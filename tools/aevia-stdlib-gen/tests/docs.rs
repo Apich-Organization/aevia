@@ -7,52 +7,60 @@
 //! as documentation.
 use std::path::Path;
 
-fn stdlib_dir() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/aevia-std/stdlib")
-}
-
-fn sources() -> Vec<(String, String)> {
+fn sources() -> std::io::Result<Vec<(String, String)>> {
     let mut out = Vec::new();
-    let mut stack = vec![stdlib_dir()];
+    let mut stack =
+        vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/aevia-std/stdlib")];
     while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(dir).unwrap() {
-            let path = entry.unwrap().path();
+        for entry in std::fs::read_dir(dir)? {
+            let path = entry?.path();
             if path.is_dir() {
                 stack.push(path);
             } else if path.extension().is_some_and(|ext| ext == "aev") {
-                let name = path.file_name().unwrap().to_string_lossy().into_owned();
-                out.push((name, std::fs::read_to_string(&path).unwrap()));
+                let name = path
+                    .file_name()
+                    .ok_or_else(|| std::io::Error::other("source path has no file name"))?
+                    .to_string_lossy()
+                    .into_owned();
+                out.push((name, std::fs::read_to_string(&path)?));
             }
         }
     }
     out.sort();
-    out
+    Ok(out)
 }
 
 #[test]
-fn the_generator_notice_is_not_documentation() {
-    for (name, source) in sources() {
+fn the_generator_notice_is_not_documentation() -> Result<(), Box<dyn std::error::Error>> {
+    for (name, source) in sources()? {
         assert!(
             !source
                 .lines()
-                .any(|line| line.starts_with("## Generated standard library")),
+                .filter_map(|line| line.strip_prefix("##"))
+                .any(|doc| {
+                    let doc = doc.trim().to_ascii_lowercase();
+                    doc.starts_with("generated standard library")
+                        || doc.starts_with("generated from the rssn kernel manifest")
+                        || doc.contains("cargo run -p aevia-stdlib-gen")
+                        || (doc.starts_with("rssn ") && doc.contains(", api "))
+                }),
             "{name}: the notice must be a plain `#` comment, not a `##` doc line"
         );
     }
+    Ok(())
 }
 
 #[test]
-fn every_reexported_name_is_documented() {
-    let mut bindings = 0;
-    let mut described = 0;
-    for (name, source) in sources() {
+fn every_reexported_name_is_documented() -> Result<(), Box<dyn std::error::Error>> {
+    let mut bindings = 0_usize;
+    let mut described = 0_usize;
+    for (name, source) in sources()? {
         // The unit and constant modules are generated from the manifest's
         // tables, with their own per-constant documentation.
         if source.contains("module Units.") {
             continue;
         }
-        let lines: Vec<&str> = source.lines().collect();
-        for (index, line) in lines.iter().enumerate() {
+        for (line, doc) in declarations(&source) {
             let Some(rest) = line.strip_prefix("let ") else {
                 continue;
             };
@@ -62,18 +70,13 @@ fn every_reexported_name_is_documented() {
             {
                 continue;
             }
-            bindings += 1;
+            bindings = bindings.saturating_add(1);
             assert!(
-                index > 0 && lines[index - 1].starts_with("##"),
+                !doc.is_empty(),
                 "{name}: `{line}` has no `##` documentation"
             );
-            let mut at = index;
-            while at > 0 && lines[at - 1].starts_with("##") {
-                at -= 1;
-                if lines[at].contains("*Source:") {
-                    described += 1;
-                    break;
-                }
+            if doc.contains("*Source:") {
+                described = described.saturating_add(1);
             }
         }
     }
@@ -82,24 +85,20 @@ fn every_reexported_name_is_documented() {
         described, bindings,
         "every re-exported name must carry a description, not just its signature"
     );
+    Ok(())
 }
 
 #[test]
-fn an_operator_entry_has_signature_kernel_signature_dimensions_and_prose() {
-    let calculus = sources()
+fn an_operator_entry_has_signature_kernel_signature_dimensions_and_prose()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (_, calculus) = sources()?
         .into_iter()
         .find(|(name, _)| name == "Calculus.aev")
-        .expect("Calculus.aev")
-        .1;
-    let start = calculus
-        .find("let diff = diff")
-        .expect("diff is re-exported");
-    let block: Vec<&str> = calculus[..start]
-        .lines()
-        .rev()
-        .take_while(|l| l.starts_with("##"))
-        .collect();
-    let text = block.into_iter().rev().collect::<Vec<_>>().join("\n");
+        .ok_or("missing Calculus.aev")?;
+    let (_, text) = declarations(&calculus)
+        .into_iter()
+        .find(|(declaration, _)| declaration.starts_with("let diff = diff"))
+        .ok_or("diff is not re-exported")?;
     for needle in [
         "derivative",
         "**Signature:** `diff :",
@@ -112,33 +111,35 @@ fn an_operator_entry_has_signature_kernel_signature_dimensions_and_prose() {
             "diff's documentation lacks `{needle}`:\n{text}"
         );
     }
+    Ok(())
 }
 
 /// Every `type`, `fn` and `let` declaration of a generated module, with the
 /// `##` block above it (empty when there is none).
 fn declarations(source: &str) -> Vec<(String, String)> {
-    let lines: Vec<&str> = source.lines().collect();
     let mut found = Vec::new();
-    for (index, line) in lines.iter().enumerate() {
-        let is_declaration = ["type ", "fn ", "let "]
-            .iter()
-            .any(|keyword| line.starts_with(keyword));
-        if !is_declaration {
+    let mut docs = Vec::new();
+    for line in source.lines() {
+        if line.starts_with("##") {
+            docs.push(line);
             continue;
         }
-        let mut at = index;
-        while at > 0 && lines[at - 1].starts_with("##") {
-            at -= 1;
+        if ["type ", "fn ", "let "]
+            .iter()
+            .any(|keyword| line.starts_with(keyword))
+        {
+            found.push((line.to_string(), docs.join("\n")));
         }
-        found.push((line.to_string(), lines[at..index].join("\n")));
+        docs.clear();
     }
     found
 }
 
 #[test]
-fn every_declaration_of_a_generated_module_has_a_description() {
+fn every_declaration_of_a_generated_module_has_a_description()
+-> Result<(), Box<dyn std::error::Error>> {
     let mut missing = Vec::new();
-    for (name, source) in sources() {
+    for (name, source) in sources()? {
         // Unit and constant modules document each constant from the
         // manifest's own tables.
         if source.contains("module Units.") {
@@ -155,12 +156,13 @@ fn every_declaration_of_a_generated_module_has_a_description() {
         "declarations with no `##` description:\n{}",
         missing.join("\n")
     );
+    Ok(())
 }
 
 #[test]
-fn a_description_is_more_than_its_signature() {
+fn a_description_is_more_than_its_signature() -> Result<(), Box<dyn std::error::Error>> {
     let mut thin = Vec::new();
-    for (name, source) in sources() {
+    for (name, source) in sources()? {
         if source.contains("module Units.") {
             continue;
         }
@@ -180,12 +182,13 @@ fn a_description_is_more_than_its_signature() {
         "declarations documented by a signature alone:\n{}",
         thin.join("\n")
     );
+    Ok(())
 }
 
 #[test]
-fn the_documentation_does_not_speak_rust() {
+fn the_documentation_does_not_speak_rust() -> Result<(), Box<dyn std::error::Error>> {
     let mut offences = Vec::new();
-    for (name, source) in sources() {
+    for (name, source) in sources()? {
         if source.contains("module Units.") {
             continue;
         }
@@ -206,4 +209,5 @@ fn the_documentation_does_not_speak_rust() {
         "documentation written for Rust developers:\n{}",
         offences.join("\n")
     );
+    Ok(())
 }

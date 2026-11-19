@@ -20,6 +20,8 @@
 //! tree of §8.20 is generated from that attribution, so a module's export list
 //! cannot silently drift from the section it claims to re-export.
 
+use std::collections::BTreeMap;
+
 /// A type name a section declares, with the parameters the specification
 /// writes (`type Table<ρ>` → name `Table`, params `["ρ"]`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,7 +33,7 @@ pub struct TypeName {
 }
 
 /// One section of chapter 8.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Section {
     /// `8.2` or `8.2.2`; empty for declarations outside a chapter-8 section
     /// (the spec's own unit tests feed bare snippets to [`names`]).
@@ -66,12 +68,10 @@ pub fn names(source: &str) -> Vec<String> {
 #[must_use]
 pub fn sections(source: &str) -> Vec<Section> {
     let mut out: Vec<Section> = Vec::new();
-    // Index of the section receiving declarations. `None` until the first
-    // declaration or heading; a declaration before any heading materialises the
-    // default (numberless) section.
-    let mut current: Option<usize> = None;
+    // A declaration before any heading materialises the default section.
+    let mut current: Option<Section> = None;
     let mut in_fence = false;
-    let mut depth: i32 = 0;
+    let mut depth = 0usize;
     for raw in source.lines() {
         if in_fence {
             if raw.trim_start().starts_with("```") {
@@ -87,29 +87,21 @@ pub fn sections(source: &str) -> Vec<Section> {
             }
             // A heading is prose, not part of a signature block.
             if let Some((number, title)) = chapter8_heading(raw) {
-                out.push(Section {
+                out.extend(current.replace(Section {
                     number,
                     title,
-                    names: Vec::new(),
-                    types: Vec::new(),
-                });
-                current = Some(out.len() - 1);
-                continue;
+                    ..Section::default()
+                }));
             }
             continue;
         }
         // A `#` starts a comment in the specification's signatures.
-        let line = match raw.find('#') {
-            | Some(at) => &raw[..at],
-            | None => raw,
-        };
-        let opens = i32::try_from(line.matches('{').count()).unwrap_or(0);
-        let closes = i32::try_from(line.matches('}').count()).unwrap_or(0);
-        if depth > 0 {
-            depth = (depth + opens - closes).max(0);
+        let line = raw.split_once('#').map_or(raw, |(before, _)| before);
+        let nested = depth != 0;
+        depth = brace_depth(line, depth);
+        if nested {
             continue;
         }
-        depth = (depth + opens - closes).max(0);
         let trimmed = line.trim_start();
         if trimmed.is_empty() {
             continue;
@@ -122,34 +114,32 @@ pub fn sections(source: &str) -> Vec<Section> {
             if head_word == "type"
                 && let Some(declared) = declared_type(trimmed)
             {
-                let index = current.unwrap_or_else(|| {
-                    out.push(Section {
-                        number: String::new(),
-                        title: String::new(),
-                        names: Vec::new(),
-                        types: Vec::new(),
-                    });
-                    out.len() - 1
-                });
-                out[index].types.push(declared);
+                current
+                    .get_or_insert_with(Section::default)
+                    .types
+                    .push(declared);
             }
             continue;
         }
         let Some(declared) = declared_names(trimmed) else {
             continue;
         };
-        let index = current.unwrap_or_else(|| {
-            out.push(Section {
-                number: String::new(),
-                title: String::new(),
-                names: Vec::new(),
-                types: Vec::new(),
-            });
-            out.len() - 1
-        });
-        out[index].names.extend(declared);
+        current
+            .get_or_insert_with(Section::default)
+            .names
+            .extend(declared);
     }
+    out.extend(current);
     out
+}
+
+fn brace_depth(
+    line: &str,
+    depth: usize,
+) -> usize {
+    depth
+        .saturating_add(line.matches('{').count())
+        .saturating_sub(line.matches('}').count())
 }
 
 /// The signature text the specification gives each name, `name -> [signature]`.
@@ -158,10 +148,10 @@ pub fn sections(source: &str) -> Vec<Section> {
 /// distinct signature, in document order. A signature that wraps onto indented
 /// continuation lines is joined with single spaces; `#` comments are dropped.
 #[must_use]
-pub fn signatures(source: &str) -> std::collections::BTreeMap<String, Vec<String>> {
-    let mut out: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+pub fn signatures(source: &str) -> BTreeMap<String, Vec<String>> {
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut in_fence = false;
-    let mut depth: i32 = 0;
+    let mut depth = 0usize;
     let mut current: Option<(Vec<String>, String)> = None;
     let mut flush = |current: &mut Option<(Vec<String>, String)>| {
         if let Some((names, text)) = current.take() {
@@ -184,14 +174,12 @@ pub fn signatures(source: &str) -> std::collections::BTreeMap<String, Vec<String
         if !in_fence {
             continue;
         }
-        let line = raw.find('#').map_or(raw, |at| &raw[..at]);
-        let opens = i32::try_from(line.matches('{').count()).unwrap_or(0);
-        let closes = i32::try_from(line.matches('}').count()).unwrap_or(0);
-        if depth > 0 {
-            depth = (depth + opens - closes).max(0);
+        let line = raw.split_once('#').map_or(raw, |(before, _)| before);
+        let nested = depth != 0;
+        depth = brace_depth(line, depth);
+        if nested {
             continue;
         }
-        depth = (depth + opens - closes).max(0);
         if line.trim().is_empty() {
             continue;
         }
@@ -212,9 +200,9 @@ pub fn signatures(source: &str) -> std::collections::BTreeMap<String, Vec<String
             continue;
         }
         if let Some(names) = declared_names(trimmed)
-            && let Some(colon) = trimmed.find(':')
+            && let Some((_, signature)) = trimmed.split_once(':')
         {
-            current = Some((names, trimmed[colon + 1..].trim().to_owned()));
+            current = Some((names, signature.trim().to_owned()));
         }
     }
     flush(&mut current);
@@ -222,45 +210,45 @@ pub fn signatures(source: &str) -> std::collections::BTreeMap<String, Vec<String
 }
 
 /// The number and title of a `## 8.x …` or `### 8.x.y …` heading.
+#[allow(
+    clippy::single_call_fn,
+    reason = "isolates the numbered heading grammar"
+)]
 fn chapter8_heading(line: &str) -> Option<(String, String)> {
     let rest = line
         .strip_prefix("### ")
         .or_else(|| line.strip_prefix("## "))?;
     let rest = rest.trim_start();
     let number_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-    let number = &rest[..number_end];
-    let mut parts = number.split('.');
-    if parts.next() != Some("8") {
+    let (number, title) = rest.split_at_checked(number_end)?;
+    let segments = number.strip_prefix("8.")?;
+    if !segments
+        .split('.')
+        .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+    {
         return None;
     }
-    let mut seen = 0_usize;
-    for part in parts {
-        if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) {
-            return None;
-        }
-        seen += 1;
-    }
-    if seen == 0 {
-        return None;
-    }
-    Some((number.to_string(), rest[number_end..].trim().to_string()))
+    Some((number.to_string(), title.trim().to_string()))
 }
 
 /// The type declaration a `type Name<params> …` line declares.
+#[allow(
+    clippy::single_call_fn,
+    reason = "isolates the declaration head grammar"
+)]
 fn declared_type(line: &str) -> Option<TypeName> {
     let rest = line.strip_prefix("type ")?;
     let rest = rest.trim_start();
     let name_end = rest
         .find(|ch: char| ch == '<' || ch == '=' || ch.is_whitespace())
         .unwrap_or(rest.len());
-    let name = &rest[..name_end];
+    let (name, suffix) = rest.split_at_checked(name_end)?;
     if !is_identifier(name) {
         return None;
     }
-    let params = if rest[name_end..].starts_with('<') {
-        let tail = &rest[name_end + 1..];
-        let end = tail.find('>')?;
-        tail[..end]
+    let params = if let Some(tail) = suffix.strip_prefix('<') {
+        let (params, _) = tail.split_once('>')?;
+        params
             .split(',')
             .map(|param| param.trim().to_string())
             .filter(|param| !param.is_empty())
@@ -276,8 +264,8 @@ fn declared_type(line: &str) -> Option<TypeName> {
 
 /// The identifiers a `name … : type` line declares, if it declares any.
 fn declared_names(line: &str) -> Option<Vec<String>> {
-    let colon = line.find(':')?;
-    let head = line[..colon].trim();
+    let (head, _) = line.split_once(':')?;
+    let head = head.trim();
     if head.is_empty() {
         return None;
     }
@@ -305,12 +293,16 @@ fn declared_names(line: &str) -> Option<Vec<String>> {
 }
 
 /// Removes every `<…>` group, keeping the identifier in front of it.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps generic syntax scanning separate from signature extraction"
+)]
 fn strip_type_arguments(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut depth = 0usize;
     for character in text.chars() {
         match character {
-            | '<' => depth += 1,
+            | '<' => depth = depth.saturating_add(1),
             | '>' => depth = depth.saturating_sub(1),
             | other if depth == 0 => out.push(other),
             | _ => {},
@@ -321,18 +313,15 @@ fn strip_type_arguments(text: &str) -> String {
 
 /// True for `name` or `Rssn.name`.
 fn is_identifier(text: &str) -> bool {
-    let mut parts = text.split('.');
-    let first = parts.next().unwrap_or("");
-    let rest: Vec<&str> = parts.collect();
-    if rest.len() > 1 {
-        return false;
-    }
     let valid = |part: &str| {
         let mut chars = part.chars();
         matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
             && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
     };
-    valid(first) && rest.iter().all(|part| valid(part))
+    text.split_once('.').map_or_else(
+        || valid(text),
+        |(first, second)| valid(first) && valid(second),
+    )
 }
 
 #[cfg(test)]
@@ -343,6 +332,21 @@ mod tests {
     fn reads_a_signature_line() {
         let source = "```\nid       : a -> a\ngcd lcm  : (Int, Int) -> Int\n```\n";
         assert_eq!(names(source), vec!["gcd", "id", "lcm"]);
+    }
+
+    #[test]
+    fn groups_declarations_before_the_first_numbered_heading() {
+        let parsed = sections("```text\ntype Table<ρ>\nread write : Int\n```\n## 8.2 Math\n");
+        let [unnumbered, math] = parsed.as_slice() else {
+            panic!("expected two sections: {parsed:?}")
+        };
+        assert!(unnumbered.number.is_empty());
+        assert_eq!(unnumbered.names, ["read", "write"]);
+        assert_eq!(
+            unnumbered.types.first().map(|ty| ty.name.as_str()),
+            Some("Table")
+        );
+        assert_eq!(math.number, "8.2");
     }
 
     #[test]

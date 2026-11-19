@@ -14,6 +14,21 @@
 //! `--jobs N` configures
 //! the Rayon worker thread pool used for parallel evaluation (`par_map`).
 
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
 // CLI-owned output shares one colour policy; language programs and LSP write
 // directly to their own streams and keep their byte-for-byte output.
 macro_rules! print {
@@ -35,6 +50,7 @@ mod help;
 mod lint_cmd;
 mod terminal;
 
+mod debugger;
 mod doctest;
 mod package;
 mod registry;
@@ -54,6 +70,7 @@ use aevia_core::manifest::Package;
 use aevia_syntax::DeclKind;
 use aevia_syntax::Diagnostics;
 use aevia_syntax::Style;
+use std::fmt::Write as _;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -113,16 +130,20 @@ impl Default for Options {
 
 impl Options {
     /// Splits `args` into options and the command line that follows.
+    #[allow(
+        clippy::single_call_fn,
+        reason = "parses global options before creating the interpreter thread"
+    )]
     fn parse(args: &[String]) -> Result<(Self, Vec<String>), String> {
         let mut options = Self::default();
         let mut rest = Vec::new();
         let mut index = 0;
-        while index < args.len() {
-            let arg = args[index].clone();
+        while let Some(argument) = args.get(index) {
+            let arg = argument.clone();
             // Everything after `--` belongs to the program, including names
             // that happen to look like global interpreter flags.
             if arg == "--" {
-                rest.extend_from_slice(&args[index..]);
+                rest.extend(args.iter().skip(index).cloned());
                 break;
             }
             let (name, inline) = match arg.split_once('=') {
@@ -133,7 +154,7 @@ impl Options {
                 if let Some(value) = inline.clone() {
                     return Ok(value);
                 }
-                *index += 1;
+                *index = index.saturating_add(1);
                 args.get(*index)
                     .cloned()
                     .ok_or_else(|| format!("`{what}` expects a value"))
@@ -194,7 +215,7 @@ impl Options {
                 },
                 | _ => rest.push(arg),
             }
-            index += 1;
+            index = index.saturating_add(1);
         }
         Ok((options, rest))
     }
@@ -219,7 +240,7 @@ fn main() -> ExitCode {
         .stack_size(stack)
         .spawn(move || {
             aevia_core::install_stack_budget(stack);
-            run_cli(options, args)
+            run_cli(options, &args)
         });
     match worker {
         | Ok(handle) => handle.join().unwrap_or_else(|_| ExitCode::from(101)),
@@ -249,9 +270,6 @@ fn apply_options(
     if options.release {
         interp.mode = aevia_core::Mode::Ir;
     }
-    if options.release {
-        interp.mode = aevia_core::Mode::Ir;
-    }
     if let Some(budget) = options.budget {
         interp.max_tail_calls = budget;
         interp.max_io_steps = budget;
@@ -269,61 +287,68 @@ fn apply_options(
     interp.max_io_depth = interp.max_io_depth.max(1_000_000);
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "this is the command router on the interpreter thread"
+)]
 fn run_cli(
     options: Options,
-    args: Vec<String>,
+    args: &[String],
 ) -> ExitCode {
-    if let Some(code) = help::route(&args) {
+    if let Some(code) = help::route(args) {
         return code;
     }
     if options.locked
-        && let Err(code) = locked_precheck(&args)
+        && let Err(code) = locked_precheck(args)
     {
         return code;
     }
-    match args.first().map(String::as_str) {
-        | Some("run") => run_command(options, &args[1..]),
-        | Some("check") => check_command(options, &args[1..]),
-        | Some("lint") => lint_cmd::run(options, &args[1..]),
-        | Some("watch") => watch_command(options, &args[1..]),
-        | Some("test") => test_command(options, &args[1..]),
-        | Some("repl") if args.len() == 1 => repl(options),
-        | Some("repl") => {
+    let Some((command, tail)) = args.split_first() else {
+        return repl(options);
+    };
+    match command.as_str() {
+        | "run" => run_command(options, tail),
+        | "check" => check_command(options, tail),
+        | "lint" => lint_cmd::run(options, tail),
+        | "watch" => watch_command(options, tail),
+        | "test" => test_command(options, tail),
+        | "repl" if tail.is_empty() => repl(options),
+        | "repl" => {
             eprintln!(
                 "aevia repl: unexpected argument `{}`; use aevia repl --help",
-                args[1]
+                tail.first().map_or("", String::as_str)
             );
             ExitCode::from(2)
         },
-        | Some("fmt") => tooling::fmt(options, &args[1..]),
-        | Some("doc") => tooling::doc(options, &args[1..]),
-        | Some("bench") => tooling::bench(options, &args[1..]),
-        | Some("clean") => package::clean(&args[1..]),
-        | Some("lsp") => lsp_command(&args[1..]),
-        | Some("completions") => completions_command(&args[1..]),
-        | Some("init") => package::init(&args[1..]),
-        | Some("add") => package::add(&args[1..], options.locked),
-        | Some("update") => package::update(&args[1..], options.locked),
-        | Some("fetch") => package::fetch(&args[1..]),
-        | Some("tree") => package::tree(&args[1..]),
-        | Some("rssn") => rssn_command(&args[1..]),
+        | "fmt" => tooling::fmt(options, tail),
+        | "doc" => tooling::doc(tail),
+        | "bench" => tooling::bench(options, tail),
+        | "clean" => package::clean(tail),
+        | "lsp" => lsp_command(tail),
+        | "debug" => debugger::serve(options, tail),
+        | "completions" => completions_command(tail),
+        | "init" => package::init(tail),
+        | "add" => package::add(tail, options.locked),
+        | "update" => package::update(tail, options.locked),
+        | "fetch" => package::fetch(tail),
+        | "tree" => package::tree(tail),
+        | "rssn" => rssn_command(tail),
         // The registry client is a separate binary; `aevia pkg` forwards to it
         // so the toolchain has one entry point. See `registry.rs`.
-        | Some("pkg") => registry::run(&args[1..]),
+        | "pkg" => registry::run(tail),
         // The commands people reach for most, without the `pkg` prefix.
-        | Some("publish") => registry::publish(&args[1..]),
-        | Some("docs") => registry::docs(&args[1..]),
-        | Some(command) if registry::is_forwarded(command) => registry::run(&args),
-        | Some("--version" | "-V") => {
+        | "publish" => registry::publish(tail),
+        | "docs" => registry::docs(tail),
+        | command if registry::is_forwarded(command) => registry::run(args),
+        | "--version" | "-V" => {
             println!("aevia {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         },
-        | None => repl(options),
-        | Some("--help" | "-h") => {
+        | "--help" | "-h" => {
             help();
             ExitCode::SUCCESS
         },
-        | Some(other) => {
+        | other => {
             eprintln!("aevia: unknown command `{other}`");
             help();
             ExitCode::from(2)
@@ -336,6 +361,10 @@ fn run_cli(
 /// `--locked` means "the lock file is part of the input, and an out-of-date
 /// one is an error rather than something to rewrite". `update` and `add` own
 /// their own handling because they are the commands that would write the lock.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps lock verification before the dispatched command's side effects"
+)]
 fn locked_precheck(args: &[String]) -> Result<(), ExitCode> {
     match args.first().map(String::as_str) {
         | Some("test") if args.iter().any(|arg| arg == "--doc") => Ok(()),
@@ -355,6 +384,10 @@ fn locked_precheck(args: &[String]) -> Result<(), ExitCode> {
 }
 
 /// Fails when `aevia.lock` does not already match the package tree.
+#[allow(
+    clippy::single_call_fn,
+    reason = "reports lock errors for the package in the current directory"
+)]
 fn verify_lock() -> Result<(), ExitCode> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let package = match Package::find(&cwd) {
@@ -396,14 +429,55 @@ fn verify_package_lock(package: &Package) -> Result<(), ExitCode> {
     Ok(())
 }
 
-/// `aevia lsp [--stdio]` — the §9.10 server on standard I/O.
+// Shell source is a fixture so argument validation does not get lost in the script.
+const ZSH_COMPLETIONS: &str = "#compdef aevia\n\
+             _aevia() {\n\
+             \x20   local -a commands\n\
+             \x20   commands=(\n\
+             \x20       'run:Compile and run a program'\n\
+             \x20       'check:Type-check without evaluating'\n\
+             \x20       'lint:Run compiler and style lints'\n\
+             \x20       'watch:Recheck when dependencies change'\n\
+             \x20       'test:Run tests or doc examples'\n\
+             \x20       'repl:Interactive session'\n\
+             \x20       'fmt:Format Aevia source'\n\
+             \x20       'doc:Generate API documentation'\n\
+             \x20       'bench:Measure benchmarks'\n\
+             \x20       'clean:Remove generated build products'\n\
+             \x20       'lsp:Start the language server'\n\
+             \x20       'debug:Start the source debug adapter'\n\
+             \x20       'completions:Generate shell completions'\n\
+             \x20       'init:Create a package'\n\
+             \x20       'add:Add a dependency'\n\
+             \x20       'update:Update lock file'\n\
+             \x20       'fetch:Download locked dependencies'\n\
+             \x20       'tree:Display dependency tree'\n\
+             \x20       'rssn:Inspect the scientific kernel'\n\
+             \x20       'pkg:Run the registry client'\n\
+             \x20       'publish:Publish a package'\n\
+             \x20       'docs:Locate package documentation'\n\
+             \x20       'help:Show command help'\n\
+             \x20   )\n\
+             \x20   if (( CURRENT == 2 )); then\n\
+             \x20       _describe 'command' commands\n\
+             \x20   else\n\
+             \x20       _files\n\
+             \x20   fi\n\
+             }\n\
+             _aevia \"$@\"\n";
+
+/// Generates shell completion source for the selected shell.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the completion command maintains its own shell-specific output"
+)]
 fn completions_command(args: &[String]) -> ExitCode {
-    if args.len() != 1 {
+    let [shell] = args else {
         eprintln!("aevia completions: expected <bash|zsh|fish|powershell|elvish>");
         return ExitCode::from(2);
-    }
-    let shell = args[0].to_ascii_lowercase();
-    let commands = "run check lint watch test repl fmt doc bench clean lsp completions init add update fetch tree rssn pkg publish docs login search info yank verify help";
+    };
+    let shell = shell.to_ascii_lowercase();
+    let commands = "run check lint watch test repl fmt doc bench clean lsp debug completions init add update fetch tree rssn pkg publish docs login search info yank verify help";
     let script = match shell.as_str() {
         | "bash" => {
             format!(
@@ -434,50 +508,14 @@ fn completions_command(args: &[String]) -> ExitCode {
              complete -F _aevia_completions aevia\n"
             )
         },
-        | "zsh" => {
-            format!(
-                "#compdef aevia\n\
-             _aevia() {{\n\
-             \x20   local -a commands\n\
-             \x20   commands=(\n\
-             \x20       'run:Compile and run a program'\n\
-             \x20       'check:Type-check without evaluating'\n\
-             \x20       'lint:Run compiler and style lints'\n\
-             \x20       'watch:Recheck when dependencies change'\n\
-             \x20       'test:Run tests or doc examples'\n\
-             \x20       'repl:Interactive session'\n\
-             \x20       'fmt:Format Aevia source'\n\
-             \x20       'doc:Generate API documentation'\n\
-             \x20       'bench:Measure benchmarks'\n\
-             \x20       'clean:Remove generated build products'\n\
-             \x20       'lsp:Start the language server'\n\
-             \x20       'completions:Generate shell completions'\n\
-             \x20       'init:Create a package'\n\
-             \x20       'add:Add a dependency'\n\
-             \x20       'update:Update lock file'\n\
-             \x20       'fetch:Download locked dependencies'\n\
-             \x20       'tree:Display dependency tree'\n\
-             \x20       'rssn:Inspect the scientific kernel'\n\
-             \x20       'pkg:Run the registry client'\n\
-             \x20       'publish:Publish a package'\n\
-             \x20       'docs:Locate package documentation'\n\
-             \x20       'help:Show command help'\n\
-             \x20   )\n\
-             \x20   if (( CURRENT == 2 )); then\n\
-             \x20       _describe 'command' commands\n\
-             \x20   else\n\
-             \x20       _files\n\
-             \x20   fi\n\
-             }}\n\
-             _aevia \"$@\"\n"
-            )
-        },
+        | "zsh" => ZSH_COMPLETIONS.to_owned(),
         | "fish" => {
             let mut out = String::from("# Fish completions for aevia\n");
             for cmd in commands.split_whitespace() {
-                out.push_str(&format!(
-                    "complete -c aevia -n '__fish_use_subcommand' -a '{cmd}'\n"
-                ));
+                let _ = writeln!(
+                    out,
+                    "complete -c aevia -n '__fish_use_subcommand' -a '{cmd}'"
+                );
             }
             out.push_str("complete -c aevia -n '__fish_seen_subcommand_from completions' -a 'bash zsh fish powershell elvish'\n");
             out.push_str("complete -c aevia -n '__fish_seen_subcommand_from doc' -l stdlib -l json -l open -l out\n");
@@ -504,10 +542,9 @@ fn completions_command(args: &[String]) -> ExitCode {
             format!(
                 "set edit:completion:arg-completer[aevia] = {{|@args|\n\
              \x20   if (== (count $args) 2) {{\n\
-             \x20       put {}\n\
+             \x20       put {commands}\n\
              \x20   }}\n\
-             }}\n",
-                commands
+             }}\n"
             )
         },
         | other => {
@@ -521,6 +558,10 @@ fn completions_command(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "the LSP entry point validates its invocation before taking standard streams"
+)]
 fn lsp_command(args: &[String]) -> ExitCode {
     if let Some(unknown) = args.iter().find(|argument| argument.as_str() != "--stdio") {
         eprintln!(
@@ -662,6 +703,11 @@ fn manifest_failure(error: &aevia_core::manifest::ManifestError) -> Program {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    clippy::too_many_lines,
+    reason = "groups input validation, configured evaluation, and diagnostics for run"
+)]
 fn run_command(
     options: Options,
     args: &[String],
@@ -675,17 +721,17 @@ fn run_command(
     let mut no_cache = false;
     let mut relax_result = false;
     let mut index = 0;
-    while index < args.len() {
-        let argument = args[index].as_str();
+    while let Some(argument) = args.get(index) {
+        let argument = argument.as_str();
         if argument == "--" {
-            program_args = args[index + 1..].to_vec();
+            program_args = args.iter().skip(index.saturating_add(1)).cloned().collect();
             break;
         }
         match argument {
             | "--no-cache" => no_cache = true,
             | "--relax-result" => relax_result = true,
             | "--example" => {
-                index += 1;
+                index = index.saturating_add(1);
                 let Some(name) = args.get(index) else {
                     eprintln!("aevia run: `--example` expects an example name");
                     return ExitCode::from(2);
@@ -708,7 +754,7 @@ fn run_command(
                 return ExitCode::from(2);
             },
         }
-        index += 1;
+        index = index.saturating_add(1);
     }
     if example.is_some() && file.is_some() {
         eprintln!("aevia run: `--example` and a file are different programs; pass one of them");
@@ -750,18 +796,14 @@ fn run_command(
     // §9.7: worker threads rebuild the program from the same entry file, so
     // closures cross by source span. A replica keeps the interpreter's own
     // call-depth guard: it has no `install_stack_budget` of its own.
-    let replica_path = path.clone();
     interp.set_replica(std::sync::Arc::new(move || {
-        let program = load_at_with(&replica_path, !no_cache);
+        let program = load_at_with(&path, !no_cache);
         if program.diagnostics.has_errors() {
             return Err("the program no longer checks".to_string());
         }
         let entry = program.entry().ok_or("no module produced")?;
         let mut replica = Interp::new(&entry.checked);
         replica.optimize_ir = options.release;
-        if options.release {
-            replica.mode = aevia_core::Mode::Ir;
-        }
         if options.release {
             replica.mode = aevia_core::Mode::Ir;
         }
@@ -803,6 +845,10 @@ fn run_command(
 /// §7.5.3 puts examples in the package's `examples/` directory; outside a
 /// package the same directory next to the working directory is used. A missing
 /// example lists the ones that exist, so a typo is fixable without `ls`.
+#[allow(
+    clippy::single_call_fn,
+    reason = "locates installed examples and reports valid names on failure"
+)]
 fn example_path(name: &str) -> Result<PathBuf, ExitCode> {
     let stem = name.strip_suffix(".aev").unwrap_or(name);
     if stem.is_empty() || stem.contains(['/', '\\']) || stem.contains("..") || stem.starts_with('.')
@@ -826,22 +872,20 @@ fn example_path(name: &str) -> Result<PathBuf, ExitCode> {
     if path.is_file() {
         return Ok(path);
     }
-    let mut available: Vec<String> = std::fs::read_dir(&base)
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter_map(|entry| {
-                    let path = entry.path();
-                    if path.extension().is_some_and(|extension| extension == "aev") {
-                        path.file_stem()
-                            .map(|stem| stem.to_string_lossy().to_string())
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut available: Vec<String> = std::fs::read_dir(&base).map_or_default(|entries| {
+        entries
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                if path.extension().is_some_and(|extension| extension == "aev") {
+                    path.file_stem()
+                        .map(|stem| stem.to_string_lossy().to_string())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    });
     available.sort();
     if available.is_empty() {
         eprintln!(
@@ -880,6 +924,10 @@ fn load_program_with(
     Ok(program)
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "the check command chooses file, package, and cache diagnostics"
+)]
 fn check_command(
     options: Options,
     args: &[String],
@@ -923,7 +971,7 @@ fn check_command(
         .map(|path| path.display().to_string())
         .collect();
     if files.len() > 1 {
-        return check_files(options, &files, cli_overrides, no_cache);
+        return check_files(options, &files, &cli_overrides, no_cache);
     }
     let path = match entry_path(&files, "check") {
         | Ok(path) => path,
@@ -989,17 +1037,24 @@ fn check_command(
 /// rebuilt compiler, another colour style) is a miss. The record describes a
 /// whole program, so it is exact without serialising checked interfaces.
 mod check_cache {
-    use super::*;
+    use super::ExitCode;
+    use super::Path;
+    use super::PathBuf;
+    use super::Style;
 
-    pub(super) struct Entry {
+    pub struct Entry {
         file: PathBuf,
         header: String,
     }
 
+    #[allow(
+        clippy::single_call_fn,
+        reason = "cache identity includes the exact compiler executable metadata"
+    )]
     fn compiler_identity() -> String {
         std::env::current_exe()
             .and_then(|exe| std::fs::metadata(&exe).map(|meta| (exe, meta)))
-            .map(|(exe, meta)| {
+            .map_or_default(|(exe, meta)| {
                 format!(
                     "{}|{}|{:?}",
                     exe.display(),
@@ -1007,10 +1062,13 @@ mod check_cache {
                     meta.modified().ok()
                 )
             })
-            .unwrap_or_default()
     }
 
     impl Entry {
+        #[allow(
+            clippy::single_call_fn,
+            reason = "constructs a cache key and header for one entry file"
+        )]
         pub(super) fn for_entry(
             entry: &Path,
             style: Style,
@@ -1036,6 +1094,10 @@ mod check_cache {
         }
 
         /// Replays a matching record: its output and its exit status.
+        #[allow(
+            clippy::single_call_fn,
+            reason = "keeps validation of a cached check report separate from cache-key generation"
+        )]
         pub(super) fn replay(&self) -> Option<ExitCode> {
             let text = std::fs::read_to_string(&self.file).ok()?;
             let rest = text.strip_prefix(&self.header)?;
@@ -1096,6 +1158,10 @@ mod check_cache {
 /// its interface changed. Each round prints how many modules were checked and
 /// how many were reused. `--once` (or `--runs N`) stops after that many
 /// rounds; the default runs until interrupted.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the watch command owns its incremental polling and diagnostics loop"
+)]
 fn watch_command(
     options: Options,
     args: &[String],
@@ -1103,11 +1169,11 @@ fn watch_command(
     let mut files = Vec::new();
     let mut runs: Option<usize> = None;
     let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
+    while let Some(argument) = args.get(index) {
+        match argument.as_str() {
             | "--once" => runs = Some(1),
             | "--runs" => {
-                index += 1;
+                index = index.saturating_add(1);
                 let Some(count) = args.get(index).and_then(|text| text.parse().ok()) else {
                     eprintln!("aevia watch: `--runs` expects a count");
                     return ExitCode::from(2);
@@ -1122,7 +1188,7 @@ fn watch_command(
             },
             | other => files.push(other.to_string()),
         }
-        index += 1;
+        index = index.saturating_add(1);
     }
     let path = match entry_path(&files, "watch") {
         | Ok(path) => path,
@@ -1149,7 +1215,7 @@ fn watch_command(
     let mut round = 0usize;
     let mut failed;
     loop {
-        round += 1;
+        round = round.saturating_add(1);
         let started = std::time::Instant::now();
         let (program, stats) = driver::load_incremental(
             &path,
@@ -1193,10 +1259,14 @@ fn watch_command(
 }
 
 /// `aevia check <file>…`: one file per argument, each checked on its own.
+#[allow(
+    clippy::single_call_fn,
+    reason = "individual roots use their own lint settings and check output"
+)]
 fn check_files(
     options: Options,
     files: &[String],
-    cli_overrides: Vec<aevia_lint::CliOverride>,
+    cli_overrides: &[aevia_lint::CliOverride],
     no_cache: bool,
 ) -> ExitCode {
     let store = aevia_lint::LintStore::with_builtins();
@@ -1207,7 +1277,7 @@ fn check_files(
         let start_dir = path.parent().unwrap_or(&cwd);
         let lint_config = aevia_lint::LintConfig {
             manifest_lints: lint_cmd::load_manifest_lints(start_dir),
-            cli_overrides: cli_overrides.clone(),
+            cli_overrides: cli_overrides.to_vec(),
             run_extra_lints: false,
         };
         let program = load_at_with(&path, !no_cache);
@@ -1215,7 +1285,7 @@ fn check_files(
         let lint_report =
             aevia_lint::Driver::run_program(&program, &store, &lint_config, root_files.as_deref());
         if report(&lint_report.diagnostics, &program.sources, style(options)) {
-            failed += 1;
+            failed = failed.saturating_add(1);
         } else {
             println!("{}: ok", path.display());
         }
@@ -1233,6 +1303,11 @@ fn check_files(
 /// `check` with no `--all` checks what the entry reaches. A module that
 /// nothing imports is still part of the package (§7.5.3), and `--all` is the
 /// command that checks it.
+#[allow(
+    clippy::single_call_fn,
+    clippy::too_many_lines,
+    reason = "collects package roots and checks them in one compilation"
+)]
 fn check_all(
     options: Options,
     files: &[String],
@@ -1281,7 +1356,7 @@ fn check_all(
         driver::load_all_with_roots(&paths, roots, &aevia_types::check::CheckOptions::default());
     let store = aevia_lint::LintStore::with_builtins();
     let lint_config = aevia_lint::LintConfig {
-        manifest_lints: package.manifest.lints.clone(),
+        manifest_lints: package.manifest.lints,
         cli_overrides,
         run_extra_lints: false,
     };
@@ -1311,7 +1386,7 @@ fn check_all(
                 .to_string(),
         ) else {
             eprintln!("aevia check: `{}` could not be loaded", path.display());
-            failed += 1;
+            failed = failed.saturating_add(1);
             continue;
         };
         let mut own = Diagnostics::new();
@@ -1322,7 +1397,7 @@ fn check_all(
         }
         shown.insert(id);
         if report(&own, &program.sources, style(options)) {
-            failed += 1;
+            failed = failed.saturating_add(1);
         } else {
             println!("{}: ok", path.display());
         }
@@ -1336,7 +1411,7 @@ fn check_all(
         }
     }
     if report(&imported, &program.sources, style(options)) {
-        failed += 1;
+        failed = failed.saturating_add(1);
     }
     println!(
         "checked {} entries: {} modules, {} checks",
@@ -1349,19 +1424,25 @@ fn check_all(
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    clippy::too_many_lines,
+    reason = "keeps the test command's suite selection, execution and exit status together"
+)]
 fn test_command(
     options: Options,
     args: &[String],
 ) -> ExitCode {
     let mut filter: Option<String> = None;
+    let mut exact: Option<&str> = None;
     let mut files: Vec<String> = Vec::new();
     let mut doc = false;
     let mut relax_result = false;
     let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
+    while let Some(argument) = args.get(index) {
+        match argument.as_str() {
             | "--filter" => {
-                index += 1;
+                index = index.saturating_add(1);
                 let Some(value) = args.get(index) else {
                     eprintln!("aevia test: `--filter` expects a pattern");
                     return ExitCode::from(2);
@@ -1371,16 +1452,21 @@ fn test_command(
             // §7.5.5/§9.12: compile the ```aevia blocks of the `##` docs.
             | "--doc" => doc = true,
             | "--relax-result" => relax_result = true,
+            | option if option.starts_with("--exact=") => exact = option.strip_prefix("--exact="),
             | other if other.starts_with('-') => {
                 eprintln!(
                     "aevia test: unknown option `{other}` (the options are `--filter PAT`, \
-                     `--doc`, and `--relax-result`)"
+                     `--exact=NAME`, `--doc`, and `--relax-result`)"
                 );
                 return ExitCode::from(2);
             },
             | other => files.push(other.to_string()),
         }
-        index += 1;
+        index = index.saturating_add(1);
+    }
+    if exact.is_some() && (doc || filter.is_some()) {
+        eprintln!("aevia test: use `--exact=NAME` on source tests without `--filter` or `--doc`");
+        return ExitCode::from(2);
     }
     if doc {
         return doctest::run(options, &files, filter.as_deref());
@@ -1412,42 +1498,43 @@ fn test_command(
     }
     let module = &entry.module;
     let root = interp.root();
-    let mut passed = 0;
-    let mut failed = 0;
+    let mut passed = 0usize;
+    let mut failed = 0usize;
     let mut matched = 0usize;
     for decl in &module.decls {
         if let DeclKind::Test { name, body } = &decl.kind {
-            if let Some(pattern) = &filter
-                && !name.contains(pattern.as_str())
+            if exact.is_some_and(|expected| name != expected)
+                || filter
+                    .as_ref()
+                    .is_some_and(|pattern| !name.contains(pattern.as_str()))
             {
                 continue;
             }
-            matched += 1;
+            matched = matched.saturating_add(1);
             match interp.eval(body, &root) {
                 | Ok(aevia_core::value::Value::Bool(true)) => {
                     println!("test {name} ... ok");
-                    passed += 1;
+                    passed = passed.saturating_add(1);
                 },
                 | Ok(other) => {
                     println!(
                         "test {name} ... FAILED (returned {})",
                         aevia_core::value::show(&other)
                     );
-                    failed += 1;
+                    failed = failed.saturating_add(1);
                 },
                 | Err(error) => {
                     println!("test {name} ... FAILED ({})", error.message);
-                    failed += 1;
+                    failed = failed.saturating_add(1);
                 },
             }
         }
     }
-    if filter.is_some() && matched == 0 {
+    if let Some(filter) = exact.or(filter.as_deref())
+        && matched == 0
+    {
         // A filter that matches nothing must not read as "all tests passed".
-        eprintln!(
-            "aevia test: the filter `{}` matched no test",
-            filter.as_deref().unwrap_or_default()
-        );
+        eprintln!("aevia test: the filter `{}` matched no test", filter);
         return ExitCode::from(1);
     }
     println!("\n{passed} passed, {failed} failed");
@@ -1458,6 +1545,11 @@ fn test_command(
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    clippy::too_many_lines,
+    reason = "pairs RSSN's registry inspection and export options in one command"
+)]
 fn rssn_command(args: &[String]) -> ExitCode {
     let registry = aevia_rssn::registry();
     if let Err(error) = aevia_rssn::check_compatibility(registry) {
@@ -1469,36 +1561,36 @@ fn rssn_command(args: &[String]) -> ExitCode {
     let mut audit = false;
     let mut namespaces = false;
     let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
+    while let Some(argument) = args.get(index) {
+        match argument.as_str() {
             // `--emit` is a flag; §9.9 calls the destination `--out`. The old
             // `--emit DIR` spelling still works, because a directory after
             // `--emit` can only have been the destination.
             | "--emit" => {
                 emit = true;
-                if let Some(next) = args.get(index + 1)
+                if let Some(next) = args.get(index.saturating_add(1))
                     && !next.starts_with('-')
                 {
                     out = Some(next.clone());
-                    index += 1;
+                    index = index.saturating_add(1);
                 }
-                index += 1;
+                index = index.saturating_add(1);
             },
             | "--out" => {
-                let Some(path) = args.get(index + 1) else {
+                let Some(path) = args.get(index.saturating_add(1)) else {
                     eprintln!("aevia rssn: `--out` needs a directory");
                     return ExitCode::from(2);
                 };
                 out = Some(path.clone());
-                index += 2;
+                index = index.saturating_add(2);
             },
             | "--namespaces" => {
                 namespaces = true;
-                index += 1;
+                index = index.saturating_add(1);
             },
             | "--audit" => {
                 audit = true;
-                index += 1;
+                index = index.saturating_add(1);
             },
             | other => {
                 eprintln!("aevia rssn: unknown argument `{other}`");
@@ -1526,16 +1618,16 @@ fn rssn_command(args: &[String]) -> ExitCode {
     println!("api version: {}", registry.api_version);
     println!("manifest: {}", registry.manifest_hash);
     let ops: Vec<_> = registry.ops().collect();
-    let mut declared = 0;
-    let mut overlay = 0;
-    let mut derived = 0;
-    let mut none = 0;
+    let mut declared = 0usize;
+    let mut overlay = 0usize;
+    let mut derived = 0usize;
+    let mut none = 0usize;
     for op in &ops {
         match op.source {
-            | aevia_rssn::Source::Declared => declared += 1,
-            | aevia_rssn::Source::Overlay => overlay += 1,
-            | aevia_rssn::Source::Derived => derived += 1,
-            | aevia_rssn::Source::None => none += 1,
+            | aevia_rssn::Source::Declared => declared = declared.saturating_add(1),
+            | aevia_rssn::Source::Overlay => overlay = overlay.saturating_add(1),
+            | aevia_rssn::Source::Derived => derived = derived.saturating_add(1),
+            | aevia_rssn::Source::None => none = none.saturating_add(1),
         }
     }
     println!("operators: {}", ops.len());
@@ -1563,7 +1655,7 @@ fn rssn_command(args: &[String]) -> ExitCode {
             .iter()
             .filter(|row| matches!(row.coverage, Coverage::Dynamic(_)))
             .count();
-        let unavailable = catalog.len() - typed - dynamic;
+        let unavailable = catalog.len().saturating_sub(typed).saturating_sub(dynamic);
         let callback_aliases = catalog
             .iter()
             .filter(|row| row.typed_callback_name.is_some())
@@ -1582,8 +1674,10 @@ fn rssn_command(args: &[String]) -> ExitCode {
                 "{}:{}[{}] -> {}: {}{}{}",
                 row.op.rule_set,
                 row.op.name,
-                row.overload
-                    .map_or_else(|| "unsigned".to_string(), |i| (i + 1).to_string()),
+                row.overload.map_or_else(
+                    || "unsigned".to_string(),
+                    |i| i.saturating_add(1).to_string()
+                ),
                 row.name,
                 status,
                 if reasons.is_empty() {
@@ -1663,6 +1757,10 @@ fn repl_source_identity() -> aevia_core::source::SourceIdentity {
 }
 
 impl Session {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "sets up the REPL's persistent interpreter state once per session"
+    )]
     fn new(options: Options) -> Self {
         let identity = repl_source_identity();
         let directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -1764,7 +1862,7 @@ impl Session {
 
     /// Set a temporary resolution origin for a :load fragment; restore the
     /// returned origin after submission, on both success and failure.
-    fn set_source_origin(
+    const fn set_source_origin(
         &mut self,
         origin: Option<PathBuf>,
     ) -> Option<PathBuf> {
@@ -1883,14 +1981,18 @@ fn evaluate_repl_expression(
         aevia_ir::optimize::declaration(&mut lowered);
         if let aevia_ir::lower::LoweredDecl::Let(decl) = lowered {
             return aevia_core::eval_ir::eval_top(interp, &decl.block, decl.nslots, &root)
-                .map_err(|error| repl_runtime_error(error, compilation, options));
+                .map_err(|error| repl_runtime_error(&error, compilation, options));
         }
     }
     interp
         .eval(expression, &root)
-        .map_err(|error| repl_runtime_error(error, compilation, options))
+        .map_err(|error| repl_runtime_error(&error, compilation, options))
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "connects cancellable terminal reads to one REPL interpreter"
+)]
 fn repl_program_line_reader(
     cancellation: aevia_core::CancellationToken
 ) -> std::rc::Rc<dyn Fn() -> Result<String, aevia_core::EvalError>> {
@@ -1949,9 +2051,14 @@ fn repl(options: Options) -> ExitCode {
         } else {
             let mut offset = 0;
             for unit in repl_input::split_submissions(&source) {
-                if let Some(start) = source[offset..].find(&unit).map(|start| offset + start) {
-                    session.input_source = Some(original_input.select(start..start + unit.len()));
-                    offset = start + unit.len();
+                if let Some(start) = source
+                    .get(offset..)
+                    .and_then(|text| text.find(&unit))
+                    .map(|start| offset.saturating_add(start))
+                {
+                    session.input_source =
+                        Some(original_input.select(start..start.saturating_add(unit.len())));
+                    offset = start.saturating_add(unit.len());
                 } else {
                     session.input_source = None;
                 }
@@ -2001,6 +2108,10 @@ fn submit_repl(
     result
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps the REPL's per-input compilation and evaluation transaction"
+)]
 fn submit_repl_input(
     session: &mut Session,
     input: &str,
@@ -2106,6 +2217,10 @@ fn submit_repl_input(
 /// A file's ordinary module header names its original namespace. Appended
 /// standalone declarations join the current REPL namespace; blank the header
 /// in place so line numbers and all following source offsets stay intact.
+#[allow(
+    clippy::single_call_fn,
+    reason = "validates a loaded module header before rewriting it"
+)]
 fn repl_module_fragment(
     input: &str,
     appending: bool,
@@ -2129,24 +2244,27 @@ fn repl_module_fragment(
     else {
         return Ok(None);
     };
-    let start = first.span.start as usize;
-    let end = input[start..]
-        .find(['\r', '\n'])
-        .map_or(input.len(), |end| start + end);
+    let start = usize::try_from(first.span.start).map_err(|_| "invalid module header location")?;
+    let (before, header) = input
+        .split_at_checked(start)
+        .ok_or("invalid module header location")?;
+    let length = header.find(['\r', '\n']).unwrap_or(header.len());
+    let end = start.saturating_add(length);
     if lexed.tokens.iter().any(|token| {
         (token.span.start as usize) < end && matches!(token.kind, TokenKind::Keyword(Keyword::With))
     }) {
         return Err("a module with its own unit system needs a fresh session; use :reset before loading it, or aevia run FILE".to_string());
     }
-    let mut bytes = input.as_bytes().to_vec();
-    bytes[start..end].fill(b' ');
-    Ok(Some(String::from_utf8(bytes).expect(
-        "replacing a complete module header preserves UTF-8",
-    )))
+    let suffix = header.get(length..).ok_or("invalid module header range")?;
+    let mut source = String::with_capacity(input.len());
+    source.push_str(before);
+    source.extend(std::iter::repeat_n(' ', length));
+    source.push_str(suffix);
+    Ok(Some(source))
 }
 
 fn repl_runtime_error(
-    error: aevia_core::EvalError,
+    error: &aevia_core::EvalError,
     compilation: &repl_source::Compilation,
     options: Options,
 ) -> String {
@@ -2179,7 +2297,7 @@ fn run_repl_main(session: &mut Session) -> bool {
             let compilation = session.compile(&session.declarations);
             eprintln!(
                 "{}",
-                repl_runtime_error(error, &compilation, session.options)
+                repl_runtime_error(&error, &compilation, session.options)
             );
             false
         },
@@ -2195,6 +2313,11 @@ enum ReplControl {
     Quit,
 }
 
+#[allow(
+    clippy::single_call_fn,
+    clippy::too_many_lines,
+    reason = "keeps the complete REPL command dispatch and output policy together"
+)]
 fn handle_repl_command(
     command: &str,
     session: &mut Session,
@@ -2254,9 +2377,10 @@ fn handle_repl_command(
         },
         | "show" | "print" | "repr" | "pretty" | "pprint" | "typst" => {
             let format = match name {
-                | "print" => aevia_core::display::Format::Show,
-                | "pprint" => aevia_core::display::Format::Pretty,
-                | _ => repl_parse_format(name).expect("renderer command"),
+                | "typst" => aevia_core::display::Format::Typst,
+                | "repr" => aevia_core::display::Format::Repr,
+                | "pretty" | "pprint" => aevia_core::display::Format::Pretty,
+                | _ => aevia_core::display::Format::Show,
             };
             match repl_render(session, name, argument, format) {
                 | Ok(text) => println!("{text}"),
@@ -2387,7 +2511,7 @@ fn handle_repl_command(
         | "ast" => {
             match repl_ast_with_input(
                 argument,
-                session.expression_input(argument),
+                &session.expression_input(argument),
                 style(session.options),
             ) {
                 | Ok(text) => println!("{text}"),
@@ -2457,6 +2581,10 @@ fn repl_file_argument(argument: &str) -> &str {
 }
 
 /// Prefer real item documentation; a leading colon explicitly requests a command.
+#[allow(
+    clippy::single_call_fn,
+    reason = "applies interactive documentation lookup to the active REPL session"
+)]
 fn repl_item_help(
     session: &Session,
     topic: &str,
@@ -2519,6 +2647,10 @@ fn repl_item_help(
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeps the REPL help topics and their text together"
+)]
 fn repl_help(topic: &str) -> bool {
     match topic.trim_start_matches(':') {
         | "" => {
@@ -2573,7 +2705,7 @@ Session commands:
   :quit          leave the session (:q alias)
 
 Use aevia help COMMAND in your shell for CLI help."
-            )
+            );
         },
         | "paste" | "main" => {
             println!(
@@ -2587,7 +2719,7 @@ The entire declaration group type-checks before execution. Its main runs once.
 Use :run to repeat main; expressions entered later do not repeat it.
 For explicit paste, enter :paste, paste the code, and enter :end on its own line.
 Use :cancel before :end to discard the block."
-            )
+            );
         },
         | "source" => {
             println!(
@@ -2603,7 +2735,7 @@ Paths may contain spaces; surrounding quotes are optional.
 :reset starts over. :load supports the same standalone declarations as pasted code.
 Imports use the loaded file's package and directory, then stay available at the prompt.
 Dependencies initialize once per session. :reset clears bindings and refreshes imports."
-            )
+            );
         },
         | "units" | "dims" => {
             println!(
@@ -2611,12 +2743,12 @@ Dependencies initialize once per session. :reset clears bindings and refreshes i
 Quantities carry dimensions: 3 m + 2 m is valid; 3 m + 2 s is a type error.
 Try :type 3 m / 2 s, :dims, :units L, or :units L/T.
 Numbers are exact by default. Use approx(EXPR) when you want a numerical result."
-            )
+            );
         },
         | "type" | "t" => {
             println!(
                 "usage: :type EXPRESSION\nExamples: :type 3 m / 2 s, :type map\nChecks the type without executing effects; session bindings are in scope."
-            )
+            );
         },
         | "latex" | "typst" | "pretty" | "pprint" | "repr" | "print" | "format" => {
             println!(
@@ -2631,7 +2763,7 @@ Numbers are exact by default. Use approx(EXPR) when you want a numerical result.
         | "time" | "ast" | "core" => {
             println!(
                 "usage: :{topic} EXPRESSION\nExample: :{topic} 1 + 2\n:ast parses; :core also type-checks; :time evaluates once using :format's output mode."
-            )
+            );
         },
         | "imports" | "import" | "open" => {
             println!(
@@ -2646,7 +2778,7 @@ Imports at the prompt use the package containing the current directory.
 :imports lists active modules and aliases. Tab completes imported qualified names.
 Loaded dependencies are frozen and initialize once; :reset starts a fresh session
 and observes edited module files. A failed import leaves the prior session intact."
-            )
+            );
         },
         | "interrupt" | "cancel" => {
             println!(
@@ -2656,21 +2788,21 @@ Accepted bindings remain available. Cancelled declaration/import batches roll ba
 Effects completed before an interruption (for example a printed line) stay completed.
 A native library call without cancellation checkpoints finishes its current call
 before reporting interruption. Ctrl-D at the prompt exits; :reset clears the session."
-            )
+            );
         },
         | "run" => {
-            println!("usage: :run\nExecute the main already loaded by paste or :load again.")
+            println!("usage: :run\nExecute the main already loaded by paste or :load again.");
         },
         | "bindings" | "vars" => {
-            println!("usage: :bindings\nList names and types declared in this session.")
+            println!("usage: :bindings\nList names and types declared in this session.");
         },
         | "reset" => {
             println!(
                 "usage: :reset\nClear all declarations, values, and runtime state. Editor history stays available."
-            )
+            );
         },
         | "quit" | "q" => {
-            println!("usage: :quit\nExit the session. Ctrl-D also exits at the prompt.")
+            println!("usage: :quit\nExit the session. Ctrl-D also exits at the prompt.");
         },
         | other => {
             eprintln!("unknown help topic `{other}`; use :help for the full guide");
@@ -2692,12 +2824,16 @@ fn repl_ast(expression: &str) -> Result<String, String> {
         return Err("`:ast` expects an expression, as in `:ast f(1) + 2`".to_string());
     }
     let history = repl_source::History::default();
-    repl_ast_with_input(expression, history.input(expression, None), Style::Plain)
+    repl_ast_with_input(expression, &history.input(expression, None), Style::Plain)
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "parses AST inspection input with its own source diagnostics"
+)]
 fn repl_ast_with_input(
     expression: &str,
-    input: repl_source::Input,
+    input: &repl_source::Input,
     output_style: Style,
 ) -> Result<String, String> {
     if expression.is_empty() {
@@ -2707,7 +2843,7 @@ fn repl_ast_with_input(
     sources.add("<repl>", expression);
     let history = repl_source::History::default();
     let region = repl_source::Region::expression(0, 0, expression.len(), input.clone());
-    let view = history.view(Some(region), Some(&input));
+    let view = history.view(Some(region), Some(input));
     let value = aevia_syntax::parse_expression(0, expression).map_err(|diagnostics| {
         view.render(&diagnostics, &sources, output_style)
             .trim_end()
@@ -2723,6 +2859,10 @@ fn repl_ast_with_input(
 /// The lowering is `aevia_ir`'s, with the checker's pinned `Rssn` overloads and
 /// class instances — this is the same Core IR the interpreter would run, not a
 /// second rendering of the AST.
+#[allow(
+    clippy::single_call_fn,
+    reason = "builds Core IR for REPL inspection without executing the expression"
+)]
 fn repl_core(
     session: &Session,
     expression: &str,
@@ -2758,6 +2898,10 @@ fn repl_core(
 /// One evaluation, so the number is what the user's expression costs; the
 /// value is printed first because a timing without the result it timed is not
 /// reproducible.
+#[allow(
+    clippy::single_call_fn,
+    reason = "evaluates one REPL expression and reports its elapsed time"
+)]
 fn repl_time(
     session: &mut Session,
     expression: &str,
@@ -2781,7 +2925,7 @@ fn repl_time(
     let value = if let aevia_core::value::Value::Io(action) = value {
         interp
             .run_io(&action)
-            .map_err(|error| repl_runtime_error(error, &compilation, session.options))?
+            .map_err(|error| repl_runtime_error(&error, &compilation, session.options))?
     } else {
         value
     };
@@ -2791,6 +2935,10 @@ fn repl_time(
 }
 
 /// `:latex e` — evaluate `e` and render the value with `to_latex`'s engine.
+#[allow(
+    clippy::single_call_fn,
+    reason = "renders the LaTeX inspection command using the session's definitions"
+)]
 fn repl_latex(
     session: &mut Session,
     expression: &str,
@@ -2819,6 +2967,10 @@ fn repl_render(
     aevia_core::display::render(&value, format)
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps all supported REPL display formats in one place"
+)]
 fn repl_parse_format(name: &str) -> Option<aevia_core::display::Format> {
     use aevia_core::display::Format;
     Some(match name {
@@ -2831,7 +2983,7 @@ fn repl_parse_format(name: &str) -> Option<aevia_core::display::Format> {
     })
 }
 
-fn repl_format_name(format: aevia_core::display::Format) -> &'static str {
+const fn repl_format_name(format: aevia_core::display::Format) -> &'static str {
     use aevia_core::display::Format;
     match format {
         | Format::Show => "show",
@@ -2895,13 +3047,17 @@ fn repl_value(
             .as_mut()
             .ok_or("no session")?
             .run_io(&action)
-            .map_err(|error| repl_runtime_error(error, compilation, options))
+            .map_err(|error| repl_runtime_error(&error, compilation, options))
     } else {
         Ok(value)
     }
 }
 
 /// A duration in the largest unit that keeps three significant decimals.
+#[allow(
+    clippy::single_call_fn,
+    reason = "formats elapsed REPL time using the appropriate unit"
+)]
 fn repl_duration(value: std::time::Duration) -> String {
     let nanos = value.as_nanos();
     if nanos < 1_000 {
@@ -2918,11 +3074,11 @@ fn repl_duration(value: std::time::Duration) -> String {
 /// One node of the rendered AST.
 struct AstNode {
     label: String,
-    children: Vec<AstNode>,
+    children: Vec<Self>,
 }
 
 impl AstNode {
-    fn leaf(label: String) -> Self {
+    const fn leaf(label: String) -> Self {
         Self {
             label,
             children: Vec::new(),
@@ -2934,6 +3090,10 @@ impl AstNode {
 ///
 /// Brackets are not in the AST (§9.2.1), so the tree is the precedence-resolved
 /// shape: `(1 + 2) * 3` renders with `*` at the root.
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeps exhaustive syntax-to-tree rendering in a single match"
+)]
 fn ast_node(expr: &aevia_syntax::Expr) -> AstNode {
     use aevia_syntax::ast::BlockStmt;
     use aevia_syntax::ast::DoStmt;
@@ -3142,12 +3302,20 @@ fn ty_node(ty: &aevia_syntax::ast::Ty) -> AstNode {
     AstNode::leaf(format!("type {}", type_source(ty)))
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "renders type annotations for the AST display"
+)]
 fn type_source(ty: &aevia_syntax::ast::Ty) -> String {
     aevia_fmt::print::Printer::new(Vec::new())
         .type_(ty)
         .unwrap_or_else(|_| "<unprintable>".to_string())
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "labels each definition kind for the AST display"
+)]
 fn decl_name(decl: &aevia_syntax::ast::Decl) -> String {
     match &decl.kind {
         | DeclKind::Fn { name, .. }
@@ -3173,7 +3341,7 @@ fn print_ast(
     let child_prefix = format!("{prefix}{}", if last { "   " } else { "│  " });
     let count = node.children.len();
     for (index, child) in node.children.iter().enumerate() {
-        print_ast(child, &child_prefix, index + 1 == count, out);
+        print_ast(child, &child_prefix, index.saturating_add(1) == count, out);
     }
 }
 

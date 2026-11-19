@@ -66,7 +66,7 @@ pub fn lex_inline(
             LexOutput {
                 tokens: vec![Token::new(
                     TokenKind::Eof,
-                    Span::new(file, base, base + text.len()),
+                    Span::new(file, base, base.saturating_add(text.len())),
                 )],
                 docs: Vec::new(),
             }
@@ -111,10 +111,10 @@ impl<'a> Lexer<'a> {
     fn run(mut self) -> Result<LexOutput, Diagnostics> {
         // A UTF-8 BOM is allowed and ignored (§1.1).
         if self.src.starts_with('\u{feff}') {
-            self.pos += '\u{feff}'.len_utf8();
+            self.pos = self.pos.saturating_add('\u{feff}'.len_utf8());
         }
         // A shebang line is ignored.
-        if self.src[self.pos..].starts_with("#!") {
+        if self.remaining().starts_with("#!") {
             while let Some(c) = self.peek() {
                 if c == '\n' {
                     break;
@@ -205,31 +205,47 @@ impl<'a> Lexer<'a> {
         self.push(TokenKind::Eof, at, at);
     }
 
-    fn mark(&self) -> usize {
-        self.base + self.pos
+    const fn mark(&self) -> usize {
+        self.pos
+    }
+
+    fn span(
+        &self,
+        start: usize,
+        end: usize,
+    ) -> Span {
+        Span::new(
+            self.file,
+            self.base.saturating_add(start),
+            self.base.saturating_add(end),
+        )
+    }
+
+    fn remaining(&self) -> &str {
+        self.src.get(self.pos..).unwrap_or_default()
     }
 
     fn peek(&self) -> Option<char> {
-        self.src[self.pos..].chars().next()
+        self.remaining().chars().next()
     }
 
     fn peek_at(
         &self,
         offset: usize,
     ) -> Option<char> {
-        self.src[self.pos..].chars().nth(offset)
+        self.remaining().chars().nth(offset)
     }
 
     fn bump(&mut self) -> Option<char> {
         let c = self.peek()?;
-        self.pos += c.len_utf8();
+        self.pos = self.pos.saturating_add(c.len_utf8());
         Some(c)
     }
 
     fn skip_spaces(&mut self) {
         while let Some(c) = self.peek() {
             if c == ' ' || c == '\t' {
-                self.pos += c.len_utf8();
+                self.pos = self.pos.saturating_add(c.len_utf8());
             } else {
                 break;
             }
@@ -245,8 +261,7 @@ impl<'a> Lexer<'a> {
         if !matches!(kind, TokenKind::Newline | TokenKind::Dedent) {
             self.line_has_token = true;
         }
-        self.tokens
-            .push(Token::new(kind, Span::new(self.file, start, end)));
+        self.tokens.push(Token::new(kind, self.span(start, end)));
     }
 
     fn emit(
@@ -265,7 +280,7 @@ impl<'a> Lexer<'a> {
         start: usize,
         end: usize,
     ) {
-        let span = Span::new(self.file, start, end);
+        let span = self.span(start, end);
         self.diagnostics
             .push(Diagnostic::error(code, message, span));
     }
@@ -299,15 +314,15 @@ impl<'a> Lexer<'a> {
                 match self.peek() {
                     | Some(' ') => {
                         self.bump();
-                        indent += 1;
+                        indent = indent.saturating_add(1);
                     },
                     | Some('\t') => {
                         let start = self.mark();
                         self.bump();
-                        indent += 1;
+                        indent = indent.saturating_add(1);
                         self.error("E0101", "tab character in indentation", start, self.mark());
                         // Keep measuring so the rest of the line still parses.
-                        while let Some(' ') | Some('\t') = self.peek() {
+                        while let Some(' ' | '\t') = self.peek() {
                             if self.peek() == Some('\t') {
                                 let at = self.mark();
                                 self.bump();
@@ -320,7 +335,7 @@ impl<'a> Lexer<'a> {
                             } else {
                                 self.bump();
                             }
-                            indent += 1;
+                            indent = indent.saturating_add(1);
                         }
                     },
                     | _ => break,
@@ -331,11 +346,7 @@ impl<'a> Lexer<'a> {
                     self.at_line_start = false;
                     return false;
                 },
-                | Some('\n') => {
-                    self.bump();
-                    continue;
-                },
-                | Some('\r') => {
+                | Some('\n' | '\r') => {
                     self.bump();
                     continue;
                 },
@@ -346,7 +357,7 @@ impl<'a> Lexer<'a> {
                         // that follows belongs to the current block level, not
                         // to an indent measured from the comment's tail.
                         self.skip_spaces();
-                        if matches!(self.peek(), Some('\n') | Some('\r') | None) {
+                        if matches!(self.peek(), Some('\n' | '\r') | None) {
                             continue;
                         }
                         self.apply_indent(*self.indent_stack.last().unwrap_or(&0));
@@ -359,11 +370,7 @@ impl<'a> Lexer<'a> {
                             self.at_line_start = false;
                             return false;
                         },
-                        | Some('\n') => {
-                            self.bump();
-                            continue;
-                        },
-                        | Some('\r') => {
+                        | Some('\n' | '\r') => {
                             self.bump();
                             continue;
                         },
@@ -400,7 +407,9 @@ impl<'a> Lexer<'a> {
                     "E0102",
                     "inconsistent indentation",
                     at,
-                    at + indent.saturating_sub(*self.indent_stack.last().unwrap_or(&0)),
+                    at.saturating_add(
+                        indent.saturating_sub(*self.indent_stack.last().unwrap_or(&0)),
+                    ),
                 );
             }
         }
@@ -410,17 +419,17 @@ impl<'a> Lexer<'a> {
     /// the following text starts a new physical line.
     fn comment(&mut self) -> bool {
         let start = self.mark();
-        if self.src[self.pos..].starts_with("#-") {
-            self.pos += 2;
+        if self.remaining().starts_with("#-") {
+            self.pos = self.pos.saturating_add(2);
             let mut depth = 1usize;
             let mut newline = false;
             while self.pos < self.src.len() {
-                if self.src[self.pos..].starts_with("#-") {
-                    self.pos += 2;
-                    depth += 1;
-                } else if self.src[self.pos..].starts_with("-#") {
-                    self.pos += 2;
-                    depth -= 1;
+                if self.remaining().starts_with("#-") {
+                    self.pos = self.pos.saturating_add(2);
+                    depth = depth.saturating_add(1);
+                } else if self.remaining().starts_with("-#") {
+                    self.pos = self.pos.saturating_add(2);
+                    depth = depth.saturating_sub(1);
                     if depth == 0 {
                         break;
                     }
@@ -436,8 +445,8 @@ impl<'a> Lexer<'a> {
             }
             return newline;
         }
-        if self.src[self.pos..].starts_with("##") {
-            self.pos += 2;
+        if self.remaining().starts_with("##") {
+            self.pos = self.pos.saturating_add(2);
             let text_start = self.pos;
             while let Some(c) = self.peek() {
                 if c == '\n' {
@@ -445,9 +454,14 @@ impl<'a> Lexer<'a> {
                 }
                 self.bump();
             }
-            let text = self.src[text_start..self.pos].trim().to_string();
+            let text = self
+                .src
+                .get(text_start..self.pos)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
             self.docs.push(DocComment {
-                span: Span::new(self.file, start, self.mark()),
+                span: self.span(start, self.mark()),
                 text,
             });
             return false;
@@ -471,7 +485,7 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
-        let raw = &self.src[start - self.base..self.pos];
+        let raw = self.src.get(start..self.pos).unwrap_or_default();
         // §1.5.1: identifiers are compared in NFC, so `é` written as `e` plus a
         // combining accent is the same name as the precomposed one.
         let normalised: String = raw.nfc().collect();
@@ -504,7 +518,11 @@ impl<'a> Lexer<'a> {
         {
             self.bump();
         }
-        let text = self.src[start - self.base..self.pos].to_string();
+        let text = self
+            .src
+            .get(start..self.pos)
+            .unwrap_or_default()
+            .to_string();
         self.emit(TokenKind::Ident(text), start);
     }
 
@@ -517,10 +535,18 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
-        let text = self.src[start - self.base..self.pos].to_string();
+        let text = self
+            .src
+            .get(start..self.pos)
+            .unwrap_or_default()
+            .to_string();
         self.emit(TokenKind::Superscript(text), start);
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps numeric literal validation and error recovery together"
+    )]
     fn number(&mut self) {
         let start = self.mark();
         if self.peek() == Some('0')
@@ -646,10 +672,10 @@ impl<'a> Lexer<'a> {
                 self.error("E0106", "numeric literal ends with `_`", at, at);
             }
         }
-        if matches!(self.peek(), Some('e') | Some('E')) {
-            let mut lookahead = 1;
-            if matches!(self.peek_at(lookahead), Some('+') | Some('-')) {
-                lookahead += 1;
+        if matches!(self.peek(), Some('e' | 'E')) {
+            let mut lookahead = 1usize;
+            if matches!(self.peek_at(lookahead), Some('+' | '-')) {
+                lookahead = lookahead.saturating_add(1);
             }
             if self.peek_at(lookahead).is_some_and(|c| c.is_ascii_digit()) {
                 is_float = true;
@@ -678,7 +704,7 @@ impl<'a> Lexer<'a> {
                         "invalid floating-point literal",
                         start,
                         self.mark(),
-                    )
+                    );
                 },
             }
         } else {
@@ -689,27 +715,27 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps literal escapes and string recovery in one scanner"
+    )]
     fn string(&mut self) {
         let start = self.mark();
-        if self.src[self.pos..].starts_with("\"\"\"") {
+        if self.remaining().starts_with("\"\"\"") {
             self.multiline_string(start);
             return;
         }
-        self.pos += 1;
+        self.pos = self.pos.saturating_add(1);
         let mut parts: Vec<StringPart> = Vec::new();
         let mut text = String::new();
         loop {
             match self.peek() {
-                | None => {
+                | None | Some('\n') => {
                     self.error("E0104", "unclosed string literal", start, self.mark());
                     break;
                 },
                 | Some('"') => {
                     self.bump();
-                    break;
-                },
-                | Some('\n') => {
-                    self.error("E0104", "unclosed string literal", start, self.mark());
                     break;
                 },
                 | Some('\\') => {
@@ -761,7 +787,11 @@ impl<'a> Lexer<'a> {
                                 }
                                 self.bump();
                             }
-                            let hex = self.src[hex_start..self.pos].to_string();
+                            let hex = self
+                                .src
+                                .get(hex_start..self.pos)
+                                .unwrap_or_default()
+                                .to_string();
                             if self.peek() != Some('}') {
                                 self.error(
                                     "E0104",
@@ -780,7 +810,7 @@ impl<'a> Lexer<'a> {
                                         format!("`\\u{{{hex}}}` is not a Unicode scalar value"),
                                         hex_start,
                                         self.pos,
-                                    )
+                                    );
                                 },
                             }
                         },
@@ -826,11 +856,11 @@ impl<'a> Lexer<'a> {
         while let Some(c) = self.peek() {
             match c {
                 | '{' => {
-                    depth += 1;
+                    depth = depth.saturating_add(1);
                     self.bump();
                 },
                 | '}' => {
-                    depth -= 1;
+                    depth = depth.saturating_sub(1);
                     if depth == 0 {
                         break;
                     }
@@ -848,15 +878,11 @@ impl<'a> Lexer<'a> {
                 | '"' => {
                     // Skip a nested string so braces inside it do not count.
                     self.bump();
-                    while let Some(inner) = self.peek() {
+                    while let Some(inner) = self.bump() {
                         if inner == '\\' {
                             self.bump();
-                            self.bump();
                         } else if inner == '"' {
-                            self.bump();
                             break;
-                        } else {
-                            self.bump();
                         }
                     }
                 },
@@ -874,14 +900,14 @@ impl<'a> Lexer<'a> {
             );
             return None;
         }
-        let source = unescape_source(&self.src[content_start..self.pos]);
-        let span = Span::new(self.file, self.base + content_start, self.base + self.pos);
+        let source = unescape_source(self.src.get(content_start..self.pos).unwrap_or_default());
+        let span = self.span(content_start, self.pos);
         self.bump(); // '}'
         // `"{}"` is a placeholder in other languages; here it is an
         // interpolation with nothing in it. Name the two ways out instead of
         // the parser's "expected an expression".
         if source.trim().is_empty() {
-            let span = Span::new(self.file, open, self.mark());
+            let span = self.span(open, self.mark());
             self.diagnostics.push(
                 Diagnostic::error("E0104", "empty interpolation `{}` in a string", span).with_help(
                     "write an expression inside the braces, `\\{` for a literal brace, \
@@ -895,7 +921,7 @@ impl<'a> Lexer<'a> {
 
     fn raw_string(&mut self) {
         let start = self.mark();
-        self.pos += 1; // opening quote
+        self.pos = self.pos.saturating_add(1); // opening quote
         let content_start = self.pos;
         loop {
             match self.peek() {
@@ -909,7 +935,11 @@ impl<'a> Lexer<'a> {
                 },
             }
         }
-        let text = self.src[content_start..self.pos].to_string();
+        let text = self
+            .src
+            .get(content_start..self.pos)
+            .unwrap_or_default()
+            .to_string();
         if self.peek() == Some('"') {
             self.bump();
         }
@@ -920,13 +950,13 @@ impl<'a> Lexer<'a> {
         &mut self,
         start: usize,
     ) {
-        self.pos += 3;
+        self.pos = self.pos.saturating_add(3);
         let content_start = self.pos;
         let mut end = None;
         while self.pos < self.src.len() {
-            if self.src[self.pos..].starts_with("\"\"\"") {
+            if self.remaining().starts_with("\"\"\"") {
                 end = Some(self.pos);
-                self.pos += 3;
+                self.pos = self.pos.saturating_add(3);
                 break;
             }
             self.bump();
@@ -940,15 +970,14 @@ impl<'a> Lexer<'a> {
             );
             return;
         };
-        let raw = &self.src[content_start..end];
+        let raw = self.src.get(content_start..end).unwrap_or_default();
         let text = dedent_multiline(raw);
-        let span = Span::new(self.file, start, end);
+        let span = self.span(start, end);
         let parts = split_interpolations(&text, span, &mut self.diagnostics);
         self.emit(TokenKind::Str(parts), start);
     }
 
     fn punct(&mut self) {
-        let start = self.mark();
         const CANDIDATES: &[(&str, Punct)] = &[
             ("...", Punct::Ellipsis),
             ("..=", Punct::DotDotEq),
@@ -998,12 +1027,13 @@ impl<'a> Lexer<'a> {
             ("≥", Punct::Ge),
             ("≠", Punct::NotEq),
         ];
+        let start = self.mark();
         for (text, punct) in CANDIDATES {
-            if self.src[self.pos..].starts_with(text) {
-                self.pos += text.len();
+            if self.remaining().starts_with(text) {
+                self.pos = self.pos.saturating_add(text.len());
                 match punct {
                     | Punct::LParen | Punct::LBracket | Punct::LBrace => {
-                        self.bracket_depth += 1;
+                        self.bracket_depth = self.bracket_depth.saturating_add(1);
                     },
                     | Punct::RParen | Punct::RBracket | Punct::RBrace => {
                         self.bracket_depth = self.bracket_depth.saturating_sub(1);
@@ -1025,7 +1055,7 @@ impl<'a> Lexer<'a> {
 }
 
 /// True for the characters that may appear in a superscript exponent.
-fn is_superscript(c: char) -> bool {
+const fn is_superscript(c: char) -> bool {
     matches!(
         c,
         '\u{2070}'
@@ -1052,7 +1082,7 @@ fn unescape_source(source: &str) -> String {
     while let Some(ch) = chars.next() {
         if ch == '\\' {
             match chars.peek() {
-                | Some('"') | Some('{') | Some('}') => {
+                | Some('"' | '{' | '}') => {
                     if let Some(escaped) = chars.next() {
                         out.push(escaped);
                     }
@@ -1072,6 +1102,10 @@ fn unescape_source(source: &str) -> String {
 /// escapes of §1.7 — they are decoded here exactly as in a `"..."` literal, so
 /// `"""x\ty"""` contains a tab and not a `t`. The span is the literal's,
 /// because the dedented text no longer lines up with the source.
+#[allow(
+    clippy::single_call_fn,
+    reason = "isolates multiline interpolation splitting from the lexer cursor"
+)]
 fn split_interpolations(
     text: &str,
     span: Span,
@@ -1124,9 +1158,9 @@ fn split_interpolations(
                 let mut end = text.len();
                 while let Some((index, inner)) = chars.next() {
                     match inner {
-                        | '{' => depth += 1,
+                        | '{' => depth = depth.saturating_add(1),
                         | '}' => {
-                            depth -= 1;
+                            depth = depth.saturating_sub(1);
                             if depth == 0 {
                                 end = index;
                                 break;
@@ -1148,7 +1182,7 @@ fn split_interpolations(
                 }
                 flush(&mut literal, &mut parts);
                 parts.push(StringPart::Interpolation {
-                    source: unescape_source(&text[start..end]),
+                    source: unescape_source(text.get(start..end).unwrap_or_default()),
                     span,
                 });
             },
@@ -1162,6 +1196,10 @@ fn split_interpolations(
 /// Decodes the escapes of §1.7 (`\n`, `\t`, `\r`, `\0`, `\\`, `\"`, `\{`,
 /// `\}`, `\u{...}`). An unknown escape is reported through `on_error` and its
 /// character is kept, so no source text is lost.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps escape decoding separate from interpolation splitting"
+)]
 fn decode_escapes(
     text: &str,
     mut on_error: impl FnMut(&str),
@@ -1211,6 +1249,10 @@ fn decode_escapes(
     out
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "isolates indentation normalization from string scanning"
+)]
 fn dedent_multiline(raw: &str) -> String {
     let raw = raw.strip_prefix('\n').unwrap_or(raw);
     let raw = raw.strip_prefix("\r\n").unwrap_or(raw);
@@ -1220,7 +1262,9 @@ fn dedent_multiline(raw: &str) -> String {
         if line.trim().is_empty() {
             continue;
         }
-        let indent = line.len() - line.trim_start_matches([' ', '\t']).len();
+        let indent = line
+            .len()
+            .saturating_sub(line.trim_start_matches([' ', '\t']).len());
         common = Some(common.map_or(indent, |value: usize| value.min(indent)));
     }
     let common = common.unwrap_or(0);
@@ -1232,7 +1276,7 @@ fn dedent_multiline(raw: &str) -> String {
         if line.trim().is_empty() {
             continue;
         }
-        out.push_str(&line[common.min(line.len())..]);
+        out.push_str(line.get(common..).unwrap_or_default());
     }
     out
 }
@@ -1241,6 +1285,30 @@ fn dedent_multiline(raw: &str) -> String {
 mod tests {
     use super::*;
     use crate::token::TokenKind;
+
+    #[test]
+    fn inline_lexing_keeps_local_text_at_saturating_offsets() {
+        let output = lex_inline(7, "x + 1", usize::MAX);
+        assert!(
+            matches!(output.tokens.first().map(|token| &token.kind), Some(TokenKind::Ident(name)) if name == "x")
+        );
+        assert!(output.tokens.iter().all(|token| {
+            token.span
+                == Span {
+                    file: 7,
+                    start: u32::MAX,
+                    end: u32::MAX,
+                }
+        }));
+        let output = lex_inline(7, "\"", usize::MAX);
+        assert!(matches!(
+            output.tokens.as_slice(),
+            [Token {
+                kind: TokenKind::Eof,
+                ..
+            }]
+        ));
+    }
 
     fn kinds(source: &str) -> Vec<TokenKind> {
         let output = lex(0, source).expect("lexes");

@@ -4,6 +4,21 @@
 //! caller maps variables into its own universe, then propagates the four
 //! concrete representations without replacing a dependent result by an input.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -25,21 +40,30 @@ use crate::ty::Type;
     bincode_next::Fingerprint,
 )]
 pub enum NumericConstraint {
+    /// A literal requires a compatible scalar type.
     Literal {
+        /// Type inferred for the literal.
         ty: Type,
+        /// Literal syntax determines the admissible representations.
         kind: LiteralKind,
     },
     /// A private literal reading computed after its independent source
     /// parameters are selected, rather than an arbitrary result type choice.
     DefaultLiteral {
+        /// Type inferred for the literal.
         ty: Type,
+        /// Literal syntax determines the admissible representations.
         kind: LiteralKind,
+        /// Representations whose selections determine the default.
         inputs: Vec<Rep>,
     },
+    /// A relation between numeric representations.
     Relation(RepRelation),
 }
 
 impl NumericConstraint {
+    /// Returns the types and representation operands carrying free variables.
+    #[must_use]
     pub fn types(&self) -> Vec<Type> {
         match self {
             | Self::Literal { ty, .. } => vec![ty.clone()],
@@ -56,12 +80,14 @@ impl NumericConstraint {
                 relation
                     .operands()
                     .into_iter()
+                    .flatten()
                     .map(|rep| Type::Scalar(rep, aevia_dim::Dim::one()))
                     .collect()
             },
         }
     }
 
+    /// Maps the constraint into another variable universe.
     #[must_use]
     pub fn substitute(
         &self,
@@ -95,18 +121,51 @@ impl NumericConstraint {
     Eq,
     Hash,
     serde::Serialize,
-    serde::Deserialize,
     bincode_next::Encode,
-    bincode_next::Decode,
     bincode_next::Fingerprint,
 )]
 pub struct RepDomain(u8);
 
+impl<'de> serde::Deserialize<'de> for RepDomain {
+    fn deserialize<D: serde::Deserializer<'de>>(decoder: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(rename = "RepDomain")]
+        struct Bits(u8);
+        let bits = Bits::deserialize(decoder)?.0;
+        Self::from_bits(bits)
+            .ok_or_else(|| serde::de::Error::custom("invalid representation domain"))
+    }
+}
+
+impl<Context> bincode_next::Decode<Context> for RepDomain {
+    fn decode<D: bincode_next::de::Decoder<Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        Self::from_bits(u8::decode(decoder)?).ok_or(bincode_next::error::DecodeError::Other(
+            "invalid representation domain",
+        ))
+    }
+}
+
+bincode_next::impl_borrow_decode!(RepDomain);
+
 impl RepDomain {
+    /// A domain accepting every concrete representation.
     pub const ALL: Self = Self(0b1111);
+    /// Concrete representations in domain-bit order.
     pub const CONCRETE: [Rep; 4] = [Rep::Int, Rep::Float, Rep::Real, Rep::Complex];
+    /// A domain accepting no concrete representations.
     pub const EMPTY: Self = Self(0);
 
+    const fn from_bits(bits: u8) -> Option<Self> {
+        if bits & !Self::ALL.0 == 0 {
+            Some(Self(bits))
+        } else {
+            None
+        }
+    }
+
+    /// A domain containing one concrete representation. A variable yields an empty domain.
     #[must_use]
     pub const fn singleton(rep: Rep) -> Self {
         match rep {
@@ -118,6 +177,7 @@ impl RepDomain {
         }
     }
 
+    /// Builds a domain from concrete representations, skipping variables.
     #[must_use]
     pub fn from_reps(reps: impl IntoIterator<Item = Rep>) -> Self {
         Self(
@@ -126,6 +186,7 @@ impl RepDomain {
         )
     }
 
+    /// Checks whether the domain accepts a concrete representation.
     #[must_use]
     pub const fn contains(
         self,
@@ -134,6 +195,7 @@ impl RepDomain {
         self.0 & Self::singleton(rep).0 != 0
     }
 
+    /// Keeps representations accepted by both domains.
     #[must_use]
     pub const fn intersection(
         self,
@@ -142,18 +204,22 @@ impl RepDomain {
         Self(self.0 & other.0)
     }
 
+    /// Checks whether the domain accepts no concrete representation.
     #[must_use]
     pub const fn is_empty(self) -> bool {
         self.0 == 0
     }
 
+    /// Returns the only concrete representation when the domain is a singleton.
     #[must_use]
     pub fn unique(self) -> Option<Rep> {
-        (self.0.count_ones() == 1)
-            .then(|| Self::CONCRETE.into_iter().find(|rep| self.contains(*rep)))
+        self.0
+            .is_power_of_two()
+            .then(|| self.iter().next())
             .flatten()
     }
 
+    /// Iterates over the accepted concrete representations.
     pub fn iter(self) -> impl Iterator<Item = Rep> {
         Self::CONCRETE
             .into_iter()
@@ -176,10 +242,36 @@ impl RepDomain {
     bincode_next::Fingerprint,
 )]
 pub enum RepRelation {
-    Domain { rep: Rep, allowed: RepDomain },
-    AtLeast { upper: Rep, lower: Rep },
-    Join { left: Rep, right: Rep, result: Rep },
-    Divide { input: Rep, result: Rep },
+    /// Restricts one representation to a finite domain.
+    Domain {
+        /// Operand being restricted.
+        rep: Rep,
+        /// Admissible concrete representations.
+        allowed: RepDomain,
+    },
+    /// A representation can express another without a narrower numeric domain.
+    AtLeast {
+        /// Required upper representation.
+        upper: Rep,
+        /// Representation supplying the lower bound.
+        lower: Rep,
+    },
+    /// Result of combining representations through their numeric join.
+    Join {
+        /// Left input to the join.
+        left: Rep,
+        /// Right input to the join.
+        right: Rep,
+        /// Required joined representation.
+        result: Rep,
+    },
+    /// Division promotes integral operations to an exact real result.
+    Divide {
+        /// Representation before division.
+        input: Rep,
+        /// Result after division.
+        result: Rep,
+    },
 }
 
 impl RepRelation {
@@ -218,30 +310,30 @@ impl RepRelation {
         }
     }
 
-    fn operands(self) -> Vec<Rep> {
+    const fn operands(self) -> [Option<Rep>; 3] {
         match self {
-            | Self::Domain { rep, .. } => vec![rep],
-            | Self::AtLeast { upper, lower } => vec![upper, lower],
-            | Self::Join { left, right, result } => vec![left, right, result],
-            | Self::Divide { input, result } => vec![input, result],
+            | Self::Domain { rep, .. } => [Some(rep), None, None],
+            | Self::AtLeast { upper, lower } => [Some(upper), Some(lower), None],
+            | Self::Join { left, right, result } => [Some(left), Some(right), Some(result)],
+            | Self::Divide { input, result } => [Some(input), Some(result), None],
         }
     }
 
     fn accepts(
         self,
-        values: &[Rep],
+        [first, second, third]: [Rep; 3],
     ) -> bool {
         match self {
-            | Self::Domain { allowed, .. } => allowed.contains(values[0]),
-            | Self::AtLeast { .. } => values[0].at_least(values[1]),
-            | Self::Join { .. } => values[0].join_concrete(values[1]) == Some(values[2]),
+            | Self::Domain { allowed, .. } => allowed.contains(first),
+            | Self::AtLeast { .. } => first.at_least(second),
+            | Self::Join { .. } => first.join_concrete(second) == Some(third),
             | Self::Divide { .. } => {
-                let result = if values[0] == Rep::Int {
+                let result = if first == Rep::Int {
                     Rep::Real
                 } else {
-                    values[0]
+                    first
                 };
-                result == values[1]
+                result == second
             },
         }
     }
@@ -250,6 +342,7 @@ impl RepRelation {
 /// An impossible representation relation, retained for a useful diagnostic.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RepConflict {
+    /// First relation that lost all of its assignments.
     pub relation: RepRelation,
 }
 
@@ -276,6 +369,7 @@ pub struct RepDomains {
 }
 
 impl RepDomains {
+    /// Returns the current domain of an operand.
     #[must_use]
     pub fn domain(
         &self,
@@ -287,6 +381,7 @@ impl RepDomains {
         }
     }
 
+    /// Iterates over tracked variables in identifier order.
     pub fn variables(&self) -> impl Iterator<Item = (u32, RepDomain)> + '_ {
         self.variables.iter().map(|(id, domain)| (*id, *domain))
     }
@@ -298,6 +393,10 @@ impl RepDomains {
 /// Join(r, Float, r) excludes Int instead of independently satisfying the
 /// input and output positions. No pointer identity or global type ids enter
 /// the result.
+///
+/// # Errors
+///
+/// Returns the first relation with no remaining supported assignment.
 pub fn propagate(
     relations: &[RepRelation],
     mut resolve: impl FnMut(Rep) -> Rep,
@@ -308,7 +407,7 @@ pub fn propagate(
         .collect();
     let mut domains = RepDomains::default();
     for relation in &relations {
-        for operand in relation.operands() {
+        for operand in relation.operands().into_iter().flatten() {
             if let Rep::Var(id) = operand {
                 domains.variables.entry(id).or_insert(RepDomain::ALL);
             }
@@ -318,57 +417,18 @@ pub fn propagate(
         let mut changed = false;
         for relation in &relations {
             let operands = relation.operands();
-            let choices: Vec<Vec<Rep>> = operands
-                .iter()
-                .map(|rep| domains.domain(*rep).iter().collect())
-                .collect();
-            let mut supported = BTreeMap::<u32, RepDomain>::new();
-            let mut accepted = false;
-            // Relations have at most three operands, so this enumerates at
-            // most 64 tuples, independently of the number of type variables.
-            for code in 0..4usize.pow(operands.len() as u32) {
-                let mut code = code;
-                let mut values = Vec::with_capacity(operands.len());
-                let mut assignments = BTreeMap::new();
-                let mut valid = true;
-                for (operand, choices) in operands.iter().zip(&choices) {
-                    let index = code % 4;
-                    code /= 4;
-                    let Some(value) = choices.get(index).copied() else {
-                        valid = false;
-                        break;
-                    };
-                    if let Rep::Var(id) = operand
-                        && assignments
-                            .insert(*id, value)
-                            .is_some_and(|previous| previous != value)
-                    {
-                        valid = false;
-                        break;
-                    }
-                    values.push(value);
-                }
-                if !valid || !relation.accepts(&values) {
-                    continue;
-                }
-                accepted = true;
-                for (id, value) in assignments {
-                    let support = supported.entry(id).or_insert(RepDomain::EMPTY);
-                    support.0 |= RepDomain::singleton(value).0;
-                }
-            }
-            if !accepted {
+            let masks = operands
+                .map(|rep| rep.map_or(RepDomain::singleton(Rep::Int), |rep| domains.domain(rep)));
+            let supported = supported_values(*relation, operands, masks);
+            if supported.iter().any(|domain| domain.is_empty()) {
                 return Err(RepConflict { relation: *relation });
             }
-            for (id, support) in supported {
-                let old = domains.variables[&id];
-                let next = old.intersection(support);
-                if next.is_empty() {
-                    return Err(RepConflict { relation: *relation });
-                }
-                if next != old {
-                    domains.variables.insert(id, next);
-                    changed = true;
+            for (operand, support) in operands.into_iter().zip(supported) {
+                if let Some(Rep::Var(id)) = operand {
+                    let domain = domains.variables.entry(id).or_insert(RepDomain::ALL);
+                    let next = domain.intersection(support);
+                    changed |= next != *domain;
+                    *domain = next;
                 }
             }
         }
@@ -376,6 +436,42 @@ pub fn propagate(
             return Ok(domains);
         }
     }
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "evaluate support for one representation relation"
+    )
+)]
+fn supported_values(
+    relation: RepRelation,
+    [first, second, third]: [Option<Rep>; 3],
+    [first_choices, second_choices, third_choices]: [RepDomain; 3],
+) -> [RepDomain; 3] {
+    let mut support = [RepDomain::EMPTY; 3];
+    let agrees =
+        |a: Option<Rep>, b: Option<Rep>, value_a: Rep, value_b: Rep| a != b || value_a == value_b;
+    // Padding uses a singleton, and the actual relation has at most three slots.
+    for a in first_choices.iter() {
+        for b in second_choices.iter() {
+            if !agrees(first, second, a, b) {
+                continue;
+            }
+            for c in third_choices.iter() {
+                if agrees(first, third, a, c)
+                    && agrees(second, third, b, c)
+                    && relation.accepts([a, b, c])
+                {
+                    for (domain, rep) in support.iter_mut().zip([a, b, c]) {
+                        domain.0 |= RepDomain::singleton(rep).0;
+                    }
+                }
+            }
+        }
+    }
+    support
 }
 
 #[cfg(test)]
@@ -504,5 +600,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(domains.domain(Rep::Var(0)).unique(), Some(Rep::Complex));
+    }
+
+    #[test]
+    fn representation_domain_decoder_rejects_unknown_bits() {
+        let config = bincode_next::config::standard();
+        let bytes = bincode_next::encode_to_vec(RepDomain::ALL, config).expect("encode domain");
+        assert_eq!(bytes, [0b1111]);
+        assert_eq!(
+            bincode_next::decode_from_slice::<RepDomain, _>(&bytes, config)
+                .expect("decode domain")
+                .0,
+            RepDomain::ALL,
+        );
+        assert!(bincode_next::decode_from_slice::<RepDomain, _>(&[0b1_0000], config).is_err());
     }
 }

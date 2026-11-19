@@ -20,6 +20,9 @@ pub(super) fn map_err(err: InterpError) -> NumericError {
 }
 
 /// Evaluates a cubic spline with the specified boundary condition at `x`.
+///
+/// # Errors
+/// Rejects invalid or unordered knots, mismatched values, or a singular spline system.
 pub fn cubic_spline(
     xs: &[f64],
     ys: &[f64],
@@ -30,6 +33,9 @@ pub fn cubic_spline(
 }
 
 /// PCHIP (Piecewise Cubic Hermite Interpolating Polynomial) at `x`.
+///
+/// # Errors
+/// Rejects invalid or unordered knots and mismatched values.
 pub fn pchip(
     xs: &[f64],
     ys: &[f64],
@@ -39,6 +45,9 @@ pub fn pchip(
 }
 
 /// Akima 1D cubic spline interpolation at `x`.
+///
+/// # Errors
+/// Rejects insufficient or invalid knots and mismatched values.
 pub fn akima(
     xs: &[f64],
     ys: &[f64],
@@ -48,6 +57,9 @@ pub fn akima(
 }
 
 /// Evaluates a B-spline of given `degree` at `x`.
+///
+/// # Errors
+/// Rejects incompatible coefficients or knots and invalid degree or query.
 pub fn bspline_eval(
     knots: &[f64],
     coeffs: &[f64],
@@ -63,6 +75,9 @@ pub struct BSpline(interp_ext::BSpline);
 
 impl BSpline {
     /// Fits a clamped B-spline of `degree` that interpolates `(xs[i], ys[i])`.
+    ///
+    /// # Errors
+    /// Rejects invalid data or degree and singular interpolation systems.
     pub fn interpolate(
         xs: &[f64],
         ys: &[f64],
@@ -74,6 +89,9 @@ impl BSpline {
     }
 
     /// Evaluates the fitted B-spline at `x`.
+    ///
+    /// # Errors
+    /// Rejects a query outside the spline's domain.
     pub fn eval(
         &self,
         x: f64,
@@ -83,6 +101,9 @@ impl BSpline {
 }
 
 /// Bicubic interpolation on a rectilinear 2D grid.
+///
+/// # Errors
+/// Rejects invalid grid axes, mismatched grid storage, and invalid queries.
 pub fn bicubic(
     xs: &[f64],
     ys: &[f64],
@@ -94,6 +115,9 @@ pub fn bicubic(
 }
 
 /// N-dimensional multilinear interpolation on a rectilinear grid.
+///
+/// # Errors
+/// Rejects mismatched shape or an invalid grid, rank, or query.
 pub fn interpn(
     axes: &[&[f64]],
     grid: &[f64],
@@ -103,6 +127,9 @@ pub fn interpn(
 }
 
 /// Radial Basis Function (RBF) scattered-data interpolation in `R^d`.
+///
+/// # Errors
+/// Rejects inconsistent point dimensions or values and singular interpolation systems.
 pub fn rbf_interp(
     points: &[&[f64]],
     values: &[f64],
@@ -113,6 +140,9 @@ pub fn rbf_interp(
 }
 
 /// Shepard inverse-distance weighting (IDW) scattered-data interpolation in `R^d`.
+///
+/// # Errors
+/// Rejects mismatched point dimensions or values and invalid weights or query.
 pub fn shepard_idw(
     points: &[&[f64]],
     values: &[f64],
@@ -123,6 +153,9 @@ pub fn shepard_idw(
 }
 
 /// 2D scattered-data linear interpolation over the Delaunay triangulation of `points`.
+///
+/// # Errors
+/// Rejects invalid point sets and queries outside the triangulation.
 pub fn delaunay_linear_2d(
     points: &[(f64, f64)],
     values: &[f64],
@@ -133,6 +166,9 @@ pub fn delaunay_linear_2d(
 }
 
 /// Computes the `[m / n]` Padé approximant `P(x) / Q(x)`.
+///
+/// # Errors
+/// Rejects insufficient coefficients, invalid degrees, and singular systems.
 pub fn pade(
     coeffs: &[f64],
     m: usize,
@@ -142,6 +178,9 @@ pub fn pade(
 }
 
 /// Evaluates a rational function `P(x) / Q(x)`.
+///
+/// # Errors
+/// Rejects a vanishing denominator at the evaluation point.
 pub fn rational_eval(
     p: &[f64],
     q: &[f64],

@@ -10,7 +10,37 @@
 //! Errors are recovered per declaration: a bad declaration is dropped and
 //! parsing continues at the next line, so one mistake does not hide the rest.
 
-use crate::ast::*;
+use crate::ast::AttrArg;
+use crate::ast::Attribute;
+use crate::ast::BinOp;
+use crate::ast::BlockStmt;
+use crate::ast::ClassMethod;
+use crate::ast::Constructor;
+use crate::ast::Decl;
+use crate::ast::DeclKind;
+use crate::ast::DimAst;
+use crate::ast::DoStmt;
+use crate::ast::Expr;
+use crate::ast::ExprKind;
+use crate::ast::InstanceMethod;
+use crate::ast::Kind;
+use crate::ast::MatchArm;
+use crate::ast::Module;
+use crate::ast::NatAst;
+use crate::ast::NumberLit;
+use crate::ast::Param;
+use crate::ast::Pat;
+use crate::ast::PatKind;
+use crate::ast::PatLit;
+use crate::ast::ShapeAst;
+use crate::ast::ShapeItem;
+use crate::ast::SliceAst;
+use crate::ast::StrPiece;
+use crate::ast::Ty;
+use crate::ast::TyKind;
+use crate::ast::TypeBody;
+use crate::ast::TypeParam;
+use crate::ast::UnOp;
 use crate::diagnostic::Diagnostic;
 use crate::diagnostic::Diagnostics;
 use crate::lexer::LexOutput;
@@ -80,6 +110,7 @@ pub fn parse_expression(
 struct Parser<'a> {
     tokens: &'a [Token],
     docs: &'a [DocComment],
+    eof: Token,
     doc_cursor: usize,
     file: FileId,
     source: &'a str,
@@ -103,6 +134,7 @@ impl<'a> Parser<'a> {
         Self {
             tokens,
             docs,
+            eof: Token::new(TokenKind::Eof, Span::new(file, source.len(), source.len())),
             doc_cursor: 0,
             file,
             source,
@@ -116,11 +148,7 @@ impl<'a> Parser<'a> {
     // ----- token helpers -------------------------------------------------
 
     fn token(&self) -> &Token {
-        // The lexer always ends the stream with `Eof`, so the fallback is only
-        // reachable if a caller slices tokens by hand.
-        self.tokens
-            .get(self.pos)
-            .unwrap_or_else(|| &self.tokens[self.tokens.len() - 1])
+        self.tokens.get(self.pos).unwrap_or(&self.eof)
     }
 
     fn kind(&self) -> &TokenKind {
@@ -148,7 +176,7 @@ impl<'a> Parser<'a> {
         offset: usize,
     ) -> &TokenKind {
         self.tokens
-            .get(self.pos + offset)
+            .get(self.pos.saturating_add(offset))
             .map_or(&TokenKind::Eof, |token| &token.kind)
     }
 
@@ -217,7 +245,7 @@ impl<'a> Parser<'a> {
     fn bump(&mut self) -> Token {
         let token = self.token().clone();
         if !self.at_eof() {
-            self.pos += 1;
+            self.pos = self.pos.saturating_add(1);
         }
         token
     }
@@ -308,11 +336,8 @@ impl<'a> Parser<'a> {
     /// True when the construct just parsed ended with a block, which consumed
     /// the `NEWLINE` before its `DEDENT` — the grammar's `NEWLINE?`.
     fn line_end_consumed(&self) -> bool {
-        self.pos > 0
-            && matches!(
-                self.tokens[self.pos - 1].kind,
-                TokenKind::Newline | TokenKind::Dedent
-            )
+        self.previous_token()
+            .is_some_and(|token| matches!(token.kind, TokenKind::Newline | TokenKind::Dedent))
     }
 
     fn describe(&self) -> String {
@@ -485,7 +510,7 @@ impl<'a> Parser<'a> {
                     | Some(previous) => format!("{previous}\n{}", doc.text),
                     | None => doc.text.clone(),
                 });
-                self.doc_cursor += 1;
+                self.doc_cursor = self.doc_cursor.saturating_add(1);
             } else {
                 break;
             }
@@ -512,7 +537,7 @@ impl<'a> Parser<'a> {
         {
             let mut look = 2;
             while matches!(self.kind_at(look), TokenKind::Newline) {
-                look += 1;
+                look = look.saturating_add(1);
             }
             if matches!(self.kind_at(look), TokenKind::Keyword(Keyword::Module)) {
                 self.bump();
@@ -628,17 +653,17 @@ impl<'a> Parser<'a> {
             self.bump();
         }
         let kind = match self.kind().clone() {
-            | TokenKind::Keyword(Keyword::Import) => self.import_decl(false, export)?,
-            | TokenKind::Keyword(Keyword::Open) => self.import_decl(true, export)?,
+            | TokenKind::Keyword(Keyword::Import) => self.import_decl(false, export),
+            | TokenKind::Keyword(Keyword::Open) => self.import_decl(true, export),
             | TokenKind::Keyword(Keyword::Dimension) => self.dimension_decl()?,
             | TokenKind::Keyword(Keyword::Unit) => self.unit_decl()?,
             | TokenKind::Keyword(Keyword::Type) => self.type_decl()?,
             | TokenKind::Keyword(Keyword::Class) => self.class_decl()?,
             | TokenKind::Keyword(Keyword::Instance) => self.instance_decl()?,
-            | TokenKind::Keyword(Keyword::Derive) => self.derive_decl()?,
+            | TokenKind::Keyword(Keyword::Derive) => self.derive_decl(),
             | TokenKind::Keyword(Keyword::Fn) => self.fn_decl()?,
             | TokenKind::Keyword(Keyword::Let) => self.let_decl()?,
-            | TokenKind::Keyword(Keyword::Test) => self.test_decl()?,
+            | TokenKind::Keyword(Keyword::Test) => self.test_decl(),
             | _ => {
                 self.unexpected("a declaration");
                 return None;
@@ -712,11 +737,13 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn previous_token(&self) -> Option<&Token> {
+        self.tokens.get(self.pos.checked_sub(1)?)
+    }
+
     fn previous_span(&self) -> Span {
-        if self.pos == 0 {
-            return self.span();
-        }
-        self.tokens[self.pos - 1].span
+        self.previous_token()
+            .map_or_else(|| self.span(), |token| token.span)
     }
 
     fn attribute(&mut self) -> Attribute {
@@ -775,7 +802,7 @@ impl<'a> Parser<'a> {
         &mut self,
         open: bool,
         export: bool,
-    ) -> Option<DeclKind> {
+    ) -> DeclKind {
         self.bump(); // import / open
         let path = self.module_path();
         let mut alias = None;
@@ -787,8 +814,7 @@ impl<'a> Parser<'a> {
                 self.unexpected("a module alias");
             }
         }
-        let mut names = None;
-        if self.eat_punct(Punct::LBrace) {
+        let names = if self.eat_punct(Punct::LBrace) {
             let mut list = Vec::new();
             while !self.at_punct(Punct::RBrace) && !self.at_eof() {
                 match self.kind().clone() {
@@ -806,16 +832,18 @@ impl<'a> Parser<'a> {
                 }
             }
             self.expect_punct(Punct::RBrace);
-            names = Some(list);
-        }
+            Some(list)
+        } else {
+            None
+        };
         self.expect_newline();
-        Some(DeclKind::Import {
+        DeclKind::Import {
             path,
             alias,
             names,
             open,
             export,
-        })
+        }
     }
 
     fn dimension_decl(&mut self) -> Option<DeclKind> {
@@ -854,8 +882,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let mut offset = None;
-        if self.ident_is("offset") {
+        let offset = if self.ident_is("offset") {
             self.bump();
             let offset_scale = self.unit_scale()?;
             let offset_unit = if self.starts_unit_atom() {
@@ -863,8 +890,10 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            offset = Some((offset_scale, offset_unit));
-        }
+            Some((offset_scale, offset_unit))
+        } else {
+            None
+        };
         let prefixable = if self.ident_is("prefixable") {
             self.bump();
             true
@@ -910,6 +939,10 @@ impl<'a> Parser<'a> {
         }
     }
 
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "exact rational operations check nonzero divisors"
+    )]
     fn unit_scale(&mut self) -> Option<Scale> {
         let negative = self.eat_punct(Punct::Minus);
         if self.ident_is("pi") {
@@ -1291,7 +1324,7 @@ impl<'a> Parser<'a> {
         Some(DeclKind::Instance { class, ty, methods })
     }
 
-    fn derive_decl(&mut self) -> Option<DeclKind> {
+    fn derive_decl(&mut self) -> DeclKind {
         self.bump();
         let mut classes = Vec::new();
         loop {
@@ -1314,7 +1347,7 @@ impl<'a> Parser<'a> {
         self.expect_kw(Keyword::For);
         let ty = self.ty();
         self.expect_newline();
-        Some(DeclKind::Derive { classes, ty })
+        DeclKind::Derive { classes, ty }
     }
 
     fn fn_decl(&mut self) -> Option<DeclKind> {
@@ -1431,7 +1464,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn test_decl(&mut self) -> Option<DeclKind> {
+    fn test_decl(&mut self) -> DeclKind {
         self.bump();
         let name = match self.kind().clone() {
             | TokenKind::Str(parts) => {
@@ -1444,8 +1477,7 @@ impl<'a> Parser<'a> {
                             | StringPart::Interpolation { .. } => None,
                         }
                     })
-                    .collect::<Vec<_>>()
-                    .join("")
+                    .collect::<String>()
             },
             | _ => {
                 self.unexpected("a test name");
@@ -1455,20 +1487,20 @@ impl<'a> Parser<'a> {
         self.expect_punct(Punct::Equals);
         let body = self.expr();
         self.expect_newline();
-        Some(DeclKind::Test { name, body })
+        DeclKind::Test { name, body }
     }
 
     // ----- expressions ---------------------------------------------------
 
     fn expr(&mut self) -> Expr {
-        self.depth += 1;
+        self.depth = self.depth.saturating_add(1);
         if self.depth > MAX_DEPTH {
-            self.depth -= 1;
+            self.depth = self.depth.saturating_sub(1);
             self.error_here("E0202", "expression nesting is too deep");
             return Expr::new(ExprKind::Error, self.span());
         }
         let result = self.expr_inner();
-        self.depth -= 1;
+        self.depth = self.depth.saturating_sub(1);
         result
     }
 
@@ -1555,16 +1587,16 @@ impl<'a> Parser<'a> {
         loop {
             match self.kind_at(offset) {
                 | TokenKind::Newline | TokenKind::Dedent | TokenKind::Eof => return false,
-                | TokenKind::Keyword(Keyword::Let) => pending += 1,
+                | TokenKind::Keyword(Keyword::Let) => pending = pending.saturating_add(1),
                 | TokenKind::Keyword(Keyword::In) => {
                     if pending == 0 {
                         return true;
                     }
-                    pending -= 1;
+                    pending = pending.saturating_sub(1);
                 },
                 | _ => {},
             }
-            offset += 1;
+            offset = offset.saturating_add(1);
         }
     }
 
@@ -2098,14 +2130,14 @@ impl<'a> Parser<'a> {
             return Expr::new(ExprKind::Error, self.span());
         }
         let result = self.unary_expr_inner();
-        self.depth -= 1;
+        self.depth = self.depth.saturating_sub(1);
         result
     }
 
     fn enter_depth(&mut self) -> bool {
-        self.depth += 1;
+        self.depth = self.depth.saturating_add(1);
         if self.depth > MAX_DEPTH {
-            self.depth -= 1;
+            self.depth = self.depth.saturating_sub(1);
             self.error_here("E0202", "expression nesting is too deep");
             return false;
         }
@@ -2154,6 +2186,10 @@ impl<'a> Parser<'a> {
         left
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps one grammar production and its recovery paths together"
+    )]
     fn postfix_expr(&mut self) -> Expr {
         let mut expr = self.primary();
         loop {
@@ -2438,6 +2474,10 @@ impl<'a> Parser<'a> {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps one grammar production and its recovery paths together"
+    )]
     fn primary(&mut self) -> Expr {
         let start = self.span();
         if self.physical_declaration_boundary() {
@@ -2605,14 +2645,14 @@ impl<'a> Parser<'a> {
                             "E0108",
                             "expected a unit after the numeric literal",
                             self.span(),
-                        )
+                        );
                     },
                     | _ => {
                         self.error(
                             "E0209",
                             "`(` after a numeric literal must contain a unit expression",
                             self.span(),
-                        )
+                        );
                     },
                 }
                 None
@@ -2833,6 +2873,10 @@ impl<'a> Parser<'a> {
         pat
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps one grammar production and its recovery paths together"
+    )]
     fn pattern_atom(&mut self) -> Pat {
         let start = self.span();
         match self.kind().clone() {
@@ -2881,8 +2925,7 @@ impl<'a> Parser<'a> {
                             | StringPart::Interpolation { .. } => None,
                         }
                     })
-                    .collect::<Vec<_>>()
-                    .join("");
+                    .collect::<String>();
                 Pat::new(PatKind::Lit(PatLit::Str(text)), start)
             },
             | TokenKind::Keyword(Keyword::True) => {
@@ -3000,14 +3043,14 @@ impl<'a> Parser<'a> {
     // ----- types ---------------------------------------------------------
 
     fn ty(&mut self) -> Ty {
-        self.depth += 1;
+        self.depth = self.depth.saturating_add(1);
         if self.depth > MAX_DEPTH {
-            self.depth -= 1;
+            self.depth = self.depth.saturating_sub(1);
             self.error_here("E0202", "type nesting is too deep");
             return Ty::new(TyKind::Unit, self.span());
         }
         let result = self.ty_inner();
-        self.depth -= 1;
+        self.depth = self.depth.saturating_sub(1);
         result
     }
 
@@ -3179,6 +3222,10 @@ impl<'a> Parser<'a> {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps one grammar production and its recovery paths together"
+    )]
     fn named_type(
         &mut self,
         name: String,
@@ -3579,6 +3626,10 @@ impl<'a> Parser<'a> {
         }
     }
 
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "exact rational operations check nonzero divisors"
+    )]
     fn exponent(&mut self) -> BigRational {
         let negative = self.eat_punct(Punct::Minus);
         if self.eat_punct(Punct::LParen) {
@@ -3608,6 +3659,10 @@ impl<'a> Parser<'a> {
         if negative { -value } else { value }
     }
 
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "exact rational operations check nonzero divisors"
+    )]
     fn exponent_number(&mut self) -> BigRational {
         let negative = self.eat_punct(Punct::Minus);
         let span = self.span();
@@ -3667,7 +3722,7 @@ impl<'a> Parser<'a> {
     /// Whether the current token touches both its neighbours.
     fn tight_unit_operator(&self) -> bool {
         let current = self.span();
-        let Some(next) = self.tokens.get(self.pos + 1) else {
+        let Some(next) = self.tokens.get(self.pos.saturating_add(1)) else {
             return false;
         };
         self.pos > 0 && self.previous_span().end == current.start && current.end == next.span.start
@@ -3746,6 +3801,10 @@ impl<'a> Parser<'a> {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps the span fallback for nested declarations explicit"
+)]
 fn decl_span(kind: &DeclKind) -> Span {
     // Used only for nested function declarations, where the exact span is not
     // observable; the body's span is the best available approximation.
@@ -3756,7 +3815,7 @@ fn decl_span(kind: &DeclKind) -> Span {
     }
 }
 
-fn operator_name(punct: Punct) -> Option<&'static str> {
+const fn operator_name(punct: Punct) -> Option<&'static str> {
     Some(match punct {
         | Punct::Plus => "+",
         | Punct::Minus => "-",
@@ -3778,6 +3837,10 @@ fn operator_name(punct: Punct) -> Option<&'static str> {
 }
 
 /// Converts a superscript run such as `⁻¹` or `⁽⁻¹⁾` to an integer exponent.
+#[allow(
+    clippy::single_call_fn,
+    reason = "isolates Unicode exponent decoding and overflow checks"
+)]
 fn parse_superscript(text: &str) -> Option<i32> {
     let mut value: i32 = 0;
     let mut negative = false;
@@ -3785,7 +3848,7 @@ fn parse_superscript(text: &str) -> Option<i32> {
     for c in text.chars() {
         match c {
             | '\u{2070}'..='\u{2079}' => {
-                let digit = (c as u32) - 0x2070;
+                let digit = (c as u32).checked_sub(0x2070)?;
                 value = value
                     .checked_mul(10)?
                     .checked_add(i32::try_from(digit).ok()?)?;
@@ -3822,13 +3885,34 @@ fn parse_superscript(text: &str) -> Option<i32> {
     if !saw_digit {
         return None;
     }
-    Some(if negative { -value } else { value })
+    if negative {
+        value.checked_neg()
+    } else {
+        Some(value)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::lexer::lex;
+
+    #[test]
+    fn host_token_stream_may_be_empty_or_missing_its_eof() {
+        let empty = LexOutput {
+            tokens: Vec::new(),
+            docs: Vec::new(),
+        };
+        let (module, diagnostics) = parse_module(0, "", &empty);
+        assert!(module.decls.is_empty() && !diagnostics.has_errors());
+
+        let source = "let x = 1\n";
+        let mut truncated = lex(0, source).expect("lexes");
+        truncated.tokens.pop();
+        let (module, diagnostics) = parse_module(0, source, &truncated);
+        assert_eq!(module.decls.len(), 1);
+        assert!(!diagnostics.has_errors());
+    }
 
     fn parse(source: &str) -> Module {
         let lexed = lex(0, source).expect("lexes");

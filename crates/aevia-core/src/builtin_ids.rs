@@ -4,6 +4,21 @@
 //! a chain of length-and-memcmp tests, one per arm. Resolving the name to a
 //! [`BuiltinId`] once turns the dispatch itself into a jump table.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
 use crate::fxhash::FxHashMap;
 use std::cell::Cell;
 use std::sync::OnceLock;
@@ -13,7 +28,7 @@ macro_rules! builtin_ids {
         /// A builtin implemented by `builtins::call`.
         #[derive(Clone, Copy, PartialEq, Eq, Debug)]
         #[repr(u16)]
-        pub(crate) enum BuiltinId {
+        pub enum BuiltinId {
             $($variant,)*
         }
 
@@ -484,9 +499,14 @@ thread_local! {
 
 impl BuiltinId {
     /// The builtin called `name`, if the runtime implements one.
-    pub(crate) fn from_name(name: &str) -> Option<Self> {
-        let slot = ((name.as_ptr() as usize >> 3) ^ name.len()) & (CACHE_SLOTS - 1);
-        let cached = RESOLVED.with(|cache| cache[slot].get());
+    #[allow(
+        clippy::single_call_fn,
+        reason = "resolve source names separately from builtin execution"
+    )]
+    pub fn from_name(name: &str) -> Option<Self> {
+        static TABLE: OnceLock<FxHashMap<&'static str, BuiltinId>> = OnceLock::new();
+        let slot = ((name.as_ptr() as usize >> 3) ^ name.len()) & CACHE_SLOTS.saturating_sub(1);
+        let cached = RESOLVED.with(|cache| cache.get(slot).map_or(0, Cell::get));
         if let Some(&(known, id)) = usize::from(cached)
             .checked_sub(1)
             .and_then(|index| Self::ALL.get(index))
@@ -494,17 +514,15 @@ impl BuiltinId {
         {
             return Some(id);
         }
-        let id = Self::lookup(name)?;
-        RESOLVED.with(|cache| cache[slot].set(id as u16 + 1));
-        Some(id)
-    }
-
-    fn lookup(name: &str) -> Option<Self> {
-        static TABLE: OnceLock<FxHashMap<&'static str, BuiltinId>> = OnceLock::new();
-        TABLE
+        let id = *TABLE
             .get_or_init(|| Self::ALL.iter().copied().collect())
-            .get(name)
-            .copied()
+            .get(name)?;
+        RESOLVED.with(|cache| {
+            if let Some(cell) = cache.get(slot) {
+                cell.set((id as u16).saturating_add(1));
+            }
+        });
+        Some(id)
     }
 }
 

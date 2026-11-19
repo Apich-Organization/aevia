@@ -6,7 +6,8 @@
 //! [`DocComment`][aevia_syntax::token::DocComment] spans (never the
 //! declarations' `doc` strings, because those are per-line `trim`med and would
 //! lose the indentation of a block body), reconstructs each comment run with
-//! its indentation, and returns one [`Doctest`] per `aevia` fenced block.
+//! its indentation, and returns one [`Doctest`] per backtick or tilde fence
+//! labelled `aevia`.
 //!
 //! A block may declare that it is *expected* to fail: a first content line of
 //! `compile_fail` or `compile_fail E0401` (optionally written as a comment,
@@ -14,14 +15,9 @@
 //! requires that code to be among the errors. The marker line is not part of
 //! the snippet.
 //!
-//! The declaring module's `import`/`open` lines are carried with every
-//! snippet. The module's own declarations are **not** in scope: a snippet is
-//! compiled as its own synthetic module, which is what the compiler's
-//! single-file [`aevia_core::compile`] can check without a package graph. A
-//! snippet that needs a module function has to define what it uses; this
-//! limitation is documented in the command's help and in its output.
+//! Each snippet compiles as its own synthetic module with the declaring
+//! module's `import` and `open` lines. Define any local helpers in the block.
 
-use aevia_syntax::ast::Decl;
 use aevia_syntax::ast::DeclKind;
 use aevia_syntax::lex;
 use aevia_syntax::parse_module;
@@ -54,7 +50,7 @@ pub struct Doctest {
     pub imports: Vec<String>,
 }
 
-/// Extracts every ```aevia block from the `##` comments of one file.
+/// Extracts every fenced `aevia` block from the `##` comments of one file.
 ///
 /// # Errors
 ///
@@ -65,27 +61,36 @@ pub fn extract(
     source: &str,
     file: &str,
 ) -> Result<Vec<Doctest>, String> {
-    let lexed = lex(0, source).map_err(|diagnostics| first_error(source, &diagnostics))?;
+    let lexed = lex(0, source).map_err(|diagnostics| super::first_error(source, &diagnostics))?;
     let (module, diagnostics) = parse_module(0, source, &lexed);
     if diagnostics.has_errors() {
-        return Err(first_error(source, &diagnostics));
+        return Err(super::first_error(source, &diagnostics));
     }
-    let module_name = module
-        .name
-        .as_ref()
-        .map(|path| path.join("."))
-        .unwrap_or_else(|| file_stem(file));
+    let module_name = module.name.as_ref().map_or_else(
+        || {
+            std::path::Path::new(file).file_stem().map_or_else(
+                || file.to_string(),
+                |stem| stem.to_string_lossy().into_owned(),
+            )
+        },
+        |path| path.join("."),
+    );
     let imports: Vec<String> = module
         .decls
         .iter()
         .filter(|declaration| matches!(declaration.kind, DeclKind::Import { .. }))
-        .filter_map(|declaration| slice(source, declaration).map(str::to_string))
+        .filter_map(|declaration| {
+            let start = usize::try_from(declaration.span.start).ok()?;
+            let end = usize::try_from(declaration.span.end).ok()?;
+            source.get(start..end).map(str::trim)
+        })
         .filter(|text| !text.is_empty())
+        .map(str::to_owned)
         .collect();
 
     let mut doctests = Vec::new();
     for run in doc_runs(source, &lexed.docs) {
-        scan_run(run, &module_name, file, &imports, &mut doctests)?;
+        scan_run(&run, &module_name, file, &imports, &mut doctests)?;
     }
     Ok(doctests)
 }
@@ -105,20 +110,42 @@ type DocRun = Vec<DocLine>;
 ///
 /// The lexer trims each `##` line, so the spans are the only way back to the
 /// original indentation — which a fenced code block needs.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "source span reconstruction precedes Markdown scanning"
+    )
+)]
 fn doc_runs(
     source: &str,
     docs: &[aevia_syntax::token::DocComment],
 ) -> Vec<DocRun> {
     let mut runs: Vec<DocRun> = Vec::new();
     let mut previous_end: Option<usize> = None;
+    let mut line_breaks = source
+        .match_indices(['\r', '\n'])
+        .filter(|(offset, terminator)| {
+            *terminator == "\n"
+                || !source
+                    .get(*offset..)
+                    .is_some_and(|tail| tail.starts_with("\r\n"))
+        })
+        .map(|(offset, _)| offset)
+        .peekable();
+    let mut number = 1u32;
     for comment in docs {
         let start = usize::try_from(comment.span.start).unwrap_or(usize::MAX);
         let end = usize::try_from(comment.span.end).unwrap_or(usize::MAX);
         let Some(raw) = source.get(start..end) else {
             continue;
         };
-        let text = comment_body(raw);
-        let number = 1 + source[..start.min(source.len())].matches('\n').count() as u32;
+        let trimmed = raw.trim_start();
+        let body = trimmed.strip_prefix("##").unwrap_or(trimmed);
+        let text = body.strip_prefix(' ').unwrap_or(body).trim_end().to_owned();
+        while line_breaks.next_if(|offset| *offset < start).is_some() {
+            number = number.saturating_add(1);
+        }
         let contiguous = previous_end.is_some_and(|previous| {
             source
                 .get(previous..start)
@@ -136,78 +163,101 @@ fn doc_runs(
     runs
 }
 
-/// `## text` → `text`, preserving indentation beyond one separator space.
-fn comment_body(raw: &str) -> String {
-    let trimmed = raw.trim_start();
-    let body = trimmed.strip_prefix("##").unwrap_or(trimmed);
-    let body = body.strip_prefix(' ').unwrap_or(body);
-    body.trim_end().to_string()
-}
-
 /// Walks one doc run and appends the doctests it contains.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "Markdown scanning operates on the reconstructed comment lines"
+    )
+)]
 fn scan_run(
-    run: DocRun,
+    run: &[DocLine],
     module_name: &str,
     file: &str,
     imports: &[String],
     doctests: &mut Vec<Doctest>,
 ) -> Result<(), String> {
-    let mut index = 0;
-    while index < run.len() {
-        let trimmed = run[index].text.trim_start();
-        let Some(info) = trimmed.strip_prefix("```") else {
-            index += 1;
+    let mut lines = run.iter();
+    while let Some(open) = lines.next() {
+        let Some((marker, width, info)) = fence(&open.text) else {
             continue;
         };
-        // Any fenced block is skipped whole; only `aevia` runs.
-        let close = (index + 1..run.len())
-            .find(|candidate| run[*candidate].text.trim_start().starts_with("```"));
-        let Some(close) = close else {
+        let runnable = info.eq_ignore_ascii_case("aevia");
+        let mut body = Vec::new();
+        let mut closed = false;
+        for line in lines.by_ref() {
+            if fence(&line.text).is_some_and(|(end, length, info)| {
+                marker == end && length >= width && info.is_empty()
+            }) {
+                closed = true;
+                break;
+            }
+            if runnable {
+                body.push(line.text.as_str());
+            }
+        }
+        if !closed {
             return Err(format!(
-                "line {}: unclosed ```{info} block; add the closing fence",
-                run[index].number
+                "line {}: unclosed {} block; add the closing fence",
+                open.number,
+                open.text.trim_start(),
             ));
-        };
-        let language = info.trim();
-        if language.eq_ignore_ascii_case("aevia") {
-            let mut body: Vec<&str> = run[index + 1..close]
-                .iter()
-                .map(|line| line.text.as_str())
-                .collect();
-            // Trailing blank lines are formatting, not part of the snippet.
+        }
+        if runnable {
             while body.last().is_some_and(|line| line.trim().is_empty()) {
                 body.pop();
             }
-            let (expected, marker) = parse_marker(body.first().copied())
-                .map_err(|message| format!("line {}: {message}", run[index].number))?;
+            let mut body = body
+                .into_iter()
+                .skip_while(|line| line.trim().is_empty())
+                .peekable();
+            let (expected, marker) = parse_marker(body.peek().copied())
+                .map_err(|message| format!("line {}: {message}", open.number))?;
             if marker {
-                body.remove(0);
+                body.next();
             }
-            // A blank line between the fence and the code is not code.
-            while body.first().is_some_and(|line| line.trim().is_empty()) {
-                body.remove(0);
-            }
-            let snippet = body.join("\n");
-            if !snippet.trim().is_empty() {
+            let snippet = body
+                .skip_while(|line| line.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !snippet.is_empty() {
                 doctests.push(Doctest {
                     file: file.to_string(),
                     module: module_name.to_string(),
-                    line: run[index].number,
+                    line: open.number,
                     snippet,
                     expected,
                     imports: imports.to_vec(),
                 });
             }
         }
-        index = close + 1;
     }
     Ok(())
+}
+
+fn fence(line: &str) -> Option<(char, usize, &str)> {
+    let line = line.trim_start();
+    let marker = line.chars().next()?;
+    if !matches!(marker, '`' | '~') {
+        return None;
+    }
+    let rest = line.trim_start_matches(marker);
+    let width = line.len().checked_sub(rest.len())?;
+    (width >= 3).then_some((marker, width, rest.trim()))
 }
 
 /// Reads a `compile_fail` marker from the first content line.
 ///
 /// Returns the expectation and whether the line was a marker (and therefore
 /// must not be compiled).
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "compile-fail markers have a separate grammar from Markdown fences"
+    )
+)]
 fn parse_marker(first: Option<&str>) -> Result<(Expected, bool), String> {
     let Some(first) = first else {
         return Ok((Expected::Compiles, false));
@@ -227,7 +277,8 @@ fn parse_marker(first: Option<&str>) -> Result<(Expected, bool), String> {
     }
     let mut parts = rest.splitn(2, char::is_whitespace);
     let code = parts.next().unwrap_or_default();
-    if !is_error_code(code) {
+    if !matches!(code.as_bytes(), [b'E', digits @ ..] if digits.len() == 4 && digits.iter().all(u8::is_ascii_digit))
+    {
         return Err(format!(
             "invalid compile_fail code `{code}`; expected a code such as `E0401`"
         ));
@@ -239,46 +290,6 @@ fn parse_marker(first: Option<&str>) -> Result<(Expected, bool), String> {
         ));
     }
     Ok((Expected::FailsWith(code.to_string()), true))
-}
-
-/// True for an appendix-B error code: `E` and four decimal digits.
-fn is_error_code(code: &str) -> bool {
-    let bytes = code.as_bytes();
-    bytes.len() == 5 && bytes[0] == b'E' && bytes[1..].iter().all(u8::is_ascii_digit)
-}
-
-/// The file stem, for a file that declares no module.
-fn file_stem(file: &str) -> String {
-    std::path::Path::new(file)
-        .file_stem()
-        .map(|stem| stem.to_string_lossy().to_string())
-        .unwrap_or_else(|| file.to_string())
-}
-
-/// The first diagnostic as `line N: code: message`.
-fn first_error(
-    source: &str,
-    diagnostics: &aevia_syntax::Diagnostics,
-) -> String {
-    let Some(first) = diagnostics.items.first() else {
-        return "the file does not parse".to_string();
-    };
-    let line = 1 + source[..usize::try_from(first.span.start)
-        .unwrap_or(0)
-        .min(source.len())]
-        .matches('\n')
-        .count();
-    format!("line {line}: {}: {}", first.code, first.message)
-}
-
-/// The source text of one declaration, trimmed.
-fn slice<'a>(
-    source: &'a str,
-    declaration: &Decl,
-) -> Option<&'a str> {
-    let start = usize::try_from(declaration.span.start).ok()?;
-    let end = usize::try_from(declaration.span.end).ok()?;
-    source.get(start..end).map(str::trim)
 }
 
 #[cfg(test)]
@@ -394,6 +405,51 @@ mod tests {
     fn a_file_that_does_not_parse_is_refused() {
         let error = extract("fn f( = 1\n", "a.aev").expect_err("refuses");
         assert!(error.contains("line 1"), "{error}");
+    }
+
+    #[test]
+    fn fences_match_the_opening_width_and_markers_follow_empty_lines() {
+        let source = concat!(
+            "module Demo\r\n",
+            "## ````markdown\r\n",
+            "## ```aevia\r\n",
+            "## let hidden = 1\r\n",
+            "## ```\r\n",
+            "## ````\r\n",
+            "## ````aevia\r\n",
+            "##\r\n",
+            "## # compile_fail E0401\r\n",
+            "## let wrong = 1 m + 2 s\r\n",
+            "## ````\r\n",
+            "let documented = 42\r\n",
+        );
+        let tests = extract_ok(source);
+        assert_eq!(tests.len(), 1);
+        assert_eq!(tests[0].line, 7);
+        assert_eq!(tests[0].expected, Expected::FailsWith("E0401".into()));
+        assert_eq!(tests[0].snippet, "let wrong = 1 m + 2 s");
+    }
+
+    #[test]
+    fn tilde_fences_use_their_own_delimiter_and_minimum_width() {
+        let source = concat!(
+            "## ~~~~markdown\n",
+            "## ```aevia\n",
+            "## let hidden = 1\n",
+            "## ```\n",
+            "## ~~~~\n",
+            "## ~~~~aevia\n",
+            "## let example: Int = 2\n",
+            "## ~~~~~\n",
+            "let documented = 2\n",
+        );
+        let tests = extract_ok(source);
+        assert_eq!(tests.len(), 1);
+        assert_eq!(tests[0].line, 6);
+        assert_eq!(tests[0].snippet, "let example: Int = 2");
+        assert_eq!(tests[0].expected, Expected::Compiles);
+        let unclosed = "## ~~~~aevia\n## let example = 2\n## ~~~\nlet documented = 2\n";
+        assert!(extract(unclosed, "short.aev").is_err());
     }
 
     #[test]

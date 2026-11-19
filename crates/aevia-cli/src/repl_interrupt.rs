@@ -10,13 +10,17 @@ use std::sync::atomic::Ordering;
 /// Installs a handler only when the first submission starts. Before that,
 /// Rustyline handles input cancellation itself (and an unfinished pipe keeps
 /// the operating system's ordinary signal behavior).
-pub(crate) struct Signals {
+pub struct Signals {
     token: CancellationToken,
     active: Arc<AtomicBool>,
     installed: bool,
 }
 
 impl Signals {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "constructs the cancellation state before the REPL starts reading"
+    )]
     pub(crate) fn new(token: CancellationToken) -> Self {
         Self {
             token,
@@ -45,7 +49,7 @@ impl Signals {
     }
 }
 
-pub(crate) struct Activity {
+pub struct Activity {
     active: Arc<AtomicBool>,
 }
 
@@ -57,12 +61,26 @@ impl Drop for Activity {
 
 /// Program input uses bounded foreground polls, never a background reader.
 /// This also covers Ctrl-C arriving between IO actions and the next input read.
-pub(crate) fn line_reader(token: CancellationToken) -> Rc<dyn Fn() -> Result<String, EvalError>> {
-    Rc::new(move || read_program_line(&token))
+#[allow(
+    clippy::single_call_fn,
+    reason = "adapts terminal input to the interpreter's host callback type"
+)]
+#[must_use]
+pub fn line_reader(token: CancellationToken) -> Rc<dyn Fn() -> Result<String, EvalError>> {
+    #[allow(
+        clippy::result_large_err,
+        reason = "the host line-reader API shares the interpreter's runtime error type"
+    )]
+    let read_line = move || read_program_line(&token).map_err(ProgramReadError::runtime_error);
+    Rc::new(read_line)
 }
 
 #[cfg(unix)]
-fn read_program_line(token: &CancellationToken) -> Result<String, EvalError> {
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps operating-system input polling behind one host callback"
+)]
+fn read_program_line(token: &CancellationToken) -> Result<String, ProgramReadError> {
     use nix::errno::Errno;
     use nix::poll::PollFd;
     use nix::poll::PollFlags;
@@ -74,7 +92,7 @@ fn read_program_line(token: &CancellationToken) -> Result<String, EvalError> {
     let mut bytes = Vec::new();
     loop {
         if token.is_cancelled() {
-            return Err(interrupted());
+            return Err(ProgramReadError::Interrupted);
         }
         let mut descriptors = [PollFd::new(
             input.as_fd(),
@@ -86,7 +104,7 @@ fn read_program_line(token: &CancellationToken) -> Result<String, EvalError> {
             | Ok(_) => {},
         }
         if token.is_cancelled() {
-            return Err(interrupted());
+            return Err(ProgramReadError::Interrupted);
         }
         // One byte avoids buffering a later line that belongs to a future
         // program read or the REPL. The terminal retains canonical editing.
@@ -95,12 +113,12 @@ fn read_program_line(token: &CancellationToken) -> Result<String, EvalError> {
             | Ok(0) => break,
             | Ok(_) if byte[0] == b'\n' => break,
             | Ok(_) => bytes.push(byte[0]),
-            | Err(Errno::EINTR | Errno::EAGAIN) => continue,
+            | Err(Errno::EINTR | Errno::EAGAIN) => {},
             | Err(error) => return Err(io_error(error)),
         }
     }
     if token.is_cancelled() {
-        return Err(interrupted());
+        return Err(ProgramReadError::Interrupted);
     }
     String::from_utf8(bytes)
         .map(|line| line.trim_end_matches('\r').to_string())
@@ -108,7 +126,11 @@ fn read_program_line(token: &CancellationToken) -> Result<String, EvalError> {
 }
 
 #[cfg(windows)]
-fn read_program_line(token: &CancellationToken) -> Result<String, EvalError> {
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps operating-system input polling behind one host callback"
+)]
+fn read_program_line(token: &CancellationToken) -> Result<String, ProgramReadError> {
     use crossterm::event::Event;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEventKind;
@@ -119,32 +141,34 @@ fn read_program_line(token: &CancellationToken) -> Result<String, EvalError> {
     use std::io::IsTerminal;
     use std::io::Write;
     use std::time::Duration;
-    if !std::io::stdin().is_terminal() {
-        // Piped REPL source has already reached EOF before evaluation starts.
-        if token.is_cancelled() {
-            return Err(interrupted());
-        }
-        let mut line = String::new();
-        std::io::stdin().read_line(&mut line).map_err(io_error)?;
-        if token.is_cancelled() {
-            return Err(interrupted());
-        }
-        return Ok(line.trim_end_matches(['\r', '\n']).to_string());
-    }
-    crossterm::terminal::enable_raw_mode().map_err(io_error)?;
+
     struct RawMode;
     impl Drop for RawMode {
         fn drop(&mut self) {
             let _ = crossterm::terminal::disable_raw_mode();
         }
     }
+
+    if !std::io::stdin().is_terminal() {
+        // Piped REPL source has already reached EOF before evaluation starts.
+        if token.is_cancelled() {
+            return Err(ProgramReadError::Interrupted);
+        }
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).map_err(io_error)?;
+        if token.is_cancelled() {
+            return Err(ProgramReadError::Interrupted);
+        }
+        return Ok(line.trim_end_matches(['\r', '\n']).to_string());
+    }
+    crossterm::terminal::enable_raw_mode().map_err(io_error)?;
     let _raw = RawMode;
     let mut output = std::io::stdout().lock();
     output.flush().map_err(io_error)?;
     let mut line = String::new();
     loop {
         if token.is_cancelled() {
-            return Err(interrupted());
+            return Err(ProgramReadError::Interrupted);
         }
         if !event::poll(Duration::from_millis(25)).map_err(io_error)? {
             continue;
@@ -154,7 +178,7 @@ fn read_program_line(token: &CancellationToken) -> Result<String, EvalError> {
                 match key.code {
                     | KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         token.cancel();
-                        return Err(interrupted());
+                        return Err(ProgramReadError::Interrupted);
                     },
                     | KeyCode::Char('d' | 'z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         return Ok(line);
@@ -168,10 +192,8 @@ fn read_program_line(token: &CancellationToken) -> Result<String, EvalError> {
                         line.push('\t');
                         write!(output, "\t").map_err(io_error)?;
                     },
-                    | KeyCode::Backspace => {
-                        if line.pop().is_some() {
-                            write!(output, "\x08 \x08").map_err(io_error)?;
-                        }
+                    | KeyCode::Backspace if line.pop().is_some() => {
+                        write!(output, "\x08 \x08").map_err(io_error)?;
                     },
                     | KeyCode::Char(ch)
                         if !key
@@ -190,10 +212,24 @@ fn read_program_line(token: &CancellationToken) -> Result<String, EvalError> {
     }
 }
 
-fn io_error(error: impl std::fmt::Display) -> EvalError {
-    EvalError::new("E0810", error.to_string())
+enum ProgramReadError {
+    Io(String),
+    Interrupted,
 }
 
-fn interrupted() -> EvalError {
-    EvalError::new("E0812", "evaluation interrupted")
+impl ProgramReadError {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "maps low-level input errors to language diagnostics at the host boundary"
+    )]
+    fn runtime_error(self) -> EvalError {
+        match self {
+            | Self::Io(message) => EvalError::new("E0810", message),
+            | Self::Interrupted => EvalError::new("E0812", "evaluation interrupted"),
+        }
+    }
+}
+
+fn io_error(error: impl std::fmt::Display) -> ProgramReadError {
+    ProgramReadError::Io(error.to_string())
 }

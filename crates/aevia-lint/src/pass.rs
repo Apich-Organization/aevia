@@ -1,7 +1,6 @@
 //! Lint pass traits, emission context, and structured fixes.
 
 use aevia_syntax::Diagnostic;
-use aevia_syntax::Severity;
 use aevia_syntax::SourceMap;
 use aevia_syntax::Span;
 use aevia_syntax::ast::Decl;
@@ -67,14 +66,18 @@ pub struct DiagnosticBuilder<'b, 'a> {
     index: Option<usize>,
 }
 
+#[allow(
+    clippy::return_self_not_must_use,
+    reason = "builder calls mutate the diagnostic immediately; keeping the builder only enables chaining"
+)]
 impl DiagnosticBuilder<'_, '_> {
     /// Attaches a `help:` line.
     pub fn help(
         self,
         message: impl Into<String>,
     ) -> Self {
-        if let Some(i) = self.index {
-            self.cx.results[i].diagnostic.helps.push(message.into());
+        if let Some(result) = self.index.and_then(|i| self.cx.results.get_mut(i)) {
+            result.diagnostic.helps.push(message.into());
         }
         self
     }
@@ -84,19 +87,20 @@ impl DiagnosticBuilder<'_, '_> {
         self,
         message: impl Into<String>,
     ) -> Self {
-        if let Some(i) = self.index {
-            self.cx.results[i].diagnostic.notes.push(message.into());
+        if let Some(result) = self.index.and_then(|i| self.cx.results.get_mut(i)) {
+            result.diagnostic.notes.push(message.into());
         }
         self
     }
 
     /// Attaches a structured fix.
+    #[allow(clippy::must_use_candidate, reason = "the fix attaches immediately")]
     pub fn fix(
         self,
         fix: Fix,
     ) -> Self {
-        if let Some(i) = self.index {
-            self.cx.results[i].fixes.push(fix);
+        if let Some(result) = self.index.and_then(|i| self.cx.results.get_mut(i)) {
+            result.fixes.push(fix);
         }
         self
     }
@@ -151,23 +155,18 @@ impl<'a> LintCx<'a> {
                 index: None,
             };
         }
-        let mut diag = if matches!(level, Level::Deny | Level::Forbid) {
+        let diag = if matches!(level, Level::Deny | Level::Forbid) {
             Diagnostic::error(lint.code, message, span)
         } else {
             Diagnostic::warning(lint.code, message, span)
         };
-        diag.severity = match level {
-            | Level::Warn => Severity::Warning,
-            | Level::Deny | Level::Forbid => Severity::Error,
-            | Level::Allow => unreachable!(),
-        };
+        let index = Some(self.results.len());
         self.results.push(LintDiagnostic {
             diagnostic: diag,
             lint,
             level,
             fixes: Vec::new(),
         });
-        let index = Some(self.results.len() - 1);
         DiagnosticBuilder { cx: self, index }
     }
 }

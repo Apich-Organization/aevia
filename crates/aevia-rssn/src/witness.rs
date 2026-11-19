@@ -20,19 +20,23 @@ pub enum DimensionWitness {
     Scalar(Dim),
     /// A tensor's uniform element dimension and any nested element witnesses.
     Tensor {
+        /// Uniform physical dimension, if attested by the kernel.
         dimension: Option<Dim>,
-        element: Option<Box<DimensionWitness>>,
+        /// Evidence shared by all elements.
+        element: Option<Box<Self>>,
+        /// Uniform element representation at the ABI boundary.
         element_repr: Option<SigType>,
-        elements: Vec<DimensionWitness>,
+        /// Evidence for individual elements when the shared evidence is insufficient.
+        elements: Vec<Self>,
     },
     /// Named field witnesses of a structured result.
-    Record(Vec<(String, DimensionWitness)>),
+    Record(Vec<(String, Self)>),
     /// Actual tagged payload witnesses; tags do not establish nominal ADT identity.
     Variant {
         /// Actual payload tag.
         tag: String,
         /// One witness for every actual payload field.
-        fields: Vec<DimensionWitness>,
+        fields: Vec<Self>,
     },
 }
 fn concrete(dim: &rssn::kernel::signature::DimExpr) -> Option<Dim> {
@@ -156,23 +160,22 @@ pub fn extract(
             // Numeric tensors have a uniform element schema; keep only
             // contradictory explicit witnesses rather than allocating one
             // witness per scalar. Nested structures still need each child.
-            let elements = if let Some(expected) = &dimension {
-                t.data.iter().filter_map(|value| {
-                    if !matches!(value, Value::Dyn(_) | Value::Quantity(_)) { return None; }
-                    let witness = extract(value, false);
-                    if matches!(&witness, DimensionWitness::Scalar(actual) if actual == expected) { None } else { Some(witness) }
-                }).collect()
-            } else {
-                t.data
-                    .iter()
-                    .map(|value| {
-                        extract(
-                            value,
-                            trusted && matches!(value, Value::Tensor(_) | Value::Record(_)),
-                        )
-                    })
-                    .collect()
-            };
+            let elements = dimension.as_ref().map_or_else(
+                || {
+                    t.data.iter().map(|value| {
+                        extract(value, trusted && matches!(value, Value::Tensor(_) | Value::Record(_)))
+                    }).collect()
+                },
+                |expected| {
+                    t.data.iter().filter_map(|value| {
+                        if !matches!(value, Value::Dyn(_) | Value::Quantity(_)) {
+                            return None;
+                        }
+                        let witness = extract(value, false);
+                        (!matches!(&witness, DimensionWitness::Scalar(actual) if actual == expected)).then_some(witness)
+                    }).collect()
+                },
+            );
             DimensionWitness::Tensor {
                 dimension,
                 element: Some(Box::new(schema(&t.elem, trusted))),
@@ -216,6 +219,10 @@ fn scalar_type(sig: &SigType) -> Option<TypeExpr> {
 }
 /// Attach known host dimensions to values before a value-native kernel call.
 /// Empty tensor element representation comes from actual structural evidence.
+///
+/// # Errors
+///
+/// Returns an error when the value, witness and expected signature disagree.
 pub fn attach(
     value: &mut Value,
     witness: &DimensionWitness,
@@ -412,6 +419,10 @@ fn evidenced_type(
         | _ => None,
     }
 }
+#[allow(
+    clippy::too_many_lines,
+    reason = "Validates evidence for each recursive dynamic value variant"
+)]
 fn attach_dynamic(
     value: &mut Value,
     witness: &DimensionWitness,
@@ -527,9 +538,9 @@ fn attach_dynamic(
                     attach_dynamic(v, proof)?;
                 }
             }
-            if !uniform && !t.data.is_empty() {
-                let first = t.data[0].type_expr();
-                t.elem = if t.data.iter().all(|v| v.type_expr() == first) {
+            if !uniform && let Some((first, rest)) = t.data.split_first() {
+                let first = first.type_expr();
+                t.elem = if rest.iter().all(|v| v.type_expr() == first) {
                     first
                 } else {
                     TypeExpr::Dyn(rssn::kernel::signature::RepExpr {

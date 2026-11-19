@@ -6,20 +6,6 @@ use super::matmul;
 use crate::Complex;
 use crate::NumericError;
 
-fn check_shape(
-    rows: usize,
-    cols: usize,
-    a: &[f64],
-) -> Result<(), NumericError> {
-    if rows.checked_mul(cols) != Some(a.len()) {
-        return Err(NumericError::ShapeMismatch(format!(
-            "expected {rows}x{cols} ({}) entries, got {}",
-            rows.saturating_mul(cols),
-            a.len()
-        )));
-    }
-    Ok(())
-}
 use rssn::kernels::dense::DenseError;
 use rssn::kernels::dense::Mat as RssnMat;
 use rssn::kernels::dense::{
@@ -36,7 +22,13 @@ fn to_rssn_mat(
     cols: usize,
     a: &[f64],
 ) -> Result<RssnMat, NumericError> {
-    check_shape(rows, cols, a)?;
+    if rows.checked_mul(cols) != Some(a.len()) {
+        return Err(NumericError::ShapeMismatch(format!(
+            "expected {rows}x{cols} ({}) entries, got {}",
+            rows.saturating_mul(cols),
+            a.len()
+        )));
+    }
     if a.iter().any(|v| !v.is_finite()) {
         return Err(NumericError::Domain(
             "matrix contains non-finite entries".into(),
@@ -117,7 +109,7 @@ pub fn pinv(
 ) -> Result<Vec<f64>, NumericError> {
     let m = to_rssn_mat(rows, cols, a)?;
     if rows == 0 || cols == 0 {
-        return Ok(vec![0.0; cols * rows]);
+        return Ok(Vec::new());
     }
     Ok(dense::pinv(&m).map_err(map_dense_err)?.data)
 }
@@ -218,13 +210,16 @@ pub fn qr_pivoted(
     a: &[f64],
     tol: f64,
 ) -> Result<(Vec<f64>, Vec<f64>, Vec<usize>, usize), NumericError> {
+    let count = super::output_len::<f64>(rows, rows)?;
     let m = to_rssn_mat(rows, cols, a)?;
     if rows == 0 || cols == 0 {
-        let mut q = vec![0.0; rows * rows];
-        for i in 0..rows {
-            q[i * rows + i] = 1.0;
-        }
-        return Ok((q, vec![0.0; rows * cols], (0..cols).collect(), 0));
+        let (q, r) = super::empty_qr(rows, cols, a, count)?;
+        let mut permutation = Vec::new();
+        permutation.try_reserve_exact(cols).map_err(|_| {
+            NumericError::ShapeMismatch("QR permutation storage is too large".into())
+        })?;
+        permutation.extend(0..cols);
+        return Ok((q, r, permutation, 0));
     }
     let pqr = lowrank::qr_pivoted(&m).map_err(|e| NumericError::ShapeMismatch(e.to_string()))?;
     let rank = pqr.rank(if tol < 0.0 { None } else { Some(tol) });

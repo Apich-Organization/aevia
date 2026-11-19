@@ -532,6 +532,7 @@ crate::kernels::dd::Dd::to_f64	declared	num_native_dd_to_f64		const fn to_f64 (s
 crate::kernels::dense::Lu::det	declared	num_dense_det_units,num_dense_lu_model_det		fn det (& self) -> f64
 crate::kernels::dense::Lu::inverse	declared	num_dense_lu_model_inverse		fn inverse (& self) -> Mat
 crate::kernels::dense::Lu::solve	declared	num_dense_lu_model_solve		fn solve (& self , b : & [f64] ,) -> Vec < f64 >
+crate::kernels::dense::Lu::solve_into	associated-method			fn solve_into (& self , b : & [f64] , x : & mut [f64] ,) -> Result < () , DenseError >
 crate::kernels::dense::Mat::at	declared	num_linear_mat_at		fn at (& self , i : usize , j : usize ,) -> f64
 crate::kernels::dense::Mat::from_rows	declared	num_linear_mat_from_rows		fn from_rows (rows : & [Vec < f64 >]) -> Result < Self , DenseError >
 crate::kernels::dense::Mat::identity	declared	num_linear_mat_identity		fn identity (n : usize) -> Self
@@ -582,11 +583,12 @@ crate::kernels::dense::schur	declared	num_dense_schur		fn schur (a : & Mat) -> R
 crate::kernels::dense::solve	declared	num_dense_solve		fn solve (a : & Mat , b : & [f64] ,) -> Result < Vec < f64 > , DenseError >
 crate::kernels::dense::spectral_radius	declared	num_spectral_radius		fn spectral_radius (a : & Mat) -> Result < f64 , DenseError >
 crate::kernels::dense::svd	declared	num_svd		fn svd (a : & Mat) -> Result < Svd , DenseError >
-crate::kernels::descriptive::corr	declared	num_descriptive_corr		fn corr (left : & [f64] , right : & [f64] , population : bool ,) -> Result < f64 , NumericError >
+crate::kernels::descriptive::corr	declared	num_descriptive_corr		fn corr (left : & [f64] , right : & [f64] , _population : bool ,) -> Result < f64 , NumericError >
 crate::kernels::descriptive::cov	declared	num_descriptive_cov		fn cov (left : & [f64] , right : & [f64] , population : bool ,) -> Result < f64 , NumericError >
 crate::kernels::descriptive::cov_exact	declared	num_descriptive_cov_exact		fn cov_exact (left : & [BigRational] , right : & [BigRational] , population : bool ,) -> Result < BigRational , NumericError >
 crate::kernels::descriptive::histogram	declared	num_descriptive_histogram		fn histogram (values : & [f64] , bins : usize ,) -> Result < (Vec < i64 > , Vec < f64 >) , NumericError >
 crate::kernels::descriptive::kurtosis	declared	num_descriptive_kurtosis		fn kurtosis (values : & [f64]) -> Result < f64 , NumericError >
+crate::kernels::descriptive::mean	opaque			fn mean (values : & [f64]) -> Result < f64 , NumericError >
 crate::kernels::descriptive::mean_exact	declared	num_descriptive_mean_exact		fn mean_exact (values : & [BigRational]) -> Result < BigRational , NumericError >
 crate::kernels::descriptive::median	declared	num_descriptive_median		fn median (values : & mut [f64]) -> Result < f64 , NumericError >
 crate::kernels::descriptive::median_exact	declared	num_descriptive_median_exact		fn median_exact (values : & mut [BigRational]) -> Result < BigRational , NumericError >
@@ -595,6 +597,8 @@ crate::kernels::descriptive::mode_exact	declared	num_descriptive_mode_exact		fn 
 crate::kernels::descriptive::quantile	declared	num_descriptive_quantile		fn quantile (values : & [f64] , q : f64 ,) -> Result < f64 , NumericError >
 crate::kernels::descriptive::quantile_exact	declared	num_descriptive_quantile_exact		fn quantile_exact (sorted : & [BigRational] , q : & BigRational ,) -> Result < BigRational , NumericError >
 crate::kernels::descriptive::skewness	declared	num_descriptive_skewness		fn skewness (values : & [f64]) -> Result < f64 , NumericError >
+crate::kernels::descriptive::std_dev	opaque			fn std_dev (values : & [f64] , population : bool ,) -> Result < f64 , NumericError >
+crate::kernels::descriptive::var	opaque			fn var (values : & [f64] , population : bool ,) -> Result < f64 , NumericError >
 crate::kernels::descriptive::var_exact	declared	num_descriptive_var_exact		fn var_exact (values : & [BigRational] , population : bool ,) -> Result < BigRational , NumericError >
 crate::kernels::differential_geometry::christoffel_symbols	declared	num_native_geometry_christoffel_symbols		fn christoffel_symbols (g : impl Fn (& [f64]) -> Vec < Vec < f64 > > , point : & [f64] ,) -> Result < Vec < Vec < Vec < f64 > > > , String >
 crate::kernels::differential_geometry::metric_tensor_at_point	declared	num_native_geometry_metric_tensor_at_point		fn metric_tensor_at_point (g : impl Fn (& [f64]) -> Vec < Vec < f64 > > , point : & [f64] ,) -> Result < Vec < Vec < f64 > > , String >
@@ -706,6 +710,7 @@ crate::kernels::fftconv::convolve	declared	num_fftconv_convolve		fn convolve (a 
 crate::kernels::fftconv::correlate	declared	num_fftconv_correlate		fn correlate (a : & [f64] , b : & [f64] ,) -> Vec < f64 >
 crate::kernels::fftconv::fft	declared	num_analysis_fftconv_fft		fn fft (x : & [Complex] , inverse : bool ,) -> Vec < Complex >
 crate::kernels::fftconv::poly_mul_i64	declared	num_fftconv_poly_mul_i64		fn poly_mul_i64 (a : & [i64] , b : & [i64] ,) -> Vec < i64 >
+crate::kernels::fftconv::poly_mul_i64_checked	declared	num_fftconv_poly_mul_i64_checked		fn poly_mul_i64_checked (a : & [i64] , b : & [i64] ,) -> Option < Vec < i64 > >
 crate::kernels::finite_field::PrimeFieldElement::inverse	declared	num_native_prime_field_inverse		fn inverse (& self) -> Option < Self >
 crate::kernels::finite_field::PrimeFieldElement::is_agnostic	declared	num_native_prime_field_is_agnostic		const fn is_agnostic (& self) -> bool
 crate::kernels::finite_field::PrimeFieldElement::new	declared	num_native_prime_field_new		const fn new (value : u64 , modulus : u64 ,) -> Self
@@ -722,7 +727,8 @@ crate::kernels::fractal_geometry_and_chaos::FractalData::new	declared	num_native
 crate::kernels::fractal_geometry_and_chaos::FractalData::set	declared	num_native_fractal_data_set		fn set (& mut self , x : usize , y : usize , value : u32 ,)
 crate::kernels::fractal_geometry_and_chaos::barnsley_fern_ifs	declared	num_fractal_geometry_and_chaos_barnsley_fern_ifs		fn barnsley_fern_ifs () -> (Vec < AffineTransform2D > , Vec < f64 >)
 crate::kernels::fractal_geometry_and_chaos::box_counting_dimension	declared	num_fractal_geometry_and_chaos_box_counting_dimension		fn box_counting_dimension (points : & [(f64 , f64)] , num_scales : usize ,) -> f64
-crate::kernels::fractal_geometry_and_chaos::correlation_dimension	declared	num_fractal_geometry_and_chaos_correlation_dimension		fn correlation_dimension (points : & [(f64 , f64)] , num_radii : usize ,) -> f64
+crate::kernels::fractal_geometry_and_chaos::correlation_dimension	declared	num_fractal_geometry_and_chaos_correlation_dimension		fn correlation_dimension (points : & [Point2D] , num_radii : usize ,) -> f64
+crate::kernels::fractal_geometry_and_chaos::correlation_dimension_with_radii	declared	num_fractal_geometry_and_chaos_correlation_dimension_with_radii		fn correlation_dimension_with_radii (points : & [Point2D] , radii : & [f64] ,) -> Option < f64 >
 crate::kernels::fractal_geometry_and_chaos::generate_burning_ship	declared	num_fractal_geometry_and_chaos_generate_burning_ship		fn generate_burning_ship (width : usize , height : usize , x_range : (f64 , f64) , y_range : (f64 , f64) , max_iter : u32 ,) -> Vec < Vec < u32 > >
 crate::kernels::fractal_geometry_and_chaos::generate_henon_map	declared	num_fractal_geometry_and_chaos_generate_henon_map		fn generate_henon_map (start_point : (f64 , f64) , num_steps : usize , a : f64 , b : f64 ,) -> Vec < (f64 , f64) >
 crate::kernels::fractal_geometry_and_chaos::generate_ifs_fractal	declared	num_fractal_geometry_and_chaos_generate_ifs_fractal		fn generate_ifs_fractal (transforms : & [AffineTransform2D] , probabilities : & [f64] , start_point : (f64 , f64) , num_points : usize , skip : usize ,) -> Vec < (f64 , f64) >
@@ -1101,6 +1107,7 @@ crate::kernels::lowrank::PivotedQr::rank	declared	num_linear_pivoted_qr_rank		fn
 crate::kernels::lowrank::PivotedQr::solve	declared	num_linear_pivoted_qr_solve		fn solve (& self , b : & [f64] , tol : Option < f64 > ,) -> Result < Vec < f64 > , LowRankError >
 crate::kernels::lowrank::anderson	declared	num_linear_anderson		fn anderson (g : & dyn Fn (& [f64]) -> Vec < f64 > , start : & [f64] , window : usize , damping : f64 , tol : f64 , max_evaluations : usize ,) -> Result < FixedPoint , LowRankError >
 crate::kernels::lowrank::lobpcg	declared	num_linear_lobpcg		fn lobpcg (apply : & dyn Fn (& [f64] , & mut [f64]) , precondition : Preconditioner < '_ > , n : usize , k : usize , tol : f64 , max_iterations : usize , seed : u64 ,) -> Result < Eigenpairs , LowRankError >
+crate::kernels::lowrank::lobpcg_generalized	callback			fn lobpcg_generalized (apply : & dyn Fn (& [f64] , & mut [f64]) , mass : & dyn Fn (& [f64] , & mut [f64]) , precondition : Preconditioner < '_ > , n : usize , k : usize , options : LobpcgOptions ,) -> Result < Eigenpairs , LowRankError >
 crate::kernels::lowrank::qr_pivoted	declared	num_linear_pivoted_qr,num_lowrank_qr_pivoted		fn qr_pivoted (a : & Mat) -> Result < PivotedQr , LowRankError >
 crate::kernels::lowrank::randomized_svd	declared	num_linear_randomized_svd		fn randomized_svd (matvec : & dyn Fn (& [f64] , & mut [f64]) , rmatvec : & dyn Fn (& [f64] , & mut [f64]) , m : usize , n : usize , k : usize , options : & RandomizedOptions ,) -> Result < dense :: Svd , LowRankError >
 crate::kernels::matfun::csr_norm1	declared	num_linear_csr_norm1		fn csr_norm1 (a : & Csr) -> f64
@@ -1522,15 +1529,17 @@ crate::kernels::quadrature::tanh_sinh	declared	num_analysis_quadrature_tanh_sinh
 crate::kernels::quadrature::tanh_sinh_with_levels	declared	num_tanh_sinh		fn tanh_sinh_with_levels < F : Fn (f64) -> f64 > (f : F , a : f64 , b : f64 , tol : f64 , max_levels : usize ,) -> Integral
 crate::kernels::random::Rng::below	declared	num_native_rng_below		const fn below (& mut self , n : u64 ,) -> u64
 crate::kernels::random::Rng::beta	declared	num_native_rng_beta		fn beta (& mut self , a : f64 , b : f64 ,) -> f64
-crate::kernels::random::Rng::binomial	declared	num_native_rng_binomial		fn binomial (& mut self , n : u64 , p : f64 ,) -> u64
+crate::kernels::random::Rng::binomial	declared	num_native_rng_binomial		fn binomial (& mut self , mut n : u64 , mut p : f64 ,) -> u64
 crate::kernels::random::Rng::exponential	declared	num_native_rng_exponential		fn exponential (& mut self , rate : f64 ,) -> f64
 crate::kernels::random::Rng::fill_normal	declared	num_native_rng_fill_normal		fn fill_normal (& mut self , out : & mut [f64] ,)
 crate::kernels::random::Rng::gamma	declared	num_native_rng_gamma		fn gamma (& mut self , k : f64 , theta : f64 ,) -> f64
+crate::kernels::random::Rng::jump	declared	num_native_rng_jump		const fn jump (& mut self)
+crate::kernels::random::Rng::long_jump	declared	num_native_rng_long_jump		const fn long_jump (& mut self)
 crate::kernels::random::Rng::new	declared	num_native_rng_new		const fn new (seed : u64) -> Self
 crate::kernels::random::Rng::next_u64	declared	num_native_rng_next_u64		const fn next_u64 (& mut self) -> u64
 crate::kernels::random::Rng::normal	declared	num_native_rng_normal		fn normal (& mut self) -> f64
 crate::kernels::random::Rng::normal_with	declared	num_native_rng_normal_with		fn normal_with (& mut self , mean : f64 , sd : f64 ,) -> f64
-crate::kernels::random::Rng::poisson	declared	num_native_rng_poisson		fn poisson (& mut self , lambda : f64 ,) -> u64
+crate::kernels::random::Rng::poisson	declared	num_native_rng_poisson		fn poisson (& mut self , mut lambda : f64 ,) -> u64
 crate::kernels::random::Rng::shuffle	declared	num_native_rng_shuffle		fn shuffle < T > (& mut self , v : & mut [T] ,)
 crate::kernels::random::Rng::uniform	declared	num_native_rng_uniform		fn uniform (& mut self) -> f64
 crate::kernels::random::Rng::uniform_range	declared	num_native_rng_uniform_range		fn uniform_range (& mut self , a : f64 , b : f64 ,) -> f64
@@ -1550,6 +1559,8 @@ crate::kernels::robust::mad	declared	num_robust_mad		fn mad (data : & [f64] , no
 crate::kernels::robust::median	declared	num_robust_median		fn median (data : & [f64]) -> f64
 crate::kernels::robust::quantile	declared	num_robust_quantile		fn quantile (data : & [f64] , p : f64 , kind : u8 ,) -> f64
 crate::kernels::robust::trimmed_mean	declared	num_robust_trimmed_mean		fn trimmed_mean (data : & [f64] , trim : f64 ,) -> f64
+crate::kernels::robust::weighted_ecdf	declared	num_robust_weighted_ecdf		fn weighted_ecdf (data : & [f64] , weights : & [f64] , x : f64 ,) -> f64
+crate::kernels::robust::weighted_quantile	declared	num_robust_weighted_quantile		fn weighted_quantile (data : & [f64] , weights : & [f64] , p : f64 ,) -> f64
 crate::kernels::robust::winsorized_mean	declared	num_robust_winsorized_mean		fn winsorized_mean (data : & [f64] , trim : f64 ,) -> f64
 crate::kernels::rootfind::<reexport:289e7bb385459ca3>	unresolved-reexport			least_squares :: LeastSquaresResult
 crate::kernels::rootfind::<reexport:3e9496178c381d24>	unresolved-reexport			least_squares :: LeastSquaresStatus

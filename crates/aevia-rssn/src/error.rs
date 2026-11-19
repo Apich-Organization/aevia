@@ -7,6 +7,7 @@
 use crate::value::Sym;
 use rssn::kernel::Diag;
 use rssn::kernel::call::OpError;
+use std::fmt::Write as _;
 
 /// What kind of failure this is.
 ///
@@ -177,16 +178,21 @@ impl KernelError {
         };
         let name = function
             .filter(|name| !name.is_empty())
-            .or(Some(diag.op.as_str()).filter(|op| !op.is_empty()));
+            .or_else(|| (!diag.op.is_empty()).then_some(diag.op.as_str()));
         let mut text = String::new();
         if let Some(name) = name {
             text.push_str(name);
             text.push_str(": ");
         }
         if let Some(index) = diag.arg {
+            let position = index.saturating_add(1);
             match params.and_then(|params| params.get(index)) {
-                | Some(param) => text.push_str(&format!("argument `{param}` (#{}): ", index + 1)),
-                | None => text.push_str(&format!("argument #{}: ", index + 1)),
+                | Some(param) => {
+                    let _ = write!(text, "argument `{param}` (#{position}): ");
+                },
+                | None => {
+                    let _ = write!(text, "argument #{position}: ");
+                },
             }
         }
         text.push_str(&diag.message);
@@ -307,6 +313,11 @@ pub fn from_op_error(error: &OpError) -> KernelError {
     classify(error).caused_by(error)
 }
 
+#[allow(
+    clippy::single_call_fn,
+    clippy::too_many_lines,
+    reason = "Maps every kernel error variant to the language diagnostic taxonomy"
+)]
 fn classify(error: &OpError) -> KernelError {
     match error {
         | OpError::UnknownOp(key) => {

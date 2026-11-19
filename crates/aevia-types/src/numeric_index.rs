@@ -1,13 +1,31 @@
 //! Stable, variable-indexed active numeric facts. No inference substitution or
 //! arithmetic policy is hidden here; the owner resolves facts after bindings.
+
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::collections::btree_map::Entry;
 
+/// Retains active facts and indexes their dependents by variable.
 #[derive(Clone, Debug)]
-pub(crate) struct NumericIndex<C> {
+pub struct NumericIndex<C> {
     facts: BTreeMap<usize, C>,
     dependencies: HashMap<usize, Vec<u32>>,
     variables: HashMap<u32, BTreeSet<usize>>,
@@ -50,8 +68,7 @@ impl<C> NumericIndex<C> {
     ) -> Vec<usize> {
         self.variables
             .get(&variable)
-            .map(|facts| facts.iter().copied().collect())
-            .unwrap_or_default()
+            .map_or_default(|facts| facts.iter().copied().collect())
     }
 
     pub(crate) fn equivalent(
@@ -79,9 +96,14 @@ impl<C> NumericIndex<C> {
         fact: C,
         dependencies: Vec<u32>,
     ) -> usize {
-        let id = self.next;
-        self.next += 1;
-        self.facts.insert(id, fact);
+        let id = loop {
+            let id = self.next;
+            self.next = id.wrapping_add(1);
+            if let Entry::Vacant(slot) = self.facts.entry(id) {
+                slot.insert(fact);
+                break id;
+            }
+        };
         self.link(id, dependencies);
         self.dirty.insert(id);
         id
@@ -280,5 +302,18 @@ mod tests {
         assert_eq!(index.project([0]).len(), 4096);
         assert_eq!(index.take_dirty_component().unwrap().len(), 4096);
         assert!(index.take_dirty_component().is_none());
+    }
+
+    #[test]
+    fn counter_wrap_does_not_replace_a_live_fact() {
+        let mut index = NumericIndex::default();
+        let first = index.insert("first", vec![0]);
+        index.next = usize::MAX;
+        let last = index.insert("last", vec![1]);
+        let wrapped = index.insert("wrapped", vec![2]);
+        assert_eq!([first, last, wrapped], [0, usize::MAX, 1]);
+        assert_eq!(index.get(first), Some(&"first"));
+        assert_eq!(index.project([0]), vec![first]);
+        assert_eq!(index.project([2]), vec![wrapped]);
     }
 }

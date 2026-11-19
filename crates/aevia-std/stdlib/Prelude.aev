@@ -549,7 +549,7 @@ let is_err = is_err
 ##
 ## **Signature:** `is_finite : Scalar<ρ,d> -> Bool`
 ##
-## Exact Ints and Reals are always finite.
+## Exact integers and rational values remain finite at any magnitude.
 ##
 ## **Examples:**
 ## ```text
@@ -617,17 +617,20 @@ let is_ok = is_ok
 ##
 ## *Source: Aevia standard library guide.*
 let is_some = is_some
-## join(sep, parts) glues a vector of strings together with sep between them.
+## join(sep, parts) joins a vector of strings with sep between them.
 ##
 ## **Signature:** `join : (String, Tensor<1, String>) -> String`
 ##
-## **Signature:** `join : (Table<ρ>, Table<σ>, String) -> Table<ρ + σ>`
+## **Signature:** `join : (Table<ρ>, Table<σ>, String) -> Table<τ>`
 ##
 ## It is the inverse of split.
+##
+## join(left, right, key) joins two tables on a named column in each table. Each pair of matching rows contributes one output row. The left rows keep their order and each left row's matches follow the order of the right table. The output keeps the left columns in order and appends the right non-key columns. A missing key or an ambiguous column name raises E0903.
 ##
 ## **Examples:**
 ## ```text
 ## join(", ", ["a", "b", "c"])
+## fn joined(left: Table<{ id: Float, x: Float }>, right: Table<{ id: Float, y: Float }>): Table<{ id: Float, x: Float, y: Float }> = join(left, right, "id")
 ## ```
 ##
 ## *Source: Aevia standard library guide.*

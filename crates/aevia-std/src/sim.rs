@@ -3,13 +3,11 @@
 //! `simulate(name, json)` is the dynamic entry point and the typed wrappers
 //! (`Physics.Ising`, `Physics.Geodesic`, …) are the same call with a record
 //! converted to JSON. Both go through rssn's scenario registry, which is the
-//! only place the scenario names exist (29 in rssn 3.0.0-rc.1, including
-//! `ising_wolff`); reimplementing the list here would make Aevia's list drift
-//! from the backend's.
+//! source of public scenario names, including `ising_wolff`.
 
 /// Every scenario rssn provides, in registry order.
 #[must_use]
-pub fn scenarios() -> &'static [&'static str] {
+pub const fn scenarios() -> &'static [&'static str] {
     rssn::sim::scenario::SCENARIOS
 }
 

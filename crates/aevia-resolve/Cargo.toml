@@ -12,5 +12,5 @@ repository.workspace = true
 # hundred lines. The crate does no I/O; an `Index` implementation brings the data.
 [dependencies]
 
-[lints.rust]
-unsafe_code = "forbid"
+[lints]
+workspace = true

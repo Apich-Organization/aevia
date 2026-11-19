@@ -1,4 +1,4 @@
-//! Strided views (§6.6.4, §9.5).
+//! Strided views (§6.6.3.1, §9.5).
 //!
 //! A slice of an `f64` tensor is a *view*: an offset and one stride per
 //! dimension over the buffer it already has. Two things have to be true for
@@ -20,6 +20,7 @@
 #![allow(clippy::result_large_err)]
 
 use aevia_core::Interp;
+use aevia_core::builtins::call;
 use aevia_core::builtins::call_typed;
 use aevia_core::compile;
 use aevia_core::value::NumKind;
@@ -940,4 +941,137 @@ fn a_reversed_matrix_axis_flips_that_axis_only() {
         flipped.slice_view(&[(0, 3), (0, 4)]).is_none(),
         "a column past the extent is not a view"
     );
+}
+
+#[test]
+fn stepped_view_walks_are_bounded_by_the_parent_slice() {
+    let backing = TensorData::new(
+        vec![5],
+        Storage::Dense(Rc::new(vec![0.0, 1.0, 2.0, 3.0, 4.0])),
+        aevia_dim::Dim::one(),
+        None,
+    );
+    let view = backing.slice_view(&[(1, 4)]).expect("nonempty float view");
+    assert!(view.slice_step_view(&[(2, 2, 1)]).is_none());
+    assert!(view.slice_step_view(&[(0, 2, -1)]).is_none());
+    assert!(view.slice_step_view(&[(0, usize::MAX, 2)]).is_none());
+    assert!(view.slice_step_view(&[(2, 3, -1)]).is_some());
+}
+
+#[test]
+fn rank_three_transpose_shares_storage_and_reverses_the_axes() {
+    let mut interp = session(MATRIX);
+    let shape = vec![2, 3, 4];
+    let data = Rc::new((0..24).map(f64::from).collect());
+    let source = Value::Tensor(Rc::new(TensorData::new(
+        shape,
+        Storage::Dense(Rc::clone(&data)),
+        aevia_dim::Dim::one(),
+        None,
+    )));
+    let transposed = call(
+        &mut interp,
+        "transpose",
+        vec![source.clone()],
+        Span::default(),
+    )
+    .expect("transpose a rank-three tensor");
+    let view = tensor_of(&transposed);
+    assert_eq!(view.shape, [4, 3, 2]);
+    assert_eq!(view.strides(), Some([1, 4, 12].as_slice()));
+    assert!(Rc::ptr_eq(view.buffer().expect("shared buffer"), &data));
+    assert_eq!(
+        view.get(&[1, 2, 1]).and_then(|value| value.as_f64()),
+        Some(21.0)
+    );
+    let fallback = call(
+        &mut interp,
+        "transpose",
+        vec![boxed(&source)],
+        Span::default(),
+    )
+    .expect("transpose a boxed tensor");
+    assert_same(
+        &transposed,
+        &fallback,
+        "rank-three transpose storage parity",
+    );
+}
+
+#[test]
+fn zero_extent_shapes_survive_reshape_transpose_and_sum() {
+    let mut interp = session(MATRIX);
+    let dims = vec![0, usize::MAX, 2];
+    let tensor = TensorData::new(
+        dims.clone(),
+        Storage::Dense(Rc::new(Vec::new())),
+        aevia_dim::Dim::one(),
+        None,
+    );
+    assert_eq!(tensor.checked_element_count(), Some(0));
+    assert!(tensor.reshape_storage(&[usize::MAX, 2, 0]).is_some());
+    assert!(tensor.reshape_storage(&[usize::MAX, 2]).is_none());
+    assert!(tensor.reshape_storage(&[1]).is_none());
+
+    let tensor = Value::Tensor(Rc::new(tensor));
+    let transposed = call(
+        &mut interp,
+        "transpose",
+        vec![tensor.clone()],
+        Span::default(),
+    )
+    .expect("transpose an empty tensor");
+    assert_eq!(tensor_of(&transposed).shape, vec![2, usize::MAX, 0]);
+    let reduced = call(
+        &mut interp,
+        "sum",
+        vec![tensor, Value::Num(aevia_core::value::NumVal::int(2))],
+        Span::default(),
+    )
+    .expect("reduce a nonempty axis of an empty tensor");
+    assert_eq!(tensor_of(&reduced).shape, vec![0, usize::MAX, 1]);
+    assert!(tensor_of(&reduced).dense().is_some());
+
+    let empty_matrix = Value::Tensor(Rc::new(TensorData::new(
+        vec![usize::MAX, 0],
+        Storage::Dense(Rc::new(Vec::new())),
+        aevia_dim::Dim::one(),
+        None,
+    )));
+    for name in ["tril", "triu"] {
+        let triangle = call(
+            &mut interp,
+            name,
+            vec![empty_matrix.clone()],
+            Span::default(),
+        )
+        .expect("extract a triangle from an empty matrix");
+        assert_eq!(tensor_of(&triangle).shape, [usize::MAX, 0]);
+    }
+}
+
+#[test]
+fn tensor_operations_reject_a_mismatched_host_shape() {
+    let mut interp = session(MATRIX);
+    let tensor = TensorData::new(
+        vec![2, 2],
+        Storage::Dense(Rc::new(vec![1.0])),
+        aevia_dim::Dim::one(),
+        None,
+    );
+    assert!(tensor.reshape_storage(&[1]).is_none());
+    let tensor = Value::Tensor(Rc::new(tensor));
+    let index = Value::Num(aevia_core::value::NumVal::int(0));
+    for (name, args) in [
+        ("at", vec![tensor.clone(), index.clone()]),
+        ("sum", vec![tensor.clone(), index]),
+        ("transpose", vec![tensor]),
+    ] {
+        assert_eq!(
+            call(&mut interp, name, args, Span::default())
+                .unwrap_err()
+                .code,
+            "E0802"
+        );
+    }
 }

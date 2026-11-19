@@ -109,13 +109,13 @@ impl Interval {
     ) -> bool {
         let above = match &self.lower {
             | Bound::Unbounded => true,
-            | Bound::Included(bound) => version >= bound,
-            | Bound::Excluded(bound) => version > bound,
+            | Bound::Included(bound) => !version.cmp_precedence(bound).is_lt(),
+            | Bound::Excluded(bound) => version.cmp_precedence(bound).is_gt(),
         };
         let below = match &self.upper {
             | Bound::Unbounded => true,
-            | Bound::Included(bound) => version <= bound,
-            | Bound::Excluded(bound) => version < bound,
+            | Bound::Included(bound) => !version.cmp_precedence(bound).is_gt(),
+            | Bound::Excluded(bound) => version.cmp_precedence(bound).is_lt(),
         };
         above && below
     }
@@ -140,12 +140,15 @@ impl Interval {
             | Bound::Included(version) => (version, false),
             | Bound::Excluded(version) => (version, true),
         };
+        if low_open && !low.is_prerelease() && low.triple() == (u64::MAX, u64::MAX, u64::MAX) {
+            return true;
+        }
         let (high, high_open) = match &self.upper {
             | Bound::Unbounded => return false,
             | Bound::Included(version) => (version, false),
             | Bound::Excluded(version) => (version, true),
         };
-        match low.cmp(high) {
+        match low.cmp_precedence(high) {
             | Ordering::Greater => true,
             | Ordering::Equal => low_open || high_open,
             | Ordering::Less => false,
@@ -153,6 +156,10 @@ impl Interval {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "lower bound selection mirrors the separate upper bound rule"
+)]
 fn tighter_lower(
     left: &Bound,
     right: &Bound,
@@ -160,7 +167,7 @@ fn tighter_lower(
     match (left, right) {
         | (Bound::Unbounded, other) | (other, Bound::Unbounded) => other.clone(),
         | (Bound::Included(a) | Bound::Excluded(a), Bound::Included(b) | Bound::Excluded(b)) => {
-            match a.cmp(b) {
+            match a.cmp_precedence(b) {
                 | Ordering::Greater => left.clone(),
                 | Ordering::Less => right.clone(),
                 // Equal versions: the open end is the tighter one.
@@ -176,6 +183,10 @@ fn tighter_lower(
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "upper bound selection mirrors the separate lower bound rule"
+)]
 fn tighter_upper(
     left: &Bound,
     right: &Bound,
@@ -183,7 +194,7 @@ fn tighter_upper(
     match (left, right) {
         | (Bound::Unbounded, other) | (other, Bound::Unbounded) => other.clone(),
         | (Bound::Included(a) | Bound::Excluded(a), Bound::Included(b) | Bound::Excluded(b)) => {
-            match a.cmp(b) {
+            match a.cmp_precedence(b) {
                 | Ordering::Less => left.clone(),
                 | Ordering::Greater => right.clone(),
                 | Ordering::Equal => {
@@ -209,12 +220,16 @@ impl Comparator {
         }
     }
 
-    /// `maj.min.0` one minor above, or the next major when the minor is absent.
-    fn next_after_partial(&self) -> Version {
-        match self.minor {
-            | Some(minor) => Version::new(self.major, minor.saturating_add(1), 0),
-            | None => Version::new(self.major.saturating_add(1), 0, 0),
-        }
+    /// The first release after this major or major/minor prefix.
+    fn next_after_partial(&self) -> Option<Version> {
+        self.minor
+            .and_then(|minor| minor.checked_add(1))
+            .map(|minor| Version::new(self.major, minor, 0))
+            .or_else(|| {
+                self.major
+                    .checked_add(1)
+                    .map(|major| Version::new(major, 0, 0))
+            })
     }
 
     /// The versions this comparator admits, before the pre-release rule.
@@ -232,7 +247,9 @@ impl Comparator {
                 } else {
                     Interval {
                         lower: Bound::Included(floor),
-                        upper: Bound::Excluded(self.next_after_partial()),
+                        upper: self
+                            .next_after_partial()
+                            .map_or(Bound::Unbounded, Bound::Excluded),
                     }
                 }
             },
@@ -244,7 +261,10 @@ impl Comparator {
                     }
                 } else {
                     Interval {
-                        lower: Bound::Included(self.next_after_partial()),
+                        lower: self.next_after_partial().map_or_else(
+                            || Bound::Excluded(Version::new(u64::MAX, u64::MAX, u64::MAX)),
+                            Bound::Included,
+                        ),
                         upper: Bound::Unbounded,
                     }
                 }
@@ -270,32 +290,44 @@ impl Comparator {
                 } else {
                     Interval {
                         lower: Bound::Unbounded,
-                        upper: Bound::Excluded(self.next_after_partial()),
+                        upper: self
+                            .next_after_partial()
+                            .map_or(Bound::Unbounded, Bound::Excluded),
                     }
                 }
             },
             | Op::Tilde | Op::Wildcard => {
                 Interval {
                     lower: Bound::Included(floor),
-                    upper: Bound::Excluded(self.next_after_partial()),
+                    upper: self
+                        .next_after_partial()
+                        .map_or(Bound::Unbounded, Bound::Excluded),
                 }
             },
             | Op::Caret => {
                 let upper = if self.major > 0 {
-                    Version::new(self.major.saturating_add(1), 0, 0)
+                    self.major
+                        .checked_add(1)
+                        .map(|major| Version::new(major, 0, 0))
                 } else {
-                    match (self.minor, self.patch) {
+                    Some(match (self.minor, self.patch) {
                         | (None, _) => Version::new(1, 0, 0),
                         | (Some(minor), _) if minor > 0 => {
-                            Version::new(0, minor.saturating_add(1), 0)
+                            minor
+                                .checked_add(1)
+                                .map_or(Version::new(1, 0, 0), |minor| Version::new(0, minor, 0))
                         },
-                        | (Some(_), Some(patch)) => Version::new(0, 0, patch.saturating_add(1)),
+                        | (Some(_), Some(patch)) => {
+                            patch
+                                .checked_add(1)
+                                .map_or(Version::new(0, 1, 0), |patch| Version::new(0, 0, patch))
+                        },
                         | (Some(_), None) => Version::new(0, 1, 0),
-                    }
+                    })
                 };
                 Interval {
                     lower: Bound::Included(floor),
-                    upper: Bound::Excluded(upper),
+                    upper: upper.map_or(Bound::Unbounded, Bound::Excluded),
                 }
             },
         }
@@ -384,7 +416,7 @@ impl VersionReq {
 
     /// Whether this is `*`.
     #[must_use]
-    pub fn is_any(&self) -> bool {
+    pub const fn is_any(&self) -> bool {
         self.comparators.is_empty()
     }
 
@@ -429,6 +461,10 @@ impl VersionReq {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "comparators are the units of the requirement grammar"
+)]
 fn parse_comparator(
     input: &str,
     part: &str,
@@ -515,8 +551,7 @@ fn parse_comparator(
         },
     };
     let op = match (op, wildcard) {
-        | (None, true) => Op::Wildcard,
-        | (Some(Op::Exact), true) => Op::Wildcard,
+        | (None | Some(Op::Exact), true) => Op::Wildcard,
         | (Some(op), _) => op,
         | (None, false) => Op::Caret,
     };
@@ -529,6 +564,10 @@ fn parse_comparator(
     })
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "operator recognition keeps the longest-first spelling table together"
+)]
 fn split_op(part: &str) -> (Option<Op>, &str) {
     for (prefix, op) in [
         (">=", Op::GreaterEq),
@@ -546,6 +585,10 @@ fn split_op(part: &str) -> (Option<Op>, &str) {
     (None, part)
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "all numeric comparator components share one validation rule"
+)]
 fn parse_component(
     input: &str,
     part: &str,
@@ -816,6 +859,28 @@ mod tests {
                 assert!(a.overlaps(&b), "`{a}` / `{b}` share a version");
             }
         }
+    }
+
+    #[test]
+    fn extreme_component_bounds_carry_or_remain_unbounded() {
+        let max = u64::MAX;
+        assert!(r(&format!("^{max}")).matches(&v(&format!("{max}.{max}.{max}"))));
+        assert!(r(&format!("~1.{max}")).matches(&v(&format!("1.{max}.9"))));
+        assert!(!r(&format!(">1.{max}")).matches(&v(&format!("1.{max}.9"))));
+        assert!(r(&format!(">1.{max}")).matches(&v("2.0.0")));
+        assert!(r(&format!(">{max}.{max}")).interval().is_empty());
+        assert!(r(&format!(">{max}.{max}.{max}")).interval().is_empty());
+        assert!(r(&format!("^0.0.{max}")).matches(&v(&format!("0.0.{max}"))));
+        assert!(!r(&format!("^0.0.{max}")).matches(&v("0.1.0")));
+    }
+
+    #[test]
+    fn requirements_compare_precedence_without_build_metadata() {
+        let built = v("1.2.3+packaged.1");
+        assert!(r("=1.2.3").matches(&built));
+        assert!(r("<=1.2.3").matches(&built));
+        assert!(!r(">1.2.3").matches(&built));
+        assert!(r("=1.2.3-rc.1").matches(&v("1.2.3-rc.1+packaged.1")));
     }
 
     #[test]

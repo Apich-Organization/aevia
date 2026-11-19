@@ -31,10 +31,6 @@ repository = "https://github.com/Apich-Organization/aevia"
 [workspace.dependencies]
 num-bigint = { version = "0.4", features = ["serde"] }
 num-rational = { version = "0.4", features = ["serde"] }
-# The `f64` linear-algebra backend: blocked GEMM and LAPACK-class factorisations.
-# `sparse-linalg` backs the sparse LU of `aevia_std::sparse` (the `rand` and
-# `npy` features are still unused here).
-faer = { version = "0.24", default-features = false, features = ["std", "rayon", "sparse-linalg"] }
 num-integer = "0.1"
 num-traits = "0.2"
 indexmap = { version = "2", features = ["serde"] }
@@ -42,9 +38,9 @@ unicode-ident = "1"
 unicode-normalization = "0.1"
 unicode-segmentation = "1"
 serde_json = "1"
-# The `.aevi` checked-module cache (spec 9.11): serde types, compact binary codec.
 serde = { version = "1", features = ["derive", "rc"] }
-bincode-next = { version = "3.2", features = ["serde"] }
+# Native encoding and schema fingerprinting for the checked-module cache.
+bincode-next = "3.2"
 
 aevia-dim = { path = "crates/aevia-dim" }
 aevia-syntax = { path = "crates/aevia-syntax" }
@@ -93,3 +89,21 @@ lto = "thin"
 codegen-units = 16
 incremental = true
 debug = "line-tables-only"
+
+[workspace.lints.rust]
+future_incompatible = { level = "deny", priority = -1 }
+nonstandard_style = { level = "deny", priority = -1 }
+rust_2018_idioms = { level = "deny", priority = -1 }
+improper_ctypes_definitions = "deny"
+unreachable_code = "deny"
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+dbg_macro = "deny"
+implicit_clone = "deny"
+missing_safety_doc = "deny"
+same_item_push = "deny"
+todo = "deny"
+undocumented_unsafe_blocks = "deny"
+unnecessary_safety_comment = "deny"

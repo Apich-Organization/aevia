@@ -6,6 +6,10 @@ use aevia_core::compile;
 use aevia_core::value::show;
 use aevia_syntax::Span;
 
+#[allow(
+    clippy::result_large_err,
+    reason = "the test inspects the original runtime error and failed batch index"
+)]
 fn batch(
     interp: &mut Interp,
     source: &str,

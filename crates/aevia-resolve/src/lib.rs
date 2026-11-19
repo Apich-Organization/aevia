@@ -6,13 +6,27 @@
 //! mean" and "which versions does `aevia update` pick" have exactly one
 //! answer.
 //!
-//! * [`Version`] — SemVer 2.0.0 with pre-release and build metadata and a total
+//! * [`Version`] — `SemVer` 2.0.0 with pre-release and build metadata and a total
 //!   order.
 //! * [`VersionReq`] — `^1.2`, `~1.2.3`, `>=1.2, <2`, `1.*`, `=1.2.3`, `*`.
-//! * [`resolve`] — the resolver, over an abstract [`Index`].
+//! * [`resolve()`] — the resolver, over an abstract [`Index`].
 //! * [`sparse`] — the registry's sparse-index text as an [`Index`].
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
 
 pub mod index;
 pub mod names;

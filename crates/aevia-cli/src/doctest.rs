@@ -31,6 +31,10 @@ enum Outcome {
 }
 
 /// `aevia test --doc [--filter PAT] [files…]`
+#[allow(
+    clippy::single_call_fn,
+    reason = "the test command routes documentation snippets through a separate runner"
+)]
 pub fn run(
     options: Options,
     files: &[String],
@@ -54,7 +58,7 @@ pub fn run(
             | Ok(source) => source,
             | Err(error) => {
                 eprintln!("aevia test --doc: cannot read `{shown}`: {error}");
-                failed += 1;
+                failed = failed.saturating_add(1);
                 continue;
             },
         };
@@ -64,7 +68,7 @@ pub fn run(
                 // A file whose documentation cannot be read is a failure, not
                 // an empty success: nothing was checked.
                 eprintln!("aevia test --doc: `{shown}`: {message}");
-                failed += 1;
+                failed = failed.saturating_add(1);
                 continue;
             },
         };
@@ -86,12 +90,12 @@ pub fn run(
             }
         }
         for doctest in &doctests {
-            checked += 1;
+            checked = checked.saturating_add(1);
             let (outcome, compilation) = check(doctest);
             match outcome {
                 | Outcome::Pass => {
                     println!("doctest {}:{} ... ok", doctest.file, doctest.line);
-                    passed += 1;
+                    passed = passed.saturating_add(1);
                 },
                 | Outcome::Fail(reason) => {
                     println!(
@@ -101,20 +105,17 @@ pub fn run(
                     if let Some(compilation) = compilation {
                         eprint!("{}", compilation.diagnostics.render(&compilation.sources));
                     }
-                    failed += 1;
+                    failed = failed.saturating_add(1);
                 },
             }
         }
     }
-    if let Some(pattern) = filter
-        && checked == 0
-        && failed == 0
-    {
-        eprintln!("aevia test --doc: the filter `{pattern}` matched no doctest");
-        return ExitCode::from(1);
-    }
-    if checked == 0 {
-        eprintln!("aevia test --doc: no ```aevia code blocks found; nothing was checked");
+    if checked == 0 && failed == 0 {
+        if let Some(pattern) = filter {
+            eprintln!("aevia test --doc: the filter `{pattern}` matched no doctest");
+        } else {
+            eprintln!("aevia test --doc: no fenced `aevia` code blocks found");
+        }
         return ExitCode::from(1);
     }
     println!("\n{passed} passed, {failed} failed");
@@ -133,6 +134,10 @@ pub fn run(
 ///
 /// The compilation is returned alongside the outcome so a caller can print the
 /// compiler's own diagnostics when the snippet did not do what it promised.
+#[allow(
+    clippy::single_call_fn,
+    reason = "isolates compilation and failure accounting for a single snippet"
+)]
 fn check(doctest: &Doctest) -> (Outcome, Option<aevia_core::driver::Program>) {
     use aevia_core::manifest::Package;
     use aevia_core::manifest::Roots;
@@ -157,7 +162,7 @@ fn check(doctest: &Doctest) -> (Outcome, Option<aevia_core::driver::Program>) {
         if !entry.exists() && entry != declaring {
             break entry;
         }
-        serial += 1;
+        serial = serial.saturating_add(1);
     };
     let compilation = aevia_core::driver::load_with_roots_and_source(
         &entry,
@@ -176,7 +181,9 @@ fn check(doctest: &Doctest) -> (Outcome, Option<aevia_core::driver::Program>) {
         .filter(|diagnostic| !diagnostic.code.is_empty())
         .map(|diagnostic| diagnostic.code.clone())
         .collect();
-    let prefix_len = source.len() - (doctest.snippet.trim_end().len() + 1);
+    let prefix_len = source
+        .len()
+        .saturating_sub(doctest.snippet.trim_end().len().saturating_add(1));
     let entry_file = compilation.entry().map(|entry| entry.file);
     if entry_file.is_none()
         || errors.iter().any(|error| {
@@ -227,6 +234,10 @@ fn check(doctest: &Doctest) -> (Outcome, Option<aevia_core::driver::Program>) {
 }
 
 /// The synthetic module: copied imports, a blank line, then the snippet.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps generated file layout with the corresponding diagnostic remapping"
+)]
 fn candidate(doctest: &Doctest) -> String {
     let mut source = String::new();
     for import in &doctest.imports {

@@ -156,9 +156,13 @@ const TRANSPORT_PREFIX: &str = "__aevia_dim_";
 const NOMINAL_PREFIX: &str = "__aevia_dim_n_v1_";
 const RAW_PREFIX: &str = "__aevia_dim_b_v1_";
 const VARIABLE_PREFIX: &str = "__aevia_dim_v_v1_";
+#[allow(
+    clippy::indexing_slicing,
+    reason = "both nibbles are in 0..16 by construction"
+)]
 fn hex(text: &str) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(text.len() * 2);
+    let mut encoded = String::with_capacity(text.len().saturating_mul(2));
     for byte in text.bytes() {
         encoded.push(char::from(DIGITS[usize::from(byte >> 4)]));
         encoded.push(char::from(DIGITS[usize::from(byte & 15)]));
@@ -175,9 +179,10 @@ fn unhex(text: &str) -> Option<String> {
         .0
         .iter()
         .map(|pair| {
-            let a = char::from(pair[0]).to_digit(16)?;
-            let b = char::from(pair[1]).to_digit(16)?;
-            Some((a * 16 + b) as u8)
+            if !pair.iter().all(u8::is_ascii_hexdigit) {
+                return None;
+            }
+            u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()
         })
         .collect();
     String::from_utf8(bytes?).ok()
@@ -398,6 +403,10 @@ impl Dim {
         result
     }
 
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "arbitrary-precision rational exponents have no machine-word overflow"
+    )]
     fn combine(
         &self,
         other: &Self,
@@ -496,6 +505,10 @@ impl Dim {
 
     /// Builds a dimension from generator/exponent pairs, dropping zero powers.
     #[must_use]
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "combines exponents as arbitrary-precision rationals"
+    )]
     pub fn from_factors<I>(factors: I) -> Self
     where
         I: IntoIterator<Item = (Atom, BigRational)>,
@@ -514,7 +527,7 @@ impl Dim {
 
     /// True when the dimension is `1`.
     #[must_use]
-    pub fn is_one(&self) -> bool {
+    pub const fn is_one(&self) -> bool {
         self.factors.is_none()
     }
 
@@ -550,6 +563,10 @@ impl Dim {
 
     /// Raises the dimension to a rational power.
     #[must_use]
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "multiplies exponents as arbitrary-precision rationals"
+    )]
     pub fn pow(
         &self,
         exponent: &BigRational,
@@ -630,23 +647,23 @@ impl Dim {
         mut lookup: F,
     ) -> Self
     where
-        F: FnMut(u32) -> Option<Dim>,
+        F: FnMut(u32) -> Option<Self>,
     {
         if self.is_concrete() {
             return self.clone();
         }
-        let mut result = Dim::one();
+        let mut result = Self::one();
         for (atom, exponent) in self.slice() {
             match atom {
                 | Atom::Base(_) | Atom::Nominal(_) => {
-                    result = result.mul(&Dim::from_factors([(atom.clone(), exponent.clone())]));
+                    result = result.mul(&Self::from_factors([(atom.clone(), exponent.clone())]));
                 },
                 | Atom::Var(id) => {
                     match lookup(*id) {
                         | Some(replacement) => result = result.mul(&replacement.pow(exponent)),
                         | None => {
                             result = result
-                                .mul(&Dim::from_factors([(Atom::Var(*id), exponent.clone())]));
+                                .mul(&Self::from_factors([(Atom::Var(*id), exponent.clone())]));
                         },
                     }
                 },
@@ -720,37 +737,13 @@ impl Dim {
         if self.is_one() {
             return String::new();
         }
-        let mut numerator = Vec::new();
-        let mut denominator = Vec::new();
-        for (atom, exponent) in self.slice() {
-            let name = match atom {
+        render(self, |atom| {
+            match atom {
                 | Atom::Base(name) => si_symbol(name).to_string(),
                 | Atom::Nominal(base) => base.display_name().to_string(),
                 | Atom::Var(id) => format!("d{id}"),
-            };
-            let (target, magnitude) = if exponent.is_negative() {
-                (&mut denominator, -exponent.clone())
-            } else {
-                (&mut numerator, exponent.clone())
-            };
-            if magnitude.is_one() {
-                target.push(name);
-            } else if magnitude.is_integer() {
-                target.push(format!("{name}^{}", magnitude.numer()));
-            } else {
-                target.push(format!("{name}^({})", format_rational(&magnitude)));
             }
-        }
-        let numerator = if numerator.is_empty() {
-            "1".to_string()
-        } else {
-            numerator.join("*")
-        };
-        match denominator.len() {
-            | 0 => numerator,
-            | 1 => format!("{numerator}/{}", denominator[0]),
-            | _ => format!("{numerator}/({})", denominator.join("*")),
-        }
+        })
     }
 
     /// Renders for value display, preferring a named SI derived unit.
@@ -788,6 +781,10 @@ impl Dim {
 
     /// Parse text emitted by [`Self::to_transport_string`]. This is deliberately
     /// separate from parsing source names in a module's dimension environment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DimParseError`] when the text is not a dimension expression.
     pub fn parse_transport(text: &str) -> Result<Self, DimParseError> {
         let mut parser = DimTextParser::new(text);
         parser.transport = true;
@@ -832,14 +829,19 @@ where
     for (atom, exponent) in dim.slice() {
         let name = name_of(atom);
         let (target, magnitude) = if exponent.is_negative() {
-            (&mut denominator, -exponent.clone())
+            (&mut denominator, exponent.abs())
         } else {
             (&mut numerator, exponent.clone())
         };
         if magnitude.is_one() {
             target.push(name);
         } else {
-            target.push(format!("{name}^{}", format_exponent(&magnitude)));
+            let power = if magnitude.is_integer() {
+                magnitude.numer().to_string()
+            } else {
+                format!("({})", format_rational(&magnitude))
+            };
+            target.push(format!("{name}^{power}"));
         }
     }
     let numerator = if numerator.is_empty() {
@@ -847,20 +849,12 @@ where
     } else {
         numerator.join("*")
     };
-    match denominator.len() {
-        | 0 => numerator,
+    match denominator.as_slice() {
+        | [] => numerator,
         // `M/L*T` reads as `(M/L)*T`; a product in the denominator needs
         // parentheses so the text parses back to the same dimension.
-        | 1 => format!("{numerator}/{}", denominator[0]),
+        | [unit] => format!("{numerator}/{unit}"),
         | _ => format!("{numerator}/({})", denominator.join("*")),
-    }
-}
-
-fn format_exponent(exponent: &BigRational) -> String {
-    if exponent.denom().is_one() {
-        exponent.numer().to_string()
-    } else {
-        format!("({})", format_rational(exponent))
     }
 }
 
@@ -869,6 +863,10 @@ fn format_exponent(exponent: &BigRational) -> String {
 /// A base that is not one of the seven SI generators (a user-declared
 /// `dimension` in a `DimEnv`, say) keeps its own name: inventing a symbol for
 /// it would make the display ambiguous.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps the SI base dimension display table together"
+)]
 fn si_symbol(base: &str) -> &str {
     match base {
         | "Length" => "m",
@@ -1059,7 +1057,7 @@ impl DimEnv {
 
     /// All aliases in declaration order.
     #[must_use]
-    pub fn aliases(&self) -> &IndexMap<String, Dim> {
+    pub const fn aliases(&self) -> &IndexMap<String, Dim> {
         &self.aliases
     }
 
@@ -1181,7 +1179,7 @@ struct DimTextParser<'a> {
 }
 
 impl<'a> DimTextParser<'a> {
-    fn new(text: &'a str) -> Self {
+    const fn new(text: &'a str) -> Self {
         Self {
             text,
             pos: 0,
@@ -1190,17 +1188,22 @@ impl<'a> DimTextParser<'a> {
     }
 
     fn rest(&self) -> &'a str {
-        &self.text[self.pos..]
+        self.text.get(self.pos..).unwrap_or_default()
+    }
+
+    fn take_while(
+        &mut self,
+        predicate: impl FnMut(char) -> bool,
+    ) -> &'a str {
+        let rest = self.rest();
+        let mut predicate = predicate;
+        let len = rest.find(|c| !predicate(c)).unwrap_or(rest.len());
+        self.pos = self.pos.saturating_add(len);
+        rest.get(..len).unwrap_or_default()
     }
 
     fn skip_space(&mut self) {
-        while let Some(c) = self.rest().chars().next() {
-            if c.is_whitespace() {
-                self.pos += c.len_utf8();
-            } else {
-                break;
-            }
-        }
+        self.take_while(char::is_whitespace);
     }
 
     fn peek(&mut self) -> Option<char> {
@@ -1210,7 +1213,7 @@ impl<'a> DimTextParser<'a> {
 
     fn bump(&mut self) -> Option<char> {
         let c = self.peek()?;
-        self.pos += c.len_utf8();
+        self.pos = self.pos.saturating_add(c.len_utf8());
         Some(c)
     }
 
@@ -1223,33 +1226,52 @@ impl<'a> DimTextParser<'a> {
         &mut self,
         env: &DimEnv,
     ) -> Result<Dim, DimParseError> {
-        let mut result = self.parse_factor(env)?;
+        let mut groups = Vec::new();
+        let mut dim = Dim::one();
+        let mut divide = false;
         loop {
-            match self.peek() {
-                | Some('*') | Some('·') => {
-                    self.bump();
-                    result = result.mul(&self.parse_factor(env)?);
-                },
-                | Some('/') => {
-                    self.bump();
-                    result = result.div(&self.parse_factor(env)?);
-                },
-                | _ => return Ok(result),
+            while self.peek() == Some('(') {
+                self.bump();
+                groups.push((dim, divide));
+                dim = Dim::one();
+                divide = false;
+            }
+            let atom = self.parse_atom(env)?;
+            let mut factor = self.parse_power(atom)?;
+            loop {
+                dim = if divide {
+                    dim.div(&factor)
+                } else {
+                    dim.mul(&factor)
+                };
+                match self.peek() {
+                    | Some(op @ ('*' | '·' | '/')) => {
+                        self.bump();
+                        divide = op == '/';
+                        break;
+                    },
+                    | Some(')') if !groups.is_empty() => {
+                        self.bump();
+                        factor = self.parse_power(dim)?;
+                        (dim, divide) = groups.pop().ok_or(DimParseError::UnexpectedEnd)?;
+                    },
+                    | _ if groups.is_empty() => return Ok(dim),
+                    | _ => return Err(DimParseError::UnexpectedEnd),
+                }
             }
         }
     }
 
-    fn parse_factor(
+    fn parse_power(
         &mut self,
-        env: &DimEnv,
+        atom: Dim,
     ) -> Result<Dim, DimParseError> {
-        let mut atom = self.parse_atom(env)?;
         if self.peek() == Some('^') {
             self.bump();
-            let exponent = self.parse_exponent()?;
-            atom = atom.pow(&exponent);
+            Ok(atom.pow(&self.parse_exponent()?))
+        } else {
+            Ok(atom)
         }
-        Ok(atom)
     }
 
     fn parse_atom(
@@ -1257,29 +1279,12 @@ impl<'a> DimTextParser<'a> {
         env: &DimEnv,
     ) -> Result<Dim, DimParseError> {
         match self.peek() {
-            | Some('(') => {
-                self.bump();
-                let inner = self.parse_dim_with(env)?;
-                if self.peek() != Some(')') {
-                    return Err(DimParseError::UnexpectedEnd);
-                }
-                self.bump();
-                Ok(inner)
-            },
             | Some('1') => {
                 self.bump();
                 Ok(Dim::one())
             },
             | Some(c) if c.is_alphabetic() || c == '_' => {
-                let start = self.pos;
-                while let Some(c) = self.peek() {
-                    if c.is_alphanumeric() || c == '_' {
-                        self.bump();
-                    } else {
-                        break;
-                    }
-                }
-                let name = &self.text[start..self.pos];
+                let name = self.take_while(|c| c.is_alphanumeric() || c == '_');
                 if self.transport {
                     if let Some(id) = name
                         .strip_prefix(VARIABLE_PREFIX)
@@ -1297,6 +1302,10 @@ impl<'a> DimTextParser<'a> {
         }
     }
 
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "exact rational division follows an explicit nonzero check"
+    )]
     fn parse_exponent(&mut self) -> Result<BigRational, DimParseError> {
         let negative = if self.peek() == Some('-') {
             self.bump();
@@ -1304,55 +1313,36 @@ impl<'a> DimTextParser<'a> {
         } else {
             false
         };
-        if self.peek() == Some('(') {
+        let value = if self.peek() == Some('(') {
             self.bump();
-            let text_start = self.pos;
-            while let Some(c) = self.peek() {
-                if c == ')' {
-                    break;
-                }
-                self.bump();
-            }
-            let inner = self.text[text_start..self.pos].trim().to_string();
-            if self.peek() != Some(')') {
-                return Err(DimParseError::BadExponent(inner));
-            }
-            self.bump();
-            let value = match inner.split_once('/') {
+            let Some((inner, _)) = self.rest().split_once(')') else {
+                return Err(DimParseError::BadExponent(self.rest().trim().to_string()));
+            };
+            self.pos = self.pos.saturating_add(inner.len()).saturating_add(1);
+            let inner = inner.trim();
+            let invalid = || DimParseError::BadExponent(inner.to_string());
+            match inner.split_once('/') {
                 | Some((numerator, denominator)) => {
-                    let numerator = parse_decimal(numerator)
-                        .ok_or_else(|| DimParseError::BadExponent(inner.clone()))?;
-                    let denominator = parse_decimal(denominator)
-                        .ok_or_else(|| DimParseError::BadExponent(inner.clone()))?;
+                    let numerator = parse_decimal(numerator).ok_or_else(invalid)?;
+                    let denominator = parse_decimal(denominator).ok_or_else(invalid)?;
                     if denominator.is_zero() {
-                        return Err(DimParseError::BadExponent(inner));
+                        return Err(invalid());
                     }
                     numerator / denominator
                 },
-                | None => parse_decimal(&inner).ok_or(DimParseError::BadExponent(inner))?,
-            };
-            return Ok(if negative { -value } else { value });
-        }
-        let start = self.pos;
-        while let Some(c) = self.peek() {
-            if c.is_ascii_digit() || matches!(c, '.' | '_') {
-                self.bump();
-            } else {
-                break;
+                | None => parse_decimal(inner).ok_or_else(invalid)?,
             }
-        }
-        if matches!(self.peek(), Some('e' | 'E')) {
-            self.bump();
-            if matches!(self.peek(), Some('+' | '-')) {
+        } else {
+            let start = self.pos;
+            self.take_while(|c| c.is_ascii_digit() || matches!(c, '.' | '_'));
+            if self.rest().starts_with(['e', 'E']) {
                 self.bump();
+                self.take_while(|c| matches!(c, '+' | '-'));
+                self.take_while(|c| c.is_ascii_digit() || c == '_');
             }
-            while self.peek().is_some_and(|c| c.is_ascii_digit() || c == '_') {
-                self.bump();
-            }
-        }
-        let text = &self.text[start..self.pos];
-        let value =
-            parse_decimal(text).ok_or_else(|| DimParseError::BadExponent(text.to_string()))?;
+            let text = self.text.get(start..self.pos).unwrap_or_default();
+            parse_decimal(text).ok_or_else(|| DimParseError::BadExponent(text.to_string()))?
+        };
         Ok(if negative { -value } else { value })
     }
 }
@@ -1420,7 +1410,7 @@ impl DimUnifier {
                     | None => break,
                 }
             }
-            Some(self.resolve_depth(value, depth + 1))
+            Some(self.resolve_depth(value, depth.saturating_add(1)))
         })
     }
 
@@ -1435,7 +1425,11 @@ impl DimUnifier {
         id: u32,
         value: Dim,
     ) -> Result<(), DimMismatch> {
-        let resolved = self.resolve(&value);
+        let resolved = if value.is_concrete() {
+            value
+        } else {
+            self.resolve(&value)
+        };
         if resolved.contains_var(id) {
             return Err(DimMismatch {
                 left: Dim::var(id),
@@ -1455,6 +1449,10 @@ impl DimUnifier {
     /// # Errors
     ///
     /// Returns the residual mismatch when the dimensions cannot be made equal.
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "the selected rational exponent is nonzero by the dimension invariant"
+    )]
     pub fn unify(
         &mut self,
         left: &Dim,
@@ -1515,10 +1513,11 @@ impl DimUnifier {
 }
 
 /// The SI derived unit whose dimension is exactly `dim`, if any.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps the SI derived dimension display table together"
+)]
 fn derived_si_symbol(dim: &Dim) -> Option<&'static str> {
-    if !dim.is_concrete() || dim.is_one() {
-        return None;
-    }
     // (symbol, [M, L, T, I] exponents)
     const TABLE: [(&str, [i64; 4]); 11] = [
         ("N", [1, 1, -2, 0]),
@@ -1533,6 +1532,9 @@ fn derived_si_symbol(dim: &Dim) -> Option<&'static str> {
         ("Wb", [1, 2, -2, -1]),
         ("T", [1, 0, -2, -1]),
     ];
+    if !dim.is_concrete() || dim.is_one() {
+        return None;
+    }
     let mut exponents = [0i64; 4];
     for (atom, exponent) in dim.factors() {
         let Atom::Base(name) = atom else {
@@ -1548,7 +1550,7 @@ fn derived_si_symbol(dim: &Dim) -> Option<&'static str> {
         if !exponent.is_integer() {
             return None;
         }
-        exponents[slot] = i64::try_from(exponent.numer()).ok()?;
+        *exponents.get_mut(slot)? = i64::try_from(exponent.numer()).ok()?;
     }
     TABLE
         .iter()
@@ -1661,6 +1663,16 @@ mod tests {
         let dim = env.parse("M*L^2/T^2").unwrap();
         assert_eq!(dim.to_plain_string(), "Length^2*Mass/Time^2");
         assert_eq!(Dim::parse_plain(&dim.to_plain_string()).unwrap(), dim);
+    }
+
+    #[test]
+    fn dimension_text_accepts_separating_space_and_deep_groups() {
+        let env = env();
+        let acceleration = env.parse("L/T^2").unwrap();
+        assert_eq!(env.parse(" L / ( T ^ ( 4 / 2 ) ) "), Ok(acceleration));
+        assert_eq!(env.parse("( L / T ) ^ 2"), env.parse("L^2/T^2"));
+        let nested = format!("{} L {}", "(".repeat(4_096), ")".repeat(4_096));
+        assert_eq!(env.parse(&nested), Ok(Dim::base("Length")));
     }
 
     /// Value display uses SI symbols, and a rational exponent is parenthesised:

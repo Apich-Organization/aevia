@@ -30,7 +30,7 @@ pub fn guide(name: &str) -> Option<&'static Guide> {
     GUIDES
         .binary_search_by_key(&name, |guide| guide.name)
         .ok()
-        .map(|index| &GUIDES[index])
+        .and_then(|index| GUIDES.get(index))
 }
 
 /// Words that only make sense to someone reading the Rust sources. A guide is
@@ -68,8 +68,11 @@ pub fn find_rust_ism(text: &str) -> Option<&'static str> {
         text.match_indices(ism).any(|(at, hit)| {
             !word
                 || (!text[..at].ends_with(|c: char| c.is_alphanumeric() || c == '_')
-                    && !text[at + hit.len()..]
-                        .starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+                    && !text
+                        .get(at.saturating_add(hit.len())..)
+                        .is_some_and(|tail| {
+                            tail.starts_with(|c: char| c.is_alphanumeric() || c == '_')
+                        }))
         })
     })
 }
@@ -233,7 +236,7 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "Table",
-        description: "A table of rows with named, typed columns, as read from a CSV file. The type argument is the record type of one row, so Table<{ time: Float[T], speed: Float[L/T] }> has a time column in seconds and a speed column in metres per second. Use column to get a column as a vector, filter and select to cut it down, and write_csv to save it.",
+        description: "A table with named columns and a row type parameter. Table<{ time: Float }> provides a static row type for operations such as row. For a table read from a file, the header supplies the actual column names and optional unit metadata. Use schema to inspect that metadata and column_dyn to read cells whose types are determined at run time.",
         example: "",
     },
     Guide {
@@ -518,17 +521,17 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "column",
-        description: "Extracts one column of a Table as a vector: column(table, \"time\"). The name must be a string literal so the compiler can check that the column exists and give the vector the right element type and dimension. Returns Err(DataError) if the check cannot be made at run time. For a name computed at run time use column_dyn.",
-        example: "fn times(t: Table<{ time: Float[T] }>) = column(t, \"time\")",
+        description: "Looks up a column by name at run time and returns its cells in a rank-one tensor. The surrounding expression supplies the expected element type independently of the table’s row type. Numeric cells are dimensionless Float values and other cells are String values. A missing column returns Err(DataError). Use column_dyn when the cells’ types are determined at run time.",
+        example: "fn readings(t: Table<{ time: Float }>, name: String): Result<Tensor<1, Float>, DataError> = column(t, name)",
     },
     Guide {
         name: "column_dyn",
-        description: "Extracts a column by a name computed at run time, as a vector of dynamically typed values. Returns Err(DataError) for an unknown column.",
-        example: "fn pick(t: Table<Dynamic>, name: String) = column_dyn(t, name)",
+        description: "Looks up a column by name at run time and returns a rank-one tensor of dynamic Value cells. Numeric cells are dimensionless Float values and other cells are String values. This works with any table row type. A missing column returns Err(DataError).",
+        example: "fn pick(t: Table<Dynamic>, name: String): Result<Tensor<1, Value>, DataError> = column_dyn(t, name)",
     },
     Guide {
         name: "combine",
-        description: "Gathers a vector of series into one plot specification, drawn on shared axes.",
+        description: "Collects a vector of series in one plot specification. The renderer uses shared axes and checks dimensions and explicit axis settings.",
         example: "combine([line([0.0, 1.0], [0.0, 1.0]), scatter([0.0, 1.0], [1.0, 0.0])])",
     },
     Guide {
@@ -653,8 +656,8 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "default_plot_opts",
-        description: "The plot options record with every field unset or linear: no label or colour, linear axes and automatic limits. Copy it and override the fields you want, then pass it to line_with and the other *_with functions.",
-        example: "default_plot_opts",
+        description: "A plot options record with linear axes and automatic limits. Use a record update to set labels, color, display units, scales or limits for a *_with constructor.",
+        example: "{ default_plot_opts with color = Some(\"blue\"), xlim = Some((0.0, 10.0)) }",
     },
     Guide {
         name: "defint",
@@ -793,7 +796,7 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "errorbar",
-        description: "A series of points with vertical error bars: errorbar(x, y, err) draws y plus or minus err at each x. The three vectors must have equal length, and err has y's dimension.",
+        description: "Draws central points and vertical whiskers using nonnegative error magnitudes. The three vectors have equal lengths, and the error has the same dimension as y. Non-finite errors omit the corresponding whisker.",
         example: "errorbar([0.0, 1.0, 2.0], [1.0, 2.0, 3.0], [0.1, 0.2, 0.1])",
     },
     Guide {
@@ -928,8 +931,8 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "forall",
-        description: "Checks a property on randomly generated values: forall(fn x => proposition) is true when the proposition holds for every sample. Use it in tests to catch counter-examples; a failure reports the sample that broke it.",
-        example: "forall(fn (y: Real) => sym_eq(y + 0, y))",
+        description: "Checks a proposition over fixed numeric samples. Use a unary predicate taking a dimensionless Real. The samples are 0, 1, -1, 2, -3, and 1/2. A false verdict returns false. If no verdict is false but a sample is undecidable, the call raises E0804.",
+        example: "forall(fn (x: Real) => x + 0 == x)",
     },
     Guide {
         name: "format",
@@ -1003,7 +1006,7 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "heatmap",
-        description: "A heat-map series that colours each cell of a matrix by its value. Row index runs down the picture and column index across.",
+        description: "Draws a color-scaled matrix with row zero at the top and columns increasing to the right. Non-finite cells are left blank.",
         example: "heatmap([[1.0, 2.0], [3.0, 4.0]])",
     },
     Guide {
@@ -1023,7 +1026,7 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "hist",
-        description: "A histogram series: hist(data, bins) counts the data into that many equal-width bins and draws the counts as bars.",
+        description: "Draws counts in a positive number of equal-width bins. Pass at least one finite observation. Non-finite observations are skipped.",
         example: "hist([1.0, 2.0, 2.5, 3.0, 9.0], 4)",
     },
     Guide {
@@ -1033,7 +1036,7 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "histogram",
-        description: "histogram(xs, bins) counts how many values fall in each of bins equal-width intervals. Returns a record with counts and the bins + 1 edge positions.",
+        description: "`histogram(xs, bins)` counts finite sample values in a positive number of equal-width bins. Returns integer counts and `bins + 1` Float edges in the sample’s dimension.",
         example: "histogram([1.0, 2.0, 2.5, 3.0, 9.0], 4)",
     },
     Guide {
@@ -1153,7 +1156,7 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "is_finite",
-        description: "True when a number is neither infinite nor NaN. Exact Ints and Reals are always finite.",
+        description: "True when a number is neither infinite nor NaN. Exact integers and rational values remain finite at any magnitude.",
         example: "is_finite(1.5)",
     },
     Guide {
@@ -1203,8 +1206,8 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "join",
-        description: "join(sep, parts) glues a vector of strings together with sep between them. It is the inverse of split.",
-        example: "join(\", \", [\"a\", \"b\", \"c\"])",
+        description: "join(sep, parts) joins a vector of strings with sep between them. It is the inverse of split.\n\njoin(left, right, key) joins two tables on a named column in each table. Each pair of matching rows contributes one output row. The left rows keep their order and each left row's matches follow the order of the right table. The output keeps the left columns in order and appends the right non-key columns. A missing key or an ambiguous column name raises E0903.",
+        example: "join(\", \", [\"a\", \"b\", \"c\"])\nfn joined(left: Table<{ id: Float, x: Float }>, right: Table<{ id: Float, y: Float }>): Table<{ id: Float, x: Float, y: Float }> = join(left, right, \"id\")",
     },
     Guide {
         name: "kron",
@@ -1218,7 +1221,7 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "label",
-        description: "Returns the series with a legend label attached.",
+        description: "Sets the series tooltip shown by SVG and HTML output.",
         example: "label(line([0.0, 1.0], [0.0, 1.0]), \"y = x\")",
     },
     Guide {
@@ -1268,13 +1271,13 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "line",
-        description: "Builds a line series from x and y vectors of equal length. Axis labels are produced from the vectors' dimensions, so plotting a length against a time is labelled correctly. Combine one or more series with combine, then show them with plot or write them with save.",
+        description: "Builds a line series from equal-length vectors of concrete real coordinates. Rendering skips pairs with a non-finite coordinate and connects the surviving pairs. SVG axis captions include the coordinate units.",
         example: "line([0.0, 1.0, 2.0], [0.0, 1.0, 4.0])",
     },
     Guide {
         name: "line_with",
-        description: "Like line, with a PlotOpts record controlling label, colour, axis units, linear or log scales and axis limits. Start from default_plot_opts and change the fields you need.",
-        example: "line_with([0.0, 1.0], [1.0, 10.0], default_plot_opts)",
+        description: "Builds a line series with a PlotOpts record. Copy default_plot_opts to set a label, color, display units, scales or axis limits.",
+        example: "line_with([0.0, 1.0], [1.0, 10.0], { default_plot_opts with color = Some(\"blue\") })",
     },
     Guide {
         name: "linsolve",
@@ -1283,28 +1286,28 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "linspace",
-        description: "linspace(a, b, n) returns n evenly spaced values from a to b inclusive. The endpoints must share a dimension, which the result keeps.",
+        description: "Returns evenly spaced floating-point samples with the endpoints’ dimension. For finite endpoints, two or more samples include both limits. One sample returns the start, and a nonpositive count returns an empty tensor.",
         example: "linspace(0.0, 1.0, 5)\nlinspace(0.0 m, 10.0 m, 3)",
     },
     Guide {
         name: "ln",
-        description: "Exponential or logarithmic function on a dimensionless input. Domain failures and unresolved symbolic values are distinct from a numerical approximation.",
-        example: "exp(1)\nln(2.0)",
+        description: "Natural logarithm of a dimensionless argument. It is the inverse of `exp` on the positive real line.",
+        example: "ln(2.0)",
     },
     Guide {
         name: "log",
-        description: "Exponential or logarithmic function on a dimensionless input. Domain failures and unresolved symbolic values are distinct from a numerical approximation.",
-        example: "exp(1)\nln(2.0)",
+        description: "Natural logarithm of one dimensionless argument. This is the same function as `ln`.",
+        example: "log(2.0)",
     },
     Guide {
         name: "log10",
-        description: "Exponential or logarithmic function on a dimensionless input. Domain failures and unresolved symbolic values are distinct from a numerical approximation.",
-        example: "exp(1)\nln(2.0)",
+        description: "Base-10 logarithm of a dimensionless argument. A tenfold increase adds one to the logarithm.",
+        example: "log10(100.0)",
     },
     Guide {
         name: "log2",
-        description: "Exponential or logarithmic function on a dimensionless input. Domain failures and unresolved symbolic values are distinct from a numerical approximation.",
-        example: "exp(1)\nln(2.0)",
+        description: "Base-2 logarithm of a dimensionless argument. Doubling the input adds one to the logarithm.",
+        example: "log2(8.0)",
     },
     Guide {
         name: "lower",
@@ -1578,13 +1581,13 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "plot",
-        description: "Renders a plot specification and presents it. It is an IO action. Use save instead to write it to a file.",
+        description: "Renders a plot specification to plot.html with inline SVG when the IO action runs. Rendering or writing failures report E0905.",
         example: "plot(combine([line([0.0, 1.0], [0.0, 1.0])]))",
     },
     Guide {
         name: "plot_save_gif",
-        description: "Renders a vector of plots as the frames of an animated GIF. An optional third Int sets the delay between frames in hundredths of a second. It is an IO action returning Ok(()) or Err(IOError).",
-        example: "plot_save_gif(\"anim.gif\", [combine([line([0.0, 1.0], [0.0, 1.0])])])",
+        description: "Renders a nonempty vector of plot specifications as looping 800 by 400 GIF frames. Pass an Int delay from 0 through 65535 in hundredths of a second. The unqualified two-argument call uses a delay of 10. The allocation limit permits up to 312 frames. The IO action returns Ok(()) or Err(IOError).",
+        example: "import Plot as Plots\nPlots.plot_save_gif(\"anim.gif\", [Plots.combine([Plots.line([0.0, 1.0], [0.0, 1.0])])], 25)",
     },
     Guide {
         name: "point",
@@ -1683,13 +1686,13 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "read_csv",
-        description: "Reads a CSV file into a typed Table. The row type is a type argument naming each column's type and dimension; header units like \"time [s]\" supply dimensions when you omit it. It is an IO action returning Ok(table) or Err(DataError). For files whose columns are not known in advance use read_csv_dyn.",
-        example: "read_csv<{ time: Float[T], speed: Float[L/T] }>(\"run.csv\")",
+        description: "Reads comma-separated .csv or tab-separated .tsv files. An explicit type argument or the surrounding expression supplies the row type, which is used only for static checking. The reader checks quoting and row widths using the file’s header. Header units such as s in time [s] are column metadata reported by schema, and numeric cells are dimensionless Float values. The IO action returns Ok(table) or Err(DataError).",
+        example: "read_csv<{ time: Float, speed: Float }>(\"run.csv\")",
     },
     Guide {
         name: "read_csv_dyn",
-        description: "Reads a CSV file whose columns are not known in advance, as a Table<Dynamic>. Header units such as \"time [s]\" are honoured. Returns Ok(table) or Err(DataError). Read columns with column_dyn; use read_csv with an explicit row type when you want them checked statically.",
-        example: "read_csv_dyn(\"data.csv\")",
+        description: "Reads comma-separated .csv or tab-separated .tsv files as Table<Dynamic>. The reader checks quoting and row widths. Header units such as s in time [s] are column metadata reported by schema, and numeric cells are dimensionless Float values. The IO action returns Ok(table) or Err(DataError). Use column_dyn to get values by column name.",
+        example: "read_csv_dyn(\"run.tsv\")",
     },
     Guide {
         name: "read_file",
@@ -1748,7 +1751,7 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "reshape_dyn",
-        description: "reshape_dyn(t, shape) reshapes a matrix to the dimensions listed in the vector shape, which may be computed at run time. Returns Err(ShapeError) if the element counts differ.",
+        description: "`reshape_dyn(t, shape)` takes one nonnegative `Int` extent per input axis. It returns `Ok(t)` with the reshaped tensor, or a shape error for invalid extents, rank, or element count.",
         example: "reshape_dyn([[1, 2], [3, 4]], [4, 1])",
     },
     Guide {
@@ -1803,8 +1806,8 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "row",
-        description: "The i-th row of a Table as a record, counting from 0. Returns Err(DataError) when i is out of range.",
-        example: "fn first_row(t: Table<{ x: Float }>) = row(t, 0)",
+        description: "Builds a record from the selected row of a table. Indices start at zero, and -1 selects the last row. An out-of-range index returns Err(DataError).",
+        example: "fn last_row(t: Table<{ x: Float }>) = row(t, -1)",
     },
     Guide {
         name: "sample",
@@ -1818,12 +1821,12 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "save",
-        description: "save(path, plot) writes a plot specification to a file as a self-contained HTML document with inline SVG. The file is HTML whatever the extension. A failed write stops the program with a diagnostic.",
-        example: "save(\"plot.html\", combine([line([0.0, 1.0], [0.0, 1.0])]))",
+        description: "Writes standalone SVG to a path with a case-insensitive .svg extension. Other paths receive HTML with inline SVG. Rendering or writing failures report E0905.",
+        example: "save(\"plot.svg\", combine([line([0.0, 1.0], [0.0, 1.0])]))",
     },
     Guide {
         name: "scatter",
-        description: "Builds a scatter series (points without a connecting line) from x and y vectors of equal length.",
+        description: "Builds an individual marker from each finite coordinate pair in two equal-length vectors.",
         example: "scatter([0.0, 1.0, 2.0], [0.0, 1.0, 4.0])",
     },
     Guide {
@@ -1833,7 +1836,7 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "schema",
-        description: "Describes a Table's columns as a vector of records with each column's name, type name and optional unit.",
+        description: "Reports each run-time column’s name, detected cell type and optional unit. A column whose cells all parse as numbers has dtype Float. Other columns have dtype String. The unit is the text stored in the column header.",
         example: "fn describe(t: Table<{ x: Float }>) = schema(t)",
     },
     Guide {
@@ -1903,7 +1906,7 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "set",
-        description: "set(t, index, value) returns a copy of the tensor with one element replaced; index is a vector with one entry per axis. The original is unchanged.",
+        description: "`set(t, index, value)` returns a copy of the tensor with one element replaced. Supply one `Int` index per axis. Indices start at zero, and negative indices count back from the end of the axis.",
         example: "set([1, 2, 3], [1], 9)",
     },
     Guide {
@@ -2078,7 +2081,7 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "std",
-        description: "The sample standard deviation, sqrt(var), in the elements' own dimension.",
+        description: "Computes sample standard deviation in the elements’ dimension. A singleton has zero standard deviation.",
         example: "std([1.0, 2.0, 3.0, 4.0])",
     },
     Guide {
@@ -2163,8 +2166,8 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "to_dynamic",
-        description: "Forgets a Table's static column types, giving a Table<Dynamic> that you read with column_dyn.",
-        example: "fn loosen(t: Table<{ x: Float }>) = to_dynamic(t)",
+        description: "Changes the static row type of a table to Dynamic while retaining all rows, column names and unit metadata. Use column_dyn to read cells by name.",
+        example: "fn loosen(t: Table<{ time: Float }>): Table<Dynamic> = to_dynamic(t)",
     },
     Guide {
         name: "to_float",
@@ -2203,7 +2206,7 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "to_table",
-        description: "Builds a Table from a vector of records, checking at run time that they all have the shape of the row type. Returns Ok(table) or Err(DataError).",
+        description: "Builds a table from a vector of records. Field names supply the columns and values become cell text. An element that is not a record returns Err(DataError). On success the result is Ok(table).",
         example: "to_table([{ x = 1.0 }, { x = 2.0 }])",
     },
     Guide {
@@ -2298,7 +2301,7 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "var",
-        description: "The sample variance (divisor n-1) of a tensor. The result dimension is the element dimension squared. A second Bool argument chooses the population variance when true.",
+        description: "Computes sample variance with divisor `n - 1` for two or more observations. A singleton has zero variance. The result dimension is the element dimension squared. A second Bool argument chooses the population variance when true.",
         example: "var([1.0, 2.0, 3.0, 4.0])\nvar([1.0, 2.0, 3.0, 4.0], true)",
     },
     Guide {
@@ -2318,7 +2321,7 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "write_csv",
-        description: "Writes a Table to a CSV file, with units in the header. It is an IO action returning Ok(()) or Err(DataError).",
+        description: "Writes a table as comma-separated CSV and includes any column units in the header. The IO action returns Ok(()) or Err(DataError).",
         example: "fn dump(t: Table<{ x: Float }>) = write_csv(\"out.csv\", t)",
     },
     Guide {

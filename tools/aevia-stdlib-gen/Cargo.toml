@@ -13,5 +13,5 @@ jit = ["aevia-rssn/jit"]
 aevia-stdlib-model = { path = "../../crates/aevia-stdlib-model" }
 aevia-rssn.workspace = true
 
-[lints.rust]
-unsafe_code = "forbid"
+[lints]
+workspace = true

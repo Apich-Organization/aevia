@@ -11,12 +11,27 @@
 //! Resolution is a *type-level* decision, made once, at the call site; the
 //! runtime executes the key it produced.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
 use crate::ty::Rep;
 use crate::ty::Shape;
 use crate::ty::Type;
 use aevia_dim::Dim;
 
-/// How well one argument matches one parameter, ordered weakest to strongest.
+/// How well one argument matches one parameter.
 ///
 /// The order is the kernel's `Match`: `No < Generic < Shaped < Widened <
 /// Exact`.
@@ -38,7 +53,7 @@ impl Score {
     /// Whether the parameter accepts the argument at all.
     #[must_use]
     pub fn accepted(self) -> bool {
-        self != Score::No
+        self != Self::No
     }
 }
 
@@ -71,7 +86,11 @@ pub fn resolve(
 ) -> Resolution {
     let mut scored: Vec<(usize, Score)> = Vec::new();
     for (index, signature) in entry.signatures.iter().enumerate() {
-        if !accepts_arity(signature, args.len()) {
+        if signature.params.len() != args.len()
+            && !signature.variadic.as_ref().is_some_and(|(min, max, _)| {
+                args.len() >= *min && max.is_none_or(|max| args.len() <= max)
+            })
+        {
             continue;
         }
         let mut worst = Score::Exact;
@@ -117,21 +136,15 @@ pub fn resolve(
     }
 }
 
-fn accepts_arity(
-    signature: &aevia_rssn::Sig,
-    count: usize,
-) -> bool {
-    if signature.params.len() == count {
-        return true;
-    }
-    match &signature.variadic {
-        | Some((min, max, _)) => count >= *min && max.is_none_or(|max| count <= max),
-        | None => false,
-    }
-}
-
 /// The score of one argument against one parameter.
 #[must_use]
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::too_many_lines,
+        reason = "keep the ordered overload match cases together"
+    )
+)]
 pub fn score_type(
     param: &aevia_rssn::SigType,
     got: &aevia_rssn::SigType,
@@ -139,8 +152,7 @@ pub fn score_type(
     use aevia_rssn::SigType as S;
     match (param, got) {
         // A variable or `Dyn` parameter accepts anything (§13.4.1).
-        | (S::Var(_), _) | (S::Dyn, _) | (S::Never, _) => Score::Generic,
-        | (_, S::Dyn) | (_, S::Var(_)) => Score::Generic,
+        | (S::Var(_) | S::Dyn | S::Never, _) | (_, S::Dyn | S::Var(_)) => Score::Generic,
         | (S::Int, S::Int)
         | (S::Real, S::Real)
         | (S::Float, S::Float)
@@ -150,14 +162,7 @@ pub fn score_type(
         | (S::Symbol, S::Symbol)
         | (S::Table, S::Table)
         | (S::Device, S::Device) => Score::Exact,
-        | (S::Unit(a), S::Unit(b)) => {
-            if a == b {
-                Score::Exact
-            } else {
-                Score::No
-            }
-        },
-        | (S::Point(a), S::Point(b)) => {
+        | (S::Unit(a), S::Unit(b)) | (S::Point(a), S::Point(b)) => {
             if a == b {
                 Score::Exact
             } else {
@@ -170,8 +175,6 @@ pub fn score_type(
             let inner = score_type(base, other);
             if inner.accepted() && *dim != Dim::one() {
                 Score::Shaped
-            } else if inner == Score::Exact {
-                Score::Exact
             } else {
                 inner
             }
@@ -344,9 +347,9 @@ pub fn score_type(
         //
         // `Float -> Real` is the exact conversion of §3.4.1, so `sin(0.5)`
         // picks the numeric overload rather than tying with the symbolic one.
-        | (S::Real, S::Int | S::Float) | (S::Complex, S::Int) => Score::Widened,
-        | (S::Float, S::Int) => Score::Widened,
-        | (S::Complex, S::Real | S::Float) => Score::Widened,
+        | (S::Real, S::Int | S::Float)
+        | (S::Float, S::Int)
+        | (S::Complex, S::Int | S::Real | S::Float) => Score::Widened,
         | _ => Score::No,
     }
 }
@@ -362,7 +365,9 @@ fn schema_subtype(
     match (actual, expected) {
         | (_, S::Dyn) => true,
         | (S::Var(a), S::Var(b)) if a == b => true,
-        | (S::Dyn | S::Var(_), _) => false,
+        | (S::Dyn | S::Var(_), _)
+        | (S::Sparse { .. }, S::Tensor { .. })
+        | (S::Tensor { .. }, S::Sparse { .. }) => false,
         | (_, S::Var(_)) => true,
         | (S::Int | S::Real | S::Float | S::Complex, S::Int | S::Real | S::Float | S::Complex) => {
             actual == expected
@@ -419,7 +424,6 @@ fn schema_subtype(
                         && matches.next().is_none()
                 })
         },
-        | (S::Sparse { .. }, S::Tensor { .. }) | (S::Tensor { .. }, S::Sparse { .. }) => false,
         | (S::Func(actual_params, actual_result), S::Func(expected_params, expected_result)) => {
             actual_params.len() == expected_params.len()
                 && expected_params
@@ -459,11 +463,7 @@ pub fn classify(ty: &Type) -> aevia_rssn::SigType {
                 S::Dim(Box::new(S::Complex), dim.clone())
             }
         },
-        // A representation variable is not known at the call site; the dynamic
-        // parameter is the only safe reading.
-        | Type::Scalar(Rep::Var(_), _) => S::Dyn,
-        | Type::Bool => S::Bool,
-        | Type::Prop => S::Bool,
+        | Type::Bool | Type::Prop => S::Bool,
         | Type::Str => S::Str,
         | Type::Unit => S::Opaque("Unit".to_string()),
         | Type::UnitOf(dim) => S::Unit(dim.clone()),
@@ -476,7 +476,7 @@ pub fn classify(ty: &Type) -> aevia_rssn::SigType {
                     | Shape::Refined(extents) => {
                         extents
                             .iter()
-                            .map(|extent| extent.as_ref().and_then(|extent| extent.as_const()))
+                            .map(|extent| extent.as_ref().and_then(super::ty::Nat::as_const))
                             .collect()
                     },
                 },
@@ -491,9 +491,8 @@ pub fn classify(ty: &Type) -> aevia_rssn::SigType {
         },
         | Type::Record(row) => {
             S::Record(
-                row.fields()
-                    .into_iter()
-                    .map(|(name, ty)| (name, classify(&ty)))
+                crate::keys::row_fields(row)
+                    .map(|(name, ty)| (name.to_owned(), classify(ty)))
                     .collect(),
             )
         },
@@ -501,10 +500,12 @@ pub fn classify(ty: &Type) -> aevia_rssn::SigType {
             if crate::adt::is_native_ad_var_type(ty) {
                 return S::Opaque(aevia_rssn::registry::NATIVE_AD_VAR_KIND.into());
             }
-            if *id == crate::adt::OPTION_ID && args.len() == 1 {
+            if *id == crate::adt::OPTION_ID
+                && let [payload] = args.as_slice()
+            {
                 return S::Variant(vec![
                     ("None".to_string(), Vec::new()),
-                    ("Some".to_string(), vec![classify(&args[0])]),
+                    ("Some".to_string(), vec![classify(payload)]),
                 ]);
             }
             if *id == crate::adt::ORDERING_ID {
@@ -517,7 +518,8 @@ pub fn classify(ty: &Type) -> aevia_rssn::SigType {
             S::Opaque(crate::adt::name_of(*id))
         },
         | Type::Io(inner) => S::Opaque(format!("IO {}", classify(inner).render_hint())),
-        | Type::Dyn(_) => S::Dyn,
+        | Type::Scalar(Rep::Var(_), _)
+        | Type::Dyn(_)
         | Type::Var(_)
         | Type::Param(_)
         | Type::TensorIntrinsic(_)
@@ -538,13 +540,13 @@ trait RenderHint {
 impl RenderHint for aevia_rssn::SigType {
     fn render_hint(&self) -> String {
         match self {
-            | aevia_rssn::SigType::Int => "Int".to_string(),
-            | aevia_rssn::SigType::Real => "Real".to_string(),
-            | aevia_rssn::SigType::Float => "Float".to_string(),
-            | aevia_rssn::SigType::Complex => "Complex".to_string(),
-            | aevia_rssn::SigType::Bool => "Bool".to_string(),
-            | aevia_rssn::SigType::Str => "String".to_string(),
-            | aevia_rssn::SigType::Opaque(name) => name.clone(),
+            | Self::Int => "Int".to_string(),
+            | Self::Real => "Real".to_string(),
+            | Self::Float => "Float".to_string(),
+            | Self::Complex => "Complex".to_string(),
+            | Self::Bool => "Bool".to_string(),
+            | Self::Str => "String".to_string(),
+            | Self::Opaque(name) => name.clone(),
             | other => format!("{other:?}"),
         }
     }
@@ -625,13 +627,14 @@ pub fn invoke_result(
     signature_hash_hex: &str,
     infer: &mut crate::infer::Infer,
 ) -> Option<Type> {
+    let digest = parse_signature_hash(signature_hash_hex)?;
     let registry = aevia_rssn::registry();
     let entry = registry.op(op_name)?;
     let mut matching = entry
         .keys
         .iter()
         .enumerate()
-        .filter(|(_, key)| hex(&key.signature_hash) == signature_hash_hex);
+        .filter(|(_, key)| key.signature_hash == digest);
     let (index, _) = matching.next()?;
     if matching.next().is_some() {
         // Two overloads with one digest would make the claim ambiguous.
@@ -642,16 +645,18 @@ pub fn invoke_result(
     sig_type_to_type(&signature.ret, infer, &mut dims)
 }
 
-/// Instantiates an exact signature once and solves its parameter dimension
-/// equations against the actual argument types. Representation widening was
-/// already decided by the kernel lattice, so this deliberately unifies only
-/// dimensions rather than rejecting a legal Int/Float-to-Real widening.
+/// Instantiates a signature against the argument dimensions.
+///
+/// Representation widening has already been decided by the overload lattice.
+///
+/// # Errors
+///
+/// Returns the first dimension or inferred type conflict against the signature.
 pub fn instantiate_dimensions(
     signature: &aevia_rssn::Sig,
     actual: &[Type],
     infer: &mut crate::infer::Infer,
 ) -> Result<Option<Type>, crate::infer::UnifyError> {
-    let mut dims = std::collections::HashMap::new();
     fn constrain(
         sig: &aevia_rssn::SigType,
         actual: &Type,
@@ -681,11 +686,11 @@ pub fn instantiate_dimensions(
                     | _ => Ok(()),
                 }
             },
-            | (S::Variant(cases), Type::Adt(id, args))
-                if *id == crate::adt::OPTION_ID && args.len() == 1 =>
-            {
-                if let Some(payload) = aevia_rssn::registry::option_payload(cases) {
-                    constrain(payload, &args[0], infer, dims)?;
+            | (S::Variant(cases), Type::Adt(id, args)) if *id == crate::adt::OPTION_ID => {
+                if let [argument] = args.as_slice()
+                    && let Some(payload) = aevia_rssn::registry::option_payload(cases)
+                {
+                    constrain(payload, argument, infer, dims)?;
                 }
                 Ok(())
             },
@@ -712,18 +717,31 @@ pub fn instantiate_dimensions(
             | _ => Ok(()),
         }
     }
+    let mut dims = std::collections::HashMap::new();
     for (param, got) in signature.params.iter().zip(actual) {
         constrain(param, got, infer, &mut dims)?;
     }
     Ok(sig_type_to_type(&signature.ret, infer, &mut dims).map(|ret| infer.resolve(&ret)))
 }
 
-fn hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push_str(&format!("{byte:02x}"));
+#[cfg_attr(
+    not(test),
+    expect(clippy::single_call_fn, reason = "parse a literal overload key once")
+)]
+fn parse_signature_hash(text: &str) -> Option<[u8; 16]> {
+    const fn nibble(digit: u8) -> Option<u8> {
+        match digit {
+            | b'0'..=b'9' => Some(digit.saturating_sub(b'0')),
+            | b'a'..=b'f' => Some(digit.saturating_sub(b'a').saturating_add(10)),
+            | _ => None,
+        }
     }
-    out
+    let bytes: &[u8; 32] = text.as_bytes().try_into().ok()?;
+    let mut out = [0; 16];
+    for (byte, [high, low]) in out.iter_mut().zip(bytes.as_chunks::<2>().0) {
+        *byte = (nibble(*high)? << 4) | nibble(*low)?;
+    }
+    Some(out)
 }
 
 /// Substitutes a signature dimension's variables with fresh checker variables,
@@ -742,10 +760,8 @@ fn map_dim(
 /// Maps a manifest result type to the checker's type, or `None` when the
 /// emitted spelling cannot express it.
 ///
-/// The emitted source renders `Symbol`, `Table`, `Device`, host opaque types,
-/// variants, `Never`, type variables and rank-variable tensors as `Dyn<term>`,
-/// so those map to `Dyn(Real)`; only a `Symbol` *result* has no safe spelling
-/// here (the emitted module declares `Symbol` itself), and it falls back.
+/// The emitted façade uses `Dyn<term>` for symbols, tables, devices, most
+/// opaque types, type variables and tensors with an unknown rank.
 fn sig_type_to_type(
     sig: &aevia_rssn::SigType,
     infer: &mut crate::infer::Infer,
@@ -759,11 +775,10 @@ fn sig_type_to_type(
         | S::Complex => Type::complex(Dim::one()),
         | S::Bool => Type::Bool,
         | S::Str => Type::string(),
-        | S::Symbol => Type::Dyn(Rep::Real),
         | S::Unit(dim) => Type::UnitOf(map_dim(dim, infer, dims)),
         | S::Point(dim) => Type::Point(map_dim(dim, infer, dims)),
-        | S::Dim(inner, dim) => {
-            let rep = match **inner {
+        | S::Dim(base, dim) => {
+            let rep = match **base {
                 | S::Int => Rep::Int,
                 | S::Float => Rep::Float,
                 | S::Complex => Rep::Complex,
@@ -779,9 +794,10 @@ fn sig_type_to_type(
             if shape.as_ref().is_some_and(|shape| shape.len() != *rank) {
                 return None;
             }
+            let rank = u32::try_from(*rank).ok()?;
             Type::tensor(
                 shape.as_ref().map_or_else(
-                    || Shape::Rank(u32::try_from(*rank).unwrap_or(1)),
+                    || Shape::Rank(rank),
                     |extents| Shape::refined(extents.iter().copied().map(Some)),
                 ),
                 sig_type_to_type(elem, infer, dims)?,
@@ -792,7 +808,7 @@ fn sig_type_to_type(
             elem,
         } => {
             let dense = Type::tensor(
-                Shape::Rank(u32::try_from(*rank).unwrap_or(1)),
+                Shape::Rank(u32::try_from(*rank).ok()?),
                 sig_type_to_type(elem, infer, dims)?,
             );
             crate::builtins::sparse_type(infer.fresh_type(), dense)
@@ -821,6 +837,7 @@ fn sig_type_to_type(
             crate::adt::native_ad_var_type()
         },
         // The emitted façade spells every one of these `Dyn<term>`.
+        | S::Symbol
         | S::Dyn
         | S::Never
         | S::Table
@@ -836,6 +853,7 @@ fn sig_type_to_type(
 mod invoke_tests {
     use super::*;
     use crate::infer::Infer;
+    use std::fmt::Write as _;
 
     fn hash_of(
         op: &str,
@@ -843,7 +861,11 @@ mod invoke_tests {
     ) -> Option<String> {
         let registry = aevia_rssn::registry();
         let entry = registry.op(op)?;
-        Some(hex(&entry.keys.get(index)?.signature_hash))
+        let mut hash = String::new();
+        for byte in entry.keys.get(index)?.signature_hash {
+            write!(hash, "{byte:02x}").ok()?;
+        }
+        Some(hash)
     }
 
     #[test]
@@ -866,6 +888,39 @@ mod invoke_tests {
         let mut infer = Infer::new();
         assert!(invoke_result("det", "00000000000000000000000000000000", &mut infer).is_none());
         assert!(invoke_result("no_such_operator", "x", &mut infer).is_none());
+    }
+
+    #[test]
+    fn only_canonical_hex_can_pin_a_signature() {
+        assert_eq!(
+            parse_signature_hash("ab".repeat(16).as_str()),
+            Some([0xab; 16])
+        );
+        assert!(parse_signature_hash("AB".repeat(16).as_str()).is_none());
+        assert!(parse_signature_hash("00".repeat(17).as_str()).is_none());
+        assert!(parse_signature_hash("λ".repeat(16).as_str()).is_none());
+    }
+
+    #[test]
+    fn an_unrepresentable_rank_does_not_become_rank_one() {
+        let Ok(rank) = usize::try_from(u64::from(u32::MAX) + 1) else {
+            return;
+        };
+        let mut infer = Infer::new();
+        let mut dimensions = std::collections::HashMap::new();
+        for signature in [
+            aevia_rssn::SigType::Tensor {
+                rank: Some(rank),
+                shape: None,
+                elem: Box::new(aevia_rssn::SigType::Real),
+            },
+            aevia_rssn::SigType::Sparse {
+                rank: Some(rank),
+                elem: Box::new(aevia_rssn::SigType::Real),
+            },
+        ] {
+            assert!(sig_type_to_type(&signature, &mut infer, &mut dimensions).is_none());
+        }
     }
 
     #[test]

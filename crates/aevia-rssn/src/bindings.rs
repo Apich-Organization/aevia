@@ -1,4 +1,6 @@
-//! Manifest-driven binding inventory.  The catalog deliberately separates an
+//! Manifest-driven binding inventory.
+//!
+//! The catalog deliberately separates an
 //! exact source signature from a dynamic route and from an unavailable bridge.
 //! Consumers must not interpret a derived kernel signature as an exact API.
 
@@ -50,14 +52,16 @@ pub fn catalog(registry: &Registry) -> Vec<Binding<'_>> {
             let base = crate::codegen::binding_base_name(
                 &op.name,
                 index,
-                overload
-                    .is_some_and(|i| op.raw[i].params.is_empty() && op.raw[i].variadic.is_none()),
+                op.raw
+                    .get(index)
+                    .is_some_and(|sig| sig.params.is_empty() && sig.variadic.is_none()),
             );
             let mut name = base.clone();
-            let mut suffix = 2;
-            while !used.insert(name.clone()) {
+            for suffix in 2.. {
+                if used.insert(name.clone()) {
+                    break;
+                }
                 name = format!("{base}_{suffix}");
-                suffix += 1;
             }
             result.push(Binding {
                 op,
@@ -95,24 +99,17 @@ pub fn catalog(registry: &Registry) -> Vec<Binding<'_>> {
     // Allocate typed aliases only after all established names, so adding an
     // exact facade cannot displace an existing dynamic binding.
     for row in &mut result {
-        if typed_callback_eligible(row) {
+        if let Some(key) = typed_callback_key(row) {
             let base = format!("{}_typed", row.name);
             let mut name = base.clone();
             if used.contains(&name) {
-                let key = row
-                    .op
-                    .key(row.overload.expect("typed callback overload"))
-                    .expect("typed callback key");
-                let hash: String = key
-                    .signature_hash
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect();
+                let hash = crate::registry::hex(&key.signature_hash);
                 name = format!("{base}_{hash}");
-                let mut suffix = 2;
-                while used.contains(&name) {
+                for suffix in 2.. {
+                    if !used.contains(&name) {
+                        break;
+                    }
                     name = format!("{base}_{hash}_{suffix}");
-                    suffix += 1;
                 }
             }
             used.insert(name.clone());
@@ -122,27 +119,29 @@ pub fn catalog(registry: &Registry) -> Vec<Binding<'_>> {
     result
 }
 
-fn typed_callback_eligible(row: &Binding<'_>) -> bool {
+#[allow(
+    clippy::single_call_fn,
+    reason = "Audits facade eligibility separately from generated name allocation"
+)]
+fn typed_callback_key<'op>(row: &Binding<'op>) -> Option<&'op crate::OpKey> {
     let Coverage::Dynamic(reasons) = &row.coverage else {
-        return false;
+        return None;
     };
-    if !row.op.higher_order
-        || !row.op.source.is_exact()
-        || row.op.signatures.len() != 1
-        || row.overload != Some(0)
-        || row.op.key(0).is_none()
-    {
-        return false;
+    if !row.op.higher_order || !row.op.source.is_exact() || row.overload != Some(0) {
+        return None;
     }
-    let signature = &row.op.signatures[0];
-    let raw = &row.op.raw[0];
+    let [signature] = row.op.signatures.as_slice() else {
+        return None;
+    };
+    let raw = row.op.raw.first()?;
+    let key = row.op.key(0)?;
     if !callback_nats_anchored(raw) {
-        return false;
+        return None;
     }
     if !raw.params.iter().all(ordinary_callback_raw_source_schema)
         || !callback_raw_source_schema(&raw.ret, false)
     {
-        return false;
+        return None;
     }
     if !callback_source_schema_supported(&signature.ret)
         || signature.params.iter().any(|ty| {
@@ -155,7 +154,7 @@ fn typed_callback_eligible(row: &Binding<'_>) -> bool {
             }
         })
     {
-        return false;
+        return None;
     }
     // Only the two callback-specific dynamic reasons are admissible. Any
     // other reason identifies a fact the source signature cannot prove.
@@ -163,8 +162,14 @@ fn typed_callback_eligible(row: &Binding<'_>) -> bool {
         || reason == "callbacks use the checked value-list callback ABI; typed generic wrappers require reification"
         || reason == "tensor extents are not fully concrete in the source facade"
         || reason == "host opaque type has no source facade spelling")
+        .then_some(key)
 }
 
+#[allow(
+    clippy::single_call_fn,
+    clippy::too_many_lines,
+    reason = "Produces one diagnostic classification for the complete dynamic ABI policy"
+)]
 fn classify(
     registry: &Registry,
     op: &OpEntry,
@@ -202,8 +207,14 @@ fn classify(
         });
     }
     if let Some(index) = index {
-        let signature = &op.raw[index];
-        let mirrored = &op.signatures[index];
+        let (Some(signature), Some(mirrored)) = (op.raw.get(index), op.signatures.get(index))
+        else {
+            if !unavailable.is_empty() {
+                return Coverage::Unavailable(unavailable.into_iter().collect());
+            }
+            dynamic.insert("manifest overload has no matching source signature".to_owned());
+            return Coverage::Dynamic(dynamic.into_iter().collect());
+        };
         let mut input_dims = BTreeSet::new();
         for param in &mirrored.params {
             collect_dim_vars(param, &mut input_dims);
@@ -305,6 +316,10 @@ fn classify(
 
 // Symbolic extents must be declared Nat variables and recoverable from an
 // ordinary input shape before callback construction or result validation.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Validates the relation between parameter and result extents"
+)]
 fn callback_nats_anchored(signature: &rssn::kernel::signature::Signature) -> bool {
     fn collect<'a>(
         ty: &'a TypeExpr,
@@ -395,7 +410,7 @@ fn callback_raw_source_schema(
             shape,
             elem,
         } => {
-            usize::try_from(*rank).ok().is_some_and(|rank| {
+            usize::try_from(*rank).is_ok_and(|rank| {
                 shape.as_ref().is_none_or(|shape| {
                     shape.len() == rank
                         && shape.iter().all(|extent| {
@@ -427,6 +442,10 @@ fn callback_raw_source_schema(
 // Ordinary operator arguments can carry authenticated native handles as
 // Value/Dyn carriers. Actual function parameter/result schemas stay governed by
 // callback_raw_source_schema and its sealed NativeAdVar exception.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Keeps ordinary argument and higher-order callback rules separate"
+)]
 fn ordinary_callback_raw_source_schema(ty: &TypeExpr) -> bool {
     if matches!(ty, TypeExpr::Function(..)) {
         return callback_raw_source_schema(ty, true);
@@ -529,6 +548,10 @@ fn callback_source_schema_supported(ty: &crate::registry::SigType) -> bool {
 
 // Callback declarations describe an operator's accepted family; runtime
 // callbacks still carry a separately authenticated, fully concrete schema.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Checks the complete set of mirrored callback parameters"
+)]
 fn callback_parameters_supported(params: &[crate::registry::SigType]) -> bool {
     use crate::registry::SigType as S;
     fn schema(ty: &S) -> bool {
@@ -571,6 +594,10 @@ fn callback_parameters_supported(params: &[crate::registry::SigType]) -> bool {
 // Preserve facts that the mirrored shape cannot express, especially Any,
 // malformed extents and unknown ranks; only named operator variables are
 // existential. This check runs before choosing the generic dynamic facade.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Checks raw callbacks before any lossy type mirroring"
+)]
 fn callback_raw_parameters_supported(params: &[TypeExpr]) -> bool {
     fn dim(d: &DimExpr) -> bool {
         match d {
@@ -601,7 +628,7 @@ fn callback_raw_parameters_supported(params: &[TypeExpr]) -> bool {
                 shape,
                 elem,
             } => {
-                usize::try_from(*rank).ok().is_some_and(|rank| {
+                usize::try_from(*rank).is_ok_and(|rank| {
                     shape.as_ref().is_none_or(|shape| {
                         shape.len() == rank
                             && shape.iter().all(|extent| {

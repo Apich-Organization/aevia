@@ -13,6 +13,7 @@ use crate::registry::OpEntry;
 use crate::registry::Registry;
 use crate::registry::SigType;
 use crate::registry::Source;
+use crate::registry::hex;
 use crate::registry::render_type;
 use num_traits::One;
 use num_traits::Signed;
@@ -80,8 +81,12 @@ pub fn operators(registry: &Registry) -> String {
         "let manifest_hash: String = \"{}\"",
         escape(&registry.manifest_hash)
     );
-    for (name, value) in capability_flags(registry) {
-        let _ = writeln!(out, "let {name}: Bool = {value}");
+    for capability in registry.capabilities.table() {
+        let _ = writeln!(
+            out,
+            "let {}: Bool = {}",
+            capability.binding, capability.enabled
+        );
     }
     let _ = writeln!(out);
 
@@ -107,10 +112,10 @@ pub fn operators(registry: &Registry) -> String {
     out
 }
 
-/// Optional modules grouped by the registering kernel rule set. They use the
-/// same identifiers as the flat facade and can be regenerated as the kernel
-/// adds operators. Exact, representable signatures pin their keys; everything
-/// else uses the signature-free dynamic ABI with an explicit error result.
+/// Optional modules grouped by the registering kernel rule set.
+///
+/// They share the identifiers used by the flat facade. Exact signatures pin
+/// their manifest keys. Other signatures use the dynamic ABI and return errors.
 #[must_use]
 pub fn namespace_files(registry: &Registry) -> Vec<(String, String)> {
     let catalog = crate::bindings::catalog(registry);
@@ -155,10 +160,10 @@ fn namespace_names(registry: &Registry) -> Vec<(String, String)> {
     namespace_names_for(registry.ops().map(|op| op.rule_set.as_str()))
 }
 
-/// Deterministically assign module names to rule-set names. When sanitisation
-/// collides, every member gets a stable hash suffix instead of depending on
-/// registration order. A hash collision is resolved by appending the original
-/// bytes, so distinct names never share a module.
+/// Deterministically assign module names to rule-set names.
+///
+/// Groups with the same sanitised name get stable hash suffixes. If two hashes
+/// also collide, append the original bytes to keep the module names unique.
 #[must_use]
 pub fn namespace_names_for<'a>(groups: impl IntoIterator<Item = &'a str>) -> Vec<(String, String)> {
     let unique: std::collections::BTreeSet<&str> = groups.into_iter().collect();
@@ -172,15 +177,15 @@ pub fn namespace_names_for<'a>(groups: impl IntoIterator<Item = &'a str>) -> Vec
     }
     let mut names = Vec::new();
     for (base, bucket) in buckets {
-        if bucket.len() == 1 {
-            names.push((base, bucket[0].to_string()));
+        if let [group] = bucket.as_slice() {
+            names.push((base, (*group).to_owned()));
             continue;
         }
         let mut hashes: std::collections::BTreeMap<u64, Vec<&str>> =
             std::collections::BTreeMap::new();
         for group in bucket {
-            let hash = group.bytes().fold(0xcbf29ce484222325u64, |hash, byte| {
-                (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+            let hash = group.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
             });
             hashes.entry(hash).or_default().push(group);
         }
@@ -202,14 +207,15 @@ pub fn namespace_names_for<'a>(groups: impl IntoIterator<Item = &'a str>) -> Vec
     loop {
         let mut counts = std::collections::BTreeMap::new();
         for (name, _) in &names {
-            *counts.entry(name.clone()).or_insert(0usize) += 1;
+            let count = counts.entry(name.clone()).or_insert(0usize);
+            *count = count.saturating_add(1);
         }
         if counts.values().all(|count| *count == 1) {
             break;
         }
         for (name, group) in &mut names {
-            if counts[name] > 1 {
-                name.push_str(&format!("_x{}", hex(group.as_bytes())));
+            if counts.get(name).is_some_and(|count| *count > 1) {
+                let _ = write!(name, "_x{}", hex(group.as_bytes()));
             }
         }
     }
@@ -265,16 +271,13 @@ pub fn units(registry: &Registry) -> String {
             );
             continue;
         }
-        let spelling = match spellable(&unit.name, &unit.aliases) {
-            | Some(name) => name,
-            | None => {
-                let _ = writeln!(
-                    out,
-                    "## `{}` ({}) cannot be written in Aevia source: every spelling is a keyword",
-                    unit.display, unit.category
-                );
-                continue;
-            },
+        let Some(spelling) = spellable(&unit.name, &unit.aliases) else {
+            let _ = writeln!(
+                out,
+                "## `{}` ({}) cannot be written in Aevia source: every spelling is a keyword",
+                unit.display, unit.category
+            );
+            continue;
         };
         let dim = unit.dim.to_plain_string();
         let ty = if unit.affine {
@@ -333,14 +336,12 @@ pub fn constants(registry: &Registry) -> String {
         };
         let mut binding = value_name(&constant.symbol);
         if !used.insert(binding.clone()) {
-            let mut suffix = 2;
-            loop {
+            for suffix in 2.. {
                 let candidate = format!("{binding}_{suffix}");
                 if used.insert(candidate.clone()) {
                     binding = candidate;
                     break;
                 }
-                suffix += 1;
             }
         }
         let _ = writeln!(
@@ -377,24 +378,17 @@ pub fn system_constants(
     module: &str,
 ) -> String {
     let mut out = String::new();
-    let unity: Vec<&str> = system
-        .unity
-        .iter()
-        .map(|unity| unity.label.as_str())
-        .collect();
     let _ = writeln!(
         out,
-        "## The constants in {name} units: {unity} = 1.\n\
+        "# Generated from the RSSN kernel manifest.\n\
+         # Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.\n\
+         # RSSN {version}, API {api}\n\
+         ## Physical constants in {description}.\n\
          ##\n\
-         ## {description}.\n\
-         ##\n\
-         ## Generated from the rssn Kernel Manifest (`manifest.unit_systems` and\n\
-         ## `manifest.constants`, §5.11.7). Do not edit; regenerate with\n\
-         ## `cargo run -p aevia-stdlib-gen -- --write`.\n\
-         ## rssn {version}, api {api}\n\
+         ## Use `module Example with units {name}` to apply the same convention\n\
+         ## to your module's unit literals and dimension annotations.\n\
          module {module} with units {name}\n",
         name = system.name,
-        unity = unity.join(" = "),
         description = system.description,
         version = registry.version,
         api = registry.api_version,
@@ -406,14 +400,12 @@ pub fn system_constants(
         }
         let mut binding = value_name(&constant.symbol);
         if !used.insert(binding.clone()) {
-            let mut suffix = 2;
-            loop {
+            for suffix in 2.. {
                 let candidate = format!("{binding}_{suffix}");
                 if used.insert(candidate.clone()) {
                     binding = candidate;
                     break;
                 }
-                suffix += 1;
             }
         }
         let Some(reduction) = system.reduce(&constant.dim) else {
@@ -464,7 +456,7 @@ pub fn system_constants(
         };
         let _ = writeln!(
             out,
-            "{doc}; an irrational power of the unity constants, so a Float\nlet {binding}: {ty} = {quantity}"
+            "{doc}.\n## The conversion uses a fractional power, so this constant is a `Float` in these units.\nlet {binding}: {ty} = {quantity}"
         );
     }
     out
@@ -546,19 +538,11 @@ fn constant_value(constant: &crate::registry::ConstantInfo) -> String {
     }
 }
 
-/// The capability flags `Rssn.aev` declares.
-///
-/// One table, in `registry::Capabilities::table`; this only spells the rows.
-fn capability_flags(registry: &Registry) -> Vec<(String, bool)> {
-    registry
-        .capabilities
-        .table()
-        .into_iter()
-        .map(|capability| (capability.binding, capability.enabled))
-        .collect()
-}
-
 /// Renders one operator's typed declarations.
+#[allow(
+    clippy::too_many_lines,
+    reason = "Keeps the flat and namespaced overload output format in one renderer"
+)]
 fn declaration(
     op: &OpEntry,
     rows: &[&crate::bindings::Binding<'_>],
@@ -594,7 +578,9 @@ fn declaration(
         }
     }
     if op.signatures.is_empty() {
-        let row = rows[0];
+        let Some(row) = rows.first() else {
+            return out;
+        };
         let _ = writeln!(
             out,
             "## No exact signature; errors are returned by the dynamic ABI."
@@ -616,9 +602,9 @@ fn declaration(
         }
         return out;
     }
-    for (index, signature) in op.signatures.iter().enumerate() {
-        let name = &rows[index].name;
-        match &rows[index].coverage {
+    for (index, (signature, row)) in op.signatures.iter().zip(rows).enumerate() {
+        let name = &row.name;
+        match &row.coverage {
             | crate::bindings::Coverage::Typed => {},
             | crate::bindings::Coverage::Dynamic(reasons) => {
                 let _ = writeln!(
@@ -631,7 +617,7 @@ fn declaration(
                 let _ = writeln!(out, "## Bridge limitation: {}", reasons.join("; "));
             },
         }
-        if !matches!(rows[index].coverage, crate::bindings::Coverage::Typed) {
+        if !matches!(row.coverage, crate::bindings::Coverage::Typed) {
             if op.higher_order {
                 let _ = writeln!(
                     out,
@@ -645,7 +631,7 @@ fn declaration(
                     escape(&op.name)
                 );
             }
-            if let Some(typed_name) = &rows[index].typed_callback_name {
+            if let Some(typed_name) = &row.typed_callback_name {
                 callback_declaration(&mut out, op, signature, index, typed_name);
             }
             continue;
@@ -658,7 +644,7 @@ fn declaration(
             let _ = writeln!(
                 out,
                 "## Overload {} of `{}` has no OpKey in the manifest: reach it with Rssn.dynamic(\"{}\", [...])",
-                index + 1,
+                index.saturating_add(1),
                 escape(&op.name),
                 escape(&op.name)
             );
@@ -759,6 +745,10 @@ fn declaration(
 /// Typed callback aliases retain the dynamic entry point and pin their exact
 /// manifest overload. The checker reifies each actual callback at the source
 /// call, and `from_value` validates the instantiated declared result.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Keeps the typed callback source template separate from dynamic declarations"
+)]
 fn callback_declaration(
     out: &mut String,
     op: &OpEntry,
@@ -767,10 +757,11 @@ fn callback_declaration(
     name: &str,
 ) {
     use crate::registry::SigType;
-    let key = op.key(index).expect("typed callback requires pinned key");
+    let (Some(key), Some(raw)) = (op.key(index), op.raw.get(index)) else {
+        return;
+    };
     let mut dims = DimNames::default();
     let mut nats = CallbackNatNames::default();
-    let raw = &op.raw[index];
     let params: Vec<_> = signature
         .params
         .iter()
@@ -825,7 +816,6 @@ fn callback_declaration(
 #[derive(Default)]
 struct CallbackNatNames {
     names: std::collections::BTreeMap<String, String>,
-    next: usize,
 }
 impl CallbackNatNames {
     fn name(
@@ -835,11 +825,11 @@ impl CallbackNatNames {
         if let Some(name) = self.names.get(original) {
             return name.clone();
         }
-        self.next += 1;
-        let name = if self.next == 1 {
+        let next = self.names.len().saturating_add(1);
+        let name = if next == 1 {
             "n".to_owned()
         } else {
-            format!("n{}", self.next)
+            format!("n{next}")
         };
         self.names.insert(original.to_owned(), name.clone());
         name
@@ -904,12 +894,11 @@ fn render_callback_type(
             let fields: Vec<_> = fields
                 .iter()
                 .map(|(name, field)| {
-                    let raw = &raw_fields
-                        .iter()
-                        .find(|(other, _)| other == name)
-                        .expect("mirror record field")
-                        .1;
-                    format!("{name}: {}", render_callback_type(dims, nats, field, raw))
+                    let field_type = match raw_fields.iter().find(|(other, _)| other == name) {
+                        | Some((_, raw)) => render_callback_type(dims, nats, field, raw),
+                        | None => render_with(dims, field),
+                    };
+                    format!("{name}: {field_type}")
                 })
                 .collect();
             format!("{{ {} }}", fields.join(", "))
@@ -944,7 +933,11 @@ fn render_callback_type(
     }
 }
 
-fn stability(value: rssn::kernel::signature::Stability) -> &'static str {
+#[allow(
+    clippy::single_call_fn,
+    reason = "Centralizes the stable text for every upstream stability classification"
+)]
+const fn stability(value: rssn::kernel::signature::Stability) -> &'static str {
     use rssn::kernel::signature::Stability;
     match value {
         | Stability::Stable => "stable",
@@ -968,25 +961,15 @@ fn stability(value: rssn::kernel::signature::Stability) -> &'static str {
 /// type: an unknown tensor rank (`Tensor<_, τ>` has no declaration spelling), a
 /// type-parameter reference (`TypeParamKind::Type`), a table with an unknown
 /// row, a device handle, a variant, a host opaque type, or `Never`.
-fn render(ty: &SigType) -> String {
-    render_with(&mut DimNames::default(), ty)
-}
-
-/// The declaration spelling of one type, for conformance tests.
-///
-/// The same renderer `--emit` uses, so a test can pin the spelling of a
-/// hand-built `SigType` (including the `Dyn<term>` cases) without going through
-/// the live manifest.
 #[must_use]
 pub fn declaration_type(ty: &SigType) -> String {
-    render(ty)
+    render_with(&mut DimNames::default(), ty)
 }
 
 /// Names for the explicitly bound dimension variables of one declaration (`d`, `d2`, …).
 #[derive(Default)]
 struct DimNames {
     names: std::collections::BTreeMap<u32, String>,
-    next: usize,
 }
 
 impl DimNames {
@@ -997,12 +980,12 @@ impl DimNames {
         if let Some(name) = self.names.get(&id) {
             return name.clone();
         }
-        let name = if self.next == 0 {
+        let next = self.names.len().saturating_add(1);
+        let name = if next == 1 {
             "d".to_string()
         } else {
-            format!("d{}", self.next + 1)
+            format!("d{next}")
         };
-        self.next += 1;
         self.names.insert(id, name.clone());
         name
     }
@@ -1013,9 +996,6 @@ fn render_with(
     ty: &SigType,
 ) -> String {
     match ty {
-        | SigType::Tensor { rank: None, .. } | SigType::Sparse { rank: None, .. } => {
-            "Dyn<term>".to_string()
-        },
         | SigType::Tensor {
             rank: Some(rank),
             shape: Some(shape),
@@ -1031,17 +1011,27 @@ fn render_with(
                 render_with(dims, elem)
             )
         },
-        | SigType::Tensor { shape: Some(_), .. } => "Dyn<term>".to_string(),
-        | SigType::Tensor { rank, elem, .. } | SigType::Sparse { rank, elem } => {
-            format!("Tensor<{}, {}>", rank.unwrap_or(1), render_with(dims, elem))
-        },
-        | SigType::Var(_) | SigType::Table | SigType::Device | SigType::Never => {
-            "Dyn<term>".to_string()
+        | SigType::Tensor {
+            rank: Some(rank),
+            shape: None,
+            elem,
+        }
+        | SigType::Sparse {
+            rank: Some(rank),
+            elem,
+        } => {
+            format!("Tensor<{rank}, {}>", render_with(dims, elem))
         },
         // A host type has no Aevia spelling; the kernel decides.
         | SigType::Opaque(name) if name == crate::registry::NATIVE_AD_VAR_KIND => {
             "NativeAdVar".to_string()
         },
+        | SigType::Tensor { .. }
+        | SigType::Sparse { .. }
+        | SigType::Var(_)
+        | SigType::Table
+        | SigType::Device
+        | SigType::Never
         | SigType::Opaque(_) => "Dyn<term>".to_string(),
         | SigType::Unit(dim) => format!("Unit[{}]", render_dim(dims, dim)),
         | SigType::Point(dim) => format!("Point[{}]", render_dim(dims, dim)),
@@ -1090,11 +1080,12 @@ fn render_dim(
             | aevia_dim::Atom::Nominal(base) => base.display_name().to_string(),
             | aevia_dim::Atom::Var(id) => dims.name(*id),
         };
-        let (target, magnitude) = if exponent.is_negative() {
-            (&mut denominator, -exponent.clone())
+        let target = if exponent.is_negative() {
+            &mut denominator
         } else {
-            (&mut numerator, exponent.clone())
+            &mut numerator
         };
+        let magnitude = exponent.abs();
         if magnitude.is_one() {
             target.push(name);
         } else if magnitude.is_integer() {
@@ -1111,14 +1102,18 @@ fn render_dim(
     } else {
         numerator.join("*")
     };
-    match denominator.len() {
-        | 0 => numerator,
-        | 1 => format!("{numerator}/{}", denominator[0]),
+    match denominator.as_slice() {
+        | [] => numerator,
+        | [only] => format!("{numerator}/{only}"),
         | _ => format!("{numerator}/({})", denominator.join("*")),
     }
 }
 
 /// A spelling of `name` that Aevia source can contain.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Isolates the keyword and alias policy from the unit template"
+)]
 fn spellable(
     name: &str,
     aliases: &[String],
@@ -1200,7 +1195,7 @@ pub fn binding_base_name(
     let base = if index == 0 {
         sanitise(name)
     } else {
-        format!("{}_{}", sanitise(name), index + 1)
+        format!("{}_{}", sanitise(name), index.saturating_add(1))
     };
     if nullary {
         value_name(&base)
@@ -1248,6 +1243,10 @@ pub(crate) fn escape(text: &str) -> String {
 ///
 /// Formatting through `f64` turned `1.602176634e-19` into `0.0`; the constant
 /// table has to survive the round trip, so the exact form is written.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Keeps exact ratio round-trip verification out of the constant template"
+)]
 fn exact_text(value: &num_rational::BigRational) -> String {
     if value.denom().is_one() {
         return value.numer().to_string();
@@ -1262,14 +1261,6 @@ fn exact_text(value: &num_rational::BigRational) -> String {
         return decimal;
     }
     format!("({})/({})", value.numer(), value.denom())
-}
-
-fn hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
 }
 
 #[cfg(test)]

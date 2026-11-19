@@ -76,7 +76,7 @@ fn output(source: &str) -> String {
         interp
             .run_main()
             .unwrap_or_else(|error| panic!("{mode:?}: {}: {}", error.code, error.message));
-        results.push(interp.captured().to_string());
+        results.push(interp.captured());
     }
     assert_eq!(results[0], results[1], "AST and IR disagree");
     results.remove(0)

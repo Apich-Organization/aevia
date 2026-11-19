@@ -134,10 +134,9 @@ pub fn legendre_p(
     n: i32,
     x: f64,
 ) -> f64 {
-    if n < 0 {
-        return f64::NAN;
-    }
-    rssn::kernels::special::legendre_p(n as u32, x)
+    u32::try_from(n).map_or(f64::NAN, |order| {
+        rssn::kernels::special::legendre_p(order, x)
+    })
 }
 
 /// The physicists' Hermite polynomial `H_n(x)`.
@@ -146,10 +145,9 @@ pub fn hermite_h(
     n: i32,
     x: f64,
 ) -> f64 {
-    if n < 0 {
-        return f64::NAN;
-    }
-    rssn::kernels::special::hermite_h(n as u32, x)
+    u32::try_from(n).map_or(f64::NAN, |order| {
+        rssn::kernels::special::hermite_h(order, x)
+    })
 }
 
 /// The Laguerre polynomial `L_n(x)`.
@@ -158,10 +156,9 @@ pub fn laguerre_l(
     n: i32,
     x: f64,
 ) -> f64 {
-    if n < 0 {
-        return f64::NAN;
-    }
-    rssn::kernels::special::laguerre_l(n as u32, x)
+    u32::try_from(n).map_or(f64::NAN, |order| {
+        rssn::kernels::special::laguerre_l(order, x)
+    })
 }
 
 /// The Chebyshev polynomial of the first kind `T_n(x)`.
@@ -170,10 +167,9 @@ pub fn chebyshev_t(
     n: i32,
     x: f64,
 ) -> f64 {
-    if n < 0 {
-        return f64::NAN;
-    }
-    rssn::kernels::special::chebyshev_t(n as u32, x)
+    u32::try_from(n).map_or(f64::NAN, |order| {
+        rssn::kernels::special::chebyshev_t(order, x)
+    })
 }
 
 /// The Chebyshev polynomial of the second kind `U_n(x)`.
@@ -182,10 +178,9 @@ pub fn chebyshev_u(
     n: i32,
     x: f64,
 ) -> f64 {
-    if n < 0 {
-        return f64::NAN;
-    }
-    rssn::kernels::special::chebyshev_u(n as u32, x)
+    u32::try_from(n).map_or(f64::NAN, |order| {
+        rssn::kernels::special::chebyshev_u(order, x)
+    })
 }
 
 /// The modified Bessel function of the first kind, order 0: `I_0(x)`.
@@ -254,10 +249,12 @@ pub fn polygamma(
     n: i32,
     x: f64,
 ) -> f64 {
-    if n < 0 || x.is_nan() {
+    if x.is_nan() {
         return f64::NAN;
     }
-    rssn::kernels::special::polygamma_numerical(n as u32, x)
+    u32::try_from(n).map_or(f64::NAN, |order| {
+        rssn::kernels::special::polygamma_numerical(order, x)
+    })
 }
 
 /// Inverse error function `erfinv(y)` for `|y| <= 1`.
@@ -266,10 +263,10 @@ pub fn erfinv(y: f64) -> f64 {
     if y.is_nan() || y.abs() > 1.0 {
         return f64::NAN;
     }
-    if y == 1.0 {
+    if y >= 1.0 {
         return f64::INFINITY;
     }
-    if y == -1.0 {
+    if y <= -1.0 {
         return f64::NEG_INFINITY;
     }
     rssn::kernels::special::inverse_erf_numerical(y)

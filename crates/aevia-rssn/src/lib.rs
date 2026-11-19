@@ -27,6 +27,20 @@
 
 #![forbid(unsafe_code)]
 #![allow(clippy::module_name_repetitions)]
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
 
 pub mod bindings;
 pub mod codegen;
@@ -176,7 +190,7 @@ pub fn format_float(value: f64) -> String {
             "-∞".to_string()
         };
     }
-    if value == value.trunc() && value.abs() < 1e16 {
+    if value.fract().classify() == std::num::FpCategory::Zero && value.abs() < 1e16 {
         return format!("{value:.1}");
     }
     let mut text = format!("{value}");

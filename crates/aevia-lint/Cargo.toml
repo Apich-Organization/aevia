@@ -16,6 +16,5 @@ bincode-next.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
-[lints.rust]
-unsafe_code = "forbid"
-missing_docs = "warn"
+[lints]
+workspace = true

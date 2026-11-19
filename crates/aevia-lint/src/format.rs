@@ -113,8 +113,7 @@ pub fn render_json(
                         && ld.diagnostic.code == d.code
                         && ld.diagnostic.message == d.message
                 })
-                .map(|ld| convert_fixes(&ld.fixes, sources))
-                .unwrap_or_default();
+                .map_or_else(Vec::new, |ld| convert_fixes(&ld.fixes, sources));
             JsonDiag {
                 code: &d.code,
                 name,
@@ -143,6 +142,10 @@ pub fn render_json(
     serde_json::to_string_pretty(&doc).unwrap_or_else(|_| "{}".to_string()) + "\n"
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps nested fix and edit conversion out of diagnostic rendering"
+)]
 fn convert_fixes<'a>(
     fixes: &'a [Fix],
     sources: &SourceMap,

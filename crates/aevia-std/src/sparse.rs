@@ -23,7 +23,7 @@ pub struct Csr<'a> {
 }
 
 impl Csr<'_> {
-    fn native(&self) -> native::Csr<'_> {
+    const fn native(&self) -> native::Csr<'_> {
         native::Csr {
             rows: self.rows,
             cols: self.cols,
@@ -136,7 +136,7 @@ fn to_rssn_csr(a: &Csr<'_>) -> Result<rssn::kernels::krylov::Csr, NumericError> 
         || a.col_idx.len() != a.values.len()
         || a.row_ptr.first() != Some(&0)
         || a.row_ptr.last() != Some(&a.values.len())
-        || a.row_ptr.windows(2).any(|pair| pair[0] > pair[1])
+        || a.row_ptr.array_windows().any(|&[lo, hi]| lo > hi)
         || a.col_idx.iter().any(|&column| column >= a.cols)
     {
         return Err(NumericError::ShapeMismatch("invalid CSR arrays".into()));

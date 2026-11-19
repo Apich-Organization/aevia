@@ -11,6 +11,21 @@
 //! binding sits at a level lower than `l`. This is the standard efficient
 //! formulation and keeps `let` inference linear in practice.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
 use crate::representation::NumericConstraint;
 use crate::representation::RepDomain;
 use crate::representation::RepRelation;
@@ -25,9 +40,16 @@ use crate::ty::Type;
 use aevia_dim::Dim;
 use aevia_dim::DimMismatch;
 use aevia_dim::DimUnifier;
+use indexmap::IndexSet;
+use num_bigint::BigInt;
+use num_bigint::Sign;
+use num_traits::One;
+use num_traits::ToPrimitive;
+use num_traits::Zero;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 
 /// Why two types could not be made equal.
 #[derive(Clone, Debug)]
@@ -156,6 +178,9 @@ impl std::fmt::Display for UnifyError {
 /// A polynomial over type-level `Nat` variables: `Σ cₘ·m`, where each monomial
 /// `m` is a sorted multiset of variables (the empty monomial is the constant).
 ///
+/// Coefficients are exact even when a product of machine-sized extents exceeds
+/// the range of any machine integer.
+///
 /// A *linear* equation (only degree-1 monomials) isolates a variable. A product
 /// of two variables (`n * m`) is kept as an opaque monomial: it cancels against
 /// an identical monomial in any order (`n * m ~ m * n`), and it is substituted
@@ -163,79 +188,72 @@ impl std::fmt::Display for UnifyError {
 /// is never solved for by itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NatLinear {
-    terms: BTreeMap<Vec<u32>, i128>,
+    terms: BTreeMap<Vec<u32>, BigInt>,
 }
 
 impl NatLinear {
-    fn constant(value: i128) -> Self {
+    fn constant(value: BigInt) -> Self {
         let mut terms = BTreeMap::new();
         terms.insert(Vec::new(), value);
         Self { terms }.normalised()
     }
 
-    fn variable(id: u32) -> Self {
-        let mut terms = BTreeMap::new();
-        terms.insert(vec![id], 1);
-        Self { terms }
-    }
-
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "arbitrary-precision coefficients cannot overflow"
+    )]
     fn add(
         mut self,
         other: Self,
     ) -> Self {
         for (monomial, coefficient) in other.terms {
-            let entry = self.terms.entry(monomial).or_insert(0);
-            *entry = entry.saturating_add(coefficient);
+            *self.terms.entry(monomial).or_default() += coefficient;
         }
         self.normalised()
     }
 
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "arbitrary-precision coefficients cannot overflow"
+    )]
     fn sub(
-        self,
+        mut self,
         other: Self,
     ) -> Self {
-        self.add(other.negate())
-    }
-
-    fn negate(self) -> Self {
-        self.scale(-1)
-    }
-
-    fn scale(
-        mut self,
-        factor: i128,
-    ) -> Self {
-        for coefficient in self.terms.values_mut() {
-            *coefficient = coefficient.saturating_mul(factor);
+        for (monomial, coefficient) in other.terms {
+            *self.terms.entry(monomial).or_default() -= coefficient;
         }
         self.normalised()
     }
 
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "arbitrary-precision coefficients cannot overflow"
+    )]
     fn mul(
         &self,
         other: &Self,
     ) -> Self {
-        let mut out: BTreeMap<Vec<u32>, i128> = BTreeMap::new();
+        let mut out: BTreeMap<Vec<u32>, BigInt> = BTreeMap::new();
         for (left, a) in &self.terms {
             for (right, b) in &other.terms {
                 let mut monomial = left.clone();
                 monomial.extend(right.iter().copied());
                 monomial.sort_unstable();
-                let entry = out.entry(monomial).or_insert(0);
-                *entry = entry.saturating_add(a.saturating_mul(*b));
+                *out.entry(monomial).or_default() += a * b;
             }
         }
         Self { terms: out }.normalised()
     }
 
     fn normalised(mut self) -> Self {
-        self.terms.retain(|_, coefficient| *coefficient != 0);
+        self.terms.retain(|_, coefficient| !coefficient.is_zero());
         self
     }
 
     /// The constant term.
-    fn constant_part(&self) -> i128 {
-        self.terms.get(&Vec::new()).copied().unwrap_or(0)
+    fn constant_part(&self) -> Option<&BigInt> {
+        self.terms.get([].as_slice())
     }
 
     /// Whether there is no variable left.
@@ -249,11 +267,15 @@ impl NatLinear {
     }
 
     /// The degree-one terms: `(variable, coefficient)`.
-    fn linear_terms(&self) -> Vec<(u32, i128)> {
+    fn linear_terms(&self) -> Vec<(u32, &BigInt)> {
         self.terms
             .iter()
-            .filter(|(monomial, _)| monomial.len() == 1)
-            .map(|(monomial, coefficient)| (monomial[0], *coefficient))
+            .filter_map(|(monomial, coefficient)| {
+                let [id] = monomial.as_slice() else {
+                    return None;
+                };
+                Some((*id, coefficient))
+            })
             .collect()
     }
 
@@ -274,6 +296,19 @@ impl NatLinear {
         out.dedup();
         out
     }
+}
+
+/// Solve `coefficient * variable + constant = 0` when division is exact.
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "BigInt division is guarded against zero"
+)]
+fn exact_nat_quotient(
+    constant: &BigInt,
+    coefficient: &BigInt,
+) -> Option<BigInt> {
+    (!coefficient.is_zero() && (constant % coefficient).is_zero())
+        .then(|| -(constant / coefficient))
 }
 
 /// What solving one Nat equation did.
@@ -326,7 +361,7 @@ pub struct Infer {
     numeric_universals: HashSet<u32>,
     numeric_errors: Vec<String>,
     /// `ρ lacks l` side conditions on row variables (§3.6.1).
-    lacks: HashMap<u32, Vec<String>>,
+    lacks: HashMap<u32, IndexSet<String>>,
     /// Type-level natural-number substitution (§3.5.1).
     nat_subst: HashMap<u32, Nat>,
     /// Level of each type-level natural-number variable, for generalisation.
@@ -387,30 +422,38 @@ impl Infer {
         }
     }
 
-    fn fresh_id(&mut self) -> u32 {
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::expect_used,
+            reason = "exhaustion cannot produce a fresh 32-bit id"
+        )
+    )]
+    const fn fresh_id(&mut self) -> u32 {
         let id = self.next;
-        self.next += 1;
+        self.next = id.checked_add(1).expect("type variable id space exhausted");
         id
     }
 
     /// The current generalisation level.
     #[must_use]
-    pub fn level(&self) -> u32 {
+    pub const fn level(&self) -> u32 {
         self.level
     }
 
     /// Enters a nested binding level.
-    pub fn enter_level(&mut self) {
-        self.level += 1;
+    pub const fn enter_level(&mut self) {
+        self.level = self.level.saturating_add(1);
     }
 
+    /// The level assigned to newly created variables.
     #[must_use]
-    pub fn current_level(&self) -> u32 {
+    pub const fn current_level(&self) -> u32 {
         self.level
     }
 
     /// Leaves a binding level.
-    pub fn leave_level(&mut self) {
+    pub const fn leave_level(&mut self) {
         self.level = self.level.saturating_sub(1);
     }
 
@@ -481,7 +524,7 @@ impl Infer {
         protected: &crate::TypeSubstitution,
     ) {
         let mut free = crate::TypeSubstitution::default();
-        free.freshen(&self.resolve(ty), &mut Infer::new());
+        free.register_variables(&self.resolve(ty), &mut Self::new());
         for id in free.types.keys().chain(free.representations.keys()) {
             if !protected.types.contains_key(id) && !protected.representations.contains_key(id) {
                 self.weak.insert(*id);
@@ -577,9 +620,9 @@ impl Infer {
 
     fn push_numeric(
         &mut self,
-        constraint: NumericConstraint,
+        constraint: &NumericConstraint,
     ) {
-        let constraint = self.resolve_numeric(&constraint);
+        let constraint = self.resolve_numeric(constraint);
         let dependencies = Self::numeric_variables(&constraint).into_iter().collect();
         self.cache_numeric_transfer(&constraint);
         self.numeric.insert(constraint, dependencies);
@@ -654,7 +697,7 @@ impl Infer {
         if !satisfied {
             let constraint = NumericConstraint::Literal { ty: ty.clone(), kind };
             if !self.contains_numeric(&constraint) {
-                self.push_numeric(constraint);
+                self.push_numeric(&constraint);
             }
         }
         match ty {
@@ -693,7 +736,18 @@ impl Infer {
         }
     }
 
-    /// Register transported numeric semantics in this inference universe.
+    /// Registers numeric semantics in this inference universe.
+    ///
+    /// # Errors
+    ///
+    /// Returns the dimension, representation, or literal conflict exposed by the constraint.
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::needless_pass_by_value,
+            reason = "preserve the public owned-constraint API"
+        )
+    )]
     pub fn add_numeric_constraint(
         &mut self,
         constraint: NumericConstraint,
@@ -721,11 +775,12 @@ impl Infer {
                 self.unify_dim(&dim, &Dim::one())?;
             }
         } else if !self.contains_numeric(&constraint) {
-            self.push_numeric(constraint);
+            self.push_numeric(&constraint);
         }
         self.propagate_numeric()
     }
 
+    /// Applies current bindings to a transported numeric constraint.
     #[must_use]
     pub fn resolve_numeric(
         &self,
@@ -789,6 +844,11 @@ impl Infer {
         Ok(relations)
     }
 
+    /// Propagates active numeric constraints to a fixed point.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first unsatisfiable representation or literal relation.
     pub fn propagate_numeric(&mut self) -> Result<(), UnifyError> {
         while let Some(component) = self.numeric.take_dirty_component() {
             #[cfg(test)]
@@ -884,6 +944,11 @@ impl Infer {
         Ok(())
     }
 
+    /// Computes the possible concrete representations of an operand.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict if the connected constraints have no valid assignment.
     pub fn representation_domain(
         &self,
         rep: Rep,
@@ -903,6 +968,11 @@ impl Infer {
         Ok(domains.domain(self.resolve_rep(rep)))
     }
 
+    /// Computes or constrains the join of two numeric representations.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict if the join contradicts active constraints.
     pub fn join_representation(
         &mut self,
         left: Rep,
@@ -1038,6 +1108,11 @@ impl Infer {
         self.numeric_work.get()
     }
 
+    /// Computes or constrains the representation after division.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict if the division result contradicts active constraints.
     pub fn divide_representation(
         &mut self,
         input: Rep,
@@ -1067,54 +1142,66 @@ impl Infer {
         level: u32,
     ) {
         let mut free = crate::TypeSubstitution::default();
-        let mut names = Infer::new();
+        let mut names = Self::new();
         for ty in inputs {
-            free.freshen(&self.resolve(ty), &mut names);
+            free.register_variables(&self.resolve(ty), &mut names);
         }
-        for id in free.types.keys() {
-            if !self.weak.contains(id)
-                && self.levels.get(id).copied().unwrap_or(0) > level
-                && !scheme.vars.contains(id)
+        let mut types: Vec<_> = free.types.into_keys().collect();
+        types.sort_unstable();
+        for id in types {
+            if !self.weak.contains(&id)
+                && self.levels.get(&id).copied().unwrap_or(0) > level
+                && !scheme.vars.contains(&id)
             {
-                scheme.vars.push(*id);
+                scheme.vars.push(id);
             }
         }
-        for id in free.representations.keys() {
-            if !self.weak.contains(id)
-                && self.rep_levels.get(id).copied().unwrap_or(0) > level
-                && !scheme.vars.contains(id)
-            {
-                scheme.vars.push(*id);
-            }
-        }
+        self.quantify_representations(scheme, free.representations, level);
         self.attach_numeric_scheme(scheme);
     }
 
+    /// Quantifies internal literal representations that are chosen per instantiation.
     pub fn quantify_numeric_existentials(
         &self,
         scheme: &mut Scheme,
         level: u32,
     ) {
         let mut free = crate::TypeSubstitution::default();
-        let mut names = Infer::new();
+        let mut names = Self::new();
         for constraint in &scheme.numeric {
             // Private defaulted literal variables are existential, rather
             // than selectable parameters, but each activation needs a fresh
             // copy of them. Other intermediates generalize normally.
             if let NumericConstraint::DefaultLiteral { ty, .. } = constraint {
-                free.freshen(ty, &mut names);
+                free.register_variables(ty, &mut names);
             }
         }
-        for id in free.representations.keys() {
-            if !self.weak.contains(id)
-                && self.rep_levels.get(id).copied().unwrap_or(0) > level
-                && !scheme.vars.contains(id)
+        self.quantify_representations(scheme, free.representations, level);
+    }
+
+    fn quantify_representations(
+        &self,
+        scheme: &mut Scheme,
+        representations: HashMap<u32, Rep>,
+        level: u32,
+    ) {
+        let mut variables: Vec<_> = representations.into_keys().collect();
+        variables.sort_unstable();
+        for id in variables {
+            if !self.weak.contains(&id)
+                && self.rep_levels.get(&id).copied().unwrap_or(0) > level
+                && !scheme.vars.contains(&id)
             {
-                scheme.vars.push(*id);
+                scheme.vars.push(id);
             }
         }
     }
 
+    /// Defaults numeric literals whose representations are outside the protected set.
+    ///
+    /// # Errors
+    ///
+    /// Returns any type or representation conflict exposed by defaulting.
     pub fn default_unprotected_numeric(
         &mut self,
         protected: &HashSet<u32>,
@@ -1124,10 +1211,16 @@ impl Infer {
         self.propagate_numeric()
     }
 
+    /// Drains buffered numeric errors for the checker to report.
     pub fn take_numeric_errors(&mut self) -> Vec<String> {
         std::mem::take(&mut self.numeric_errors)
     }
 
+    /// Chooses the default reading for each eligible unresolved literal.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict when a selected reading violates current constraints.
     pub fn default_numeric_literals(
         &mut self,
         constraints: &[NumericConstraint],
@@ -1216,9 +1309,9 @@ impl Infer {
 
     fn numeric_variables(constraint: &NumericConstraint) -> HashSet<u32> {
         let mut free = crate::TypeSubstitution::default();
-        let mut names = Infer::new();
+        let mut names = Self::new();
         for ty in constraint.types() {
-            free.freshen(&ty, &mut names);
+            free.register_variables(&ty, &mut names);
         }
         free.types
             .keys()
@@ -1276,18 +1369,51 @@ impl Infer {
     ) -> Result<(), UnifyError> {
         let mut contract = Scheme::mono(self.resolve(ty));
         self.attach_numeric_scheme(&mut contract);
-        let mut trial = Infer::new();
+        let mut trial = Self::new();
         let mut projection = crate::TypeSubstitution::default();
-        projection.freshen(&contract.ty, &mut trial);
+        projection.register_variables(&contract.ty, &mut trial);
         for constraint in &contract.numeric {
             for ty in constraint.types() {
-                projection.freshen(&ty, &mut trial);
+                projection.register_variables(&ty, &mut trial);
             }
         }
         for constraint in &contract.numeric {
             trial.add_numeric_constraint(constraint.substitute(&projection))?;
         }
         trial.unify(&projection.apply(&contract.ty), &projection.apply(reading))
+    }
+
+    /// Captures the active field exclusions of a scheme's quantified rows.
+    pub(crate) fn attach_row_lacks(
+        &self,
+        scheme: &mut Scheme,
+    ) {
+        if scheme.rows.is_empty() {
+            scheme.row_lacks.clear();
+            return;
+        }
+        let mut combined = BTreeMap::<u32, Vec<String>>::new();
+        for (id, labels) in std::mem::take(&mut scheme.row_lacks) {
+            if scheme.rows.contains(&id) {
+                combined.entry(id).or_default().extend(labels);
+            }
+        }
+        for id in &scheme.rows {
+            if let Some(labels) = self.lacks.get(id) {
+                combined
+                    .entry(*id)
+                    .or_default()
+                    .extend(labels.iter().cloned());
+            }
+        }
+        scheme.row_lacks = combined
+            .into_iter()
+            .filter_map(|(id, mut labels)| {
+                labels.sort_unstable();
+                labels.dedup();
+                (!labels.is_empty()).then_some((id, labels))
+            })
+            .collect();
     }
 
     /// Normalize an interface without choosing new defaults or changing its
@@ -1314,6 +1440,7 @@ impl Infer {
             .iter()
             .map(|ty| self.resolve(ty))
             .collect();
+        self.attach_row_lacks(&mut result);
         result
     }
 
@@ -1342,7 +1469,8 @@ impl Infer {
             // more than 128 elements failed at run time (`E0304`).
             | Type::Var(id) => {
                 match self.follow_type(*id) {
-                    | Some(bound) => self.resolve_depth(&bound, depth + 1),
+                    | Some(Type::Var(unbound)) => Type::Var(*unbound),
+                    | Some(bound) => self.resolve_depth(bound, depth),
                     | None => ty.clone(),
                 }
             },
@@ -1351,17 +1479,17 @@ impl Infer {
             },
             | Type::Tensor { shape, elem } => {
                 Type::Tensor {
-                    shape: self.resolve_shape_depth(shape, depth + 1),
-                    elem: Box::new(self.resolve_depth(elem, depth + 1)),
+                    shape: self.resolve_shape_depth(shape, depth.saturating_add(1)),
+                    elem: Box::new(self.resolve_depth(elem, depth.saturating_add(1))),
                 }
             },
             | Type::Fn(params, ret) => {
                 Type::Fn(
                     params
                         .iter()
-                        .map(|param| self.resolve_depth(param, depth + 1))
+                        .map(|param| self.resolve_depth(param, depth.saturating_add(1)))
                         .collect(),
-                    Box::new(self.resolve_depth(ret, depth + 1)),
+                    Box::new(self.resolve_depth(ret, depth.saturating_add(1))),
                 )
             },
             | Type::Record(row) => Type::Record(self.resolve_row_depth(row, depth)),
@@ -1369,11 +1497,13 @@ impl Infer {
                 Type::Adt(
                     *id,
                     args.iter()
-                        .map(|arg| self.resolve_depth(arg, depth + 1))
+                        .map(|arg| self.resolve_depth(arg, depth.saturating_add(1)))
                         .collect(),
                 )
             },
-            | Type::Io(inner) => Type::Io(Box::new(self.resolve_depth(inner, depth + 1))),
+            | Type::Io(inner) => {
+                Type::Io(Box::new(self.resolve_depth(inner, depth.saturating_add(1))))
+            },
             | Type::Dyn(rep) => Type::Dyn(self.resolve_rep_depth(*rep, depth)),
             | Type::Point(dim) => Type::Point(self.dims.resolve(dim)),
             | Type::UnitOf(dim) => Type::UnitOf(self.dims.resolve(dim)),
@@ -1381,21 +1511,21 @@ impl Infer {
                 Type::TypeRepIntrinsic(
                     inner
                         .as_ref()
-                        .map(|ty| Box::new(self.resolve_depth(ty, depth + 1))),
+                        .map(|ty| Box::new(self.resolve_depth(ty, depth.saturating_add(1)))),
                 )
             },
             | Type::FromValueIntrinsic(inner) => {
                 Type::FromValueIntrinsic(
                     inner
                         .as_ref()
-                        .map(|ty| Box::new(self.resolve_depth(ty, depth + 1))),
+                        .map(|ty| Box::new(self.resolve_depth(ty, depth.saturating_add(1)))),
                 )
             },
             | Type::TensorIntrinsic(intrinsic) => {
                 let mut intrinsic = *intrinsic;
                 intrinsic.element = intrinsic
                     .element
-                    .map(|rep| self.resolve_rep_depth(rep, depth + 1));
+                    .map(|rep| self.resolve_rep_depth(rep, depth.saturating_add(1)));
                 Type::TensorIntrinsic(intrinsic)
             },
             | _ => ty.clone(),
@@ -1449,18 +1579,16 @@ impl Infer {
     fn follow_type(
         &self,
         id: u32,
-    ) -> Option<Type> {
-        let mut bound = self.subst.get(&id)?.clone();
-        for _ in 0..=self.subst.len() {
-            match &bound {
-                | Type::Var(next) => {
-                    match self.subst.get(next) {
-                        | Some(further) => bound = further.clone(),
-                        | None => return Some(bound),
-                    }
-                },
-                | _ => return Some(bound),
-            }
+    ) -> Option<&Type> {
+        let mut bound = self.subst.get(&id)?;
+        for _ in 0..self.subst.len() {
+            let Type::Var(next) = bound else {
+                break;
+            };
+            let Some(further) = self.subst.get(next) else {
+                break;
+            };
+            bound = further;
         }
         Some(bound)
     }
@@ -1482,33 +1610,31 @@ impl Infer {
         if depth > 128 {
             return row.clone();
         }
-        match row {
-            | Row::Var(id) => {
-                let Some(mut bound) = self.row_subst.get(id).cloned() else {
-                    return row.clone();
-                };
-                for _ in 0..=self.row_subst.len() {
-                    match &bound {
-                        | Row::Var(next) => {
-                            match self.row_subst.get(next) {
-                                | Some(further) => bound = further.clone(),
-                                | None => break,
-                            }
-                        },
-                        | _ => break,
-                    }
-                }
-                self.resolve_row_depth(&bound, depth + 1)
-            },
-            | Row::Extend { label, ty, tail } => {
-                Row::Extend {
-                    label: label.clone(),
-                    ty: Box::new(self.resolve_depth(ty, 0)),
-                    tail: Box::new(self.resolve_row_depth(tail, depth + 1)),
-                }
-            },
-            | Row::Empty => Row::Empty,
-        }
+        let mut current = row;
+        let mut bindings_left = self.row_subst.len();
+        let mut fields = Vec::new();
+        let tail = loop {
+            match current {
+                | Row::Empty => break Row::Empty,
+                | Row::Var(id) => {
+                    let Some((bound, remaining)) =
+                        self.row_subst.get(id).zip(bindings_left.checked_sub(1))
+                    else {
+                        break Row::Var(*id);
+                    };
+                    current = bound;
+                    bindings_left = remaining;
+                },
+                | Row::Extend { label, ty, tail } => {
+                    fields.push((
+                        label.clone(),
+                        self.resolve_depth(ty, depth.saturating_add(1)),
+                    ));
+                    current = tail;
+                },
+            }
+        };
+        extend_row_fields(fields.into_iter().rev(), tail)
     }
 
     /// Resolves a shape's type-level extents through the Nat substitution.
@@ -1536,7 +1662,7 @@ impl Infer {
                         .iter()
                         .map(|item| {
                             item.as_ref()
-                                .map(|nat| self.resolve_nat_depth(nat, depth + 1))
+                                .map(|nat| self.resolve_nat_depth(nat, depth.saturating_add(1)))
                         })
                         .collect(),
                 )
@@ -1585,23 +1711,17 @@ impl Infer {
                         | _ => break,
                     }
                 }
-                self.resolve_nat_depth(&bound, depth + 1)
+                self.resolve_nat_depth(&bound, depth.saturating_add(1))
             },
             | Nat::Add(left, right) => {
-                let left = self.resolve_nat_depth(left, depth + 1);
-                let right = self.resolve_nat_depth(right, depth + 1);
-                match (left.as_const(), right.as_const()) {
-                    | (Some(left), Some(right)) => Nat::Lit(left.saturating_add(right)),
-                    | _ => Nat::Add(Box::new(left), Box::new(right)),
-                }
+                let left = self.resolve_nat_depth(left, depth.saturating_add(1));
+                let right = self.resolve_nat_depth(right, depth.saturating_add(1));
+                left.fold_add(right)
             },
             | Nat::Mul(left, right) => {
-                let left = self.resolve_nat_depth(left, depth + 1);
-                let right = self.resolve_nat_depth(right, depth + 1);
-                match (left.as_const(), right.as_const()) {
-                    | (Some(left), Some(right)) => Nat::Lit(left.saturating_mul(right)),
-                    | _ => Nat::Mul(Box::new(left), Box::new(right)),
-                }
+                let left = self.resolve_nat_depth(left, depth.saturating_add(1));
+                let right = self.resolve_nat_depth(right, depth.saturating_add(1));
+                left.fold_mul(right)
             },
         }
     }
@@ -1694,16 +1814,17 @@ impl Infer {
         }
     }
 
-    /// The polynomial of a Nat term, resolved through the substitution.
-    fn nat_poly(
-        &self,
-        nat: &Nat,
-    ) -> NatLinear {
-        match self.resolve_nat(nat) {
-            | Nat::Lit(value) => NatLinear::constant(i128::try_from(value).unwrap_or(i128::MAX)),
-            | Nat::Var(id) => NatLinear::variable(id),
-            | Nat::Add(left, right) => self.nat_poly(&left).add(self.nat_poly(&right)),
-            | Nat::Mul(left, right) => self.nat_poly(&left).mul(&self.nat_poly(&right)),
+    /// The polynomial of an already resolved Nat term.
+    fn nat_poly(nat: &Nat) -> NatLinear {
+        match nat {
+            | Nat::Lit(value) => NatLinear::constant(BigInt::from(*value)),
+            | Nat::Var(id) => {
+                NatLinear {
+                    terms: BTreeMap::from([(vec![*id], BigInt::one())]),
+                }
+            },
+            | Nat::Add(left, right) => Self::nat_poly(left).add(Self::nat_poly(right)),
+            | Nat::Mul(left, right) => Self::nat_poly(left).mul(&Self::nat_poly(right)),
         }
     }
 
@@ -1712,11 +1833,11 @@ impl Infer {
         &self,
         equation: &NatLinear,
     ) -> NatLinear {
-        let mut out = NatLinear::constant(0);
+        let mut out = NatLinear::constant(BigInt::ZERO);
         for (monomial, coefficient) in &equation.terms {
-            let mut term = NatLinear::constant(*coefficient);
+            let mut term = NatLinear::constant(coefficient.clone());
             for id in monomial {
-                term = term.mul(&self.nat_poly(&Nat::Var(*id)));
+                term = term.mul(&Self::nat_poly(&self.resolve_nat(&Nat::Var(*id))));
             }
             out = out.add(term);
         }
@@ -1732,10 +1853,10 @@ impl Infer {
             let mut parts = Vec::new();
             let mut constant = None;
             for (monomial, coefficient) in &equation.terms {
-                if (*coefficient < 0) != negative {
+                if (coefficient.sign() == Sign::Minus) != negative {
                     continue;
                 }
-                let magnitude = coefficient.unsigned_abs();
+                let magnitude = coefficient.magnitude();
                 if monomial.is_empty() {
                     constant = Some(magnitude.to_string());
                     continue;
@@ -1745,7 +1866,7 @@ impl Infer {
                     .map(|id| self.render_nat(&Nat::Var(*id)))
                     .collect();
                 let product = vars.join(" * ");
-                parts.push(if magnitude == 1 {
+                parts.push(if magnitude.is_one() {
                     product
                 } else {
                     format!("{magnitude} * {product}")
@@ -1761,9 +1882,20 @@ impl Infer {
         (side(false), side(true))
     }
 
-    /// A non-negative polynomial back as a Nat term.
+    /// Encodes a non-negative polynomial as a Nat term.
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::single_call_fn,
+            reason = "construct a representable Nat binding from an isolated equation"
+        )
+    )]
     fn poly_to_nat(equation: &NatLinear) -> Option<Nat> {
-        if equation.terms.values().any(|coefficient| *coefficient < 0) {
+        if equation
+            .terms
+            .values()
+            .any(|coefficient| coefficient.sign() == Sign::Minus)
+        {
             return None;
         }
         let mut result: Option<Nat> = None;
@@ -1786,17 +1918,15 @@ impl Infer {
                 });
             }
             let mut term = product?;
-            if *coefficient != 1 {
-                term = Nat::Lit(usize::try_from(*coefficient).ok()?).mul(term);
+            if !coefficient.is_one() {
+                term = Nat::Lit(coefficient.to_usize()?).mul(term);
             }
             push(term);
         }
-        let constant = equation.constant_part();
-        let has_terms = !equation.terms.is_empty();
-        if constant != 0 || !has_terms {
-            push(Nat::Lit(usize::try_from(constant).ok()?));
+        if let Some(constant) = equation.constant_part() {
+            push(Nat::Lit(constant.to_usize()?));
         }
-        result
+        result.or(Some(Nat::Lit(0)))
     }
 
     fn nat_is_flexible(
@@ -1831,7 +1961,7 @@ impl Infer {
         if left == right {
             return Ok(());
         }
-        let equation = self.nat_poly(&left).sub(self.nat_poly(&right));
+        let equation = Self::nat_poly(&left).sub(Self::nat_poly(&right));
         let (shown_left, shown_right) = (self.render_nat(&left), self.render_nat(&right));
         self.apply_nat_equation(equation).map_err(|error| {
             match error {
@@ -1852,23 +1982,24 @@ impl Infer {
         &mut self,
         equation: NatLinear,
     ) -> Result<(), UnifyError> {
-        let mut queue: std::collections::VecDeque<NatLinear> = std::collections::VecDeque::new();
+        let mut queue = VecDeque::new();
         queue.push_back(equation);
         queue.extend(std::mem::take(&mut self.nat_pending));
-        let mut kept: Vec<NatLinear> = Vec::new();
+        let mut kept = VecDeque::new();
         while let Some(equation) = queue.pop_front() {
             let equation = self.reduce_nat(&equation);
             match self.step_nat_equation(equation) {
                 | Ok(NatStep::Consumed) => {},
-                | Ok(NatStep::Solved) => queue.extend(kept.drain(..)),
-                | Ok(NatStep::Residual(equation)) => kept.push(equation),
+                | Ok(NatStep::Solved) => queue.append(&mut kept),
+                | Ok(NatStep::Residual(equation)) => kept.push_back(equation),
                 | Err(error) => {
-                    self.nat_pending = kept;
+                    kept.append(&mut queue);
+                    self.nat_pending = kept.into();
                     return Err(error);
                 },
             }
         }
-        self.nat_pending = kept;
+        self.nat_pending = kept.into();
         Ok(())
     }
 
@@ -1885,7 +2016,7 @@ impl Infer {
         equation: NatLinear,
     ) -> Result<NatStep, UnifyError> {
         if equation.is_constant() {
-            return if equation.constant_part() == 0 {
+            return if equation.terms.is_empty() {
                 Ok(NatStep::Consumed)
             } else {
                 Err(self.nat_mismatch(&equation))
@@ -1893,34 +2024,40 @@ impl Infer {
         }
         let linear = equation.linear_terms();
         // One variable and a constant: `c*v + k = 0`.
-        if equation.is_linear() && linear.len() == 1 {
-            let (id, coefficient) = linear[0];
-            let rhs = -equation.constant_part();
-            if coefficient == 0 || rhs % coefficient != 0 || rhs / coefficient < 0 {
+        if let [(id, coefficient)] = linear.as_slice()
+            && equation.is_linear()
+        {
+            let constant = equation.constant_part().unwrap_or(&BigInt::ZERO);
+            let value =
+                exact_nat_quotient(constant, coefficient).and_then(|value| value.to_usize());
+            let Some(value) = value else {
                 return Err(self.nat_mismatch(&equation));
-            }
-            let value = usize::try_from(rhs / coefficient).unwrap_or(usize::MAX);
-            self.nat_subst.insert(id, Nat::Lit(value));
+            };
+            self.nat_subst.insert(*id, Nat::Lit(value));
             return Ok(NatStep::Solved);
         }
         // An inference variable that appears only linearly is eliminated
         // against the rest (`a - b = 0` => `a = b`; `a - n - 1 = 0` =>
         // `a = n + 1`), provided the rest is a non-negative expression.
-        let mut candidates: Vec<(u32, i128)> = linear
+        let mut candidates: Vec<(u32, &BigInt)> = linear
             .iter()
             .copied()
             .filter(|(id, _)| self.nat_is_flexible(*id) && !equation.in_product(*id))
             .collect();
         candidates.sort_by_key(|(id, _)| (self.nat_level(*id), *id));
         for (id, coefficient) in candidates.into_iter().rev() {
-            let mut rest = equation.clone();
-            rest.terms.remove(&vec![id]);
-            if rest.terms.values().any(|value| value % coefficient != 0) {
+            let mut solution = equation.clone();
+            solution.terms.remove([id].as_slice());
+            if solution
+                .terms
+                .values_mut()
+                .try_for_each(|value| {
+                    *value = exact_nat_quotient(value, coefficient)?;
+                    Some(())
+                })
+                .is_none()
+            {
                 continue;
-            }
-            let mut solution = rest.negate();
-            for value in solution.terms.values_mut() {
-                *value /= coefficient;
             }
             let Some(expression) = Self::poly_to_nat(&solution) else {
                 continue;
@@ -1935,14 +2072,16 @@ impl Infer {
             return Ok(NatStep::Solved);
         }
         // Two declared extents that are not the same variable.
-        if equation.is_linear()
-            && linear.len() == 2
-            && equation.constant_part() == 0
-            && linear[0].1 == -linear[1].1
-            && linear.iter().all(|(id, _)| self.nat_rigid.contains(id))
+        if let [(left_id, left_coefficient), (right_id, right_coefficient)] = linear.as_slice()
+            && equation.is_linear()
+            && equation.constant_part().is_none()
+            && right_coefficient.sign() != left_coefficient.sign()
+            && right_coefficient.magnitude() == left_coefficient.magnitude()
+            && self.nat_rigid.contains(left_id)
+            && self.nat_rigid.contains(right_id)
         {
-            let left = self.render_nat(&Nat::Var(linear[0].0));
-            let right = self.render_nat(&Nat::Var(linear[1].0));
+            let left = self.render_nat(&Nat::Var(*left_id));
+            let right = self.render_nat(&Nat::Var(*right_id));
             return Err(UnifyError::NatRigid { left, right });
         }
         Ok(NatStep::Residual(equation))
@@ -1950,7 +2089,7 @@ impl Infer {
 
     /// How many equations are still unsolved.
     #[must_use]
-    pub fn unsolved_nat_equations(&self) -> usize {
+    pub const fn unsolved_nat_equations(&self) -> usize {
         self.nat_pending.len()
     }
 
@@ -2062,8 +2201,9 @@ impl Infer {
                 Ok(())
             },
             | (Type::Io(a), Type::Io(b)) => self.unify(a, b),
-            | (Type::Point(a), Type::Point(b)) => self.unify_dim(a, b),
-            | (Type::UnitOf(a), Type::UnitOf(b)) => self.unify_dim(a, b),
+            | (Type::Point(a), Type::Point(b)) | (Type::UnitOf(a), Type::UnitOf(b)) => {
+                self.unify_dim(a, b)
+            },
             | (Type::Dyn(a), Type::Dyn(b)) => self.unify_rep(*a, *b),
             | (Type::Param(a), Type::Param(b)) if a == b => Ok(()),
             | _ => {
@@ -2150,7 +2290,7 @@ impl Infer {
             lower: other,
         });
         if !self.contains_numeric(&constraint) {
-            self.push_numeric(constraint);
+            self.push_numeric(&constraint);
         }
         self.propagate_numeric()
     }
@@ -2209,6 +2349,11 @@ impl Infer {
         }
     }
 
+    /// Equates two representations and propagates the resulting constraints.
+    ///
+    /// # Errors
+    ///
+    /// Returns a mismatch for different concrete representations or a numeric conflict.
     pub fn unify_rep(
         &mut self,
         left: Rep,
@@ -2342,11 +2487,13 @@ impl Infer {
             if self.weak.contains(&id) {
                 self.weak.insert(other);
             }
+            let level = self.levels.get(&id).copied().unwrap_or(0);
+            self.lower_levels(&Type::Var(other), level);
             self.subst.insert(id, Type::Var(other));
             self.numeric_changed(id);
             return Ok(());
         }
-        if self.occurs(id, &ty) {
+        if self.occurs(id, Occurrence::Type(&ty)) {
             return Err(UnifyError::Occurs(id));
         }
         if let Some(kind) = self.literals.get(&id).copied() {
@@ -2388,39 +2535,64 @@ impl Infer {
         Ok(())
     }
 
+    /// Checks both type and row bindings without resolving or cloning entire
+    /// subtrees. The work stack also covers rows wider than the resolution cap.
     fn occurs(
         &self,
         id: u32,
-        ty: &Type,
+        root: Occurrence<'_>,
     ) -> bool {
-        match self.resolve(ty) {
-            | Type::Var(other) => other == id,
-            | Type::Scalar(_, dim) => dim.contains_var(id),
-            | Type::Tensor { elem, .. } => self.occurs(id, &elem),
-            | Type::Fn(params, ret) => {
-                params.iter().any(|param| self.occurs(id, param)) || self.occurs(id, &ret)
-            },
-            | Type::Record(row) => self.occurs_row(id, &row),
-            | Type::Adt(_, args) => args.iter().any(|arg| self.occurs(id, arg)),
-            | Type::Io(inner) => self.occurs(id, &inner),
-            | Type::TypeRepIntrinsic(Some(inner)) | Type::FromValueIntrinsic(Some(inner)) => {
-                self.occurs(id, &inner)
-            },
-            | Type::Point(dim) | Type::UnitOf(dim) => dim.contains_var(id),
-            | _ => false,
+        let mut pending = vec![root];
+        let mut visited = HashSet::new();
+        while let Some(node) = pending.pop() {
+            match node {
+                | Occurrence::Type(Type::Var(other)) => {
+                    if *other == id {
+                        return true;
+                    }
+                    if visited.insert((false, *other))
+                        && let Some(bound) = self.subst.get(other)
+                    {
+                        pending.push(Occurrence::Type(bound));
+                    }
+                },
+                | Occurrence::Row(Row::Var(other)) => {
+                    if *other == id {
+                        return true;
+                    }
+                    if visited.insert((true, *other))
+                        && let Some(bound) = self.row_subst.get(other)
+                    {
+                        pending.push(Occurrence::Row(bound));
+                    }
+                },
+                | Occurrence::Type(
+                    Type::Tensor { elem: inner, .. }
+                    | Type::Io(inner)
+                    | Type::TypeRepIntrinsic(Some(inner))
+                    | Type::FromValueIntrinsic(Some(inner)),
+                ) => pending.push(Occurrence::Type(inner)),
+                | Occurrence::Type(Type::Fn(params, ret)) => {
+                    pending.push(Occurrence::Type(ret));
+                    pending.extend(params.iter().map(Occurrence::Type));
+                },
+                | Occurrence::Type(Type::Adt(_, args)) => {
+                    pending.extend(args.iter().map(Occurrence::Type));
+                },
+                | Occurrence::Type(Type::Record(row)) => pending.push(Occurrence::Row(row)),
+                | Occurrence::Type(Type::Scalar(_, dim) | Type::Point(dim) | Type::UnitOf(dim))
+                    if self.resolve_dim(dim).contains_var(id) =>
+                {
+                    return true;
+                },
+                | Occurrence::Row(Row::Extend { ty, tail, .. }) => {
+                    pending.push(Occurrence::Row(tail));
+                    pending.push(Occurrence::Type(ty));
+                },
+                | _ => {},
+            }
         }
-    }
-
-    fn occurs_row(
-        &self,
-        id: u32,
-        row: &Row,
-    ) -> bool {
-        match self.resolve_row(row) {
-            | Row::Empty => false,
-            | Row::Var(other) => other == id,
-            | Row::Extend { ty, tail, .. } => self.occurs(id, &ty) || self.occurs_row(id, &tail),
-        }
+        false
     }
 
     fn lower_levels(
@@ -2466,9 +2638,10 @@ impl Infer {
                     self.lower_levels(arg, level);
                 }
             },
-            | Type::Io(inner) => self.lower_levels(inner, level),
-            | Type::TypeRepIntrinsic(Some(inner)) | Type::FromValueIntrinsic(Some(inner)) => {
-                self.lower_levels(inner, level)
+            | Type::Io(inner)
+            | Type::TypeRepIntrinsic(Some(inner))
+            | Type::FromValueIntrinsic(Some(inner)) => {
+                self.lower_levels(inner, level);
             },
             | Type::TensorIntrinsic(intrinsic) => {
                 if let Some(rep) = intrinsic.element {
@@ -2491,16 +2664,12 @@ impl Infer {
         row: &Row,
         level: u32,
     ) {
-        match row {
-            | Row::Empty => {},
-            | Row::Var(id) => {
-                let entry = self.row_levels.entry(*id).or_insert(level);
-                *entry = (*entry).min(level);
-            },
-            | Row::Extend { ty, tail, .. } => {
-                self.lower_levels(ty, level);
-                self.lower_row_levels(tail, level);
-            },
+        for (_, field) in row.iter_fields() {
+            self.lower_levels(field, level);
+        }
+        if let Some(id) = row.tail_var() {
+            let entry = self.row_levels.entry(id).or_insert(level);
+            *entry = (*entry).min(level);
         }
     }
 
@@ -2615,53 +2784,54 @@ impl Infer {
     ) -> Result<Shape, UnifyError> {
         let left = self.resolve_shape(left);
         let right = self.resolve_shape(right);
-        let mismatch = || {
-            UnifyError::ShapeMismatch {
-                left: left.clone(),
-                right: right.clone(),
-            }
-        };
-        if left.rank() != right.rank() {
-            return Err(mismatch());
+        let rank = left.rank();
+        if rank != right.rank() {
+            return Err(UnifyError::ShapeMismatch { left, right });
         }
-        let rank = usize::try_from(left.rank()).unwrap_or(usize::MAX);
-        let axes = |shape: &Shape| -> Vec<Option<Nat>> {
-            match shape {
-                | Shape::Refined(items) => items.clone(),
-                | Shape::Rank(_) => vec![None; rank],
-            }
+        let one = |nat: &Nat| matches!(nat, Nat::Lit(1));
+        let out = match (left, right) {
+            | (Shape::Rank(_), Shape::Rank(_)) => return Ok(Shape::Rank(rank)),
+            | (Shape::Rank(_), Shape::Refined(mut axes))
+            | (Shape::Refined(mut axes), Shape::Rank(_)) => {
+                for axis in &mut axes {
+                    if axis.as_ref().is_some_and(one) {
+                        *axis = None;
+                    }
+                }
+                axes
+            },
+            | (Shape::Refined(left), Shape::Refined(right)) => {
+                let mut out = Vec::with_capacity(left.len());
+                for (x, y) in left.iter().zip(&right) {
+                    let extent = match (x, y) {
+                        | (None, None) => None,
+                        | (None, Some(known)) | (Some(known), None) => {
+                            (!one(known)).then(|| known.clone())
+                        },
+                        | (Some(p), Some(q)) => {
+                            let (p, q) = (self.resolve_nat(p), self.resolve_nat(q));
+                            if p == q || one(&q) {
+                                Some(p)
+                            } else if one(&p) {
+                                Some(q)
+                            } else if matches!((&p, &q), (Nat::Lit(_), Nat::Lit(_))) {
+                                return Err(UnifyError::ShapeMismatch {
+                                    left: Shape::Refined(left),
+                                    right: Shape::Refined(right),
+                                });
+                            } else {
+                                self.unify_nat(&p, &q)?;
+                                Some(self.resolve_nat(&p))
+                            }
+                        },
+                    };
+                    out.push(extent);
+                }
+                out
+            },
         };
-        let (a, b) = (axes(&left), axes(&right));
-        let mut out = Vec::with_capacity(rank);
-        for (x, y) in a.iter().zip(b.iter()) {
-            let one = |nat: &Nat| matches!(nat, Nat::Lit(1));
-            let extent = match (x, y) {
-                | (None, None) => None,
-                | (None, Some(known)) | (Some(known), None) => {
-                    if one(known) {
-                        None
-                    } else {
-                        Some(known.clone())
-                    }
-                },
-                | (Some(p), Some(q)) => {
-                    let (p, q) = (self.resolve_nat(p), self.resolve_nat(q));
-                    if p == q || one(&q) {
-                        Some(p)
-                    } else if one(&p) {
-                        Some(q)
-                    } else if let (Nat::Lit(_), Nat::Lit(_)) = (&p, &q) {
-                        return Err(mismatch());
-                    } else {
-                        self.unify_nat(&p, &q)?;
-                        Some(self.resolve_nat(&p))
-                    }
-                },
-            };
-            out.push(extent);
-        }
         if out.iter().all(Option::is_none) {
-            Ok(Shape::Rank(left.rank()))
+            Ok(Shape::Rank(rank))
         } else {
             Ok(Shape::Refined(out))
         }
@@ -2672,74 +2842,88 @@ impl Infer {
         left: &Row,
         right: &Row,
     ) -> Result<(), UnifyError> {
-        let left = self.resolve_row(left);
-        let right = self.resolve_row(right);
-        if left == right {
-            return Ok(());
-        }
-        let left_fields = left.fields();
-        let right_fields = right.fields();
         let left_tail = left.tail_var();
         let right_tail = right.tail_var();
-
-        for (label, ty) in &left_fields {
-            match right_fields.iter().find(|(name, _)| name == label) {
-                | Some((_, other)) => self.unify(ty, other)?,
-                | None => {
-                    let Some(tail) = right_tail else {
-                        return Err(UnifyError::MissingField {
-                            field: label.clone(),
-                            row: right.clone(),
-                        });
-                    };
-                    // Rémy: `tail` becomes `{ l | tail' }`, and `tail'` must
-                    // lack `l` — otherwise a later unification could add `l`
-                    // a second time (§3.6.1).
-                    let fresh = self.fresh_row();
-                    if let Some(fresh_id) = row_id(&fresh) {
-                        self.require_lacks(fresh_id, label)?;
-                    }
-                    let extension = Row::Extend {
-                        label: label.clone(),
-                        ty: Box::new(ty.clone()),
-                        tail: Box::new(fresh),
-                    };
-                    self.bind_row(tail, extension)?;
-                    return self.unify_row(&left, &self.resolve_row(&right));
-                },
+        let right_fields: HashMap<_, _> = right.iter_fields().collect();
+        let mut left_labels = HashSet::new();
+        let mut left_only = Vec::new();
+        for (label, ty) in left.iter_fields() {
+            left_labels.insert(label);
+            if let Some(other) = right_fields.get(label) {
+                self.unify(ty, other)?;
+            } else if right_tail.is_some() {
+                left_only.push((label, ty));
+            } else {
+                return Err(UnifyError::MissingField {
+                    field: label.to_string(),
+                    row: right.clone(),
+                });
             }
         }
-        for (label, ty) in &right_fields {
-            if left_fields.iter().any(|(name, _)| name == label) {
+
+        // Unifying field types can itself bind one of the row tails.
+        if [left_tail, right_tail]
+            .into_iter()
+            .flatten()
+            .any(|tail| self.row_subst.contains_key(&tail))
+        {
+            return self.unify_row(&self.resolve_row(left), &self.resolve_row(right));
+        }
+
+        let mut right_only = Vec::new();
+        for (label, ty) in right.iter_fields() {
+            if left_labels.contains(label) {
                 continue;
             }
-            let Some(tail) = left_tail else {
+            if left_tail.is_none() {
                 return Err(UnifyError::MissingField {
-                    field: label.clone(),
+                    field: label.to_string(),
                     row: left.clone(),
                 });
-            };
-            let fresh = self.fresh_row();
-            if let Some(fresh_id) = row_id(&fresh) {
-                self.require_lacks(fresh_id, label)?;
             }
-            let extension = Row::Extend {
-                label: label.clone(),
-                ty: Box::new(ty.clone()),
-                tail: Box::new(fresh),
-            };
-            self.bind_row(tail, extension)?;
-            return self.unify_row(&self.resolve_row(&left), &right);
+            right_only.push((label, ty));
         }
+
+        if left_tail.is_some()
+            && left_tail == right_tail
+            && let Some((label, _)) = left_only.first().or_else(|| right_only.first())
+        {
+            return Err(UnifyError::DuplicateField {
+                field: (*label).to_string(),
+            });
+        }
+        for (row, tail) in [(left, left_tail), (right, right_tail)] {
+            if let Some(tail) = tail {
+                self.lacks
+                    .entry(tail)
+                    .or_default()
+                    .extend(row.iter_fields().map(|(label, _)| label.to_string()));
+            }
+        }
+
+        let close_over = |fields: Vec<(&str, &Type)>, tail| {
+            extend_row_fields(
+                fields
+                    .into_iter()
+                    .rev()
+                    .map(|(label, ty)| (label.to_string(), ty.clone())),
+                tail,
+            )
+        };
         match (left_tail, right_tail) {
             | (Some(a), Some(b)) if a != b => {
-                // The merged tail keeps both sides' lacks conditions.
-                for label in self.lacks.get(&b).cloned().unwrap_or_default() {
-                    self.require_lacks(a, &label)?;
+                if left_only.is_empty() && right_only.is_empty() {
+                    self.bind_row(a, &Row::Var(b))
+                } else {
+                    // The two residual rows share one fresh tail. Insert the
+                    // unmatched fields in batches, retaining source order.
+                    let shared = self.fresh_row();
+                    self.bind_row(a, &close_over(right_only, shared.clone()))?;
+                    self.bind_row(b, &close_over(left_only, shared))
                 }
-                self.bind_row(a, Row::Var(b))
             },
-            | (Some(tail), None) | (None, Some(tail)) => self.bind_row(tail, Row::Empty),
+            | (Some(tail), None) => self.bind_row(tail, &close_over(right_only, Row::Empty)),
+            | (None, Some(tail)) => self.bind_row(tail, &close_over(left_only, Row::Empty)),
             | _ => Ok(()),
         }
     }
@@ -2755,50 +2939,65 @@ impl Infer {
         id: u32,
         label: &str,
     ) -> Result<(), UnifyError> {
-        if self
-            .resolve_row(&Row::Var(id))
-            .fields()
-            .iter()
-            .any(|(name, _)| name == label)
-        {
+        let row = self.resolve_row(&Row::Var(id));
+        if row.field(label).is_some() {
             return Err(UnifyError::DuplicateField {
                 field: label.to_string(),
             });
         }
-        let labels = self.lacks.entry(id).or_default();
-        if !labels.iter().any(|existing| existing == label) {
-            labels.push(label.to_string());
+        self.lacks.entry(id).or_default().insert(label.to_string());
+        if let Some(tail) = row.tail_var()
+            && tail != id
+        {
+            self.lacks
+                .entry(tail)
+                .or_default()
+                .insert(label.to_string());
         }
         Ok(())
     }
 
-    /// The labels a row variable must not contain.
+    /// The labels a row variable must not contain, in insertion order.
     #[must_use]
     pub fn lacks_of(
         &self,
         id: u32,
     ) -> Vec<String> {
-        self.lacks.get(&id).cloned().unwrap_or_default()
+        let row = self.resolve_row(&Row::Var(id));
+        let id = row_id(&row).unwrap_or(id);
+        self.lacks
+            .get(&id)
+            .map_or_else(Vec::new, |labels| labels.iter().cloned().collect())
     }
 
-    /// Extends an open row with a new field, returning the field's type.
+    /// Extends an open row with a new field.
     ///
     /// # Errors
     ///
-    /// Fails when the row cannot absorb the field (a duplicate label).
+    /// Fails when the field already exists, the tail must lack the field, or
+    /// the row is closed.
     pub fn extend_row(
         &mut self,
         tail: u32,
         label: &str,
         ty: Type,
     ) -> Result<(), UnifyError> {
-        let fresh = self.fresh_row();
-        if let Some(fresh_id) = row_id(&fresh) {
-            self.require_lacks(fresh_id, label)?;
+        let row = self.resolve_row(&Row::Var(tail));
+        if row.field(label).is_some() {
+            return Err(UnifyError::DuplicateField {
+                field: label.to_string(),
+            });
         }
+        let Some(tail) = row.tail_var() else {
+            return Err(UnifyError::MissingField {
+                field: label.to_string(),
+                row,
+            });
+        };
+        let fresh = self.fresh_row();
         self.bind_row(
             tail,
-            Row::Extend {
+            &Row::Extend {
                 label: label.to_string(),
                 ty: Box::new(ty),
                 tail: Box::new(fresh),
@@ -2809,49 +3008,34 @@ impl Infer {
     fn bind_row(
         &mut self,
         id: u32,
-        row: Row,
+        row: &Row,
     ) -> Result<(), UnifyError> {
-        let row = self.resolve_row(&row);
-        if let Row::Var(other) = row {
-            if other == id {
-                return Ok(());
-            }
-            for label in self.lacks.get(&id).cloned().unwrap_or_default() {
-                let labels = self.lacks.entry(other).or_default();
-                if !labels.iter().any(|existing| existing == &label) {
-                    labels.push(label);
-                }
-            }
-            if self.weak.contains(&id) {
-                self.weak.insert(other);
-            }
-            self.row_subst.insert(id, Row::Var(other));
+        let row = self.resolve_row(row);
+        if row_id(&row) == Some(id) {
             return Ok(());
         }
-        for label in self.lacks.get(&id).cloned().unwrap_or_default() {
-            if row.fields().iter().any(|(name, _)| name == &label) {
-                return Err(UnifyError::DuplicateField { field: label });
+        if self.occurs(id, Occurrence::Row(&row)) {
+            return Err(UnifyError::Occurs(id));
+        }
+
+        let mut labels = self.lacks.get(&id).cloned().unwrap_or_default();
+        for (label, _) in row.iter_fields() {
+            if !labels.insert(label.to_string()) {
+                return Err(UnifyError::DuplicateField {
+                    field: label.to_string(),
+                });
             }
         }
-        if self.row_occurs(id, &row) {
-            return Err(UnifyError::Occurs(id));
+        if let Some(tail) = row.tail_var() {
+            self.lacks.entry(tail).or_default().extend(labels);
+            if self.weak.contains(&id) {
+                self.weak.insert(tail);
+            }
         }
         let level = self.row_levels.get(&id).copied().unwrap_or(0);
         self.lower_row_levels(&row, level);
         self.row_subst.insert(id, row);
         Ok(())
-    }
-
-    fn row_occurs(
-        &self,
-        id: u32,
-        row: &Row,
-    ) -> bool {
-        match self.resolve_row(row) {
-            | Row::Empty => false,
-            | Row::Var(other) => other == id,
-            | Row::Extend { ty, tail, .. } => self.occurs(id, &ty) || self.row_occurs(id, &tail),
-        }
     }
 
     /// Instantiates a scheme with fresh variables at the current level.
@@ -2908,6 +3092,14 @@ impl Infer {
             let fresh = self.fresh_id();
             self.row_levels.insert(fresh, self.level);
             row_map.insert(*id, fresh);
+        }
+        for (id, labels) in &scheme.row_lacks {
+            if let Some(fresh) = row_map.get(id) {
+                self.lacks
+                    .entry(*fresh)
+                    .or_default()
+                    .extend(labels.iter().cloned());
+            }
         }
         let mut nat_map = HashMap::new();
         for id in &scheme.nats {
@@ -3013,6 +3205,7 @@ impl Infer {
             vars,
             dims,
             rows,
+            row_lacks: Vec::new(),
             nats,
             constraints,
             numeric: Vec::new(),
@@ -3038,6 +3231,7 @@ impl Infer {
                 );
             }
         }
+        self.attach_row_lacks(&mut scheme);
         scheme
     }
 
@@ -3093,9 +3287,8 @@ impl Infer {
                     for nat in items.iter().flatten() {
                         for id in nat.vars() {
                             let resolved = self.resolve_nat(&Nat::Var(id));
-                            let free = match resolved {
-                                | Nat::Var(free) => free,
-                                | _ => continue,
+                            let Nat::Var(free) = resolved else {
+                                continue;
                             };
                             if nat_var(free) && !nats.contains(&free) {
                                 nats.push(free);
@@ -3119,10 +3312,9 @@ impl Infer {
                     self.collect_generalizable(arg, level, vars, dims, rows, nats);
                 }
             },
-            | Type::Io(inner) => {
-                self.collect_generalizable(inner, level, vars, dims, rows, nats);
-            },
-            | Type::TypeRepIntrinsic(Some(inner)) | Type::FromValueIntrinsic(Some(inner)) => {
+            | Type::Io(inner)
+            | Type::TypeRepIntrinsic(Some(inner))
+            | Type::FromValueIntrinsic(Some(inner)) => {
                 self.collect_generalizable(inner, level, vars, dims, rows, nats);
             },
             | Type::TensorIntrinsic(intrinsic) => {
@@ -3159,20 +3351,15 @@ impl Infer {
         rows: &mut Vec<u32>,
         nats: &mut Vec<u32>,
     ) {
-        match row {
-            | Row::Empty => {},
-            | Row::Var(id) => {
-                if !self.weak.contains(id)
-                    && self.row_levels.get(id).copied().unwrap_or(0) > level
-                    && !rows.contains(id)
-                {
-                    rows.push(*id);
-                }
-            },
-            | Row::Extend { ty, tail, .. } => {
-                self.collect_generalizable(ty, level, vars, dims, rows, nats);
-                self.collect_row(tail, level, vars, dims, rows, nats);
-            },
+        for (_, field) in row.iter_fields() {
+            self.collect_generalizable(field, level, vars, dims, rows, nats);
+        }
+        if let Some(id) = row.tail_var()
+            && !self.weak.contains(&id)
+            && self.row_levels.get(&id).copied().unwrap_or(0) > level
+            && !rows.contains(&id)
+        {
+            rows.push(id);
         }
     }
 
@@ -3202,6 +3389,7 @@ impl Infer {
         self.default_scheme_preserving(scheme, &crate::TypeSubstitution::default())
     }
 
+    /// Defaults unquantified variables while retaining the lexical parameters.
     pub fn default_scheme_preserving(
         &mut self,
         scheme: &Scheme,
@@ -3262,6 +3450,7 @@ impl Infer {
             vars: scheme.vars.clone(),
             dims: scheme.dims.clone(),
             rows: scheme.rows.clone(),
+            row_lacks: scheme.row_lacks.clone(),
             nats: scheme.nats.clone(),
             constraints,
             numeric: scheme
@@ -3276,6 +3465,7 @@ impl Infer {
                 .collect(),
             ty: self.resolve(&ty),
         };
+        self.attach_row_lacks(&mut result);
         self.attach_numeric_scheme(&mut result);
         (result, warnings)
     }
@@ -3290,6 +3480,7 @@ impl Infer {
         if depth > 64 {
             return ty.clone();
         }
+        let child_depth = depth.saturating_add(1);
         let quantified_type = |id: u32| scheme.vars.contains(&id);
         match self.resolve(ty) {
             | Type::Var(id) => {
@@ -3329,16 +3520,16 @@ impl Infer {
                     // defaulted — the checker reports `E0304` for it. Resolving the
                     // shape here only applies the substitutions already known.
                     shape: self.resolve_shape(&shape),
-                    elem: Box::new(self.default_inner(&elem, scheme, warnings, depth + 1)),
+                    elem: Box::new(self.default_inner(&elem, scheme, warnings, child_depth)),
                 }
             },
             | Type::Fn(params, ret) => {
                 Type::Fn(
                     params
                         .iter()
-                        .map(|param| self.default_inner(param, scheme, warnings, depth + 1))
+                        .map(|param| self.default_inner(param, scheme, warnings, child_depth))
                         .collect(),
-                    Box::new(self.default_inner(&ret, scheme, warnings, depth + 1)),
+                    Box::new(self.default_inner(&ret, scheme, warnings, child_depth)),
                 )
             },
             | Type::Record(row) => Type::Record(self.default_row(&row, scheme, warnings, depth)),
@@ -3346,7 +3537,7 @@ impl Infer {
                 Type::Adt(
                     id,
                     args.iter()
-                        .map(|arg| self.default_inner(arg, scheme, warnings, depth + 1))
+                        .map(|arg| self.default_inner(arg, scheme, warnings, child_depth))
                         .collect(),
                 )
             },
@@ -3355,7 +3546,7 @@ impl Infer {
                     &inner,
                     scheme,
                     warnings,
-                    depth + 1,
+                    child_depth,
                 )))
             },
             | Type::Point(dim) => Type::Point(self.default_dim(&dim, scheme, warnings)),
@@ -3371,14 +3562,14 @@ impl Infer {
                 Type::TypeRepIntrinsic(
                     inner
                         .as_ref()
-                        .map(|ty| Box::new(self.default_inner(ty, scheme, warnings, depth + 1))),
+                        .map(|ty| Box::new(self.default_inner(ty, scheme, warnings, child_depth))),
                 )
             },
             | Type::FromValueIntrinsic(inner) => {
                 Type::FromValueIntrinsic(
                     inner
                         .as_ref()
-                        .map(|ty| Box::new(self.default_inner(ty, scheme, warnings, depth + 1))),
+                        .map(|ty| Box::new(self.default_inner(ty, scheme, warnings, child_depth))),
                 )
             },
             | Type::TensorIntrinsic(mut intrinsic) => {
@@ -3387,7 +3578,7 @@ impl Infer {
                         &Type::Scalar(rep, Dim::one()),
                         scheme,
                         warnings,
-                        depth + 1,
+                        child_depth,
                     )
                 {
                     intrinsic.element = Some(rep);
@@ -3522,7 +3713,7 @@ impl Infer {
                 }
                 let resolved = match self.resolve_rep(operand) {
                     | Rep::Var(input) if input != id && self.above_floor(input) => {
-                        self.default_rep_at(input, depth + 1)
+                        self.default_rep_at(input, depth.saturating_add(1))
                     },
                     | other => other,
                 };
@@ -3530,8 +3721,7 @@ impl Infer {
                     resolved_first = Some(resolved);
                 }
             }
-            let operands = [self.resolve_rep(left), self.resolve_rep(right)];
-            return match (operands[0], operands[1]) {
+            return match (self.resolve_rep(left), self.resolve_rep(right)) {
                 | (Rep::Var(_), _) | (_, Rep::Var(_)) => None,
                 | (a, b) => a.join_concrete(b),
             };
@@ -3539,7 +3729,7 @@ impl Infer {
         if let Some(input) = self.division_inputs.get(&id).copied() {
             let resolved = match self.resolve_rep(input) {
                 | Rep::Var(operand) if operand != id && self.above_floor(operand) => {
-                    self.default_rep_at(operand, depth + 1)
+                    self.default_rep_at(operand, depth.saturating_add(1))
                 },
                 | other => other,
             };
@@ -3575,23 +3765,21 @@ impl Infer {
         warnings: &mut Vec<u32>,
         depth: u32,
     ) -> Row {
-        match self.resolve_row(row) {
-            | Row::Empty => Row::Empty,
-            | Row::Var(id) => {
-                if scheme.rows.contains(&id) || !self.above_floor(id) {
-                    Row::Var(id)
-                } else {
-                    Row::Empty
-                }
-            },
-            | Row::Extend { label, ty, tail } => {
-                Row::Extend {
-                    label,
-                    ty: Box::new(self.default_inner(&ty, scheme, warnings, depth + 1)),
-                    tail: Box::new(self.default_row(&tail, scheme, warnings, depth)),
-                }
-            },
-        }
+        let child_depth = depth.saturating_add(1);
+        let fields: Vec<_> = row
+            .iter_fields()
+            .map(|(label, ty)| {
+                (
+                    label.to_string(),
+                    self.default_inner(ty, scheme, warnings, child_depth),
+                )
+            })
+            .collect();
+        let tail = row
+            .tail_var()
+            .filter(|id| scheme.rows.contains(id) || !self.above_floor(*id))
+            .map_or(Row::Empty, Row::Var);
+        extend_row_fields(fields.into_iter().rev(), tail)
     }
 
     /// Whether a variable was created inside the declaration being closed.
@@ -3664,12 +3852,31 @@ impl Infer {
 
     /// The number of allocated variables, for tests.
     #[must_use]
-    pub fn variable_count(&self) -> u32 {
+    pub const fn variable_count(&self) -> u32 {
         self.next
     }
 }
 
-fn row_id(row: &Row) -> Option<u32> {
+enum Occurrence<'a> {
+    Type(&'a Type),
+    Row(&'a Row),
+}
+
+/// Applies fields from back to front around a shared tail.
+fn extend_row_fields(
+    fields: impl IntoIterator<Item = (String, Type)>,
+    tail: Row,
+) -> Row {
+    fields.into_iter().fold(tail, |tail, (label, ty)| {
+        Row::Extend {
+            label,
+            ty: Box::new(ty),
+            tail: Box::new(tail),
+        }
+    })
+}
+
+const fn row_id(row: &Row) -> Option<u32> {
     match row {
         | Row::Var(id) => Some(*id),
         | _ => None,
@@ -3679,6 +3886,75 @@ fn row_id(row: &Row) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quantified_numeric_inputs_keep_stable_variable_order() {
+        let mut infer = Infer::new();
+        infer.enter_level();
+        let mut inputs = Vec::new();
+        for _ in 0..8 {
+            inputs.push(infer.fresh_type());
+            inputs.push(Type::Scalar(infer.fresh_rep(), Dim::one()));
+        }
+        let mut scheme = Scheme::mono(Type::Unit);
+        infer.quantify_numeric_inputs(&mut scheme, &inputs, 0);
+        assert_eq!(
+            scheme.vars,
+            [0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15]
+        );
+    }
+
+    #[test]
+    fn an_inconsistent_nat_equation_keeps_other_pending_constraints() {
+        let mut infer = Infer::new();
+        let a = infer.fresh_nat();
+        let b = infer.fresh_nat();
+        infer.name_nat(&a, "a", true);
+        infer.name_nat(&b, "b", true);
+        infer.unify_nat(&a.add(b), &Nat::lit(2)).unwrap();
+        assert_eq!(infer.unsolved_nat_equations(), 1);
+        assert!(infer.unify_nat(&Nat::lit(1), &Nat::lit(2)).is_err());
+        assert_eq!(infer.unsolved_nat_equations(), 1);
+    }
+
+    #[test]
+    fn nat_isolation_keeps_coefficients_wider_than_a_machine_integer() {
+        let mut infer = Infer::new();
+        let n = infer.fresh_nat();
+        let max = Nat::lit(usize::MAX);
+        let wide = max.clone().mul(max.clone()).mul(max);
+        infer
+            .unify_nat(&wide.clone().mul(n.clone()), &wide.clone().add(wide))
+            .unwrap();
+        assert_eq!(infer.resolve_nat(&n), Nat::lit(2));
+    }
+
+    #[test]
+    fn distinct_large_nat_products_do_not_unify() {
+        let mut infer = Infer::new();
+        let max = Nat::lit(usize::MAX);
+        let wide = max.clone().mul(max.clone());
+        let lhs = wide.clone().mul(max);
+        let rhs = wide.mul(Nat::lit(usize::MAX - 1));
+        assert!(matches!(
+            infer.unify_nat(&lhs, &rhs),
+            Err(UnifyError::NatMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn broadcasting_keeps_large_rank_only_shapes_compact() {
+        let mut infer = Infer::new();
+        let large = Shape::Rank(u32::MAX);
+        assert_eq!(infer.broadcast_shape(&large, &large).unwrap(), large);
+        assert!(infer.broadcast_shape(&large, &Shape::Rank(1)).is_err());
+
+        let rank = Shape::Rank(3);
+        let refined = Shape::refined([Some(1), Some(4), None]);
+        let expected = Shape::refined([None, Some(4), None]);
+        assert_eq!(infer.broadcast_shape(&rank, &refined).unwrap(), expected);
+        assert_eq!(infer.broadcast_shape(&refined, &rank).unwrap(), expected);
+    }
 
     #[test]
     fn specialized_intrinsic_schemas_resolve_every_nested_kind() {
@@ -3870,6 +4146,57 @@ mod tests {
     }
 
     #[test]
+    fn aliases_to_younger_variables_keep_the_outer_inference_level() {
+        let mut infer = Infer::new();
+        let outer_type = infer.fresh_type();
+        let outer_row = Type::Record(infer.fresh_row());
+        infer.enter_level();
+        let inner_type = infer.fresh_type();
+        let inner_row = Type::Record(infer.fresh_row());
+        infer.unify(&outer_type, &inner_type).unwrap();
+        infer.unify(&outer_row, &inner_row).unwrap();
+        infer.leave_level();
+        assert!(infer.generalize(&inner_type).vars.is_empty());
+        assert!(infer.generalize(&inner_row).rows.is_empty());
+    }
+
+    #[test]
+    fn resolving_a_wide_row_reaches_its_last_field() {
+        let mut infer = Infer::new();
+        let last = infer.fresh_type();
+        let fields = (0..256)
+            .map(|index| (format!("field{index:03}"), Type::Bool))
+            .chain(std::iter::once(("last".to_string(), last.clone())));
+        let row = Row::closed(fields);
+        infer.unify(&last, &Type::int()).unwrap();
+        assert_eq!(infer.resolve_row(&row).field("last"), Some(&Type::int()));
+    }
+
+    #[test]
+    fn unifying_wide_open_rows_allocates_one_shared_tail() {
+        let mut infer = Infer::new();
+        let left_tail = infer.fresh_row();
+        let right_tail = infer.fresh_row();
+        let fields = |side: &str| {
+            (0..128)
+                .map(|index| (format!("{side}{index:03}"), Type::int()))
+                .collect::<Vec<_>>()
+        };
+        let left = extend_row_fields(fields("left").into_iter().rev(), left_tail.clone());
+        let right = extend_row_fields(fields("right").into_iter().rev(), right_tail.clone());
+        let before = infer.variable_count();
+        infer
+            .unify(&Type::Record(left), &Type::Record(right))
+            .unwrap();
+        assert_eq!(infer.variable_count(), before + 1);
+        let left = infer.resolve_row(&left_tail);
+        let right = infer.resolve_row(&right_tail);
+        assert_eq!(left.field("right127"), Some(&Type::int()));
+        assert_eq!(right.field("left127"), Some(&Type::int()));
+        assert_eq!(left.tail_var(), right.tail_var());
+    }
+
+    #[test]
     fn instantiation_produces_distinct_variables() {
         let mut infer = Infer::new();
         let scheme = Scheme::poly(vec![0], Type::func(vec![Type::Var(0)], Type::Var(0)));
@@ -3896,33 +4223,66 @@ mod tests {
     #[test]
     fn absorbing_a_field_records_a_lacks_condition() {
         let mut infer = Infer::new();
-        let tail = infer.fresh_row();
-        let open = Type::Record(Row::Extend {
-            label: "x".to_string(),
-            ty: Box::new(Type::int()),
-            tail: Box::new(tail.clone()),
-        });
-        let closed = Type::record([
-            ("x".to_string(), Type::int()),
-            ("y".to_string(), Type::int()),
-        ]);
-        infer.unify(&open, &closed).expect("open row absorbs y");
-        let Row::Var(id) = tail else {
+        let Row::Var(open) = infer.fresh_row() else {
             panic!("fresh_row is a variable");
         };
-        let resolved = infer.resolve_row(&Row::Var(id));
-        assert_eq!(
-            resolved.tail_var(),
-            None,
-            "equality with a closed row closes its tail"
-        );
-        assert!(
-            infer
-                .lacks
-                .values()
-                .any(|labels| labels.contains(&"y".to_string())),
-            "the consumed field still records its lacks condition"
-        );
+        let extension = Type::Record(Row::Extend {
+            label: "y".to_string(),
+            ty: Box::new(Type::int()),
+            tail: Box::new(infer.fresh_row()),
+        });
+        infer
+            .unify(&Type::Record(Row::Var(open)), &extension)
+            .unwrap();
+        let row = infer.resolve_row(&Row::Var(open));
+        let tail = row.tail_var().unwrap();
+        assert_eq!(row.field("y"), Some(&Type::int()));
+        assert!(matches!(infer.extend_row(tail, "y", Type::int()),
+            Err(UnifyError::DuplicateField { field }) if field == "y"));
+    }
+
+    #[test]
+    fn lacks_conditions_follow_extensions_and_aliases() {
+        let mut infer = Infer::new();
+        let Row::Var(row) = infer.fresh_row() else {
+            panic!("fresh_row is a variable");
+        };
+        let Row::Var(alias) = infer.fresh_row() else {
+            panic!("fresh_row is a variable");
+        };
+        infer
+            .unify(&Type::Record(Row::Var(alias)), &Type::Record(Row::Var(row)))
+            .unwrap();
+        infer.require_lacks(alias, "limited").unwrap();
+        infer.extend_row(alias, "first", Type::int()).unwrap();
+        infer.require_lacks(row, "later").unwrap();
+        infer.extend_row(row, "second", Type::Bool).unwrap();
+        let resolved = infer.resolve_row(&Row::Var(alias));
+        assert_eq!(resolved.field("first"), Some(&Type::int()));
+        assert_eq!(resolved.field("second"), Some(&Type::Bool));
+        let residual = resolved.tail_var().unwrap();
+        for label in ["limited", "later", "first", "second"] {
+            assert!(matches!(infer.extend_row(residual, label, Type::int()),
+                Err(UnifyError::DuplicateField { field }) if field == label));
+        }
+    }
+
+    #[test]
+    fn disjoint_prefixes_cannot_reuse_the_same_row_tail() {
+        let mut infer = Infer::new();
+        let tail = infer.fresh_row();
+        let record = |label: &str| {
+            Type::Record(Row::Extend {
+                label: label.to_string(),
+                ty: Box::new(Type::int()),
+                tail: Box::new(tail.clone()),
+            })
+        };
+        assert!(matches!(
+            infer.unify(&record("left"), &record("right")),
+            Err(UnifyError::DuplicateField { .. })
+        ));
+        assert_eq!(infer.resolve_row(&tail), tail);
     }
 
     #[test]

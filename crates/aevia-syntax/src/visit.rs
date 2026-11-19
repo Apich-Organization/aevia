@@ -148,6 +148,10 @@ pub fn walk_decl<'ast, V: Visitor<'ast>>(
 }
 
 /// Walks the children of `expr`.
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeps the exhaustive traversal order visible for every expression form"
+)]
 pub fn walk_expr<'ast, V: Visitor<'ast>>(
     visitor: &mut V,
     expr: &'ast Expr,

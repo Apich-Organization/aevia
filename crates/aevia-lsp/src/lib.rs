@@ -66,10 +66,26 @@
 //! synchronously can.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
 
 pub mod protocol;
 pub mod server;
 pub mod transport;
+
+mod command;
 
 use std::io::BufReader;
 use std::io::Read;
@@ -77,6 +93,7 @@ use std::io::Write;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::channel;
+use std::sync::mpsc::sync_channel;
 use std::thread;
 
 pub use server::Control;
@@ -113,7 +130,7 @@ where
 {
     let (to_client, from_server): (Sender<serde_json::Value>, Receiver<serde_json::Value>) =
         channel();
-    let (to_server, from_client): (Sender<Incoming>, Receiver<Incoming>) = channel();
+    let (to_server, from_client) = sync_channel(16);
 
     // The writer owns the output for the whole session. Nothing in the
     // dispatcher can block on it: `send` hands the message to this thread and
@@ -135,13 +152,12 @@ where
         loop {
             let incoming = match reader.next_message() {
                 | Ok(Some(message)) => Incoming::Message(message),
-                | Ok(None) => break,
                 | Err(transport::TransportError::Json(error)) => {
                     Incoming::Malformed(error.to_string())
                 },
                 // A broken frame cannot be resynchronised, so the session ends
                 // rather than inventing message boundaries.
-                | Err(_) => break,
+                | Ok(None) | Err(_) => break,
             };
             if to_server.send(incoming).is_err() {
                 break;
@@ -151,7 +167,7 @@ where
 
     let mut server = Server::new(to_client.clone());
     let mut exit = Exit::Graceful;
-    for incoming in from_client {
+    for incoming in &from_client {
         match incoming {
             | Incoming::Message(message) => {
                 if let Control::Exit { graceful } = server.handle(message) {
@@ -169,6 +185,7 @@ where
     // the join below finish: a server that returned before its last
     // `publishDiagnostics` was written would lose it.
     drop(server);
+    drop(from_client);
     drop(to_client);
     let _ = writer.join();
     exit

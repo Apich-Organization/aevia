@@ -41,7 +41,14 @@ const PRIMITIVE_TYPES: [&str; 22] = [
 
 /// Classifies every highlighted word in `document`.
 #[must_use]
-pub(crate) fn tokens(
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "build the standalone semantic-token stream behind the analysis query"
+    )
+)]
+pub fn tokens(
     document: &Document,
     file: aevia_syntax::FileId,
     occurrences: &[Occurrence],
@@ -50,9 +57,7 @@ pub(crate) fn tokens(
     let text = document.text();
     let mut spans: Vec<(u32, u32, TokenKind)> = Vec::new();
     for occurrence in occurrences {
-        let Some(kind) = classify(occurrence, checked) else {
-            continue;
-        };
+        let kind = classify(occurrence, checked);
         let span = match &occurrence.role {
             | Role::Qualified(_) => occurrence.span,
             | Role::Name(name)
@@ -115,14 +120,21 @@ pub(crate) fn tokens(
 }
 
 /// The token kind for one occurrence, from the checker's records.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "classify resolved occurrences independently from ordered token emission"
+    )
+)]
 fn classify(
     occurrence: &Occurrence,
     checked: &CheckedModule,
-) -> Option<TokenKind> {
+) -> TokenKind {
     match &occurrence.role {
         | Role::Name(name) => {
             if let Some(export) = checked.exports.get(name) {
-                return Some(export_kind(export));
+                return export_kind(export);
             }
             // A class-method call: the interesting fact is which instance
             // implements it, which is what "operator provenance" means here.
@@ -132,50 +144,50 @@ fn classify(
                     .iter()
                     .any(|use_| use_.span == call && use_.method == *name)
             {
-                return Some(TokenKind::Operator);
+                return TokenKind::Operator;
             }
             // A binding the walk resolved is a local no matter what else
             // shares its spelling: the SI table has a unit called `d` (day)
             // and a function parameter may be named `d`.
             if occurrence.binding.is_some() {
-                return Some(TokenKind::Variable);
+                return TokenKind::Variable;
             }
             if checked.units.contains(name) {
-                return Some(TokenKind::Unit);
+                return TokenKind::Unit;
             }
             if checked.dims.lookup(name).is_some() {
-                return Some(TokenKind::Dimension);
+                return TokenKind::Dimension;
             }
             if aevia_types::builtins::schemes(name).is_some() {
-                return Some(TokenKind::Function);
+                return TokenKind::Function;
             }
-            Some(TokenKind::Variable)
+            TokenKind::Variable
         },
         // `Rssn.sin` is a pinned kernel operator: its whole dotted name is the
         // provenance the user is being shown.
         | Role::Qualified(path) => {
             if path.first().map(String::as_str) == Some("Rssn") {
-                Some(TokenKind::Operator)
+                TokenKind::Operator
             } else {
-                Some(TokenKind::Type)
+                TokenKind::Type
             }
         },
-        | Role::Constructor(_) => Some(TokenKind::Constructor),
-        | Role::Method { .. } => Some(TokenKind::Function),
+        | Role::Constructor(_) => TokenKind::Constructor,
+        | Role::Method { .. } => TokenKind::Function,
         | Role::TypeName(name) => {
             match checked.exports.get(name) {
-                | Some(export) => Some(export_kind(export)),
-                | None if checked.dims.lookup(name).is_some() => Some(TokenKind::Dimension),
-                | None if checked.units.contains(name) => Some(TokenKind::Unit),
-                | None => Some(TokenKind::Type),
+                | Some(export) => export_kind(export),
+                | None if checked.dims.lookup(name).is_some() => TokenKind::Dimension,
+                | None if checked.units.contains(name) => TokenKind::Unit,
+                | None => TokenKind::Type,
             }
         },
-        | Role::Unit(_) => Some(TokenKind::Unit),
+        | Role::Unit(_) => TokenKind::Unit,
     }
 }
 
 /// The token kind of an exported name.
-fn export_kind(export: &Export) -> TokenKind {
+const fn export_kind(export: &Export) -> TokenKind {
     match export {
         | Export::Value { arity, .. } if *arity > 0 => TokenKind::Function,
         | Export::Value { .. } => TokenKind::Variable,

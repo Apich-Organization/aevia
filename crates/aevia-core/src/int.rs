@@ -5,9 +5,23 @@
 //! case inline — no allocation, no `gcd`, no vector arithmetic — and moves to
 //! a shared [`BigInt`] only when a result leaves the `i64` range.
 //!
-//! The representation is canonical: a value that fits in `i64` is always
-//! `Small`. Equality, ordering and hashing can therefore compare variants
-//! structurally, and a `Big` is never equal to a `Small`.
+//! Results are normalized back to `Small` whenever they fit. Comparisons and
+//! conversions also accept a host-constructed `Big` within the `i64` range.
+
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
 
 use num_bigint::BigInt;
 use num_bigint::Sign;
@@ -23,7 +37,7 @@ use std::rc::Rc;
 pub enum Int {
     /// A value in the `i64` range.
     Small(i64),
-    /// A value outside the `i64` range (never one inside it).
+    /// A shared arbitrary-precision value. Arithmetic produces this variant outside the `i64` range.
     Big(Rc<BigInt>),
 }
 
@@ -58,23 +72,26 @@ impl Int {
 
     /// The value, when it fits in `i64`.
     #[must_use]
-    pub const fn as_i64(&self) -> Option<i64> {
+    pub fn as_i64(&self) -> Option<i64> {
         match self {
             | Self::Small(value) => Some(*value),
-            | Self::Big(_) => None,
+            | Self::Big(value) => value.to_i64(),
         }
     }
 
     /// True for zero.
     #[must_use]
-    pub const fn is_zero(&self) -> bool {
-        matches!(self, Self::Small(0))
+    pub fn is_zero(&self) -> bool {
+        match self {
+            | Self::Small(value) => *value == 0,
+            | Self::Big(value) => value.is_zero(),
+        }
     }
 
     /// True for one.
     #[must_use]
-    pub const fn is_one(&self) -> bool {
-        matches!(self, Self::Small(1))
+    pub fn is_one(&self) -> bool {
+        self.as_i64() == Some(1)
     }
 
     /// True below zero.
@@ -126,6 +143,10 @@ impl Int {
 
     /// The nearest `f64`.
     #[must_use]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "conversion rounds integers to the nearest binary64 value"
+    )]
     pub fn to_f64(&self) -> f64 {
         match self {
             | Self::Small(value) => *value as f64,
@@ -139,12 +160,15 @@ impl Int {
         &self,
         exponent: u32,
     ) -> Self {
-        if let Self::Small(base) = self
-            && let Some(value) = base.checked_pow(exponent)
-        {
-            return Self::Small(value);
+        match self {
+            | Self::Small(base) => {
+                base.checked_pow(exponent).map_or_else(
+                    || Self::from_big(num_traits::Pow::pow(BigInt::from(*base), exponent)),
+                    Self::Small,
+                )
+            },
+            | Self::Big(base) => Self::from_big(num_traits::Pow::pow(base.as_ref(), exponent)),
         }
-        Self::from_big(num_traits::Pow::pow(self.to_big(), exponent))
     }
 }
 
@@ -243,8 +267,9 @@ impl PartialEq for Int {
         match (self, other) {
             | (Self::Small(a), Self::Small(b)) => a == b,
             | (Self::Big(a), Self::Big(b)) => a == b,
-            // Canonical: a big value is never in the small range.
-            | _ => false,
+            | (Self::Small(a), Self::Big(b)) | (Self::Big(b), Self::Small(a)) => {
+                b.to_i64() == Some(*a)
+            },
         }
     }
 }
@@ -268,7 +293,7 @@ impl PartialEq<i64> for Int {
         &self,
         other: &i64,
     ) -> bool {
-        matches!(self, Self::Small(a) if a == other)
+        self.as_i64() == Some(*other)
     }
 }
 
@@ -280,20 +305,29 @@ impl Ord for Int {
         match (self, other) {
             | (Self::Small(a), Self::Small(b)) => a.cmp(b),
             | (Self::Big(a), Self::Big(b)) => a.cmp(b),
-            // A big value lies beyond every small one, on its own side.
-            | (Self::Small(_), Self::Big(b)) => {
-                if b.sign() == Sign::Minus {
-                    Ordering::Greater
-                } else {
-                    Ordering::Less
-                }
+            | (Self::Small(a), Self::Big(b)) => {
+                b.to_i64().map_or_else(
+                    || {
+                        if b.sign() == Sign::Minus {
+                            Ordering::Greater
+                        } else {
+                            Ordering::Less
+                        }
+                    },
+                    |b| a.cmp(&b),
+                )
             },
-            | (Self::Big(a), Self::Small(_)) => {
-                if a.sign() == Sign::Minus {
-                    Ordering::Less
-                } else {
-                    Ordering::Greater
-                }
+            | (Self::Big(a), Self::Small(b)) => {
+                a.to_i64().map_or_else(
+                    || {
+                        if a.sign() == Sign::Minus {
+                            Ordering::Less
+                        } else {
+                            Ordering::Greater
+                        }
+                    },
+                    |a| a.cmp(b),
+                )
             },
         }
     }
@@ -315,7 +349,13 @@ impl std::hash::Hash for Int {
     ) {
         match self {
             | Self::Small(value) => value.hash(state),
-            | Self::Big(value) => value.hash(state),
+            | Self::Big(value) => {
+                if let Some(small) = value.to_i64() {
+                    small.hash(state);
+                } else {
+                    value.hash(state);
+                }
+            },
         }
     }
 }
@@ -387,16 +427,20 @@ macro_rules! arith {
             type Output = Int;
 
             #[inline]
+            #[allow(clippy::arithmetic_side_effects, reason = "operation is checked for i64 and exact for BigInt")]
             fn $method(
                 self,
                 other: &Int,
             ) -> Int {
-                if let (Int::Small(a), Int::Small(b)) = (self, other)
-                    && let Some(value) = a.$checked(*b)
-                {
-                    return Int::Small(value);
+                match (self, other) {
+                    | (Int::Small(a), Int::Small(b)) => a.$checked(*b).map_or_else(
+                        || Int::from_big(BigInt::from(*a) $op *b),
+                        Int::Small,
+                    ),
+                    | (Int::Big(a), Int::Big(b)) => Int::from_big(a.as_ref() $op b.as_ref()),
+                    | (Int::Big(a), Int::Small(b)) => Int::from_big(a.as_ref() $op *b),
+                    | (Int::Small(a), Int::Big(b)) => Int::from_big(*a $op b.as_ref()),
                 }
-                Int::from_big(self.to_big() $op other.to_big())
             }
         }
 
@@ -445,6 +489,10 @@ arith!(Mul, mul, checked_mul, *);
 impl std::ops::Neg for &Int {
     type Output = Int;
 
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "negation is checked for i64 and exact for BigInt"
+    )]
     fn neg(self) -> Int {
         match self {
             | Int::Small(value) => {
@@ -452,7 +500,7 @@ impl std::ops::Neg for &Int {
                     .checked_neg()
                     .map_or_else(|| Int::from_big(-BigInt::from(*value)), Int::Small)
             },
-            | Int::Big(value) => Int::from_big(-(**value).clone()),
+            | Int::Big(value) => Int::from_big(-value.as_ref()),
         }
     }
 }
@@ -461,7 +509,7 @@ impl std::ops::Neg for Int {
     type Output = Self;
 
     fn neg(self) -> Self {
-        -&self
+        std::ops::Neg::neg(&self)
     }
 }
 
@@ -470,7 +518,10 @@ impl serde::Serialize for Int {
         &self,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
-        self.to_big().serialize(serializer)
+        match self {
+            | Self::Small(value) => BigInt::from(*value).serialize(serializer),
+            | Self::Big(value) => value.as_ref().serialize(serializer),
+        }
     }
 }
 
@@ -486,6 +537,26 @@ mod tests {
     use num_bigint::BigInt;
 
     #[test]
+    fn host_constructed_small_bigints_match_by_value() {
+        use std::collections::HashSet;
+        use std::rc::Rc;
+
+        let host = |value| Int::Big(Rc::new(BigInt::from(value)));
+        assert!(host(0).is_zero());
+        assert!(host(1).is_one());
+        assert_eq!(host(17).as_i64(), Some(17));
+        let host_two = host(2);
+        let small_two = Int::from(2);
+        assert_eq!(host_two, small_two);
+        assert_eq!(host_two.cmp(&small_two), std::cmp::Ordering::Equal);
+        assert_eq!(HashSet::from([host_two, small_two]).len(), 1);
+        let large = Int::from(i64::MAX) + Int::ONE;
+        assert_eq!(&large - &large, Int::ZERO);
+        assert_eq!(Int::ONE - &large, Int::from(-i64::MAX));
+        assert_eq!(&large * Int::ONE, large);
+    }
+
+    #[test]
     fn overflow_promotes_and_shrinks_back() {
         let max = Int::from(i64::MAX);
         let big = &max + &Int::ONE;
@@ -493,12 +564,13 @@ mod tests {
         assert_eq!(big.to_string(), "9223372036854775808");
         let back = &big - &Int::ONE;
         assert!(matches!(back, Int::Small(i64::MAX)));
-        assert_eq!(-Int::from(i64::MIN), Int::from_big(-BigInt::from(i64::MIN)));
-        assert!(Int::from(i64::MIN) < big);
+        let minimum = Int::Small(i64::MIN);
+        assert_eq!(-&minimum, Int::from_big(-BigInt::from(i64::MIN)));
+        assert!(big > minimum);
         // -2^63 is i64::MIN itself, so it is small again.
-        assert_eq!(-&big, Int::from(i64::MIN));
-        let below = &Int::from(i64::MIN) - &Int::ONE;
-        assert!(matches!(below, Int::Big(_)) && below < Int::from(i64::MIN));
+        assert_eq!(-&big, minimum);
+        let below = &minimum - &Int::ONE;
+        assert!(matches!(below, Int::Big(_)) && below < minimum);
     }
 
     #[test]

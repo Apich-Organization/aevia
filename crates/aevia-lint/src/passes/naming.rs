@@ -110,7 +110,7 @@ fn is_snake_case(name: &str) -> bool {
     if name.starts_with('_') {
         return true;
     }
-    !name.chars().any(|c| c.is_uppercase())
+    !name.chars().any(char::is_uppercase)
 }
 
 fn is_upper_camel_case(name: &str) -> bool {
@@ -121,7 +121,7 @@ fn is_upper_camel_case(name: &str) -> bool {
 }
 
 fn to_snake_case(name: &str) -> String {
-    let mut out = String::with_capacity(name.len() + 2);
+    let mut out = String::with_capacity(name.len());
     for (i, ch) in name.chars().enumerate() {
         if ch.is_uppercase() {
             if i > 0 && !out.ends_with('_') {

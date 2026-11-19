@@ -7,6 +7,18 @@
 //! Loading is a post-order walk, so a module is always checked after the
 //! modules it imports, and a cycle is reported rather than followed.
 
+#![deny(
+    missing_docs,
+    clippy::arithmetic_side_effects,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::nursery,
+    clippy::panic,
+    clippy::pedantic,
+    clippy::single_call_fn,
+    clippy::unwrap_used
+)]
+
 use crate::disk_cache::Counters;
 use crate::disk_cache::Digest;
 use crate::disk_cache::KeyInputs;
@@ -80,6 +92,7 @@ pub struct Program {
 
 impl Program {
     /// The module that defines `main`.
+    #[must_use]
     pub fn entry(&self) -> Option<&LoadedModule> {
         self.modules.last()
     }
@@ -100,7 +113,9 @@ impl Program {
 /// A package-aware checked revision of an interactive source buffer.
 /// The ordinary compilation facade keeps expression inspection APIs reusable.
 pub struct ReplCompilation {
+    /// The checked entry and its diagnostics.
     pub compilation: crate::Compilation,
+    /// The entry and imports in dependency order.
     pub program: Program,
     contexts: HashMap<(u32, u32, String), (Roots, ResolvedModule)>,
     overlays: SourceOverlays,
@@ -115,7 +130,8 @@ impl std::ops::Deref for ReplCompilation {
     }
 }
 
-/// A stable virtual entry with real package, registry and embedded-stdlib imports.
+/// A virtual entry that resolves package, registry and standard library imports.
+///
 /// Imported source snapshots are committed only after a successful submission;
 /// reset constructs a new compiler to observe changed files explicitly.
 pub struct ReplCompiler {
@@ -134,6 +150,8 @@ pub struct ReplCompiler {
 }
 
 impl ReplCompiler {
+    /// Creates an interactive compiler rooted at `directory`.
+    #[must_use]
     pub fn new(
         directory: &Path,
         identity: crate::source::SourceIdentity,
@@ -154,14 +172,19 @@ impl ReplCompiler {
         }
     }
 
+    /// Describes the imports committed by the session.
+    #[must_use]
     pub fn imports(&self) -> &[String] {
         &self.imports
     }
 
+    /// Names brought into scope by the session's committed imports.
+    #[must_use]
     pub fn imported_names(&self) -> &[String] {
         &self.imported_names
     }
 
+    /// Checks a submission with imports relative to its optional source path.
     pub fn compile(
         &mut self,
         source: &str,
@@ -170,18 +193,14 @@ impl ReplCompiler {
         let roots = match self
             .roots
             .clone()
-            .map(Ok)
-            .unwrap_or_else(|| repl_roots(&self.entry))
+            .map_or_else(|| repl_roots(&self.entry), Ok)
         {
             | Ok(roots) => roots,
             | Err(error) => return self.failure(source, error),
         };
         let explicit_origin = origin;
         let origin = origin.unwrap_or(&self.entry);
-        let origin_roots = match explicit_origin
-            .map(repl_roots)
-            .unwrap_or_else(|| Ok(roots.clone()))
-        {
+        let origin_roots = match explicit_origin.map_or_else(|| Ok(roots.clone()), repl_roots) {
             | Ok(roots) => roots,
             | Err(error) => return self.failure(source, error),
         };
@@ -251,16 +270,15 @@ impl ReplCompiler {
             module: modules.last().map(|module| module.module.clone()),
             checked: modules
                 .last()
-                .map(|module| module.checked.clone())
-                .unwrap_or_default(),
+                .map_or_else(CheckedModule::default, |module| module.checked.clone()),
             diagnostics: diagnostics.clone(),
             sources: sources.clone(),
         };
         ReplCompilation {
             compilation,
             program: Program {
-                modules,
                 sources,
+                modules,
                 diagnostics,
                 dependencies,
             },
@@ -270,6 +288,8 @@ impl ReplCompiler {
         }
     }
 
+    /// Reports a cancelled submission without committing its imports.
+    #[must_use]
     pub fn interrupted(
         &self,
         source: &str,
@@ -314,13 +334,14 @@ impl ReplCompiler {
         }
     }
 
+    /// Retains the source snapshots and resolutions of a successful revision.
     pub fn commit(
         &mut self,
         compilation: &ReplCompilation,
     ) {
-        self.contexts = compilation.contexts.clone();
-        self.overlays = compilation.overlays.clone();
-        self.roots = compilation.roots.clone();
+        self.contexts.clone_from(&compilation.contexts);
+        self.overlays.clone_from(&compilation.overlays);
+        self.roots.clone_from(&compilation.roots);
         self.resolutions = repl_resolutions(&compilation.program.modules, &self.source_ids);
         self.imports.clear();
         self.imported_names.clear();
@@ -358,8 +379,7 @@ impl ReplCompiler {
                 let selection = import
                     .names
                     .as_ref()
-                    .map(|names| format!(" {{ {} }}", names.join(", ")))
-                    .unwrap_or_default();
+                    .map_or_else(String::new, |names| format!(" {{ {} }}", names.join(", ")));
                 self.imports.push(format!(
                     "{}{}{}",
                     module.path.join("."),
@@ -413,6 +433,10 @@ fn repl_resolutions(
     resolutions
 }
 
+#[expect(
+    clippy::single_call_fn,
+    reason = "collect shadowing names separately from binding the import scopes"
+)]
 fn repl_local_names(module: &Module) -> std::collections::HashSet<String> {
     let mut names = std::collections::HashSet::new();
     let mut patterns = Vec::new();
@@ -482,6 +506,10 @@ impl ReplRuntime {
     /// Atomically initialize new imports and the new entry declarations. A
     /// failed or interrupted submission neither consumes dependency initializers
     /// nor leaves a runtime module checked against a different source snapshot.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "retain the REPL checkpoint and complete rollback in one transaction"
+    )]
     pub fn synchronize(
         &mut self,
         interp: &mut crate::Interp,
@@ -535,18 +563,15 @@ impl ReplRuntime {
         if !diagnostics.has_errors()
             && let Some(entry) = compilation.program.entry()
         {
-            let limit = limit.min(entry.module.decls.len());
-            let loaded = loaded.min(limit);
-            if loaded < limit {
-                if let Err((_, error)) = interp.load_incremental_declarations(
-                    &entry.checked,
-                    &entry.module.decls[..loaded],
-                    &entry.module.decls[loaded..limit],
-                ) {
-                    diagnostics.push(error.diagnostic());
-                }
-            } else {
-                interp.prepare_incremental_module(&entry.checked, &entry.module.decls[..loaded]);
+            let declarations = &entry.module.decls;
+            let (bounded, _) = declarations.split_at(limit.min(declarations.len()));
+            let (previous, submitted) = bounded.split_at(loaded.min(bounded.len()));
+            if submitted.is_empty() {
+                interp.prepare_incremental_module(&entry.checked, previous);
+            } else if let Err((_, error)) =
+                interp.load_incremental_declarations(&entry.checked, previous, submitted)
+            {
+                diagnostics.push(error.diagnostic());
             }
         }
         if !diagnostics.has_errors()
@@ -662,15 +687,9 @@ impl ReplRuntime {
             self.exports.insert(module.file, values);
             self.scopes.insert(module.file, scope.clone());
             interp.file_scopes.insert(module.file, scope);
-            interp.file_keys.insert(
-                module.file,
-                std::sync::Arc::from(format!(
-                    "{}|{:?}|{:?}",
-                    module.path.join("."),
-                    module.source.path,
-                    module.source.owner
-                )),
-            );
+            interp
+                .file_keys
+                .insert(module.file, replica_file_key(module));
         }
         if let Err(error) = interp.check_cancelled() {
             diagnostics.push(error.diagnostic());
@@ -781,9 +800,9 @@ pub fn load_all_with_roots(
     };
     let mut root = None;
     for entry in entries {
-        let loaded = loader.load_entry(entry);
+        let loaded_entry = loader.load_entry(entry);
         if root.is_none() {
-            root = loaded;
+            root = loaded_entry;
         }
     }
     let files = loader.parsed.len();
@@ -881,6 +900,7 @@ pub fn load_with_roots_and_source(
 }
 
 /// Loads an entry and all its imports against one snapshot of unsaved buffers.
+///
 /// Physical buffers can be reached through aliases and multiple package owners;
 /// source identity is shared while nominal ownership/import context is retained.
 /// An overlaid import need not exist on disk yet.
@@ -994,7 +1014,7 @@ struct Loader {
 /// the cache is per process (a `watch` session, an editor, a REPL).
 #[derive(Default)]
 pub struct CheckCache {
-    entries: HashMap<String, CacheEntry>,
+    entries: HashMap<ModuleKey, CacheEntry>,
     /// Modules reused from the cache on the most recent load.
     pub reused: usize,
     /// Modules checked on the most recent load.
@@ -1129,6 +1149,10 @@ fn load_configured(
     )
 }
 
+#[expect(
+    clippy::single_call_fn,
+    reason = "hash the complete in-memory check input without mixing it with persistence"
+)]
 fn fingerprint(parts: &[&dyn std::fmt::Debug]) -> u64 {
     use std::hash::Hash as _;
     use std::hash::Hasher as _;
@@ -1171,6 +1195,10 @@ impl ModuleKey {
         }
     }
 
+    #[expect(
+        clippy::single_call_fn,
+        reason = "preserve the package identity in diagnostic dependency paths"
+    )]
     fn label(&self) -> String {
         match &self.owner {
             | Some(owner) => format!("{} [package {}]", self.path.display(), owner.display()),
@@ -1232,6 +1260,10 @@ impl Loader {
         self.load_file(&self.entry_context(path), &[])
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "keep source precedence, cycle tracking and recursive import traversal in order"
+    )]
     fn load_file(
         &mut self,
         context: &ResolvedModule,
@@ -1301,11 +1333,10 @@ impl Loader {
         if physical {
             self.watch(&context.path);
         }
-        let source = match (&overlaid, &embedded) {
-            | (Some(source), _) => source.clone(),
-            | (None, Some((_, source))) => source.to_string(),
-            | (None, None) if kernel.is_some() => kernel.as_ref().unwrap().1.clone(),
-            | (None, None) => {
+        let source = match (&overlaid, &embedded, &kernel) {
+            | (Some(source), _, _) | (None, None, Some((_, source))) => source.clone(),
+            | (None, Some((_, source)), _) => source.to_string(),
+            | (None, None, None) => {
                 if let Some(source) = self.physical_sources.get(&canonical.path) {
                     source.clone()
                 } else {
@@ -1337,10 +1368,10 @@ impl Loader {
             | (Some(_), _) => canonical.display().to_string(),
             | (None, Some((components, _))) => format!("stdlib://{}.aev", components.join("/")),
             | (None, None) => {
-                kernel
-                    .as_ref()
-                    .map(|(name, _)| format!("rssn://{name}.aev"))
-                    .unwrap_or_else(|| canonical.display().to_string())
+                kernel.as_ref().map_or_else(
+                    || canonical.display().to_string(),
+                    |(name, _)| format!("rssn://{name}.aev"),
+                )
             },
         };
         let display = if self
@@ -1383,7 +1414,7 @@ impl Loader {
                         imports: Vec::new(),
                     },
                 );
-                self.order.push(canonical.clone());
+                self.order.push(canonical);
                 return None;
             },
         };
@@ -1441,7 +1472,7 @@ impl Loader {
             else {
                 continue;
             };
-            let (import_roots, importer) = self
+            let Some((import_roots, importer)) = self
                 .entry_import_roots
                 .get(&decl.span)
                 .cloned()
@@ -1451,12 +1482,15 @@ impl Loader {
                         .cloned()
                         .map(|roots| (roots, context.clone()))
                 })
-                .unwrap_or_else(|| {
-                    (
-                        self.roots.as_ref().expect("loader roots").clone(),
-                        context.clone(),
-                    )
-                });
+                .or_else(|| self.roots.clone().map(|roots| (roots, context.clone())))
+            else {
+                self.diagnostics.push(Diagnostic::error(
+                    "E0607",
+                    "import roots are unavailable",
+                    decl.span,
+                ));
+                continue;
+            };
             let candidates = import_roots.module_candidates(&importer, import_path);
             let resolved = candidates
                 .into_iter()
@@ -1481,8 +1515,9 @@ impl Loader {
                             path: key,
                             owner: None,
                         }
-                    } else if import_path.len() == 1 && import_path[0].starts_with("Rssn_") {
-                        let name = &import_path[0];
+                    } else if let [name] = import_path.as_slice()
+                        && name.starts_with("Rssn_")
+                    {
                         let Some(source) =
                             aevia_rssn::codegen::namespace_source(aevia_rssn::registry(), name)
                         else {
@@ -1604,6 +1639,10 @@ impl Loader {
         Some(canonical)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "keep checked interfaces, cache decisions and nominal reexports in dependency order"
+    )]
     fn finish(
         mut self,
         root: Option<ModuleKey>,
@@ -1681,16 +1720,16 @@ impl Loader {
             // Materialised only when the checker (or the in-memory fingerprint)
             // needs them: a module restored from disk never clones its
             // dependencies' export tables.
-            let mut import_specs: Vec<(String, usize, Option<Vec<String>>)> = Vec::new();
-            let mut reexports: Vec<(usize, Option<Vec<String>>)> = Vec::new();
+            let mut import_specs: Vec<(String, &CheckedModule, Option<Vec<String>>)> = Vec::new();
+            let mut reexports: Vec<(&CheckedModule, Option<Vec<String>>)> = Vec::new();
             let mut runtime_imports = Vec::new();
             let mut bindings = Vec::new();
             for (target, import_path, alias, open, names, export) in &parsed.imports {
-                let Some((other_index, other)) = self
+                let Some(other) = self
                     .order
                     .iter()
                     .position(|candidate| candidate == target)
-                    .and_then(|index| modules.get(index).map(|module| (index, module)))
+                    .and_then(|index| modules.get(index))
                 else {
                     continue;
                 };
@@ -1749,7 +1788,7 @@ impl Loader {
                     expanded
                 });
                 if *export {
-                    reexports.push((other_index, runtime_names.clone()));
+                    reexports.push((&other.checked, runtime_names.clone()));
                 }
                 runtime_imports.push(ResolvedImport {
                     file: other.file,
@@ -1757,7 +1796,7 @@ impl Loader {
                     names: runtime_names,
                     export: *export,
                 });
-                import_specs.push((prefix, other_index, names.clone()));
+                import_specs.push((prefix, &other.checked, names.clone()));
             }
             // A module sees its dependency closure, never unrelated modules
             // merely checked earlier in the package traversal.
@@ -1780,8 +1819,8 @@ impl Loader {
             let imports = || -> Vec<Import> {
                 import_specs
                     .iter()
-                    .map(|(prefix, index, names)| {
-                        let mut exports = modules[*index].checked.exports.clone();
+                    .map(|(prefix, checked, names)| {
+                        let mut exports = checked.exports.clone();
                         if let Some(selected) = names {
                             exports.retain(|name, _| selected.contains(name));
                         }
@@ -1803,13 +1842,11 @@ impl Loader {
                 self.roots_for(&path)
                     .map(|roots| roots.resolved_module_identity(&parsed.context, &parsed.path))
             };
-            let cache_key = format!("{path:?}");
             let print = self.cache.as_ref().map(|_| {
                 let text = self
                     .sources
                     .file(parsed.file)
-                    .map(|file| file.text.clone())
-                    .unwrap_or_default();
+                    .map_or("", |file| file.text.as_str());
                 fingerprint(&[
                     &text,
                     &parsed.file,
@@ -1823,7 +1860,7 @@ impl Loader {
             let reused = match (&self.cache, print) {
                 | (Some(cache), Some(print)) => {
                     let cache = cache.borrow();
-                    cache.entries.get(&cache_key).and_then(|entry| {
+                    cache.entries.get(&path).and_then(|entry| {
                         (entry.file == parsed.file && entry.fingerprint == print).then(|| {
                             aevia_types::check::CheckResult {
                                 diagnostics: entry.diagnostics.clone(),
@@ -1849,14 +1886,13 @@ impl Loader {
                         let text = self
                             .sources
                             .file(parsed.file)
-                            .map(|file| file.text.clone())
-                            .unwrap_or_default();
+                            .map_or("", |file| file.text.as_str());
                         let prefixes: Vec<String> = import_specs
                             .iter()
                             .map(|(prefix, _, _)| prefix.clone())
                             .collect();
                         disk.key(&KeyInputs {
-                            text: &text,
+                            text,
                             file: parsed.file,
                             path: &parsed.path,
                             identity: &identity,
@@ -1897,7 +1933,8 @@ impl Loader {
             let mut checked = match restored {
                 | Some(checked) => {
                     if from_memory && let Some(cache) = &self.cache {
-                        cache.borrow_mut().reused += 1;
+                        let mut cache = cache.borrow_mut();
+                        cache.reused = cache.reused.saturating_add(1);
                     }
                     checked
                 },
@@ -1913,13 +1950,13 @@ impl Loader {
                     );
                     Counters::bump(&self.counters.checked);
                     if let Some(cache) = &self.cache {
-                        cache.borrow_mut().checked += 1;
+                        let mut cache = cache.borrow_mut();
+                        cache.checked = cache.checked.saturating_add(1);
                     }
                     checked
                 },
             };
-            for (other_index, selected) in &reexports {
-                let other = &modules[*other_index].checked;
+            for (other, selected) in &reexports {
                 for (name, export) in &other.exports {
                     if selected.as_ref().is_some_and(|names| !names.contains(name)) {
                         continue;
@@ -1970,7 +2007,7 @@ impl Loader {
             }
             if !from_memory && let (Some(cache), Some(print)) = (&self.cache, print) {
                 cache.borrow_mut().entries.insert(
-                    cache_key,
+                    path.clone(),
                     CacheEntry {
                         file: parsed.file,
                         fingerprint: print,
@@ -1980,15 +2017,13 @@ impl Loader {
                 );
             }
             self.diagnostics.extend(checked.diagnostics.clone());
-            let aliases = prefixes
-                .get(&path)
-                .map(|list| {
-                    list.iter()
-                        .filter(|prefix| **prefix != parsed.path.join("."))
-                        .cloned()
-                        .collect()
-                })
-                .unwrap_or_default();
+            let aliases = prefixes.get(&path).map_or_else(Vec::new, |list| {
+                let path = parsed.path.join(".");
+                list.iter()
+                    .filter(|prefix| **prefix != path)
+                    .cloned()
+                    .collect()
+            });
             modules.push(LoadedModule {
                 path: parsed.path,
                 file: parsed.file,
@@ -2010,6 +2045,10 @@ impl Loader {
 ///
 /// A user type is nominal per module (D6): `A.Circle` takes its id from A's
 /// type, not from whichever same-named type the process registry finds first.
+#[expect(
+    clippy::single_call_fn,
+    reason = "keep constructor identity handling out of normal module bindings"
+)]
 fn publish_constructors(
     interp: &mut crate::Interp,
     module: &LoadedModule,
@@ -2037,6 +2076,10 @@ fn publish_constructors(
 }
 
 /// The name of a module in a diagnostic: its path, or `<entry>`.
+#[expect(
+    clippy::single_call_fn,
+    reason = "give the anonymous entry module a readable diagnostic label"
+)]
 fn module_label(path: &[String]) -> String {
     if path.is_empty() {
         "<entry>".to_string()
@@ -2046,6 +2089,10 @@ fn module_label(path: &[String]) -> String {
 }
 
 /// The name a module declares, or its file stem.
+#[expect(
+    clippy::single_call_fn,
+    reason = "keep the file stem fallback separate from checked module identity"
+)]
 fn module_path(
     module: &Module,
     file: &Path,
@@ -2054,8 +2101,20 @@ fn module_path(
         return name.clone();
     }
     file.file_stem()
-        .map(|stem| vec![stem.to_string_lossy().to_string()])
-        .unwrap_or_default()
+        .map_or_else(Vec::new, |stem| vec![stem.to_string_lossy().into_owned()])
+}
+
+#[expect(
+    clippy::unnecessary_debug_formatting,
+    reason = "file identities preserve escaped non-Unicode path bytes and package ownership"
+)]
+fn replica_file_key(module: &LoadedModule) -> std::sync::Arc<str> {
+    std::sync::Arc::from(format!(
+        "{}|{:?}|{:?}",
+        module.path.join("."),
+        module.source.path,
+        module.source.owner
+    ))
 }
 
 /// Evaluates a program's modules in order into `interp`.
@@ -2063,6 +2122,10 @@ fn module_path(
 /// Each module gets its own scope so that two modules may both define a
 /// private helper, and every top-level name is also exported under its
 /// qualified name so that importers can reach it.
+#[expect(
+    clippy::too_many_lines,
+    reason = "install module scopes and their exports in source dependency order"
+)]
 pub fn run_modules(
     interp: &mut crate::Interp,
     program: &Program,
@@ -2111,7 +2174,9 @@ pub fn run_modules(
                 }
             }
         }
-        interp.registrations = module.checked.registrations.clone();
+        interp
+            .registrations
+            .clone_from(&module.checked.registrations);
         diagnostics.extend(interp.load_into(&module.module, &scope));
         let names = crate::top_level_names(&module.module);
         let mut values = HashMap::new();
@@ -2150,15 +2215,9 @@ pub fn run_modules(
         }
         exports.insert(module.file, values);
         interp.file_scopes.insert(module.file, scope.clone());
-        interp.file_keys.insert(
-            module.file,
-            std::sync::Arc::from(format!(
-                "{}|{:?}|{:?}",
-                module.path.join("."),
-                module.source.path,
-                module.source.owner
-            )),
-        );
+        interp
+            .file_keys
+            .insert(module.file, replica_file_key(module));
         scopes.insert(module.file, scope);
         if index == last {
             continue;
@@ -2195,6 +2254,10 @@ pub fn run_modules(
 /// A misspelling gets the closest export; a correctly spelt name that lives in
 /// a different standard-library module (`normal` is in `Stats.Distributions`,
 /// not `Stats`) gets the modules that do export it.
+#[expect(
+    clippy::single_call_fn,
+    reason = "format suggestions for an import whose selected name is absent"
+)]
 fn missing_export_note<'a>(
     name: &str,
     exports: impl IntoIterator<Item = &'a str>,

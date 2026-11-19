@@ -3,6 +3,21 @@
 //! A source identity survives editing; this snapshot belongs to one successful
 //! check. Closures retain it through their scope, rather than consulting mutable
 //! span tables belonging to a later check of the same file.
+
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
 use crate::eval::InstanceEntry;
 use crate::value::Closure;
 use crate::value::ClosureBody;
@@ -21,10 +36,10 @@ use std::rc::Rc;
 use std::rc::Weak;
 
 /// A span-keyed table on the per-call path (see [`crate::fxhash`]).
-pub(crate) type SpanMap<V> = crate::fxhash::FxHashMap<Span, V>;
+pub type SpanMap<V> = crate::fxhash::FxHashMap<Span, V>;
 
 #[derive(Debug)]
-pub(crate) struct ModuleEvidence {
+pub struct ModuleEvidence {
     pub(crate) expr_types: SpanMap<Type>,
     pub(crate) literal_reps: SpanMap<aevia_types::Rep>,
     pub(crate) constant_regions: SpanMap<aevia_types::Rep>,
@@ -40,7 +55,7 @@ pub(crate) struct ModuleEvidence {
     pub(crate) units: aevia_dim::UnitTable,
 }
 #[derive(Debug)]
-pub(crate) struct ModuleContext {
+pub struct ModuleContext {
     pub(crate) evidence: ModuleEvidence,
     pub(crate) session: Weak<()>,
     pub(crate) instances: RefCell<Vec<InstanceTemplate>>,
@@ -94,7 +109,7 @@ impl ModuleContext {
     }
 }
 #[derive(Clone, Debug)]
-pub(crate) enum MethodCode {
+pub enum MethodCode {
     Ast {
         site: Span,
         params: Vec<Pat>,
@@ -107,7 +122,7 @@ pub(crate) enum MethodCode {
 /// acyclic imported-scope graph. Reconstructing a method cannot create a new
 /// environment/reference cycle.
 #[derive(Clone, Debug)]
-pub(crate) struct InstanceTemplate {
+pub struct InstanceTemplate {
     pub(crate) entry: InstanceEntry,
     pub(crate) method: String,
     pub(crate) code: Rc<MethodCode>,
@@ -165,7 +180,7 @@ impl InstanceTemplate {
     }
 }
 
-pub(crate) type PreviousContext = (
+pub type PreviousContext = (
     Rc<ModuleContext>,
     Option<Rc<Scope>>,
     Option<Rc<crate::generics::CallBindings>>,
@@ -209,7 +224,7 @@ impl crate::Interp {
         );
         self.context = context.clone();
         self.active_scope = Some(scope.clone());
-        self.bindings = scope.types.clone();
+        self.bindings.clone_from(&scope.types);
         Ok(Some(old))
     }
 
@@ -244,14 +259,11 @@ impl crate::Interp {
     /// The instantiated body of the first visible template whose global is
     /// `global`, in the order [`Self::instance_templates`] lists them.
     ///
-    /// `None` means no visible template has that global; `Some(None)` means one
-    /// does but its defining scope is gone. That is the answer
-    /// `instance_templates().find(..).and_then(instantiate)` gives, without
-    /// building (and cloning every template of) the list.
+    /// An expired defining scope returns `None` and still shadows later templates.
     pub(crate) fn find_instance_template(
         &self,
         global: &str,
-    ) -> Option<Option<Value>> {
+    ) -> Option<Value> {
         // The innermost context is searched first by the full walk below, so
         // a hit there needs none of the walk's bookkeeping.
         if let Some(context) = self
@@ -265,7 +277,7 @@ impl crate::Interp {
                 .rev()
                 .find(|template| template.entry.global == global)
         {
-            return Some(template.instantiate());
+            return template.instantiate();
         }
         let mut pending = self.active_scope.iter().cloned().collect::<Vec<_>>();
         let mut scopes = std::collections::HashSet::new();
@@ -283,7 +295,7 @@ impl crate::Interp {
                     .rev()
                     .find(|template| template.entry.global == global)
             {
-                return Some(template.instantiate());
+                return template.instantiate();
             }
             pending.extend(scope.imports.iter().rev().cloned());
             if let Some(parent) = &scope.parent {

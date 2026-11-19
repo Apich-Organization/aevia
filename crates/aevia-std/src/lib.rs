@@ -18,12 +18,26 @@
 //!   typed adapters over RSSN numerical kernels and exact/data operations;
 //! * `aevia-core` converts between those slices and runtime values.
 //!
-//! Where a result can be exact it is kept exact: `median` of `[1, 2, 4]` is the
-//! rational `2`, and `linalg::det` answers a rational for a rational matrix.
-//! The float path is used only when an element is a float or when the algorithm
-//! has no exact form (eigenvalues, the SVD).
+//! The language runtime selects the exact or floating-point path. For example,
+//! `det([[1/3, 0], [0, 1]])` returns `1/3`. The floating-point matrix adapters
+//! support approximate decompositions such as eigenvalue and singular value
+//! decompositions.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
 #![allow(clippy::needless_range_loop, clippy::many_single_char_names)]
 // Tuples of factors (LU, QR, SVD, eigen pairs) are returned as-is to match the formulas.
 #![allow(clippy::type_complexity)]
@@ -72,14 +86,13 @@ pub enum NumericError {
 impl NumericError {
     /// The name of the `LinAlgError`/`MathError` constructor this maps to.
     #[must_use]
-    pub fn constructor(&self) -> &'static str {
+    pub const fn constructor(&self) -> &'static str {
         match self {
             | Self::Cancelled => "Cancelled",
             | Self::NotSquare | Self::ShapeMismatch(_) => "ShapeMismatch",
             | Self::Singular => "Singular",
             | Self::NotPositiveDefinite => "NotPositiveDefinite",
-            | Self::NotConverged => "NotConverged",
-            | Self::Domain(_) | Self::Empty => "NotConverged",
+            | Self::NotConverged | Self::Domain(_) | Self::Empty => "NotConverged",
         }
     }
 }

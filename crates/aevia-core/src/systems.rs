@@ -8,6 +8,21 @@
 //! rational times a power of `pi`) and becomes a symbolic `Real` when some
 //! exponent is a fraction (a charge in Heaviside-Lorentz natural units).
 
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
 use crate::sym::Term;
 use crate::value::NumKind;
 use crate::value::NumVal;
@@ -16,9 +31,14 @@ use aevia_dim::Scale;
 use aevia_dim::systems::UnitSystem;
 use num_bigint::BigInt;
 use num_rational::BigRational;
+use num_traits::Zero;
 use std::rc::Rc;
 
 /// The exact factor as a symbolic term.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Encodes one symbolic scale rather than the entire conversion"
+)]
 fn scale_term(scale: &Scale) -> Term {
     let mut term = Term::Num(scale.rat.clone());
     if scale.pi != 0 {
@@ -39,8 +59,13 @@ fn scale_term(scale: &Scale) -> Term {
 ///
 /// # Errors
 ///
-/// A message when the value is not a real scalar.
-pub(crate) fn convert(
+/// Returns an error for an invalid basis or an exact zero conversion factor.
+#[allow(clippy::single_call_fn, reason = "Runtime conversion entry point")]
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "Exact products use BigRational; floating factors use IEEE arithmetic"
+)]
+pub fn convert(
     system: &UnitSystem,
     si: &Dim,
     num: &NumVal,
@@ -81,6 +106,12 @@ pub(crate) fn convert(
                     let factor = if direction > 0 {
                         scale.rat
                     } else {
+                        if scale.rat.is_zero() {
+                            return Err(format!(
+                                "unit system `{}` has a zero conversion factor",
+                                system.name
+                            ));
+                        }
                         num_traits::Inv::inv(scale.rat)
                     };
                     match value {
@@ -106,7 +137,8 @@ pub(crate) fn convert(
 }
 
 /// The system called `name`, from the kernel manifest.
-pub(crate) fn lookup(name: &str) -> Option<std::sync::Arc<UnitSystem>> {
+#[allow(clippy::single_call_fn, reason = "Runtime lookup entry point")]
+pub fn lookup(name: &str) -> Option<std::sync::Arc<UnitSystem>> {
     aevia_rssn::registry::registry().unit_system(name)
 }
 
@@ -149,12 +181,12 @@ fn display_in(
             let Some(power_i32) = num_traits::ToPrimitive::to_i32(&power) else {
                 return Value::Num(num);
             };
-            let exponent = BigRational::from_integer(power.clone());
+            let exponent = BigRational::from_integer(power);
             let Some(scale) = base.scale.pow(&exponent) else {
                 return Value::Num(num);
             };
             let name = if power_i32 == 1 {
-                base.display.clone()
+                base.display
             } else {
                 format!("{}^{power_i32}", base.display)
             };
@@ -171,20 +203,61 @@ fn display_in(
             };
             Value::Num(num.with_display(Rc::new(def)))
         },
-        | Value::Variant(variant) => {
-            let mut variant = (*variant).clone();
-            for field in &mut variant.fields {
-                *field = display_in(system, units, field.clone(), depth + 1);
+        | Value::Variant(mut variant) => {
+            for field in &mut Rc::make_mut(&mut variant).fields {
+                let value = std::mem::replace(field, Value::Unit);
+                *field = display_in(system, units, value, depth.saturating_add(1));
             }
-            Value::Variant(Rc::new(variant))
+            Value::Variant(variant)
         },
-        | Value::Record(record) => {
-            let mut record = (*record).clone();
-            for field in record.fields.values_mut() {
-                *field = display_in(system, units, field.clone(), depth + 1);
+        | Value::Record(mut record) => {
+            for field in Rc::make_mut(&mut record).fields.values_mut() {
+                let value = std::mem::replace(field, Value::Unit);
+                *field = display_in(system, units, value, depth.saturating_add(1));
             }
-            Value::Record(Rc::new(record))
+            Value::Record(record)
         },
         | other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aevia_dim::systems::Generator;
+    use aevia_dim::systems::Unity;
+
+    #[test]
+    fn exact_conversion_reports_zero_inverse_factors() {
+        let length = Dim::base("Length");
+        let system = UnitSystem {
+            name: "zero".into(),
+            description: String::new(),
+            unity: vec![Unity {
+                symbol: "q".into(),
+                label: "q".into(),
+                dim: length.clone(),
+                value: Scale::rational(BigRational::zero()),
+            }],
+            generators: [
+                "Mass",
+                "Time",
+                "Current",
+                "Temperature",
+                "Amount",
+                "Luminosity",
+            ]
+            .map(|name| {
+                Generator {
+                    name: name.to_owned(),
+                    dim: Dim::base(name),
+                    display: name.to_owned(),
+                }
+            })
+            .to_vec(),
+        };
+        let input = NumVal::int(BigInt::from(1));
+        let error = convert(&system, &length, &input, -1, Dim::one()).unwrap_err();
+        assert!(error.contains("zero conversion factor"));
     }
 }

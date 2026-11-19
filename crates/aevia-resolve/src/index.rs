@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::req::VersionReq;
+use crate::version::ParseError;
 use crate::version::Version;
 
 /// One dependency edge as the index records it.
@@ -141,13 +142,18 @@ impl MemoryIndex {
     /// # Panics
     ///
     /// On a malformed version or requirement: this is a convenience for tests.
+    #[allow(
+        clippy::expect_used,
+        reason = "fixture convenience retained for existing callers; use try_add for parsed input"
+    )]
     pub fn add(
         &mut self,
         package: &str,
         version: &str,
         dependencies: &[(&str, &str)],
     ) -> &mut Self {
-        self.push(package, version, dependencies, false)
+        self.try_add(package, version, dependencies, false)
+            .expect("valid test fixture")
     }
 
     /// Adds a yanked version.
@@ -155,37 +161,43 @@ impl MemoryIndex {
     /// # Panics
     ///
     /// As [`MemoryIndex::add`].
+    #[allow(
+        clippy::expect_used,
+        reason = "fixture convenience retained for existing callers; use try_add for parsed input"
+    )]
     pub fn add_yanked(
         &mut self,
         package: &str,
         version: &str,
         dependencies: &[(&str, &str)],
     ) -> &mut Self {
-        self.push(package, version, dependencies, true)
+        self.try_add(package, version, dependencies, true)
+            .expect("valid test fixture")
     }
 
-    fn push(
+    /// Parses and adds a version with `(package, requirement)` dependencies.
+    ///
+    /// # Errors
+    ///
+    /// A malformed version or dependency requirement. The index is updated
+    /// only after the version and every requirement parse successfully.
+    pub fn try_add(
         &mut self,
         package: &str,
         version: &str,
         dependencies: &[(&str, &str)],
         yanked: bool,
-    ) -> &mut Self {
+    ) -> Result<&mut Self, ParseError> {
         let summary = Summary {
-            version: Version::parse(version).expect("a valid version"),
+            version: Version::parse(version)?,
             dependencies: dependencies
                 .iter()
-                .map(|(name, req)| {
-                    Dependency::new(name, VersionReq::parse(req).expect("a valid requirement"))
-                })
-                .collect(),
+                .map(|(name, req)| Ok(Dependency::new(name, VersionReq::parse(req)?)))
+                .collect::<Result<_, ParseError>>()?,
             yanked,
         };
-        self.packages
-            .entry(package.to_string())
-            .or_default()
-            .push(summary);
-        self
+        self.insert(package, summary);
+        Ok(self)
     }
 
     /// Adds a prepared summary.
@@ -215,5 +227,18 @@ impl Index for MemoryIndex {
             .get(package)
             .cloned()
             .ok_or_else(|| IndexError::missing(package))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_malformed_requirement_does_not_insert_the_package() {
+        let mut index = MemoryIndex::new();
+        let invalid = index.try_add("o/a", "1.0.0", &[("o/b", "^1"), ("o/c", "^x")], false);
+        assert!(invalid.is_err());
+        assert_eq!(index.packages().count(), 0);
     }
 }

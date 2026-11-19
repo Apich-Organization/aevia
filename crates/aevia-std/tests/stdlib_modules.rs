@@ -77,7 +77,8 @@ fn the_embedding_table_matches_the_catalog() {
 fn the_generated_sources_are_the_specifications() {
     let spec = std::fs::read_to_string(spec_stdlib_path()).expect("spec/08-stdlib.md");
     let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-    let expected = generator_support::docs::module_sources(&spec, &crates);
+    let expected = generator_support::docs::module_sources(&spec, &crates)
+        .expect("standard-library declarations and descriptions are valid");
     assert!(!expected.is_empty(), "no §8.20 module is generated");
     let mut drifted = Vec::new();
     for (path, source) in expected {
@@ -140,8 +141,7 @@ fn every_module_checks_and_exports_its_names() {
             // the list against the module's interface, so a name that is not
             // exported is `E0301` — that check *is* the reachability
             // assertion. It covers values and the `Table` type alias alike.
-            let list: Vec<&str> = exports.to_vec();
-            probe.push_str(&format!("import {path} {{ {} }}\n", list.join(", ")));
+            probe.push_str(&format!("import {path} {{ {} }}\n", exports.join(", ")));
         }
         probe.push_str("\nfn main(): IO Unit = do\n    print(\"\")\n");
         let program =
@@ -435,5 +435,5 @@ fn run_solver_source(
     let diagnostics = aevia_core::driver::run_modules(&mut interp, &program);
     assert!(!diagnostics.has_errors(), "{name}: {:?}", diagnostics.items);
     interp.run_main().expect("solver source runs");
-    interp.captured().to_string()
+    interp.captured()
 }

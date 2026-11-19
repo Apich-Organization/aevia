@@ -15,5 +15,5 @@ rssn = { path = "../../../rssn", default-features = false }
 syn = { version = "2", features = ["full", "visit"] }
 quote = "1"
 
-[lints.rust]
-unsafe_code = "forbid"
+[lints]
+workspace = true

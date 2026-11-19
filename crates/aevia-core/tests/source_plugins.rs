@@ -91,6 +91,18 @@ fn sinh_exp(x: Real[1]) = (sinh(x), (exp(x) - exp(-x)) / 2)
 }
 
 #[test]
+fn a_rule_can_reference_double_digit_parameter_indices() {
+    let (_, diagnostics) = load(
+        r#"@rule("demo/sin-subtraction")
+fn sin_subtraction(a: Real[1], b: Real[1], c: Real[1], d: Real[1], e: Real[1],
+    f: Real[1], g: Real[1], h: Real[1], i: Real[1], j: Real[1], k: Real[1]) =
+    (sin(b - k), sin(b) * cos(k) - cos(b) * sin(k))
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
 fn a_function_that_branches_on_its_argument_is_rejected() {
     let (_interp, diagnostics) = load(
         r#"@op("demo/relu")

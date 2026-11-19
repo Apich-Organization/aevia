@@ -31,12 +31,18 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 /// A scoped host function using the neutral bridge value model.
+///
 /// Implementations may carry only thread-safe handles; interpreter state stays
 /// in its owning thread and may not be borrowed across this boundary.
 pub trait BridgeCallback: Send + Sync {
     /// A concrete, immutable signature captured at registration.
     fn signature(&self) -> crate::Sig;
     /// Invoke with explicit runtime dimension witnesses.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bridge error when the arguments or witnesses are invalid
+    /// or the callback fails.
     fn call(
         &self,
         args: &[Val],
@@ -53,6 +59,10 @@ struct CallbackAdapter {
 // Native handles carry their unit domain inside the checked session
 // object store. Numeric dimension witnesses are neither required nor inferred
 // for their wire bytes. Validate the precise declared kind, never generic Value.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Isolates the opaque native tensor envelope check at the ABI boundary"
+)]
 fn backend_scalar_handle_tensor(
     value: &Value,
     signature: &crate::SigType,
@@ -105,6 +115,10 @@ fn backend_scalar_handle_tensor(
 
 // Closed String/Bool arrays have no physical scalar leaves. Authenticate their
 // actual payload and complete shape rather than inventing a numeric witness.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Checks non-metric tensors without inventing scalar dimension evidence"
+)]
 fn closed_nonmetric_tensor(
     value: &Value,
     signature: &crate::SigType,
@@ -153,7 +167,7 @@ fn closed_nonmetric_tensor(
 }
 
 /// Public callback implementations supply their own schema. Validate it
-/// before conversion to RSSN TypeExpr: malformed or unsupported metadata must
+/// before conversion to RSSN `TypeExpr`: malformed or unsupported metadata must
 /// never be silently weakened into a rank-only or opaque signature.
 fn supported_callback_schema(ty: &crate::SigType) -> bool {
     use crate::SigType as S;
@@ -177,7 +191,7 @@ fn supported_callback_schema(ty: &crate::SigType) -> bool {
         },
         | S::Record(fields) => {
             fields.iter().enumerate().all(|(index, (name, ty))| {
-                !fields[..index].iter().any(|(other, _)| other == name)
+                !fields.iter().take(index).any(|(other, _)| other == name)
                     && supported_callback_schema(ty)
             })
         },
@@ -404,7 +418,7 @@ fn ordinary_input_schema_proves(
             expected.len() == actual.len()
                 && expected.len() == witnesses.len()
                 && expected.iter().enumerate().all(|(index, (name, field))| {
-                    if expected[..index].iter().any(|(other, _)| other == name) {
+                    if expected.iter().take(index).any(|(other, _)| other == name) {
                         return false;
                     }
                     let mut fields = actual.iter().filter(|(n, _)| n == name);
@@ -420,6 +434,10 @@ fn ordinary_input_schema_proves(
         | _ => false,
     }
 }
+#[allow(
+    clippy::too_many_lines,
+    reason = "Checks each concrete input shape against its runtime witness"
+)]
 fn validate_ordinary_callback_input(
     value: &Val,
     witness: &crate::witness::DimensionWitness,
@@ -566,14 +584,14 @@ fn validate_ordinary_callback_input(
                 return Err(missing());
             }
             for (index, (name, field)) in schema.iter().enumerate() {
-                if schema[..index].iter().any(|(other, _)| other == name) {
+                if schema.iter().take(index).any(|(other, _)| other == name) {
                     return Err(missing());
                 }
                 let mut values = fields.iter().filter(|(n, _)| n == name);
                 let mut proofs = witnesses.iter().filter(|(n, _)| n == name);
                 match (values.next(), values.next(), proofs.next(), proofs.next()) {
                     | (Some((_, value)), None, Some((_, proof)), None) => {
-                        validate_ordinary_callback_input(value, proof, field)?
+                        validate_ordinary_callback_input(value, proof, field)?;
                     },
                     | _ => return Err(missing()),
                 }
@@ -584,6 +602,10 @@ fn validate_ordinary_callback_input(
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "Keeps all callback result witness rules in one exhaustive check"
+)]
 fn validate_callback_result(
     value: &Val,
     witness: &crate::witness::DimensionWitness,
@@ -592,7 +614,7 @@ fn validate_callback_result(
     use crate::Num;
     use crate::SigType as S;
     use crate::witness::DimensionWitness as W;
-    fn scalar(
+    const fn scalar(
         value: &Val,
         sig: &S,
     ) -> bool {
@@ -603,9 +625,6 @@ fn validate_callback_result(
                 | (Val::Num(Num::Float(_)), S::Float)
                 | (Val::Complex { .. }, S::Complex)
         )
-    }
-    fn is_numeric(sig: &S) -> bool {
-        matches!(sig, S::Int | S::Real | S::Float | S::Complex | S::Dim(_, _))
     }
     let mismatch = || {
         KernelError::new(
@@ -671,7 +690,10 @@ fn validate_callback_result(
                 }
                 return Ok(());
             }
-            if is_numeric(elem) {
+            if matches!(
+                elem.as_ref(),
+                S::Int | S::Real | S::Float | S::Complex | S::Dim(_, _)
+            ) {
                 let dim = match elem.as_ref() {
                     | S::Dim(_, dim) if dim.is_concrete() => dim.clone(),
                     | S::Dim(_, _) => return Err(mismatch()),
@@ -768,8 +790,7 @@ pub fn kernel() -> Rc<Kernel> {
             *slot = Some(Rc::new(Kernel::new()));
         }
         slot.as_ref()
-            .map(Rc::clone)
-            .unwrap_or_else(|| Rc::new(Kernel::new()))
+            .map_or_else(|| Rc::new(Kernel::new()), Rc::clone)
     })
 }
 
@@ -818,7 +839,7 @@ impl Opts {
 
     /// A numeric request within `tolerance`.
     #[must_use]
-    pub fn numeric(tolerance: f64) -> Self {
+    pub const fn numeric(tolerance: f64) -> Self {
         Self {
             numeric: Some(tolerance),
             bindings: Vec::new(),
@@ -859,10 +880,10 @@ pub struct Computed {
     pub reduced: bool,
 }
 
-/// The dimension signature of an operator defined from Aevia source
-/// (§13.5.2): its parameters' and result's dimensions as signature
-/// dimensions, with the source function's dimension variables as
-/// `DimExpr::Var`.
+/// The dimension signature of an operator defined from Aevia source.
+///
+/// Parameter and result dimensions follow §13.5.2. Source dimension
+/// variables are represented by `DimExpr::Var`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceOpSignature {
     /// The operator name (`demo/area`).
@@ -1090,6 +1111,15 @@ impl Kernel {
     }
 
     /// Calls the dynamic ABI while preserving explicit input and output witnesses.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bridge error if the operator is unavailable, the arguments
+    /// or dimension witnesses fail validation, or the kernel call fails.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keeps witness validation, plugin lookup and dispatch in call order"
+    )]
     pub fn call_with_witnesses(
         &self,
         name: &str,
@@ -1119,8 +1149,9 @@ impl Kernel {
         };
         registry.capabilities.require_op(entry)?;
         let mut converted = self.convert(name, args)?;
-        if entry.source.is_exact() && entry.signatures.len() == 1 {
-            let signature = &entry.signatures[0];
+        if entry.source.is_exact()
+            && let [signature] = entry.signatures.as_slice()
+        {
             for (index, (value, witness)) in converted.iter_mut().zip(witnesses).enumerate() {
                 if let Some(param) = signature
                     .params
@@ -1141,14 +1172,6 @@ impl Kernel {
                                 | crate::SigType::Complex,
                                 W::Scalar(d),
                             ) => d.is_concrete(),
-                            | (
-                                crate::SigType::Dim(_, _)
-                                | crate::SigType::Int
-                                | crate::SigType::Real
-                                | crate::SigType::Float
-                                | crate::SigType::Complex,
-                                _,
-                            ) => false,
                             | (
                                 crate::SigType::Tensor { elem, .. }
                                 | crate::SigType::Sparse { elem, .. },
@@ -1203,7 +1226,12 @@ impl Kernel {
                             | (
                                 crate::SigType::Tensor { .. }
                                 | crate::SigType::Sparse { .. }
-                                | crate::SigType::Record(_),
+                                | crate::SigType::Record(_)
+                                | crate::SigType::Dim(_, _)
+                                | crate::SigType::Int
+                                | crate::SigType::Real
+                                | crate::SigType::Float
+                                | crate::SigType::Complex,
                                 _,
                             ) => false,
                             | _ => true,
@@ -1334,15 +1362,13 @@ impl Kernel {
             let mut element_repr = crate::SigType::Int;
             for (value, _) in &items {
                 match repr(value)? {
-                    | crate::SigType::Int => {},
                     | crate::SigType::Real if element_repr == crate::SigType::Int => {
                         element_repr = crate::SigType::Real;
                     },
-                    | crate::SigType::Real => {},
                     | crate::SigType::Float if element_repr == crate::SigType::Int => {
                         element_repr = crate::SigType::Float;
                     },
-                    | crate::SigType::Float => {},
+                    | crate::SigType::Int | crate::SigType::Real | crate::SigType::Float => {},
                     | _ => return None,
                 }
             }
@@ -1361,20 +1387,14 @@ impl Kernel {
             ));
         }
         let n = items.len();
-        let first_shape = match &items[0].0 {
-            | Val::Tensor { shape, .. } => Some(shape.clone()),
-            | _ => None,
-        };
-        let uniform = first_shape.as_ref().is_some_and(|first| {
-            items.iter().all(|(value, witness)| {
-                matches!(value, Val::Tensor { shape, .. } if shape == first)
-                    && *witness == items[0].1
+        if let Some(((Val::Tensor { shape: first, .. }, witness), rest)) = items.split_first()
+            && rest.iter().all(|(value, proof)| {
+                matches!(value, Val::Tensor { shape, .. } if shape == first) && proof == witness
             })
-        });
-        if uniform {
+        {
             let mut shape = vec![n];
-            shape.extend(first_shape?);
-            let witness = items[0].1.clone();
+            shape.extend(first);
+            let witness = witness.clone();
             let mut data = Vec::new();
             for (value, _) in items {
                 if let Val::Tensor { data: inner, .. } = value {
@@ -1541,6 +1561,11 @@ impl Kernel {
     /// Calls a higher-order operator with explicitly scoped callbacks and
     /// physical input/output witnesses. Callback registrations live only for
     /// this call and each bank entry snapshots its concrete signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bridge error if the operator, callback signatures, inputs or
+    /// witnesses fail validation, or the callback or kernel operation fails.
     pub fn call_ho_scoped(
         &self,
         name: &str,
@@ -1584,9 +1609,12 @@ impl Kernel {
         let entry = registry
             .op(name)
             .ok_or_else(|| KernelError::new("E1003", format!("rssn has no operator `{name}`")))?;
-        if !entry.higher_order || !entry.source.is_exact() || entry.signatures.len() != 1 {
+        if !entry.higher_order || !entry.source.is_exact() {
             return Err(KernelError::capability("core.callback.signature"));
         }
+        let [signature] = entry.signatures.as_slice() else {
+            return Err(KernelError::capability("core.callback.signature"));
+        };
         if let Some(key) = key
             && entry.key_index(key) != Some(0)
         {
@@ -1595,7 +1623,6 @@ impl Kernel {
                 "kernel callback overload key is not registered",
             ));
         }
-        let signature = &entry.signatures[0];
         for (index, (value, witness)) in args.iter().zip(witnesses).enumerate() {
             let param = signature
                 .params
@@ -1644,12 +1671,20 @@ impl Kernel {
                     .map_err(|e| from_op_error(&e))?,
             );
         }
-        let raw = if let Some(key) = key {
-            rssn::kernel::call::Kernel::call_ho(&self.session, key, &converted, &handles, &ctx)
-        } else {
-            self.session.call_ho(name, &converted, &handles, &ctx)
-        }
-        .map_err(|e| from_op_error(&e).at_operator(name))?;
+        let raw = key
+            .map_or_else(
+                || self.session.call_ho(name, &converted, &handles, &ctx),
+                |key| {
+                    rssn::kernel::call::Kernel::call_ho(
+                        &self.session,
+                        key,
+                        &converted,
+                        &handles,
+                        &ctx,
+                    )
+                },
+            )
+            .map_err(|e| from_op_error(&e).at_operator(name))?;
         let witness = crate::witness::extract(&raw, true);
         Ok((Val::from_rssn(&raw, self.id)?, witness))
     }
@@ -1866,17 +1901,15 @@ impl Kernel {
                     | None => self.parse_term(&number.to_string())?,
                 }
             },
-            | Val::Num(Num::Rat(number)) => {
-                match (number.numer().to_i64(), number.denom().to_i64()) {
+            | Val::Num(Num::Rat(ratio)) => {
+                match (ratio.numer().to_i64(), ratio.denom().to_i64()) {
                     | (Some(numer), Some(denom)) => {
                         match self.session.rational(numer, denom) {
                             | Some(term) => term,
                             | None => self.parse_term(&format!("({numer})/({denom})"))?,
                         }
                     },
-                    | _ => {
-                        self.parse_term(&format!("({})/({})", number.numer(), number.denom()))?
-                    },
+                    | _ => self.parse_term(&format!("({})/({})", ratio.numer(), ratio.denom()))?,
                 }
             },
             | Val::Num(Num::Float(number)) => self.session.float(*number),
@@ -2244,6 +2277,10 @@ pub fn rational(
 /// Any other rule (`Same`, `Sum`, `Product`, `Custom`, ...) depends on the
 /// arguments' dimensions and is not trusted here, so a dimensioned result is
 /// still never mislabelled.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Separates the dimensionless result proof from term evaluation"
+)]
 fn result_is_dimensionless(
     entry: &crate::registry::OpEntry,
     witnesses: &[crate::witness::DimensionWitness],

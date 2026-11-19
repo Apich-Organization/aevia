@@ -44,20 +44,29 @@ pub(crate) fn analysable(path: &Path) -> bool {
         || Package::owning(path).ok().flatten().is_some()
 }
 
-pub(crate) fn load_program(path: &Path) -> Program {
-    driver::load_with_roots(path, roots_for(path))
-}
-
-pub(crate) fn load_dirty_program(
-    path: &Path,
-    source: &str,
-) -> Program {
-    driver::load_with_roots_and_source(
-        path,
-        roots_for(path),
-        source,
-        &aevia_types::check::CheckOptions::default(),
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "select the filesystem or overlay loader at the cache boundary"
     )
+)]
+pub(crate) fn load_program(
+    path: &Path,
+    overlay: Option<&str>,
+) -> Program {
+    let roots = roots_for(path);
+    match overlay {
+        | Some(source) => {
+            driver::load_with_roots_and_source(
+                path,
+                roots,
+                source,
+                &aevia_types::check::CheckOptions::default(),
+            )
+        },
+        | None => driver::load_with_roots(path, roots),
+    }
 }
 
 /// Loaded programs by entry path. Source snapshots are compared exactly, so
@@ -77,19 +86,19 @@ impl AnalysisCache {
 
     /// Number of loads; hits do not count.
     #[must_use]
-    pub fn loads(&self) -> u64 {
+    pub const fn loads(&self) -> u64 {
         self.loads
     }
 
     /// Number of retained programs.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// Whether the cache retains no programs.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
@@ -144,7 +153,7 @@ impl AnalysisCache {
             self.entries.push(entry);
             return program;
         }
-        self.loads += 1;
+        self.loads = self.loads.saturating_add(1);
         let program = Rc::new(driver::load_with_roots_and_overlays(
             path,
             roots,

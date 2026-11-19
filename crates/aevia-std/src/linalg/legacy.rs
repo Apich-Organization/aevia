@@ -35,7 +35,7 @@ pub fn det(
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
-    reference::det(rows, cols, a).map_err(super::faer_backend::error)
+    reference::det(rows, cols, a).map_err(super::dense_error)
 }
 
 /// Compatibility `inv` through RSSN's reference algebra.
@@ -50,7 +50,7 @@ pub fn inv(
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
-    reference::inv(rows, cols, a).map_err(super::faer_backend::error)
+    reference::inv(rows, cols, a).map_err(super::dense_error)
 }
 
 /// Compatibility `solve` through RSSN's reference algebra.
@@ -66,7 +66,7 @@ pub fn solve(
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
-    reference::solve(rows, cols, a, b).map_err(super::faer_backend::error)
+    reference::solve(rows, cols, a, b).map_err(super::dense_error)
 }
 
 /// Compatibility `lu` through RSSN's reference algebra.
@@ -81,7 +81,7 @@ pub fn lu(
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
-    reference::lu(rows, cols, a).map_err(super::faer_backend::error)
+    reference::lu(rows, cols, a).map_err(super::dense_error)
 }
 
 /// Compatibility `qr` through RSSN's reference algebra.
@@ -93,10 +93,16 @@ pub fn qr(
     cols: usize,
     a: &[f64],
 ) -> Result<(Vec<f64>, Vec<f64>), NumericError> {
-    reference::qr(rows, cols, a).map_err(super::faer_backend::error)
+    let count = super::output_len::<f64>(rows, rows)?;
+    if rows == 0 || cols == 0 {
+        super::check_storage(rows, cols, a)?;
+        return Ok((super::filled(count, 0.0)?, Vec::new()));
+    }
+    reference::qr(rows, cols, a).map_err(super::dense_error)
 }
 
 /// Sequential kernel product retaining the historical floating-point order.
+/// Inconsistent or unrepresentable dimensions return an empty buffer.
 #[must_use]
 pub fn matmul(
     rows: usize,
@@ -105,5 +111,16 @@ pub fn matmul(
     a: &[f64],
     b: &[f64],
 ) -> Vec<f64> {
+    let Ok(count) = super::output_len::<f64>(rows, cols) else {
+        return Vec::new();
+    };
+    if super::check_storage(rows, inner, a).is_err()
+        || super::check_storage(inner, cols, b).is_err()
+    {
+        return Vec::new();
+    }
+    if count == 0 || inner == 0 {
+        return super::filled(count, 0.0).unwrap_or_default();
+    }
     reference::matmul(rows, inner, cols, a, b)
 }

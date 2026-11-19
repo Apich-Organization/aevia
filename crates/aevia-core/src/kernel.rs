@@ -13,6 +13,21 @@
 //!   as [`Term::Foreign`], so `integral(exp(-x^2))` prints `sqrt(pi)*erf(x)/2`
 //!   instead of failing.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
 use crate::eval::EvalError;
 use crate::sym::Term;
 use crate::value::NumKind;
@@ -32,7 +47,7 @@ use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::One;
 use num_traits::ToPrimitive;
-use num_traits::Zero;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -59,6 +74,7 @@ pub fn error(failure: &KernelError) -> EvalError {
 ///
 /// A closure or a constructor has no counterpart in the kernel and is
 /// reported as `E1003`.
+#[allow(clippy::too_many_lines, reason = "Exhaustive runtime value dispatch")]
 pub fn to_val(value: &Value) -> Result<Val, EvalError> {
     Ok(match value {
         | Value::KernelValue(value) => value.payload.clone(),
@@ -90,12 +106,42 @@ pub fn to_val(value: &Value) -> Result<Val, EvalError> {
             }
         },
         | Value::Tensor(tensor) => {
-            let mut data = Vec::with_capacity(tensor.storage.len());
-            for index in 0..tensor.storage.len() {
-                if let Some(item) = tensor.get_flat(index) {
-                    data.push(to_val(&item)?);
-                }
+            let len = tensor.storage.len();
+            let malformed = || EvalError::new("E0809", "tensor shape and storage disagree");
+            if tensor.checked_element_count() != Some(len) {
+                return Err(malformed());
             }
+            let data = if len == 0 {
+                Vec::new()
+            } else if let Some(items) = tensor.dense() {
+                items
+                    .iter()
+                    .map(|item| Val::Num(Num::Float(*item)))
+                    .collect()
+            } else {
+                match &tensor.storage {
+                    | Storage::Boxed(items) => {
+                        items.iter().map(to_val).collect::<Result<Vec<_>, _>>()?
+                    },
+                    | Storage::Bool(items) => items.iter().copied().map(Val::Bool).collect(),
+                    | Storage::Exact(items)
+                    | Storage::TypedExact(items, crate::value::ExactRep::Real) => {
+                        items
+                            .iter()
+                            .cloned()
+                            .map(|item| Val::Num(Num::Rat(item)))
+                            .collect()
+                    },
+                    | _ => {
+                        let mut data = Vec::with_capacity(len);
+                        for index in 0..len {
+                            let item = tensor.get_flat(index).ok_or_else(malformed)?;
+                            data.push(to_val(&item)?);
+                        }
+                        data
+                    },
+                }
+            };
             Val::Tensor {
                 shape: tensor.shape.clone(),
                 data,
@@ -208,7 +254,14 @@ pub fn to_expr(term: &Term) -> Expr {
         | Term::Pow(base, exponent) => {
             Expr::App(
                 "pow".to_string(),
-                vec![to_expr(base), exponent_expr(exponent)],
+                vec![
+                    to_expr(base),
+                    if exponent.denom().is_one() {
+                        Expr::Num(Num::Int(exponent.numer().clone()))
+                    } else {
+                        Expr::Num(Num::Rat(exponent.clone()))
+                    },
+                ],
             )
         },
         | Term::Fun(function, args) => {
@@ -218,15 +271,6 @@ pub fn to_expr(term: &Term) -> Expr {
             )
         },
         | Term::Foreign { sym, .. } => Expr::Term(*sym),
-    }
-}
-
-/// An exponent as a build request, integers included.
-fn exponent_expr(value: &BigRational) -> Expr {
-    if value.denom().is_one() {
-        Expr::Num(Num::Int(value.numer().clone()))
-    } else {
-        Expr::Num(Num::Rat(value.clone()))
     }
 }
 
@@ -246,79 +290,135 @@ fn is_ident_char(c: char) -> bool {
 }
 
 /// `E` as a whole identifier becomes `e`.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Separate token spelling from root normalization"
+)]
 fn respell_euler(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
+    let mut chars = text.chars().peekable();
+    let mut before = None;
     let mut out = String::with_capacity(text.len());
-    for (index, &c) in chars.iter().enumerate() {
-        let before = index.checked_sub(1).map(|i| chars[i]);
-        let after = chars.get(index + 1).copied();
+    while let Some(c) = chars.next() {
         if c == 'E'
             && !before.is_some_and(|b| is_ident_char(b) || b == '.')
-            && !after.is_some_and(|a| is_ident_char(a) || a == '(')
+            && !chars.peek().is_some_and(|&a| is_ident_char(a) || a == '(')
         {
             out.push('e');
         } else {
             out.push(c);
         }
+        before = Some(c);
     }
     out
 }
 
-/// `atom^(1/2)` becomes `sqrt(atom)`, where `atom` is an identifier, a number,
-/// a bracketed group or a call. Anything it cannot delimit is left alone.
+#[derive(Clone, Copy)]
+struct RenderedAtom {
+    start: usize,
+    end: usize,
+    identifier: bool,
+    bare_group: bool,
+}
+
+#[derive(Default)]
+struct RootEdit {
+    opens: usize,
+    skip_to: Option<usize>,
+    close: bool,
+}
+
+/// `atom^(1/2)` becomes `sqrt(atom)` for identifiers, numbers, groups and calls.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Normalize root spelling independently of other token rewrites"
+)]
 fn respell_square_roots(text: &str) -> String {
     const HALF: &str = "^(1/2)";
-    let mut current = text.to_string();
-    // Each pass rewrites the leftmost occurrence; nested roots take one pass
-    // each, and the bound keeps a malformed text from looping.
-    for _ in 0..64 {
-        let Some(at) = current.find(HALF) else {
-            break;
-        };
-        let chars: Vec<char> = current[..at].chars().collect();
-        let mut start = chars.len();
-        if chars.last() == Some(&')') {
-            let mut depth = 0usize;
-            let mut found = None;
-            for index in (0..chars.len()).rev() {
-                match chars[index] {
-                    | ')' => depth += 1,
-                    | '(' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            found = Some(index);
-                            break;
-                        }
-                    },
-                    | _ => {},
+    let mut chars = text.char_indices();
+    let mut atom: Option<RenderedAtom> = None;
+    let mut groups = Vec::new();
+    let mut edits: BTreeMap<usize, RootEdit> = BTreeMap::new();
+    while let Some((index, c)) = chars.next() {
+        let end = index.saturating_add(c.len_utf8());
+        let previous = atom.take().filter(|previous| previous.end == index);
+        atom = match c {
+            | '(' => {
+                let function = previous.filter(|previous| previous.identifier);
+                groups.push((
+                    function.map_or(index, |name| name.start),
+                    function.is_none(),
+                ));
+                None
+            },
+            | ')' => {
+                groups.pop().map(|(start, bare_group)| {
+                    RenderedAtom {
+                        start,
+                        end,
+                        identifier: false,
+                        bare_group,
+                    }
+                })
+            },
+            | '^' if let Some(previous) = previous
+                && text
+                    .get(index..)
+                    .is_some_and(|suffix| suffix.starts_with(HALF)) =>
+            {
+                let after = index.saturating_add(HALF.len());
+                let open = edits.entry(previous.start).or_default();
+                open.opens = open.opens.saturating_add(1);
+                let close = if previous.bare_group {
+                    open.skip_to = Some(previous.start.saturating_add(1));
+                    index.saturating_sub(1)
+                } else {
+                    index
+                };
+                let close = edits.entry(close).or_default();
+                close.skip_to = Some(after);
+                close.close = true;
+                for _ in 1..HALF.len() {
+                    chars.next();
                 }
-            }
-            let Some(open) = found else {
-                break;
-            };
-            start = open;
-            // A call keeps its function name: `f(x)^(1/2)`.
-            while start > 0 && is_ident_char(chars[start - 1]) {
-                start -= 1;
-            }
-        } else {
-            while start > 0 && (is_ident_char(chars[start - 1]) || chars[start - 1] == '.') {
-                start -= 1;
-            }
-        }
-        if start == chars.len() {
-            break;
-        }
-        let atom: String = chars[start..].iter().collect();
-        let inner = if atom.starts_with('(') && atom.ends_with(')') {
-            atom[1..atom.len() - 1].to_string()
-        } else {
-            atom
+                Some(RenderedAtom {
+                    end: after,
+                    identifier: false,
+                    bare_group: false,
+                    ..previous
+                })
+            },
+            | c if is_ident_char(c) || c == '.' => {
+                let start = previous
+                    .filter(|previous| previous.identifier)
+                    .map_or(index, |word| word.start);
+                Some(RenderedAtom {
+                    start,
+                    end,
+                    identifier: true,
+                    bare_group: false,
+                })
+            },
+            | _ => None,
         };
-        let prefix: String = chars[..start].iter().collect();
-        current = format!("{prefix}sqrt({inner}){}", &current[at + HALF.len()..]);
     }
-    current
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for (index, edit) in edits {
+        if let Some(fragment) = text.get(cursor..index) {
+            out.push_str(fragment);
+        }
+        for _ in 0..edit.opens {
+            out.push_str("sqrt(");
+        }
+        if edit.close {
+            out.push(')');
+        }
+        cursor = edit.skip_to.unwrap_or(index);
+    }
+    if let Some(suffix) = text.get(cursor..) {
+        out.push_str(suffix);
+    }
+    out
 }
 
 /// Removes the disambiguating suffix from internal symbol names.
@@ -330,21 +430,17 @@ fn respell_square_roots(text: &str) -> String {
 pub fn clean_internal_names(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
-    while let Some(position) = rest.find("#diff") {
-        out.push_str(&rest[..position]);
-        let tail = &rest[position + "#diff".len()..];
-        // Only the generated `x#diff12` is stripped; `symbol("a#b")` keeps its
-        // name, because `a#b` is the name the user asked for.
-        let digits = tail.len() - tail.trim_start_matches(|c: char| c.is_ascii_digit()).len();
-        if digits > 0
-            || tail.is_empty()
-            || !tail.starts_with(|c: char| c.is_alphanumeric() || c == '_')
+    while let Some((prefix, tail)) = rest.split_once("#diff") {
+        out.push_str(prefix);
+        // Preserve user names where `#diff` is followed by more identifier text.
+        let suffix = tail.trim_start_matches(|c: char| c.is_ascii_digit());
+        if suffix.len() < tail.len() || !tail.starts_with(|c: char| c.is_alphanumeric() || c == '_')
         {
-            rest = &tail[digits..];
-            continue;
+            rest = suffix;
+        } else {
+            out.push_str("#diff");
+            rest = tail;
         }
-        out.push_str("#diff");
-        rest = tail;
     }
     out.push_str(rest);
     out
@@ -401,6 +497,7 @@ pub fn fold(
 /// `dim` is the dimension the static type assigned to the result; the kernel
 /// does not track it on the static path (§10.4.1).
 #[must_use]
+#[allow(clippy::too_many_lines, reason = "Exhaustive kernel value dispatch")]
 pub fn from_val(
     value: &Val,
     dim: Dim,
@@ -467,6 +564,9 @@ pub fn from_val(
             }
         },
         | Val::Tensor { shape, data } => {
+            if crate::value::checked_element_count(shape) != Some(data.len()) {
+                return Value::Error;
+            }
             let storage: Vec<Value> = data
                 .iter()
                 .map(|item| from_val(item, dim.clone()))
@@ -539,11 +639,7 @@ pub fn term_of(val: &Val) -> Option<Term> {
     match val {
         | Val::Num(Num::Int(value)) => Some(Term::Num(BigRational::from_integer(value.clone()))),
         | Val::Num(Num::Rat(value)) => Some(Term::Num(value.clone())),
-        | Val::Num(Num::Float(value)) => {
-            Some(Term::Num(
-                BigRational::from_float(*value).unwrap_or_else(BigRational::zero),
-            ))
-        },
+        | Val::Num(Num::Float(value)) => BigRational::from_float(*value).map(Term::Num),
         | Val::Symbol(name) => Some(Term::Sym(name.clone())),
         | Val::Term(sym) => {
             let kernel = aevia_rssn::kernel();
@@ -561,6 +657,10 @@ pub fn dim_of(value: &Value) -> Dim {
 
 /// Evaluates a symbolic term to a float, with the given bindings.
 #[must_use]
+#[allow(
+    clippy::implicit_hasher,
+    reason = "Accept the same bindings as Term::eval"
+)]
 pub fn eval_term(
     term: &Term,
     bindings: &HashMap<String, f64>,
@@ -589,7 +689,7 @@ pub fn int_num(value: i64) -> Num {
 
 /// A float as the bridge's number.
 #[must_use]
-pub fn float_num(value: f64) -> Num {
+pub const fn float_num(value: f64) -> Num {
     Num::Float(value)
 }
 
@@ -607,7 +707,7 @@ pub fn as_i64(value: &Num) -> Option<i64> {
         },
         | Num::Float(value) => {
             if value.fract() == 0.0 {
-                Some(*value as i64)
+                value.to_i64()
             } else {
                 None
             }
@@ -673,7 +773,44 @@ pub fn kernel_symbol(name: &str) -> Sym {
 
 #[cfg(test)]
 mod spelling_tests {
-    use super::foreign_text;
+    use super::*;
+
+    #[test]
+    fn bridge_rejects_out_of_range_and_nonfinite_values() {
+        assert_eq!(as_i64(&Num::Float(9_223_372_036_854_775_808.0)), None);
+        assert_eq!(
+            as_i64(&Num::Float(-9_223_372_036_854_775_808.0)),
+            Some(i64::MIN)
+        );
+        assert!(term_of(&Val::Num(Num::Float(f64::INFINITY))).is_none());
+        assert!(term_of(&Val::Num(Num::Float(f64::NAN))).is_none());
+        let empty = TensorData::new(
+            vec![usize::MAX, 2, 0],
+            Storage::Bool(Vec::new()),
+            Dim::one(),
+            None,
+        );
+        assert!(to_val(&Value::Tensor(Rc::new(empty))).is_ok());
+        let malformed = TensorData::new(vec![2], Storage::Bool(vec![true]), Dim::one(), None);
+        assert!(to_val(&Value::Tensor(Rc::new(malformed))).is_err());
+        let malformed = Val::Tensor {
+            shape: vec![2],
+            data: vec![Val::Bool(true)],
+        };
+        assert!(matches!(from_val(&malformed, Dim::one()), Value::Error));
+    }
+
+    #[test]
+    fn roots_spell_nested_and_long_expressions() {
+        assert_eq!(foreign_text("(α^(1/2))^(1/2)"), "sqrt(sqrt(α))");
+        assert_eq!(foreign_text("α^(1/2)^(1/2)"), "sqrt(sqrt(α))");
+        assert_eq!(foreign_text("a^(1/2)+b^(1/2)"), "sqrt(a)+sqrt(b)");
+        assert_eq!(foreign_text("^(1/2) + α^(1/2)"), "^(1/2) + sqrt(α)");
+        assert_eq!(
+            foreign_text(&"x^(1/2)+".repeat(100)),
+            "sqrt(x)+".repeat(100)
+        );
+    }
 
     #[test]
     fn kernel_text_is_respelt_in_aevia_terms() {

@@ -25,15 +25,15 @@ use crate::package;
 use crate::style;
 
 /// Parses `-A/-W/-D/-F` (`--allow/--warn/--deny/--forbid`) flags, returning remaining args.
-pub(crate) fn parse_lint_flags(
+pub fn parse_lint_flags(
     args: &[String],
     command: &str,
 ) -> Result<(Vec<CliOverride>, Vec<String>), ExitCode> {
     let mut overrides = Vec::new();
     let mut rest = Vec::new();
     let mut i = 0;
-    while i < args.len() {
-        let arg = &args[i];
+    while let Some(argument) = args.get(i) {
+        let arg = argument;
         let flag = match arg.as_str() {
             | "-A" | "--allow" => Some(Level::Allow),
             | "-W" | "--warn" => Some(Level::Warn),
@@ -42,7 +42,7 @@ pub(crate) fn parse_lint_flags(
             | _ => None,
         };
         if let Some(level) = flag {
-            let Some(target) = args.get(i + 1) else {
+            let Some(target) = args.get(i.saturating_add(1)) else {
                 eprintln!("aevia {command}: `{arg}` expects a lint or group name");
                 return Err(ExitCode::from(2));
             };
@@ -50,7 +50,7 @@ pub(crate) fn parse_lint_flags(
                 level,
                 target: target.clone(),
             });
-            i += 2;
+            i = i.saturating_add(2);
             continue;
         }
         // Also support `--deny=warnings`, `-Dwarnings`, etc.
@@ -59,15 +59,19 @@ pub(crate) fn parse_lint_flags(
                 level: prefix,
                 target: target.to_string(),
             });
-            i += 1;
+            i = i.saturating_add(1);
             continue;
         }
         rest.push(arg.clone());
-        i += 1;
+        i = i.saturating_add(1);
     }
     Ok((overrides, rest))
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps accepted lint flag spellings together"
+)]
 fn split_inline_flag(arg: &str) -> Option<(Level, &str)> {
     for (p, lvl) in [
         ("--allow=", Level::Allow),
@@ -89,16 +93,20 @@ fn split_inline_flag(arg: &str) -> Option<(Level, &str)> {
 }
 
 /// Loads `[lints]` from the nearest `aevia.toml` (if any) starting from `start_dir`.
-pub(crate) fn load_manifest_lints(start_dir: &Path) -> BTreeMap<String, LintSetting> {
+pub fn load_manifest_lints(start_dir: &Path) -> BTreeMap<String, LintSetting> {
     Package::find(start_dir)
         .ok()
         .flatten()
-        .map(|pkg| pkg.manifest.lints)
-        .unwrap_or_default()
+        .map_or_default(|pkg| pkg.manifest.lints)
 }
 
 /// Entry point for `aevia lint`.
-pub(crate) fn run(
+#[allow(
+    clippy::single_call_fn,
+    clippy::too_many_lines,
+    reason = "the lint command routes inspection, package checks, and file checks"
+)]
+pub fn run(
     options: Options,
     args: &[String],
 ) -> ExitCode {
@@ -118,35 +126,33 @@ pub(crate) fn run(
     let mut format = OutputFormat::Human;
     let mut files = Vec::new();
 
-    let mut i = 0;
-    while i < rest.len() {
-        match rest[i].as_str() {
+    let mut args = rest.into_iter();
+    while let Some(argument) = args.next() {
+        match argument.as_str() {
             | "--all" => all = true,
             | "--no-cache" => no_cache = true,
             | "--fix" => fix = true,
             | "--allow-dirty" => allow_dirty = true,
             | "--list" => list = true,
             | "--explain" => {
-                let Some(target) = rest.get(i + 1) else {
+                let Some(target) = args.next() else {
                     eprintln!("aevia lint: `--explain` expects a lint code or name");
                     return ExitCode::from(2);
                 };
-                explain = Some(target.clone());
-                i += 1;
+                explain = Some(target);
             },
             | "--format" => {
-                let Some(fmt) = rest.get(i + 1) else {
+                let Some(fmt) = args.next() else {
                     eprintln!("aevia lint: `--format` expects `human`, `json`, or `sarif`");
                     return ExitCode::from(2);
                 };
-                let Some(parsed) = OutputFormat::parse(fmt) else {
+                let Some(parsed) = OutputFormat::parse(&fmt) else {
                     eprintln!(
                         "aevia lint: unknown format `{fmt}` (expected `human`, `json`, or `sarif`)"
                     );
                     return ExitCode::from(2);
                 };
                 format = parsed;
-                i += 1;
             },
             | other if other.starts_with('-') => {
                 eprintln!(
@@ -156,7 +162,6 @@ pub(crate) fn run(
             },
             | other => files.push(other.to_string()),
         }
-        i += 1;
     }
 
     if list {
@@ -192,110 +197,22 @@ pub(crate) fn run(
         );
     }
 
-    let expanded: Vec<String> = package::expand_globs(&files)
-        .into_iter()
-        .map(|p| p.display().to_string())
-        .collect();
-    if expanded.len() > 1 {
-        return lint_files(
-            options,
-            &store,
-            cli_overrides,
-            &expanded,
-            fix,
-            format,
-            no_cache,
-        );
-    }
-
-    let path = match entry_path(&expanded, "lint") {
-        | Ok(p) => p,
-        | Err(code) => return code,
-    };
-    let start_dir = path.parent().unwrap_or(&cwd);
-    let config = LintConfig {
-        manifest_lints: load_manifest_lints(start_dir),
-        cli_overrides,
-        run_extra_lints: true,
-    };
-
-    let program = load_at_with(&path, !no_cache);
-    let root_files: Option<Vec<FileId>> = program.entry().map(|m| vec![m.file]);
-    let mut report = Driver::run_program(&program, &store, &config, root_files.as_deref());
-
-    if fix {
-        match FixEngine::apply(&report.lint_diagnostics, &program.sources) {
-            | Ok(summary) if summary.applied > 0 => {
-                eprintln!(
-                    "aevia lint: applied {} fix(es) in {} file(s)",
-                    summary.applied,
-                    summary.files_modified.len()
-                );
-                let reloaded = load_at_with(&path, false);
-                let root_files: Option<Vec<FileId>> = reloaded.entry().map(|m| vec![m.file]);
-                report = Driver::run_program(&reloaded, &store, &config, root_files.as_deref());
-                print_report(&reloaded.sources, &report, &store, format, options);
-                return if report.has_errors() {
-                    ExitCode::from(1)
-                } else {
-                    ExitCode::SUCCESS
-                };
-            },
-            | Ok(_) => {},
-            | Err(err) => {
-                eprintln!("aevia lint: {err}");
-                return ExitCode::from(1);
-            },
+    let mut paths = package::expand_globs(&files);
+    if paths.is_empty() {
+        match entry_path(&[], "lint") {
+            | Ok(path) => paths.push(path),
+            | Err(code) => return code,
         }
     }
-
-    print_report(&program.sources, &report, &store, format, options);
-    if report.has_errors() {
-        ExitCode::from(1)
-    } else {
-        ExitCode::SUCCESS
-    }
-}
-
-fn lint_files(
-    options: Options,
-    store: &LintStore,
-    cli_overrides: Vec<CliOverride>,
-    files: &[String],
-    fix: bool,
-    format: OutputFormat,
-    no_cache: bool,
-) -> ExitCode {
     let mut failed = false;
-    for raw in files {
-        let path = PathBuf::from(raw);
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    for path in paths {
         let start_dir = path.parent().unwrap_or(&cwd);
         let config = LintConfig {
             manifest_lints: load_manifest_lints(start_dir),
             cli_overrides: cli_overrides.clone(),
             run_extra_lints: true,
         };
-        let program = load_at_with(&path, !no_cache);
-        let root_files: Option<Vec<FileId>> = program.entry().map(|m| vec![m.file]);
-        let mut report = Driver::run_program(&program, store, &config, root_files.as_deref());
-        if fix
-            && let Ok(summary) = FixEngine::apply(&report.lint_diagnostics, &program.sources)
-            && summary.applied > 0
-        {
-            let reloaded = load_at_with(&path, false);
-            let root_files: Option<Vec<FileId>> = reloaded.entry().map(|m| vec![m.file]);
-            report = Driver::run_program(&reloaded, store, &config, root_files.as_deref());
-            print_report(&reloaded.sources, &report, store, format, options);
-            if report.has_errors() {
-                failed = true;
-            }
-            continue;
-        }
-        print_report(&program.sources, &report, store, format, options);
-        if report.has_errors() {
-            failed = true;
-        }
+        failed |= lint_path(&path, options, &store, &config, fix, format, no_cache);
     }
     if failed {
         ExitCode::from(1)
@@ -304,6 +221,59 @@ fn lint_files(
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "one report and fix cycle belongs to one source root"
+)]
+fn lint_path(
+    path: &Path,
+    options: Options,
+    store: &LintStore,
+    config: &LintConfig,
+    fix: bool,
+    format: OutputFormat,
+    no_cache: bool,
+) -> bool {
+    let mut program = load_at_with(path, !no_cache);
+    let root_files = program.entry().map(|module| [module.file]);
+    let mut report = Driver::run_program(
+        &program,
+        store,
+        config,
+        root_files.as_ref().map(<[FileId; 1]>::as_slice),
+    );
+    if fix {
+        match FixEngine::apply(&report.lint_diagnostics, &program.sources) {
+            | Ok(summary) if summary.applied > 0 => {
+                eprintln!(
+                    "aevia lint: applied {} fix(es) in {} file(s)",
+                    summary.applied,
+                    summary.files_modified.len()
+                );
+                program = load_at_with(path, false);
+                let root_files = program.entry().map(|module| [module.file]);
+                report = Driver::run_program(
+                    &program,
+                    store,
+                    config,
+                    root_files.as_ref().map(<[FileId; 1]>::as_slice),
+                );
+            },
+            | Ok(_) => {},
+            | Err(error) => {
+                eprintln!("aevia lint: {}: {error}", path.display());
+                return true;
+            },
+        }
+    }
+    print_report(&program.sources, &report, store, format, options);
+    report.has_errors()
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "linting a package resolves the workspace and its lint settings once"
+)]
 fn lint_all(
     options: Options,
     store: &LintStore,
@@ -350,7 +320,7 @@ fn lint_all(
         },
     };
     let config = LintConfig {
-        manifest_lints: package.manifest.lints.clone(),
+        manifest_lints: package.manifest.lints,
         cli_overrides,
         run_extra_lints: true,
     };
@@ -434,6 +404,10 @@ fn print_report(
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "checks for the user's uncommitted changes before applying edits"
+)]
 fn is_git_dirty(dir: &Path) -> bool {
     Command::new("git")
         .args(["status", "--porcelain"])

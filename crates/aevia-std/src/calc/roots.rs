@@ -56,13 +56,13 @@ where
     DF: FnMut(f64) -> f64,
     D2F: FnMut(f64) -> f64,
 {
-    let fc = RefCell::new(f);
-    let dfc = RefCell::new(df);
-    let d2fc = RefCell::new(d2f);
+    let function = RefCell::new(f);
+    let first_derivative = RefCell::new(df);
+    let second_derivative = RefCell::new(d2f);
     rootfind::halley(
-        |x| (fc.borrow_mut())(x),
-        |x| (dfc.borrow_mut())(x),
-        |x| (d2fc.borrow_mut())(x),
+        |x| (function.borrow_mut())(x),
+        |x| (first_derivative.borrow_mut())(x),
+        |x| (second_derivative.borrow_mut())(x),
         x0,
         tol,
         max_iter,

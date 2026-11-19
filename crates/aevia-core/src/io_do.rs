@@ -1,5 +1,20 @@
 //! Immutable do programs with replay-local cursors. No suffix cloning or
 //! implementation closure can change source evaluation order or catch `?`.
+
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
 use crate::EvalError;
 use crate::Interp;
 use crate::eval::Frame;
@@ -15,19 +30,25 @@ use std::rc::Rc;
 #[derive(Debug)]
 enum Code {
     Ast(Rc<[DoStmt]>),
-    Ir(Rc<aevia_ir::DoPlan>),
+    Ir {
+        plan: Rc<aevia_ir::DoPlan>,
+        env: Rc<IrEnv>,
+    },
 }
-/// A deferred source IO program. Execution state is created afresh by run_io,
+/// A deferred source IO program. Execution state is created afresh by `run_io`,
 /// so running the same action twice never shares bindings or an instruction cursor.
 #[derive(Debug)]
 pub struct DoBlock {
     code: Code,
     scope: Rc<Scope>,
-    env: Option<Rc<IrEnv>>,
     span: Span,
     origin: Frame,
 }
 impl DoBlock {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "the AST and lowered evaluators construct their own deferred program variants"
+    )]
     pub(crate) fn ast(
         interp: &Interp,
         statements: &[DoStmt],
@@ -37,35 +58,38 @@ impl DoBlock {
         Rc::new(Self {
             code: Code::Ast(statements.to_vec().into()),
             scope: Scope::child_with_types(scope, interp.bindings.clone()),
-            env: None,
             span,
             origin: origin(interp, span),
         })
     }
 
+    #[allow(
+        clippy::single_call_fn,
+        reason = "the AST and lowered evaluators construct their own deferred program variants"
+    )]
     pub(crate) fn ir(
         interp: &Interp,
         plan: Rc<aevia_ir::DoPlan>,
         env: Rc<IrEnv>,
+        scope: Rc<Scope>,
     ) -> Rc<Self> {
         let span = plan.span;
         Rc::new(Self {
-            code: Code::Ir(plan),
-            scope: env.scope.clone().expect("captured do scope"),
-            env: Some(env),
+            code: Code::Ir { plan, env },
+            scope,
             span,
             origin: origin(interp, span),
         })
     }
 
-    pub(crate) fn source_span(&self) -> Span {
+    pub(crate) const fn source_span(&self) -> Span {
         self.span
     }
 
     pub(crate) fn cursor(self: &Rc<Self>) -> DoCursor {
         let slots = match &self.code {
             | Code::Ast(_) => 0,
-            | Code::Ir(plan) => plan.nslots as usize,
+            | Code::Ir { plan, .. } => plan.nslots as usize,
         };
         DoCursor {
             block: self.clone(),
@@ -117,7 +141,7 @@ impl DoCursor {
                     }
                 })
             },
-            | Code::Ir(plan) => {
+            | Code::Ir { plan, .. } => {
                 plan.steps.get(index).map_or(plan.span, |step| {
                     match step {
                         | aevia_ir::DoStep::Let { span, .. }
@@ -167,8 +191,10 @@ impl DoCursor {
         match &block.code {
             | Code::Ast(statements) => {
                 if let Some(index) = self.awaiting.take() {
-                    let DoStmt::Bind { pattern, .. } = &statements[index] else {
-                        unreachable!()
+                    let Some(DoStmt::Bind { pattern, .. }) = statements.get(index) else {
+                        return Err(
+                            EvalError::new("E0809", "invalid deferred do binding").at(block.span)
+                        );
                     };
                     let next = Scope::child(&self.scope);
                     interp.bind_pattern_entry(pattern, last, &next)?;
@@ -178,7 +204,7 @@ impl DoCursor {
                     return Ok(Step::Complete(Value::Unit));
                 };
                 let index = self.index;
-                self.index += 1;
+                self.index = self.index.saturating_add(1);
                 match statement {
                     | DoStmt::Let { pattern, value, .. } => {
                         let value = interp.eval(value, &self.scope)?;
@@ -208,11 +234,13 @@ impl DoCursor {
                     },
                 }
             },
-            | Code::Ir(plan) => {
-                let env = block.env.as_ref().expect("IR do environment");
+            | Code::Ir { plan, env } => {
                 if let Some(index) = self.awaiting.take() {
-                    let aevia_ir::DoStep::Bind { pattern, span, .. } = &plan.steps[index] else {
-                        unreachable!()
+                    let Some(aevia_ir::DoStep::Bind { pattern, span, .. }) = plan.steps.get(index)
+                    else {
+                        return Err(
+                            EvalError::new("E0809", "invalid deferred do binding").at(block.span)
+                        );
                     };
                     crate::eval_ir::bind_do_pattern(pattern, last, &mut self.slots, *span)?;
                 }
@@ -220,7 +248,7 @@ impl DoCursor {
                     return Ok(Step::Complete(Value::Unit));
                 };
                 let index = self.index;
-                self.index += 1;
+                self.index = self.index.saturating_add(1);
                 let (value, span) = match step {
                     | aevia_ir::DoStep::Let { value, span, .. }
                     | aevia_ir::DoStep::Bind { value, span, .. }

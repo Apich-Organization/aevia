@@ -1,10 +1,4 @@
-//! Shape type arguments at run time (§8.4, item 4 of the round).
-//!
-//! `reshape`, `zeros_of` and `ones_of` name their target shape in a *type*
-//! argument. The runtime reads that argument from the AST node, so these tests
-//! go through a program wherever the parser accepts the spelling, and through
-//! `call_typed` for the `[3, 2]` spelling the parser does not accept yet
-//! (recorded in `.workbuddy-ai/audit/dicts.md`).
+//! Static and dynamic tensor shapes through the checker and runtime.
 
 #![allow(clippy::result_large_err)]
 
@@ -115,10 +109,35 @@ fn reshape_dyn_reports_the_same_failure_as_a_result() {
 }
 
 #[test]
+fn reshape_dyn_keeps_the_rank_and_checks_exact_extents() {
+    let mut interp = interp(
+        "let vector = reshape_dyn([1, 2], [2])\n\
+         let high = reshape_dyn(zeros(2, 3, 1, 1, 1), [1, 1, 3, 2, 1])\n\
+         let rank = reshape_dyn(zeros(2, 3), [6])\n\
+         let negative = reshape_dyn(zeros(0, 1), [-1, 0])\n\
+         let overflow = reshape_dyn(zeros(0, 1), [18446744073709551616, 0])\n",
+    );
+    for (name, shape) in [("vector", vec![2]), ("high", vec![1, 1, 3, 2, 1])] {
+        let Value::Variant(result) = interp.eval_toplevel(name).expect("binding") else {
+            panic!("reshape_dyn returns a Result");
+        };
+        assert_eq!(result.name, "Ok");
+        let Value::Tensor(tensor) = &result.fields[0] else {
+            panic!("Ok carries a tensor");
+        };
+        assert_eq!(tensor.shape, shape);
+    }
+    for name in ["rank", "negative", "overflow"] {
+        let Value::Variant(result) = interp.eval_toplevel(name).expect("binding") else {
+            panic!("reshape_dyn returns a Result");
+        };
+        assert_eq!(result.name, "Err", "{name}");
+    }
+}
+
+#[test]
 fn a_shape_written_as_a_shape_argument_works() {
-    // The specification spells the argument `reshape<[3, 2]>`; the parser does
-    // not reach `type_arg` from an expression's `<…>` list yet, so the AST
-    // node is built here. This is the spelling the runtime already handles.
+    // Construct the parsed shape directly for the public host entry point.
     let ty = Ty::new(
         TyKind::ShapeArg(ShapeAst::Refined(vec![
             ShapeItem::Known(NatAst::Lit(3)),

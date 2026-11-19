@@ -627,7 +627,35 @@ fn a_record_update_keeps_the_open_tail() {
         r#"type P = { x: Float, y: Float }
 fn f(p: P): { x: Float, y: Float, z: Float } = { p with z = 1.0 }
 fn g(p: { x: Float, ...r }): { x: Float, ...r } = { p with x = 2.0 }
+fn h(p: { x: Float, ...r }): { x: Float, z: Bool, ...r } = { p with z = true }
 "#,
+    );
+}
+
+#[test]
+fn generic_record_updates_require_the_added_field_to_be_absent() {
+    let definitions = "\
+fn add_visible(p: { x: Int, ...r }): { x: Int, z: Bool, ...r } = { p with z = true }
+fn add_hidden(p: { x: Int, ...r }): Bool = ({ p with z = true }).z
+fn forwarded(p: { x: Int, ...r }): Bool = add_hidden(p)
+let alias = add_hidden
+";
+    expect_ok(&format!(
+        "{definitions}let visible = add_visible({{ x = 1, y = \"other\" }})\nlet hidden = add_hidden({{ x = 1 }})\n"
+    ));
+    for name in ["add_visible", "add_hidden", "forwarded", "alias"] {
+        expect_error(
+            &format!("{definitions}let invalid = {name}({{ x = 1, z = \"existing\" }})\n"),
+            "E0208",
+        );
+    }
+}
+
+#[test]
+fn projecting_a_field_that_the_open_tail_excludes_is_an_error() {
+    expect_error(
+        "fn f(p: { x: Int, ...r }) =\n    let _updated = { p with z = true }\n    p.z\n",
+        "E0208",
     );
 }
 

@@ -9,17 +9,36 @@
 //! page's examples are checked by compiling them, not only by rendering them.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
 
 pub mod doctest;
 
 use aevia_fmt::print::Printer;
-use aevia_syntax::ast::*;
+use aevia_syntax::ast::Decl;
+use aevia_syntax::ast::DeclKind;
+use aevia_syntax::ast::Pat;
+use aevia_syntax::ast::PatKind;
+use aevia_syntax::ast::Ty;
+use aevia_syntax::ast::TypeParam;
 use aevia_syntax::lex;
 use aevia_syntax::parse_module;
 use std::fmt::Write as _;
 
 /// One documented declaration.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DeclDoc {
     /// `fn`, `let`, `type`, `unit`, `dimension`, `class`, `instance`, `derive`.
     pub kind: String,
@@ -36,7 +55,7 @@ pub struct DeclDoc {
 }
 
 /// One module's documentation.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ModuleDoc {
     /// The module path, `Kinematics` or `Thermo.IdealGas`.
     pub path: String,
@@ -105,8 +124,7 @@ pub fn module_doc(
     let path = module
         .name
         .as_ref()
-        .map(|name| name.join("."))
-        .unwrap_or_else(|| fallback_name.to_string());
+        .map_or_else(|| fallback_name.to_string(), |name| name.join("."));
     let header = module_header(source);
     let mut decls = Vec::new();
     for decl in &module.decls {
@@ -143,9 +161,13 @@ pub fn module_doc(
 }
 
 /// The `##` lines at the top of a file, before the `module` line.
+#[allow(
+    clippy::single_call_fn,
+    reason = "module-level comment association is separate from declaration collection"
+)]
 fn module_header(source: &str) -> Option<String> {
     let mut lines = Vec::new();
-    for raw in source.lines() {
+    for raw in source.split(['\r', '\n']) {
         let line = raw.trim();
         if let Some(rest) = line.strip_prefix("##") {
             lines.push(rest.strip_prefix(' ').unwrap_or(rest).trim_end().to_owned());
@@ -169,18 +191,24 @@ fn first_error(
     source: &str,
     diagnostics: &aevia_syntax::Diagnostics,
 ) -> String {
-    let Some(first) = diagnostics.items.first() else {
+    let Some(first) = diagnostics
+        .items
+        .iter()
+        .find(|diagnostic| diagnostic.severity == aevia_syntax::Severity::Error)
+        .or_else(|| diagnostics.items.first())
+    else {
         return "the file does not parse".to_string();
     };
-    let line = 1 + source[..usize::try_from(first.span.start)
-        .unwrap_or(0)
-        .min(source.len())]
-        .matches('\n')
-        .count();
+    let (line, _) = aevia_syntax::SourceFile::new("", source).line_col(first.span.start);
     format!("line {line}: {}: {}", first.code, first.message)
 }
 
 /// The kind, name and signature of a declaration.
+#[allow(
+    clippy::single_call_fn,
+    clippy::too_many_lines,
+    reason = "one exhaustive AST dispatch keeps declaration spelling in one place"
+)]
 fn signature(decl: &Decl) -> (String, String, String) {
     let kind = match &decl.kind {
         | DeclKind::Import { .. } => "import",
@@ -313,7 +341,6 @@ fn type_text(ty: &Ty) -> String {
 fn pattern_text(pat: &Pat) -> String {
     match &pat.kind {
         | PatKind::Var(name) => name.clone(),
-        | PatKind::Wildcard => "_".to_string(),
         | PatKind::Tuple(items) => {
             format!(
                 "({})",
@@ -473,33 +500,56 @@ impl StdlibDocBundle {
     }
 }
 
-/// Generates the full standard-library documentation bundle, combining
-/// `aevia-std/stdlib/*.aev` module docs with untruncated `aevia_rssn::registry()`
-/// operator docs and examples.
+/// Generates documentation for the supplied embedded standard-library sources
+/// and includes a separate catalog of kernel operators.
 ///
 /// # Errors
 ///
-/// Returns an error if any embedded stdlib `.aev` module fails to parse.
-pub fn generate_stdlib_docs() -> Result<StdlibDocBundle, String> {
+/// Returns an error for an invalid, mismatched, or undocumented public module.
+pub fn generate_stdlib_docs<'a>(
+    sources: impl IntoIterator<Item = (&'a str, &'a str)>,
+    operators: Vec<OperatorDoc>,
+) -> Result<StdlibDocBundle, String> {
     let mut modules = Vec::new();
-    for entry in aevia_std::stdlib::modules() {
-        let file = format!("stdlib/{}.aev", entry.path);
-        let fallback = entry.path.replace('/', ".");
-        modules.push(module_doc(entry.source, &file, &fallback)?);
-    }
-    let operators = aevia_rssn::registry::registry()
-        .ops()
-        .map(|op| {
-            OperatorDoc {
-                name: op.name.clone(),
-                rule_set: op.rule_set.clone(),
-                signatures: op.signatures.iter().map(aevia_rssn::Sig::render).collect(),
-                stability: format!("{:?}", op.stability),
-                doc: op.doc.clone(),
-                examples: op.witnesses.clone(),
+    for (path, source) in sources {
+        let file = format!("stdlib/{path}.aev");
+        let name = path.replace('/', ".");
+        let module =
+            module_doc(source, &file, &name).map_err(|error| format!("{file}: {error}"))?;
+        if module.path != name {
+            return Err(format!(
+                "{file}: expected module `{name}`, found `{}`",
+                module.path
+            ));
+        }
+        if modules.iter().any(|entry: &ModuleDoc| entry.path == name) {
+            return Err(format!("{file}: duplicate module `{name}`"));
+        }
+        if module
+            .doc
+            .as_deref()
+            .is_none_or(|doc| doc.trim().is_empty())
+        {
+            return Err(format!("{file}: missing module description"));
+        }
+        for decl in module.public_decls() {
+            let has_description = decl.doc.as_deref().is_some_and(|doc| {
+                doc.lines().next().is_some_and(|line| {
+                    let line = line.trim();
+                    !line.is_empty() && !line.starts_with("**Signature:**")
+                })
+            });
+            if !has_description {
+                return Err(format!("{file}: missing description for `{}`", decl.name));
             }
-        })
-        .collect();
+        }
+        // JSON and Markdown expose the same declarations.
+        let mut module = module;
+        module
+            .decls
+            .retain(|decl| !decl.private && !decl.doc_hidden);
+        modules.push(module);
+    }
     Ok(StdlibDocBundle { modules, operators })
 }
 
@@ -654,14 +704,25 @@ private fn secret(): Int = 4
 
     #[test]
     fn stdlib_doc_bundle_combines_modules_and_untruncated_operators() {
-        let bundle = generate_stdlib_docs().expect("generates stdlib docs");
-        assert!(!bundle.modules.is_empty());
-        assert!(!bundle.operators.is_empty());
+        let source = "## Arithmetic.\nmodule Math\n\n## The answer.\nlet answer = 42\nprivate let hidden = 0\n";
+        let operator = OperatorDoc {
+            name: "add".to_owned(),
+            rule_set: "arithmetic".to_owned(),
+            signatures: vec![],
+            stability: "Stable".to_owned(),
+            doc: "Adds two numbers.".to_owned(),
+            examples: vec![],
+        };
+        let bundle = generate_stdlib_docs([("Math", source)], vec![operator])
+            .expect("generates stdlib docs");
         let json = bundle.to_json().expect("serializes to json");
         assert!(json.contains("\"modules\""));
         assert!(json.contains("\"operators\""));
+        assert!(!json.contains("\"name\": \"hidden\""));
         let md = bundle.to_markdown();
         assert!(md.contains("# Aevia Standard Library"));
         assert!(md.contains("# RSSN Kernel Operators"));
+        let error = generate_stdlib_docs([("Other", source)], vec![]).expect_err("path mismatch");
+        assert!(error.contains("expected module `Other`"));
     }
 }

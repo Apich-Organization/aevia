@@ -22,6 +22,20 @@
 //! ```
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
 
 pub mod comments;
 pub mod fingerprint;
@@ -186,25 +200,22 @@ fn describe(
     else {
         return "the file does not parse".to_string();
     };
-    format!(
-        "line {}: {}: {}",
-        line_of(source, first.span.start),
-        first.code,
-        first.message
-    )
-}
-
-fn line_of(
-    source: &str,
-    offset: u32,
-) -> usize {
-    let offset = usize::try_from(offset)
-        .unwrap_or(usize::MAX)
-        .min(source.len());
-    1 + source[..offset].matches('\n').count()
+    let offset = usize::try_from(first.span.start).unwrap_or(usize::MAX);
+    let line = source
+        .as_bytes()
+        .iter()
+        .take(offset)
+        .filter(|byte| **byte == b'\n')
+        .count();
+    let line = line.saturating_add(1);
+    format!("line {line}: {}: {}", first.code, first.message)
 }
 
 /// The declaration whose printed form differs, for the failure message.
+#[allow(
+    clippy::single_call_fn,
+    reason = "isolates the declaration-level diagnostic from tree comparison"
+)]
 fn blame(
     original: &Module,
     printed: &Module,
@@ -240,20 +251,22 @@ fn normalise(comments: &[comments::Comment]) -> Vec<String> {
 }
 
 /// The first place two fingerprints differ, as a short excerpt.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps the bounded fingerprint excerpt out of the formatting pass"
+)]
 fn first_difference(
     left: &str,
     right: &str,
 ) -> String {
-    let left: Vec<char> = left.chars().collect();
-    let right: Vec<char> = right.chars().collect();
     let at = left
-        .iter()
-        .zip(right.iter())
-        .position(|(a, b)| a != b)
-        .unwrap_or_else(|| left.len().min(right.len()));
+        .chars()
+        .zip(right.chars())
+        .take_while(|(a, b)| a == b)
+        .count();
     let from = at.saturating_sub(20);
-    let left: String = left[from..].iter().take(60).collect();
-    let right: String = right[from..].iter().take(60).collect();
+    let left: String = left.chars().skip(from).take(60).collect();
+    let right: String = right.chars().skip(from).take(60).collect();
     format!("`{left}` became `{right}`")
 }
 
@@ -312,6 +325,17 @@ mod tests {
         assert!(formatted.contains("# leading"));
         assert!(formatted.contains("# trailing"));
         assert!(formatted.contains("# last"));
+    }
+
+    #[test]
+    fn shebang_precedes_module_header() {
+        let source = "#!/usr/bin/env -S aevia run\nmodule Sample\nlet  x=1\n";
+        let expected = "#!/usr/bin/env -S aevia run\nmodule Sample\n\nlet x = 1\n";
+        assert_eq!(format_source(source).expect("formats"), expected);
+        assert_eq!(
+            format_source(&format!("\u{feff}{source}")).expect("formats with BOM"),
+            expected
+        );
     }
 
     #[test]

@@ -31,7 +31,7 @@ fn map_num_err(err: rssn::kernels::number_ext::NumberExtError) -> crate::Numeric
 /// The extended greatest common divisor `(g, x, y)` such that
 /// `a * x + b * y == g` and `g >= 0`.
 #[must_use]
-pub fn xgcd(
+pub const fn xgcd(
     a: i64,
     b: i64,
 ) -> (i128, i128, i128) {
@@ -79,10 +79,11 @@ pub fn crt(
 /// Euler's totient function `phi(n)`: the count of integers in `1..=n` coprime to `n`.
 #[must_use]
 pub fn totient(n: i64) -> i64 {
-    if n <= 0 {
+    let Ok(positive) = u64::try_from(n) else {
         return 0;
-    }
-    rssn::kernels::number_theory::phi(n as u64) as i64
+    };
+    // A totient never exceeds its positive input, which was already in i64.
+    i64::try_from(rssn::kernels::number_theory::phi(positive)).unwrap_or_default()
 }
 
 /// The Möbius function `mu(n)`.

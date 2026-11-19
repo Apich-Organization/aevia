@@ -43,13 +43,17 @@ fn current() -> Result<Package, String> {
 }
 
 /// `aevia init <name>`
+#[allow(
+    clippy::single_call_fn,
+    reason = "the init command validates the package and writes its initial layout"
+)]
 pub fn init(args: &[String]) -> ExitCode {
     let Some(name) = args.first() else {
         eprintln!("aevia init: expected a package name, as in `aevia init kinematics`");
         return ExitCode::from(2);
     };
-    if args.len() > 1 {
-        eprintln!("aevia init: expected one package name, found `{}`", args[1]);
+    if let Some(extra) = args.get(1) {
+        eprintln!("aevia init: expected one package name, found `{extra}`");
         return ExitCode::from(2);
     }
     if !valid_package_name(name) {
@@ -112,6 +116,11 @@ pub fn init(args: &[String]) -> ExitCode {
 }
 
 /// `aevia add <path>` (with `--locked`, adding a dependency is refused).
+#[allow(
+    clippy::single_call_fn,
+    clippy::too_many_lines,
+    reason = "the add command distinguishes local and registry dependencies"
+)]
 pub fn add(
     args: &[String],
     locked: bool,
@@ -123,7 +132,7 @@ pub fn add(
         match arg.as_str() {
             | "--offline" => options.offline = true,
             | "--as" => {
-                let Some(name) = iter.next() else {
+                let Some(name) = iter.next().filter(|value| !value.starts_with('-')) else {
                     eprintln!("aevia add: `--as` expects the import root to use");
                     return ExitCode::from(2);
                 };
@@ -141,6 +150,10 @@ pub fn add(
     };
     if path.starts_with('-') {
         eprintln!("aevia add: `{path}` is not an option of `aevia add` (`--as NAME`, `--offline`)");
+        return ExitCode::from(2);
+    }
+    if let Some(extra) = positional.get(1) {
+        eprintln!("aevia add: unexpected argument `{extra}` (add one package per command)");
         return ExitCode::from(2);
     }
     if let Some(spec) = registry_spec(path) {
@@ -180,7 +193,9 @@ pub fn add(
             return ExitCode::from(1);
         },
     };
-    let key = import_root(&dependency_manifest.name);
+    let key = options
+        .alias
+        .unwrap_or_else(|| import_root(&dependency_manifest.name));
     let dependency = Dependency::Path {
         path: path.replace('\\', "/"),
     };
@@ -319,6 +334,10 @@ struct RegistrySpec {
 /// A directory that holds an `aevia.toml` is always a path dependency; anything
 /// else that spells `owner/name` (optionally `@requirement`) is a registry
 /// package, and a bare `name` is a package of the official scope.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps registry coordinates separate from local path handling"
+)]
 fn registry_spec(arg: &str) -> Option<RegistrySpec> {
     if arg.starts_with(['.', '/', '\\']) || arg.contains('\\') || arg.contains(':') {
         return None;
@@ -350,6 +369,10 @@ fn registry_spec(arg: &str) -> Option<RegistrySpec> {
 }
 
 /// Asks `aevia-pkg` to download the index of `package` into `registry`.
+#[allow(
+    clippy::single_call_fn,
+    reason = "maps registry process failures to package resolution diagnostics"
+)]
 fn fetch_index(
     registry: &DirRegistry,
     package: &str,
@@ -420,6 +443,10 @@ fn vendor(
 }
 
 /// The newest release (not a pre-release, not yanked) in a cached index.
+#[allow(
+    clippy::single_call_fn,
+    reason = "selects a compatible active registry release"
+)]
 fn newest_release(
     registry: &DirRegistry,
     package: &str,
@@ -433,6 +460,11 @@ fn newest_release(
         .max()
 }
 
+#[allow(
+    clippy::single_call_fn,
+    clippy::too_many_lines,
+    reason = "keeps the registry validation and manifest update in one transaction"
+)]
 fn add_registry(
     spec: &RegistrySpec,
     options: &RegistryOptions,
@@ -549,6 +581,10 @@ fn add_registry(
 }
 
 /// Writes the lock when it changed; with `--locked` a change is an error.
+#[allow(
+    clippy::single_call_fn,
+    reason = "regenerates a lock only after the manifest change succeeds"
+)]
 fn finish_lock(
     package: &Package,
     lock: &aevia_core::manifest::Lock,
@@ -620,6 +656,10 @@ fn split_flags(
 /// `aevia update [owner/name…]` — with `--locked`, a change is an error rather
 /// than a write. Without names every registry package moves to the newest
 /// compatible version; with names only those do and the rest stay locked.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the update command refreshes package dependencies and lock state"
+)]
 pub fn update(
     args: &[String],
     locked: bool,
@@ -690,6 +730,10 @@ pub fn update(
 /// `aevia fetch [--offline] [--force]` — make `.aevia/registry` hold verified
 /// sources for everything `aevia.lock` names (re-resolving first if the lock is
 /// stale, without writing it).
+#[allow(
+    clippy::single_call_fn,
+    reason = "the fetch command materializes the verified dependency graph"
+)]
 pub fn fetch(args: &[String]) -> ExitCode {
     let (options, force, names) = match split_flags("fetch", args) {
         | Ok(parsed) => parsed,
@@ -762,6 +806,10 @@ pub fn fetch(args: &[String]) -> ExitCode {
 }
 
 /// `aevia tree [--offline]` — the dependency tree: path and registry packages.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the tree command displays resolved dependency relationships"
+)]
 pub fn tree(args: &[String]) -> ExitCode {
     let (options, _, names) = match split_flags("tree", args) {
         | Ok(parsed) => parsed,
@@ -806,6 +854,10 @@ pub fn tree(args: &[String]) -> ExitCode {
 /// `src/` for the conventional `src/main.aev`. The command removes `.aevia/`
 /// from both places and otherwise says there is nothing to clean. It never
 /// claims to have removed a cache that does not exist.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the clean command applies registry preservation to each cache directory"
+)]
 pub fn clean(args: &[String]) -> ExitCode {
     let mut with_registry = false;
     for arg in args {
@@ -832,8 +884,25 @@ pub fn clean(args: &[String]) -> ExitCode {
             caches.push(beside_entry);
         }
     }
-    caches.retain(|cache| cache.exists());
-    if caches.is_empty() {
+    let mut existing = Vec::new();
+    for cache in caches {
+        match std::fs::symlink_metadata(&cache) {
+            | Ok(meta) if meta.is_dir() => existing.push(cache),
+            | Ok(_) => {
+                eprintln!(
+                    "aevia clean: `{}` must be a cache directory",
+                    cache.display()
+                );
+                return ExitCode::from(1);
+            },
+            | Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            | Err(error) => {
+                eprintln!("aevia clean: cannot inspect `{}`: {error}", cache.display());
+                return ExitCode::from(1);
+            },
+        }
+    }
+    if existing.is_empty() {
         println!(
             "nothing to clean: `{}` does not exist (`aevia check` and `aevia run` write the \
              per-module `.aevi` cache there)",
@@ -841,7 +910,7 @@ pub fn clean(args: &[String]) -> ExitCode {
         );
         return ExitCode::SUCCESS;
     }
-    for cache in caches {
+    for cache in existing {
         let files = count_files(&cache);
         // `.aevia/registry` holds downloaded, verified packages and their
         // indexes: not a build product, and not recoverable offline. It stays
@@ -876,6 +945,10 @@ pub fn clean(args: &[String]) -> ExitCode {
 
 /// Removes everything under `dir` except `keep` (and the directories on the
 /// way to it); returns how many files went.
+#[allow(
+    clippy::single_call_fn,
+    reason = "cache removal and its reported count use the same operation"
+)]
 fn remove_except(
     dir: &Path,
     keep: Option<&Path>,
@@ -885,18 +958,31 @@ fn remove_except(
         std::fs::remove_dir_all(dir)?;
         return Ok(files);
     };
-    let mut removed = 0;
+    let mut removed = 0usize;
     for entry in std::fs::read_dir(dir)? {
-        let path = entry?.path();
+        let entry = entry?;
+        let path = entry.path();
         if path == keep {
             continue;
         }
-        if path.is_dir() {
-            removed += count_files(&path);
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            removed = removed.saturating_add(count_files(&path));
             std::fs::remove_dir_all(&path)?;
         } else {
+            // A Windows junction or directory symlink is removed as a directory.
+            // No recursive file count should traverse the link.
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::FileTypeExt as _;
+                if kind.is_symlink_dir() {
+                    std::fs::remove_dir(&path)?;
+                    removed = removed.saturating_add(1);
+                    continue;
+                }
+            }
             std::fs::remove_file(&path)?;
-            removed += 1;
+            removed = removed.saturating_add(1);
         }
     }
     Ok(removed)
@@ -910,9 +996,8 @@ fn count_files(dir: &Path) -> usize {
     entries
         .flatten()
         .map(|entry| {
-            let path = entry.path();
-            if path.is_dir() {
-                count_files(&path)
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                count_files(&entry.path())
             } else {
                 1
             }
@@ -945,10 +1030,17 @@ pub fn expand_globs(names: &[String]) -> Vec<PathBuf> {
             paths.push(PathBuf::from(name));
             continue;
         }
-        let (parent, pattern) = match name.rfind(['/', '\\']) {
-            | Some(index) => (&name[..index], &name[index + 1..]),
-            | None => (".", name.as_str()),
-        };
+        let (parent, pattern) =
+            name.rsplit_once(['/', '\\'])
+                .map_or((".", name.as_str()), |(parent, pattern)| {
+                    let directory = if parent.is_empty() || (cfg!(windows) && parent.ends_with(':'))
+                    {
+                        name.get(..parent.len().saturating_add(1)).unwrap_or(parent)
+                    } else {
+                        parent
+                    };
+                    (directory, pattern)
+                });
         let Ok(entries) = std::fs::read_dir(if parent.is_empty() {
             "."
         } else {
@@ -957,11 +1049,12 @@ pub fn expand_globs(names: &[String]) -> Vec<PathBuf> {
             paths.push(PathBuf::from(name));
             continue;
         };
+        let pattern: Vec<_> = pattern.chars().collect();
         let mut matches: Vec<PathBuf> = entries
             .flatten()
             .filter(|entry| {
                 wildcard_matches(
-                    &pattern.chars().collect::<Vec<_>>(),
+                    &pattern,
                     &entry
                         .file_name()
                         .to_string_lossy()
@@ -982,18 +1075,38 @@ pub fn expand_globs(names: &[String]) -> Vec<PathBuf> {
 }
 
 /// Shell-style matching of one file name against `*`/`?`.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps filename matching separate from filesystem traversal"
+)]
 fn wildcard_matches(
     pattern: &[char],
     name: &[char],
 ) -> bool {
-    match pattern.split_first() {
-        | None => name.is_empty(),
-        | Some(('*', rest)) => (0..=name.len()).any(|start| wildcard_matches(rest, &name[start..])),
-        | Some(('?', rest)) => !name.is_empty() && wildcard_matches(rest, &name[1..]),
-        | Some((character, rest)) => {
-            name.first() == Some(character) && wildcard_matches(rest, &name[1..])
-        },
+    let mut position = 0usize;
+    let mut part = 0usize;
+    let mut star = None;
+    while let Some(character) = name.get(position) {
+        match pattern.get(part) {
+            | Some('*') => {
+                part = part.saturating_add(1);
+                star = Some((part, position));
+            },
+            | Some(next) if next == character || *next == '?' => {
+                position = position.saturating_add(1);
+                part = part.saturating_add(1);
+            },
+            | _ => {
+                let Some((suffix, consumed)) = star else {
+                    return false;
+                };
+                position = consumed.saturating_add(1);
+                part = suffix;
+                star = Some((suffix, position));
+            },
+        }
     }
+    pattern.iter().skip(part).all(|character| *character == '*')
 }
 
 fn collect(

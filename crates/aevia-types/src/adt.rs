@@ -5,6 +5,21 @@
 //! and `Ordering`, whose ids are fixed constants so that `Type::option` can be
 //! built without touching the registry.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
 use crate::keys::AdtKey;
 use crate::keys::ModulePath;
 pub use crate::ty::AdtId;
@@ -13,6 +28,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::RwLock;
+use std::sync::RwLockWriteGuard;
 
 /// `Option<a>`.
 pub const OPTION_ID: AdtId = 0;
@@ -20,6 +36,8 @@ pub const OPTION_ID: AdtId = 0;
 pub const RESULT_ID: AdtId = 1;
 /// `Ordering`.
 pub const ORDERING_ID: AdtId = 2;
+
+const PRELUDE_IDS: [AdtId; 3] = [OPTION_ID, RESULT_ID, ORDERING_ID];
 
 /// The sealed host type of a session-owned native reverse-AD variable.
 /// It has no source constructors; a same-named source declaration is distinct.
@@ -81,15 +99,16 @@ pub fn module_of(id: AdtId) -> ModulePath {
 }
 fn completed() -> &'static RwLock<std::collections::HashSet<AdtId>> {
     static COMPLETE: OnceLock<RwLock<std::collections::HashSet<AdtId>>> = OnceLock::new();
-    COMPLETE.get_or_init(|| RwLock::new(std::collections::HashSet::new()))
+    COMPLETE.get_or_init(|| RwLock::new(PRELUDE_IDS.into_iter().collect()))
 }
 fn schemas() -> &'static RwLock<HashMap<AdtId, crate::DeclarationSchemaKey>> {
     static SCHEMAS: OnceLock<RwLock<HashMap<AdtId, crate::DeclarationSchemaKey>>> = OnceLock::new();
     SCHEMAS.get_or_init(|| RwLock::new(HashMap::new()))
 }
-/// A complete, already-registered source type with exactly this symbolic key
-/// (module, name and declaration schema). The cache decoder reuses it instead
-/// of allocating a second witness for an unchanged declaration.
+/// Finds an already complete type by its symbolic key.
+///
+/// The cache decoder reuses types with the same module, name and declaration
+/// schema.
 #[must_use]
 pub fn find_complete(key: &AdtKey) -> Option<AdtId> {
     let candidates: Vec<AdtId> = {
@@ -147,10 +166,10 @@ pub fn set_module(
     id: AdtId,
     module: ModulePath,
 ) {
-    if is_complete(id) {
-        return;
-    }
-    if let Ok(mut table) = modules().write() {
+    if let Ok(finalized) = completed().read()
+        && !finalized.contains(&id)
+        && let Ok(mut table) = modules().write()
+    {
         table.insert(id, module);
     }
 }
@@ -187,10 +206,10 @@ pub fn set_param_kinds(
     id: AdtId,
     kinds: Vec<ParamKind>,
 ) {
-    if is_complete(id) {
-        return;
-    }
-    if let Ok(mut table) = param_kinds().write() {
+    if let Ok(finalized) = completed().read()
+        && !finalized.contains(&id)
+        && let Ok(mut table) = param_kinds().write()
+    {
         table.insert(id, kinds);
     }
 }
@@ -250,6 +269,10 @@ fn registry() -> &'static RwLock<Vec<Arc<Adt>>> {
 }
 
 /// `Option`, `Result` and `Ordering`: the registry's first three entries.
+#[allow(
+    clippy::single_call_fn,
+    reason = "records the canonical prelude declaration order independently of the registry lock"
+)]
 fn prelude_adts() -> [Adt; 3] {
     [
         Adt {
@@ -301,6 +324,38 @@ fn prelude_adts() -> [Adt; 3] {
     ]
 }
 
+// Registry writes manipulate owned collections using concrete key types. A
+// recovered lock still contains valid entries and can resume publication.
+fn writable<T>(table: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    table.write().unwrap_or_else(|poisoned| {
+        table.clear_poison();
+        poisoned.into_inner()
+    })
+}
+
+#[allow(
+    clippy::panic,
+    reason = "the infallible AdtId API cannot issue an alias when its 32-bit address space is exhausted"
+)]
+fn register(
+    mut entries: RwLockWriteGuard<'_, Vec<Arc<Adt>>>,
+    adt: Adt,
+    module: Option<ModulePath>,
+) -> AdtId {
+    let Ok(id) = AdtId::try_from(entries.len()) else {
+        drop(entries);
+        panic!("the nominal type identifier space is exhausted");
+    };
+    if let Some(module) = module {
+        writable(modules()).insert(id, module);
+    }
+    // Keep the registry lock across publication of the source identity.
+    // Concurrent interning must never see a source type without its origin.
+    entries.push(Arc::new(adt));
+    drop(entries);
+    id
+}
+
 /// Interns a *built-in* type, keyed by name.
 ///
 /// This is for the opaque types the checker itself needs (`Value`, `OpError`,
@@ -310,33 +365,35 @@ fn prelude_adts() -> [Adt; 3] {
 ///
 /// # Panics
 ///
-/// Panics when the registry lock is poisoned, which only happens if another
-/// thread panicked while holding it.
+/// Panics if the registry has exhausted the `AdtId` identifier space.
 #[must_use]
 pub fn intern(adt: Adt) -> AdtId {
-    let mut guard = registry().write().expect("adt registry is not poisoned");
-    // Interning is reserved for shared prelude/host types. A source module
-    // may declare `Value`, `OpError` or any other same-named nominal type;
-    // such a declaration must never become the ABI type by winning a race.
-    let identities = modules()
-        .read()
-        .expect("adt module registry is not poisoned");
-    if let Some(index) = guard.iter().enumerate().position(|(index, existing)| {
-        existing.name == adt.name
-            && u32::try_from(index)
-                .ok()
-                .and_then(|id| identities.get(&id))
-                .is_none_or(ModulePath::is_prelude)
-    }) {
-        return u32::try_from(index).unwrap_or(0);
-    }
-    let id = u32::try_from(guard.len()).unwrap_or(u32::MAX);
-    guard.push(Arc::new(adt));
-    id
+    intern_with_status(adt).0
 }
 
-/// Allocates a *fresh* id for a nominal type declared by a compilation unit
-/// .
+pub(crate) fn intern_with_status(adt: Adt) -> (AdtId, bool) {
+    let entries = writable(registry());
+    // A same-named source declaration cannot serve as an opaque host type.
+    let existing = {
+        let origins = modules();
+        let identities = origins.read().unwrap_or_else(|poisoned| {
+            origins.clear_poison();
+            poisoned.into_inner()
+        });
+        entries.iter().enumerate().find_map(|(index, entry)| {
+            let id = AdtId::try_from(index).ok()?;
+            (entry.name == adt.name && identities.get(&id).is_none_or(ModulePath::is_prelude))
+                .then_some(id)
+        })
+    };
+    if let Some(id) = existing {
+        drop(entries);
+        return (id, false);
+    }
+    (register(entries, adt, None), true)
+}
+
+/// Allocates a fresh id for a nominal source type in the prelude scope.
 ///
 /// Ids are never reused and never keyed by name, so two modules that both
 /// declare `type Shape` get distinct types, and a user `type Result` cannot
@@ -344,7 +401,7 @@ pub fn intern(adt: Adt) -> AdtId {
 ///
 /// # Panics
 ///
-/// Panics when the registry lock is poisoned.
+/// Panics if the registry has exhausted the `AdtId` identifier space.
 #[must_use]
 pub fn allocate(
     name: &str,
@@ -358,22 +415,19 @@ pub fn allocate(
 ///
 /// # Panics
 ///
-/// Panics when the registry lock is poisoned.
+/// Panics if the registry has exhausted the `AdtId` identifier space.
 #[must_use]
 pub fn allocate_in(
     module: ModulePath,
     name: &str,
     params: Vec<String>,
 ) -> AdtId {
-    let mut guard = registry().write().expect("adt registry is not poisoned");
-    let id = u32::try_from(guard.len()).unwrap_or(u32::MAX);
-    guard.push(Arc::new(Adt {
+    let adt = Adt {
         name: name.to_string(),
         params,
         ctors: Vec::new(),
-    }));
-    set_module(id, module);
-    id
+    };
+    register(writable(registry()), adt, Some(module))
 }
 
 /// Fills in the constructors of a type allocated by [`allocate`].
@@ -386,18 +440,15 @@ pub fn set_ctors(
     id: AdtId,
     ctors: Vec<Ctor>,
 ) {
-    if is_complete(id) {
-        return;
-    }
     if let Ok(mut guard) = registry().write()
+        && let Ok(mut finalized) = completed().write()
+        && !finalized.contains(&id)
         && let Some(entry) = usize::try_from(id)
             .ok()
             .and_then(|index| guard.get_mut(index))
     {
         Arc::make_mut(entry).ctors = ctors;
-        if let Ok(mut table) = completed().write() {
-            table.insert(id);
-        }
+        finalized.insert(id);
     }
 }
 
@@ -448,26 +499,28 @@ pub fn ctor_index(
 /// resolution depend on what else was checked in this process.
 #[must_use]
 pub fn find_prelude_ctor(name: &str) -> Option<(AdtId, usize, Adt)> {
-    let guard = registry().read().ok()?;
-    for id in [OPTION_ID, RESULT_ID, ORDERING_ID] {
-        let adt = guard.get(usize::try_from(id).ok()?)?;
-        if let Some(position) = adt.ctors.iter().position(|ctor| ctor.name == name) {
-            return Some((id, position, (**adt).clone()));
-        }
-    }
-    None
+    let (id, position, adt) = {
+        let entries = registry().read().ok()?;
+        PRELUDE_IDS.into_iter().find_map(|id| {
+            let entry = entries.get(usize::try_from(id).ok()?)?;
+            let position = entry.ctors.iter().position(|ctor| ctor.name == name)?;
+            Some((id, position, Arc::clone(entry)))
+        })
+    }?;
+    Some((id, position, (*adt).clone()))
 }
 
 /// Finds a constructor by name across all registered types.
 #[must_use]
 pub fn find_ctor(name: &str) -> Option<(AdtId, usize, Adt)> {
-    let guard = registry().read().ok()?;
-    for (index, adt) in guard.iter().enumerate() {
-        if let Some(position) = adt.ctors.iter().position(|ctor| ctor.name == name) {
-            return Some((u32::try_from(index).ok()?, position, (**adt).clone()));
-        }
-    }
-    None
+    let (id, position, adt) = {
+        let entries = registry().read().ok()?;
+        entries.iter().enumerate().find_map(|(index, entry)| {
+            let position = entry.ctors.iter().position(|ctor| ctor.name == name)?;
+            Some((AdtId::try_from(index).ok()?, position, Arc::clone(entry)))
+        })
+    }?;
+    Some((id, position, (*adt).clone()))
 }
 
 /// The number of registered types, for tests.
@@ -476,13 +529,16 @@ pub fn count() -> usize {
     registry().read().map_or(0, |guard| guard.len())
 }
 
-/// Resets the registry to the prelude types. Used by tests.
+/// Resets the registry to the prelude types.
+///
+/// Test code must have exclusive use of the registry and discard every prior
+/// user-defined `AdtId` before calling this function.
 pub fn reset() {
     if let Ok(mut table) = schemas().write() {
         table.clear();
     }
     if let Ok(mut table) = completed().write() {
-        table.clear();
+        table.retain(|id| PRELUDE_IDS.contains(id));
     }
     if let Ok(mut guard) = registry().write() {
         guard.truncate(3);
@@ -501,6 +557,9 @@ mod tests {
 
     #[test]
     fn prelude_types_have_fixed_ids() {
+        set_ctors(OPTION_ID, Vec::new());
+        set_module(OPTION_ID, ModulePath::new(["Other"]));
+        assert!(module_of(OPTION_ID).is_prelude());
         assert_eq!(name_of(OPTION_ID), "Option");
         assert_eq!(name_of(RESULT_ID), "Result");
         assert_eq!(ctor_index(OPTION_ID, "Some"), Some(1));
@@ -517,8 +576,10 @@ mod tests {
                 fields: Vec::new(),
             }],
         };
-        let first = intern(adt.clone());
-        let second = intern(adt);
+        let (first, created) = intern_with_status(adt.clone());
+        let (second, reused) = intern_with_status(adt);
+        assert!(created);
+        assert!(!reused);
         assert_eq!(first, second);
     }
 

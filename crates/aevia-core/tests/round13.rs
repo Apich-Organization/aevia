@@ -83,7 +83,7 @@ fn failure(source: &str) -> String {
         .items
         .iter()
         .find(|item| item.severity == aevia_syntax::Severity::Error)
-        .map(|item| item.code.to_string())
+        .map(|item| item.code.clone())
         .expect("expected a load failure")
 }
 

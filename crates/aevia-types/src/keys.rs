@@ -1,7 +1,6 @@
 //! Stable, symbolic identity for dispatch and for the module interface.
 //!
-//! Round-2 decision 4 (`.workbuddy-ai/design/round2-design-register.md`): the
-//! checker, the interface file and the runtime share one nominal key scheme.
+//! The checker, interface files and runtime share one nominal key scheme.
 //!
 //! * [`ClassKey`] is `(defining module, class name)`.
 //! * [`AdtKey`] is `(defining module, type name)` — **never** an `AdtId`, which
@@ -19,13 +18,39 @@
 //! The canonical key is also what an interface file may persist; `AdtId` never
 //! crosses a module boundary or a process boundary.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
 use crate::adt;
 use crate::ty::Nat;
 use crate::ty::Rep;
 use crate::ty::Row;
 use crate::ty::Shape;
 use crate::ty::Type;
+use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::fmt;
+use std::fmt::Write as _;
+
+/// Appends one byte-length framed component to a symbolic identity.
+pub(crate) fn key_part(
+    text: &mut String,
+    value: &str,
+) {
+    let _ = write!(text, "{}:{value}", value.len());
+}
 
 /// A module path, `[]` for the prelude/builtin scope, `["A", "B"]` for `A.B`.
 #[derive(
@@ -71,7 +96,7 @@ pub struct ModuleOrigin {
 impl ModulePath {
     /// The prelude/builtin module.
     #[must_use]
-    pub fn prelude() -> Self {
+    pub const fn prelude() -> Self {
         Self(Vec::new(), None)
     }
 
@@ -93,7 +118,7 @@ impl ModulePath {
 
     /// The package source identity, when supplied by a package-aware driver.
     #[must_use]
-    pub fn origin(&self) -> Option<&ModuleOrigin> {
+    pub const fn origin(&self) -> Option<&ModuleOrigin> {
         self.1.as_ref()
     }
 
@@ -101,32 +126,24 @@ impl ModulePath {
     /// component is length-framed; display/import aliases never participate.
     #[must_use]
     pub fn identity_key(&self) -> String {
-        fn part(
-            text: &mut String,
-            value: &str,
-        ) {
-            text.push_str(&value.len().to_string());
-            text.push(':');
-            text.push_str(value);
-        }
         let mut text = "aevia-module-v1:".to_string();
-        part(&mut text, &self.0.len().to_string());
+        key_part(&mut text, &self.0.len().to_string());
         for component in &self.0 {
-            part(&mut text, component);
+            key_part(&mut text, component);
         }
         if let Some(origin) = self.origin() {
-            part(&mut text, "origin");
-            part(&mut text, &origin.package);
-            part(&mut text, &origin.source);
+            key_part(&mut text, "origin");
+            key_part(&mut text, &origin.package);
+            key_part(&mut text, &origin.source);
         } else {
-            part(&mut text, "no-origin");
+            key_part(&mut text, "no-origin");
         }
         text
     }
 
     /// Whether this is the prelude scope.
     #[must_use]
-    pub fn is_prelude(&self) -> bool {
+    pub const fn is_prelude(&self) -> bool {
         self.0.is_empty() && self.1.is_none()
     }
 
@@ -291,7 +308,7 @@ pub enum RepKind {
 impl RepKind {
     /// The kind of a concrete representation; `None` for a variable.
     #[must_use]
-    pub fn of(rep: Rep) -> Option<Self> {
+    pub const fn of(rep: Rep) -> Option<Self> {
         match rep {
             | Rep::Int => Some(Self::Int),
             | Rep::Real => Some(Self::Real),
@@ -349,7 +366,7 @@ pub enum StorageClass {
 impl StorageClass {
     /// The storage class of an element representation.
     #[must_use]
-    pub fn of(rep: Rep) -> Option<Self> {
+    pub const fn of(rep: Rep) -> Option<Self> {
         match rep {
             | Rep::Int | Rep::Real => Some(Self::Exact),
             | Rep::Float => Some(Self::Float),
@@ -407,35 +424,42 @@ pub enum HeadKey {
     Point,
     /// `Unit[d]` — the unit value constructor.
     UnitOf,
-    /// `Tensor<shape, τ>`; the shape keeps its rank and known extents.
+    /// `Tensor<shape, τ>` with one or more known extents.
     Tensor {
         /// The rank, or the refined shape.
         shape: Vec<Option<usize>>,
         /// The element key.
-        elem: Box<HeadKey>,
+        elem: Box<Self>,
     },
     /// A nominal type, with its structural arguments.
-    Adt(AdtKey, Vec<HeadKey>),
+    Adt(AdtKey, Vec<Self>),
     /// A record's canonical field names and types.
-    Record(Vec<(String, HeadKey)>),
+    Record(Vec<(String, Self)>),
     /// A function type: no instance head may dispatch it.
     Fn,
     /// `Dyn<ρ>`.
     Dyn,
     /// `IO τ`.
-    Io(Box<HeadKey>),
+    Io(Box<Self>),
     /// An open position (`a` in `instance C for Option<a>`).
     Wildcard,
+    /// `Tensor<rank, τ>` with no known extents.
+    TensorRank {
+        /// Number of axes.
+        rank: u32,
+        /// The element key.
+        elem: Box<Self>,
+    },
 }
 
 impl<C: bincode_next::config::Config> bincode_next::Fingerprint<C> for HeadKey {
     const SCHEMA_HASH: u64 = crate::persist::mix_hash(
         crate::persist::mix_hash(
             C::CONFIG_HASH,
-            b"HeadKey:v1:RepKind",
+            b"HeadKey:v2:RepKind",
             <RepKind as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
         ),
-        b"HeadKey:v1:AdtKey",
+        b"HeadKey:v2:AdtKey",
         <AdtKey as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
     );
 }
@@ -469,6 +493,7 @@ impl fmt::Display for HeadKey {
                 f.write_str("], ")?;
                 write!(f, "{elem}>")
             },
+            | Self::TensorRank { rank, elem } => write!(f, "Tensor<{rank}, {elem}>"),
             | Self::Adt(key, args) => {
                 write!(f, "{key}")?;
                 if !args.is_empty() {
@@ -511,6 +536,7 @@ impl HeadKey {
             | Self::Tensor { shape, elem } => {
                 shape.iter().all(Option::is_some) && elem.is_concrete()
             },
+            | Self::TensorRank { rank, elem } => *rank == 0 && elem.is_concrete(),
             | Self::Adt(_, args) => args.iter().all(Self::is_concrete),
             | Self::Record(fields) => fields.iter().all(|(_, ty)| ty.is_concrete()),
             | Self::Io(inner) => inner.is_concrete(),
@@ -543,16 +569,24 @@ pub fn head_key(ty: &Type) -> HeadKey {
         | Type::Point(_) => HeadKey::Point,
         | Type::UnitOf(_) => HeadKey::UnitOf,
         | Type::Tensor { shape, elem } => {
-            HeadKey::Tensor {
-                shape: shape_items(shape),
-                elem: Box::new(head_key(elem)),
+            let elem = Box::new(head_key(elem));
+            if let Shape::Refined(items) = shape {
+                let extents: Vec<_> = items
+                    .iter()
+                    .map(|item| item.as_ref().and_then(Nat::as_const))
+                    .collect();
+                if extents.iter().any(Option::is_some) {
+                    return HeadKey::Tensor { shape: extents, elem };
+                }
+            }
+            HeadKey::TensorRank {
+                rank: shape.rank(),
+                elem,
             }
         },
         | Type::Record(row) => {
-            let mut fields: Vec<_> = row
-                .fields()
-                .into_iter()
-                .map(|(label, ty)| (label, head_key(&ty)))
+            let mut fields: Vec<_> = row_fields(row)
+                .map(|(label, ty)| (label.to_owned(), head_key(ty)))
                 .collect();
             fields.sort_by(|a, b| a.0.cmp(&b.0));
             if row.tail_var().is_some() {
@@ -581,27 +615,33 @@ pub fn head_key(ty: &Type) -> HeadKey {
     }
 }
 
-fn shape_items(shape: &Shape) -> Vec<Option<usize>> {
-    match shape {
-        | Shape::Rank(rank) => vec![None; usize::try_from(*rank).unwrap_or(0)],
-        // Only concrete extents can name a head: a shape that still has a
-        // variable is `?` in the key (witness dispatch, not exact key).
-        | Shape::Refined(items) => {
-            items
-                .iter()
-                .map(|item| item.as_ref().and_then(Nat::as_const))
-                .collect()
-        },
-    }
+/// Borrows a row's field labels and types without cloning their declarations.
+pub(crate) fn row_fields(row: &Row) -> impl Iterator<Item = (&str, &Type)> {
+    let mut tail = row;
+    std::iter::from_fn(move || {
+        let Row::Extend {
+            label,
+            ty,
+            tail: next,
+        } = tail
+        else {
+            return None;
+        };
+        tail = next;
+        Some((label.as_str(), ty.as_ref()))
+    })
 }
 
+#[cfg_attr(
+    not(test),
+    expect(clippy::single_call_fn, reason = "canonical observable record labels")
+)]
 fn row_labels(row: &Row) -> Vec<String> {
-    let mut labels: Vec<String> = row
-        .fields()
-        .into_iter()
+    let mut labels: Vec<String> = row_fields(row)
         .map(|(label, _)| label)
-        .collect::<std::collections::BTreeSet<_>>()
+        .collect::<BTreeSet<_>>()
         .into_iter()
+        .map(str::to_owned)
         .collect();
     if row.tail_var().is_some() {
         // An open record's labels are a lower bound; represent that explicitly
@@ -639,7 +679,7 @@ pub struct InstanceKey {
 impl InstanceKey {
     /// A key from its parts.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         module: ModulePath,
         class: ClassKey,
         head: HeadKey,
@@ -685,7 +725,7 @@ impl fmt::Display for InstanceKey {
 pub enum Witness {
     /// A nominal type, by module+name, with the witnesses of its arguments:
     /// `Option<Int>` and `Option<String>` are told apart by their payloads.
-    Adt(AdtKey, Vec<Witness>),
+    Adt(AdtKey, Vec<Self>),
     /// A scalar number kind.
     Num(RepKind),
     /// A tensor: the runtime knows its rank and its storage class.
@@ -804,17 +844,19 @@ pub fn witnesses_are_disjoint(
 /// The first colliding pair in a candidate list, for a diagnostic.
 #[must_use]
 pub fn witness_collision(witnesses: &[Option<Witness>]) -> Option<(usize, usize)> {
-    for (index, left) in witnesses.iter().enumerate() {
-        for (other_index, right) in witnesses.iter().enumerate().skip(index + 1) {
-            match (left, right) {
-                | (Some(left), Some(right)) if !witnesses_are_disjoint(left, right) => {
-                    return Some((index, other_index));
-                },
-                | _ => {},
-            }
+    let mut first_uses = HashMap::new();
+    let mut collision = None;
+    for (right, witness) in witnesses.iter().enumerate() {
+        let Some(witness) = witness else {
+            continue;
+        };
+        let left = *first_uses.entry(witness).or_insert(right);
+        if left != right {
+            let pair = (left, right);
+            collision = Some(collision.map_or(pair, |earlier: (usize, usize)| earlier.min(pair)));
         }
     }
-    None
+    collision
 }
 
 #[cfg(test)]
@@ -912,6 +954,46 @@ mod tests {
                 AdtKey::new(ModulePath::prelude(), "Option"),
                 vec![HeadKey::Wildcard]
             )
+        );
+    }
+
+    #[test]
+    fn rank_only_head_is_compact_and_matches_unknown_extents() {
+        let key = head_key(&Type::tensor(Shape::Rank(u32::MAX), Type::int()));
+        assert_eq!(
+            key,
+            HeadKey::TensorRank {
+                rank: u32::MAX,
+                elem: Box::new(HeadKey::Scalar(RepKind::Int)),
+            }
+        );
+        assert!(!key.is_concrete());
+        assert_eq!(
+            head_key(&Type::tensor(Shape::Rank(2), Type::int())),
+            head_key(&Type::tensor(
+                Shape::Refined(vec![Some(Nat::Var(0)), None]),
+                Type::int(),
+            ))
+        );
+        let bytes = crate::persist::codec::encode(&key).expect("encode symbolic head");
+        assert!(bytes.len() < 32);
+        assert_eq!(
+            crate::persist::codec::decode::<HeadKey>(&bytes).expect("decode symbolic head"),
+            key
+        );
+    }
+
+    #[test]
+    fn collision_order_prefers_the_first_witness_over_a_nearer_duplicate() {
+        assert_eq!(
+            witness_collision(&[
+                Some(Witness::Bool),
+                Some(Witness::Unit),
+                Some(Witness::Unit),
+                None,
+                Some(Witness::Bool),
+            ]),
+            Some((0, 4))
         );
     }
 

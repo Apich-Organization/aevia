@@ -31,6 +31,10 @@ pub fn ratio(
 /// becomes `1/10000000000`. Underscores used as digit separators are ignored.
 /// Returns `None` for anything that is not a plain decimal number.
 #[must_use]
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "the mantissa and decimal factor use arbitrary-precision integers"
+)]
 pub fn parse_decimal(text: &str) -> Option<BigRational> {
     let cleaned: String = text.chars().filter(|c| *c != '_').collect();
     let cleaned = cleaned.trim();
@@ -41,11 +45,8 @@ pub fn parse_decimal(text: &str) -> Option<BigRational> {
         | Some(rest) => (true, rest),
         | None => (false, cleaned.strip_prefix('+').unwrap_or(cleaned)),
     };
-    let (mantissa, exponent) = match rest.find(['e', 'E']) {
-        | Some(at) => {
-            let exp = i64::from_str(&rest[at + 1..]).ok()?;
-            (&rest[..at], exp)
-        },
+    let (mantissa, exponent) = match rest.split_once(['e', 'E']) {
+        | Some((mantissa, exponent)) => (mantissa, i64::from_str(exponent).ok()?),
         | None => (rest, 0),
     };
     let (int_part, frac_part) = match mantissa.split_once('.') {
@@ -67,11 +68,11 @@ pub fn parse_decimal(text: &str) -> Option<BigRational> {
     if scale.unsigned_abs() > 10_000 {
         return None;
     }
-    let ten = BigInt::from(10);
+    let factor = BigInt::from(10).pow(u32::try_from(scale.unsigned_abs()).ok()?);
     let result = if scale >= 0 {
-        BigRational::from_integer(value * ten.pow(u32::try_from(scale).ok()?))
+        BigRational::from_integer(value * factor)
     } else {
-        BigRational::new(value, ten.pow(u32::try_from(-scale).ok()?))
+        BigRational::new(value, factor)
     };
     Some(result)
 }
@@ -85,13 +86,7 @@ pub fn pow_int(
     if value.is_zero() && exponent < 0 {
         return BigRational::zero();
     }
-    let magnitude = exponent.unsigned_abs();
-    let powered = value.pow(i32::try_from(magnitude).unwrap_or(i32::MAX));
-    if exponent < 0 {
-        powered.recip()
-    } else {
-        powered
-    }
+    value.pow(exponent)
 }
 
 /// Renders a rational as `n` or `n/d`.
@@ -108,23 +103,29 @@ pub fn format_rational(value: &BigRational) -> String {
 ///
 /// Used by `show` for exact values: `0.5` prints as `0.5`, `1/3` stays `1/3`.
 #[must_use]
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "arbitrary-precision arithmetic with the nonzero denominator and fixed factors 2 and 5"
+)]
 pub fn format_rational_decimal(value: &BigRational) -> String {
     if value.denom().is_one() {
         return value.numer().to_string();
     }
-    let denom = value.denom().clone();
-    let mut reduced = denom;
+    if value.denom().is_zero() {
+        return format_rational(value);
+    }
+    let mut reduced = value.denom().abs();
     let two = BigInt::from(2);
     let five = BigInt::from(5);
     let mut twos = 0u32;
     let mut fives = 0u32;
     while (&reduced % &two).is_zero() {
         reduced /= &two;
-        twos += 1;
+        twos = twos.saturating_add(1);
     }
     while (&reduced % &five).is_zero() {
         reduced /= &five;
-        fives += 1;
+        fives = fives.saturating_add(1);
     }
     if !reduced.is_one() {
         return format_rational(value);
@@ -135,13 +136,20 @@ pub fn format_rational_decimal(value: &BigRational) -> String {
     let negative = scaled.is_negative();
     let digits = scaled.abs().to_string();
     let places = usize::try_from(places).unwrap_or(0);
-    let body = if places == 0 {
-        digits
-    } else if digits.len() > places {
-        let split = digits.len() - places;
-        format!("{}.{}", &digits[..split], &digits[split..])
+    if places == 0 {
+        return scaled.to_string();
+    }
+    let body = if let Some((whole, fractional)) =
+        digits.split_at_checked(digits.len().saturating_sub(places))
+        && !whole.is_empty()
+    {
+        format!("{whole}.{fractional}")
     } else {
-        format!("0.{}{}", "0".repeat(places - digits.len()), digits)
+        format!(
+            "0.{}{}",
+            "0".repeat(places.saturating_sub(digits.len())),
+            digits
+        )
     };
     let body = body.trim_end_matches('0').trim_end_matches('.').to_string();
     if negative {
@@ -206,6 +214,7 @@ mod tests {
         assert_eq!(pow_int(&ratio(2, 3), 2), ratio(4, 9));
         assert_eq!(pow_int(&ratio(2, 3), -1), ratio(3, 2));
         assert_eq!(pow_int(&ratio(0, 1), -1), ratio(0, 1));
+        assert_eq!(pow_int(&ratio(-1, 1), i32::MIN), ratio(1, 1));
         assert_eq!(parse_decimal("1e999999999"), None);
     }
 
@@ -215,5 +224,7 @@ mod tests {
         assert_eq!(format_rational_decimal(&ratio(3, 1)), "3");
         assert_eq!(format_rational_decimal(&ratio(1, 3)), "1/3");
         assert_eq!(format_rational_decimal(&ratio(-25, 4)), "-6.25");
+        let invalid = BigRational::new_raw(7.into(), 0.into());
+        assert_eq!(format_rational_decimal(&invalid), "7/0");
     }
 }

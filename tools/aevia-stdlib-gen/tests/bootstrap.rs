@@ -5,26 +5,25 @@ use std::process::Command;
 fn run(
     mode: &str,
     root: &Path,
-) -> std::process::Output {
+) -> std::io::Result<std::process::Output> {
     Command::new(env!("CARGO_BIN_EXE_aevia-stdlib-gen"))
         .arg(mode)
         .arg("--root")
         .arg(root)
         .output()
-        .expect("run generator")
 }
 
 #[test]
-fn empty_tree_can_be_generated_checked_and_repaired() {
+fn empty_tree_can_be_generated_checked_and_repaired() -> std::io::Result<()> {
     let root = std::env::temp_dir().join(format!(
         "aevia-stdlib-generator-bootstrap-{}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&root);
-    let check = run("--check", &root);
+    let check = run("--check", &root)?;
     assert!(!check.status.success(), "missing outputs must fail --check");
     assert!(!root.exists(), "--check must not create the output tree");
-    let write = run("--write", &root);
+    let write = run("--write", &root)?;
     assert!(
         write.status.success(),
         "{}",
@@ -33,56 +32,54 @@ fn empty_tree_can_be_generated_checked_and_repaired() {
     let tensor = root.join("stdlib/Tensor.aev");
     let table = root.join("src/stdlib_table.rs");
     assert!(tensor.exists() && table.exists());
-    let original = std::fs::read(&tensor).unwrap();
-    let original_table = std::fs::read(&table).unwrap();
-    assert!(run("--check", &root).status.success());
-    std::fs::remove_file(&tensor).unwrap();
-    std::fs::remove_file(&table).unwrap();
-    assert!(!run("--check", &root).status.success());
+    let original = std::fs::read(&tensor)?;
+    let original_table = std::fs::read(&table)?;
+    assert!(run("--check", &root)?.status.success());
+    std::fs::remove_file(&tensor)?;
+    std::fs::remove_file(&table)?;
+    assert!(!run("--check", &root)?.status.success());
     assert!(
         !tensor.exists() && !table.exists(),
         "--check must not repair files"
     );
-    let repair = run("--write", &root);
+    let repair = run("--write", &root)?;
     assert!(
         repair.status.success(),
         "{}",
         String::from_utf8_lossy(&repair.stderr)
     );
-    assert_eq!(std::fs::read(&tensor).unwrap(), original);
-    assert_eq!(std::fs::read(&table).unwrap(), original_table);
-    assert!(run("--check", &root).status.success());
+    assert_eq!(std::fs::read(&tensor)?, original);
+    assert_eq!(std::fs::read(&table)?, original_table);
+    assert!(run("--check", &root)?.status.success());
     let unexpected = root.join("stdlib/Unexpected.aev");
-    std::fs::copy(&tensor, &unexpected).unwrap();
-    assert!(!run("--check", &root).status.success());
-    assert!(!run("--write", &root).status.success());
+    std::fs::copy(&tensor, &unexpected)?;
+    assert!(!run("--check", &root)?.status.success());
+    assert!(!run("--write", &root)?.status.success());
     assert!(
         unexpected.exists(),
         "generator must not delete unknown files"
     );
-    std::fs::remove_dir_all(root).unwrap();
+    std::fs::remove_dir_all(root)
 }
 
 #[test]
-fn workspace_root_resolves_to_the_std_crate_output_tree() {
+fn workspace_root_resolves_to_the_std_crate_output_tree() -> std::io::Result<()> {
     let root = std::env::temp_dir().join(format!(
         "aevia-stdlib-generator-workspace-{}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&root);
     let library = root.join("crates/aevia-std");
-    std::fs::create_dir_all(&library).unwrap();
+    std::fs::create_dir_all(&library)?;
     std::fs::write(
         root.join("Cargo.toml"),
         "[workspace]\nmembers = [\"crates/aevia-std\"]\n",
-    )
-    .unwrap();
+    )?;
     std::fs::write(
         library.join("Cargo.toml"),
         "[package]\nname = \"aevia-std\"\nversion = \"0.1.0\"\n",
-    )
-    .unwrap();
-    let generated = run("--write", &root);
+    )?;
+    let generated = run("--write", &root)?;
     assert!(
         generated.status.success(),
         "{}",
@@ -92,6 +89,6 @@ fn workspace_root_resolves_to_the_std_crate_output_tree() {
     assert!(library.join("src/stdlib_table.rs").exists());
     assert!(!root.join("stdlib").exists());
     assert!(!root.join("src").exists());
-    assert!(run("--check", &root).status.success());
-    std::fs::remove_dir_all(root).unwrap();
+    assert!(run("--check", &root)?.status.success());
+    std::fs::remove_dir_all(root)
 }

@@ -42,9 +42,9 @@ fn imported_units(): Int = 1
 
 ## A multi-line snippet keeps the indentation of its block.
 ##
-## ```aevia
+## ~~~aevia
 ## fn double(x: Int): Int =
 ##     x + x
 ## let four = double(2)
-## ```
+## ~~~
 fn indented_note(): Int = 1

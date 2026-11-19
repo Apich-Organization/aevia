@@ -299,7 +299,7 @@ fn a_package_depending_on_itself_is_a_ring() {
 
 #[test]
 fn the_result_does_not_depend_on_index_order() {
-    let mut entries: Vec<(&str, &str, Vec<(&str, &str)>)> = vec![
+    let mut entries = [
         ("o/a", "1.0.0", vec![("o/c", "^1")]),
         ("o/a", "1.2.0", vec![("o/c", "^1.1")]),
         ("o/b", "1.0.0", vec![("o/c", "^1.0")]),
@@ -723,4 +723,36 @@ fn newest_is_chosen_whenever_nothing_forces_otherwise_on_random_chains() {
             assert_eq!(chosen(&resolution, name), [best], "{name}");
         }
     }
+}
+
+#[test]
+fn a_deep_index_chain_resolves_and_explains_failures_without_using_the_host_stack() {
+    const PACKAGES: usize = 4_000;
+    let mut index = MemoryIndex::new();
+    for package in 1..PACKAGES {
+        let name = format!("o/package-{package:04}");
+        let next = format!("o/package-{:04}", package + 1);
+        index.add(&name, "1.0.0", &[(&next, "^1")]);
+    }
+    let query = [("o/package-0001", "^1")];
+    let error = run(&index, &query).expect_err("the last package is missing");
+    let explanation = error.to_string();
+    assert!(explanation.contains("package-0001"), "{explanation}");
+    assert!(
+        explanation.contains("explanation is cut here"),
+        "{explanation}"
+    );
+
+    index.add(&format!("o/package-{PACKAGES:04}"), "1.0.0", &[]);
+    let resolution = run(&index, &query).expect("the long chain resolves");
+    let build_order = resolution.build_order();
+    assert_eq!(build_order.len(), PACKAGES);
+    assert_eq!(
+        build_order.first().map(|package| package.package.as_str()),
+        Some("o/package-4000"),
+    );
+    assert_eq!(
+        build_order.last().map(|package| package.package.as_str()),
+        Some("o/package-0001"),
+    );
 }

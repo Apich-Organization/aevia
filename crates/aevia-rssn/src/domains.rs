@@ -144,14 +144,15 @@ impl Overlay {
     /// Parse overlay text. Errors are collected in [`Overlay::errors`] so that
     /// one run reports every mistake.
     #[must_use]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Reports all overlay directives through one source line cursor"
+    )]
     pub fn parse(source: &str) -> Self {
         let mut overlay = Self::default();
-        let lines: Vec<&str> = source.lines().collect();
-        let mut index = 0;
-        while index < lines.len() {
-            let number = index + 1;
-            let line = lines[index].trim();
-            index += 1;
+        let mut lines = (1usize..).zip(source.lines()).peekable();
+        while let Some((number, line)) = lines.next() {
+            let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
@@ -202,7 +203,7 @@ impl Overlay {
                         | None => {
                             overlay.errors.push(format!(
                                 "line {number}: `mode` names unknown domain `{domain}`"
-                            ))
+                            ));
                         },
                     }
                 },
@@ -266,27 +267,27 @@ impl Overlay {
                 | "prelude" => {
                     let domain = rest.to_string();
                     let mut text = String::new();
-                    while index < lines.len() && lines[index].trim_start().starts_with('|') {
-                        let body = lines[index].trim_start()[1..]
-                            .strip_prefix(' ')
-                            .unwrap_or(&lines[index].trim_start()[1..]);
-                        text.push_str(body);
+                    while let Some(body) = lines
+                        .peek()
+                        .and_then(|(_, line)| line.trim_start().strip_prefix('|'))
+                    {
+                        text.push_str(body.strip_prefix(' ').unwrap_or(body));
                         text.push('\n');
-                        index += 1;
+                        lines.next();
                     }
                     match overlay.domains.iter_mut().find(|d| d.name == domain) {
                         | Some(found) => found.prelude.push_str(&text),
                         | None => {
                             overlay.errors.push(format!(
                                 "line {number}: `prelude` names unknown domain `{domain}`"
-                            ))
+                            ));
                         },
                     }
                 },
                 | other => {
                     overlay
                         .errors
-                        .push(format!("line {number}: unknown directive `{other}`"))
+                        .push(format!("line {number}: unknown directive `{other}`"));
                 },
             }
         }
@@ -302,14 +303,18 @@ fn split_bar(text: &str) -> (&str, &str) {
 }
 
 /// Split at top-level commas (angle, round and square brackets nest).
+#[allow(
+    clippy::single_call_fn,
+    reason = "Isolates top-level comma recognition from signature field validation"
+)]
 fn split_top(text: &str) -> Vec<String> {
     let mut parts = Vec::new();
     let mut depth = 0i32;
     let mut current = String::new();
     for ch in text.chars() {
         match ch {
-            | '<' | '(' | '[' | '{' => depth += 1,
-            | '>' | ')' | ']' | '}' => depth -= 1,
+            | '<' | '(' | '[' | '{' => depth = depth.saturating_add(1),
+            | '>' | ')' | ']' | '}' => depth = depth.saturating_sub(1),
             | _ => {},
         }
         if ch == ',' && depth == 0 {
@@ -326,46 +331,50 @@ fn split_top(text: &str) -> Vec<String> {
 }
 
 /// `op [as name](p: T, ...) -> Result<R, OpError>`
+#[allow(
+    clippy::single_call_fn,
+    reason = "Keeps nesting and diagnostic handling apart from the overlay line cursor"
+)]
 fn parse_sig(
     text: &str,
     line: usize,
 ) -> Result<SigDef, String> {
-    let open = text
-        .find('(')
+    let (head, tail) = text
+        .split_once('(')
         .ok_or_else(|| format!("line {line}: `sig` needs a parameter list"))?;
-    let head: Vec<&str> = text[..open].split_whitespace().collect();
+    let head: Vec<&str> = head.split_whitespace().collect();
     let (op, name) = match head[..] {
         | [op] => (op.to_string(), crate::codegen::sanitise(op)),
         | [op, "as", name] => (op.to_string(), name.to_string()),
         | _ => return Err(format!("line {line}: expected `sig op [as name](...)`")),
     };
     // The parameter list ends at the matching parenthesis.
-    let mut depth = 0i32;
+    let mut depth = 0usize;
     let mut close = None;
-    for (offset, ch) in text[open..].char_indices() {
+    for (offset, ch) in tail.char_indices() {
         match ch {
-            | '(' => depth += 1,
+            | '(' => depth = depth.saturating_add(1),
             | ')' => {
-                depth -= 1;
                 if depth == 0 {
-                    close = Some(open + offset);
+                    close = tail.split_at_checked(offset);
                     break;
                 }
+                depth = depth.saturating_sub(1);
             },
             | _ => {},
         }
     }
-    let close = close.ok_or_else(|| format!("line {line}: unbalanced parameter list"))?;
+    let (body, after) = close.ok_or_else(|| format!("line {line}: unbalanced parameter list"))?;
     let mut params = Vec::new();
-    for part in split_top(&text[open + 1..close]) {
+    for part in split_top(body) {
         let (pname, pty) = part
             .split_once(':')
             .ok_or_else(|| format!("line {line}: parameter `{part}` needs `name: Type`"))?;
         params.push((pname.trim().to_string(), pty.trim().to_string()));
     }
-    let after = text[close + 1..].trim();
     let ret = after
-        .strip_prefix("->")
+        .strip_prefix(')')
+        .and_then(|rest| rest.trim().strip_prefix("->"))
         .map(str::trim)
         .ok_or_else(|| format!("line {line}: `sig` needs `-> Result<T, OpError>`"))?;
     let inner = ret
@@ -437,30 +446,28 @@ pub struct Placement<'a> {
     pub status: Status,
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "Keeps prefix, interior and suffix matching separate from rule precedence"
+)]
 fn glob_matches(
     glob: &str,
     name: &str,
 ) -> bool {
-    let parts: Vec<&str> = glob.split('*').collect();
-    if parts.len() == 1 {
+    let mut parts = glob.split('*');
+    let (Some(prefix), Some(suffix)) = (parts.next(), parts.next_back()) else {
         return glob == name;
-    }
-    let mut rest = name;
-    for (index, part) in parts.iter().enumerate() {
-        if index == 0 {
-            let Some(stripped) = rest.strip_prefix(part) else {
-                return false;
-            };
-            rest = stripped;
-        } else if index == parts.len() - 1 {
-            return rest.ends_with(part);
-        } else if let Some(position) = rest.find(part) {
-            rest = &rest[position + part.len()..];
-        } else {
+    };
+    let Some(mut rest) = name.strip_prefix(prefix) else {
+        return false;
+    };
+    for part in parts {
+        let Some((_, remaining)) = rest.split_once(part) else {
             return false;
-        }
+        };
+        rest = remaining;
     }
-    true
+    rest.ends_with(suffix)
 }
 
 /// Place every operator of the manifest.
@@ -500,6 +507,10 @@ pub fn classify<'a>(
 /// The coverage check. An empty result means the overlay and the manifest
 /// agree; each entry is one thing to fix, written so that it names the fix.
 #[must_use]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Lists independent overlay consistency checks in diagnostic order"
+)]
 pub fn problems(
     registry: &Registry,
     overlay: &Overlay,
@@ -554,7 +565,7 @@ pub fn problems(
                 ));
             },
             | Status::Typed => {
-                for sig in &overlay.sigs[&op.name] {
+                for sig in overlay.sigs.get(&op.name).into_iter().flatten() {
                     let (min, max) = op.arity;
                     let n = sig.params.len();
                     if n < min || max.is_some_and(|max| n > max) {
@@ -690,6 +701,10 @@ pub fn domain_files(registry: &Registry) -> Vec<(String, String)> {
 }
 
 /// How a value of Aevia type `ty` is put on the wire.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Keeps generated parameter encoding and result decoding independently readable"
+)]
 fn encode(
     overlay: &Overlay,
     ty: &str,
@@ -701,6 +716,10 @@ fn encode(
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "Keeps generated result decoding and parameter encoding independently readable"
+)]
 fn decode(
     overlay: &Overlay,
     ty: &str,
@@ -755,7 +774,7 @@ fn render(
         }
     }
     for placement in classify(registry, overlay) {
-        if !placement.domain.is_some_and(|d| d.name == domain.name) {
+        if placement.domain.is_none_or(|d| d.name != domain.name) {
             continue;
         }
         let op = placement.op;
@@ -764,7 +783,7 @@ fn render(
                 let _ = writeln!(out, "## `{}` is not bound here: {reason}\n", op.name);
             },
             | Status::Typed => {
-                for sig in &overlay.sigs[&op.name] {
+                for sig in overlay.sigs.get(&op.name).into_iter().flatten() {
                     let name = unique(&mut used, &sig.name);
                     typed_wrapper(&mut out, overlay, op, sig, &name);
                 }
@@ -798,10 +817,11 @@ fn unique(
     base: &str,
 ) -> String {
     let mut name = base.to_string();
-    let mut suffix = 2;
-    while !used.insert(name.clone()) {
+    for suffix in 2.. {
+        if used.insert(name.clone()) {
+            break;
+        }
         name = format!("{base}_{suffix}");
-        suffix += 1;
     }
     name
 }
@@ -827,6 +847,10 @@ fn docs(
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "Renders the overlay-typed facade at one auditable template boundary"
+)]
 fn typed_wrapper(
     out: &mut String,
     overlay: &Overlay,
@@ -948,7 +972,9 @@ pub fn witnessed_sigs(op: &OpEntry) -> Vec<WitnessedSig> {
     out
 }
 
-/// Parameter names for a witnessed wrapper. The kernel records no names, so
+/// Parameter names for a witnessed wrapper.
+///
+/// The kernel records no names, so
 /// they come from the Aevia type: `n` for an integer, `x` for a scalar, `xs`
 /// for a vector, `m` for a matrix, `t3` for a rank-3 tensor, `flag` for a
 /// boolean and `v` for a handle. A kind that occurs more than once is
@@ -976,22 +1002,30 @@ pub fn witnessed_param_names(types: &[String]) -> Vec<String> {
         }
     };
     let bases: Vec<String> = types.iter().map(|t| base(t)).collect();
+    let mut totals = BTreeMap::<&str, usize>::new();
+    for base in &bases {
+        let total = totals.entry(base).or_default();
+        *total = total.saturating_add(1);
+    }
     let mut seen = std::collections::BTreeMap::<&str, usize>::new();
     bases
         .iter()
         .map(|b| {
-            let total = bases.iter().filter(|o| *o == b).count();
-            if total == 1 {
+            if totals.get(b.as_str()) == Some(&1) {
                 b.clone()
             } else {
                 let k = seen.entry(b.as_str()).or_insert(0);
-                *k += 1;
+                *k = k.saturating_add(1);
                 format!("{b}{k}")
             }
         })
         .collect()
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "Renders the witnessed facade separately from curated signatures"
+)]
 fn witnessed_wrapper(
     out: &mut String,
     op: &OpEntry,
@@ -1030,6 +1064,10 @@ fn witnessed_wrapper(
     );
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "Renders the value-list facade separately from typed signatures"
+)]
 fn dynamic_wrapper(
     out: &mut String,
     op: &OpEntry,
@@ -1084,29 +1122,32 @@ fn dynamic_wrapper(
 /// library, so the report can say which kernel operators already have a
 /// hand-written standard-library entry point.
 #[must_use]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Keeps the generated report sections and their ordering together"
+)]
 pub fn coverage_report(
     registry: &Registry,
     overlay: &Overlay,
     stdlib_names: &BTreeSet<String>,
 ) -> String {
     let catalog = crate::bindings::catalog(registry);
-    let mut flat_typed: BTreeSet<&str> = BTreeSet::new();
-    let mut flat_total: BTreeMap<&str, usize> = BTreeMap::new();
-    for row in &catalog {
-        *flat_total.entry(row.op.name.as_str()).or_default() += 1;
-        if matches!(row.coverage, crate::bindings::Coverage::Typed) {
-            flat_typed.insert(row.op.name.as_str());
-        }
-    }
+    let flat_typed: BTreeSet<&str> = catalog
+        .iter()
+        .filter(|row| matches!(row.coverage, crate::bindings::Coverage::Typed))
+        .map(|row| row.op.name.as_str())
+        .collect();
     let placements = classify(registry, overlay);
     let mut out = String::new();
+    // Optional JIT and GPU capabilities change the sealed manifest hash.
+    // This report compares the operator inventory and Aevia placements.
     let _ = writeln!(
         out,
         "# rssn operator coverage in Aevia\n\n\
          Generated by `cargo test -p aevia-rssn --test domains` (set `AEVIA_BLESS=1` to rewrite);\n\
          do not edit. Source of truth: the Kernel Manifest and `crates/aevia-rssn/domains.overlay`.\n\n\
-         rssn {}, api {}, manifest `{}`.\n",
-        registry.version, registry.api_version, registry.manifest_hash
+         RSSN {}, kernel API {}.\n",
+        registry.version, registry.api_version
     );
     let total = placements.len();
     let count = |f: &dyn Fn(&Placement<'_>) -> bool| placements.iter().filter(|p| f(p)).count();
@@ -1218,8 +1259,9 @@ pub fn coverage_report(
                 p.status == Status::Typed && p.domain.is_some_and(|d| d.name == domain.name)
             })
             .map(|p| {
-                let sigs = &overlay.sigs[&p.op.name];
-                if sigs.len() > 1 {
+                if let Some(sigs) = overlay.sigs.get(&p.op.name)
+                    && sigs.len() > 1
+                {
                     let aliases: Vec<&str> = sigs.iter().map(|s| s.name.as_str()).collect();
                     format!("{} ({})", p.op.name, aliases.join(", "))
                 } else {
@@ -1264,7 +1306,6 @@ pub fn coverage_report(
             }
         );
     }
-    let _ = flat_total;
     out
 }
 

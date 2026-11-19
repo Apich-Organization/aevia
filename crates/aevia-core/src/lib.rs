@@ -22,6 +22,23 @@
 //! ```
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+// Preserve written evaluation order across FMA and non-FMA targets. Numeric
+// kernels deliberately convert host counts and indices to their scalar type.
+#![allow(clippy::suboptimal_flops, clippy::cast_precision_loss)]
 #![allow(
     clippy::needless_range_loop,
     clippy::should_implement_trait,
@@ -36,6 +53,7 @@ mod builtin_ids;
 pub mod builtins;
 mod callback;
 pub mod cancellation;
+pub mod debugger;
 pub mod disk_cache;
 pub mod display;
 pub mod driver;
@@ -281,18 +299,15 @@ impl Interp {
         // Then the bindings, in passes: `let a = b + 1` before `let b = 41` is
         // legal (§7.1.2), so a pass that hits an unbound name retries once the
         // names after it are bound.
-        let mut pending: Vec<usize> = module
+        let mut pending: Vec<_> = module
             .decls
             .iter()
-            .enumerate()
-            .filter(|(_, decl)| matches!(decl.kind, aevia_syntax::DeclKind::Let { .. }))
-            .map(|(index, _)| index)
+            .filter(|decl| matches!(decl.kind, aevia_syntax::DeclKind::Let { .. }))
             .collect();
         while !pending.is_empty() {
             let mut deferred = Vec::new();
             let mut progress = false;
-            for index in pending {
-                let decl = &module.decls[index];
+            for decl in pending {
                 let aevia_syntax::DeclKind::Let { pattern, value, .. } = &decl.kind else {
                     continue;
                 };
@@ -310,7 +325,7 @@ impl Interp {
                     },
                     // A name that is not bound yet may be bound by a later
                     // declaration; anything else is a real failure.
-                    | Err(error) if error.code == "E0301" => deferred.push((index, error)),
+                    | Err(error) if error.code == "E0301" => deferred.push((decl, error)),
                     | Err(error) => {
                         progress = true;
                         diagnostics.push(error.diagnostic());
@@ -326,7 +341,7 @@ impl Interp {
                 }
                 break;
             }
-            pending = deferred.into_iter().map(|(index, _)| index).collect();
+            pending = deferred.into_iter().map(|(decl, _)| decl).collect();
         }
         diagnostics
     }
@@ -364,7 +379,11 @@ impl Interp {
         let root = root.clone();
         for decl in &lowered.fns {
             let closure = crate::eval_ir::module_closure(&decl.function, &root);
-            root.bind_source(&decl.name, closure, sites[&decl.span]);
+            root.bind_source(
+                &decl.name,
+                closure,
+                sites.get(&decl.span).copied().unwrap_or(decl.span),
+            );
         }
         for instance in &lowered.instances {
             let export = self.instance_export_at(instance.span);
@@ -381,12 +400,11 @@ impl Interp {
         }
         bind_module_constructors(self, module, &root);
         diagnostics.extend(self.publish_module_registrations(module, &root));
-        let mut pending: Vec<usize> = (0..lowered.lets.len()).collect();
+        let mut pending: Vec<_> = lowered.lets.iter().collect();
         while !pending.is_empty() {
             let mut deferred = Vec::new();
             let mut progress = false;
-            for index in pending {
-                let decl = &lowered.lets[index];
+            for decl in pending {
                 match crate::eval_ir::eval_top(self, &decl.block, decl.nslots, &root) {
                     | Ok(bound) => {
                         progress = true;
@@ -394,12 +412,12 @@ impl Interp {
                             &decl.pattern,
                             &bound,
                             &root,
-                            sites[&decl.span],
+                            sites.get(&decl.span).copied().unwrap_or(decl.span),
                         ) {
                             diagnostics.push(error.diagnostic());
                         }
                     },
-                    | Err(error) if error.code == "E0301" => deferred.push((index, error)),
+                    | Err(error) if error.code == "E0301" => deferred.push((decl, error)),
                     | Err(error) => {
                         progress = true;
                         diagnostics.push(error.diagnostic());
@@ -415,7 +433,7 @@ impl Interp {
                 }
                 break;
             }
-            pending = deferred.into_iter().map(|(index, _)| index).collect();
+            pending = deferred.into_iter().map(|(decl, _)| decl).collect();
         }
         diagnostics
     }
@@ -437,7 +455,7 @@ impl Interp {
         let spelled = crate::eval::instance_head_name(head);
         let key = export.map(|export| export.key.clone());
         let name = match &key {
-            | Some(key) => Interp::instance_global(key, method),
+            | Some(key) => Self::instance_global(key, method),
             | None => format!("{class}@{}::{method}", spelled.as_deref().unwrap_or("?")),
         };
         let closure = crate::eval_ir::module_closure(function, env);
@@ -594,23 +612,22 @@ impl Interp {
         // globals. Preserve these in this batch's lexical snapshot.
         crate::value::bump_environment();
         root.vars.borrow_mut().extend(self.globals.clone());
-        let mut pending: Vec<usize> = declarations
+        let mut pending: Vec<_> = declarations
             .iter()
             .enumerate()
             .filter(|(_, declaration)| !prebound(declaration))
-            .map(|(index, _)| index)
             .collect();
         while !pending.is_empty() {
             let mut deferred = Vec::new();
             let mut progress = false;
-            for index in pending {
+            for (index, declaration) in pending {
                 // A deferred initializer must not consume random/symbol state
                 // twice when its forward dependency becomes available.
                 let symbol_counts = self.symbol_counts.clone();
                 let seed = self.seed;
                 let constants_seeded = self.constants_seeded;
                 let globals = self.globals.clone();
-                match self.load_decl_in(&declarations[index], &root) {
+                match self.load_decl_in(declaration, &root) {
                     | Ok(()) => progress = true,
                     | Err(error) if error.code == "E0301" => {
                         self.symbol_counts = symbol_counts;
@@ -618,18 +635,18 @@ impl Interp {
                         self.constants_seeded = constants_seeded;
                         crate::value::bump_environment();
                         self.globals = globals;
-                        deferred.push((index, error));
+                        deferred.push(((index, declaration), error));
                     },
                     | Err(error) => return Err((index, error)),
                 }
             }
-            if deferred.is_empty() {
+            if !progress {
+                if let Some(((index, _), error)) = deferred.into_iter().next() {
+                    return Err((index, error));
+                }
                 break;
             }
-            if !progress {
-                return Err(deferred.remove(0));
-            }
-            pending = deferred.into_iter().map(|(index, _)| index).collect();
+            pending = deferred.into_iter().map(|(decl, _)| decl).collect();
         }
         Ok(())
     }
@@ -786,6 +803,9 @@ impl Interp {
                     aevia_syntax::Span::default(),
                 )?
             },
+            | Value::Closure(_) => {
+                return Err(EvalError::new("E0315", "`main` must take zero arguments"));
+            },
             | other => other,
         };
         match value {
@@ -842,7 +862,7 @@ impl Interp {
 
 /// Functions and recursive bindings see themselves; ordinary initializers
 /// see the preceding declaration with that name.
-fn source_visibility(declaration: &aevia_syntax::Decl) -> aevia_syntax::Span {
+const fn source_visibility(declaration: &aevia_syntax::Decl) -> aevia_syntax::Span {
     let mut site = declaration.span;
     if matches!(
         declaration.kind,
@@ -963,15 +983,20 @@ pub fn top_level_names(module: &Module) -> Vec<String> {
 ///
 /// # Errors
 ///
-/// Returns the first diagnostic when the program does not compile, or the
+/// Returns the first error diagnostic when the program does not compile, or the
 /// runtime error when `main` fails.
 pub fn run(
     source: &str,
     name: &str,
 ) -> Result<String, Diagnostic> {
     let compilation = compile(name, source);
-    if compilation.diagnostics.has_errors() {
-        return Err(compilation.diagnostics.items[0].clone());
+    if let Some(error) = compilation
+        .diagnostics
+        .items
+        .into_iter()
+        .find(|item| item.severity == aevia_syntax::Severity::Error)
+    {
+        return Err(error);
     }
     let Some(module) = &compilation.module else {
         return Err(Diagnostic::error(
@@ -994,8 +1019,12 @@ pub fn run(
         Ok(replica)
     }));
     let load_diagnostics = interp.load(module);
-    if load_diagnostics.has_errors() {
-        return Err(load_diagnostics.items[0].clone());
+    if let Some(error) = load_diagnostics
+        .items
+        .into_iter()
+        .find(|item| item.severity == aevia_syntax::Severity::Error)
+    {
+        return Err(error);
     }
     interp.run_main().map_err(|error| error.diagnostic())?;
     Ok(interp.captured())

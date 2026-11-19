@@ -59,6 +59,10 @@ pub struct Driver;
 impl Driver {
     /// Lints a single module (used by both `Driver::run` and `aevia-analysis` / LSP).
     #[must_use]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "keeps existing callers of the public module lint entry point source-compatible"
+    )]
     pub fn run_module(
         sources: &SourceMap,
         module: &Module,
@@ -296,6 +300,10 @@ fn sort_diagnostics(items: &mut [Diagnostic]) {
     });
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "names the special deduplication key for configuration diagnostics"
+)]
 fn dedup_config_errors(items: &mut Vec<Diagnostic>) {
     let mut seen = std::collections::HashSet::new();
     items.retain(|d| seen.insert((d.span.file, d.span.start, d.code.clone(), d.message.clone())));

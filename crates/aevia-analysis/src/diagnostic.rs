@@ -101,7 +101,14 @@ pub fn convert(
     })
 }
 
-fn severity(severity: SyntaxSeverity) -> Severity {
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "keep the compiler-to-editor severity table explicit"
+    )
+)]
+const fn severity(severity: SyntaxSeverity) -> Severity {
     match severity {
         | SyntaxSeverity::Error => Severity::Error,
         | SyntaxSeverity::Warning => Severity::Warning,

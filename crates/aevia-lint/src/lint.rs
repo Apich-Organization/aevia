@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::fmt::Write as _;
 
 /// Enforcement level of a lint.
 #[derive(
@@ -185,7 +186,7 @@ impl LintStore {
         self.lints.get(id.0).copied()
     }
 
-    /// Looks up a lint by kebab-case name, snake_case alias, or `W0xxx` code.
+    /// Looks up a lint by kebab-case name, `snake_case` alias, or `W0xxx` code.
     #[must_use]
     pub fn find(
         &self,
@@ -270,14 +271,15 @@ impl LintStore {
             } else {
                 " (lint)"
             };
-            out.push_str(&format!(
-                "{:<6} {:<26} {:<8} {:<12} {}{tier}\n",
+            let _ = writeln!(
+                out,
+                "{:<6} {:<26} {:<8} {:<12} {}{tier}",
                 lint.code,
                 lint.name,
                 lint.default_level.as_str(),
                 lint.group.as_str(),
                 lint.summary,
-            ));
+            );
         }
         out.push_str("\nGroups: correctness, style, pedantic, warnings, all\n");
         out
@@ -307,6 +309,7 @@ impl LintStore {
 }
 
 /// Compiler lints (emitted by `aevia-types`).
+/// Reports a variable binding with no uses.
 pub static W0101_UNUSED_VARIABLE: Lint = Lint {
     code: "W0101",
     name: "unused-variable",
@@ -317,6 +320,7 @@ pub static W0101_UNUSED_VARIABLE: Lint = Lint {
     explanation: "A local binding or parameter is never read. Prefix it with `_` if intentional, or remove it.",
 };
 
+/// Reports a binding that shadows another binding in scope.
 pub static W0103_SHADOWED_BINDING: Lint = Lint {
     code: "W0103",
     name: "shadowed-binding",
@@ -327,6 +331,7 @@ pub static W0103_SHADOWED_BINDING: Lint = Lint {
     explanation: "A local `let` or parameter rebinds a name already visible in an enclosing scope.",
 };
 
+/// Reports an unreachable match arm.
 pub static W0201_REDUNDANT_MATCH_ARM: Lint = Lint {
     code: "W0201",
     name: "redundant-match-arm",
@@ -337,6 +342,7 @@ pub static W0201_REDUNDANT_MATCH_ARM: Lint = Lint {
     explanation: "Earlier patterns already cover every value matched by this arm, so it can never execute.",
 };
 
+/// Reports an `IO` result discarded without choosing how to handle it.
 pub static W0202_DISCARDED_IO_RESULT: Lint = Lint {
     code: "W0202",
     name: "discarded-io-result",
@@ -347,6 +353,7 @@ pub static W0202_DISCARDED_IO_RESULT: Lint = Lint {
     explanation: "An `IO` action or expression inside `do` returns a non-`()` value that is ignored. Bind it with `<-` or `let _ = ...`.",
 };
 
+/// Reports a discarded `Result` accepted in relaxed mode.
 pub static W0204_RELAXED_DISCARDED_RESULT: Lint = Lint {
     code: "W0204",
     name: "relaxed-discarded-result",
@@ -357,6 +364,7 @@ pub static W0204_RELAXED_DISCARDED_RESULT: Lint = Lint {
     explanation: "A `Result` is bound to `_` in a declaration marked `@relax_result`. Handle the error or match on it.",
 };
 
+/// Reports an implicit unwrap accepted in relaxed mode.
 pub static W0205_RELAXED_IMPLICIT_UNWRAP: Lint = Lint {
     code: "W0205",
     name: "relaxed-implicit-unwrap",
@@ -367,6 +375,7 @@ pub static W0205_RELAXED_IMPLICIT_UNWRAP: Lint = Lint {
     explanation: "A `?` that cannot be converted to the enclosing return type is treated as an unwrap in a declaration marked `@relax_result`.",
 };
 
+/// Reports a non-exhaustive match accepted in relaxed mode.
 pub static W0206_RELAXED_NON_EXHAUSTIVE_MATCH: Lint = Lint {
     code: "W0206",
     name: "relaxed-non-exhaustive-match",
@@ -377,6 +386,7 @@ pub static W0206_RELAXED_NON_EXHAUSTIVE_MATCH: Lint = Lint {
     explanation: "A `match` on a `Result` or `Option` misses cases; the error is relaxed to a warning in a declaration marked `@relax_result`.",
 };
 
+/// Reports an unresolved dimension that defaults to dimensionless.
 pub static W0301_UNRESOLVED_DIMENSION_DEFAULT: Lint = Lint {
     code: "W0301",
     name: "unresolved-dimension-default",
@@ -387,6 +397,7 @@ pub static W0301_UNRESOLVED_DIMENSION_DEFAULT: Lint = Lint {
     explanation: "A dimension variable remained unconstrained and defaulted to dimensionless (`1`). Add a unit or dimension annotation if a physical dimension was intended.",
 };
 
+/// Reports mixed exact and approximate real arithmetic.
 pub static W0302_REAL_FLOAT_MIX: Lint = Lint {
     code: "W0302",
     name: "real-float-mix",
@@ -397,6 +408,7 @@ pub static W0302_REAL_FLOAT_MIX: Lint = Lint {
     explanation: "Mixing exact `Real` and IEEE-754 `Float` promotes to `Real` at runtime; annotate explicitly if `Float` performance was intended.",
 };
 
+/// Reports a symbolic declaration with no uses.
 pub static W0303_UNUSED_SYMBOL: Lint = Lint {
     code: "W0303",
     name: "unused-symbol",
@@ -407,6 +419,7 @@ pub static W0303_UNUSED_SYMBOL: Lint = Lint {
     explanation: "A top-level declaration is never referenced.",
 };
 
+/// Reports an unused private declaration.
 pub static W0601_UNUSED_PRIVATE_DECL: Lint = Lint {
     code: "W0601",
     name: "unused-private-decl",
@@ -417,6 +430,7 @@ pub static W0601_UNUSED_PRIVATE_DECL: Lint = Lint {
     explanation: "A `private` declaration is never used inside its module.",
 };
 
+/// Reports a reference to a deprecated declaration.
 pub static W0602_DEPRECATED_USE: Lint = Lint {
     code: "W0602",
     name: "deprecated-use",
@@ -428,6 +442,7 @@ pub static W0602_DEPRECATED_USE: Lint = Lint {
 };
 
 /// Extra lints (`aevia lint` only).
+/// Reports an unused imported module or name.
 pub static W0102_UNUSED_IMPORT: Lint = Lint {
     code: "W0102",
     name: "unused-import",
@@ -438,6 +453,7 @@ pub static W0102_UNUSED_IMPORT: Lint = Lint {
     explanation: "An `import` statement brings a module or selective names into scope that are never referenced in this module.",
 };
 
+/// Reports a value name that uses uppercase characters.
 pub static W0701_NON_SNAKE_CASE: Lint = Lint {
     code: "W0701",
     name: "non-snake-case",
@@ -448,6 +464,7 @@ pub static W0701_NON_SNAKE_CASE: Lint = Lint {
     explanation: "Aevia uses `snake_case` for functions and value bindings. Rename the identifier or suppress with `@allow(non-snake-case)`.",
 };
 
+/// Reports a type name that differs from `UpperCamelCase`.
 pub static W0702_NON_CAMEL_CASE_TYPE: Lint = Lint {
     code: "W0702",
     name: "non-camel-case-type",
@@ -458,6 +475,7 @@ pub static W0702_NON_CAMEL_CASE_TYPE: Lint = Lint {
     explanation: "Aevia uses `UpperCamelCase` for nominal types, type classes, and constructors.",
 };
 
+/// Reports a public declaration without a documentation comment.
 pub static W0703_MISSING_DOC_PUBLIC: Lint = Lint {
     code: "W0703",
     name: "missing-doc-public",
@@ -468,6 +486,7 @@ pub static W0703_MISSING_DOC_PUBLIC: Lint = Lint {
     explanation: "Public declarations appear in generated registry docs (`aevia doc`). Add a `##` doc comment above the declaration.",
 };
 
+/// Reports an annotation that repeats the inferred type.
 pub static W0704_REDUNDANT_ANNOTATION: Lint = Lint {
     code: "W0704",
     name: "redundant-annotation",
@@ -478,6 +497,7 @@ pub static W0704_REDUNDANT_ANNOTATION: Lint = Lint {
     explanation: "An expression carries an explicit `: T` annotation that repeats the literal or inner annotation type.",
 };
 
+/// Reports a declaration that shadows a prelude name.
 pub static W0705_SHADOWED_PRELUDE_NAME: Lint = Lint {
     code: "W0705",
     name: "shadowed-prelude-name",
@@ -488,6 +508,7 @@ pub static W0705_SHADOWED_PRELUDE_NAME: Lint = Lint {
     explanation: "Binding a name such as `sqrt`, `sin`, `abs`, or `map` shadows the prelude builtin in this scope.",
 };
 
+/// Reports exact equality tests between approximate numbers.
 pub static W0706_FLOAT_EQUALITY: Lint = Lint {
     code: "W0706",
     name: "float-equality",
@@ -498,6 +519,7 @@ pub static W0706_FLOAT_EQUALITY: Lint = Lint {
     explanation: "IEEE-754 floating-point equality (`==` / `!=`) is sensitive to rounding error. Prefer comparing `abs(a - b) < eps`.",
 };
 
+/// Reports a bare zero coerced to a dimensionful scalar or point.
 pub static W0707_DIMENSION_LITERAL_DEFAULT: Lint = Lint {
     code: "W0707",
     name: "dimension-literal-default",
@@ -508,6 +530,7 @@ pub static W0707_DIMENSION_LITERAL_DEFAULT: Lint = Lint {
     explanation: "A bare `0` or `0.0` acquires a physical dimension from context without an explicit unit. Write `0 m` (or the intended unit) for clarity.",
 };
 
+/// Reports a comparison with identical operands.
 pub static W0708_SELF_COMPARISON: Lint = Lint {
     code: "W0708",
     name: "self-comparison",
@@ -518,6 +541,7 @@ pub static W0708_SELF_COMPARISON: Lint = Lint {
     explanation: "Comparing an expression to itself with `==`, `!=`, `<`, `<=`, `>`, or `>=` is usually a bug (such as a typo in one operand).",
 };
 
+/// Reports an `if` expression that can be replaced with its condition or negation.
 pub static W0709_REDUNDANT_IF: Lint = Lint {
     code: "W0709",
     name: "redundant-if",
@@ -528,6 +552,7 @@ pub static W0709_REDUNDANT_IF: Lint = Lint {
     explanation: "An `if` expression that returns `true`/`false` directly or has identical branches can be simplified.",
 };
 
+/// Reports repeated imports of the same module.
 pub static W0710_DUPLICATE_IMPORT: Lint = Lint {
     code: "W0710",
     name: "duplicate-import",

@@ -1,16 +1,30 @@
 //! One iterative, transactional matcher for source and Core IR patterns.
 //! A failed match never commits bindings to a lexical environment or slot frame.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
 use crate::value::NumKind;
 use crate::value::TensorData;
 use crate::value::Value;
+use crate::value::VariantValue;
 use aevia_syntax::ast::Pat;
 use aevia_syntax::ast::PatKind;
 use aevia_syntax::ast::PatLit;
+use aevia_types::adt;
 use aevia_types::adt::AdtId;
-use aevia_types::adt::{
-    self,
-};
 use num_rational::BigRational;
+use num_traits::One;
 use std::rc::Rc;
 
 #[derive(Clone, Copy)]
@@ -26,37 +40,60 @@ enum Work<'a> {
     Match(Node<'a>, Value),
     Bind(Target<'a>, Value),
 }
-pub(crate) enum Binding {
+pub enum Binding {
     Name(String, Value),
     Slot(u32, Value),
 }
 
-pub(crate) fn ast(
+#[allow(
+    clippy::single_call_fn,
+    reason = "Entry point for the source interpreter"
+)]
+pub fn ast(
     pattern: &Pat,
     value: &Value,
     constructors: &crate::evidence::SpanMap<(AdtId, usize)>,
 ) -> Option<Vec<Binding>> {
     execute(Node::Ast(pattern), value, constructors)
 }
-pub(crate) fn ir(
+#[allow(
+    clippy::single_call_fn,
+    reason = "Entry point for the Core IR interpreter"
+)]
+pub fn ir(
     pattern: &aevia_ir::Pattern,
     value: &Value,
 ) -> Option<Vec<Binding>> {
-    execute(Node::Ir(pattern), value, &Default::default())
+    execute(
+        Node::Ir(pattern),
+        value,
+        &crate::evidence::SpanMap::default(),
+    )
 }
-fn constructor(
-    value: &Value,
+fn constructor<'a>(
+    value: &'a Value,
     name: &str,
     expected: Option<(AdtId, usize)>,
     arity: usize,
-) -> bool {
+) -> Option<&'a VariantValue> {
     let (Value::Variant(value), Some((id, index))) = (value, expected) else {
-        return false;
+        return None;
     };
-    adt::same_type(value.adt, id)
+    (adt::same_type(value.adt, id)
         && value.index == index
         && value.name == name
-        && value.fields.len() == arity
+        && value.fields.len() == arity)
+        .then_some(value)
+}
+
+fn rational_matches_integer(
+    actual: &BigRational,
+    expected: &num_bigint::BigInt,
+) -> bool {
+    if actual.denom().is_one() {
+        return actual.numer() == expected;
+    }
+    actual == &BigRational::from_integer(expected.clone())
 }
 fn literal(
     literal: &PatLit,
@@ -66,10 +103,10 @@ fn literal(
         | (PatLit::Int(expected), Value::Num(number)) => {
             match &number.kind {
                 | NumKind::Int(actual) => actual == expected,
-                | NumKind::Exact(actual) => **actual == BigRational::from_integer(expected.clone()),
+                | NumKind::Exact(actual) => rational_matches_integer(actual, expected),
                 | NumKind::Float(actual) => {
                     BigRational::from_float(*actual)
-                        == Some(BigRational::from_integer(expected.clone()))
+                        .is_some_and(|ratio| rational_matches_integer(&ratio, expected))
                 },
                 | _ => false,
             }
@@ -88,20 +125,20 @@ fn tensor(
     let Value::Tensor(tensor) = value else {
         return None;
     };
-    if tensor.rank() != 1
-        || tensor.shape[0] != tensor.storage.len()
-        || if rest {
-            tensor.shape[0] < count
-        } else {
-            tensor.shape[0] != count
-        }
-    {
+    let &[length] = tensor.shape.as_slice() else {
+        return None;
+    };
+    if length != tensor.storage.len() || length < count || (!rest && length != count) {
         return None;
     }
     Some(tensor)
 }
-fn execute<'a>(
-    node: Node<'a>,
+#[allow(
+    clippy::too_many_lines,
+    reason = "The transactional loop handles both pattern representations together"
+)]
+fn execute(
+    node: Node<'_>,
     value: &Value,
     constructors: &crate::evidence::SpanMap<(AdtId, usize)>,
 ) -> Option<Vec<Binding>> {
@@ -130,17 +167,12 @@ fn execute<'a>(
                         }
                     },
                     | PatKind::Ctor { name, args } => {
-                        if !constructor(
+                        let value = constructor(
                             &value,
                             name,
                             constructors.get(&pattern.span).copied(),
                             args.len(),
-                        ) {
-                            return None;
-                        }
-                        let Value::Variant(value) = value else {
-                            unreachable!()
-                        };
+                        )?;
                         for (pattern, field) in args.iter().zip(&value.fields).rev() {
                             pending.push(Work::Match(Node::Ast(pattern), field.clone()));
                         }
@@ -188,7 +220,7 @@ fn execute<'a>(
                         pending.push(Work::Match(Node::Ast(pattern), value));
                     },
                     | PatKind::Annot { pattern, .. } => {
-                        pending.push(Work::Match(Node::Ast(pattern), value))
+                        pending.push(Work::Match(Node::Ast(pattern), value));
                     },
                 }
             },
@@ -208,12 +240,7 @@ fn execute<'a>(
                         }
                     },
                     | aevia_ir::Pattern::Ctor { name, identity, args } => {
-                        if !constructor(&value, name, *identity, args.len()) {
-                            return None;
-                        }
-                        let Value::Variant(value) = value else {
-                            unreachable!()
-                        };
+                        let value = constructor(&value, name, *identity, args.len())?;
                         for (pattern, field) in args.iter().zip(&value.fields).rev() {
                             pending.push(Work::Match(Node::Ir(pattern), field.clone()));
                         }

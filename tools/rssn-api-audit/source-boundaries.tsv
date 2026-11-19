@@ -1,0 +1,50 @@
+# Rust source path	Reason this entry point belongs to the Rust host API.
+crate::kernels::OdeStepMode::adaptive	Constructs a Rust solver-control enum. Aevia numerical solver calls take explicit tolerances and limits.
+crate::kernels::OdeStepMode::fixed	Constructs a Rust solver-control enum. Aevia solver calls take explicit step controls.
+crate::kernels::OdeStepMode::to_ode_options	Converts one Rust solver-control type to another after selecting a time interval and state length.
+crate::kernels::dense::Lu::solve_into	Writes into a caller-owned mutable output buffer. Aevia's LU solve returns an owned result.
+crate::kernels::descriptive::mean	Used by Aevia's typed mean builtin, which applies the empty-tensor and representation rules.
+crate::kernels::descriptive::std_dev	Used by Aevia's typed std builtin, which preserves the sample dimension and exact roots when available.
+crate::kernels::descriptive::var	Used by Aevia's typed var builtin, which squares the sample dimension and preserves exact variance.
+crate::kernels::lowrank::lobpcg_generalized	Takes independent Rust output-slice callbacks for stiffness, mass, and optional preconditioning.
+crate::kernels::ode::OdeStepMode::adaptive	Re-exported Rust solver-control enum constructor.
+crate::kernels::ode::OdeStepMode::fixed	Re-exported Rust solver-control enum constructor.
+crate::kernels::ode::OdeStepMode::to_ode_options	Re-exported conversion between Rust solver-control types.
+crate::kernels::ode::solve_ode	Rust method dispatcher taking an in-place rate callback and typed solver controls. Aevia exposes method-specific calls with checked callbacks.
+crate::kernels::ode::solve_ode_events	Rust method dispatcher taking borrowed event callbacks together with an in-place rate callback.
+crate::kernels::ode_adaptive::dae_index1_adaptive	Rust semi-explicit DAE callback interface using host values and adaptive controls. Aevia exposes a dimensional index-one DAE adapter.
+crate::kernels::ode_adaptive::dae_index1_with	Chooses fixed or adaptive DAE control using Rust-native rate and constraint callbacks.
+crate::kernels::ode_adaptive::dde_rk4_adaptive	Rust delay callback uses borrowed state/history data. Aevia uses a checked history function.
+crate::kernels::ode_adaptive::dde_rk4_with	Chooses fixed or adaptive delay integration in the Rust callback API.
+crate::kernels::ode_adaptive::dopri5_fixed	Fixed-step entry point for an in-place Rust rate callback and fixed-step options.
+crate::kernels::ode_adaptive::leapfrog_adaptive	Rust leapfrog callback writes derivatives into caller-provided slices.
+crate::kernels::ode_adaptive::leapfrog_with	Chooses fixed or adaptive leapfrog for the Rust output-slice callback.
+crate::kernels::ode_adaptive::rosenbrock23_fixed	Fixed-step entry point accepting a Rust rate and Jacobian callback.
+crate::kernels::ode_adaptive::rosenbrock23_fixed_events	Fixed-step entry point accepting a borrowed Rust event list, rate and Jacobian.
+crate::kernels::ode_adaptive::yoshida4_adaptive	Fourth-order geometric composition in the Rust acceleration callback API.
+crate::kernels::ode_adaptive::yoshida4_with	Chooses fixed or adaptive Yoshida integration for the Rust acceleration callback.
+crate::kernels::ode_ext::etdrk4_adaptive	Rust callback interface accepting its native exponential-integration control and matrix representation.
+crate::kernels::ode_ext::etdrk4_diag_adaptive	Rust callback interface with a borrowed diagonal linear operator and numerical controls.
+crate::kernels::ode_ext::etdrk4_diag_with	Chooses fixed or adaptive ETDRK4 for the Rust diagonal callback interface.
+crate::kernels::ode_ext::etdrk4_with	Chooses fixed or adaptive ETDRK4 for the Rust matrix callback interface.
+crate::kernels::ode_ext::exprb32_fixed	Fixed-step Rust exponential Rosenbrock interface with native rate/Jacobian callbacks.
+crate::kernels::ode_ext::exprb32_with	Chooses fixed or adaptive exponential Rosenbrock for the Rust callback interface.
+crate::kernels::ode_ext::imex_rk_adaptive	Rust IMEX callback interface accepting its native tableau and adaptive controls.
+crate::kernels::ode_ext::imex_rk_step_mode	Chooses fixed or adaptive steps for native Rust IMEX callbacks.
+crate::kernels::ode_ext::symplectic_split_adaptive	Rust adaptive splitting interface accepting a native acceleration closure and method.
+crate::kernels::ode_ext::symplectic_split_with	Chooses fixed or adaptive symplectic splitting for the native Rust acceleration closure.
+crate::kernels::ode_geom::solve_dae_index1_fixed	Fixed-step semi-explicit DAE using Rust-native callbacks and state arrays.
+crate::kernels::ode_geom::solve_dae_index1_with	Rust method selection over the fixed and adaptive DAE callback interfaces.
+crate::kernels::ode_geom::solve_dde_fixed	Fixed-step delay integration using a Rust-native history callback.
+crate::kernels::ode_geom::solve_dde_with	Rust method selection over the fixed and adaptive delay callback interfaces.
+crate::kernels::ode_geom::solve_geometric	Rust dispatcher over geometric methods with borrowed callback data and step-mode enum.
+crate::kernels::ode_sdirk::sdirk3_fd_events	Rust SDIRK with finite-difference Jacobian and borrowed event callbacks.
+crate::kernels::ode_sdirk::sdirk3_fd_fixed_events	Rust fixed-step SDIRK with finite-difference Jacobian and borrowed event callbacks.
+crate::kernels::ode_stiff::bdf_fixed	Rust fixed-step BDF using an in-place rate callback.
+crate::kernels::ode_stiff::bdf_fixed_events	Rust fixed-step BDF using an in-place rate callback and borrowed event list.
+crate::kernels::ode_stiff::radau5_fixed_events	Rust fixed-step Radau using native rate/Jacobian callbacks and borrowed events.
+crate::kernels::solve_ode	Re-exported Rust dispatcher for typed controls and an in-place rate callback.
+crate::kernels::solve_ode_events	Re-exported Rust dispatcher for typed controls, an in-place rate callback and borrowed events.
+crate::sim::integrators::solve_symplectic	Rust symplectic dispatcher taking the simulator's mutable derivative callback.
+crate::sim::pde_api::adaptive::solve_pde	Generic Rust controller over a supplied stepper and CFL callback. Aevia exposes checked PDE family adapters.
+crate::sim::pde_api::solve_pde	Re-exported generic Rust controller over a supplied stepper and CFL callback.

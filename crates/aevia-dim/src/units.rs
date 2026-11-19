@@ -19,6 +19,7 @@ use crate::rat::ratio;
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::One;
+use num_traits::Signed;
 use num_traits::ToPrimitive;
 use num_traits::Zero;
 use std::collections::HashMap;
@@ -88,12 +89,16 @@ impl Scale {
 
     /// A rational scale without a factor of pi.
     #[must_use]
-    pub fn rational(rat: BigRational) -> Self {
+    pub const fn rational(rat: BigRational) -> Self {
         Self { rat, pi: 0 }
     }
 
     /// Parses `1`, `1/1000`, `0.3048`, `pi`, `pi/180`, `-2.5`.
     #[must_use]
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "decimal parsing produces arbitrary-precision rationals and rejects zero divisors"
+    )]
     pub fn parse(text: &str) -> Option<Self> {
         let text = text.trim();
         if let Some(rest) = text.strip_prefix("pi") {
@@ -128,71 +133,139 @@ impl Scale {
     }
 
     /// Multiplies two scales.
+    ///
+    /// # Panics
+    /// Panics when the resulting power of pi does not fit in an `i32` or a
+    /// raw rational factor has a zero denominator.
     #[must_use]
+    #[allow(
+        clippy::expect_used,
+        reason = "preserves the established infallible scale API; use checked_mul for data inputs"
+    )]
     pub fn mul(
         &self,
         other: &Self,
     ) -> Self {
-        Self {
-            rat: &self.rat * &other.rat,
-            pi: self.pi + other.pi,
+        self.checked_mul(other)
+            .expect("invalid exact scale product")
+    }
+
+    /// Multiplies two scales, rejecting exponent overflow and invalid rational factors.
+    #[must_use]
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "the integer exponent is checked; rational multiplication is arbitrary precision"
+    )]
+    pub fn checked_mul(
+        &self,
+        other: &Self,
+    ) -> Option<Self> {
+        let pi = self.pi.checked_add(other.pi)?;
+        if self.rat.denom().is_zero() || other.rat.denom().is_zero() {
+            return None;
         }
+        Some(Self {
+            rat: &self.rat * &other.rat,
+            pi,
+        })
     }
 
     /// Divides two scales.
+    ///
+    /// # Panics
+    /// Panics when the divisor is zero, the resulting power of pi does not
+    /// fit in an `i32`, or a raw rational factor has a zero denominator.
     #[must_use]
+    #[allow(
+        clippy::expect_used,
+        reason = "preserves the established infallible scale API; use checked_div for data inputs"
+    )]
     pub fn div(
         &self,
         other: &Self,
     ) -> Self {
-        Self {
-            rat: &self.rat / &other.rat,
-            pi: self.pi - other.pi,
-        }
+        self.checked_div(other)
+            .expect("invalid exact scale quotient")
     }
 
-    /// Raises the scale to a rational power, when the result stays exact.
+    /// Divides two scales, rejecting zero divisors, exponent overflow, and invalid rational factors.
+    #[must_use]
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "the divisor and power of pi are checked before exact rational division"
+    )]
+    pub fn checked_div(
+        &self,
+        other: &Self,
+    ) -> Option<Self> {
+        let pi = self.pi.checked_sub(other.pi)?;
+        if other.rat.is_zero() || self.rat.denom().is_zero() || other.rat.denom().is_zero() {
+            return None;
+        }
+        Some(Self {
+            rat: &self.rat / &other.rat,
+            pi,
+        })
+    }
+
+    /// Raises the scale to a rational power when the result stays exact.
     ///
-    /// `(m^2)^(1/2)` is exact; `(km)^(1/2)` is `sqrt(1000)` and has no exact
-    /// rational form, so it is rejected (the unit expression is ill-formed
-    /// rather than silently approximated).
+    /// A fractional power requires an exact real root of the rational factor
+    /// and an integral power of pi. For scales other than zero and one,
+    /// numerators with magnitude greater than 1024 are rejected to bound the
+    /// size of intermediate powers.
     #[must_use]
     pub fn pow(
         &self,
         exponent: &BigRational,
     ) -> Option<Self> {
-        if exponent.is_zero() {
-            return Some(Self::one());
-        }
-        if exponent.denom().is_one() {
-            let power = exponent.numer().to_i32()?;
-            if power.unsigned_abs() > 1024 {
-                return None;
-            }
-            return Some(Self {
-                rat: pow_int(&self.rat, power),
-                pi: self.pi.checked_mul(power)?,
-            });
-        }
-        // Fractional exponent: only exact when the rational is a perfect power
-        // and pi is absent (or the pi exponent also divides evenly).
-        if self.pi != 0 {
+        if !exponent.denom().is_positive() || !self.rat.denom().is_positive() {
             return None;
         }
-        if self.rat.is_one() {
+        if exponent.is_zero() || self.is_one() {
             return Some(Self::one());
+        }
+        if self.rat.is_zero() {
+            return exponent
+                .is_positive()
+                .then(|| Self::rational(BigRational::zero()));
+        }
+        let power = exponent.numer().to_i32()?;
+        if power.unsigned_abs() > 1024 {
+            return None;
         }
         let degree = exponent.denom().to_u32()?;
-        let numerator = self.rat.numer().clone().nth_root(degree);
-        let denominator = self.rat.denom().clone().nth_root(degree);
-        let candidate = BigRational::new(numerator, denominator);
-        if candidate.pow(i32::try_from(degree).unwrap_or(i32::MAX)) != self.rat {
+        let degree_i64 = i64::from(degree);
+        let old_pi = i64::from(self.pi);
+        if old_pi.checked_rem(degree_i64)? != 0 {
             return None;
         }
-        Some(Self::rational(pow_int(
-            &candidate,
-            exponent.numer().to_i32()?,
-        )))
+        let pi = old_pi
+            .checked_div(degree_i64)?
+            .checked_mul(i64::from(power))?;
+        let pi = i32::try_from(pi).ok()?;
+        if degree == 1 {
+            return Some(Self {
+                rat: pow_int(&self.rat, power),
+                pi,
+            });
+        }
+        if self.rat.is_negative() && degree.is_multiple_of(2) {
+            return None;
+        }
+        let numerator = self.rat.numer().nth_root(degree);
+        let denominator = self.rat.denom().nth_root(degree);
+        if denominator.is_zero() {
+            return None;
+        }
+        let root = BigRational::new(numerator, denominator);
+        if num_traits::Pow::pow(&root, degree) != self.rat {
+            return None;
+        }
+        Some(Self {
+            rat: pow_int(&root, power),
+            pi,
+        })
     }
 
     /// The numeric value of the scale, for kernels and printing.
@@ -301,7 +374,7 @@ impl UnitDef {
 
     /// Marks the unit as prefixable.
     #[must_use]
-    pub fn prefixable(mut self) -> Self {
+    pub const fn prefixable(mut self) -> Self {
         self.prefixable = true;
         self
     }
@@ -352,13 +425,13 @@ pub enum UnitExpr {
     /// `%`.
     Percent,
     /// `a*b`.
-    Mul(Box<UnitExpr>, Box<UnitExpr>),
+    Mul(Box<Self>, Box<Self>),
     /// `a/b`.
-    Div(Box<UnitExpr>, Box<UnitExpr>),
+    Div(Box<Self>, Box<Self>),
     /// `a^n` or `a²`.
-    Pow(Box<UnitExpr>, BigRational),
+    Pow(Box<Self>, BigRational),
     /// `(a)`.
-    Paren(Box<UnitExpr>),
+    Paren(Box<Self>),
 }
 
 impl UnitExpr {
@@ -421,6 +494,8 @@ pub enum UnitError {
     AffineInProduct(String),
     /// A scale power had no exact rational result.
     InexactPower(String),
+    /// An exact scale overflowed its power of pi or had a zero divisor.
+    InvalidScale(String),
     /// Two definitions share a name.
     Duplicate(String),
     /// A prefix was applied to a unit that does not accept prefixes.
@@ -438,11 +513,11 @@ pub enum UnitError {
 impl UnitError {
     /// The diagnostic code from appendix B.
     #[must_use]
-    pub fn code(&self) -> &'static str {
+    pub const fn code(&self) -> &'static str {
         match self {
             | Self::Unknown(_) => "E0501",
             | Self::AffineInProduct(_) => "E0508",
-            | Self::InexactPower(_) => "E0506",
+            | Self::InexactPower(_) | Self::InvalidScale(_) => "E0506",
             | Self::Duplicate(_) => "E0505",
             | Self::NotPrefixable(_) => "E0503",
             | Self::NotInSystem { .. } => "E0511",
@@ -467,6 +542,12 @@ impl fmt::Display for UnitError {
                 write!(
                     f,
                     "the scale of `{name}` has no exact value for that exponent"
+                )
+            },
+            | Self::InvalidScale(name) => {
+                write!(
+                    f,
+                    "the scale of `{name}` has a zero divisor or an out-of-range power of pi"
                 )
             },
             | Self::Duplicate(name) => write!(f, "duplicate unit `{name}`"),
@@ -601,17 +682,25 @@ impl UnitTable {
         if reduction.is_identity() {
             return Ok(unit);
         }
-        let factor = system.factor_scale(&reduction).ok_or_else(|| {
+        let not_in_system = || {
             UnitError::NotInSystem {
                 unit: unit.name.clone(),
                 system: system.name.clone(),
             }
-        })?;
+        };
+        let factor = system.factor_scale(&reduction).ok_or_else(not_in_system)?;
+        let invalid_scale = || UnitError::InvalidScale(unit.name.clone());
+        let scale = unit.scale.checked_div(&factor).ok_or_else(invalid_scale)?;
+        let offset = unit
+            .offset
+            .as_ref()
+            .map(|offset| offset.checked_div(&factor).ok_or_else(invalid_scale))
+            .transpose()?;
         Ok(ResolvedUnit {
             name: unit.name,
             dim: reduction.dim,
-            scale: unit.scale.div(&factor),
-            offset: unit.offset.map(|offset| offset.div(&factor)),
+            scale,
+            offset,
             affine: unit.affine,
         })
     }
@@ -637,7 +726,16 @@ impl UnitTable {
     /// Manifest with [`UnitTable::from_defs`], and a conformance test in
     /// `aevia-rssn` checks that every unit here also exists there with the
     /// same dimension and scale. Nothing outside tests should call this.
+    ///
+    /// # Panics
+    /// Panics if a hardcoded fixture has an invalid dimension, scale, or name.
     #[must_use]
+    #[allow(
+        clippy::expect_used,
+        clippy::panic,
+        clippy::too_many_lines,
+        reason = "keeps the static SI conformance fixture and its internal integrity checks together"
+    )]
     pub fn si() -> Self {
         let mut table = Self::empty();
         let env = DimEnv::si();
@@ -778,8 +876,12 @@ impl UnitTable {
         for name in [
             "eV", "bar", "cal", "B", "bit", "l", "t", "Da", "pc", "au", "ly", "Å",
         ] {
-            if let Some(index) = table.index.get(name).copied() {
-                table.defs[index].prefixable = true;
+            if let Some(unit) = table
+                .index
+                .get(name)
+                .and_then(|&index| table.defs.get_mut(index))
+            {
+                unit.prefixable = true;
             }
         }
 
@@ -795,10 +897,10 @@ impl UnitTable {
             ("u", "Da"),
             ("byte", "B"),
         ] {
-            if let Some(index) = table.index.get(canonical).copied() {
-                let mut unit = table.defs[index].clone();
+            if let Some(&index) = table.index.get(canonical)
+                && let Some(unit) = table.defs.get_mut(index)
+            {
                 unit.aliases.push(alias.to_string());
-                table.defs[index] = unit.clone();
                 table.index.insert(alias.to_string(), index);
             }
         }
@@ -815,14 +917,10 @@ impl UnitTable {
         &mut self,
         unit: UnitDef,
     ) -> Result<(), UnitError> {
-        if let Some(existing) = self.index.get(&unit.name) {
-            let existing_name = self.defs[*existing].name.clone();
-            return Err(UnitError::Duplicate(existing_name));
-        }
-        for alias in &unit.aliases {
-            if let Some(existing) = self.index.get(alias) {
-                let existing_name = self.defs[*existing].name.clone();
-                return Err(UnitError::Duplicate(existing_name));
+        for name in std::iter::once(&unit.name).chain(&unit.aliases) {
+            if let Some(&existing) = self.index.get(name) {
+                let existing_name = self.defs.get(existing).map_or(name, |unit| &unit.name);
+                return Err(UnitError::Duplicate(existing_name.clone()));
             }
         }
         let position = self.defs.len();
@@ -882,7 +980,7 @@ impl UnitTable {
         name: &str,
     ) -> Option<UnitDef> {
         if let Some(index) = self.index.get(name) {
-            return Some(self.defs[*index].clone());
+            return self.defs.get(*index).cloned();
         }
         for (prefix, exponent) in PREFIXES {
             let Some(rest) = name.strip_prefix(*prefix) else {
@@ -891,10 +989,9 @@ impl UnitTable {
             if rest.is_empty() {
                 continue;
             }
-            let Some(index) = self.index.get(rest) else {
+            let Some(base) = self.index.get(rest).and_then(|&index| self.defs.get(index)) else {
                 continue;
             };
-            let base = &self.defs[*index];
             if !base.prefixable {
                 continue;
             }
@@ -909,7 +1006,7 @@ impl UnitTable {
                 name: name.to_string(),
                 aliases: Vec::new(),
                 dim: base.dim.clone(),
-                scale: base.scale.mul(&factor),
+                scale: base.scale.checked_mul(&factor)?,
                 offset: None,
                 prefixable: false,
                 affine: false,
@@ -971,7 +1068,7 @@ impl UnitTable {
     /// # Errors
     ///
     /// Reports unknown names, affine units in products (§5.6.5) and scales
-    /// whose rational power is not exact.
+    /// whose rational power is not exact or whose product or quotient is invalid.
     pub fn resolve(
         &self,
         expr: &UnitExpr,
@@ -1003,28 +1100,30 @@ impl UnitTable {
                 })
             },
             | UnitExpr::Paren(inner) => self.resolve_si(inner),
-            | UnitExpr::Mul(left, right) => {
+            | UnitExpr::Mul(left, right) | UnitExpr::Div(left, right) => {
                 let left = self.resolve_si(left)?;
                 let right = self.resolve_si(right)?;
                 reject_affine(&left)?;
                 reject_affine(&right)?;
+                let (symbol, dim, scale) = if matches!(expr, UnitExpr::Mul(_, _)) {
+                    (
+                        '*',
+                        left.dim.mul(&right.dim),
+                        left.scale.checked_mul(&right.scale),
+                    )
+                } else {
+                    (
+                        '/',
+                        left.dim.div(&right.dim),
+                        left.scale.checked_div(&right.scale),
+                    )
+                };
+                let name = format!("{}{symbol}{}", left.name, right.name);
+                let scale = scale.ok_or_else(|| UnitError::InvalidScale(name.clone()))?;
                 Ok(ResolvedUnit {
-                    name: format!("{}*{}", left.name, right.name),
-                    dim: left.dim.mul(&right.dim),
-                    scale: left.scale.mul(&right.scale),
-                    offset: None,
-                    affine: false,
-                })
-            },
-            | UnitExpr::Div(left, right) => {
-                let left = self.resolve_si(left)?;
-                let right = self.resolve_si(right)?;
-                reject_affine(&left)?;
-                reject_affine(&right)?;
-                Ok(ResolvedUnit {
-                    name: format!("{}/{}", left.name, right.name),
-                    dim: left.dim.div(&right.dim),
-                    scale: left.scale.div(&right.scale),
+                    name,
+                    dim,
+                    scale,
                     offset: None,
                     affine: false,
                 })
@@ -1205,10 +1304,69 @@ mod regression_tests {
         let exponent = BigRational::from_integer(BigInt::from(3_000_000_000_i64));
         assert!(scale.pow(&exponent).is_none());
     }
+
+    #[test]
+    fn fractional_powers_check_real_roots_and_integral_pi_powers() {
+        let negative = Scale::rational(ratio(-8, 1));
+        assert!(negative.pow(&ratio(1, 2)).is_none());
+        assert_eq!(
+            negative.pow(&ratio(1, 3)),
+            Some(Scale::rational(ratio(-2, 1)))
+        );
+        let squared = Scale {
+            rat: ratio(4, 1),
+            pi: 2,
+        };
+        let root = Scale {
+            rat: ratio(2, 1),
+            pi: 1,
+        };
+        assert_eq!(squared.pow(&ratio(1, 2)), Some(root.clone()));
+        assert!(root.pow(&ratio(1, 2)).is_none());
+        assert!(
+            Scale::rational(BigRational::zero())
+                .pow(&ratio(-1, 1))
+                .is_none()
+        );
+        assert_eq!(
+            Scale::one().pow(&ratio(1, 10_000_000_000)),
+            Some(Scale::one())
+        );
+    }
+
+    #[test]
+    fn unit_composition_reports_invalid_scales() {
+        let table = UnitTable::from_defs([
+            UnitDef::linear(
+                "big",
+                Dim::one(),
+                Scale {
+                    rat: BigRational::one(),
+                    pi: i32::MAX,
+                },
+            ),
+            UnitDef::linear("p", Dim::one(), Scale::parse("pi").unwrap()),
+            UnitDef::linear("zero", Dim::one(), Scale::rational(BigRational::zero())),
+        ]);
+        let named = |name: &str| Box::new(UnitExpr::Name(name.to_string()));
+        for expression in [
+            UnitExpr::Mul(named("big"), named("p")),
+            UnitExpr::Div(named("p"), named("zero")),
+        ] {
+            let error = table.resolve(&expression).unwrap_err();
+            assert_eq!(error.code(), "E0506");
+            assert!(matches!(error, UnitError::InvalidScale(_)));
+        }
+    }
 }
 
 /// Serializes the name index in key order, so the encoding of a unit table (and
 /// of the cache files that hold one) does not depend on hash iteration order.
+#[allow(
+    clippy::needless_collect,
+    clippy::single_call_fn,
+    reason = "serde calls this hook to serialize the index in stable key order"
+)]
 fn sorted_index<S: serde::Serializer>(
     index: &HashMap<String, usize>,
     serializer: S,

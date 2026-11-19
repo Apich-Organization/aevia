@@ -11,6 +11,9 @@ pub fn polygon_area(points: &[f64]) -> f64 {
 }
 
 /// Euclidean distance between points of equal dimension.
+///
+/// # Errors
+/// Returns a shape error when the point dimensions differ.
 pub fn distance(
     left: &[f64],
     right: &[f64],

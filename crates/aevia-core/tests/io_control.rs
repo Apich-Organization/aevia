@@ -362,3 +362,15 @@ fn legacy_exception_never_authenticates_wrong_concrete_or_source_nominal_errors(
         }
     }
 }
+
+#[test]
+fn run_returns_the_compile_error_after_an_earlier_warning() {
+    let source = "fn bad(n: Int): Int =\n    let n = 1\n    n + unknown_name\n";
+    let diagnostics = compile("diagnostic.aev", source).diagnostics;
+    let [first, ..] = diagnostics.items.as_slice() else {
+        panic!("expected a warning followed by an error");
+    };
+    assert_eq!(first.severity, aevia_syntax::Severity::Warning);
+    let error = aevia_core::run(source, "diagnostic.aev").unwrap_err();
+    assert_eq!(error.severity, aevia_syntax::Severity::Error);
+}

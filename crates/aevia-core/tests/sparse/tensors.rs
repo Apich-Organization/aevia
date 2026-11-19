@@ -204,6 +204,9 @@ fn full_contraction_is_a_scalar_and_an_outer_product_is_sparse() {
         ("sparse", "sparse"),
     );
     assert_eq!(run(&source), expected, "{source}");
+    let (source, expected) =
+        contraction_program(&[2], &[3], &[], &[], 5, false, ("sparse", "sparse"));
+    assert_eq!(run(&source), expected, "{source}");
 }
 
 #[test]
@@ -221,6 +224,18 @@ fn contraction_errors() {
         "fn main(): IO Unit = do\n    let c = contract(from_dense<Coo>([[1.0, 2.0]]), from_dense<Coo>([[1.0, 2.0, 3.0]]), [1], [1])\n    println(\"{nnz(c)}\")\n",
     );
     assert_eq!(code, "E0802");
+}
+
+#[test]
+fn repeated_contraction_axes_are_rejected_at_the_runtime_boundary() {
+    let source = r#"
+fn main(): IO Unit = do
+    let a = from_dense<Coo>([[1.0]])
+    let axis = 0
+    let product = contract(a, a, [0, axis], [0, 1])
+    println("{product}")
+"#;
+    assert_eq!(runtime_code(source), "E0802");
 }
 
 #[test]

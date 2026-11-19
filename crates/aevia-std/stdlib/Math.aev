@@ -260,7 +260,7 @@ let hypot = hypot
 ##
 ## *Source: Aevia standard library guide.*
 let i = i
-## Exponential or logarithmic function on a dimensionless input.
+## Natural logarithm of a dimensionless argument.
 ##
 ## **Signature:** `ln : Scalar<ρ,1> -> Scalar<ρ,1>`
 ##
@@ -271,60 +271,50 @@ let i = i
 ##
 ## **Dimensions:** the result is dimensionless
 ##
-## Domain failures and unresolved symbolic values are distinct from a numerical approximation.
+## It is the inverse of `exp` on the positive real line.
 ##
 ## **Examples:**
 ## ```text
-## exp(1)
 ## ln(2.0)
 ## ```
 ##
 ## *Source: Aevia standard library guide.*
 let ln = ln
-## Exponential or logarithmic function on a dimensionless input.
+## Natural logarithm of one dimensionless argument.
 ##
 ## **Signature:** `log : Scalar<ρ,1> -> Scalar<ρ,1>`
 ##
-## **Kernel signature** (derived):
-## - `log : (Real, Real) -> Real`
-## - `log : (Dyn<term>, Dyn<term>) -> Dyn<term>`
-##
-## **Dimensions:** the result is dimensionless
-##
-## Domain failures and unresolved symbolic values are distinct from a numerical approximation.
+## This is the same function as `ln`.
 ##
 ## **Examples:**
 ## ```text
-## exp(1)
-## ln(2.0)
+## log(2.0)
 ## ```
 ##
 ## *Source: Aevia standard library guide.*
 let log = log
-## Exponential or logarithmic function on a dimensionless input.
+## Base-10 logarithm of a dimensionless argument.
 ##
 ## **Signature:** `log10 : Scalar<ρ,1> -> Scalar<ρ,1>`
 ##
-## Domain failures and unresolved symbolic values are distinct from a numerical approximation.
+## A tenfold increase adds one to the logarithm.
 ##
 ## **Examples:**
 ## ```text
-## exp(1)
-## ln(2.0)
+## log10(100.0)
 ## ```
 ##
 ## *Source: Aevia standard library guide.*
 let log10 = log10
-## Exponential or logarithmic function on a dimensionless input.
+## Base-2 logarithm of a dimensionless argument.
 ##
 ## **Signature:** `log2 : Scalar<ρ,1> -> Scalar<ρ,1>`
 ##
-## Domain failures and unresolved symbolic values are distinct from a numerical approximation.
+## Doubling the input adds one to the logarithm.
 ##
 ## **Examples:**
 ## ```text
-## exp(1)
-## ln(2.0)
+## log2(8.0)
 ## ```
 ##
 ## *Source: Aevia standard library guide.*

@@ -38,11 +38,11 @@ let corr = corr
 ##
 ## *Source: Aevia standard library guide.*
 let cov = cov
-## histogram(xs, bins) counts how many values fall in each of bins equal-width intervals.
+## `histogram(xs, bins)` counts finite sample values in a positive number of equal-width bins.
 ##
-## **Signature:** `histogram : (Tensor<1, Scalar<ρ,d>>, Int) -> { counts: Tensor<1, Int>, edges: Tensor<1, Scalar<ρ,d>> }`
+## **Signature:** `histogram : (Tensor<1, Scalar<ρ,d>>, Int) -> { counts: Tensor<1, Int>, edges: Tensor<1, Float[d]> }`
 ##
-## Returns a record with counts and the bins + 1 edge positions.
+## Returns integer counts and `bins + 1` Float edges in the sample’s dimension.
 ##
 ## **Examples:**
 ## ```text
@@ -163,7 +163,7 @@ let quantile = quantile
 ##
 ## *Source: Aevia standard library guide.*
 let skewness = skewness
-## The sample standard deviation, sqrt(var), in the elements' own dimension.
+## Computes sample standard deviation in the elements’ dimension.
 ##
 ## **Signature:** `std : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>`
 ##
@@ -172,6 +172,8 @@ let skewness = skewness
 ##
 ## **Dimensions:** the result has the dimension of argument 1
 ##
+## A singleton has zero standard deviation.
+##
 ## **Examples:**
 ## ```text
 ## std([1.0, 2.0, 3.0, 4.0])
@@ -179,13 +181,13 @@ let skewness = skewness
 ##
 ## *Source: Aevia standard library guide.*
 let std = std
-## The sample variance (divisor n-1) of a tensor.
+## Computes sample variance with divisor `n - 1` for two or more observations.
 ##
 ## **Signature:** `var : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d^2>`
 ##
 ## **Signature:** `var : (Tensor<n, Scalar<ρ,d>>, Bool) -> Scalar<div_rep(ρ),d^2>`
 ##
-## The result dimension is the element dimension squared. A second Bool argument chooses the population variance when true.
+## A singleton has zero variance. The result dimension is the element dimension squared. A second Bool argument chooses the population variance when true.
 ##
 ## **Examples:**
 ## ```text

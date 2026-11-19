@@ -36,5 +36,5 @@ aevia-rssn.workspace = true
 # itself must not see the checker.
 aevia-types = { path = "../aevia-types" }
 
-[lints.rust]
-unsafe_code = "forbid"
+[lints]
+workspace = true

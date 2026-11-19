@@ -1,6 +1,7 @@
-//! Validated NumPy float-array codec shared by the language and Rust API.
+//! Validated `NumPy` float-array codec shared by the language and Rust API.
 
 const NPY_MAGIC: &[u8] = b"\x93NUMPY";
+const MAX_HEADER_LEN: usize = 10 * 1024;
 
 /// Check that the element count and row-major suffix strides fit `usize`.
 /// Empty arrays still require representable strides for downstream tensor views.
@@ -29,6 +30,9 @@ pub fn encode(
     if values.len() != count {
         return Err("E0902: NPY tensor storage does not match its shape".to_string());
     }
+    if shape.len() > MAX_HEADER_LEN / 2 {
+        return Err("E0903: the NPY header exceeds 10 KiB".to_string());
+    }
     let shape = if shape.is_empty() {
         "()".to_string()
     } else {
@@ -45,18 +49,29 @@ pub fn encode(
     };
     let mut header = format!("{{'descr': '<f8', 'fortran_order': False, 'shape': {shape}, }}");
     // magic(6) + version(2) + header length(2) + header must be a multiple of 64.
-    let padding = (64 - ((10 + header.len() + 1) % 64)) % 64;
+    let unpadded_len = header.len().saturating_add(11);
+    let padding = 64_usize.saturating_sub(unpadded_len % 64) % 64;
     header.push_str(&" ".repeat(padding));
     header.push('\n');
+    if header.len() > MAX_HEADER_LEN {
+        return Err("E0903: the NPY header exceeds 10 KiB".to_string());
+    }
     let header_len = u16::try_from(header.len())
         .map_err(|_| "E0903: the NPY header is too large".to_string())?;
-    let mut bytes = Vec::with_capacity(10 + header.len() + values.len() * 8);
+    let capacity = std::mem::size_of_val(values)
+        .checked_add(header.len())
+        .and_then(|length| length.checked_add(10))
+        .ok_or_else(|| "E0903: the NPY file is too large".to_string())?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(|_| "E0903: cannot allocate the NPY data".to_string())?;
     bytes.extend_from_slice(NPY_MAGIC);
     bytes.push(1); // major
     bytes.push(0); // minor
     bytes.extend_from_slice(&header_len.to_le_bytes());
     bytes.extend_from_slice(header.as_bytes());
-    for value in values.iter() {
+    for value in values {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
     Ok(bytes)
@@ -65,27 +80,20 @@ pub fn encode(
 // NPY uses a Python-literal dictionary, not JSON. Parse the supported
 // primitive header grammar directly; never execute or substring-search it.
 struct NpyHeader<'a> {
-    bytes: &'a [u8],
-    at: usize,
+    remaining: &'a [u8],
 }
 impl<'a> NpyHeader<'a> {
     fn invalid() -> String {
         "E0903: malformed NPY header dictionary".to_string()
     }
 
-    fn ws(&mut self) {
-        while self.bytes.get(self.at).is_some_and(u8::is_ascii_whitespace) {
-            self.at += 1;
-        }
-    }
-
     fn take(
         &mut self,
         byte: u8,
     ) -> bool {
-        self.ws();
-        if self.bytes.get(self.at) == Some(&byte) {
-            self.at += 1;
+        self.remaining = self.remaining.trim_ascii_start();
+        if let Some(rest) = self.remaining.strip_prefix(&[byte]) {
+            self.remaining = rest;
             true
         } else {
             false
@@ -93,35 +101,31 @@ impl<'a> NpyHeader<'a> {
     }
 
     fn string(&mut self) -> Result<&'a str, String> {
-        self.ws();
-        let quote = *self.bytes.get(self.at).ok_or_else(Self::invalid)?;
-        if quote != b'\'' && quote != b'"' {
+        let Some((&quote @ (b'\'' | b'"'), rest)) = self.remaining.trim_ascii_start().split_first()
+        else {
             return Err(Self::invalid());
-        }
-        self.at += 1;
-        let start = self.at;
-        while let Some(&byte) = self.bytes.get(self.at) {
+        };
+        for (index, &byte) in rest.iter().enumerate() {
             if byte == quote {
-                let text = std::str::from_utf8(&self.bytes[start..self.at])
-                    .map_err(|_| Self::invalid())?;
-                self.at += 1;
-                return Ok(text);
+                let (content, closing) = rest.split_at_checked(index).ok_or_else(Self::invalid)?;
+                let (_, remaining) = closing.split_first().ok_or_else(Self::invalid)?;
+                self.remaining = remaining;
+                return std::str::from_utf8(content).map_err(|_| Self::invalid());
             }
             if byte == b'\\' || byte.is_ascii_control() {
                 return Err(Self::invalid());
             }
-            self.at += 1;
         }
         Err(Self::invalid())
     }
 
     fn boolean(&mut self) -> Result<bool, String> {
-        self.ws();
-        if self.bytes[self.at..].starts_with(b"True") {
-            self.at += 4;
+        let trimmed = self.remaining.trim_ascii_start();
+        if let Some(rest) = trimmed.strip_prefix(b"True") {
+            self.remaining = rest;
             Ok(true)
-        } else if self.bytes[self.at..].starts_with(b"False") {
-            self.at += 5;
+        } else if let Some(rest) = trimmed.strip_prefix(b"False") {
+            self.remaining = rest;
             Ok(false)
         } else {
             Err(Self::invalid())
@@ -137,15 +141,17 @@ impl<'a> NpyHeader<'a> {
             return Ok(shape);
         }
         loop {
-            self.ws();
-            let start = self.at;
-            while self.bytes.get(self.at).is_some_and(u8::is_ascii_digit) {
-                self.at += 1;
-            }
-            if start == self.at {
+            let trimmed = self.remaining.trim_ascii_start();
+            let end = trimmed
+                .iter()
+                .position(|byte| !byte.is_ascii_digit())
+                .unwrap_or(trimmed.len());
+            if end == 0 {
                 return Err(Self::invalid());
             }
-            let extent = std::str::from_utf8(&self.bytes[start..self.at])
+            let (digits, rest) = trimmed.split_at_checked(end).ok_or_else(Self::invalid)?;
+            self.remaining = rest;
+            let extent = std::str::from_utf8(digits)
                 .map_err(|_| Self::invalid())?
                 .parse::<usize>()
                 .map_err(|_| "E0903: NPY shape entry overflows".to_string())?;
@@ -162,10 +168,13 @@ impl<'a> NpyHeader<'a> {
         }
     }
 
-    fn parse(header: &'a str) -> Result<(String, bool, Vec<usize>), String> {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "The Python literal grammar is independent of NPY framing and array order."
+    )]
+    fn parse(header: &'a str) -> Result<(&'a str, bool, Vec<usize>), String> {
         let mut parser = Self {
-            bytes: header.as_bytes(),
-            at: 0,
+            remaining: header.as_bytes(),
         };
         if !parser.take(b'{') {
             return Err(Self::invalid());
@@ -178,7 +187,7 @@ impl<'a> NpyHeader<'a> {
                     return Err(Self::invalid());
                 }
                 match key {
-                    | "descr" if descr.is_none() => descr = Some(parser.string()?.to_string()),
+                    | "descr" if descr.is_none() => descr = Some(parser.string()?),
                     | "fortran_order" if order.is_none() => order = Some(parser.boolean()?),
                     | "shape" if shape.is_none() => shape = Some(parser.shape()?),
                     | _ => return Err(Self::invalid()),
@@ -194,8 +203,7 @@ impl<'a> NpyHeader<'a> {
                 }
             }
         }
-        parser.ws();
-        if parser.at != parser.bytes.len() {
+        if !parser.remaining.trim_ascii().is_empty() {
             return Err(Self::invalid());
         }
         Ok((
@@ -213,109 +221,148 @@ impl<'a> NpyHeader<'a> {
 /// `E0903` for malformed/truncated data, `E0904` for an unsupported dtype. The message carries the code, because the language-level
 /// result is `Result<Tensor<…>, DataError>`.
 pub fn decode(bytes: &[u8]) -> Result<(Vec<usize>, Vec<f64>), String> {
-    if bytes.len() < 10 || &bytes[..6] != NPY_MAGIC {
+    let Some(rest) = bytes.strip_prefix(NPY_MAGIC) else {
         return Err("E0903: not a NumPy `.npy` file (bad magic)".to_string());
-    }
-    let major = bytes[6];
-    if bytes[7] != 0 {
-        return Err(format!(
-            "E0904: unsupported NPY version {major}.{}",
-            bytes[7]
-        ));
-    }
-    let header_len = match major {
-        | 1 => usize::from(u16::from_le_bytes([bytes[8], bytes[9]])),
-        | 2 | 3 => {
-            if bytes.len() < 12 {
-                return Err("E0903: truncated NPY header".to_string());
-            }
-            usize::try_from(u32::from_le_bytes([
-                bytes[8], bytes[9], bytes[10], bytes[11],
-            ]))
-            .unwrap_or(0)
-        },
-        | _ => {
-            return Err(format!(
-                "E0904: unsupported NPY version {major}.{}",
-                bytes[7]
-            ));
-        },
     };
-    if header_len > 10 * 1024 {
+    let Some((&[major, minor], rest)) = rest.split_first_chunk::<2>() else {
+        return Err("E0903: truncated NPY version".to_string());
+    };
+    let truncated = || "E0903: truncated NPY header".to_string();
+    let (header_len, rest) = match (major, minor) {
+        | (1, 0) => {
+            let (bytes, rest) = rest.split_first_chunk::<2>().ok_or_else(truncated)?;
+            (usize::from(u16::from_le_bytes(*bytes)), rest)
+        },
+        | (2 | 3, 0) => {
+            let (bytes, rest) = rest.split_first_chunk::<4>().ok_or_else(truncated)?;
+            let length = usize::try_from(u32::from_le_bytes(*bytes))
+                .map_err(|_| "E0903: the NPY header is too large".to_string())?;
+            (length, rest)
+        },
+        | _ => return Err(format!("E0904: unsupported NPY version {major}.{minor}")),
+    };
+    if header_len > MAX_HEADER_LEN {
         return Err("E0903: the NPY header exceeds 10 KiB".to_string());
     }
-    let start = if major == 1 { 10 } else { 12 };
-    if bytes.len() < start + header_len {
-        return Err("E0903: the NPY header is truncated".to_string());
-    }
-    let header = std::str::from_utf8(&bytes[start..start + header_len])
+    let (header, data) = rest.split_at_checked(header_len).ok_or_else(truncated)?;
+    let header = std::str::from_utf8(header)
         .map_err(|_| "E0903: the NPY header is not UTF-8".to_string())?;
 
     let (descr, fortran, shape) = NpyHeader::parse(header)?;
-    let (width, big_endian) = match descr.as_str() {
-        | "<f8" | "|f8" => (8usize, false),
-        | "<f4" | "|f4" => (4usize, false),
-        | ">f8" => (8usize, true),
-        | ">f4" => (4usize, true),
-        | "=f8" => (8usize, cfg!(target_endian = "big")),
-        | "=f4" => (4usize, cfg!(target_endian = "big")),
+    let count = checked_element_count(&shape)
+        .ok_or_else(|| "E0903: NPY shape or strides overflow".to_string())?;
+    let reorder = fortran && shape.len() > 1 && count > 0;
+    let values = match descr {
+        | "<f8" | "|f8" => decode_values(data, count, &shape, reorder, f64::from_le_bytes)?,
+        | ">f8" => decode_values(data, count, &shape, reorder, f64::from_be_bytes)?,
+        | "=f8" => decode_values(data, count, &shape, reorder, f64::from_ne_bytes)?,
+        | "<f4" | "|f4" => {
+            decode_values(data, count, &shape, reorder, |bytes| {
+                f64::from(f32::from_le_bytes(bytes))
+            })?
+        },
+        | ">f4" => {
+            decode_values(data, count, &shape, reorder, |bytes| {
+                f64::from(f32::from_be_bytes(bytes))
+            })?
+        },
+        | "=f4" => {
+            decode_values(data, count, &shape, reorder, |bytes| {
+                f64::from(f32::from_ne_bytes(bytes))
+            })?
+        },
         | _ => {
             return Err(format!(
                 "E0904: unsupported NPY dtype `{descr}` (only float32/float64)"
             ));
         },
     };
-    let count = checked_element_count(&shape)
-        .ok_or_else(|| "E0903: NPY shape or strides overflow".to_string())?;
-    let data = &bytes[start + header_len..];
-    let expected = count
-        .checked_mul(width)
-        .ok_or_else(|| "E0903: NPY shape overflows".to_string())?;
-    if data.len() != expected {
+    Ok((shape, values))
+}
+
+fn decode_values<const WIDTH: usize>(
+    data: &[u8],
+    count: usize,
+    shape: &[usize],
+    reorder: bool,
+    convert: impl Fn([u8; WIDTH]) -> f64,
+) -> Result<Vec<f64>, String> {
+    let (chunks, trailing) = data.as_chunks::<WIDTH>();
+    if chunks.len() != count || !trailing.is_empty() {
+        let overflow = || "E0903: NPY shape overflows".to_string();
+        let expected = count.checked_mul(WIDTH).ok_or_else(overflow)?;
         return Err(format!(
             "E0903: NPY data is {} byte(s), the shape needs {expected}",
             data.len()
         ));
     }
-    let decode = |chunk: &[u8]| -> f64 {
-        if width == 8 {
-            let bytes = <[u8; 8]>::try_from(chunk).expect("eight bytes");
-            if big_endian {
-                f64::from_be_bytes(bytes)
-            } else {
-                f64::from_le_bytes(bytes)
-            }
-        } else {
-            let bytes = <[u8; 4]>::try_from(chunk).expect("four bytes");
-            f64::from(if big_endian {
-                f32::from_be_bytes(bytes)
-            } else {
-                f32::from_le_bytes(bytes)
-            })
-        }
-    };
-    let mut values = Vec::with_capacity(count);
-    if fortran && shape.len() > 1 && count > 0 {
-        let mut strides = Vec::with_capacity(shape.len());
-        let mut stride = 1usize;
-        for &extent in &shape {
-            strides.push(stride);
-            stride = stride
-                .checked_mul(extent)
-                .ok_or_else(|| "E0903: NPY shape overflows".to_string())?;
-        }
-        for index in 0..count {
-            let mut remainder = index;
-            let mut source = 0usize;
-            for (&extent, &stride) in shape.iter().zip(&strides).rev() {
-                let coordinate = remainder % extent;
-                remainder /= extent;
-                source += coordinate * stride;
-            }
-            values.push(decode(&data[source * width..(source + 1) * width]));
-        }
-    } else {
-        values.extend(data.chunks_exact(width).map(decode));
+
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(count)
+        .map_err(|_| "E0903: cannot allocate the decoded NPY data".to_string())?;
+    if !reorder {
+        values.extend(chunks.iter().copied().map(convert));
+        return Ok(values);
     }
-    Ok((shape, values))
+
+    let overflow = || "E0903: NPY shape overflows".to_string();
+    let mut strides = Vec::with_capacity(shape.len());
+    let mut stride = 1_usize;
+    for &extent in shape {
+        strides.push(stride);
+        stride = stride.checked_mul(extent).ok_or_else(overflow)?;
+    }
+    for index in 0..count {
+        let mut remainder = index;
+        let mut source = 0_usize;
+        for (&extent, &stride) in shape.iter().zip(&strides).rev() {
+            // A positive count guarantees that all axes are nonzero. Each coordinate is
+            // bounded by its axis and the sum forms an index smaller than the element count.
+            let coordinate = remainder.checked_rem(extent).ok_or_else(overflow)?;
+            remainder = remainder.checked_div(extent).ok_or_else(overflow)?;
+            source = coordinate
+                .checked_mul(stride)
+                .and_then(|offset| source.checked_add(offset))
+                .ok_or_else(overflow)?;
+        }
+        let bytes = chunks.get(source).ok_or_else(overflow)?;
+        values.push(convert(*bytes));
+    }
+    Ok(values)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn big_endian_fortran_matrix_decodes_in_row_major_order() {
+        let header = b"{'descr': '>f4', 'fortran_order': True, 'shape': (2, 3), }\n";
+        let mut bytes = NPY_MAGIC.to_vec();
+        bytes.extend_from_slice(&[2, 0]);
+        bytes.extend_from_slice(&u32::try_from(header.len()).unwrap().to_le_bytes());
+        bytes.extend_from_slice(header);
+        for value in [1.0_f32, 4.0, 2.0, 5.0, 3.0, 6.0] {
+            bytes.extend_from_slice(&value.to_be_bytes());
+        }
+        assert_eq!(
+            decode(&bytes).unwrap(),
+            (vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        );
+        bytes.push(0);
+        assert!(decode(&bytes).unwrap_err().starts_with("E0903: NPY data"));
+    }
+
+    #[test]
+    fn encoder_rejects_headers_its_decoder_would_reject() {
+        assert!(
+            encode(&vec![1; MAX_HEADER_LEN / 2], &[0.0])
+                .unwrap_err()
+                .contains("header exceeds 10 KiB")
+        );
+        let shape = vec![1; 1000];
+        let bytes = encode(&shape, &[3.5]).unwrap();
+        assert_eq!(decode(&bytes).unwrap(), (shape, vec![3.5]));
+    }
 }

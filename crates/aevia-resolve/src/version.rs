@@ -1,4 +1,4 @@
-//! Semantic versions (SemVer 2.0.0) with a total order.
+//! Semantic versions (`SemVer` 2.0.0) with a total order.
 //!
 //! # The order
 //!
@@ -219,13 +219,13 @@ impl Version {
 
     /// Whether this is a pre-release (`1.0.0-rc.1`).
     #[must_use]
-    pub fn is_prerelease(&self) -> bool {
+    pub const fn is_prerelease(&self) -> bool {
         !self.pre.is_empty()
     }
 
     /// The compatibility series (see [`Series`]).
     #[must_use]
-    pub fn series(&self) -> Series {
+    pub const fn series(&self) -> Series {
         if self.major > 0 {
             Series {
                 major: self.major,
@@ -259,11 +259,15 @@ impl Version {
 
     /// The three-number part as a tuple.
     #[must_use]
-    pub fn triple(&self) -> (u64, u64, u64) {
+    pub const fn triple(&self) -> (u64, u64, u64) {
         (self.major, self.minor, self.patch)
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "all three numeric components share one validation rule"
+)]
 fn parse_number(
     input: &str,
     part: &str,
@@ -352,22 +356,30 @@ fn compare_identifiers(
     left.len().cmp(&right.len())
 }
 
+impl Version {
+    /// Compares semantic version precedence without build metadata.
+    #[must_use]
+    pub fn cmp_precedence(
+        &self,
+        other: &Self,
+    ) -> Ordering {
+        self.triple().cmp(&other.triple()).then_with(|| {
+            match (self.pre.is_empty(), other.pre.is_empty()) {
+                | (true, true) => Ordering::Equal,
+                | (true, false) => Ordering::Greater,
+                | (false, true) => Ordering::Less,
+                | (false, false) => compare_identifiers(&self.pre, &other.pre),
+            }
+        })
+    }
+}
+
 impl Ord for Version {
     fn cmp(
         &self,
         other: &Self,
     ) -> Ordering {
-        self.triple()
-            .cmp(&other.triple())
-            .then_with(|| {
-                match (self.pre.is_empty(), other.pre.is_empty()) {
-                    | (true, true) => Ordering::Equal,
-                    // A release is greater than any pre-release of it.
-                    | (true, false) => Ordering::Greater,
-                    | (false, true) => Ordering::Less,
-                    | (false, false) => compare_identifiers(&self.pre, &other.pre),
-                }
-            })
+        self.cmp_precedence(other)
             .then_with(|| compare_identifiers(&self.build, &other.build))
     }
 }

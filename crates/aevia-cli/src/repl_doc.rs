@@ -28,13 +28,18 @@ struct Item {
 /// Compact metadata for the last accepted declaration submission. It retains
 /// no compiler graph or interpreter and does not reopen source files.
 #[derive(Default)]
-pub(crate) struct Catalog {
+pub struct Catalog {
     items: BTreeMap<String, Item>,
     units: BTreeMap<String, aevia_dim::UnitDef>,
     dimensions: BTreeMap<String, String>,
 }
 
 impl Catalog {
+    #[allow(
+        clippy::single_call_fn,
+        clippy::too_many_lines,
+        reason = "assembles a REPL documentation index with source and builtin metadata"
+    )]
     pub(crate) fn with_origins(
         compilation: &ReplCompilation,
         location: &dyn Fn(Span) -> String,
@@ -307,6 +312,10 @@ impl Catalog {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "builds documentation records from local declarations"
+)]
 fn local_items(
     module: &LoadedModule,
     sources: &aevia_syntax::SourceMap,
@@ -333,12 +342,14 @@ fn local_items(
                 aevia_doc::module_doc(sources.text(declaration.span), "<accepted>", "Repl")
                     .ok()
                     .and_then(|doc| doc.decls.into_iter().next())
-                    .map(|doc| doc.signature)
-                    .unwrap_or_else(|| {
-                        aevia_fmt::print::describe_decl(declaration)
-                            .trim_matches('`')
-                            .to_string()
-                    })
+                    .map_or_else(
+                        || {
+                            aevia_fmt::print::describe_decl(declaration)
+                                .trim_matches('`')
+                                .to_string()
+                        },
+                        |doc| doc.signature,
+                    )
             };
             let mut signature = signature;
             let declared_unit = match module.checked.exports.get(&name) {
@@ -376,9 +387,9 @@ fn local_items(
                 if let Some(target) = target {
                     if let Some(original) = items.get(&target) {
                         if item.doc.is_none() {
-                            item.doc = original.doc.clone();
+                            item.doc.clone_from(&original.doc);
                         }
-                        item.builtin = original.builtin.clone();
+                        item.builtin.clone_from(&original.builtin);
                         item.alias = Some(format!("{target} ({})", original.origin));
                     } else {
                         let another_source_binding =
@@ -420,6 +431,10 @@ fn referenced_name(expression: &aevia_syntax::Expr) -> Option<String> {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "formats declaration types in the interactive documentation index"
+)]
 fn declaration_type(
     checked: &CheckedModule,
     declaration: &Decl,
@@ -552,6 +567,10 @@ fn render_item(
     out.trim_end().to_string()
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "recovers module-level docs for the interactive index"
+)]
 fn leading_module_doc(text: &str) -> Option<String> {
     let mut lines = Vec::new();
     for line in text.lines() {
@@ -585,7 +604,7 @@ fn builtin_item(name: &str) -> Option<Item> {
         let _ = write!(
             signature,
             "\n… {} additional rank/shape overloads; the checker selects one at each call",
-            signatures.len() - 8
+            signatures.len().saturating_sub(8)
         );
     }
     Some(Item {
@@ -604,6 +623,10 @@ const TYPE_NAMES: &[&str] = &[
     "Int", "Real", "Float", "Complex", "Bool", "String", "Unit", "Tensor", "Prop", "Option",
     "Result", "IO", "Dyn", "Point", "UnitOf", "Task", "Show",
 ];
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeps the type reference descriptions and signatures together"
+)]
 fn type_item(name: &str) -> Option<Item> {
     let (signature, doc) = match name {
         | "Int" => {
@@ -722,6 +745,10 @@ fn type_item(name: &str) -> Option<Item> {
     })
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "provides a dedicated formatter for unit definitions"
+)]
 fn unit_help(
     name: &str,
     unit: &aevia_dim::UnitDef,
@@ -750,6 +777,10 @@ fn unit_help(
     out
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "maps RSSN operator metadata to interactive help"
+)]
 fn kernel_help(name: &str) -> Option<String> {
     if name == "Rssn" {
         return Some("Rssn — scientific kernel module\n\nKernel functions are available under Rssn. Native signatures and documentation come from the bundled kernel manifest.\nUse :doc Rssn.NAME for a binding, or import Rssn as K and inspect K.NAME.\nThe dynamic escape hatch is Rssn.dynamic(\"operator\", [to_value(argument)]).".into());
@@ -773,7 +804,7 @@ fn kernel_help(name: &str) -> Option<String> {
         }
         match binding.coverage {
             | aevia_rssn::bindings::Coverage::Typed => {
-                out.push_str("An exact typed Aevia binding is available.\n")
+                out.push_str("An exact typed Aevia binding is available.\n");
             },
             | aevia_rssn::bindings::Coverage::Dynamic(reasons) => {
                 let _ = writeln!(out, "Dynamic bridge: {}", reasons.join("; "));
@@ -797,27 +828,40 @@ fn builtin_guide(name: &str) -> Option<(&'static str, &'static str)> {
     aevia_stdlib_model::guides::guide(name).map(|guide| (guide.description, guide.example))
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps the spelling-distance metric separate from help ranking"
+)]
 fn edit_distance(
     left: &str,
     right: &str,
 ) -> usize {
     let right: Vec<_> = right.chars().collect();
     let mut row: Vec<_> = (0..=right.len()).collect();
-    for (i, a) in left.chars().enumerate() {
-        let mut next = vec![i + 1];
-        for (j, b) in right.iter().enumerate() {
-            next.push(
-                (row[j + 1] + 1)
-                    .min(next[j] + 1)
-                    .min(row[j] + usize::from(a != *b)),
-            );
+    for (index, character) in left.chars().enumerate() {
+        let mut diagonal = index;
+        let mut west = index.saturating_add(1);
+        if let Some(first) = row.first_mut() {
+            *first = west;
         }
-        row = next;
+        for (other, cell) in right.iter().zip(row.iter_mut().skip(1)) {
+            let north = *cell;
+            *cell = north
+                .saturating_add(1)
+                .min(west.saturating_add(1))
+                .min(diagonal.saturating_add(usize::from(character != *other)));
+            west = *cell;
+            diagonal = north;
+        }
     }
-    row[right.len()]
+    row.last().copied().unwrap_or_default()
 }
 
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "maps operator syntax to interactive help text"
+)]
 fn operator_help(name: &str) -> Option<String> {
     let (syntax, description, example) = match name {
         | "+" | "-" => {

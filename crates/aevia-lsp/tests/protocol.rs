@@ -1536,3 +1536,87 @@ fn virtual_buffers_get_versioned_rename_edits_and_callback_signature_help() {
         .unwrap();
     assert_eq!(callback["kind"], 3, "function completion kind");
 }
+
+#[test]
+fn malformed_requests_and_lifecycle_notifications_do_not_mutate_documents() {
+    let (exit, replies) = run(&[
+        r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"untitled:source","version":1,"text":"let x = 1"}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"shutdown"}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"initialize","params":{}}"#,
+        r#"{"jsonrpc":"2.0","id":{},"method":"textDocument/hover"}"#,
+        r#"{"jsonrpc":"2.0","id":3,"method":false}"#,
+        r#"{"jsonrpc":"2.0","id":4,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"untitled:source"}}}"#,
+        r#"{"jsonrpc":"2.0","id":5,"method":"shutdown"}"#,
+        r#"{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"untitled:source"}}}"#,
+        r#"{"jsonrpc":"2.0","method":"exit"}"#,
+    ]);
+    assert_eq!(exit, Exit::Graceful);
+    assert_eq!(reply(&replies, 1)["error"]["code"], -32002);
+    assert!(
+        replies
+            .iter()
+            .any(|message| message["id"].is_null() && message["error"]["code"] == -32600)
+    );
+    assert_eq!(reply(&replies, 3)["error"]["code"], -32600);
+    assert!(reply(&replies, 4)["result"].is_null());
+    assert!(published(&replies, "untitled:source").is_empty());
+}
+
+#[test]
+fn editor_queries_follow_locals_and_recover_signatures_while_typing() {
+    use serde_json::json;
+
+    let uri = "untitled:editing";
+    let header = "fn choose(label: String, local_count: Int): Int = local_count";
+    let complete = r#"let value = choose(")", 2)"#;
+    let unfinished = r#"let value = choose(")", "#;
+    let position = |line, character| json!({"textDocument":{"uri":uri},"position":{"line":line,"character":character}});
+    let completion = position(0, header.rfind("local_count").unwrap());
+    let signature = position(1, complete.find('2').unwrap());
+    let recovered = position(1, unfinished.len());
+    let (_, replies) = run_json(vec![
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{
+            "textDocument":{"uri":uri,"version":1,"text":format!("{header}\n{complete}\n")}
+        }}),
+        json!({"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":completion}),
+        json!({"jsonrpc":"2.0","id":3,"method":"textDocument/signatureHelp","params":signature}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didChange","params":{
+            "textDocument":{"uri":uri,"version":2},
+            "contentChanges":[{"text":format!("{header}\n{unfinished}\n")}]
+        }}),
+        json!({"jsonrpc":"2.0","id":4,"method":"textDocument/signatureHelp","params":recovered}),
+        json!({"jsonrpc":"2.0","id":5,"method":"shutdown"}),
+        json!({"jsonrpc":"2.0","method":"exit"}),
+    ]);
+    let items = reply(&replies, 2)["result"]
+        .as_array()
+        .expect("completions");
+    assert!(items.iter().any(|item| item["label"] == "local_count"));
+    for id in [3, 4] {
+        let result = &reply(&replies, id)["result"];
+        assert_eq!(
+            result["signatures"][0]["label"],
+            "choose: (String, Int) -> Int"
+        );
+        assert_eq!(result["activeParameter"], 1);
+    }
+}
+
+#[test]
+fn code_actions_honor_the_requested_kind_and_scratch_code_has_no_run_lens() {
+    let (_, replies) = run(&[
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+        r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"untitled:source","version":1,"text":"let bad = 1 m + 1\nfn main(): IO Unit = println(42)\n"}}}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/codeAction","params":{"textDocument":{"uri":"untitled:source"},"range":{"start":{"line":0,"character":12},"end":{"line":0,"character":12}},"context":{"diagnostics":[],"only":["quickfix"]}}}"#,
+        r#"{"jsonrpc":"2.0","id":3,"method":"textDocument/codeAction","params":{"textDocument":{"uri":"untitled:source"},"range":{"start":{"line":0,"character":12},"end":{"line":0,"character":12}},"context":{"diagnostics":[],"only":["source.organizeImports"]}}}"#,
+        r#"{"jsonrpc":"2.0","id":4,"method":"textDocument/codeLens","params":{"textDocument":{"uri":"untitled:source"}}}"#,
+        r#"{"jsonrpc":"2.0","id":5,"method":"shutdown"}"#,
+        r#"{"jsonrpc":"2.0","method":"exit"}"#,
+    ]);
+    let fixes = reply(&replies, 2)["result"].as_array().expect("fixes");
+    assert!(!fixes.is_empty());
+    assert!(fixes.iter().all(|fix| fix["kind"] == "quickfix"));
+    assert_eq!(reply(&replies, 3)["result"], serde_json::json!([]));
+    assert_eq!(reply(&replies, 4)["result"], serde_json::json!([]));
+}

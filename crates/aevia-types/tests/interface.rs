@@ -131,6 +131,39 @@ let rendered = pretty({ x = 1.0, y = 2.0 })
 }
 
 #[test]
+fn imported_row_exclusions_survive_the_native_interface_codec() {
+    let library =
+        parsed("module Library\nfn add(p: { x: Int, ...r }): Bool = ({ p with z = true }).z\n");
+    let bytes = aevia_types::persist::encode(&library.interface()).expect("encode interface");
+    let decoded: ModuleInterface = aevia_types::persist::decode(&bytes).expect("decode interface");
+    let Some(Export::Value { scheme, .. }) = decoded.exports.get("add") else {
+        panic!("expected an exported function");
+    };
+    assert!(
+        scheme
+            .row_lacks
+            .iter()
+            .any(|(_, labels)| labels.iter().any(|label| label == "z"))
+    );
+
+    let source = "module Caller\nlet allowed = Library.add({ x = 1, y = \"other\" })\nlet refused = Library.add({ x = 1, z = \"existing\" })\n";
+    let tokens = lex(0, source).expect("lex importer");
+    let (module, diagnostics) = parse_module(0, source, &tokens);
+    assert!(!diagnostics.has_errors(), "{diagnostics:?}");
+    let imports = [("Library".to_string(), decoded.exports.clone())];
+    let result =
+        check_module_with_interfaces(0, &module, &imports, &[decoded], &CheckOptions::default());
+    let errors: Vec<_> = result
+        .diagnostics
+        .items
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == aevia_syntax::Severity::Error)
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect();
+    assert_eq!(errors, ["E0208"], "{:?}", result.diagnostics.items);
+}
+
+#[test]
 fn an_importer_can_expand_an_imported_alias_and_call_its_instance() {
     // Probe P5: an instance defined in an imported module used to be invisible
     // (`E0310`); the alias was `E0301` from an importer because only its arity

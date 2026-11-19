@@ -100,22 +100,42 @@ where
     .map_err(map_fdm_err)
 }
 
+/// Solves the Poisson equation on the specified 2D grid.
+///
+/// # Errors
+/// Rejects invalid grid, field shape, boundary data, or solver parameters.
 pub fn solve_poisson(spec: &PoissonSpec) -> Result<Field, NumericError> {
     rssn::sim::fdm_nd::solve_poisson(spec).map_err(map_fdm_err)
 }
 
+/// Solves the heat equation on the specified 2D grid.
+///
+/// # Errors
+/// Rejects invalid grid, field shape, boundary data, or unstable time stepping.
 pub fn solve_heat(spec: &HeatSpec) -> Result<Vec<Field>, NumericError> {
     rssn::sim::fdm_nd::solve_heat(spec).map_err(map_fdm_err)
 }
 
+/// Solves the wave equation on the specified 2D grid.
+///
+/// # Errors
+/// Rejects invalid grid, field shape, boundary data, or unstable time stepping.
 pub fn solve_wave(spec: &WaveSpec) -> Result<Vec<Field>, NumericError> {
     rssn::sim::fdm_nd::solve_wave(spec).map_err(map_fdm_err)
 }
 
+/// Solves the advection equation on the specified 2D grid.
+///
+/// # Errors
+/// Rejects invalid grid, field shape, boundary data, or unstable time stepping.
 pub fn solve_advection(spec: &AdvectionSpec) -> Result<Vec<Field>, NumericError> {
     rssn::sim::fdm_nd::solve_advection(spec).map_err(map_fdm_err)
 }
 
+/// Solves the Poisson equation on a 1D grid.
+///
+/// # Errors
+/// Rejects invalid grid, field shape, boundary data, or solver parameters.
 pub fn solve_poisson_1d(
     grid: Grid1D,
     source: &[f64],
@@ -124,6 +144,10 @@ pub fn solve_poisson_1d(
     rssn::sim::fdm_nd::solve_poisson_1d(grid, source, bc).map_err(map_fdm_err)
 }
 
+/// Solves the Poisson equation with explicit 2D face conditions.
+///
+/// # Errors
+/// Rejects invalid grid, field shape, boundary data, or solver parameters.
 pub fn solve_poisson_with_bc(
     spec: &PoissonSpec,
     bc: &Boundary2D,
@@ -131,6 +155,10 @@ pub fn solve_poisson_with_bc(
     rssn::sim::fdm_nd::solve_poisson_with_bc(spec, bc).map_err(map_fdm_err)
 }
 
+/// Solves the Poisson equation on a 3D grid.
+///
+/// # Errors
+/// Rejects invalid grid, field shape, boundary data, or solver parameters.
 pub fn solve_poisson_3d(
     grid: Grid3D,
     source: &[f64],
@@ -142,6 +170,10 @@ pub fn solve_poisson_3d(
         .map_err(map_fdm_err)
 }
 
+/// Solves the heat equation on a 1D grid.
+///
+/// # Errors
+/// Rejects invalid grid, field shape, boundary data, or unstable time stepping.
 pub fn solve_heat_1d(
     grid: Grid1D,
     alpha: f64,
@@ -155,6 +187,10 @@ pub fn solve_heat_1d(
         .map_err(map_fdm_err)
 }
 
+/// Solves the heat equation with explicit 2D face conditions.
+///
+/// # Errors
+/// Rejects invalid grid, field shape, boundary data, or unstable time stepping.
 pub fn solve_heat_with_bc(
     spec: &HeatSpec,
     bc: &Boundary2D,
@@ -163,6 +199,10 @@ pub fn solve_heat_with_bc(
     rssn::sim::fdm_nd::solve_heat_with_bc(spec, bc, stepping).map_err(map_fdm_err)
 }
 
+/// Solves the heat equation on a 3D grid.
+///
+/// # Errors
+/// Rejects invalid grid, field shape, boundary data, or unstable time stepping.
 pub fn solve_heat_3d(
     grid: Grid3D,
     alpha: f64,
@@ -176,6 +216,10 @@ pub fn solve_heat_3d(
         .map_err(map_fdm_err)
 }
 
+/// Solves the wave equation on a 1D grid.
+///
+/// # Errors
+/// Rejects invalid grid, field shape, boundary data, or unstable time stepping.
 pub fn solve_wave_1d(
     grid: Grid1D,
     c: f64,
@@ -188,6 +232,10 @@ pub fn solve_wave_1d(
     rssn::sim::fdm_nd::solve_wave_1d(grid, c, dt, steps, initial, velocity, bc).map_err(map_fdm_err)
 }
 
+/// Solves the wave equation with explicit 2D face conditions.
+///
+/// # Errors
+/// Rejects invalid grid, field shape, boundary data, or unstable time stepping.
 pub fn solve_wave_with_bc(
     spec: &WaveSpec,
     bc: &Boundary2D,
@@ -195,6 +243,10 @@ pub fn solve_wave_with_bc(
     rssn::sim::fdm_nd::solve_wave_with_bc(spec, bc).map_err(map_fdm_err)
 }
 
+/// Solves the wave equation on a 3D grid.
+///
+/// # Errors
+/// Rejects invalid grid, field shape, boundary data, or unstable time stepping.
 pub fn solve_wave_3d(
     grid: Grid3D,
     c: f64,
@@ -207,6 +259,9 @@ pub fn solve_wave_3d(
 }
 
 /// Solve the 3D wave equation with arbitrary supported face conditions.
+///
+/// # Errors
+/// Rejects invalid grid, field shape, boundary data, or unstable time stepping.
 pub fn solve_wave_3d_with_bc(
     grid: Grid3D,
     c: f64,
@@ -220,6 +275,10 @@ pub fn solve_wave_3d_with_bc(
         .map_err(map_fdm_err)
 }
 
+/// Solves the advection equation on a 1D grid.
+///
+/// # Errors
+/// Rejects invalid grid, field shape, boundary data, or unstable time stepping.
 pub fn solve_advection_1d(
     grid: Grid1D,
     v: f64,
@@ -231,6 +290,10 @@ pub fn solve_advection_1d(
     rssn::sim::fdm_nd::solve_advection_1d(grid, v, dt, steps, initial, bc).map_err(map_fdm_err)
 }
 
+/// Solves the advection equation with explicit 2D face conditions.
+///
+/// # Errors
+/// Rejects invalid grid, field shape, boundary data, or unstable time stepping.
 pub fn solve_advection_with_bc(
     spec: &AdvectionSpec,
     bc: &Boundary2D,
@@ -238,6 +301,10 @@ pub fn solve_advection_with_bc(
     rssn::sim::fdm_nd::solve_advection_with_bc(spec, bc).map_err(map_fdm_err)
 }
 
+/// Solves the advection equation on a 3D grid.
+///
+/// # Errors
+/// Rejects invalid grid, field shape, boundary data, or unstable time stepping.
 pub fn solve_advection_3d(
     grid: Grid3D,
     velocity: (f64, f64, f64),
@@ -254,6 +321,8 @@ pub use rssn::sim::pde_api::FemDegree;
 pub use rssn::sim::pde_api::FemSolution;
 pub use rssn::sim::pde_api::FvmScheme;
 
+/// Solves a 1D reaction-diffusion boundary-value problem with finite elements.
+///
 /// Solves the 1D reaction-diffusion BVP `-(k u_x)_x + c u = f(x)` on `[x0, x1]`
 /// with `nx` simplex intervals using `P1` or `P2` Lagrange finite elements
 /// (`rssn::sim::fem_simplex`) and boundary conditions `bc` (Dirichlet, Neumann, or Robin).
@@ -276,6 +345,8 @@ where
     rssn::sim::pde_api::solve_fem_1d(bounds, nx, degree, k, c, source, bc).map_err(map_fdm_err)
 }
 
+/// Solves a 2D elliptic equation with simplicial finite elements.
+///
 /// Solves the 2D elliptic PDE `-∇·(k ∇u) + c u = f(x, y)` on `[x0, x1] × [y0, y1]`
 /// triangulated into `2 * nx * ny` triangles using `P1` or `P2` Lagrange finite
 /// elements (`rssn::sim::fem_simplex`) and per-face boundary conditions `bc`
@@ -301,6 +372,8 @@ where
     rssn::sim::pde_api::solve_fem_2d(bounds, nx, ny, degree, k, c, source, bc).map_err(map_fdm_err)
 }
 
+/// Solves a 3D elliptic equation with simplicial finite elements.
+///
 /// Solves the 3D elliptic PDE `-∇·(k ∇u) + c u = f(x, y, z)` on a tetrahedral
 /// box mesh `[lo, hi]` with `cells = [nx, ny, nz]` using `P1` or `P2` Lagrange
 /// finite elements (`rssn::sim::fem_simplex`) and per-face boundary conditions `bc`.
@@ -361,6 +434,8 @@ where
     .map_err(map_fdm_err)
 }
 
+/// Solves a 1D scalar conservation law with finite volumes.
+///
 /// Solves a 1D scalar conservation law `u_t + f(u)_x = 0` on `num_cells` finite
 /// volumes covering `[0, domain_size]` using `scheme` (`Upwind`, `LaxFriedrichs`,
 /// `MusclMinmod`, or `MusclVanLeer`, leveraging `rssn::sim::physics_fvm` limiters
@@ -453,6 +528,8 @@ pub fn solve_fvm_shallow_water_1d(
         .map_err(map_fdm_err)
 }
 
+/// Solves 1D advection with a nodal discontinuous Galerkin scheme.
+///
 /// Solves 1D linear advection `u_t + a u_x = 0` using Nodal Discontinuous Galerkin
 /// (`rssn::sim::dg::solve_dg_1d`) of polynomial degree `poly_degree >= 1` on `n_elem`
 /// elements over `[x0, x1]` with periodic boundary conditions.
@@ -486,6 +563,8 @@ where
     .map_err(map_fdm_err)
 }
 
+/// Solves a periodic screened Poisson equation.
+///
 /// Solves the periodic Helmholtz / screened Poisson equation `-Δu + σ u = f`
 /// in 1D, 2D, or 3D on a periodic box of lengths `lengths` and power-of-two grid
 /// sizes `extents` using Fourier pseudospectral inversion (`rssn::sim::spectral::SpectralGrid`).
@@ -507,6 +586,8 @@ pub fn solve_spectral_helmholtz(
         .map_err(map_fdm_err)
 }
 
+/// Integrates a periodic reaction-diffusion or heat equation with Fourier methods.
+///
 /// Integrates a periodic reaction-diffusion or heat equation
 /// `u_t = \alpha Δu - \sigma u + N(t, u)` in 1D, 2D, or 3D on a periodic Fourier
 /// pseudospectral grid using 4th-order Exponential Time Differencing Runge–Kutta
@@ -543,6 +624,8 @@ where
     .map_err(map_fdm_err)
 }
 
+/// Solves a bounded Helmholtz equation by Chebyshev collocation.
+///
 /// Solves the 1D/2D/3D Helmholtz / Poisson equation `-Δu + σ u = f(x)` on a bounded
 /// box `[lo, hi]` using Chebyshev–Gauss–Lobatto spectral collocation
 /// (`rssn::sim::spectral::ChebGrid::solve_helmholtz`) with Dirichlet, Neumann, or
@@ -567,6 +650,33 @@ where
     rssn::sim::pde_api::solve_chebyshev_helmholtz(degrees, lo, hi, sigma, source, bc)
         .map_err(map_fdm_err)
 }
+
+/// Adaptive PDE controls and kernel entry points; all time-stepping math lives in RSSN.
+pub use rssn::sim::fdm_nd::adaptive::PdeAdaptiveOptions;
+/// Adaptive PDE controls and kernel entry points; all time-stepping math lives in RSSN.
+pub use rssn::sim::fdm_nd::adaptive::PdeAdaptiveSolution;
+/// Adaptive PDE controls and kernel entry points; all time-stepping math lives in RSSN.
+pub use rssn::sim::fdm_nd::adaptive::PdeTerminalEvent;
+/// Adaptive PDE controls and kernel entry points; all time-stepping math lives in RSSN.
+pub use rssn::sim::fdm_nd::adaptive::advection_adaptive;
+/// Adaptive PDE controls and kernel entry points; all time-stepping math lives in RSSN.
+pub use rssn::sim::fdm_nd::adaptive::heat_adaptive;
+/// Adaptive PDE controls and kernel entry points; all time-stepping math lives in RSSN.
+pub use rssn::sim::fdm_nd::adaptive::wave_adaptive;
+
+/// Adaptive FEM, FVM, DG, and Fourier evolution delegated to RSSN.
+pub use rssn::sim::pde_api::adaptive::dg_advection_adaptive;
+/// Adaptive FEM, FVM, DG, and Fourier evolution delegated to RSSN.
+pub use rssn::sim::pde_api::adaptive::fem_heat_adaptive;
+/// Adaptive FEM, FVM, DG, and Fourier evolution delegated to RSSN.
+pub use rssn::sim::pde_api::adaptive::fvm_adaptive;
+/// Adaptive FEM, FVM, DG, and Fourier evolution delegated to RSSN.
+pub use rssn::sim::pde_api::adaptive::spectral_etdrk4_adaptive;
+
+/// Adaptive nodal source FEM and native one-/two-dimensional DG kernel interfaces.
+pub use rssn::sim::pde_api::adaptive::dg_advection_nd_adaptive;
+/// Adaptive nodal source FEM and native one-/two-dimensional DG kernel interfaces.
+pub use rssn::sim::pde_api::adaptive::fem_heat_source_adaptive;
 
 #[cfg(test)]
 mod tests {
@@ -1207,30 +1317,3 @@ mod tests {
         assert!((end_a[1] - 2.0 * (-1.0f64).exp()).abs() < 1e-6);
     }
 }
-
-/// Adaptive PDE controls and kernel entry points; all time-stepping math lives in RSSN.
-pub use rssn::sim::fdm_nd::adaptive::PdeAdaptiveOptions;
-/// Adaptive PDE controls and kernel entry points; all time-stepping math lives in RSSN.
-pub use rssn::sim::fdm_nd::adaptive::PdeAdaptiveSolution;
-/// Adaptive PDE controls and kernel entry points; all time-stepping math lives in RSSN.
-pub use rssn::sim::fdm_nd::adaptive::PdeTerminalEvent;
-/// Adaptive PDE controls and kernel entry points; all time-stepping math lives in RSSN.
-pub use rssn::sim::fdm_nd::adaptive::advection_adaptive;
-/// Adaptive PDE controls and kernel entry points; all time-stepping math lives in RSSN.
-pub use rssn::sim::fdm_nd::adaptive::heat_adaptive;
-/// Adaptive PDE controls and kernel entry points; all time-stepping math lives in RSSN.
-pub use rssn::sim::fdm_nd::adaptive::wave_adaptive;
-
-/// Adaptive FEM, FVM, DG, and Fourier evolution delegated to RSSN.
-pub use rssn::sim::pde_api::adaptive::dg_advection_adaptive;
-/// Adaptive FEM, FVM, DG, and Fourier evolution delegated to RSSN.
-pub use rssn::sim::pde_api::adaptive::fem_heat_adaptive;
-/// Adaptive FEM, FVM, DG, and Fourier evolution delegated to RSSN.
-pub use rssn::sim::pde_api::adaptive::fvm_adaptive;
-/// Adaptive FEM, FVM, DG, and Fourier evolution delegated to RSSN.
-pub use rssn::sim::pde_api::adaptive::spectral_etdrk4_adaptive;
-
-/// Adaptive nodal source FEM and native one-/two-dimensional DG kernel interfaces.
-pub use rssn::sim::pde_api::adaptive::dg_advection_nd_adaptive;
-/// Adaptive nodal source FEM and native one-/two-dimensional DG kernel interfaces.
-pub use rssn::sim::pde_api::adaptive::fem_heat_source_adaptive;

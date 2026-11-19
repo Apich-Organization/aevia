@@ -106,10 +106,10 @@ fn delete_decl_fix(
     if let Some(file) = sources.file(span.file) {
         let bytes = file.text.as_bytes();
         let idx = usize::try_from(end).unwrap_or(bytes.len());
-        if bytes.get(idx) == Some(&b'\r') && bytes.get(idx + 1) == Some(&b'\n') {
-            end += 2;
-        } else if bytes.get(idx) == Some(&b'\n') {
-            end += 1;
+        match bytes.get(idx..) {
+            | Some([b'\r', b'\n', ..]) => end = end.checked_add(2).unwrap_or(end),
+            | Some([b'\n', ..]) => end = end.checked_add(1).unwrap_or(end),
+            | _ => {},
         }
     }
     Fix {

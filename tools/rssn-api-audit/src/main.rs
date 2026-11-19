@@ -1,12 +1,24 @@
 //! Audits public Rust numerical APIs against declared RSSN dynamic exports.
 //! Source paths and callable operators are separate inventories. Proven aliases
 //! share coverage; unresolved imports and macros remain review fingerprints.
+
+#![deny(
+    missing_docs,
+    clippy::arithmetic_side_effects,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::nursery,
+    clippy::pedantic,
+    clippy::single_call_fn,
+    clippy::unwrap_used
+)]
 use rssn_api_model::numerical_codegen;
 use rssn_api_model::structured_codegen;
 
 use quote::ToTokens;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
 use syn::Item;
@@ -20,7 +32,7 @@ struct Entry {
     cfg: String,
     reason: &'static str,
 }
-fn public(vis: &Visibility) -> bool {
+const fn public(vis: &Visibility) -> bool {
     matches!(vis, Visibility::Public(_))
 }
 fn compact(tokens: impl ToTokens) -> String {
@@ -177,6 +189,10 @@ fn named_uses(
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeps visibility, cfg and re-export traversal in one place"
+)]
 fn resolve_local_function(
     items: &[Item],
     dir: &Path,
@@ -188,10 +204,9 @@ fn resolve_local_function(
     if depth > 32 {
         return Ok(None);
     }
-    let path = if path.first().is_some_and(|part| part == "self") {
-        &path[1..]
-    } else {
-        path
+    let path = match path {
+        | [first, rest @ ..] if first == "self" => rest,
+        | _ => path,
     };
     let Some((head, tail)) = path.split_first() else {
         return Ok(None);
@@ -221,7 +236,7 @@ fn resolve_local_function(
                             dir,
                             &target,
                             &child_cfg,
-                            depth + 1,
+                            depth.saturating_add(1),
                             module_depth,
                         )? {
                             return Ok(Some(found));
@@ -254,8 +269,8 @@ fn resolve_local_function(
                 &dir.join(head),
                 tail,
                 &child_cfg,
-                depth + 1,
-                module_depth + 1,
+                depth.saturating_add(1),
+                module_depth.saturating_add(1),
             );
         }
         let path_attr = module.attrs.iter().find_map(|attr| {
@@ -275,13 +290,16 @@ fn resolve_local_function(
         });
         let direct = dir.join(format!("{head}.rs"));
         let nested = dir.join(head).join("mod.rs");
-        let file = if let Some(path) = path_attr {
-            dir.parent().unwrap_or(dir).join(path)
-        } else if direct.exists() {
-            direct
-        } else {
-            nested
-        };
+        let file = path_attr.map_or_else(
+            || {
+                if direct.exists() {
+                    direct
+                } else {
+                    nested
+                }
+            },
+            |path| dir.parent().unwrap_or(dir).join(path),
+        );
         if !file.exists() {
             return Ok(None);
         }
@@ -293,8 +311,8 @@ fn resolve_local_function(
             &dir.join(head),
             tail,
             &child_cfg,
-            depth + 1,
-            module_depth + 1,
+            depth.saturating_add(1),
+            module_depth.saturating_add(1),
         );
     }
     Ok(None)
@@ -302,6 +320,10 @@ fn resolve_local_function(
 
 /// Resolve public inherent methods of a named local type re-export. External
 /// crates and private declarations remain unresolved; no signature guessing.
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeps visibility, cfg and inherent-method traversal in one place"
+)]
 fn resolve_local_methods(
     items: &[Item],
     dir: &Path,
@@ -313,10 +335,9 @@ fn resolve_local_methods(
     if depth > 32 {
         return Ok(Vec::new());
     }
-    let path = if path.first().is_some_and(|p| p == "self") {
-        &path[1..]
-    } else {
-        path
+    let path = match path {
+        | [first, rest @ ..] if first == "self" => rest,
+        | _ => path,
     };
     let Some((head, tail)) = path.split_first() else {
         return Ok(Vec::new());
@@ -341,7 +362,10 @@ fn resolve_local_methods(
                 };
                 if p.qself.is_some()
                     || p.path.segments.len() != 1
-                    || p.path.segments[0].ident != head.as_str()
+                    || p.path
+                        .segments
+                        .first()
+                        .is_none_or(|segment| segment.ident != head.as_str())
                 {
                     continue;
                 }
@@ -373,7 +397,7 @@ fn resolve_local_methods(
                             dir,
                             &target,
                             &c,
-                            depth + 1,
+                            depth.saturating_add(1),
                             module_depth,
                         )?;
                         if !found.is_empty() {
@@ -386,25 +410,28 @@ fn resolve_local_methods(
         return Ok(Vec::new());
     }
     for item in items {
-        let Item::Mod(m) = item else { continue };
-        if m.ident != head.as_str() {
+        let Item::Mod(module) = item else { continue };
+        if module.ident != head.as_str() {
             continue;
         }
-        if module_depth > 0 && !public(&m.vis) {
+        if module_depth > 0 && !public(&module.vis) {
             return Ok(Vec::new());
         }
-        let c = [cfg_so_far, &cfg(&m.attrs)].join(" ").trim().to_string();
-        if let Some((_, children)) = &m.content {
+        let child_cfg = [cfg_so_far, &cfg(&module.attrs)]
+            .join(" ")
+            .trim()
+            .to_string();
+        if let Some((_, children)) = &module.content {
             return resolve_local_methods(
                 children,
                 &dir.join(head),
                 tail,
-                &c,
-                depth + 1,
-                module_depth + 1,
+                &child_cfg,
+                depth.saturating_add(1),
+                module_depth.saturating_add(1),
             );
         }
-        let explicit = m.attrs.iter().find_map(|a| {
+        let explicit = module.attrs.iter().find_map(|a| {
             if a.path().is_ident("path") {
                 a.parse_args::<syn::LitStr>()
                     .ok()
@@ -425,16 +452,17 @@ fn resolve_local_methods(
                 None
             }
         });
-        let file = if let Some(p) = explicit {
-            dir.parent().unwrap_or(dir).join(p)
-        } else {
-            let direct = dir.join(format!("{head}.rs"));
-            if direct.exists() {
-                direct
-            } else {
-                dir.join(head).join("mod.rs")
-            }
-        };
+        let file = explicit.map_or_else(
+            || {
+                let direct = dir.join(format!("{head}.rs"));
+                if direct.exists() {
+                    direct
+                } else {
+                    dir.join(head).join("mod.rs")
+                }
+            },
+            |path| dir.parent().unwrap_or(dir).join(path),
+        );
         if !file.exists() {
             return Ok(Vec::new());
         }
@@ -445,14 +473,24 @@ fn resolve_local_methods(
             &parsed.items,
             &dir.join(head),
             tail,
-            &c,
-            depth + 1,
-            module_depth + 1,
+            &child_cfg,
+            depth.saturating_add(1),
+            module_depth.saturating_add(1),
         );
     }
     Ok(Vec::new())
 }
 
+fn token_digest(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "all Rust item forms participate in one ordered source inventory pass"
+)]
 fn visit_items(
     items: &[Item],
     prefix: &str,
@@ -532,9 +570,7 @@ fn visit_items(
             // to --check while making the inventory's limit explicit.
             | Item::Macro(m) => {
                 let text = compact(&m.mac);
-                let hash = text.bytes().fold(0xcbf29ce484222325u64, |h, b| {
-                    (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
-                });
+                let hash = token_digest(&text);
                 let c = [inherited_cfg, &cfg(&m.attrs)].join(" ").trim().to_string();
                 out.push(Entry {
                     alias_of: None,
@@ -546,9 +582,7 @@ fn visit_items(
             },
             | Item::Use(u) if public(&u.vis) => {
                 let text = compact(&u.tree);
-                let hash = text.bytes().fold(0xcbf29ce484222325u64, |h, b| {
-                    (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
-                });
+                let hash = token_digest(&text);
                 let c = [inherited_cfg, &cfg(&u.attrs)].join(" ").trim().to_string();
                 let mut names = Vec::new();
                 named_uses(&u.tree, &[], &mut names);
@@ -576,7 +610,9 @@ fn visit_items(
                         resolve_local_methods(items, dir, &target, &c, 0, 0)?
                     {
                         let original = compact(&self_ty).replace(' ', "");
-                        let module = target[..target.len() - 1]
+                        let module = target
+                            .split_last()
+                            .map_or(&[][..], |(_, modules)| modules)
                             .iter()
                             .filter(|p| p.as_str() != "self")
                             .cloned()
@@ -591,8 +627,10 @@ fn visit_items(
                             original,
                             method.sig.ident
                         ));
-                        if let syn::Type::Path(p) = &mut self_ty {
-                            p.path.segments[0].ident = syn::parse_str(&alias)
+                        if let syn::Type::Path(path) = &mut self_ty
+                            && let Some(segment) = path.path.segments.first_mut()
+                        {
+                            segment.ident = syn::parse_str(&alias)
                                 .map_err(|e| format!("invalid type alias: {e}"))?;
                         }
                         let name = compact(&self_ty).replace(' ', "");
@@ -675,13 +713,18 @@ fn visit_items(
                         if path.qself.is_some() || path.path.segments.len() != 1 {
                             continue;
                         }
-                        let Some(original) = aliases.get(&path.path.segments[0].ident.to_string())
-                        else {
+                        let Some(segment) = path.path.segments.first() else {
+                            continue;
+                        };
+                        let Some(original) = aliases.get(&segment.ident.to_string()) else {
                             continue;
                         };
                         let mut implementation = implementation.clone();
                         let mut receiver = path.clone();
-                        receiver.path.segments[0].ident = syn::parse_str(original)
+                        let Some(segment) = receiver.path.segments.first_mut() else {
+                            continue;
+                        };
+                        segment.ident = syn::parse_str(original)
                             .map_err(|e| format!("invalid parent type: {e}"))?;
                         implementation.self_ty = Box::new(syn::Type::Path(receiver));
                         visit_items(&[Item::Impl(implementation)], prefix, dir, &child_cfg, out)?;
@@ -720,6 +763,10 @@ fn visit_items(
     }
     Ok(())
 }
+#[allow(
+    clippy::single_call_fn,
+    reason = "isolates manifest provenance validation"
+)]
 fn exported() -> Result<BTreeMap<String, Vec<String>>, String> {
     use rssn::kernel::manifest::SignatureSource;
     let session = rssn::api::Session::new();
@@ -751,11 +798,10 @@ fn exported() -> Result<BTreeMap<String, Vec<String>>, String> {
             let label = if info.keys.len() == 1 {
                 info.name.clone()
             } else {
-                let hash: String = key
-                    .signature_hash
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect();
+                let mut hash = String::new();
+                for byte in key.signature_hash {
+                    let _ = write!(hash, "{byte:02x}");
+                }
                 format!("{}@{hash}", info.name)
             };
             paths.entry(path.clone()).or_default().push(label);
@@ -768,6 +814,10 @@ fn exported() -> Result<BTreeMap<String, Vec<String>>, String> {
     Ok(paths)
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "isolates source collection from snapshot rendering"
+)]
 fn report(root: &Path) -> Result<String, String> {
     let mut entries = Vec::new();
     for module in ["kernels", "backend", "sim"] {
@@ -803,6 +853,25 @@ fn report(root: &Path) -> Result<String, String> {
     }
     Ok(render(entries, &exports))
 }
+fn identity(
+    path: &str,
+    aliases: &BTreeMap<String, String>,
+) -> Option<String> {
+    let mut path = path.to_string();
+    let mut seen = BTreeSet::new();
+    while let Some(next) = aliases.get(&path) {
+        if !seen.insert(path.clone()) || seen.len() > 32 {
+            return None;
+        }
+        path.clone_from(next);
+    }
+    Some(path)
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps canonical TSV serialization separate from source analysis"
+)]
 fn render(
     entries: Vec<Entry>,
     exports: &BTreeMap<String, Vec<String>>,
@@ -814,20 +883,6 @@ fn render(
         .iter()
         .filter_map(|e| e.alias_of.as_ref().map(|a| (e.path.clone(), a.clone())))
         .collect();
-    fn identity(
-        path: &str,
-        aliases: &BTreeMap<String, String>,
-    ) -> Option<String> {
-        let mut path = path.to_string();
-        let mut seen = BTreeSet::new();
-        while let Some(next) = aliases.get(&path) {
-            if !seen.insert(path.clone()) || seen.len() > 32 {
-                return None;
-            }
-            path = next.clone();
-        }
-        Some(path)
-    }
     let mut inherited: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (path, names) in exports {
         if let Some(key) = identity(path, &aliases) {
@@ -853,13 +908,18 @@ fn render(
             e.reason
         };
         let names = names.map_or_else(String::new, |x| x.join(","));
-        out.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\n",
+        let _ = writeln!(
+            out,
+            "{}\t{}\t{}\t{}\t{}",
             e.path, class, names, e.cfg, e.signature
-        ));
+        );
     }
     out
 }
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps the unchanged snapshot contract directly testable"
+)]
 fn check_snapshot(
     saved: &str,
     actual: &str,
@@ -871,32 +931,70 @@ fn check_snapshot(
     }
 }
 
-/// Enforce callable-source completeness independently of snapshot freshness.
-/// Macro/re-export fingerprints remain review evidence, not callable APIs.
-fn check_complete(report: &str) -> Result<usize, String> {
-    let mut total = 0usize;
+/// Require a declared adapter or an explicit Rust host boundary for each API.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps the source boundary policy directly testable"
+)]
+fn check_complete(
+    report: &str,
+    policy: &str,
+) -> Result<(usize, usize), String> {
+    let mut host_boundaries = BTreeMap::new();
+    for line in policy
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+    {
+        let (path, reason) = line
+            .split_once('\t')
+            .ok_or_else(|| format!("invalid source boundary: {line}"))?;
+        if !path.starts_with("crate::") || reason.trim().is_empty() || reason.contains('\t') {
+            return Err(format!("invalid source boundary: {line}"));
+        }
+        if host_boundaries.insert(path, reason).is_some() {
+            return Err(format!("duplicate source boundary: {path}"));
+        }
+    }
+    let mut matched_boundaries = BTreeSet::new();
+    let mut adapted = 0usize;
     let mut missing = Vec::new();
     for row in report
         .lines()
         .filter(|row| !row.starts_with('#') && !row.is_empty())
     {
-        let fields = row.split('\t').collect::<Vec<_>>();
-        if fields.len() != 5 {
+        let fields: Vec<_> = row.split('\t').collect();
+        let [path, class, names, _, _] = fields.as_slice() else {
             return Err("malformed source inventory row".into());
-        }
-        if matches!(fields[1], "unexpanded-macro" | "unresolved-reexport") {
+        };
+        if matches!(*class, "unexpanded-macro" | "unresolved-reexport") {
             continue;
         }
-        total += 1;
-        if !matches!(fields[1], "declared" | "declared-alias") || fields[2].is_empty() {
-            missing.push(fields[0]);
+        if matches!(*class, "declared" | "declared-alias") && !names.is_empty() {
+            if host_boundaries.contains_key(path) {
+                return Err(format!(
+                    "remove the Rust-only source boundary for adapted API {path}"
+                ));
+            }
+            adapted = adapted.saturating_add(1);
+        } else if host_boundaries.contains_key(path) {
+            matched_boundaries.insert(*path);
+        } else {
+            missing.push(*path);
         }
     }
+    if let Some(path) = host_boundaries
+        .keys()
+        .find(|path| !matched_boundaries.contains(**path))
+    {
+        return Err(format!(
+            "source boundary references missing Rust API {path}"
+        ));
+    }
     if missing.is_empty() {
-        Ok(total)
+        Ok((adapted, matched_boundaries.len()))
     } else {
         Err(format!(
-            "{} of {total} callable source interfaces lack a declared adapter:\n{}",
+            "{} callable source interfaces need a declared adapter or a reviewed Rust host boundary:\n{}",
             missing.len(),
             missing.join("\n")
         ))
@@ -904,93 +1002,81 @@ fn check_complete(report: &str) -> Result<usize, String> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<_> = std::env::args().skip(1).collect();
-    if matches!(args.as_slice(), [arg] if matches!(arg.as_str(), "--codecs-write" | "--codecs-check" | "--codecs-report"))
-    {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../rssn");
-        let policy = root.join("tools/rssn-api-gen/codec-policy.tsv");
-        let target = root.join("src/rules/numerical_abi/codec_generated.rs");
-        let result =
-            rssn_api_model::codec_codegen::generate(&root, &std::fs::read_to_string(policy)?)?;
-        match args[0].as_str() {
-            | "--codecs-report" => print!("{result}"),
-            | "--codecs-write" => {
-                std::fs::write(&target, result)?;
-                println!("wrote {}", target.display());
-            },
-            | _ => {
-                if std::fs::read_to_string(&target)? != result {
-                    return Err(
-                        "generated codecs changed; review --codecs-report and run --codecs-write"
-                            .into(),
-                    );
-                }
-                println!("generated composable codecs verified");
-            },
-        }
-        return Ok(());
-    }
-    if matches!(args.as_slice(), [arg] if matches!(arg.as_str(), "--structured-write" | "--structured-check" | "--structured-report"))
-    {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../rssn");
-        let policy = root.join("tools/rssn-api-gen/structured-policy.tsv");
-        let target = root.join("src/rules/numerical_abi/structured_generated.rs");
-        let result = structured_codegen::generate(&root, &std::fs::read_to_string(policy)?)?;
-        match args[0].as_str() {
-            | "--structured-report" => print!("{result}"),
-            | "--structured-write" => {
-                std::fs::write(&target, result)?;
-                println!("wrote {}", target.display());
-            },
-            | _ => {
-                if std::fs::read_to_string(&target)? != result {
-                    return Err("generated structured codecs changed; review --structured-report and run --structured-write".into());
-                }
-                println!("generated structured codecs verified");
-            },
-        }
-        return Ok(());
-    }
-    if matches!(args.as_slice(), [arg] if matches!(arg.as_str(), "--bindings-write" | "--bindings-check" | "--bindings-report"))
-    {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../rssn");
-        let policy = root.join("tools/rssn-api-gen/numerical-policy.tsv");
-        let target = root.join("src/rules/numerical_abi/generated.rs");
-        let source = std::fs::read_to_string(policy)?;
-        let result = numerical_codegen::generate(&root, &source)?;
-        match args[0].as_str() {
-            | "--bindings-report" => print!("{result}"),
-            | "--bindings-write" => {
-                std::fs::write(&target, result)?;
-                println!("wrote {}", target.display());
-            },
-            | _ => {
-                let saved = std::fs::read_to_string(&target)?;
-                if saved != result {
-                    return Err("generated numerical bindings changed; review --bindings-report and run --bindings-write".into());
-                }
-                println!("generated numerical bindings verified");
-            },
-        }
-        return Ok(());
-    }
-    if args != ["--check"]
-        && args != ["--write"]
-        && args != ["--report"]
-        && args != ["--coverage-check"]
-    {
-        return Err("usage: rssn-api-audit --check|--write|--report|--coverage-check|--bindings-check|--bindings-write|--bindings-report|--structured-check|--structured-write|--structured-report|--codecs-check|--codecs-write|--codecs-report".into());
-    }
+    type Generator = fn(&Path, &str) -> Result<String, String>;
+    const USAGE: &str = "usage: rssn-api-audit --check|--write|--report|--coverage-check|--bindings-check|--bindings-write|--bindings-report|--structured-check|--structured-write|--structured-report|--codecs-check|--codecs-write|--codecs-report";
+    let mut args = std::env::args().skip(1);
+    let (Some(mode), None) = (args.next(), args.next()) else {
+        return Err(USAGE.into());
+    };
+    let mode = mode.as_str();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../rssn");
+    if let Some((family, action @ ("check" | "write" | "report"))) = mode
+        .strip_prefix("--")
+        .and_then(|name| name.split_once('-'))
+    {
+        let generation: Option<(&str, &str, &str, Generator)> = match family {
+            | "codecs" => {
+                Some((
+                    "codec-policy.tsv",
+                    "codec_generated.rs",
+                    "composable codecs",
+                    rssn_api_model::codec_codegen::generate,
+                ))
+            },
+            | "structured" => {
+                Some((
+                    "structured-policy.tsv",
+                    "structured_generated.rs",
+                    "structured codecs",
+                    structured_codegen::generate,
+                ))
+            },
+            | "bindings" => {
+                Some((
+                    "numerical-policy.tsv",
+                    "generated.rs",
+                    "numerical bindings",
+                    numerical_codegen::generate,
+                ))
+            },
+            | _ => None,
+        };
+        if let Some((policy, filename, label, generate)) = generation {
+            let policy = std::fs::read_to_string(root.join("tools/rssn-api-gen").join(policy))?;
+            let source = generate(&root, &policy)?;
+            let target = root.join("src/rules/numerical_abi").join(filename);
+            match action {
+                | "report" => print!("{source}"),
+                | "write" => {
+                    std::fs::write(&target, source)?;
+                    println!("wrote {}", target.display());
+                },
+                | _ => {
+                    if std::fs::read_to_string(&target)? != source {
+                        return Err(format!("generated {label} changed; review --{family}-report and run --{family}-write").into());
+                    }
+                    println!("generated {label} verified");
+                },
+            }
+            return Ok(());
+        }
+    }
+    if !matches!(
+        mode,
+        "--check" | "--write" | "--report" | "--coverage-check"
+    ) {
+        return Err(USAGE.into());
+    }
     let snapshot = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("inventory.tsv");
     let result = report(&root)?;
-    match args[0].as_str() {
+    match mode {
         | "--report" => print!("{result}"),
         | "--coverage-check" => {
+            let policy = include_str!("../source-boundaries.tsv");
+            let (adapted, host_only) = check_complete(&result, policy)?;
             println!(
-                "all {} callable source interfaces have declared adapters",
-                check_complete(&result)?
-            )
+                "{adapted} callable source interfaces have declared adapters; {host_only} reviewed Rust host interfaces"
+            );
         },
         | "--write" => {
             std::fs::write(&snapshot, &result)?;
@@ -1006,12 +1092,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    reason = "tests assert the shape of fixed source fixtures"
+)]
 mod tests {
     use super::*;
 
     #[test]
     fn alias_coverage_requires_resolved_item_identity() {
-        let parsed=syn::parse_file(r#"pub mod child{pub struct T;impl T{pub fn method(&self){}}}pub use child::T as Alias;pub fn unrelated(){}"#).unwrap();
+        let parsed=syn::parse_file(r"pub mod child{pub struct T;impl T{pub fn method(&self){}}}pub use child::T as Alias;pub fn unrelated(){}").unwrap();
         let mut rows = Vec::new();
         visit_items(
             &parsed.items,
@@ -1028,12 +1120,16 @@ mod tests {
         let report = render(rows, &exports);
         assert!(report.contains("crate::kernels::Alias::method\tdeclared-alias\tnum_method"));
         assert!(report.contains("crate::kernels::unrelated\tno-declared-adapter\t"));
-        assert!(check_complete(&report).is_err());
+        assert!(check_complete(&report, "").is_err());
+        let policy = "crate::kernels::unrelated\tRust-specific test interface\n";
+        assert_eq!(check_complete(&report, policy), Ok((2, 1)));
+        let stale = "crate::kernels::child::T::method\tAlready adapted\n";
+        assert!(check_complete(&report, stale).is_err());
     }
 
     #[test]
     fn reexported_public_type_methods_and_parent_generic_receivers_keep_public_paths() {
-        let source=syn::parse_file(r#"mod hidden {pub struct Model<T>(T);impl<T> Model<T>{pub fn new(x:T)->Self{Self(x)} fn private(){}}}pub use hidden::Model as Public;pub struct Parent<T>(T);mod child{use super::Parent;impl<T> Parent<T>{pub fn value(&self)->&T{&self.0}}}"#).unwrap();
+        let source=syn::parse_file(r"mod hidden {pub struct Model<T>(T);impl<T> Model<T>{pub fn new(x:T)->Self{Self(x)} fn private(){}}}pub use hidden::Model as Public;pub struct Parent<T>(T);mod child{use super::Parent;impl<T> Parent<T>{pub fn value(&self)->&T{&self.0}}}").unwrap();
         let mut rows = Vec::new();
         visit_items(
             &source.items,
@@ -1061,13 +1157,13 @@ mod tests {
     #[test]
     fn completeness_requires_real_declared_adapters_and_ignores_noncallable_fingerprints() {
         let complete = "# header\ncrate::kernels::f\tdeclared\tnum_f\t\tfn f()\ncrate::kernels::<macro:1>\tunexpanded-macro\t\t\tthread_local\n";
-        assert_eq!(check_complete(complete), Ok(1));
+        assert_eq!(check_complete(complete, ""), Ok((1, 0)));
         assert!(
-            check_complete(&complete.replace("declared\tnum_f", "opaque\t"))
+            check_complete(&complete.replace("declared\tnum_f", "opaque\t"), "")
                 .unwrap_err()
                 .contains("crate::kernels::f")
         );
-        assert!(check_complete(&complete.replace("declared\tnum_f", "declared\t")).is_err());
+        assert!(check_complete(&complete.replace("declared\tnum_f", "declared\t"), "").is_err());
     }
 
     #[test]
@@ -1183,7 +1279,7 @@ mod tests {
     #[test]
     fn private_child_inherent_methods_are_visible_on_public_parent() {
         let file = syn::parse_file(
-            r#"
+            r"
             pub struct Tape;
             struct Hidden;
             mod derivative {
@@ -1192,7 +1288,7 @@ mod tests {
                 impl Hidden { pub fn hidden(&self) {} }
                 pub fn not_exported() {}
             }
-        "#,
+        ",
         )
         .unwrap();
         let mut entries = Vec::new();

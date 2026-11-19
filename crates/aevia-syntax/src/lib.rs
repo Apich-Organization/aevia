@@ -18,7 +18,20 @@
 //! ```
 
 #![forbid(unsafe_code)]
-#![allow(clippy::large_enum_variant)]
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
 
 pub mod ast;
 pub mod diagnostic;

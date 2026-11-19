@@ -5,6 +5,7 @@
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
+use std::fmt::Write as _;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::io::{
@@ -47,6 +48,10 @@ pub struct Input {
 }
 
 impl Input {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "constructs terminal state and configures the line editor in one place"
+    )]
     pub fn new(color: bool) -> Result<Self, String> {
         // TERM=dumb still supports ordinary line-at-a-time input, but not the
         // cursor-control sequences used by a terminal editor.
@@ -80,7 +85,7 @@ impl Input {
         })
     }
 
-    pub fn interactive(&self) -> bool {
+    pub const fn interactive(&self) -> bool {
         self.editor.is_some()
     }
 
@@ -170,6 +175,10 @@ struct ReplHelper {
 }
 
 impl ReplHelper {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "constructs terminal state and configures the line editor in one place"
+    )]
     fn new(color: bool) -> Self {
         Self {
             bindings: Vec::new(),
@@ -184,6 +193,70 @@ impl ReplHelper {
 
 impl Helper for ReplHelper {}
 
+const INPUT_COMPLETIONS: &[&str] = &[
+    ":help",
+    ":h",
+    ":?",
+    ":bindings",
+    ":imports",
+    ":vars",
+    ":t",
+    ":l",
+    ":quit",
+    ":q",
+    ":reset",
+    ":type",
+    ":dims",
+    ":units",
+    ":ast",
+    ":core",
+    ":time",
+    ":latex",
+    ":typst",
+    ":pretty",
+    ":pprint",
+    ":repr",
+    ":print",
+    ":format",
+    ":doc",
+    ":apropos",
+    ":load",
+    ":paste",
+    ":end",
+    ":cancel",
+    ":run",
+    ":show",
+    ":source",
+    ":save",
+    "let",
+    "fn",
+    "main",
+    "type",
+    "dimension",
+    "unit",
+    "import",
+    "open",
+    "class",
+    "instance",
+    "match",
+    "with",
+    "if",
+    "then",
+    "else",
+    "do",
+    "true",
+    "false",
+    "println",
+    "print",
+    "map",
+    "filter",
+    "fold",
+    "sin",
+    "cos",
+    "sqrt",
+    "sum",
+];
+
 impl Completer for ReplHelper {
     type Candidate = Pair;
 
@@ -193,38 +266,25 @@ impl Completer for ReplHelper {
         pos: usize,
         ctx: &Context<'_>,
     ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        let Some(before_cursor) = line.get(..pos) else {
+            return Ok((0, Vec::new()));
+        };
         let command = line.trim_start();
         if command
-            .find(char::is_whitespace)
-            .is_some_and(|end| matches!(&command[..end], ":load" | ":l" | ":save"))
+            .split_once(char::is_whitespace)
+            .is_some_and(|(head, _)| matches!(head, ":load" | ":l" | ":save"))
         {
             return self.files.complete(line, pos, ctx);
         }
-        let start = line[..pos]
+        let start = before_cursor
             .char_indices()
             .rev()
             .find(|(_, ch)| !(ch.is_alphanumeric() || *ch == '_' || *ch == ':' || *ch == '.'))
-            .map_or(0, |(index, ch)| index + ch.len_utf8());
-        let word = &line[start..pos];
-        let mut module_names = Vec::new();
-        for name in &self.bindings {
-            if name
-                .split('.')
-                .all(|part| part.chars().next().is_some_and(char::is_uppercase))
-            {
-                module_names.push(name.clone());
-            }
-            for (index, _) in name.match_indices('.') {
-                let prefix = &name[..index];
-                if prefix
-                    .split('.')
-                    .all(|part| part.chars().next().is_some_and(char::is_uppercase))
-                {
-                    module_names.push(prefix.to_string());
-                }
-            }
-        }
-        let prefix = line[..start].rsplit('\n').next().unwrap_or("").trim();
+            .map_or(0, |(index, ch)| index.saturating_add(ch.len_utf8()));
+        let Some((before_word, word)) = before_cursor.split_at_checked(start) else {
+            return Ok((0, Vec::new()));
+        };
+        let prefix = before_word.rsplit('\n').next().unwrap_or("").trim();
         if prefix == ":format" {
             return Ok((
                 start,
@@ -241,73 +301,22 @@ impl Completer for ReplHelper {
             ));
         }
         let module_context = matches!(prefix, "import" | "open");
-        let mut names: Vec<&str> = module_names.iter().map(String::as_str).collect();
+        let mut names = Vec::new();
+        for name in &self.bindings {
+            names.extend(
+                name.match_indices('.')
+                    .filter_map(|(index, _)| name.get(..index))
+                    .chain(std::iter::once(name.as_str()))
+                    .filter(|path| {
+                        path.split('.')
+                            .all(|part| part.chars().next().is_some_and(char::is_uppercase))
+                    }),
+            );
+        }
         if !module_context {
             names.extend(self.bindings.iter().map(String::as_str));
             names.extend(aevia_types::builtins::PRELUDE_NAMES.iter().copied());
-            names.extend([
-                ":help",
-                ":h",
-                ":?",
-                ":bindings",
-                ":imports",
-                ":vars",
-                ":t",
-                ":l",
-                ":quit",
-                ":q",
-                ":reset",
-                ":type",
-                ":dims",
-                ":units",
-                ":ast",
-                ":core",
-                ":time",
-                ":latex",
-                ":typst",
-                ":pretty",
-                ":pprint",
-                ":repr",
-                ":print",
-                ":format",
-                ":doc",
-                ":apropos",
-                ":load",
-                ":paste",
-                ":end",
-                ":cancel",
-                ":run",
-                ":show",
-                ":source",
-                ":save",
-                "let",
-                "fn",
-                "main",
-                "type",
-                "dimension",
-                "unit",
-                "import",
-                "open",
-                "class",
-                "instance",
-                "match",
-                "with",
-                "if",
-                "then",
-                "else",
-                "do",
-                "true",
-                "false",
-                "println",
-                "print",
-                "map",
-                "filter",
-                "fold",
-                "sin",
-                "cos",
-                "sqrt",
-                "sum",
-            ]);
+            names.extend(INPUT_COMPLETIONS.iter().copied());
         }
         names.sort_unstable();
         names.dedup();
@@ -401,12 +410,19 @@ impl Highlighter for ReplHelper {
 
 /// Color token spans without changing a byte of the user's input. Gaps can
 /// contain comments (the lexer intentionally omits them) or plain whitespace.
+#[allow(
+    clippy::single_call_fn,
+    reason = "maps lexer spans to terminal styles with unchanged source text"
+)]
 fn syntax_highlight(
     line: &str,
     matching: Option<usize>,
 ) -> Option<String> {
     let lexed = aevia_syntax::lex(0, line).ok()?;
-    let mut output = String::with_capacity(line.len() + lexed.tokens.len() * 10);
+    let mut output = String::with_capacity(
+        line.len()
+            .saturating_add(lexed.tokens.len().saturating_mul(10)),
+    );
     let mut cursor = 0;
     for token in &lexed.tokens {
         if matches!(
@@ -417,10 +433,9 @@ fn syntax_highlight(
         }
         let start = token.span.start as usize;
         let end = token.span.end as usize;
-        if start < cursor || end > line.len() {
-            continue;
-        }
-        highlight_gap(&mut output, &line[cursor..start]);
+        let gap = line.get(cursor..start)?;
+        let text = line.get(start..end)?;
+        highlight_gap(&mut output, gap);
         let code = match token.kind {
             | TokenKind::Keyword(_) => "1;35",
             | TokenKind::UpperIdent(_) => "36",
@@ -430,15 +445,15 @@ fn syntax_highlight(
         };
         highlight_span(
             &mut output,
-            &line[start..end],
+            text,
             code,
             matching
                 .and_then(|index| index.checked_sub(start))
-                .filter(|index| *index < end - start),
+                .filter(|index| *index < end.saturating_sub(start)),
         );
         cursor = end;
     }
-    highlight_gap(&mut output, &line[cursor..]);
+    highlight_gap(&mut output, line.get(cursor..)?);
     Some(output)
 }
 
@@ -446,9 +461,9 @@ fn highlight_gap(
     output: &mut String,
     gap: &str,
 ) {
-    if let Some(comment) = gap.find('#') {
-        output.push_str(&gap[..comment]);
-        highlight_span(output, &gap[comment..], "2;90", None);
+    if let Some((plain, comment)) = gap.find('#').and_then(|start| gap.split_at_checked(start)) {
+        output.push_str(plain);
+        highlight_span(output, comment, "2;90", None);
     } else {
         output.push_str(gap);
     }
@@ -461,17 +476,23 @@ fn highlight_span(
     matching: Option<usize>,
 ) {
     if !code.is_empty() {
-        output.push_str(&format!("\x1b[{code}m"));
+        let _ = write!(output, "\x1b[{code}m");
     }
-    if let Some(index) = matching {
-        output.push_str(&text[..index]);
+    if let Some((prefix, bracket, suffix)) = matching
+        .and_then(|index| text.split_at_checked(index))
+        .and_then(|(prefix, rest)| {
+            rest.split_at_checked(1)
+                .map(|(bracket, suffix)| (prefix, bracket, suffix))
+        })
+    {
+        output.push_str(prefix);
         output.push_str("\x1b[1;34m");
-        output.push_str(&text[index..index + 1]);
+        output.push_str(bracket);
         output.push_str("\x1b[0m");
         if !code.is_empty() {
-            output.push_str(&format!("\x1b[{code}m"));
+            let _ = write!(output, "\x1b[{code}m");
         }
-        output.push_str(&text[index + 1..]);
+        output.push_str(suffix);
     } else {
         output.push_str(text);
     }
@@ -542,25 +563,27 @@ fn lexical_continuation(source: &str) -> bool {
     !stack.is_empty()
         || matches!(
             last,
-            Some(TokenKind::Keyword(
-                Keyword::Do | Keyword::Then | Keyword::Else | Keyword::Where | Keyword::With
-            )) | Some(TokenKind::Punct(
-                Punct::Equals
-                    | Punct::Arrow
-                    | Punct::FatArrow
-                    | Punct::LArrow
-                    | Punct::Pipe
-                    | Punct::Plus
-                    | Punct::Minus
-                    | Punct::Star
-                    | Punct::Slash
-                    | Punct::Caret
-                    | Punct::AndAnd
-                    | Punct::OrOr
-                    | Punct::PipeGt
-                    | Punct::LtPipe
-                    | Punct::Comma
-            ))
+            Some(
+                TokenKind::Keyword(
+                    Keyword::Do | Keyword::Then | Keyword::Else | Keyword::Where | Keyword::With
+                ) | TokenKind::Punct(
+                    Punct::Equals
+                        | Punct::Arrow
+                        | Punct::FatArrow
+                        | Punct::LArrow
+                        | Punct::Pipe
+                        | Punct::Plus
+                        | Punct::Minus
+                        | Punct::Star
+                        | Punct::Slash
+                        | Punct::Caret
+                        | Punct::AndAnd
+                        | Punct::OrOr
+                        | Punct::PipeGt
+                        | Punct::LtPipe
+                        | Punct::Comma
+                )
+            )
         )
 }
 
@@ -596,6 +619,10 @@ fn missing_else(source: &str) -> bool {
             .all(|d| d.message.ends_with("found end of file"))
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "distinguishes incomplete submissions from parse errors"
+)]
 fn incomplete(source: &str) -> bool {
     if source.trim_start().starts_with(':') {
         return false;
@@ -627,7 +654,7 @@ fn incomplete(source: &str) -> bool {
     let mut indentation = 0usize;
     for token in lexed.tokens {
         match token.kind {
-            | TokenKind::Indent => indentation += 1,
+            | TokenKind::Indent => indentation = indentation.saturating_add(1),
             // EOF closes layout synthetically. Only physical dedents matter.
             | TokenKind::Dedent if (token.span.start as usize) < source.len() => {
                 indentation = indentation.saturating_sub(1);
@@ -654,10 +681,10 @@ pub fn declaration(source: &str) -> bool {
                 .map(|d| d.span.start as usize)
                 .min()
                 .unwrap_or(0);
-            if let Ok(lexed) = aevia_syntax::lex(0, &source[..limit]) {
-                if lexed.tokens.iter().any(meaningful) {
-                    return declaration_tokens(source, &lexed.tokens);
-                }
+            if let Ok(lexed) = aevia_syntax::lex(0, &source[..limit])
+                && lexed.tokens.iter().any(meaningful)
+            {
+                return declaration_tokens(source, &lexed.tokens);
             }
             // Invalid indentation can precede the first token. Trim only for
             // classification; the real compiler still diagnoses the source.
@@ -671,9 +698,9 @@ pub fn declaration(source: &str) -> bool {
             let word = &trimmed[..end];
             if word == "fn" {
                 return !trimmed[end..].trim_start().starts_with('(')
-                    && !trimmed[end..]
+                    && trimmed[end..]
                         .find("=>")
-                        .is_some_and(|arrow| !trimmed[end..][..arrow].contains('='));
+                        .is_none_or(|arrow| trimmed[end..][..arrow].contains('='));
             }
             matches!(
                 Keyword::from_word(word),
@@ -698,7 +725,7 @@ pub fn declaration(source: &str) -> bool {
     }
 }
 
-fn meaningful(token: &aevia_syntax::Token) -> bool {
+const fn meaningful(token: &aevia_syntax::Token) -> bool {
     !matches!(
         token.kind,
         TokenKind::Newline | TokenKind::Indent | TokenKind::Dedent | TokenKind::Eof
@@ -789,6 +816,10 @@ fn match_arm(
 /// Move standalone trailing comments to the next submission. The lexer tells
 /// us where the last real token ends, so nested block comments work too; inline
 /// comments stay with the line they describe.
+#[allow(
+    clippy::single_call_fn,
+    reason = "retains the lexer-confirmed documentation for the next submission"
+)]
 fn trailing_comments(source: &mut String) -> String {
     let Ok(lexed) = aevia_syntax::lex(0, source) else {
         return String::new();
@@ -805,7 +836,7 @@ fn trailing_comments(source: &mut String) -> String {
     let Some(newline) = source[end..].find('\n') else {
         return String::new();
     };
-    source.split_off(end + newline + 1)
+    source.split_off(end.saturating_add(newline).saturating_add(1))
 }
 
 /// Splits an unbracketed input stream into submissions. Adjacent declarations
@@ -961,6 +992,14 @@ mod tests {
         assert_eq!(without_ansi(&styled), source);
         assert!(styled.contains("\x1b[1;34m[\x1b[0m"));
         assert!(styled.contains("\x1b[33m42\x1b[0m"));
+    }
+
+    #[test]
+    fn highlighting_preserves_unicode_at_invalid_matching_offsets() {
+        let source = "let π = 1";
+        let invalid_offset = source.find('π').unwrap() + 1;
+        let styled = syntax_highlight(source, Some(invalid_offset)).unwrap();
+        assert_eq!(without_ansi(&styled), source);
     }
 
     #[test]

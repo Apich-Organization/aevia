@@ -23,6 +23,7 @@ aevia-rssn.workspace = true
 aevia-std = { path = "../aevia-std" }
 rssn = { path = "../../../rssn", default-features = false }
 num-bigint.workspace = true
+num-integer.workspace = true
 num-rational.workspace = true
 num-traits.workspace = true
 indexmap.workspace = true
@@ -36,9 +37,5 @@ rayon = "1"
 name = "interp"
 harness = false
 
-[lints.rust]
-# No production code may use `unsafe`. `deny` (not `forbid`) is what lets the
-# allocation gate test install a counting `#[global_allocator]`, whose impl is
-# necessarily `unsafe`; that file is the only place allowed to opt back in, and
-# it forwards every operation to `System` with a SAFETY comment.
-unsafe_code = "deny"
+[lints]
+workspace = true

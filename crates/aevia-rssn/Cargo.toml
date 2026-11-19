@@ -22,8 +22,8 @@ num-traits.workspace = true
 serde_json.workspace = true
 rssn ={ path = "../../../rssn", default-features = false }
 
-[lints.rust]
-unsafe_code = "forbid"
+[lints]
+workspace = true
 
 [dev-dependencies]
 # Native kernel conformance tests share the kernel solver types.

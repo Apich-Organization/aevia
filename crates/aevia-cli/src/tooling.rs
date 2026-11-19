@@ -1,5 +1,8 @@
 //! `aevia fmt`, `aevia doc`, `aevia bench` — the source-level tools.
 
+#[path = "stdlib_locale.rs"]
+mod stdlib_locale;
+
 use crate::Options;
 use crate::apply_options;
 use crate::load_program;
@@ -11,6 +14,7 @@ use aevia_syntax::DeclKind;
 use aevia_syntax::Expr;
 use aevia_syntax::ExprKind;
 use aevia_syntax::Span;
+use std::fmt::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -25,6 +29,10 @@ const DEFAULT_ITERATIONS: usize = 100;
 const DEFAULT_THRESHOLD: f64 = 0.05;
 
 /// `aevia fmt [--check] [files…]`
+#[allow(
+    clippy::single_call_fn,
+    reason = "the fmt command owns formatter errors and check-mode exit status"
+)]
 pub fn fmt(
     _options: Options,
     args: &[String],
@@ -52,7 +60,7 @@ pub fn fmt(
             | Ok(source) => source,
             | Err(error) => {
                 eprintln!("aevia fmt: cannot read `{}`: {error}", path.display());
-                failed += 1;
+                failed = failed.saturating_add(1);
                 continue;
             },
         };
@@ -61,7 +69,7 @@ pub fn fmt(
                 if formatted == source {
                     continue;
                 }
-                changed += 1;
+                changed = changed.saturating_add(1);
                 if check {
                     println!("would reformat {}", path.display());
                 } else {
@@ -69,7 +77,7 @@ pub fn fmt(
                         | Ok(()) => println!("formatted {}", path.display()),
                         | Err(error) => {
                             eprintln!("aevia fmt: cannot write `{}`: {error}", path.display());
-                            failed += 1;
+                            failed = failed.saturating_add(1);
                         },
                     }
                 }
@@ -78,7 +86,7 @@ pub fn fmt(
                 // The file is left exactly as it was; the message names the
                 // construct that could not be printed.
                 eprintln!("aevia fmt: {}: {error}", path.display());
-                failed += 1;
+                failed = failed.saturating_add(1);
             },
         }
     }
@@ -95,21 +103,22 @@ pub fn fmt(
 }
 
 /// `aevia doc [--out DIR] [--open] [--stdlib] [--json] [files…]`
-pub fn doc(
-    _options: Options,
-    args: &[String],
-) -> ExitCode {
+#[allow(
+    clippy::single_call_fn,
+    reason = "the doc command chooses standard library or project generation"
+)]
+pub fn doc(args: &[String]) -> ExitCode {
     let mut out: Option<PathBuf> = None;
     let mut files: Vec<String> = Vec::new();
     let mut open = false;
     let mut stdlib = false;
     let mut json = false;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
+    let mut lang = None;
+    let mut args = args.iter();
+    while let Some(argument) = args.next() {
+        match argument.as_str() {
             | "--out" => {
-                index += 1;
-                let Some(value) = args.get(index) else {
+                let Some(value) = args.next() else {
                     eprintln!("aevia doc: `--out` expects a directory");
                     return ExitCode::from(2);
                 };
@@ -118,15 +127,23 @@ pub fn doc(
             | "--open" => open = true,
             | "--stdlib" => stdlib = true,
             | "--json" => json = true,
+            | "--lang" => {
+                lang = args.next().map(String::as_str);
+                if !matches!(lang, Some("en" | "zh")) {
+                    eprintln!("aevia doc: --lang expects en or zh");
+                    return ExitCode::from(2);
+                }
+            },
             | other if other.starts_with('-') => {
-                eprintln!(
-                    "aevia doc: unknown option `{other}` (the options are `--out DIR`, `--open`, `--stdlib`, and `--json`)"
-                );
+                eprintln!("aevia doc: unknown option `{other}` (see `aevia doc --help`)");
                 return ExitCode::from(2);
             },
             | other => files.push(other.to_string()),
         }
-        index += 1;
+    }
+    if lang.is_some() && !stdlib {
+        eprintln!("aevia doc: --lang requires --stdlib");
+        return ExitCode::from(2);
     }
     let package = aevia_core::manifest::Package::find(
         &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -144,82 +161,190 @@ pub fn doc(
             eprintln!("aevia doc: `--stdlib` does not accept file arguments");
             return ExitCode::from(2);
         }
-        let bundle = match aevia_doc::generate_stdlib_docs() {
-            | Ok(bundle) => bundle,
-            | Err(message) => {
-                eprintln!("aevia doc: {message}");
-                return ExitCode::from(1);
-            },
-        };
-        if let Err(error) = std::fs::create_dir_all(&directory) {
+        write_stdlib_docs(&directory, lang == Some("zh"), json, open)
+    } else {
+        write_project_docs(&directory, &files, package.as_ref(), json, open)
+    }
+    .err()
+    .unwrap_or(ExitCode::SUCCESS)
+}
+
+fn write_doc_file(
+    path: &Path,
+    contents: impl AsRef<[u8]>,
+) -> Result<(), ExitCode> {
+    std::fs::write(path, contents).map_err(|error| {
+        eprintln!("aevia doc: cannot write `{}`: {error}", path.display());
+        ExitCode::from(1)
+    })?;
+    println!("wrote {}", path.display());
+    Ok(())
+}
+
+fn write_doc_pages(
+    directory: &Path,
+    modules: &[aevia_doc::ModuleDoc],
+    index: &str,
+) -> Result<PathBuf, ExitCode> {
+    std::fs::create_dir_all(directory).map_err(|error| {
+        eprintln!(
+            "aevia doc: cannot create `{}`: {error}",
+            directory.display()
+        );
+        ExitCode::from(1)
+    })?;
+    for module in modules {
+        write_doc_file(
+            &directory.join(module.page()),
+            aevia_doc::render_module(module),
+        )?;
+    }
+    let index_path = directory.join("index.md");
+    write_doc_file(&index_path, index)?;
+    Ok(index_path)
+}
+
+fn write_doc_json(
+    path: &Path,
+    value: &(impl serde::Serialize + ?Sized),
+    label: &str,
+) -> Result<(), ExitCode> {
+    let encoded = serde_json::to_string_pretty(value).map_err(|error| {
+        eprintln!("aevia doc: cannot serialize {label}: {error}");
+        ExitCode::from(1)
+    })?;
+    write_doc_file(path, encoded)
+}
+
+fn open_doc_index(
+    open: bool,
+    index_path: &Path,
+) {
+    use std::io::IsTerminal;
+    if !open {
+        return;
+    }
+    let path = match std::path::absolute(index_path) {
+        | Ok(path) => path,
+        | Err(error) => {
             eprintln!(
-                "aevia doc: cannot create `{}`: {error}",
-                directory.display()
-            );
-            return ExitCode::from(1);
-        }
-        for module in &bundle.modules {
-            let path = directory.join(module.page());
-            if let Err(error) = std::fs::write(&path, aevia_doc::render_module(module)) {
-                eprintln!("aevia doc: cannot write `{}`: {error}", path.display());
-                return ExitCode::from(1);
-            }
-            println!("wrote {}", path.display());
-        }
-        let index_path = directory.join("index.md");
-        if let Err(error) = std::fs::write(
-            &index_path,
-            aevia_doc::render_index("Aevia Standard Library", &bundle.modules),
-        ) {
-            eprintln!(
-                "aevia doc: cannot write `{}`: {error}",
+                "aevia doc: --open: cannot resolve `{}`: {error}",
                 index_path.display()
             );
-            return ExitCode::from(1);
-        }
-        println!("wrote {}", index_path.display());
-        let markdown_path = directory.join("stdlib.md");
-        if let Err(error) = std::fs::write(&markdown_path, bundle.to_markdown()) {
-            eprintln!(
-                "aevia doc: cannot write `{}`: {error}",
-                markdown_path.display()
-            );
-            return ExitCode::from(1);
-        }
-        println!("wrote {}", markdown_path.display());
-        if json {
-            let json_path = directory.join("stdlib-docs.json");
-            let encoded = match bundle.to_json() {
-                | Ok(encoded) => encoded,
-                | Err(error) => {
-                    eprintln!("aevia doc: cannot serialize stdlib docs: {error}");
-                    return ExitCode::from(1);
-                },
-            };
-            if let Err(error) = std::fs::write(&json_path, encoded) {
-                eprintln!("aevia doc: cannot write `{}`: {error}", json_path.display());
-                return ExitCode::from(1);
-            }
-            println!("wrote {}", json_path.display());
-        }
-        println!(
-            "{} stdlib module(s) and {} RSSN operator(s)",
-            bundle.modules.len(),
-            bundle.operators.len()
-        );
-        if open {
-            match absolute(&index_path) {
-                | Ok(path) => open_documentation(&path),
-                | Err(message) => eprintln!("aevia doc: --open: {message}"),
-            }
-        }
-        return ExitCode::SUCCESS;
-    }
-    let paths = match inputs(&files) {
-        | Ok(paths) => paths,
-        | Err(code) => return code,
+            return;
+        },
     };
-    let name = package.as_ref().map_or_else(
+    if !std::io::stdout().is_terminal() {
+        println!("the documentation is at {}", path.display());
+        return;
+    }
+    match crate::terminal::open_default(path.as_os_str()) {
+        | Ok(()) => println!("opened {}", path.display()),
+        | Err(error) => {
+            eprintln!(
+                "aevia doc: --open: cannot start a viewer ({error}); the documentation is at {}",
+                path.display()
+            );
+        },
+    }
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps translated standard library rendering and manifest output together"
+)]
+fn write_stdlib_docs(
+    directory: &Path,
+    chinese: bool,
+    json: bool,
+    open: bool,
+) -> Result<(), ExitCode> {
+    let sources = aevia_std::stdlib::modules()
+        .iter()
+        .map(|module| (module.path, module.source));
+    let operators = aevia_rssn::registry()
+        .ops()
+        .map(|op| {
+            aevia_doc::OperatorDoc {
+                name: op.name.clone(),
+                rule_set: op.rule_set.clone(),
+                signatures: op.signatures.iter().map(aevia_rssn::Sig::render).collect(),
+                stability: format!("{:?}", op.stability),
+                doc: op.doc.clone(),
+                examples: op.witnesses.clone(),
+            }
+        })
+        .collect();
+    let mut bundle = match aevia_doc::generate_stdlib_docs(sources, operators) {
+        | Ok(bundle) => bundle,
+        | Err(message) => {
+            eprintln!("aevia doc: {message}");
+            return Err(ExitCode::from(1));
+        },
+    };
+    document_ambient_units(&mut bundle.modules, &aevia_rssn::registry().units);
+    let zh_modules = match stdlib_locale::chinese_modules(&bundle.modules) {
+        | Ok(modules) => modules,
+        | Err(error) => {
+            eprintln!("aevia doc: {error}");
+            return Err(ExitCode::from(1));
+        },
+    };
+    let modules = if chinese {
+        &zh_modules
+    } else {
+        &bundle.modules
+    };
+    let index = if chinese {
+        stdlib_locale::chinese_index(modules)
+    } else {
+        aevia_doc::render_index("Aevia Standard Library", modules)
+    };
+    let index_path = write_doc_pages(directory, modules, &index)?;
+    let markdown = if chinese {
+        std::iter::once(index)
+            .chain(modules.iter().map(aevia_doc::render_module))
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        bundle.to_markdown()
+    };
+    write_doc_file(&directory.join("stdlib.md"), markdown)?;
+    if json {
+        write_doc_json(
+            &directory.join("stdlib-docs.json"),
+            &stdlib_locale::BilingualBundle {
+                original: &bundle,
+                zh_modules: &zh_modules,
+            },
+            "stdlib docs",
+        )?;
+    }
+    println!(
+        "{} stdlib module(s) and {} RSSN operator(s)",
+        bundle.modules.len(),
+        bundle.operators.len()
+    );
+    open_doc_index(open, &index_path);
+    Ok(())
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "checks all project sources before writing documentation pages"
+)]
+fn write_project_docs(
+    directory: &Path,
+    files: &[String],
+    package: Option<&aevia_core::manifest::Package>,
+    json: bool,
+    open: bool,
+) -> Result<(), ExitCode> {
+    let paths = match inputs(files) {
+        | Ok(paths) => paths,
+        | Err(code) => return Err(code),
+    };
+    let name = package.map_or_else(
         || "Aevia".to_string(),
         |package| package.manifest.name.clone(),
     );
@@ -230,18 +355,17 @@ pub fn doc(
             | Ok(source) => source,
             | Err(error) => {
                 eprintln!("aevia doc: cannot read `{}`: {error}", path.display());
-                failed += 1;
+                failed = failed.saturating_add(1);
                 continue;
             },
         };
-        let fallback = path
-            .file_stem()
-            .map(|stem| stem.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Module".to_string());
+        let fallback = path.file_stem().map_or_else(
+            || "Module".to_string(),
+            |stem| stem.to_string_lossy().to_string(),
+        );
         // The page quotes the file relative to the package, so the generated
         // documentation is the same on every checkout.
         let shown = package
-            .as_ref()
             .and_then(|package| path.strip_prefix(&package.dir).ok())
             .unwrap_or(path)
             .display()
@@ -250,52 +374,17 @@ pub fn doc(
             | Ok(doc) => docs.push(doc),
             | Err(message) => {
                 eprintln!("aevia doc: {}: {message}", path.display());
-                failed += 1;
+                failed = failed.saturating_add(1);
             },
         }
     }
     if failed > 0 {
-        return ExitCode::from(1);
+        return Err(ExitCode::from(1));
     }
     docs.sort_by(|left, right| left.path.cmp(&right.path));
-    if let Err(error) = std::fs::create_dir_all(&directory) {
-        eprintln!(
-            "aevia doc: cannot create `{}`: {error}",
-            directory.display()
-        );
-        return ExitCode::from(1);
-    }
-    for doc in &docs {
-        let path = directory.join(doc.page());
-        if let Err(error) = std::fs::write(&path, aevia_doc::render_module(doc)) {
-            eprintln!("aevia doc: cannot write `{}`: {error}", path.display());
-            return ExitCode::from(1);
-        }
-        println!("wrote {}", path.display());
-    }
-    let index_path = directory.join("index.md");
-    if let Err(error) = std::fs::write(&index_path, aevia_doc::render_index(&name, &docs)) {
-        eprintln!(
-            "aevia doc: cannot write `{}`: {error}",
-            index_path.display()
-        );
-        return ExitCode::from(1);
-    }
-    println!("wrote {}", index_path.display());
+    let index_path = write_doc_pages(directory, &docs, &aevia_doc::render_index(&name, &docs))?;
     if json {
-        let json_path = directory.join("docs.json");
-        let encoded = match serde_json::to_string_pretty(&docs) {
-            | Ok(encoded) => encoded,
-            | Err(error) => {
-                eprintln!("aevia doc: cannot serialize docs: {error}");
-                return ExitCode::from(1);
-            },
-        };
-        if let Err(error) = std::fs::write(&json_path, encoded) {
-            eprintln!("aevia doc: cannot write `{}`: {error}", json_path.display());
-            return ExitCode::from(1);
-        }
-        println!("wrote {}", json_path.display());
+        write_doc_json(&directory.join("docs.json"), &docs, "docs")?;
     }
     let declarations: usize = docs.iter().map(|doc| doc.decls.len()).sum();
     let undocumented: usize = docs
@@ -308,153 +397,100 @@ pub fn doc(
     );
     // §7.5.5: the examples are compiled too, by `aevia test --doc`.
     println!("run `aevia test --doc` to compile the `aevia` examples in these pages");
-    if open {
-        match absolute(&index_path) {
-            | Ok(path) => open_documentation(&path),
-            | Err(message) => eprintln!("aevia doc: --open: {message}"),
+    open_doc_index(open, &index_path);
+    Ok(())
+}
+
+/// Units resolve through the registry even though their source namespaces
+/// do not declare bindings. Generate a reference from the same registry.
+#[allow(
+    clippy::single_call_fn,
+    reason = "generates documentation for units provided by the kernel registry"
+)]
+fn document_ambient_units(
+    modules: &mut [aevia_doc::ModuleDoc],
+    units: &[aevia_rssn::registry::UnitInfo],
+) {
+    for module in modules {
+        let (summary, names): (&str, &[&str]) = match module.path.as_str() {
+            | "Units.SI" => {
+                (
+                    "The unit registry lists SI units and accepted non-SI spellings. Use a unit after a number, as in `3 km`.\n\n单位表包含 SI 单位及可用的非 SI 名称。把单位写在数字之后，例如 `3 km`。",
+                    &[],
+                )
+            },
+            | "Units.Imperial" => {
+                (
+                    "Use imperial and US customary units in quantities such as `6 ft`. `gal` is the US liquid gallon.\n\n英制与美制单位可以直接用于物理量，如 `6 ft`。`gal` 采用美制液量加仑。",
+                    &[
+                        "in", "ft", "yd", "mi", "lb", "oz", "gal", "psi", "mph", "acre", "lbf",
+                        "hp", "degF",
+                    ],
+                )
+            },
+            | "Units.Astronomy" => {
+                (
+                    "Use these astronomical distances, masses and angles directly in quantities.\n\n这些天文距离、质量和角度单位可以直接用于物理量。",
+                    &[
+                        "au", "ly", "pc", "Rsun", "Msun", "Mearth", "jup", "arcmin", "arcsec",
+                    ],
+                )
+            },
+            | "Units.CGS" => {
+                (
+                    "Use these centimetre–gram–second units with the same dimension checking as SI.\n\n厘米–克–秒制单位与 SI 单位遵循相同的量纲检查。",
+                    &["dyn", "erg", "Gal", "P", "St", "G", "Mx", "Ba", "Oe"],
+                )
+            },
+            | _ => continue,
+        };
+        let mut text = format!(
+            "{summary}\n\nThe coherent SI value is the magnitude times the scale, plus the offset.\n\nSI 相干单位下的值等于读数乘比例，再加偏置。\n\n"
+        );
+        text.push_str("| Unit 单位 | Dimension 量纲 | Scale 比例 | Offset 偏置 | Prefix 可加前缀 | Aliases 别名 |\n|---|---|---|---|---|---|\n");
+        for unit in units
+            .iter()
+            .filter(|unit| names.is_empty() || names.contains(&unit.name.as_str()))
+        {
+            let offset = unit
+                .offset
+                .as_ref()
+                .map_or_else(|| String::from("0"), ToString::to_string);
+            let aliases = unit
+                .aliases
+                .iter()
+                .map(|alias| format!("`{alias}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let prefix = if unit.prefixable {
+                "✓"
+            } else {
+                "—"
+            };
+            let _ = writeln!(
+                text,
+                "| `{}` | `{}` | `{}` | `{offset}` | {prefix} | {aliases} |",
+                unit.name, unit.dim, unit.scale
+            );
         }
+        module.doc = Some(text);
     }
-    ExitCode::SUCCESS
 }
 
 /// The absolute path of a written file, for a message a user can click.
-fn absolute(path: &std::path::Path) -> Result<PathBuf, String> {
-    if path.is_absolute() {
-        return Ok(path.to_path_buf());
-    }
-    std::env::current_dir()
-        .map(|cwd| cwd.join(path))
-        .map_err(|error| format!("cannot resolve `{}`: {error}", path.display()))
-}
-
-/// Opens the generated index in the platform's viewer.
-///
-/// `--open` is a request to *show* the docs. When standard output is not a
-/// terminal (a script, a pipe, a test) there is no one to show them to, so the
-/// path is printed instead of spawning a viewer nobody asked for.
-fn open_documentation(index: &std::path::Path) {
-    use std::io::IsTerminal;
-    if !std::io::stdout().is_terminal() {
-        println!("the documentation is at {}", index.display());
-        return;
-    }
-    #[cfg(target_os = "windows")]
-    let command = std::process::Command::new("cmd")
-        .args(["/C", "start", ""])
-        .arg(index)
-        .spawn();
-    #[cfg(target_os = "macos")]
-    let command = std::process::Command::new("open").arg(index).spawn();
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let command = std::process::Command::new("xdg-open").arg(index).spawn();
-    match command {
-        | Ok(_) => println!("opened {}", index.display()),
-        | Err(error) => {
-            // Not being able to launch a viewer is not a documentation
-            // failure: the files are written and the path is the answer.
-            eprintln!(
-                "aevia doc: --open: cannot start a viewer ({error}); the documentation is at {}",
-                index.display()
-            );
-        },
-    }
-}
-
 /// `aevia bench [--filter PAT] [--iterations N] [--warmup N] [files…]`
+#[allow(
+    clippy::single_call_fn,
+    reason = "the bench command coordinates reporting and baseline comparison"
+)]
 pub fn bench(
     options: Options,
     args: &[String],
 ) -> ExitCode {
-    let mut filter: Option<String> = None;
-    let mut iterations = DEFAULT_ITERATIONS;
-    let mut warmup = DEFAULT_WARMUP;
-    let mut threshold = DEFAULT_THRESHOLD;
-    let mut save_baseline_path: Option<PathBuf> = None;
-    let mut compare_baseline_path: Option<PathBuf> = None;
-    let mut files: Vec<String> = Vec::new();
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            | "--filter" => {
-                index += 1;
-                let Some(value) = args.get(index) else {
-                    eprintln!("aevia bench: `--filter` expects a pattern");
-                    return ExitCode::from(2);
-                };
-                filter = Some(value.clone());
-            },
-            // A benchmark whose single call takes a second cannot be timed a
-            // hundred times; the count is the user's, not a constant.
-            | "--iterations" => {
-                index += 1;
-                let Some(value) = args.get(index).and_then(|value| value.parse().ok()) else {
-                    eprintln!("aevia bench: `--iterations` expects a positive count");
-                    return ExitCode::from(2);
-                };
-                if value == 0 {
-                    eprintln!("aevia bench: `--iterations` must be at least 1");
-                    return ExitCode::from(2);
-                }
-                iterations = value;
-            },
-            | "--warmup" => {
-                index += 1;
-                let Some(value) = args.get(index).and_then(|value| value.parse().ok()) else {
-                    eprintln!("aevia bench: `--warmup` expects a count of untimed calls");
-                    return ExitCode::from(2);
-                };
-                warmup = value;
-            },
-            | "--save-baseline" => {
-                index += 1;
-                let Some(value) = args.get(index) else {
-                    eprintln!("aevia bench: `--save-baseline` expects a file path");
-                    return ExitCode::from(2);
-                };
-                save_baseline_path = Some(PathBuf::from(value));
-            },
-            | "--compare-baseline" => {
-                index += 1;
-                let Some(value) = args.get(index) else {
-                    eprintln!("aevia bench: `--compare-baseline` expects a file path");
-                    return ExitCode::from(2);
-                };
-                compare_baseline_path = Some(PathBuf::from(value));
-            },
-            // §9.12's 5 % gate; `0.05` and `5%` both mean the same thing.
-            | "--threshold" => {
-                index += 1;
-                let Some(value) = args.get(index) else {
-                    eprintln!("aevia bench: `--threshold` expects a ratio such as `0.05` or `5%`");
-                    return ExitCode::from(2);
-                };
-                match parse_threshold(value) {
-                    | Ok(parsed) => threshold = parsed,
-                    | Err(message) => {
-                        eprintln!("aevia bench: {message}");
-                        return ExitCode::from(2);
-                    },
-                }
-            },
-            | other if other.starts_with('-') => {
-                eprintln!(
-                    "aevia bench: unknown option `{other}` (the options are `--filter PAT`, \
-                     `--iterations N`, `--warmup N`, `--save-baseline FILE`, \
-                     `--compare-baseline FILE` and `--threshold RATIO`)"
-                );
-                return ExitCode::from(2);
-            },
-            | other => files.push(other.to_string()),
-        }
-        index += 1;
-    }
-    if save_baseline_path.is_some() && compare_baseline_path.is_some() {
-        eprintln!(
-            "aevia bench: `--save-baseline` and `--compare-baseline` are different runs; \
-             pass one of them"
-        );
-        return ExitCode::from(2);
-    }
+    let args = match BenchArgs::parse(args) {
+        | Ok(args) => args,
+        | Err(code) => return code,
+    };
     if cfg!(debug_assertions) {
         // A release build is 10-20× faster for interpreter loops; reporting
         // debug numbers without saying so invites a comparison that means
@@ -466,72 +502,12 @@ pub fn bench(
              does not change the build)."
         );
     }
-    let paths = match inputs(&files) {
-        | Ok(paths) => paths,
+    let (rows, failed) = match measure_benchmarks(options, &args) {
+        | Ok(result) => result,
         | Err(code) => return code,
     };
-    let mut rows: Vec<Row> = Vec::new();
-    let mut failed = 0usize;
-    for path in &paths {
-        let program = match load_program(path, style(options)) {
-            | Ok(program) => program,
-            | Err(code) => return code,
-        };
-        if report(&program.diagnostics, &program.sources, style(options)) {
-            return ExitCode::from(1);
-        }
-        let Some(entry) = program.entry() else {
-            eprintln!("aevia bench: no module produced");
-            return ExitCode::from(1);
-        };
-        let mut interp = Interp::new(&entry.checked);
-        apply_options(&mut interp, options);
-        let load_diagnostics = driver::run_modules(&mut interp, &program);
-        if report(&load_diagnostics, &program.sources, style(options)) {
-            return ExitCode::from(1);
-        }
-        let benches: Vec<(String, &Expr)> = entry
-            .module
-            .decls
-            .iter()
-            .filter(|decl| decl.has_attribute("bench"))
-            .filter_map(|decl| {
-                match &decl.kind {
-                    | DeclKind::Fn { name, body, .. } => Some((name.clone(), body)),
-                    | _ => None,
-                }
-            })
-            .collect();
-        if benches.is_empty() {
-            eprintln!(
-                "aevia bench: `{}` has no `@bench` functions, so nothing was measured",
-                path.display()
-            );
-            failed += 1;
-            continue;
-        }
-        for (name, _) in benches {
-            if let Some(pattern) = &filter
-                && !name.contains(pattern.as_str())
-            {
-                continue;
-            }
-            let row = run_bench(
-                &mut interp,
-                entry,
-                &name,
-                &path.to_string_lossy(),
-                warmup,
-                iterations,
-            );
-            if matches!(row.outcome, Outcome::Failed(_)) {
-                failed += 1;
-            }
-            rows.push(row);
-        }
-    }
     if rows.is_empty() {
-        if filter.is_some() && failed == 0 {
+        if args.filter.is_some() && !failed {
             eprintln!("aevia bench: the filter matched no benchmark");
         }
         return ExitCode::from(1);
@@ -549,16 +525,14 @@ pub fn bench(
          with the same `--release` IR optimization setting, from the median of N iterations; timings include interpreter allocation but allocations \
          are not counted"
     );
-    let mut recorded = 0usize;
-    if let Some(path) = &save_baseline_path {
-        match save_baseline(path, &rows, iterations, warmup, options.release) {
+    if let Some(path) = &args.save_baseline_path {
+        match save_baseline(path, &rows, args.iterations, args.warmup, options.release) {
             | Ok(saved) => {
                 println!(
                     "wrote baseline `{}` ({saved} workload(s), profile `{}`)",
                     path.display(),
                     profile()
                 );
-                recorded += saved;
             },
             | Err(message) => {
                 eprintln!("aevia bench: cannot save the baseline: {message}");
@@ -566,10 +540,10 @@ pub fn bench(
             },
         }
     }
-    if let Some(path) = &compare_baseline_path {
-        match compare_baseline(path, &rows, threshold, options.release) {
+    if let Some(path) = &args.compare_baseline_path {
+        match compare_baseline(path, &rows, args.threshold, options.release) {
             | Ok(comparison) => {
-                let percent = threshold * 100.0;
+                let percent = args.threshold * 100.0;
                 println!(
                     "{} benchmark(s) compared against `{}`, {} regression(s) over {percent:.1}% \
                      (profile `{}`)",
@@ -578,7 +552,6 @@ pub fn bench(
                     comparison.regressions,
                     profile()
                 );
-                recorded = comparison.compared;
                 if comparison.regressions > 0 {
                     return ExitCode::from(1);
                 }
@@ -589,16 +562,202 @@ pub fn bench(
             },
         }
     }
-    let _ = recorded;
-    if failed > 0 {
+    if failed {
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS
     }
 }
 
+struct BenchArgs<'a> {
+    filter: Option<&'a str>,
+    iterations: usize,
+    warmup: usize,
+    threshold: f64,
+    save_baseline_path: Option<PathBuf>,
+    compare_baseline_path: Option<PathBuf>,
+    files: Vec<String>,
+}
+
+impl<'a> BenchArgs<'a> {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "validates measurement and baseline options before loading workloads"
+    )]
+    fn parse(args: &'a [String]) -> Result<Self, ExitCode> {
+        let mut filter = None;
+        let mut iterations = DEFAULT_ITERATIONS;
+        let mut warmup = DEFAULT_WARMUP;
+        let mut threshold = DEFAULT_THRESHOLD;
+        let mut save_baseline_path: Option<PathBuf> = None;
+        let mut compare_baseline_path: Option<PathBuf> = None;
+        let mut files: Vec<String> = Vec::new();
+        let mut args = args.iter();
+        while let Some(argument) = args.next() {
+            match argument.as_str() {
+                | "--filter" => {
+                    let Some(value) = args.next() else {
+                        eprintln!("aevia bench: `--filter` expects a pattern");
+                        return Err(ExitCode::from(2));
+                    };
+                    filter = Some(value.as_str());
+                },
+                // A benchmark whose single call takes a second cannot be timed a
+                // hundred times; the count is the user's, not a constant.
+                | "--iterations" => {
+                    let Some(value) = args.next().and_then(|value| value.parse().ok()) else {
+                        eprintln!("aevia bench: `--iterations` expects a positive count");
+                        return Err(ExitCode::from(2));
+                    };
+                    if value == 0 {
+                        eprintln!("aevia bench: `--iterations` must be at least 1");
+                        return Err(ExitCode::from(2));
+                    }
+                    iterations = value;
+                },
+                | "--warmup" => {
+                    let Some(value) = args.next().and_then(|value| value.parse().ok()) else {
+                        eprintln!("aevia bench: `--warmup` expects a count of untimed calls");
+                        return Err(ExitCode::from(2));
+                    };
+                    warmup = value;
+                },
+                | "--save-baseline" => {
+                    let Some(value) = args.next() else {
+                        eprintln!("aevia bench: `--save-baseline` expects a file path");
+                        return Err(ExitCode::from(2));
+                    };
+                    save_baseline_path = Some(PathBuf::from(value));
+                },
+                | "--compare-baseline" => {
+                    let Some(value) = args.next() else {
+                        eprintln!("aevia bench: `--compare-baseline` expects a file path");
+                        return Err(ExitCode::from(2));
+                    };
+                    compare_baseline_path = Some(PathBuf::from(value));
+                },
+                // §9.12's 5 % gate; `0.05` and `5%` both mean the same thing.
+                | "--threshold" => {
+                    let Some(value) = args.next() else {
+                        eprintln!(
+                            "aevia bench: `--threshold` expects a ratio such as `0.05` or `5%`"
+                        );
+                        return Err(ExitCode::from(2));
+                    };
+                    match parse_threshold(value) {
+                        | Ok(parsed) => threshold = parsed,
+                        | Err(message) => {
+                            eprintln!("aevia bench: {message}");
+                            return Err(ExitCode::from(2));
+                        },
+                    }
+                },
+                | other if other.starts_with('-') => {
+                    eprintln!(
+                        "aevia bench: unknown option `{other}` (the options are `--filter PAT`, \
+                         `--iterations N`, `--warmup N`, `--save-baseline FILE`, \
+                         `--compare-baseline FILE` and `--threshold RATIO`)"
+                    );
+                    return Err(ExitCode::from(2));
+                },
+                | other => files.push(other.to_string()),
+            }
+        }
+        if save_baseline_path.is_some() && compare_baseline_path.is_some() {
+            eprintln!(
+                "aevia bench: `--save-baseline` and `--compare-baseline` are different runs; \
+                 pass one of them"
+            );
+            return Err(ExitCode::from(2));
+        }
+        Ok(Self {
+            filter,
+            iterations,
+            warmup,
+            threshold,
+            save_baseline_path,
+            compare_baseline_path,
+            files,
+        })
+    }
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "records benchmark timings using the ordinary interpreter"
+)]
+fn measure_benchmarks(
+    options: Options,
+    args: &BenchArgs<'_>,
+) -> Result<(Vec<Row>, bool), ExitCode> {
+    let paths = match inputs(&args.files) {
+        | Ok(paths) => paths,
+        | Err(code) => return Err(code),
+    };
+    let mut rows: Vec<Row> = Vec::new();
+    let mut failed = false;
+    for path in &paths {
+        let program = match load_program(path, style(options)) {
+            | Ok(program) => program,
+            | Err(code) => return Err(code),
+        };
+        if report(&program.diagnostics, &program.sources, style(options)) {
+            return Err(ExitCode::from(1));
+        }
+        let Some(entry) = program.entry() else {
+            eprintln!("aevia bench: no module produced");
+            return Err(ExitCode::from(1));
+        };
+        let mut interp = Interp::new(&entry.checked);
+        apply_options(&mut interp, options);
+        let load_diagnostics = driver::run_modules(&mut interp, &program);
+        if report(&load_diagnostics, &program.sources, style(options)) {
+            return Err(ExitCode::from(1));
+        }
+        let benches: Vec<&str> = entry
+            .module
+            .decls
+            .iter()
+            .filter(|decl| decl.has_attribute("bench"))
+            .filter_map(|decl| {
+                match &decl.kind {
+                    | DeclKind::Fn { name, .. } => Some(name.as_str()),
+                    | _ => None,
+                }
+            })
+            .collect();
+        if benches.is_empty() {
+            eprintln!(
+                "aevia bench: `{}` has no `@bench` functions, so nothing was measured",
+                path.display()
+            );
+            failed = true;
+            continue;
+        }
+        let shown = path.to_string_lossy();
+        for name in benches {
+            if args.filter.is_some_and(|pattern| !name.contains(pattern)) {
+                continue;
+            }
+            let row = run_bench(
+                &mut interp,
+                entry,
+                name,
+                &shown,
+                args.warmup,
+                args.iterations,
+            );
+            if matches!(row.outcome, Outcome::Failed(_)) {
+                failed = true;
+            }
+            rows.push(row);
+        }
+    }
+    Ok((rows, failed))
+}
+
 /// The build profile a timing belongs to.
-fn profile() -> &'static str {
+const fn profile() -> &'static str {
     if cfg!(debug_assertions) {
         "debug"
     } else {
@@ -607,6 +766,10 @@ fn profile() -> &'static str {
 }
 
 /// Parses `0.05` or `5%` into the ratio `0.05`.
+#[allow(
+    clippy::single_call_fn,
+    reason = "parses the two accepted user formats for the regression threshold"
+)]
 fn parse_threshold(text: &str) -> Result<f64, String> {
     let text = text.trim();
     let (number, scale) = match text.strip_suffix('%') {
@@ -624,7 +787,7 @@ fn parse_threshold(text: &str) -> Result<f64, String> {
 
 /// The measured parts of one row, or `None` when it failed.
 impl Row {
-    fn measured(&self) -> Option<(Duration, Duration, Duration)> {
+    const fn measured(&self) -> Option<(Duration, Duration, Duration)> {
         match &self.outcome {
             | Outcome::Ok {
                 median,
@@ -641,6 +804,10 @@ impl Row {
 /// The file records the profile, the iteration protocol and the tool version,
 /// because a median without them is not comparable to anything: a debug build
 /// or a different N is a different measurement.
+#[allow(
+    clippy::single_call_fn,
+    reason = "writes the benchmark results in the versioned baseline shape"
+)]
 fn save_baseline(
     path: &Path,
     rows: &[Row],
@@ -697,6 +864,11 @@ struct Comparison {
 /// stored median. Workloads present on only one side are reported and do not
 /// count as regressions: adding or removing a benchmark is a change to the
 /// suite, not a slowdown.
+#[allow(
+    clippy::single_call_fn,
+    clippy::too_many_lines,
+    reason = "validates baseline settings and reports workload deltas"
+)]
 fn compare_baseline(
     path: &Path,
     rows: &[Row],
@@ -781,11 +953,15 @@ fn compare_baseline(
             continue;
         }
         let current_ns = nanos(median);
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "timing ratios are approximate and displayed to one decimal place"
+        )]
         let ratio = current_ns as f64 / baseline_ns as f64;
         let delta = ratio - 1.0;
-        compared += 1;
+        compared = compared.saturating_add(1);
         if delta > threshold {
-            regressions += 1;
+            regressions = regressions.saturating_add(1);
             println!(
                 "{}: {} vs baseline {} ({:+.1}%) REGRESSION over {:.1}%",
                 row.name,
@@ -844,6 +1020,10 @@ enum Outcome {
 /// single slow call can drag. The call goes through `Interp::eval` — the entry
 /// `aevia run` uses, not a separate harness — so the number is the cost of the
 /// interpreter path the user actually runs.
+#[allow(
+    clippy::single_call_fn,
+    reason = "times one declaration with bounded iteration and allocation"
+)]
 fn run_bench(
     interp: &mut Interp,
     entry: &driver::LoadedModule,
@@ -904,15 +1084,27 @@ fn run_bench(
         }
         samples.push(start.elapsed());
     }
-    let total: Duration = samples.iter().sum();
-    let count = samples.len().max(1);
-    let mean = total / u32::try_from(count).unwrap_or(1);
+    let total = samples
+        .iter()
+        .copied()
+        .fold(Duration::ZERO, Duration::saturating_add);
+    let count = u32::try_from(samples.len()).unwrap_or(u32::MAX).max(1);
+    let mean = total.checked_div(count).unwrap_or_default();
     samples.sort_unstable();
-    let median = if samples.len() % 2 == 1 {
-        samples[samples.len() / 2]
+    let middle = samples.len().div_euclid(2);
+    let upper = samples.get(middle).copied().unwrap_or_default();
+    let median = if samples.len().is_multiple_of(2) {
+        let lower = middle
+            .checked_sub(1)
+            .and_then(|i| samples.get(i))
+            .copied()
+            .unwrap_or_default();
+        lower
+            .saturating_add(upper)
+            .checked_div(2)
+            .unwrap_or_default()
     } else {
-        let middle = samples.len() / 2;
-        (samples[middle - 1] + samples[middle]) / 2
+        upper
     };
     // The 95 % confidence interval of the mean: 1.96 · s / √n, with s the
     // sample standard deviation in seconds.
@@ -925,11 +1117,11 @@ fn run_bench(
                 delta * delta
             })
             .sum::<f64>()
-            / f64::from(u32::try_from(samples.len() - 1).unwrap_or(1))
+            / f64::from(count.saturating_sub(1).max(1))
     } else {
         0.0
     };
-    let half_width = 1.96 * variance.sqrt() / (samples.len() as f64).sqrt();
+    let half_width = 1.96 * variance.sqrt() / f64::from(count).sqrt();
     Row {
         name: name.to_string(),
         iterations,
@@ -941,6 +1133,10 @@ fn run_bench(
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "formats measured durations and failed workloads in the same table"
+)]
 fn print_table(rows: &[Row]) {
     let width = rows
         .iter()
@@ -949,7 +1145,7 @@ fn print_table(rows: &[Row]) {
         .max()
         .unwrap_or(9)
         .max(9)
-        + 2;
+        .saturating_add(2);
     println!(
         "{:<width$}{:>10}  {:>12}  {:>12}  {:>12}",
         "benchmark",
@@ -959,7 +1155,7 @@ fn print_table(rows: &[Row]) {
         "95% CI",
         width = width
     );
-    println!("{}", "-".repeat(width + 52));
+    println!("{}", "-".repeat(width.saturating_add(52)));
     for row in rows {
         match &row.outcome {
             | Outcome::Ok {
@@ -975,7 +1171,7 @@ fn print_table(rows: &[Row]) {
                     duration(*mean),
                     format!("±{}", duration(*confidence)),
                     width = width
-                )
+                );
             },
             | Outcome::Failed(reason) => {
                 println!(
@@ -984,7 +1180,7 @@ fn print_table(rows: &[Row]) {
                     "-",
                     reason,
                     width = width
-                )
+                );
             },
         }
     }
@@ -1008,7 +1204,7 @@ fn duration(value: Duration) -> String {
 /// A directory argument is expanded to the `.aev` files under it, so
 /// `aevia fmt examples` means what it looks like; a `*`/`?` pattern is
 /// expanded even when the shell did not expand it.
-pub(crate) fn inputs(files: &[String]) -> Result<Vec<PathBuf>, ExitCode> {
+pub fn inputs(files: &[String]) -> Result<Vec<PathBuf>, ExitCode> {
     if !files.is_empty() {
         let mut paths = Vec::new();
         for path in crate::package::expand_globs(files) {

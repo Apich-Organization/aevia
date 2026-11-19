@@ -65,7 +65,11 @@ impl std::fmt::Display for EditError {
     ) -> std::fmt::Result {
         match self {
             | Self::UnknownLine(line) => {
-                write!(f, "the edit names line {}, which does not exist", line + 1)
+                write!(
+                    f,
+                    "the edit names line {}, which does not exist",
+                    u64::from(*line).saturating_add(1)
+                )
             },
             | Self::InvalidPosition(position) => {
                 write!(
@@ -117,7 +121,7 @@ impl Document {
 
     /// The revision this text belongs to.
     #[must_use]
-    pub fn version(&self) -> i64 {
+    pub const fn version(&self) -> i64 {
         self.version
     }
 
@@ -129,19 +133,19 @@ impl Document {
 
     /// The length in bytes.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.text.len()
     }
 
     /// True when the document is empty.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.text.is_empty()
     }
 
     /// The line index, for callers that need more than one conversion.
     #[must_use]
-    pub fn index(&self) -> &LineIndex {
+    pub const fn index(&self) -> &LineIndex {
         &self.index
     }
 
@@ -212,44 +216,52 @@ impl Document {
         change: &Change,
         version: i64,
     ) -> Result<(), EditError> {
-        match change.range {
-            | None => {
-                self.replace(change.text.clone(), version);
-                Ok(())
-            },
-            | Some(range) => {
-                if range.end < range.start {
-                    return Err(EditError::Reversed);
-                }
-                let start = self
-                    .index
-                    .offset(&self.text, range.start)
-                    .ok_or(EditError::UnknownLine(range.start.line))?;
-                let end = self
-                    .index
-                    .offset(&self.text, range.end)
-                    .ok_or(EditError::UnknownLine(range.end.line))?;
-                if self.index.position(&self.text, start) != range.start {
-                    return Err(EditError::InvalidPosition(range.start));
-                }
-                if self.index.position(&self.text, end) != range.end {
-                    return Err(EditError::InvalidPosition(range.end));
-                }
-                let start = usize::try_from(start.min(end)).unwrap_or(0);
-                let end = usize::try_from(end).unwrap_or(self.text.len()).max(start);
-                let mut text = String::with_capacity(self.text.len() + change.text.len());
-                text.push_str(&self.text[..start]);
-                text.push_str(&change.text);
-                text.push_str(&self.text[end..]);
-                self.replace(text, version);
-                Ok(())
-            },
+        let Some(range) = change.range else {
+            self.replace(change.text.clone(), version);
+            return Ok(());
+        };
+        if range.end < range.start {
+            return Err(EditError::Reversed);
         }
+        let start = self
+            .index
+            .offset(&self.text, range.start)
+            .ok_or(EditError::UnknownLine(range.start.line))?;
+        let end = self
+            .index
+            .offset(&self.text, range.end)
+            .ok_or(EditError::UnknownLine(range.end.line))?;
+        if self.index.position(&self.text, start) != range.start {
+            return Err(EditError::InvalidPosition(range.start));
+        }
+        if self.index.position(&self.text, end) != range.end {
+            return Err(EditError::InvalidPosition(range.end));
+        }
+        let start = usize::try_from(start).map_err(|_| EditError::InvalidPosition(range.start))?;
+        let end = usize::try_from(end).map_err(|_| EditError::InvalidPosition(range.end))?;
+        let before = self
+            .text
+            .get(..start)
+            .ok_or(EditError::InvalidPosition(range.start))?;
+        let after = self
+            .text
+            .get(end..)
+            .ok_or(EditError::InvalidPosition(range.end))?;
+        let mut text = String::with_capacity(self.text.len().saturating_add(change.text.len()));
+        text.push_str(before);
+        text.push_str(&change.text);
+        text.push_str(after);
+        self.replace(text, version);
+        Ok(())
     }
 
     /// Applies one revision's ordered changes atomically. Ranges are measured
     /// against the preceding change's result; any invalid edit rolls back text,
     /// line index and version for the entire batch.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first [`EditError`] if a change has an invalid range.
     pub fn apply_batch(
         &mut self,
         changes: &[Change],
@@ -329,13 +341,13 @@ impl DocumentStore {
 
     /// How many documents are open.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.documents.len()
     }
 
     /// True when nothing is open.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.documents.is_empty()
     }
 }

@@ -6,14 +6,22 @@ use std::path::Path;
 use aevia_core::driver;
 use aevia_core::manifest::LintLevel;
 use aevia_core::manifest::LintSetting;
+use aevia_lint::Applicability;
 use aevia_lint::CliOverride;
 use aevia_lint::Driver;
+use aevia_lint::Fix;
 use aevia_lint::FixEngine;
 use aevia_lint::Level;
 use aevia_lint::LintConfig;
+use aevia_lint::LintDiagnostic;
 use aevia_lint::LintStore;
 use aevia_lint::OutputFormat;
+use aevia_lint::TextEdit;
+use aevia_lint::lint::W0102_UNUSED_IMPORT;
 use aevia_lint::render;
+use aevia_syntax::Diagnostic;
+use aevia_syntax::SourceMap;
+use aevia_syntax::Span;
 use aevia_syntax::Style;
 
 fn lint_source(
@@ -338,5 +346,69 @@ fn partial_selective_unused_import_reports_only_unused_name() {
     assert_eq!(w0102.len(), 1, "expected 1 W0102: {w0102:?}");
     assert!(w0102[0].message.contains("unused_fn"));
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn fixes_skip_stale_or_invalid_edits_and_apply_each_group_in_full() {
+    let dir =
+        std::env::temp_dir().join(format!("aevia-lint-edit-snapshots-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create test directory");
+    let current = dir.join("Current.aev");
+    let stale = dir.join("Stale.aev");
+    std::fs::write(&current, "αβxyz").expect("write current file");
+    std::fs::write(&stale, "external edit").expect("write stale file");
+
+    let mut sources = SourceMap::new();
+    let current_id = sources.add(current.to_string_lossy(), "αβxyz");
+    let stale_id = sources.add(stale.to_string_lossy(), "stale buffer");
+    let edit = |file, start, end, replacement: &str| {
+        TextEdit {
+            span: Span { file, start, end },
+            replacement: replacement.to_owned(),
+        }
+    };
+    let fix = |edits| {
+        Fix {
+            title: "test fix".to_owned(),
+            applicability: Applicability::MachineApplicable,
+            edits,
+        }
+    };
+    let diagnostic = LintDiagnostic {
+        diagnostic: Diagnostic::warning("W0102", "test fixes", Span::default()),
+        lint: &W0102_UNUSED_IMPORT,
+        level: Level::Warn,
+        fixes: vec![
+            fix(vec![
+                edit(current_id, 1, 2, "invalid"),
+                edit(current_id, 6, 7, "z1"),
+            ]),
+            fix(vec![
+                edit(stale_id, 0, 5, "stale"),
+                edit(current_id, 6, 7, "z2"),
+            ]),
+            fix(vec![
+                edit(current_id, 0, 2, "A"),
+                edit(current_id, 4, 5, "X"),
+            ]),
+            fix(vec![
+                edit(current_id, 0, 2, "overlap"),
+                edit(current_id, 6, 7, "z3"),
+            ]),
+        ],
+    };
+
+    let summary = FixEngine::apply(&[diagnostic], &sources).expect("apply fix");
+    assert_eq!(summary.applied, 1);
+    assert_eq!(summary.files_modified, [current.to_string_lossy()]);
+    assert_eq!(
+        std::fs::read_to_string(&current).expect("read current file"),
+        "AβXyz"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&stale).expect("read stale file"),
+        "external edit"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

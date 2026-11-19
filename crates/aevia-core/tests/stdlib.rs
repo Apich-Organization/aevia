@@ -204,11 +204,11 @@ fn statistics_keep_exactness_and_report_shapes() {
         Some(NumKind::Float(_))
     ));
 
-    // The type-7 quantile of [0, 10] at 1/4 is exactly 5/2.
+    // Type-7 quantiles order the sample. For [10, 0] at 1/4 the result is 5/2.
     let quantile = call(
         "quantile",
         vec![
-            exact(vec![0, 10]),
+            exact(vec![10, 0]),
             Value::Num(aevia_core::value::NumVal::exact(
                 BigRational::new(BigInt::from(1), BigInt::from(4)),
                 aevia_dim::Dim::one(),
@@ -239,6 +239,26 @@ fn statistics_keep_exactness_and_report_shapes() {
 }
 
 #[test]
+fn float_statistics_keep_finite_results_across_extreme_scales() {
+    let large = f64::MAX;
+    let mean = call("mean", vec![tensor(vec![2], vec![large, large])]);
+    assert_eq!(as_f64(&mean), large);
+    let population = Value::Bool(true);
+    let deviation = call(
+        "std",
+        vec![tensor(vec![2], vec![large, -large]), population.clone()],
+    );
+    assert_eq!(as_f64(&deviation), large);
+    let error = call_error(
+        "var",
+        vec![tensor(vec![2], vec![large, -large]), population],
+    );
+    assert_eq!(error.code, "E0806");
+    let singleton_variance = call("var", vec![tensor(vec![1], vec![5.0])]);
+    assert_eq!(as_f64(&singleton_variance), 0.0);
+}
+
+#[test]
 fn a_histogram_reports_counts_and_edges() {
     let histogram = call(
         "histogram",
@@ -258,6 +278,18 @@ fn a_histogram_reports_counts_and_edges() {
     // Edges are [0, 2, 4]: 0 and 1 fall low, 2, 3 and 4 fall high.
     let counts: Vec<f64> = counts.elements().iter().map(as_f64).collect();
     assert_eq!(counts, vec![2.0, 3.0]);
+    for bins in [0, -1, i64::MAX] {
+        let invalid = call_error("histogram", vec![exact(vec![0, 1]), int(bins)]);
+        assert_eq!(invalid.code, "E0802");
+    }
+    let exact_input_edges = run_value(
+        "let h = histogram([1, 2, 3], 2)\nlet edges: Tensor<1, Float> = h.edges\n",
+        "edges",
+    );
+    assert!(matches!(
+        tensor_of(&exact_input_edges).storage,
+        Storage::Dense(_)
+    ));
 }
 
 #[test]
@@ -430,15 +462,19 @@ fn the_sparse_layout_round_trips_through_csr() {
 #[test]
 fn the_shape_operations_keep_the_element_count() {
     let matrix = tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let reshaped = call("reshape_dyn", vec![matrix, tensor(vec![2], vec![3.0, 2.0])]);
-    assert_eq!(tensor_of(&reshaped).shape, vec![3, 2]);
+    let reshaped = call("reshape_dyn", vec![matrix, exact(vec![3, 2])]);
+    let Value::Variant(result) = reshaped else {
+        panic!("reshape_dyn returns a Result");
+    };
+    assert_eq!(result.name, "Ok");
+    assert_eq!(tensor_of(&result.fields[0]).shape, vec![3, 2]);
     // A reshape that would drop elements answers with the `Err` its declared
     // `Result` promises, not with a diagnostic.
     let refused = call(
         "reshape_dyn",
         vec![
             tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
-            tensor(vec![1], vec![4.0]),
+            exact(vec![4]),
         ],
     );
     match refused {
@@ -450,17 +486,34 @@ fn the_shape_operations_keep_the_element_count() {
         "set",
         vec![
             tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]),
-            tensor(vec![2], vec![0.0, 1.0]),
+            exact(vec![0, -1]),
             float(9.0),
         ],
     );
     let values: Vec<f64> = tensor_of(&updated).elements().iter().map(as_f64).collect();
     assert_eq!(values, vec![1.0, 9.0, 3.0, 4.0]);
+    let malformed = tensor(vec![2], vec![5.0]);
+    assert_eq!(
+        call_error("set", vec![malformed, exact(vec![1]), float(9.0)]).code,
+        "E0802"
+    );
+    let noninteger = tensor(vec![1], vec![f64::NAN]);
+    let dense = tensor(vec![1], vec![5.0]);
+    assert_eq!(
+        call_error("set", vec![dense, noninteger, float(9.0)]).code,
+        "E0802"
+    );
     // `tril` zeroes the upper triangle and keeps the storage class.
     let lower = call("tril", vec![tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0])]);
     let values: Vec<f64> = tensor_of(&lower).elements().iter().map(as_f64).collect();
     assert_eq!(values, vec![1.0, 0.0, 3.0, 4.0]);
     assert!(matches!(tensor_of(&lower).storage, Storage::Dense(_)));
+}
+
+#[test]
+fn dense_constructors_reject_negative_and_nonintegral_extents() {
+    assert_eq!(call_error("zeros", vec![int(-1)]).code, "E0802");
+    assert_eq!(call_error("ones", vec![float(1.5)]).code, "E0302");
 }
 
 #[test]
@@ -523,6 +576,30 @@ fn the_fourier_transform_round_trips() {
 }
 
 #[test]
+fn real_fft_round_trips_when_an_untransformed_axis_is_empty() {
+    let input = tensor(vec![0, 3], Vec::new());
+    let spectrum = call("rfftn_axes", vec![input, exact(vec![-1])]);
+    assert_eq!(tensor_of(&spectrum).shape, [0, 2]);
+    let inverse = call(
+        "irfftn_axes",
+        vec![spectrum.clone(), exact(vec![-1]), int(3)],
+    );
+    assert_eq!(tensor_of(&inverse).shape, [0, 3]);
+    assert_eq!(
+        call_error("irfftn_axes", vec![spectrum, exact(Vec::new())]).code,
+        "E0802"
+    );
+    assert_eq!(
+        call_error("fftfreq", vec![int(-1), float(1.0)]).code,
+        "E0802"
+    );
+    assert_eq!(
+        call_error("fftfreq", vec![int(1), float(0.0)]).code,
+        "E0806"
+    );
+}
+
+#[test]
 fn the_transform_family_refuses_bad_axes_and_lengths() {
     let matrix = tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let vector = tensor(vec![4], vec![1.0, 2.0, 3.0, 4.0]);
@@ -536,6 +613,22 @@ fn the_transform_family_refuses_bad_axes_and_lengths() {
     );
     assert_eq!(
         call_error("fftn_axes", vec![matrix.clone(), exact(vec![0, 0])]).code,
+        "E0802"
+    );
+    assert_eq!(
+        call_error("fft_axis", vec![matrix.clone(), float(0.5)]).code,
+        "E0302"
+    );
+    assert_eq!(
+        call_error(
+            "fftn_axes",
+            vec![matrix.clone(), tensor(vec![1], vec![0.0])]
+        )
+        .code,
+        "E0302"
+    );
+    assert_eq!(
+        call_error("fftn_axes", vec![matrix.clone(), exact(vec![i64::MIN])]).code,
         "E0802"
     );
     assert_eq!(call_error("fft2", vec![vector.clone()]).code, "E0802");
@@ -798,6 +891,66 @@ fn the_table_layer_columns_selects_and_joins() {
 
     let schema = call("schema", vec![table]);
     assert_eq!(tensor_of(&schema).shape, vec![2]);
+}
+
+#[test]
+fn table_join_preserves_duplicate_match_order_and_rejects_invalid_columns() {
+    let table = |side: &str, entries: &[(i64, i64)]| {
+        let rows = entries
+            .iter()
+            .map(|&(id, value)| record(vec![("id", int(id)), (side, int(value))]))
+            .collect();
+        let rows = aevia_core::eval::build_tensor(rows, vec![entries.len()], aevia_dim::Dim::one());
+        let Value::Variant(result) = call("to_table", vec![rows]) else {
+            panic!("expected a table result");
+        };
+        assert_eq!(result.name, "Ok");
+        result.fields[0].clone()
+    };
+    let left = table("left", &[(2, 10), (1, 20), (2, 30), (4, 40)]);
+    let right = table("right", &[(2, 100), (1, 200), (2, 300), (3, 400)]);
+    let Value::Record(joined) = call(
+        "join",
+        vec![left.clone(), right.clone(), Value::string("id")],
+    ) else {
+        panic!("expected a joined table");
+    };
+    let pairs: Vec<_> = tensor_of(&joined.fields["rows"])
+        .elements()
+        .iter()
+        .map(|row| {
+            let Value::Record(row) = row else {
+                panic!("expected a joined row");
+            };
+            (as_f64(&row.fields["left"]), as_f64(&row.fields["right"]))
+        })
+        .collect();
+    assert_eq!(
+        pairs,
+        [
+            (10.0, 100.0),
+            (10.0, 300.0),
+            (20.0, 200.0),
+            (30.0, 100.0),
+            (30.0, 300.0)
+        ]
+    );
+
+    let duplicate_names = aevia_core::eval::build_tensor(
+        vec![Value::string("id"), Value::string("id")],
+        vec![2],
+        aevia_dim::Dim::one(),
+    );
+    let duplicate_key = call("select", vec![right.clone(), duplicate_names]);
+    for (rhs, key) in [
+        (right, "absent"),
+        (left.clone(), "id"),
+        (duplicate_key, "id"),
+    ] {
+        let error = call_error("join", vec![left.clone(), rhs, Value::string(key)]);
+        assert_eq!(error.code, "E0903");
+        assert!(error.span.is_some());
+    }
 }
 
 #[test]

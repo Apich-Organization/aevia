@@ -4,6 +4,7 @@ use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::ops::Range;
 use std::path::Path;
 use std::rc::Rc;
@@ -23,7 +24,7 @@ struct Document {
 }
 
 #[derive(Clone)]
-pub(crate) struct Input {
+pub struct Input {
     document: Rc<Document>,
     selection: Range<usize>,
 }
@@ -39,7 +40,8 @@ impl Input {
         assert!(range.start <= range.end && range.end <= self.selection.len());
         Self {
             document: self.document.clone(),
-            selection: self.selection.start + range.start..self.selection.start + range.end,
+            selection: self.selection.start.saturating_add(range.start)
+                ..self.selection.start.saturating_add(range.end),
         }
     }
 
@@ -49,19 +51,23 @@ impl Input {
     ) -> Option<Self> {
         self.text()
             .rfind(text)
-            .map(|start| self.select(start..start + text.len()))
+            .map(|start| self.select(start..start.saturating_add(text.len())))
     }
 }
 
 #[derive(Clone)]
-pub(crate) struct Region {
+pub struct Region {
     cover: Range<usize>,
     body: Range<usize>,
     input: Input,
     declaration: bool,
 }
 impl Region {
-    pub(crate) fn declaration(
+    #[allow(
+        clippy::single_call_fn,
+        reason = "constructs a reusable mapping from generated to entered declaration source"
+    )]
+    pub(crate) const fn declaration(
         start: usize,
         generated_end: usize,
         body_len: usize,
@@ -69,7 +75,7 @@ impl Region {
     ) -> Self {
         Self {
             cover: start..generated_end,
-            body: start..start + body_len,
+            body: start..start.saturating_add(body_len),
             input,
             declaration: true,
         }
@@ -81,7 +87,8 @@ impl Region {
         generated_end: usize,
         input: Input,
     ) -> Self {
-        let body = start + prefix_len..start + prefix_len + input.selection.len();
+        let begin = start.saturating_add(prefix_len);
+        let body = begin..begin.saturating_add(input.selection.len());
         Self {
             cover: start..generated_end,
             body,
@@ -90,7 +97,7 @@ impl Region {
         }
     }
 
-    fn contains(
+    const fn contains(
         &self,
         span: Span,
     ) -> bool {
@@ -102,7 +109,7 @@ impl Region {
 
 type WarningSet = Rc<RefCell<HashSet<String>>>;
 #[derive(Default)]
-pub(crate) struct History {
+pub struct History {
     next: Cell<u64>,
     accepted: Vec<Region>,
     warnings: WarningSet,
@@ -113,7 +120,7 @@ impl History {
         text: &str,
         path: Option<&Path>,
     ) -> Input {
-        let id = self.next.get() + 1;
+        let id = self.next.get().saturating_add(1);
         self.next.set(id);
         Input {
             document: Rc::new(Document {
@@ -129,12 +136,12 @@ impl History {
         &mut self,
         view: &View,
     ) {
-        if let Some(region) = view.current.as_ref().filter(|region| region.declaration) {
-            if !self.accepted.iter().any(|old| {
+        if let Some(region) = view.current.as_ref().filter(|region| region.declaration)
+            && !self.accepted.iter().any(|old| {
                 old.cover == region.cover && old.input.document.id == region.input.document.id
-            }) {
-                self.accepted.push(region.clone());
-            }
+            })
+        {
+            self.accepted.push(region.clone());
         }
     }
 
@@ -161,7 +168,7 @@ impl History {
                     .unwrap_or("");
                 let preview: String = first.chars().take(80).collect();
                 let name = doc.name.as_deref().unwrap_or("<repl>");
-                text.push_str(&format!("  {id}  {name}  {preview}\n"));
+                let _ = writeln!(text, "  {id}  {name}  {preview}");
             }
             Ok(text.trim_end().into())
         } else {
@@ -193,7 +200,7 @@ impl History {
     }
 }
 
-pub(crate) struct Compilation {
+pub struct Compilation {
     pub(crate) raw: aevia_core::driver::ReplCompilation,
     pub(crate) view: View,
 }
@@ -214,7 +221,7 @@ impl Compilation {
     }
 }
 
-pub(crate) struct View {
+pub struct View {
     accepted: Vec<Region>,
     current: Option<Region>,
     active: Option<Input>,
@@ -284,9 +291,9 @@ impl View {
         ids: &HashMap<u64, u32>,
         span: Span,
     ) -> Span {
-        if !sources
+        if sources
             .file(span.file)
-            .is_some_and(|file| file.name == "<repl>")
+            .is_none_or(|file| file.name != "<repl>")
         {
             return span;
         }
@@ -297,11 +304,12 @@ impl View {
             return span;
         };
         let offset = |byte: u32| {
-            region.input.selection.start
-                + (byte as usize)
+            region.input.selection.start.saturating_add(
+                (byte as usize)
                     .saturating_sub(region.body.start)
                     .min(region.body.len())
-                    .min(region.input.selection.len())
+                    .min(region.input.selection.len()),
+            )
         };
         Span::new(*file, offset(span.start), offset(span.end.max(span.start)))
     }
@@ -332,29 +340,24 @@ impl View {
                 !region.declaration
                     && region.contains(item.span)
                     && region.body.start > region.cover.start
-            }) {
-                if let Some(prefix) = original
-                    .file(item.span.file)
-                    .filter(|file| file.name == "<repl>")
-                    .and_then(|file| file.text.get(region.cover.start..region.body.start))
-                {
-                    if let Some(binding) = prefix
-                        .strip_prefix("let ")
-                        .and_then(|prefix| prefix.strip_suffix(" = "))
-                    {
-                        // A displayed expression's result is used by the host;
-                        // an unused-temporary warning has no user meaning.
-                        if item.severity == Severity::Warning && item.code == "W0303" {
-                            continue;
-                        }
-                        let name = format!("`{binding}`");
-                        if !region.input.text().contains(binding) {
-                            item.message = item.message.replace(&name, "this expression");
-                            item.label = item.label.replace(&name, "this expression");
-                            for text in item.notes.iter_mut().chain(item.helps.iter_mut()) {
-                                *text = text.replace(&name, "this expression");
-                            }
-                        }
+            }) && let Some(binding) = original
+                .file(item.span.file)
+                .filter(|file| file.name == "<repl>")
+                .and_then(|file| file.text.get(region.cover.start..region.body.start))
+                .and_then(|prefix| prefix.strip_prefix("let "))
+                .and_then(|prefix| prefix.strip_suffix(" = "))
+            {
+                // A displayed expression's result is used by the host;
+                // an unused-temporary warning has no user meaning.
+                if item.severity == Severity::Warning && item.code == "W0303" {
+                    continue;
+                }
+                let name = format!("`{binding}`");
+                if !region.input.text().contains(binding) {
+                    item.message = item.message.replace(&name, "this expression");
+                    item.label = item.label.replace(&name, "this expression");
+                    for text in item.notes.iter_mut().chain(item.helps.iter_mut()) {
+                        *text = text.replace(&name, "this expression");
                     }
                 }
             }
@@ -373,7 +376,7 @@ impl View {
                 item.notes,
                 item.helps
             );
-            if !emitted.insert(key.clone()) {
+            if !emitted.insert(key) {
                 continue;
             }
             if item.severity == Severity::Warning {
@@ -411,7 +414,7 @@ impl View {
 }
 
 /// A precomputed projection reused for all item-help origins in a checked revision.
-pub(crate) struct Origins<'a> {
+pub struct Origins<'a> {
     view: &'a View,
     original: &'a SourceMap,
     sources: SourceMap,

@@ -32,6 +32,13 @@ pub fn names() -> impl Iterator<Item = &'static str> {
 
 /// Concise documentation for a prelude builtin, when available.
 #[must_use]
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::too_many_lines,
+        reason = "keep the curated prelude documentation in one exhaustive lookup"
+    )
+)]
 pub fn doc(name: &str) -> Option<&'static str> {
     Some(match name {
         // Constants

@@ -217,11 +217,11 @@ let inv = inv
 ##
 ## *Source: Aevia standard library guide.*
 let linsolve = linsolve
-## linspace(a, b, n) returns n evenly spaced values from a to b inclusive.
+## Returns evenly spaced floating-point samples with the endpoints’ dimension.
 ##
-## **Signature:** `linspace : (Scalar<ρ,d>, Scalar<ρ,d>, Int) -> Tensor<1, Scalar<ρ,d>>`
+## **Signature:** `linspace : (Scalar<ρ,d>, Scalar<ρ,d>, Int) -> Tensor<1, Float[d]>`
 ##
-## The endpoints must share a dimension, which the result keeps.
+## For finite endpoints, two or more samples include both limits. One sample returns the start, and a nonpositive count returns an empty tensor.
 ##
 ## **Examples:**
 ## ```text
@@ -485,11 +485,11 @@ let refine_shape = refine_shape
 ##
 ## *Source: Aevia standard library guide.*
 let reshape = reshape
-## reshape_dyn(t, shape) reshapes a matrix to the dimensions listed in the vector shape, which may be computed at run time.
+## `reshape_dyn(t, shape)` takes one nonnegative `Int` extent per input axis.
 ##
 ## **Signature:** `reshape_dyn : (Tensor<n, τ>, Tensor<1, Int>) -> Result<Tensor<n, τ>, ShapeError>`
 ##
-## Returns Err(ShapeError) if the element counts differ.
+## It returns `Ok(t)` with the reshaped tensor, or a shape error for invalid extents, rank, or element count.
 ##
 ## **Examples:**
 ## ```text
@@ -498,11 +498,11 @@ let reshape = reshape
 ##
 ## *Source: Aevia standard library guide.*
 let reshape_dyn = reshape_dyn
-## set(t, index, value) returns a copy of the tensor with one element replaced; index is a vector with one entry per axis.
+## `set(t, index, value)` returns a copy of the tensor with one element replaced.
 ##
 ## **Signature:** `set : (Tensor<n, a>, Tensor<1, Int>, a) -> Tensor<n, a>`
 ##
-## The original is unchanged.
+## Supply one `Int` index per axis. Indices start at zero, and negative indices count back from the end of the axis.
 ##
 ## **Examples:**
 ## ```text
@@ -511,7 +511,7 @@ let reshape_dyn = reshape_dyn
 ##
 ## *Source: Aevia standard library guide.*
 let set = set
-## The sample standard deviation, sqrt(var), in the elements' own dimension.
+## Computes sample standard deviation in the elements’ dimension.
 ##
 ## **Signature:** `std : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>`
 ##
@@ -519,6 +519,8 @@ let set = set
 ## - `std : (Dyn<term>) -> Dyn<term>`
 ##
 ## **Dimensions:** the result has the dimension of argument 1
+##
+## A singleton has zero standard deviation.
 ##
 ## **Examples:**
 ## ```text
@@ -632,13 +634,13 @@ let tril = tril
 ##
 ## *Source: Aevia standard library guide.*
 let triu = triu
-## The sample variance (divisor n-1) of a tensor.
+## Computes sample variance with divisor `n - 1` for two or more observations.
 ##
 ## **Signature:** `var : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d^2>`
 ##
 ## **Signature:** `var : (Tensor<n, Scalar<ρ,d>>, Bool) -> Scalar<div_rep(ρ),d^2>`
 ##
-## The result dimension is the element dimension squared. A second Bool argument chooses the population variance when true.
+## A singleton has zero variance. The result dimension is the element dimension squared. A second Bool argument chooses the population variance when true.
 ##
 ## **Examples:**
 ## ```text

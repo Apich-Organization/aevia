@@ -13,7 +13,7 @@ use num_bigint::BigInt;
 use num_rational::BigRational;
 use std::hash::Hash;
 
-pub(crate) const fn mix_hash(
+pub const fn mix_hash(
     acc: u64,
     label: &[u8],
     child: u64,
@@ -28,14 +28,14 @@ pub(crate) const fn mix_hash(
     )
 }
 
-pub(crate) const fn rational_schema_hash<C: Config>() -> u64 {
+pub const fn rational_schema_hash<C: Config>() -> u64 {
     bincode_next::rapidhash::v3::rapidhash_v3_seeded(
         b"BigRational",
         &bincode_next::rapidhash::v3::RapidSecrets::seed_cpp(C::CONFIG_HASH),
     )
 }
 
-pub(crate) fn encode_rational<E: Encoder>(
+pub fn encode_rational<E: Encoder>(
     rat: &BigRational,
     encoder: &mut E,
 ) -> Result<(), EncodeError> {
@@ -44,7 +44,7 @@ pub(crate) fn encode_rational<E: Encoder>(
     Ok(())
 }
 
-pub(crate) fn decode_rational<D: Decoder>(decoder: &mut D) -> Result<BigRational, DecodeError> {
+pub fn decode_rational<D: Decoder>(decoder: &mut D) -> Result<BigRational, DecodeError> {
     let numer_bytes = Vec::<u8>::decode(decoder)?;
     let denom_bytes = Vec::<u8>::decode(decoder)?;
     let numer = BigInt::from_signed_bytes_le(&numer_bytes);
@@ -57,8 +57,7 @@ pub(crate) fn decode_rational<D: Decoder>(decoder: &mut D) -> Result<BigRational
     Ok(BigRational::new(numer, denom))
 }
 
-pub(crate) const fn index_map_schema_hash<C: Config, K: Fingerprint<C>, V: Fingerprint<C>>() -> u64
-{
+pub const fn index_map_schema_hash<C: Config, K: Fingerprint<C>, V: Fingerprint<C>>() -> u64 {
     let h = bincode_next::rapidhash::v3::rapidhash_v3_seeded(
         b"IndexMap",
         &bincode_next::rapidhash::v3::RapidSecrets::seed_cpp(C::CONFIG_HASH),
@@ -66,7 +65,7 @@ pub(crate) const fn index_map_schema_hash<C: Config, K: Fingerprint<C>, V: Finge
     mix_hash(mix_hash(h, b"K", K::SCHEMA_HASH), b"V", V::SCHEMA_HASH)
 }
 
-pub(crate) fn encode_index_map<K: Encode, V: Encode, E: Encoder>(
+pub fn encode_index_map<K: Encode, V: Encode, E: Encoder>(
     map: &IndexMap<K, V>,
     encoder: &mut E,
 ) -> Result<(), EncodeError> {
@@ -78,9 +77,7 @@ pub(crate) fn encode_index_map<K: Encode, V: Encode, E: Encoder>(
     Ok(())
 }
 
-pub(crate) fn decode_index_map<Context, K, V, D>(
-    decoder: &mut D
-) -> Result<IndexMap<K, V>, DecodeError>
+pub fn decode_index_map<Context, K, V, D>(decoder: &mut D) -> Result<IndexMap<K, V>, DecodeError>
 where
     K: Decode<Context> + Eq + Hash,
     V: Decode<Context>,

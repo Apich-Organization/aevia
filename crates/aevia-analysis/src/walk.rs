@@ -10,17 +10,24 @@
 //! including `do` statements, block statements, match guards, index slices and
 //! string interpolations.
 
-use aevia_syntax::ast::*;
+use aevia_syntax::ast::BlockStmt;
+use aevia_syntax::ast::Decl;
+use aevia_syntax::ast::DeclKind;
+use aevia_syntax::ast::DoStmt;
+use aevia_syntax::ast::Expr;
+use aevia_syntax::ast::ExprKind;
+use aevia_syntax::ast::Module;
+use aevia_syntax::ast::SliceAst;
+use aevia_syntax::ast::StrPiece;
 
 /// Visits every expression reachable from `declaration`, outermost first.
-pub(crate) fn declaration_exprs<'a>(
+pub fn declaration_exprs<'a>(
     declaration: &'a Decl,
     visit: &mut impl FnMut(&'a Expr),
 ) {
     match &declaration.kind {
-        | DeclKind::Fn { body, .. } => expression(body, visit),
+        | DeclKind::Fn { body, .. } | DeclKind::Test { body, .. } => expression(body, visit),
         | DeclKind::Let { value, .. } => expression(value, visit),
-        | DeclKind::Test { body, .. } => expression(body, visit),
         | DeclKind::Instance { methods, .. } => {
             for method in methods {
                 expression(&method.body, visit);
@@ -36,7 +43,7 @@ pub(crate) fn declaration_exprs<'a>(
 }
 
 /// Visits every expression in `module`, in source order.
-pub(crate) fn module_exprs<'a>(
+pub fn module_exprs<'a>(
     module: &'a Module,
     mut visit: impl FnMut(&'a Expr),
 ) {
@@ -46,7 +53,7 @@ pub(crate) fn module_exprs<'a>(
 }
 
 /// Visits `expr` and every expression inside it, outermost first.
-pub(crate) fn expression<'a>(
+pub fn expression<'a>(
     expr: &'a Expr,
     visit: &mut impl FnMut(&'a Expr),
 ) {
@@ -68,8 +75,12 @@ pub(crate) fn expression<'a>(
                 }
             }
         },
-        | ExprKind::Unary { operand, .. } => expression(operand, visit),
-        | ExprKind::Binary { left, right, .. } => {
+        | ExprKind::Binary { left, right, .. }
+        | ExprKind::LetIn {
+            value: left,
+            body: right,
+            ..
+        } => {
             expression(left, visit);
             expression(right, visit);
         },
@@ -79,8 +90,6 @@ pub(crate) fn expression<'a>(
                 expression(argument, visit);
             }
         },
-        | ExprKind::TypeApp { callee, .. } => expression(callee, visit),
-        | ExprKind::Lambda { body, .. } => expression(body, visit),
         | ExprKind::If {
             cond,
             then_branch,
@@ -99,10 +108,6 @@ pub(crate) fn expression<'a>(
                 expression(&arm.body, visit);
             }
         },
-        | ExprKind::LetIn { value, body, .. } => {
-            expression(value, visit);
-            expression(body, visit);
-        },
         | ExprKind::Block { stmts, tail } => {
             for statement in stmts {
                 match statement {
@@ -116,12 +121,12 @@ pub(crate) fn expression<'a>(
         },
         | ExprKind::Do { stmts } => {
             for statement in stmts {
-                match statement {
-                    | DoStmt::Let { value, .. } | DoStmt::Bind { value, .. } => {
-                        expression(value, visit);
-                    },
-                    | DoStmt::Expr(inner) => expression(inner, visit),
-                }
+                let expr = match statement {
+                    | DoStmt::Let { value, .. }
+                    | DoStmt::Bind { value, .. }
+                    | DoStmt::Expr(value) => value,
+                };
+                expression(expr, visit);
             }
         },
         | ExprKind::Record { base, fields } => {
@@ -132,7 +137,6 @@ pub(crate) fn expression<'a>(
                 expression(value, visit);
             }
         },
-        | ExprKind::Field { base, .. } => expression(base, visit),
         | ExprKind::Tuple(items) | ExprKind::Tensor(items) => {
             for item in items {
                 expression(item, visit);
@@ -141,24 +145,42 @@ pub(crate) fn expression<'a>(
         | ExprKind::Index { base, indices } => {
             expression(base, visit);
             for index in indices {
-                match index {
-                    | SliceAst::Index(inner) => expression(inner, visit),
-                    | SliceAst::Range { start, end, step, .. } => {
-                        for part in [start, end, step].into_iter().flatten() {
-                            expression(part, visit);
-                        }
-                    },
-                }
+                slice_exprs(index, visit);
             }
         },
-        | ExprKind::Annot { expr, .. } => expression(expr, visit),
-        | ExprKind::Try(inner) => expression(inner, visit),
+        | ExprKind::Unary { operand: expr, .. }
+        | ExprKind::TypeApp { callee: expr, .. }
+        | ExprKind::Lambda { body: expr, .. }
+        | ExprKind::Field { base: expr, .. }
+        | ExprKind::Annot { expr, .. }
+        | ExprKind::Try(expr)
         | ExprKind::Factorial { expr, .. } => expression(expr, visit),
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "visit an index or each written range bound"
+    )
+)]
+fn slice_exprs<'a>(
+    slice: &'a SliceAst,
+    visit: &mut impl FnMut(&'a Expr),
+) {
+    match slice {
+        | SliceAst::Index(inner) => expression(inner, visit),
+        | SliceAst::Range { start, end, step, .. } => {
+            for part in [start, end, step].into_iter().flatten() {
+                expression(part, visit);
+            }
+        },
+    }
+}
+
 /// The expression whose span is exactly `span`, when there is one.
-pub(crate) fn exactly(
+pub fn exactly(
     module: &Module,
     span: aevia_syntax::Span,
 ) -> Option<&Expr> {
@@ -175,7 +197,7 @@ pub(crate) fn exactly(
 ///
 /// A cursor is a zero-width request; then "touch" means the cursor is inside
 /// the span, which is what a menu opened at a position expects.
-pub(crate) fn touches(
+pub const fn touches(
     span: aevia_syntax::Span,
     start: u32,
     end: u32,

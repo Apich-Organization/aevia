@@ -7,6 +7,34 @@
 //! constructor dispatchers, so the language's call-depth guard is reached
 //! before the CLI worker exhausts its native stack.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss,
+        clippy::expect_used,
+        clippy::if_not_else,
+        clippy::indexing_slicing,
+        clippy::iter_on_single_items,
+        clippy::manual_let_else,
+        clippy::match_same_arms,
+        clippy::needless_pass_by_value,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::semicolon_if_nothing_returned,
+        clippy::similar_names,
+        clippy::single_call_fn,
+        clippy::trivially_copy_pass_by_ref,
+        clippy::wildcard_imports,
+        clippy::unwrap_used,
+    )
+)]
+
 use crate::value::Closure;
 use crate::value::ClosureBody;
 use crate::value::ClosureEnv;
@@ -33,7 +61,22 @@ use aevia_dim::UnitDef;
 use aevia_dim::UnitTable;
 use aevia_syntax::Diagnostic;
 use aevia_syntax::Span;
-use aevia_syntax::ast::*;
+use aevia_syntax::ast::BinOp;
+use aevia_syntax::ast::BlockStmt;
+use aevia_syntax::ast::DeclKind;
+use aevia_syntax::ast::DimAst;
+use aevia_syntax::ast::DoStmt;
+use aevia_syntax::ast::Expr;
+use aevia_syntax::ast::ExprKind;
+use aevia_syntax::ast::MatchArm;
+use aevia_syntax::ast::NumberLit;
+use aevia_syntax::ast::Pat;
+use aevia_syntax::ast::PatKind;
+use aevia_syntax::ast::SliceAst;
+use aevia_syntax::ast::StrPiece;
+use aevia_syntax::ast::Ty;
+use aevia_syntax::ast::TyKind;
+use aevia_syntax::ast::UnOp;
 use aevia_types::adt;
 use aevia_types::check::BuiltinDispatch;
 use aevia_types::check::CheckedModule;
@@ -77,28 +120,44 @@ pub struct Frame {
     pub span: Span,
 }
 
-/// A slice index whose expression has already been evaluated.
-///
-/// `None` means the expression produced no number. The two indexing branches
-/// treat that differently on purpose — `E0802` when every index is scalar, `0`
-/// inside a slice — so the resolved form keeps the distinction instead of
-/// inventing a value.
+/// A selector whose expressions were evaluated as dimensionless integers.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum SliceValue {
     /// `a[i]`.
-    Index(Option<f64>),
+    Index(i128),
     /// `a[i..j]`, `a[i..]`, `a[..j]`, `a[..]`, `a[i:j:s]`.
     Range {
         /// The start.
-        start: Option<f64>,
+        start: Option<i128>,
         /// The end.
-        end: Option<f64>,
+        end: Option<i128>,
         /// Whether the range is inclusive.
         inclusive: bool,
-        /// The step, when written. `None` means one; `NaN` means the
-        /// expression was not a number.
-        step: Option<f64>,
+        /// The step, when written.
+        step: Option<i128>,
     },
+}
+
+/// Read a selector without rounding through a float. Its signed range covers
+/// every host extent. Beyond that range the coordinate is always out of
+/// bounds, a bound clamps to an edge and a step can visit at most one element.
+pub(crate) fn slice_integer(
+    value: &Value,
+    span: Span,
+) -> Result<i128, EvalError> {
+    if let Some(number) = value.as_num()
+        && number.dim.is_one()
+        && let NumKind::Int(integer) = &number.kind
+    {
+        return Ok(integer.to_i128().unwrap_or_else(|| {
+            if integer.is_negative() {
+                i128::MIN
+            } else {
+                i128::MAX
+            }
+        }));
+    }
+    Err(EvalError::new("E0802", "an index, bound or slice step must be an Int").at(span))
 }
 
 /// One `instance` method body, as the runtime sees it.
@@ -156,19 +215,19 @@ impl HeadShape {
     ) -> bool {
         match (self, value) {
             | (Self::Nominal(name), Value::Variant(variant)) => adt::name_of(variant.adt) == *name,
-            | (Self::Tensor, Value::Tensor(_)) => true,
+            | (Self::Tensor, Value::Tensor(tensor)) => tensor_shape_matches_storage_len(tensor),
             | (Self::Record(labels), Value::Record(record)) => {
                 record.fields.len() == labels.len()
                     && labels.iter().all(|label| record.fields.contains_key(label))
             },
             | (Self::Scalar(rep), Value::Num(num)) => {
-                match (rep, &num.kind) {
-                    | (&"Int", NumKind::Int(_)) => true,
-                    | (&"Real", NumKind::Exact(_) | NumKind::Sym(_)) => true,
-                    | (&"Float", NumKind::Float(_)) => true,
-                    | (&"Complex", NumKind::Complex(..)) => true,
-                    | _ => false,
-                }
+                matches!(
+                    (*rep, numeric_representation(&num.kind)),
+                    ("Int", RepKind::Int)
+                        | ("Real", RepKind::Real)
+                        | ("Float", RepKind::Float)
+                        | ("Complex", RepKind::Complex)
+                )
             },
             | (Self::Bool, Value::Bool(_))
             | (Self::Str, Value::Str(_))
@@ -233,6 +292,10 @@ pub(crate) fn head_shape(
 }
 
 /// The runtime shape of a *checked* type, used to see through an alias.
+#[allow(
+    clippy::single_call_fn,
+    reason = "checked type aliases and source syntax classify heads independently"
+)]
 fn type_head_shape(ty: &aevia_types::ty::Type) -> HeadShape {
     use aevia_types::ty::Type;
     match ty {
@@ -252,6 +315,7 @@ fn type_head_shape(ty: &aevia_types::ty::Type) -> HeadShape {
         | Type::Bool => HeadShape::Bool,
         | Type::Str => HeadShape::Str,
         | Type::Unit => HeadShape::Unit,
+        | Type::Prop => HeadShape::Prop,
         | _ => HeadShape::Unknown,
     }
 }
@@ -297,7 +361,7 @@ impl EvalError {
 
     /// Attaches a span.
     #[must_use]
-    pub fn at(
+    pub const fn at(
         mut self,
         span: Span,
     ) -> Self {
@@ -323,28 +387,31 @@ impl EvalError {
         // A deep recursion is thousands of identical frames; print a run of
         // the same function once with its extent instead of one line each.
         let mut notes = Vec::new();
-        let mut depth = 0;
-        while depth < self.stack.len() {
-            let name = self.stack[depth].function.as_ref();
-            let run = self.stack[depth..]
-                .iter()
-                .take_while(|frame| frame.function.as_ref() == name)
-                .count();
+        let mut depth = 0usize;
+        for frames in self
+            .stack
+            .chunk_by(|left, right| left.function == right.function)
+        {
+            let Some(frame) = frames.first() else {
+                continue;
+            };
+            let name = &frame.function;
+            let run = frames.len();
+            let last = depth.saturating_add(run);
+            let first = depth.saturating_add(1);
             if run > 3 {
-                notes.push(format!("{} in `{}`", depth + 1, name));
+                notes.push(format!("{first} in `{name}`"));
                 notes.push(format!(
-                    "{}..{} in `{}` ({} more recursive frames)",
-                    depth + 2,
-                    depth + run,
-                    name,
-                    run - 1
+                    "{}..{last} in `{name}` ({} more recursive frames)",
+                    first.saturating_add(1),
+                    run.saturating_sub(1),
                 ));
             } else {
-                for offset in 0..run {
-                    notes.push(format!("{} in `{}`", depth + offset + 1, name));
+                for number in first..=last {
+                    notes.push(format!("{number} in `{name}`"));
                 }
             }
-            depth += run;
+            depth = last;
         }
         notes
     }
@@ -403,23 +470,24 @@ pub enum Mode {
 /// "index out of range" alone sent the reader looking for which of several
 /// indices, and by how much; the static check already says both.
 fn index_out_of_range(
-    coordinates: &[isize],
+    coordinates: &[i128],
     shape: &[usize],
 ) -> EvalError {
     for (axis, (coordinate, extent)) in coordinates.iter().zip(shape).enumerate() {
-        let extent = *extent as isize;
-        if *coordinate >= extent || *coordinate < -extent {
+        if normalize_index(*coordinate, *extent).is_none() {
             let axis_text = if shape.len() == 1 {
                 String::new()
             } else {
                 format!(" on axis {axis}")
             };
+            let (low, high) = extent.checked_sub(1).map_or_else(
+                || ("0".to_owned(), "-1".to_owned()),
+                |high| (format!("-{extent}"), high.to_string()),
+            );
             return EvalError::new(
                 "E0802",
                 format!(
-                    "index {coordinate} is out of bounds{axis_text} for extent {extent} (valid: {} to {})",
-                    -extent,
-                    extent - 1
+                    "index {coordinate} is out of bounds{axis_text} for extent {extent} (valid: {low} to {high})"
                 ),
             );
         }
@@ -452,6 +520,10 @@ pub fn install_stack_budget(total: usize) {
 
 /// The declared budget, when the current stack position is past it.
 #[inline]
+#[allow(
+    clippy::single_call_fn,
+    reason = "native-stack sampling is independent of the language call counter"
+)]
 fn stack_budget_exhausted() -> Option<usize> {
     let (base, usable) = STACK_BUDGET.with(std::cell::Cell::get)?;
     let marker = 0u8;
@@ -590,6 +662,7 @@ pub struct Interp {
     pub(crate) cancellation: Option<crate::CancellationToken>,
     /// Optional terminal-aware reader for program IO.
     pub(crate) line_reader: Option<Rc<dyn Fn() -> Result<String, EvalError>>>,
+    pub(crate) debugger: Option<Rc<dyn crate::debugger::Debugger>>,
     /// Calls in progress, the quantity `max_depth` bounds.
     pub(crate) depth: usize,
     /// Expression nodes in progress, the quantity `max_nodes` bounds.
@@ -729,10 +802,18 @@ impl<'a> Scalar<'a> {
     }
 
     /// The view of an integer literal.
+    #[allow(
+        clippy::single_call_fn,
+        reason = "the Core IR uses a borrowed integer literal without constructing a NumVal"
+    )]
     pub(crate) fn of_int(value: &'a BigInt) -> Self {
         num_traits::ToPrimitive::to_i64(value).map_or(Self::Big(value), Self::Small)
     }
 
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "promotion from Int to Float deliberately rounds to binary64"
+    )]
     fn to_f64(self) -> f64 {
         match self {
             | Self::Small(value) => value as f64,
@@ -771,9 +852,10 @@ pub(crate) fn plain_scalar_binary(
                 )))
             };
             Some(match op {
-                | BinOp::Add => int(a.checked_add(b), |x, y| x + y),
-                | BinOp::Sub => int(a.checked_sub(b), |x, y| x - y),
-                | BinOp::Mul => int(a.checked_mul(b), |x, y| x * y),
+                // Two i64 operands cannot overflow any of these i128 operations.
+                | BinOp::Add => int(a.checked_add(b), i128::saturating_add),
+                | BinOp::Sub => int(a.checked_sub(b), i128::saturating_sub),
+                | BinOp::Mul => int(a.checked_mul(b), i128::saturating_mul),
                 | BinOp::Eq => Value::Bool(a == b),
                 | BinOp::Ne => Value::Bool(a != b),
                 | BinOp::Lt => Value::Bool(a < b),
@@ -785,7 +867,11 @@ pub(crate) fn plain_scalar_binary(
         },
         | (Scalar::Small(_) | Scalar::Big(_), Scalar::Small(_) | Scalar::Big(_)) => {
             let (a, b) = (left.to_int()?, right.to_int()?);
-            Some(match op {
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "Int promotes to arbitrary precision when machine arithmetic overflows"
+            )]
+            let value = match op {
                 | BinOp::Add => Value::Num(NumVal::int(a + b)),
                 | BinOp::Sub => Value::Num(NumVal::int(a - b)),
                 | BinOp::Mul => Value::Num(NumVal::int(a * b)),
@@ -796,10 +882,12 @@ pub(crate) fn plain_scalar_binary(
                 | BinOp::Gt => Value::Bool(a > b),
                 | BinOp::Ge => Value::Bool(a >= b),
                 | _ => return None,
-            })
+            };
+            Some(value)
         },
         | (Scalar::Float(a), Scalar::Float(b)) => {
-            Some(match op {
+            #[allow(clippy::float_cmp, reason = "Float equality uses the IEEE comparison")]
+            let value = match op {
                 | BinOp::Add => Value::Num(NumVal::float(a + b, Dim::one())),
                 | BinOp::Sub => Value::Num(NumVal::float(a - b, Dim::one())),
                 | BinOp::Mul => Value::Num(NumVal::float(a * b, Dim::one())),
@@ -811,7 +899,8 @@ pub(crate) fn plain_scalar_binary(
                 | BinOp::Gt => Value::Bool(a > b),
                 | BinOp::Ge => Value::Bool(a >= b),
                 | _ => return None,
-            })
+            };
+            Some(value)
         },
         // `Int` promotes below `Float` on the arithmetic path; comparisons of
         // mixed operands keep the general path's rules.
@@ -865,6 +954,11 @@ impl Interp {
     pub fn new(checked: &CheckedModule) -> Self {
         let session = Rc::new(());
         let context = crate::evidence::ModuleContext::new(checked, &session);
+        let mut dictionaries: HashMap<Span, Vec<DictionaryUse>> = HashMap::new();
+        for use_site in checked.dictionaries.iter().cloned() {
+            let calls = dictionaries.entry(use_site.span).or_default();
+            calls.push(use_site);
+        }
         Self {
             session,
             context,
@@ -907,6 +1001,7 @@ impl Interp {
             optimize_ir: false,
             cancellation: crate::cancellation::inherited_token(),
             line_reader: None,
+            debugger: None,
             depth: 0,
             nodes: 0,
             frames: Vec::new(),
@@ -918,7 +1013,7 @@ impl Interp {
                 .iter()
                 .map(|call| (call.span, call.key.clone()))
                 .collect(),
-            dictionaries: dictionary_table(&checked.dictionaries),
+            dictionaries,
             rssn_call_sites: checked.rssn_calls.clone(),
             dictionary_sites: checked.dictionaries.clone(),
             dyn_calls: checked
@@ -929,9 +1024,7 @@ impl Interp {
             registrations: checked.registrations.clone(),
             literal_reps: checked.literal_reps.clone(),
             constant_regions: checked.constant_regions.clone(),
-            module_units: [(checked.anonymous_file, checked.units.clone())]
-                .into_iter()
-                .collect(),
+            module_units: HashMap::from([(checked.anonymous_file, checked.units.clone())]),
             expr_types: checked.expr_types.clone(),
             instance_exports: checked
                 .instances
@@ -1085,7 +1178,7 @@ impl Interp {
         self.add_dictionaries(&checked.dictionaries);
         self.method_refs.retain(|span, _| span.file != file);
         self.method_refs.extend(checked.method_refs.clone());
-        self.instance_sites = checked.instance_sites.clone();
+        self.instance_sites.clone_from(&checked.instance_sites);
         self.class_keys.extend(
             checked
                 .local_classes
@@ -1093,9 +1186,9 @@ impl Interp {
                 .map(|key| (key.name.clone(), key.clone())),
         );
         self.module_units.insert(file, checked.units.clone());
-        self.registrations = checked.registrations.clone();
+        self.registrations.clone_from(&checked.registrations);
         self.current_module = checked.module_path();
-        self.current_constructors = checked.constructors.clone();
+        self.current_constructors.clone_from(&checked.constructors);
         self.instance_exports = checked
             .instances
             .iter()
@@ -1132,7 +1225,7 @@ impl Interp {
             .get(self.next_instance_export)
             .cloned();
         if export.is_some() {
-            self.next_instance_export += 1;
+            self.next_instance_export = self.next_instance_export.saturating_add(1);
         }
         export
     }
@@ -1300,7 +1393,7 @@ impl Interp {
                 // an instance method call's cost; the name is formatted once
                 // per site and the template is looked up in place.
                 let global = self.cached_instance_global(use_site.span, key, method);
-                if let Some(Some(body)) = self.find_instance_template(&global) {
+                if let Some(body) = self.find_instance_template(&global) {
                     return Some(Dispatch::Instance(body));
                 }
                 if self.active_scope.is_none()
@@ -1477,7 +1570,7 @@ impl Interp {
     /// The AST path is the semantic reference; the IR path is the default once
     /// the two agree on the whole suite (§9.2.2).
     #[must_use]
-    pub fn with_mode(
+    pub const fn with_mode(
         mut self,
         mode: Mode,
     ) -> Self {
@@ -1494,6 +1587,10 @@ impl Interp {
         }
     }
 
+    #[allow(
+        clippy::needless_pass_by_ref_mut,
+        reason = "task replay and IO share the exclusive interpreter output interface"
+    )]
     pub(crate) fn write_out(
         &mut self,
         text: &str,
@@ -1502,6 +1599,10 @@ impl Interp {
     ) {
         match &self.output {
             | Output::Console => {
+                if let Some(debugger) = &self.debugger {
+                    debugger.output(text, newline, stderr);
+                    return;
+                }
                 if stderr {
                     eprint!("{text}");
                     if newline {
@@ -1577,22 +1678,29 @@ impl Interp {
         let _cancellation = self.cancellation_scope();
         self.check_cancelled()
             .map_err(|error| error.at(expr.span))?;
+        if let Some(debugger) = &self.debugger {
+            debugger.expression(expr.span, &self.frames, env);
+            self.check_cancelled()
+                .map_err(|error| error.at(expr.span))?;
+        }
         let previous = self.enter_scope(env)?;
-        self.nodes += 1;
-        if self.nodes > self.max_nodes {
-            self.nodes -= 1;
+        let previous_nodes = self.nodes;
+        if previous_nodes >= self.max_nodes {
             self.restore_context(previous);
             return Err(EvalError::new("E0805", "expression is nested too deeply")
                 .at(expr.span)
                 .with_stack(self.frames.clone()));
         }
+        self.nodes = previous_nodes.saturating_add(1);
         // These paths may remain live across a source-language call. Enter
         // their small frames directly rather than retaining eval_inner's
         // stack slots for every unrelated expression variant at each depth.
         let result = match &expr.kind {
-            | ExprKind::Unary { op, operand } => self.eval_unary_expression(expr, op, operand, env),
+            | ExprKind::Unary { op, operand } => {
+                self.eval_unary_expression(expr, *op, operand, env)
+            },
             | ExprKind::Binary { op, left, right } => {
-                self.eval_binary_expression(expr, op, left, right, env)
+                self.eval_binary_expression(expr, *op, left, right, env)
             },
             | ExprKind::Call { callee, args } => self.eval_call_expression(expr, callee, args, env),
             | ExprKind::If {
@@ -1620,7 +1728,7 @@ impl Interp {
                 value
             }
         });
-        self.nodes -= 1;
+        self.nodes = previous_nodes;
         self.restore_context(previous);
         self.check_cancelled()
             .map_err(|error| error.at(expr.span))?;
@@ -1698,7 +1806,7 @@ impl Interp {
     fn eval_unary_expression(
         &mut self,
         expr: &Expr,
-        op: &UnOp,
+        op: UnOp,
         operand: &Expr,
         env: &Rc<Scope>,
     ) -> Result<Value, EvalError> {
@@ -1706,14 +1814,14 @@ impl Interp {
             return self.eval_constant_region(expr, rep, env);
         }
         let value = self.eval(operand, env)?;
-        self.unary(*op, value, expr.span)
+        self.unary(op, value, expr.span)
     }
 
     #[inline(never)]
     fn eval_binary_expression(
         &mut self,
         expr: &Expr,
-        op: &BinOp,
+        op: BinOp,
         left: &Expr,
         right: &Expr,
         env: &Rc<Scope>,
@@ -1729,14 +1837,14 @@ impl Interp {
                 return Ok(Value::Bool(value));
             }
             let right_value = self.eval(right, env)?;
-            return self.binary(*op, left_value, right_value, expr.span);
+            return self.binary(op, left_value, right_value, expr.span);
         }
         if let Some(rep) = self.constant_region_rep(expr.span) {
             return self.eval_constant_region(expr, rep, env);
         }
         let left_value = self.eval(left, env)?;
         let right_value = self.eval(right, env)?;
-        self.binary(*op, left_value, right_value, expr.span)
+        self.binary(op, left_value, right_value, expr.span)
     }
 
     /// The representation a constant region at `span` is evaluated in, when
@@ -1919,7 +2027,7 @@ impl Interp {
         let subject = self.eval(scrutinee, env)?;
         for arm in arms {
             let scope = Scope::child(env);
-            if self.match_pattern(&arm.pattern, &subject, &scope)? {
+            if self.match_pattern(&arm.pattern, &subject, &scope) {
                 if let Some(guard) = &arm.guard {
                     match self.eval(guard, &scope)? {
                         | Value::Bool(true) => {},
@@ -2008,41 +2116,32 @@ impl Interp {
     ) -> Result<Value, EvalError> {
         match &expr.kind {
             // A parser recovery node: the syntax error was already reported.
-            | ExprKind::Error => Ok(Value::Unit),
-            | ExprKind::UnitLit => Ok(Value::Unit),
+            | ExprKind::Error | ExprKind::UnitLit => Ok(Value::Unit),
             | ExprKind::Bool(value) => Ok(Value::Bool(*value)),
             // §3.10.1 / §6.3.2: the checker's instantiated representation is
             // the runtime's, so a literal in a `Float` context is an f64 and one
             // in a `Real` context is exact.
             | ExprKind::Int(value) => Ok(Value::Num(self.integer_literal(value, expr.span)?)),
             | ExprKind::Float(text) => Ok(Value::Num(self.float_literal(text, expr.span)?)),
-            | ExprKind::Str(pieces) => {
-                let mut out = String::new();
-                for piece in pieces {
-                    match piece {
-                        | StrPiece::Text(text) => out.push_str(text),
-                        | StrPiece::Expr(inner) => {
-                            let value = self.eval(inner, env)?;
-                            out.push_str(&value::show(&self.system_display(value)));
-                        },
-                    }
-                }
-                Ok(Value::string(out))
-            },
+            | ExprKind::Str(pieces) => self.eval_string_parts(pieces, env),
             | ExprKind::Quantity { value, unit } => {
                 let as_float = self.literal_rep(expr.span) == Some(Rep::Float);
                 self.quantity(value, unit, expr.span, as_float)
             },
             | ExprKind::Var(name) => self.lookup(name, env, expr.span),
             | ExprKind::QName(path) => {
-                if path.len() == 2 && path[0] == "Rssn" {
-                    return Ok(crate::rssn_module::member(&path[1]));
+                if let [module, member] = path.as_slice()
+                    && module == "Rssn"
+                {
+                    return Ok(crate::rssn_module::member(member));
                 }
                 self.lookup(&path.join("."), env, expr.span)
             },
-            | ExprKind::Unary { op, operand } => self.eval_unary_expression(expr, op, operand, env),
+            | ExprKind::Unary { op, operand } => {
+                self.eval_unary_expression(expr, *op, operand, env)
+            },
             | ExprKind::Binary { op, left, right } => {
-                self.eval_binary_expression(expr, op, left, right, env)
+                self.eval_binary_expression(expr, *op, left, right, env)
             },
             | ExprKind::Call { callee, args } => self.eval_call_expression(expr, callee, args, env),
             | ExprKind::TypeApp { callee, args } => {
@@ -2072,61 +2171,9 @@ impl Interp {
             | ExprKind::Block { stmts, tail } => {
                 self.eval_block_expression(stmts, tail.as_deref(), env)
             },
-            | ExprKind::Do { stmts } => self.eval_do(stmts, env, expr.span),
-            | ExprKind::Record { base, fields } => {
-                let mut collected: IndexMap<String, Value> = IndexMap::new();
-                if let Some(base) = base {
-                    match self.eval(base, env)? {
-                        | Value::Record(record) => {
-                            for (name, value) in &record.fields {
-                                collected.insert(name.clone(), value.clone());
-                            }
-                        },
-                        | other => {
-                            return Err(EvalError::new(
-                                "E0302",
-                                format!(
-                                    "record update expects a record, found {}",
-                                    other.type_name()
-                                ),
-                            )
-                            .at(base.span));
-                        },
-                    }
-                }
-                for (name, value) in fields {
-                    let evaluated = self.eval(value, env)?;
-                    collected.insert(name.clone(), evaluated);
-                }
-                Ok(Value::Record(Rc::new(RecordValue { fields: collected })))
-            },
-            | ExprKind::Field { base, name } => {
-                if is_rssn_root(base) {
-                    // `Rssn.sin` is a kernel operator, not a record field.
-                    return Ok(crate::rssn_module::member(name));
-                }
-                if let Some(qualified) = qualified_name(base, name)
-                    && (env.lookup(&qualified).is_some() || self.globals.contains_key(&qualified))
-                {
-                    // Dependency aliases live in their defining lexical scope;
-                    // a REPL need not publish them into ambient globals.
-                    return self.lookup(&qualified, env, expr.span);
-                }
-                match self.eval(base, env)? {
-                    | Value::Record(record) => {
-                        record.fields.get(name).cloned().ok_or_else(|| {
-                            EvalError::new("E0306", format!("no field `{name}`")).at(expr.span)
-                        })
-                    },
-                    | other => {
-                        Err(EvalError::new(
-                            "E0302",
-                            format!("field access expects a record, found {}", other.type_name()),
-                        )
-                        .at(expr.span))
-                    },
-                }
-            },
+            | ExprKind::Do { stmts } => Ok(self.eval_do(stmts, env, expr.span)),
+            | ExprKind::Record { base, fields } => self.eval_record(base.as_deref(), fields, env),
+            | ExprKind::Field { base, name } => self.eval_field(base, name, env, expr.span),
             | ExprKind::Tuple(items) => {
                 let mut fields = IndexMap::new();
                 for (index, item) in items.iter().enumerate() {
@@ -2145,35 +2192,142 @@ impl Interp {
             },
             | ExprKind::Try(inner) => {
                 let value = self.eval(inner, env)?;
-                self.try_value(value, expr.span)
+                self.try_value(&value, expr.span)
             },
             | ExprKind::Factorial { expr: inner, double } => {
-                let value = self.eval(inner, env)?;
-                let n = match &value {
-                    | Value::Num(num) => {
-                        match &num.kind {
-                            | NumKind::Int(value) => {
-                                value.to_i64().ok_or_else(|| {
-                                    EvalError::new("E0801", "factorial is too large")
-                                })?
-                            },
-                            | _ => {
-                                return Err(EvalError::new("E0302", "factorial expects an Int")
-                                    .at(expr.span));
-                            },
-                        }
-                    },
-                    | _ => {
-                        return Err(
-                            EvalError::new("E0302", "factorial expects an Int").at(expr.span)
-                        );
-                    },
-                };
-                Ok(Value::Num(NumVal::int(factorial(
-                    self, n, *double, expr.span,
-                )?)))
+                self.eval_factorial(inner, *double, env, expr.span)
             },
         }
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "recursive interpolations use a small stack frame"
+    )]
+    #[inline(never)]
+    fn eval_string_parts(
+        &mut self,
+        pieces: &[StrPiece],
+        env: &Rc<Scope>,
+    ) -> Result<Value, EvalError> {
+        let mut out = String::new();
+        for piece in pieces {
+            match piece {
+                | StrPiece::Text(text) => out.push_str(text),
+                | StrPiece::Expr(inner) => {
+                    let value = self.eval(inner, env)?;
+                    out.push_str(&value::show(&self.system_display(value)));
+                },
+            }
+        }
+        Ok(Value::string(out))
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "record update and field evaluation use a separate recursive frame"
+    )]
+    #[inline(never)]
+    fn eval_record(
+        &mut self,
+        base: Option<&Expr>,
+        fields: &[(String, Expr)],
+        env: &Rc<Scope>,
+    ) -> Result<Value, EvalError> {
+        let mut record = if let Some(base) = base {
+            match self.eval(base, env)? {
+                | Value::Record(record) => record,
+                | other => {
+                    return Err(EvalError::new(
+                        "E0302",
+                        format!(
+                            "record update expects a record, found {}",
+                            other.type_name()
+                        ),
+                    )
+                    .at(base.span));
+                },
+            }
+        } else {
+            Rc::new(RecordValue {
+                fields: IndexMap::with_capacity(fields.len()),
+            })
+        };
+        for (name, value) in fields {
+            let evaluated = self.eval(value, env)?;
+            Rc::make_mut(&mut record)
+                .fields
+                .insert(name.clone(), evaluated);
+        }
+        Ok(Value::Record(record))
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "field lookup evaluates its receiver without retaining the whole AST dispatcher frame"
+    )]
+    #[inline(never)]
+    fn eval_field(
+        &mut self,
+        base: &Expr,
+        name: &str,
+        env: &Rc<Scope>,
+        span: Span,
+    ) -> Result<Value, EvalError> {
+        if is_rssn_root(base) {
+            // `Rssn.sin` is a kernel operator, not a record field.
+            return Ok(crate::rssn_module::member(name));
+        }
+        if let Some(qualified) = qualified_name(base, name)
+            && (env.lookup(&qualified).is_some() || self.globals.contains_key(&qualified))
+        {
+            // Dependency aliases live in their defining lexical scope;
+            // a REPL need not publish them into ambient globals.
+            return self.lookup(&qualified, env, span);
+        }
+        match self.eval(base, env)? {
+            | Value::Record(record) => {
+                record
+                    .fields
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| EvalError::new("E0306", format!("no field `{name}`")).at(span))
+            },
+            | other => {
+                Err(EvalError::new(
+                    "E0302",
+                    format!("field access expects a record, found {}", other.type_name()),
+                )
+                .at(span))
+            },
+        }
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "factorial evaluates its operand without keeping arithmetic locals in the AST dispatcher"
+    )]
+    #[inline(never)]
+    fn eval_factorial(
+        &mut self,
+        expr: &Expr,
+        double: bool,
+        env: &Rc<Scope>,
+        span: Span,
+    ) -> Result<Value, EvalError> {
+        let Value::Num(NumVal {
+            kind: NumKind::Int(value),
+            ..
+        }) = self.eval(expr, env)?
+        else {
+            return Err(EvalError::new("E0302", "factorial expects an Int").at(span));
+        };
+        let limit = value
+            .to_i64()
+            .ok_or_else(|| EvalError::new("E0801", "factorial is too large"))?;
+        Ok(Value::Num(NumVal::int(factorial(
+            self, limit, double, span,
+        )?)))
     }
 
     fn lookup(
@@ -2341,6 +2495,9 @@ impl Interp {
             return Ok(Value::Native(Rc::new(NativeFn(Box::new(
                 move |interp, args, span| interp.call_class_method(&class, &method, args, span),
             )))));
+        }
+        if name == "default_plot_opts" {
+            return Ok(crate::builtins::default_plot_opts());
         }
         // Builtin functions are resolved *before* units: several unit names are
         // also function names — `dyn` is the CGS force unit and `at` the
@@ -2531,7 +2688,7 @@ impl Interp {
     }
 
     pub(crate) fn quantity(
-        &mut self,
+        &self,
         value: &NumberLit,
         unit: &aevia_dim::UnitExpr,
         span: Span,
@@ -2554,7 +2711,7 @@ impl Interp {
     }
 
     fn quantity_in_unit(
-        &mut self,
+        &self,
         value: &NumberLit,
         unit: &aevia_dim::UnitExpr,
         span: Span,
@@ -2608,38 +2765,30 @@ impl Interp {
             num.display = Some(display);
             return Ok(Value::Num(num));
         }
-        // A scale with a factor of pi (`deg`) stays symbolic.
-        if resolved.scale.pi != 0 {
-            let coefficient = value
-                .as_rational()
-                .ok_or_else(|| EvalError::new("E0106", "invalid numeric literal").at(span))?;
-            let mut term = crate::sym::Term::Num(coefficient * resolved.scale.rat.clone());
-            if resolved.scale.pi != 0 {
-                let pi = crate::sym::Term::Sym("pi".to_string());
-                term = crate::sym::Term::mul(
-                    term,
-                    crate::sym::Term::pow(
-                        pi,
-                        BigRational::from_integer(BigInt::from(resolved.scale.pi)),
-                    ),
-                );
-            }
-            let mut num = NumVal::symbolic(term, resolved.dim);
-            num.display = Some(display);
-            return Ok(Value::Num(num));
-        }
-        let num = match value {
-            | NumberLit::Int(coefficient) => {
-                let scaled =
-                    BigRational::from_integer(coefficient.clone()) * resolved.scale.rat.clone();
-                NumVal::exact(scaled, resolved.dim)
-            },
-            | NumberLit::Decimal(text) => {
-                let coefficient = aevia_dim::parse_decimal(text)
-                    .ok_or_else(|| EvalError::new("E0106", "invalid decimal literal").at(span))?;
-                let scaled = coefficient * resolved.scale.rat.clone();
-                NumVal::exact(scaled, resolved.dim)
-            },
+        let power = resolved.scale.pi;
+        let coefficient = value.as_rational().ok_or_else(|| {
+            let message = if power == 0 {
+                "invalid decimal literal"
+            } else {
+                "invalid numeric literal"
+            };
+            EvalError::new("E0106", message).at(span)
+        })?;
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "a literal and a unit scale have arbitrary-precision rational coefficients"
+        )]
+        let scaled = coefficient * &resolved.scale.rat;
+        let num = if power == 0 {
+            NumVal::exact(scaled, resolved.dim)
+        } else {
+            // A scale with a factor of pi (`deg`) stays symbolic.
+            let pi = crate::sym::Term::Sym("pi".to_string());
+            let term = crate::sym::Term::mul(
+                crate::sym::Term::Num(scaled),
+                crate::sym::Term::pow(pi, BigRational::from_integer(BigInt::from(power))),
+            );
+            NumVal::symbolic(term, resolved.dim)
         };
         Ok(Value::Num(num.with_display(display)))
     }
@@ -2668,7 +2817,11 @@ impl Interp {
                 }
                 match value {
                     | Value::Num(mut num) => {
-                        num.kind = match num.kind {
+                        #[allow(
+                            clippy::arithmetic_side_effects,
+                            reason = "Int negation promotes on overflow and rational negation is exact"
+                        )]
+                        let kind = match num.kind {
                             | NumKind::Int(value) => NumKind::Int(-value),
                             | NumKind::Exact(value) => NumKind::Exact(Rc::new(-value.as_ref())),
                             | NumKind::Float(value) => NumKind::Float(-value),
@@ -2677,6 +2830,7 @@ impl Interp {
                             },
                             | NumKind::Complex(re, im) => NumKind::Complex(-re, -im),
                         };
+                        num.kind = kind;
                         Ok(Value::Num(num))
                     },
                     | Value::Sparse(sparse) => crate::sparse::negate(self, &sparse, span),
@@ -2771,11 +2925,11 @@ impl Interp {
         }
         match op {
             | BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow => {
-                self.arithmetic(op, left, right, span)
+                self.arithmetic(op, &left, &right, span)
             },
-            | BinOp::MatMul => self.matmul(left, right, span),
+            | BinOp::MatMul => self.matmul(&left, &right, span),
             | BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
-                self.compare(op, left, right, span)
+                Self::compare(op, &left, &right, span)
             },
             | BinOp::And | BinOp::Or => {
                 match (&left, &right) {
@@ -2805,14 +2959,14 @@ impl Interp {
                 }
             },
             | BinOp::Cons => {
+                let dim = value::value_dim(&left);
                 let mut elements = vec![left];
                 match right {
                     | Value::Tensor(tensor) => elements.extend(tensor.elements()),
                     | other => elements.push(other),
                 }
                 let len = elements.len();
-                let dim = value::value_dim(&elements[0]);
-                for elem in &elements[1..] {
+                for elem in elements.iter().skip(1) {
                     if value::value_dim(elem) != dim {
                         return Err(EvalError::new(
                             "E0401",
@@ -2846,84 +3000,7 @@ impl Interp {
         let left_measurement = measurement_parts(left);
         let right_measurement = measurement_parts(right);
         match (left_measurement, right_measurement) {
-            | (Some((left_value, left_uncertainty)), Some((right_value, right_uncertainty))) => {
-                match op {
-                    | BinOp::Add | BinOp::Sub => {
-                        if left_value.dim != right_value.dim {
-                            return Err(EvalError::new(
-                                "E0401",
-                                "measurement `+`/`-` need the same dimension",
-                            )
-                            .at(span));
-                        }
-                        let value =
-                            self.binary(op, Value::Num(left_value), Value::Num(right_value), span)?;
-                        let uncertainty = self.quadrature(
-                            Value::Num(left_uncertainty),
-                            Value::Num(right_uncertainty),
-                            span,
-                        )?;
-                        self.finish_measurement(value, uncertainty, span)
-                    },
-                    | BinOp::Mul => {
-                        let product = self.binary(
-                            BinOp::Mul,
-                            Value::Num(left_value.clone()),
-                            Value::Num(right_value.clone()),
-                            span,
-                        )?;
-                        let first = self.binary(
-                            BinOp::Mul,
-                            Value::Num(left_uncertainty),
-                            Value::Num(right_value),
-                            span,
-                        )?;
-                        let second = self.binary(
-                            BinOp::Mul,
-                            Value::Num(right_uncertainty),
-                            Value::Num(left_value),
-                            span,
-                        )?;
-                        let uncertainty = self.quadrature(first, second, span)?;
-                        self.finish_measurement(product, uncertainty, span)
-                    },
-                    | BinOp::Div => {
-                        if right_value.is_zero() {
-                            return Err(
-                                EvalError::new("E0801", "measurement division by zero").at(span)
-                            );
-                        }
-                        let quotient = self.binary(
-                            BinOp::Div,
-                            Value::Num(left_value.clone()),
-                            Value::Num(right_value.clone()),
-                            span,
-                        )?;
-                        let first = self.binary(
-                            BinOp::Div,
-                            Value::Num(left_uncertainty),
-                            Value::Num(right_value.clone()),
-                            span,
-                        )?;
-                        let square = self.binary(
-                            BinOp::Mul,
-                            Value::Num(right_value.clone()),
-                            Value::Num(right_value),
-                            span,
-                        )?;
-                        let numerator = self.binary(
-                            BinOp::Mul,
-                            Value::Num(right_uncertainty),
-                            Value::Num(left_value),
-                            span,
-                        )?;
-                        let second = self.binary(BinOp::Div, numerator, square, span)?;
-                        let uncertainty = self.quadrature(first, second, span)?;
-                        self.finish_measurement(quotient, uncertainty, span)
-                    },
-                    | _ => Ok(None),
-                }
-            },
+            | (Some(left), Some(right)) => self.measurement_pair(op, left, right, span),
             // A scalar scales a measurement; `measurement + scalar` is not a
             // declared operator, so it stays an `E0302` from the normal path.
             | (Some((measurement_value, measurement_uncertainty)), None) => {
@@ -2946,7 +3023,7 @@ impl Interp {
                         let magnitude = self.call_named("abs", vec![Value::Num(scalar)], span)?;
                         let uncertainty =
                             self.binary(op, Value::Num(measurement_uncertainty), magnitude, span)?;
-                        self.finish_measurement(value, uncertainty, span)
+                        Self::finish_measurement(value, uncertainty, span)
                     },
                     | _ => Ok(None),
                 }
@@ -2971,9 +3048,96 @@ impl Interp {
                     magnitude,
                     span,
                 )?;
-                self.finish_measurement(value, uncertainty, span)
+                Self::finish_measurement(value, uncertainty, span)
             },
             | (None, None) => Ok(None),
+        }
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "the two-measurement quadrature rules are independent of scalar scaling"
+    )]
+    fn measurement_pair(
+        &mut self,
+        op: BinOp,
+        (left_value, left_uncertainty): (NumVal, NumVal),
+        (right_value, right_uncertainty): (NumVal, NumVal),
+        span: Span,
+    ) -> Result<Option<Value>, EvalError> {
+        match op {
+            | BinOp::Add | BinOp::Sub => {
+                if left_value.dim != right_value.dim {
+                    return Err(EvalError::new(
+                        "E0401",
+                        "measurement `+`/`-` need the same dimension",
+                    )
+                    .at(span));
+                }
+                let value =
+                    self.binary(op, Value::Num(left_value), Value::Num(right_value), span)?;
+                let uncertainty = self.quadrature(
+                    Value::Num(left_uncertainty),
+                    Value::Num(right_uncertainty),
+                    span,
+                )?;
+                Self::finish_measurement(value, uncertainty, span)
+            },
+            | BinOp::Mul => {
+                let product = self.binary(
+                    BinOp::Mul,
+                    Value::Num(left_value.clone()),
+                    Value::Num(right_value.clone()),
+                    span,
+                )?;
+                let first = self.binary(
+                    BinOp::Mul,
+                    Value::Num(left_uncertainty),
+                    Value::Num(right_value),
+                    span,
+                )?;
+                let second = self.binary(
+                    BinOp::Mul,
+                    Value::Num(right_uncertainty),
+                    Value::Num(left_value),
+                    span,
+                )?;
+                let uncertainty = self.quadrature(first, second, span)?;
+                Self::finish_measurement(product, uncertainty, span)
+            },
+            | BinOp::Div => {
+                if right_value.is_zero() {
+                    return Err(EvalError::new("E0801", "measurement division by zero").at(span));
+                }
+                let quotient = self.binary(
+                    BinOp::Div,
+                    Value::Num(left_value.clone()),
+                    Value::Num(right_value.clone()),
+                    span,
+                )?;
+                let first = self.binary(
+                    BinOp::Div,
+                    Value::Num(left_uncertainty),
+                    Value::Num(right_value.clone()),
+                    span,
+                )?;
+                let square = self.binary(
+                    BinOp::Mul,
+                    Value::Num(right_value.clone()),
+                    Value::Num(right_value),
+                    span,
+                )?;
+                let numerator = self.binary(
+                    BinOp::Mul,
+                    Value::Num(right_uncertainty),
+                    Value::Num(left_value),
+                    span,
+                )?;
+                let second = self.binary(BinOp::Div, numerator, square, span)?;
+                let uncertainty = self.quadrature(first, second, span)?;
+                Self::finish_measurement(quotient, uncertainty, span)
+            },
+            | _ => Ok(None),
         }
     }
 
@@ -2991,7 +3155,6 @@ impl Interp {
     }
 
     fn finish_measurement(
-        &mut self,
         value: Value,
         uncertainty: Value,
         span: Span,
@@ -3007,11 +3170,11 @@ impl Interp {
     fn arithmetic(
         &mut self,
         op: BinOp,
-        left: Value,
-        right: Value,
+        left: &Value,
+        right: &Value,
         span: Span,
     ) -> Result<Value, EvalError> {
-        match (&left, &right) {
+        match (left, right) {
             | (Value::Tensor(a), Value::Tensor(b)) => {
                 self.tensor_arithmetic(op, a.as_ref(), b.as_ref(), span)
             },
@@ -3024,8 +3187,6 @@ impl Interp {
                 if let Some(value) = tensor.dense_scalar(op, num, flipped) {
                     return Ok(value);
                 }
-                let tensor = tensor.clone();
-                let num = num.clone();
                 let mut elements = Vec::with_capacity(tensor.storage.len());
                 for element in tensor.elements() {
                     let Value::Num(element) = element else {
@@ -3056,8 +3217,10 @@ impl Interp {
             },
             | (Value::UnitOf(a), Value::UnitOf(b)) => {
                 match op {
-                    | BinOp::Mul => Ok(Value::UnitOf(Rc::new(combine_units(a, b, true)))),
-                    | BinOp::Div => Ok(Value::UnitOf(Rc::new(combine_units(a, b, false)))),
+                    | BinOp::Mul | BinOp::Div => {
+                        combine_units(a, b, op == BinOp::Mul, span)
+                            .map(|unit| Value::UnitOf(Rc::new(unit)))
+                    },
                     | _ => Err(EvalError::new("E0302", "units support `*` and `/`").at(span)),
                 }
             },
@@ -3117,8 +3280,11 @@ impl Interp {
     /// The local term language only has rational exponents, so the power is
     /// built as a kernel term; differentiation, substitution, display and
     /// numeric evaluation of it then go through the kernel (`Term::Foreign`).
+    #[allow(
+        clippy::single_call_fn,
+        reason = "general symbolic powers are owned by the kernel boundary"
+    )]
     fn symbolic_power(
-        &mut self,
         base: &NumVal,
         exponent: &NumVal,
         span: Span,
@@ -3131,8 +3297,8 @@ impl Interp {
             .at(span)
             .with_note("divide by a unit first, or use `pow_dyn` for a checked dynamic power"));
         }
-        let a = self.num_to_term(base);
-        let b = self.num_to_term(exponent);
+        let a = Self::num_to_term(base);
+        let b = Self::num_to_term(exponent);
         // §6.3.4: an infinite exponent (`0 ^ oo`, `oo ^ oo`) is not a power the
         // exact phase defines; it needs a finite rational exponent.
         if crate::sym::contains_infinity(&b) {
@@ -3162,8 +3328,12 @@ impl Interp {
         Ok(NumVal::symbolic(term, Dim::one()))
     }
 
+    #[allow(
+        clippy::unused_self,
+        reason = "the AST, Core IR and numerical builtins share the interpreter scalar entry point"
+    )]
     pub(crate) fn scalar_arithmetic(
-        &mut self,
+        &self,
         op: BinOp,
         left: NumVal,
         right: NumVal,
@@ -3174,10 +3344,9 @@ impl Interp {
         // only defined for a dimensionless base and exponent (§4.6), and the
         // term is built by the kernel, which owns general powers.
         if op == BinOp::Pow && right.is_symbolic() && right.to_rational().is_none() {
-            return self.symbolic_power(&left, &right, span);
+            return Self::symbolic_power(&left, &right, span);
         }
         let dim = match op {
-            | BinOp::Add | BinOp::Sub => left.dim.clone(),
             | BinOp::Mul => left.dim.mul(&right.dim),
             | BinOp::Div => left.dim.div(&right.dim),
             | BinOp::Pow => {
@@ -3188,87 +3357,22 @@ impl Interp {
             },
             | _ => left.dim.clone(),
         };
-        // Symbolic if either side is symbolic.
         if left.is_symbolic() || right.is_symbolic() {
-            let a = self.num_to_term(&left);
-            let b = self.num_to_term(&right);
-            // The exact/Real path is *partial* on the extended reals: an
-            // undefined form such as `oo * 0`, `oo / oo` or `oo ^ 0` must not
-            // collapse to a finite answer. Such a collapse is recognised by the
-            // result being a plain number while an infinity occurred; the
-            // expression is then kept, readable, as a symbolic term (§6.3.4).
-            let has_infinity =
-                crate::sym::contains_infinity(&a) || crate::sym::contains_infinity(&b);
-            let power = if op == BinOp::Pow {
-                Some(
-                    right
-                        .to_rational()
-                        .ok_or_else(|| EvalError::new("E0402", "invalid exponent").at(span))?,
-                )
-            } else {
-                None
-            };
-            let term = match op {
-                | BinOp::Add => crate::sym::Term::add(a.clone(), b.clone()),
-                | BinOp::Sub => crate::sym::Term::sub(a.clone(), b.clone()),
-                | BinOp::Mul => crate::sym::Term::mul(a.clone(), b.clone()),
-                | BinOp::Div => {
-                    let inverse = crate::sym::Term::pow(
-                        b.clone(),
-                        BigRational::from_integer(BigInt::from(-1)),
-                    );
-                    crate::sym::Term::mul(a.clone(), inverse)
-                },
-                | BinOp::Pow => {
-                    let exponent = power.clone().expect("computed above");
-                    crate::sym::Term::pow(a.clone(), exponent)
-                },
-                | _ => return Err(EvalError::new("E0809", "unexpected operator").at(span)),
-            };
-            if let crate::sym::Term::Num(value) = &term {
-                if has_infinity {
-                    let unevaluated = match op {
-                        | BinOp::Add => crate::sym::Term::Add(vec![a, b]),
-                        | BinOp::Sub => crate::sym::Term::Add(vec![a, crate::sym::Term::neg(b)]),
-                        | BinOp::Mul => crate::sym::Term::Mul(vec![a, b]),
-                        | BinOp::Div => {
-                            crate::sym::Term::Mul(vec![
-                                a,
-                                crate::sym::Term::pow(
-                                    b,
-                                    BigRational::from_integer(BigInt::from(-1)),
-                                ),
-                            ])
-                        },
-                        | BinOp::Pow => {
-                            crate::sym::Term::Pow(Box::new(a), power.expect("computed above"))
-                        },
-                        | _ => crate::sym::Term::Num(value.clone()),
-                    };
-                    return Ok(NumVal::symbolic(unevaluated, dim));
-                }
-                // §6.3.2: a symbolic operation that collapses to a rational is
-                // that rational. `x - x` is exactly `0`, not a symbolic zero that
-                // cannot be compared.
-                return Ok(NumVal::exact(value.clone(), dim));
-            }
-            return Ok(NumVal::symbolic(term, dim));
+            return Self::symbolic_arithmetic(op, &left, &right, dim, span);
         }
         // Complex arithmetic.
         if matches!(left.kind, NumKind::Complex(..)) || matches!(right.kind, NumKind::Complex(..)) {
             let (ar, ai) = to_complex(&left);
             let (br, bi) = to_complex(&right);
+            #[allow(
+                clippy::suboptimal_flops,
+                reason = "complex multiplication retains the existing binary64 roundings"
+            )]
             let (re, im) = match op {
                 | BinOp::Add => (ar + br, ai + bi),
                 | BinOp::Sub => (ar - br, ai - bi),
                 | BinOp::Mul => (ar * br - ai * bi, ar * bi + ai * br),
-                | BinOp::Div => {
-                    let denominator = br * br + bi * bi;
-                    (
-                        (ar * br + ai * bi) / denominator,
-                        (ai * br - ar * bi) / denominator,
-                    )
-                },
+                | BinOp::Div => complex_quotient((ar, ai), (br, bi)),
                 | BinOp::Pow => {
                     let value = (ar, ai);
                     let exponent = br;
@@ -3307,6 +3411,88 @@ impl Interp {
             };
             return Ok(NumVal::float(value, dim));
         }
+        Self::exact_arithmetic(op, left, right, dim, span)
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "extended-real symbolic simplification is separate from numeric promotion"
+    )]
+    #[inline(never)]
+    fn symbolic_arithmetic(
+        op: BinOp,
+        left: &NumVal,
+        right: &NumVal,
+        dim: Dim,
+        span: Span,
+    ) -> Result<NumVal, EvalError> {
+        let a = Self::num_to_term(left);
+        let b = Self::num_to_term(right);
+        // The exact/Real path is *partial* on the extended reals: an
+        // undefined form such as `oo * 0`, `oo / oo` or `oo ^ 0` must not
+        // collapse to a finite answer. Such a collapse is recognised by the
+        // result being a plain number while an infinity occurred; the
+        // expression is then kept, readable, as a symbolic term (§6.3.4).
+        let has_infinity = crate::sym::contains_infinity(&a) || crate::sym::contains_infinity(&b);
+        let mut power = None;
+        let term = match op {
+            | BinOp::Add => crate::sym::Term::add(a.clone(), b.clone()),
+            | BinOp::Sub => crate::sym::Term::sub(a.clone(), b.clone()),
+            | BinOp::Mul => crate::sym::Term::mul(a.clone(), b.clone()),
+            | BinOp::Div => {
+                let inverse =
+                    crate::sym::Term::pow(b.clone(), BigRational::from_integer(BigInt::from(-1)));
+                crate::sym::Term::mul(a.clone(), inverse)
+            },
+            | BinOp::Pow => {
+                let exponent = right
+                    .to_rational()
+                    .ok_or_else(|| EvalError::new("E0402", "invalid exponent").at(span))?;
+                let term = crate::sym::Term::pow(a.clone(), exponent.clone());
+                power = Some(exponent);
+                term
+            },
+            | _ => return Err(EvalError::new("E0809", "unexpected operator").at(span)),
+        };
+        if let crate::sym::Term::Num(value) = &term {
+            if has_infinity {
+                let unevaluated = match (op, power) {
+                    | (_, Some(exponent)) => crate::sym::Term::Pow(Box::new(a), exponent),
+                    | (BinOp::Add, None) => crate::sym::Term::Add(vec![a, b]),
+                    | (BinOp::Sub, None) => {
+                        crate::sym::Term::Add(vec![a, crate::sym::Term::neg(b)])
+                    },
+                    | (BinOp::Mul, None) => crate::sym::Term::Mul(vec![a, b]),
+                    | (BinOp::Div, None) => {
+                        crate::sym::Term::Mul(vec![
+                            a,
+                            crate::sym::Term::pow(b, BigRational::from_integer(BigInt::from(-1))),
+                        ])
+                    },
+                    | _ => crate::sym::Term::Num(value.clone()),
+                };
+                return Ok(NumVal::symbolic(unevaluated, dim));
+            }
+            // §6.3.2: a symbolic operation that collapses to a rational is
+            // that rational. `x - x` is exactly `0`, not a symbolic zero that
+            // cannot be compared.
+            return Ok(NumVal::exact(value.clone(), dim));
+        }
+        Ok(NumVal::symbolic(term, dim))
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "integer and rational arithmetic retain exact arithmetic and their own allocation path"
+    )]
+    #[inline(never)]
+    fn exact_arithmetic(
+        op: BinOp,
+        left: NumVal,
+        right: NumVal,
+        dim: Dim,
+        span: Span,
+    ) -> Result<NumVal, EvalError> {
         // The Real path: every operand is exact (a `Float` is the exact
         // rational it denotes), so an operation that is closed on the
         // rationals answers exactly, and one that is not answers symbolically.
@@ -3315,6 +3501,10 @@ impl Interp {
         // `Int` arithmetic that stays `Int` needs no rationals: the same
         // answers as the general path below, without a `gcd` per operation.
         if let (NumKind::Int(a), NumKind::Int(b)) = (&left.kind, &right.kind) {
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "Int promotes to arbitrary precision when machine arithmetic overflows"
+            )]
             let value = match op {
                 | BinOp::Add => Some(a + b),
                 | BinOp::Sub => Some(a - b),
@@ -3340,12 +3530,16 @@ impl Interp {
                 format!(
                     "`{}` is not defined for {} and {}",
                     op.as_str(),
-                    Value::Num(left.clone()).type_name(),
-                    Value::Num(right.clone()).type_name()
+                    Value::Num(left).type_name(),
+                    Value::Num(right).type_name()
                 ),
             )
             .at(span));
         };
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "the rational operations are exact and the divisor is checked for zero"
+        )]
         let value = match op {
             | BinOp::Add => Some(&a + &b),
             | BinOp::Sub => Some(&a - &b),
@@ -3474,7 +3668,7 @@ impl Interp {
     /// `num * unit` (`multiply`) or `num / unit`: the coefficient scales by the
     /// unit's exact scale and the dimension combines with the unit's.
     fn scale_by_unit(
-        &mut self,
+        &self,
         num: &NumVal,
         unit: &Rc<UnitDef>,
         multiply: bool,
@@ -3510,7 +3704,7 @@ impl Interp {
     /// and `/` subtracts them; the payloads are the dimensionless parts, so the
     /// ordinary scalar arithmetic gives the coefficient.
     fn dyn_arithmetic(
-        &mut self,
+        &self,
         op: BinOp,
         left: &Rc<DynValue>,
         right: &Rc<DynValue>,
@@ -3555,7 +3749,7 @@ impl Interp {
     /// `Dyn ^ Int` (§4.9.3): the dimension exponent is multiplied by the
     /// integer, the payload is raised to it.
     fn dyn_pow(
-        &mut self,
+        &self,
         dynamic: &Rc<DynValue>,
         exponent: &NumVal,
         span: Span,
@@ -3580,10 +3774,7 @@ impl Interp {
         })))
     }
 
-    fn num_to_term(
-        &self,
-        num: &NumVal,
-    ) -> crate::sym::Term {
+    fn num_to_term(num: &NumVal) -> crate::sym::Term {
         match &num.kind {
             | NumKind::Int(value) => crate::sym::Term::Num(value.to_rational()),
             | NumKind::Exact(value) => crate::sym::Term::Num(value.as_ref().clone()),
@@ -3638,7 +3829,9 @@ impl Interp {
             )
             .at(span)
         })?;
-        let count = TensorData::element_count(&shape);
+        let count = value::checked_element_count(&shape).ok_or_else(|| {
+            EvalError::new("E0802", "broadcast result shape is too large").at(span)
+        })?;
         if count == 0
             && matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul)
             && let (Storage::TypedExact(_, a), Storage::TypedExact(_, b)) =
@@ -3663,13 +3856,14 @@ impl Interp {
             })));
         }
         let mut elements = Vec::with_capacity(count);
+        let mut coordinates = vec![0; shape.len()];
         for index in 0..count {
-            let coordinates = unravel(index, &shape);
+            unravel_into(index, &shape, &mut coordinates);
             let a = element_at_broadcast(left, &coordinates)
                 .ok_or_else(|| EvalError::new("E0802", "shape mismatch").at(span))?;
             let b = element_at_broadcast(right, &coordinates)
                 .ok_or_else(|| EvalError::new("E0802", "shape mismatch").at(span))?;
-            elements.push(self.arithmetic(op, a, b, span)?);
+            elements.push(self.arithmetic(op, &a, &b, span)?);
         }
         let dim = elements
             .first()
@@ -3679,56 +3873,43 @@ impl Interp {
 
     fn matmul(
         &mut self,
-        left: Value,
-        right: Value,
+        left: &Value,
+        right: &Value,
         span: Span,
     ) -> Result<Value, EvalError> {
-        let (Value::Tensor(a), Value::Tensor(b)) = (&left, &right) else {
+        let (Value::Tensor(a), Value::Tensor(b)) = (left, right) else {
             return Err(EvalError::new("E0302", "`@` expects two tensors").at(span));
         };
         if let Some(value) = a.dense_matmul(b) {
             return Ok(value);
         }
-        let (rows, inner, other_inner, cols, output_shape, label) = match (a.rank(), b.rank()) {
-            | (2, 2) => {
-                (
-                    a.shape[0],
-                    a.shape[1],
-                    b.shape[0],
-                    b.shape[1],
-                    Some(vec![a.shape[0], b.shape[1]]),
-                    "matmul",
-                )
-            },
-            | (2, 1) => {
-                (
-                    a.shape[0],
-                    a.shape[1],
-                    b.shape[0],
-                    1,
-                    Some(vec![a.shape[0]]),
-                    "matvec",
-                )
-            },
-            | (1, 2) => {
-                (
-                    1,
-                    a.shape[0],
-                    b.shape[0],
-                    b.shape[1],
-                    Some(vec![b.shape[1]]),
-                    "vecmat",
-                )
-            },
-            | (1, 1) => (1, a.shape[0], b.shape[0], 1, None, "dot"),
-            | _ => {
-                return Err(EvalError::new(
-                    "E0802",
-                    format!("`@` is not defined for ranks {} and {}", a.rank(), b.rank()),
-                )
-                .at(span));
-            },
-        };
+        let (rows, inner, other_inner, cols, output_shape, label) =
+            match (a.shape.as_slice(), b.shape.as_slice()) {
+                | ([rows, inner], [other_inner, cols]) => {
+                    (
+                        *rows,
+                        *inner,
+                        *other_inner,
+                        *cols,
+                        Some(vec![*rows, *cols]),
+                        "matmul",
+                    )
+                },
+                | ([rows, inner], [other_inner]) => {
+                    (*rows, *inner, *other_inner, 1, Some(vec![*rows]), "matvec")
+                },
+                | ([inner], [other_inner, cols]) => {
+                    (1, *inner, *other_inner, *cols, Some(vec![*cols]), "vecmat")
+                },
+                | ([inner], [other_inner]) => (1, *inner, *other_inner, 1, None, "dot"),
+                | _ => {
+                    return Err(EvalError::new(
+                        "E0802",
+                        format!("`@` is not defined for ranks {} and {}", a.rank(), b.rank()),
+                    )
+                    .at(span));
+                },
+            };
         if inner != other_inner {
             return Err(EvalError::new(
                 "E0802",
@@ -3740,28 +3921,36 @@ impl Interp {
             .at(span));
         }
         let product_dim = a.dim.mul(&b.dim);
+        if (rows == 0 || cols == 0)
+            && let Some(shape) = output_shape
+        {
+            return Ok(build_tensor(Vec::new(), shape, product_dim));
+        }
         let elements = aevia_std::linalg::contract_rectangular(
             rows,
             inner,
             cols,
             || Value::Num(NumVal::float(0.0, product_dim.clone())),
             |row, index, column, sum| {
-                let x = if a.rank() == 2 {
-                    a.get(&[row as isize, index as isize])
-                } else {
-                    a.get(&[index as isize])
-                }
-                .ok_or_else(|| EvalError::new("E0802", "index out of range").at(span))?;
-                let y = if b.rank() == 2 {
-                    b.get(&[index as isize, column as isize])
-                } else {
-                    b.get(&[index as isize])
-                }
-                .ok_or_else(|| EvalError::new("E0802", "index out of range").at(span))?;
-                let product = self.arithmetic(BinOp::Mul, x, y, span)?;
+                // A vector uses the same logical row-major offset:
+                // the left has row 0 or the right has one column (column 0).
+                let left_index = row
+                    .checked_mul(inner)
+                    .and_then(|base| base.checked_add(index));
+                let right_index = index
+                    .checked_mul(cols)
+                    .and_then(|base| base.checked_add(column));
+                let bad_index = || EvalError::new("E0802", "index out of range").at(span);
+                let x = left_index
+                    .and_then(|flat| a.get_flat(flat))
+                    .ok_or_else(bad_index)?;
+                let y = right_index
+                    .and_then(|flat| b.get_flat(flat))
+                    .ok_or_else(bad_index)?;
+                let product = self.arithmetic(BinOp::Mul, &x, &y, span)?;
                 match sum {
                     | None => Ok(product),
-                    | Some(acc) => self.arithmetic(BinOp::Add, acc, product, span),
+                    | Some(acc) => self.arithmetic(BinOp::Add, &acc, &product, span),
                 }
             },
         )
@@ -3786,21 +3975,35 @@ impl Interp {
         }
     }
 
+    #[allow(
+        clippy::single_call_fn,
+        reason = "numeric and structural comparison share their own ordering rules"
+    )]
     fn compare(
-        &mut self,
         op: BinOp,
-        left: Value,
-        right: Value,
+        left: &Value,
+        right: &Value,
         span: Span,
     ) -> Result<Value, EvalError> {
-        match (&left, &right) {
+        let compare_order = |order: std::cmp::Ordering| {
+            match op {
+                | BinOp::Eq => order.is_eq(),
+                | BinOp::Ne => order.is_ne(),
+                | BinOp::Lt => order.is_lt(),
+                | BinOp::Le => order.is_le(),
+                | BinOp::Gt => order.is_gt(),
+                | BinOp::Ge => order.is_ge(),
+                | _ => false,
+            }
+        };
+        match (left, right) {
             | (Value::Num(a), Value::Num(b)) => {
                 if a.is_symbolic() || b.is_symbolic() {
                     let text = format!(
                         "{} {} {}",
-                        value::show(&left),
+                        value::show(left),
                         op.as_str(),
-                        value::show(&right)
+                        value::show(right)
                     );
                     return Ok(Value::Prop(Rc::new(PropValue {
                         text,
@@ -3814,7 +4017,7 @@ impl Interp {
                 if matches!(op, BinOp::Eq | BinOp::Ne) {
                     // §6.12.1: a concrete `Int`/`Float` compares numerically,
                     // and two exact values compare as rationals.
-                    let equal = value::equal(&left, &right).unwrap_or(false);
+                    let equal = value::equal(left, right).unwrap_or(false);
                     return Ok(Value::Bool(if op == BinOp::Eq {
                         equal
                     } else {
@@ -3823,37 +4026,16 @@ impl Interp {
                 }
                 let both_exact = matches!(a.kind, NumKind::Int(_) | NumKind::Exact(_))
                     && matches!(b.kind, NumKind::Int(_) | NumKind::Exact(_));
-                let result = if let (NumKind::Int(a), NumKind::Int(b)) = (&a.kind, &b.kind) {
-                    match op {
-                        | BinOp::Lt => a < b,
-                        | BinOp::Le => a <= b,
-                        | BinOp::Gt => a > b,
-                        | BinOp::Ge => a >= b,
-                        | _ => false,
-                    }
+                let order = if let (NumKind::Int(a), NumKind::Int(b)) = (&a.kind, &b.kind) {
+                    Some(a.cmp(b))
                 } else if both_exact {
-                    let a = a.to_rational().unwrap_or_else(BigRational::zero);
-                    let b = b.to_rational().unwrap_or_else(BigRational::zero);
-                    match op {
-                        | BinOp::Lt => a < b,
-                        | BinOp::Le => a <= b,
-                        | BinOp::Gt => a > b,
-                        | BinOp::Ge => a >= b,
-                        | _ => false,
-                    }
+                    a.to_rational().zip(b.to_rational()).map(|(a, b)| a.cmp(&b))
                 } else {
-                    let (a, b) = match (a.to_f64(), b.to_f64()) {
-                        | (Some(a), Some(b)) => (a, b),
-                        | _ => return Ok(Value::Bool(false)),
-                    };
-                    match op {
-                        | BinOp::Lt => a < b,
-                        | BinOp::Le => a <= b,
-                        | BinOp::Gt => a > b,
-                        | BinOp::Ge => a >= b,
-                        | _ => false,
-                    }
+                    a.to_f64()
+                        .zip(b.to_f64())
+                        .and_then(|(a, b)| a.partial_cmp(&b))
                 };
+                let result = order.is_some_and(compare_order);
                 Ok(Value::Bool(result))
             },
             | (Value::Bool(a), Value::Bool(b)) => {
@@ -3863,17 +4045,7 @@ impl Interp {
                     | _ => false,
                 }))
             },
-            | (Value::Str(a), Value::Str(b)) => {
-                Ok(Value::Bool(match op {
-                    | BinOp::Eq => a == b,
-                    | BinOp::Ne => a != b,
-                    | BinOp::Lt => a < b,
-                    | BinOp::Le => a <= b,
-                    | BinOp::Gt => a > b,
-                    | BinOp::Ge => a >= b,
-                    | _ => false,
-                }))
-            },
+            | (Value::Str(a), Value::Str(b)) => Ok(Value::Bool(compare_order(a.cmp(b)))),
             | (Value::Unit, Value::Unit) => {
                 Ok(Value::Bool(matches!(op, BinOp::Eq | BinOp::Le | BinOp::Ge)))
             },
@@ -3881,7 +4053,7 @@ impl Interp {
                 // Structural equality for variants, records and tensors
                 // (§6.12.1): payloads and elements are compared, never the
                 // text they print as.
-                match value::equal(&left, &right) {
+                match value::equal(left, right) {
                     | Ok(equal) => {
                         Ok(Value::Bool(if op == BinOp::Eq {
                             equal
@@ -3997,13 +4169,27 @@ impl Interp {
                 }
             }
         }
-        if let Value::Ctor(ctor) = &function {
-            let (adt, index, name) = (ctor.adt, ctor.index, &ctor.name);
-            if adt == u32::MAX
-                && index == usize::MAX
-                && name == "read_npy"
+        self.type_apply_intrinsic(function, types, span)
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "builtin type arguments are captured independently of source closure and constructor specialization"
+    )]
+    fn type_apply_intrinsic(
+        &self,
+        function: Value,
+        types: &[Ty],
+        span: Span,
+    ) -> Value {
+        if let Value::Ctor(ctor) = &function
+            && ctor.adt == u32::MAX
+            && ctor.index == usize::MAX
+        {
+            let name = &ctor.name;
+            if name == "read_npy"
                 && ctor.origin.as_ref().is_some_and(|origin| {
-                    origin.adt == adt && origin.index == index && origin.name == *name
+                    origin.adt == ctor.adt && origin.index == ctor.index && origin.name == *name
                 })
             {
                 let rank = match self.resolved_expr_type(span) {
@@ -4018,24 +4204,24 @@ impl Interp {
                     crate::builtins::read_npy_ranked(&args, rank, span)
                 }))));
             }
-            if adt == u32::MAX && index == usize::MAX && name == "from_value" {
+            if name == "from_value" {
                 let evidence = types
                     .first()
                     .and_then(|argument| self.reified_type(argument));
                 return Value::Native(Rc::new(NativeFn(Box::new(move |_interp, args, span| {
-                    if args.len() != 1 {
+                    let [argument] = args.as_slice() else {
                         return Err(EvalError::new(
                             "E0315",
                             "`from_value` takes one value argument",
                         )
                         .at(span));
-                    }
+                    };
                     let witness = evidence.as_ref().ok_or_else(|| {
                         EvalError::new("E0304", "missing concrete type evidence for `from_value`")
                             .at(span)
                     })?;
                     Ok(
-                        match crate::rssn_module::from_kernel_value(&args[0], witness) {
+                        match crate::rssn_module::from_kernel_value(argument, witness) {
                             | Ok(value) => {
                                 make_variant(aevia_types::adt::RESULT_ID, 0, "Ok", vec![value])
                             },
@@ -4051,7 +4237,7 @@ impl Interp {
                     )
                 }))));
             }
-            if adt == u32::MAX && index == usize::MAX && name == "type_rep" {
+            if name == "type_rep" {
                 let evidence = types
                     .first()
                     .and_then(|argument| self.reified_type(argument));
@@ -4068,8 +4254,7 @@ impl Interp {
                     Ok(Value::TypeRep(Rc::new(witness)))
                 }))));
             }
-            if adt == u32::MAX && index == usize::MAX && crate::builtins::takes_type_argument(name)
-            {
+            if crate::builtins::takes_type_argument(name) {
                 let name = name.clone();
                 let types = self.canonical_tensor_types(&name, types, span);
                 return Value::Native(Rc::new(NativeFn(Box::new(move |interp, args, span| {
@@ -4103,7 +4288,7 @@ impl Interp {
                     && ctor.index == origin.index
                     && ctor.name == origin.name =>
             {
-                Some(origin.selected_result.clone())
+                Some(origin.selected_result.as_ref())
             },
             | _ => None,
         };
@@ -4118,81 +4303,32 @@ impl Interp {
                     && origin.index == ctor.index
                     && origin.name == ctor.name =>
             {
-                Some(ctor.name.clone())
+                Some(ctor.name.as_str())
             },
             | _ => None,
         };
-        let to_value = builtin.as_deref() == Some("to_value");
+        let to_value = builtin == Some("to_value");
         let result_type = source_ctor.and_then(|selected| {
             self.resolved_expr_type(span).filter(|ty| {
                 selected
-                    .as_ref()
                     .is_none_or(|selected| crate::host_witness::strict_schema_equal(selected, ty))
             })
         });
-        let input = if to_value && args.len() == 1 && argument_spans.len() == 1 {
-            self.resolved_expr_type(argument_spans[0])
-                .map(|ty| (args[0].clone(), ty))
-        } else {
-            None
-        };
-        let builtin_result = builtin
-            .as_deref()
-            .and_then(|name| builtin_result_schema(name, &args));
-        if builtin.as_deref() == Some("to_callback") {
-            if args.len() != 1 || argument_spans.len() != 1 {
-                return Err(
-                    EvalError::new("E0315", "`to_callback` requires one function").at(span),
-                );
-            }
-            let expected = self.resolved_expr_type(argument_spans[0]).ok_or_else(|| {
-                EvalError::new(
-                    "E0304",
-                    "`to_callback` requires a concrete function signature",
-                )
-                .at(span)
-            })?;
-            let function = self.reify_callable(&args[0], &expected)?;
-            let schema = self
-                .concrete_callable_type(&function)
-                .filter(|schema| crate::host_witness::strict_schema_equal(schema, &expected))
-                .ok_or_else(|| {
-                    EvalError::new("E0302", "callback signature does not match its callable")
-                        .at(span)
-                })?;
-            return Ok(Value::Callback(Rc::new(value::CallbackValue {
-                function,
-                schema,
-            })));
+        let input =
+            if to_value && let ([argument], [argument_span]) = (args.as_slice(), argument_spans) {
+                self.resolved_expr_type(*argument_span)
+                    .map(|ty| (argument.clone(), ty))
+            } else {
+                None
+            };
+        match builtin {
+            | Some("to_callback") => {
+                return self.reify_source_callback(&args, argument_spans, span);
+            },
+            | Some("from_value") => return Ok(self.reify_source_kernel_value(&args, span)),
+            | _ => {},
         }
-        if builtin.as_deref() == Some("from_value") {
-            let expected = self.resolved_expr_type(span).and_then(|ty| {
-                match ty {
-                    | aevia_types::Type::Adt(id, args) if id == adt::RESULT_ID => {
-                        args.first().cloned()
-                    },
-                    | _ => None,
-                }
-            });
-            let converted = expected
-                .ok_or_else(|| "missing concrete result type evidence".to_string())
-                .and_then(|ty| {
-                    args.first()
-                        .ok_or_else(|| "missing kernel value".to_string())
-                        .and_then(|value| crate::rssn_module::from_kernel_value(value, &ty))
-                });
-            return Ok(match converted {
-                | Ok(value) => make_variant(adt::RESULT_ID, 0, "Ok", vec![value]),
-                | Err(error) => {
-                    make_variant(
-                        adt::RESULT_ID,
-                        1,
-                        "Err",
-                        vec![crate::rssn_module::value_error("TypeMismatch", error)],
-                    )
-                },
-            });
-        }
+        let builtin_result = builtin.and_then(|name| builtin_result_schema(name, &args));
         let mut result = self.apply(function, args, span)?;
         if let Some(ty) = builtin_result.filter(|ty| {
             self.resolved_expr_type(span)
@@ -4236,6 +4372,73 @@ impl Interp {
             Rc::make_mut(kernel).host_witness = Some(Rc::new(witness));
         }
         Ok(result)
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "callback creation checks a lexical callable signature, independently of invocation"
+    )]
+    fn reify_source_callback(
+        &self,
+        args: &[Value],
+        argument_spans: &[Span],
+        span: Span,
+    ) -> Result<Value, EvalError> {
+        let ([argument], [argument_span]) = (args, argument_spans) else {
+            return Err(EvalError::new("E0315", "`to_callback` requires one function").at(span));
+        };
+        let expected = self.resolved_expr_type(*argument_span).ok_or_else(|| {
+            EvalError::new(
+                "E0304",
+                "`to_callback` requires a concrete function signature",
+            )
+            .at(span)
+        })?;
+        let function = self.reify_callable(argument, &expected)?;
+        let schema = Self::concrete_callable_type(&function)
+            .filter(|schema| crate::host_witness::strict_schema_equal(schema, &expected))
+            .ok_or_else(|| {
+                EvalError::new("E0302", "callback signature does not match its callable").at(span)
+            })?;
+        Ok(Value::Callback(Rc::new(value::CallbackValue {
+            function,
+            schema,
+        })))
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "kernel value conversion reifies the source result in a separate checked boundary"
+    )]
+    fn reify_source_kernel_value(
+        &self,
+        args: &[Value],
+        span: Span,
+    ) -> Value {
+        let expected = self.resolved_expr_type(span).and_then(|ty| {
+            match ty {
+                | aevia_types::Type::Adt(id, args) if id == adt::RESULT_ID => args.first().cloned(),
+                | _ => None,
+            }
+        });
+        let converted = expected
+            .ok_or_else(|| "missing concrete result type evidence".to_string())
+            .and_then(|ty| {
+                args.first()
+                    .ok_or_else(|| "missing kernel value".to_string())
+                    .and_then(|value| crate::rssn_module::from_kernel_value(value, &ty))
+            });
+        match converted {
+            | Ok(value) => make_variant(adt::RESULT_ID, 0, "Ok", vec![value]),
+            | Err(error) => {
+                make_variant(
+                    adt::RESULT_ID,
+                    1,
+                    "Err",
+                    vec![crate::rssn_module::value_error("TypeMismatch", error)],
+                )
+            },
+        }
     }
 
     /// A literal's value at `span` under the active bindings.
@@ -4350,7 +4553,10 @@ impl Interp {
         types: &[Ty],
         span: Span,
     ) -> Vec<Ty> {
-        if !matches!(name, "zeros" | "ones") || types.len() != 1 {
+        let [argument] = types else {
+            return types.to_vec();
+        };
+        if !matches!(name, "zeros" | "ones") {
             return types.to_vec();
         }
         let rep = match self.resolved_expr_type(span) {
@@ -4369,7 +4575,7 @@ impl Interp {
             | Some(Rep::Float) => Some(TyKind::Float(DimAst::One)),
             | _ => None,
         };
-        kind.map_or_else(|| types.to_vec(), |kind| vec![Ty::new(kind, types[0].span)])
+        kind.map_or_else(|| types.to_vec(), |kind| vec![Ty::new(kind, argument.span)])
     }
 
     /// Applies a function value to arguments.
@@ -4398,9 +4604,8 @@ impl Interp {
         // §9.3.2: the depth limit counts *calls*, not AST nodes. Counting nodes
         // rejected a legal flat `a + a + …` chain of 2100 terms while letting
         // an unbounded call chain through, which is the opposite of the rule.
-        self.depth += 1;
-        if self.depth > self.max_depth {
-            self.depth -= 1;
+        let previous_depth = self.depth;
+        if previous_depth >= self.max_depth {
             return Err(EvalError::new("E0805", "stack overflow")
                 .at(span)
                 .with_note(format!(
@@ -4410,7 +4615,6 @@ impl Interp {
                 .with_stack(self.frames.clone()));
         }
         if let Some(budget) = stack_budget_exhausted() {
-            self.depth -= 1;
             return Err(EvalError::new("E0805", "stack overflow")
                 .at(span)
                 .with_note(format!(
@@ -4420,8 +4624,9 @@ impl Interp {
                 ))
                 .with_stack(self.frames.clone()));
         }
+        self.depth = previous_depth.saturating_add(1);
         let result = self.apply_inner(function, args, span, instance);
-        self.depth -= 1;
+        self.depth = previous_depth;
         self.check_cancelled()
             .map_err(|error| error.at(span).with_stack(self.frames.clone()))?;
         match result {
@@ -4465,7 +4670,7 @@ impl Interp {
                 .or_else(|| self.bindings.clone());
         }
         let result = match function {
-            | Value::Closure(closure) => self.apply_user_closure(closure, args, span, instance),
+            | Value::Closure(closure) => self.apply_user_closure(&closure, args, span, instance),
             | Value::Native(function) => (function.0)(self, args, span),
             | other => self.apply_in_context(other, args, span, instance),
         };
@@ -4477,7 +4682,7 @@ impl Interp {
     #[inline(never)]
     fn apply_user_closure(
         &mut self,
-        closure: Rc<Closure>,
+        closure: &Rc<Closure>,
         args: Vec<Value>,
         span: Span,
         instance: Option<Rc<crate::generics::FunctionProof>>,
@@ -4486,14 +4691,14 @@ impl Interp {
         // interpreter, which trampolines its tail calls. Everything
         // else about applying a function — the depth guard, the stack
         // frame, the `?` payload — is shared.
-        if matches!(closure.body, ClosureBody::Ir(_)) {
-            return crate::eval_ir::run_closure(self, &closure, args, span, instance);
-        }
-        let ClosureBody::Ast(body) = &closure.body else {
-            unreachable!("the IR branch returned above")
+        let body = match &closure.body {
+            | ClosureBody::Ast(body) => body,
+            | ClosureBody::Ir(_) => {
+                return crate::eval_ir::run_closure(self, closure, args, span, instance);
+            },
         };
         let ClosureEnv::Ast(captured) = &closure.env else {
-            unreachable!("an AST body has an AST environment")
+            return Err(EvalError::new("E0809", "AST closure has an invalid environment").at(span));
         };
         if closure.params.len() != args.len() {
             return Err(EvalError::new(
@@ -4539,7 +4744,7 @@ impl Interp {
     ) -> Result<Value, EvalError> {
         match function {
             | Value::Native(function) => (function.0)(self, args, span),
-            | Value::Closure(closure) => self.apply_user_closure(closure, args, span, instance),
+            | Value::Closure(closure) => self.apply_user_closure(&closure, args, span, instance),
             | Value::Ctor(ctor) => {
                 if ctor.arity == usize::MAX && ctor.args.is_empty() {
                     // A builtin referenced as a value, called with all of
@@ -4669,7 +4874,7 @@ impl Interp {
     /// executed overload differ from the one the program was typed against, so
     /// an unknown key is `E1005`.
     pub(crate) fn call_rssn(
-        &mut self,
+        &self,
         op: &str,
         span: Span,
         values: Vec<Value>,
@@ -4706,7 +4911,7 @@ impl Interp {
     /// in tail position is a tail call like any other, and applying it here
     /// would spend Rust stack on every step of a recursive instance method.
     pub(crate) fn resolve_dictionary(
-        &mut self,
+        &self,
         use_site: &DictionaryUse,
         method: &str,
         values: &[Value],
@@ -4737,15 +4942,15 @@ impl Interp {
     // ----- patterns -------------------------------------------------------
 
     fn match_pattern(
-        &mut self,
+        &self,
         pattern: &Pat,
         value: &Value,
         scope: &Rc<Scope>,
-    ) -> Result<bool, EvalError> {
+    ) -> bool {
         let Some(bindings) =
             crate::pattern::ast(pattern, value, &self.context.evidence.constructor_refs)
         else {
-            return Ok(false);
+            return false;
         };
         crate::value::bump_environment();
         let mut variables = scope.vars.borrow_mut();
@@ -4754,16 +4959,16 @@ impl Interp {
                 variables.insert(name, value);
             }
         }
-        Ok(true)
+        true
     }
 
     fn bind_pattern(
-        &mut self,
+        &self,
         pattern: &Pat,
         value: &Value,
         scope: &Rc<Scope>,
     ) -> Result<(), EvalError> {
-        if self.match_pattern(pattern, value, scope)? {
+        if self.match_pattern(pattern, value, scope) {
             Ok(())
         } else {
             Err(EvalError::new(
@@ -4795,7 +5000,7 @@ impl Interp {
     /// then calls this, so the two paths cannot disagree about nesting, ragged
     /// rows or the storage class.
     pub(crate) fn tensor_from_values(
-        &mut self,
+        &self,
         values: Vec<Value>,
         span: Span,
     ) -> Result<Value, EvalError> {
@@ -4810,7 +5015,7 @@ impl Interp {
             // unlike a variable read, this is a genuine creation site.
             if tensor.storage.is_empty()
                 && matches!(tensor.storage, Storage::Boxed(_))
-                && tensor.shape.len() == shape.rank() as usize
+                && usize::try_from(shape.rank()) == Ok(tensor.shape.len())
                 && tensor
                     .shape
                     .iter()
@@ -4842,17 +5047,13 @@ impl Interp {
                     tensor.dim = dim;
                 }
             }
-            let checked_shape = tensor.shape.len() == shape.rank() as usize
+            let checked_shape = usize::try_from(shape.rank()) == Ok(tensor.shape.len())
                 && tensor.shape.iter().enumerate().all(|(axis, extent)| {
                     shape
                         .extent(axis)
                         .is_none_or(|expected| expected == *extent)
                 })
-                && tensor
-                    .shape
-                    .iter()
-                    .try_fold(1usize, |count, extent| count.checked_mul(*extent))
-                    == Some(tensor.storage.len());
+                && tensor_shape_matches_storage_len(tensor);
             // Opaque callable values have their own private proof. They
             // cannot pass through the numerical host witness validator.
             let checked_elements = !aevia_types::class::has_variables(&elem)
@@ -4872,7 +5073,7 @@ impl Interp {
     }
 
     fn tensor_from_values_unverified(
-        &mut self,
+        &self,
         values: Vec<Value>,
         span: Span,
     ) -> Result<Value, EvalError> {
@@ -4913,7 +5114,7 @@ impl Interp {
                     if shape.len() == 1 {
                         shape.extend(tensor.shape.iter().copied());
                         dim = tensor.dim.clone();
-                    } else if tensor.shape != shape[1..] {
+                    } else if tensor.shape.as_slice() != shape.get(1..).unwrap_or(&[]) {
                         return Err(EvalError::new(
                             "E0203",
                             "ragged tensor literal: every row must have the same length",
@@ -4925,7 +5126,7 @@ impl Interp {
             }
             return Ok(build_tensor(flat, shape, dim));
         }
-        let dim = value::value_dim(&values[0]);
+        let dim = values.first().map_or_else(Dim::one, value::value_dim);
         let len = values.len();
         Ok(build_tensor(values, vec![len], dim))
     }
@@ -4943,50 +5144,38 @@ impl Interp {
             return Err(EvalError::new("E0302", "indexing expects a tensor or a string").at(span));
         }
         let mut resolved = Vec::with_capacity(indices.len());
+        let mut selector = |expr: &Expr| slice_integer(&self.eval(expr, env)?, expr.span);
         for index in indices {
-            match index {
-                | SliceAst::Index(expr) => {
-                    let value = self.eval(expr, env)?;
-                    resolved.push(SliceValue::Index(value.as_f64()));
-                },
+            let resolved_index = match index {
+                | SliceAst::Index(expr) => SliceValue::Index(selector(expr)?),
                 | SliceAst::Range {
                     start,
                     end,
                     inclusive,
                     step,
                 } => {
-                    let start = match start {
-                        | Some(expr) => Some(self.eval(expr, env)?.as_f64().unwrap_or(0.0)),
-                        | None => None,
-                    };
-                    let end = match end {
-                        | Some(expr) => Some(self.eval(expr, env)?.as_f64().unwrap_or(0.0)),
-                        | None => None,
-                    };
-                    let step = match step {
-                        | Some(expr) => Some(self.eval(expr, env)?.as_f64().unwrap_or(f64::NAN)),
-                        | None => None,
-                    };
-                    resolved.push(SliceValue::Range {
-                        start,
-                        end,
+                    SliceValue::Range {
+                        start: start.as_ref().map(&mut selector).transpose()?,
+                        end: end.as_ref().map(&mut selector).transpose()?,
                         inclusive: *inclusive,
-                        step,
-                    });
+                        step: step.as_ref().map(&mut selector).transpose()?,
+                    }
                 },
-            }
+            };
+            resolved.push(resolved_index);
         }
         self.index_resolved(base, &resolved, span)
     }
 
-    /// Applies resolved indices to a tensor.
+    /// Applies resolved selectors to a string, dense tensor or sparse tensor.
     ///
-    /// Shared with the IR path. An index that is not a number is `E0802` when
-    /// every index is scalar and `0` inside a slice, which is what the AST path
-    /// has always done; keeping the resolved form explicit makes that visible
-    /// instead of implicit in which branch ran.
+    /// The AST and Core IR evaluators use the same indexing implementation.
+    #[allow(
+        clippy::unused_self,
+        reason = "source expressions, Core IR and intrinsics share the interpreter selector entry point"
+    )]
     pub(crate) fn index_resolved(
-        &mut self,
+        &self,
         base: Value,
         indices: &[SliceValue],
         span: Span,
@@ -4995,91 +5184,25 @@ impl Interp {
             return index_string(text, indices, span);
         }
         if let Value::Sparse(sparse) = &base {
-            if indices
-                .iter()
-                .any(|index| matches!(index, SliceValue::Range { .. }))
-            {
-                // §8.4.1: a range keeps its axis, an integer removes it; the
-                // stored entries are filtered, never densified.
-                if indices.len() != sparse.rank() {
-                    return Err(EvalError::new(
-                        "E0802",
-                        format!(
-                            "a rank-{} sparse tensor is sliced by {} selector(s), found {}",
-                            sparse.rank(),
-                            sparse.rank(),
-                            indices.len()
-                        ),
-                    )
-                    .at(span));
-                }
-                let mut axes = Vec::with_capacity(indices.len());
-                for (axis, index) in indices.iter().enumerate() {
-                    let extent = sparse.shape[axis];
-                    match index {
-                        | SliceValue::Index(value) => {
-                            let coordinate = value.unwrap_or(0.0) as isize;
-                            let at = normalize_index(coordinate, extent).ok_or_else(|| {
-                                EvalError::new(
-                                    "E0802",
-                                    format!(
-                                        "index {coordinate} is out of bounds for axis {axis} of extent {extent}"
-                                    ),
-                                )
-                                .at(span)
-                            })?;
-                            axes.push(crate::sparse::SliceAxis::At(at));
-                        },
-                        | SliceValue::Range {
-                            start,
-                            end,
-                            inclusive,
-                            step,
-                        } => {
-                            if let Some(step) = step {
-                                let (start, count, step) =
-                                    walk_range(*start, *end, *step, extent, span)?;
-                                axes.push(crate::sparse::SliceAxis::Walk { start, count, step });
-                                continue;
-                            }
-                            let lo =
-                                normalize_bound(start.map_or(0, |v| v as isize), extent, false);
-                            let hi = normalize_bound(
-                                end.map_or(extent as isize, |v| v as isize),
-                                extent,
-                                *inclusive,
-                            );
-                            if lo > hi {
-                                return Err(EvalError::new("E0802", "empty slice").at(span));
-                            }
-                            axes.push(crate::sparse::SliceAxis::Walk {
-                                start: lo,
-                                count: hi - lo,
-                                step: 1,
-                            });
-                        },
-                    }
-                }
-                return crate::sparse::slice(sparse, &axes, span);
-            }
-            let mut coordinates = Vec::with_capacity(indices.len());
-            for index in indices {
-                match index {
-                    | SliceValue::Index(Some(value)) => coordinates.push(*value as isize),
-                    | _ => {
-                        return Err(EvalError::new(
-                            "E0802",
-                            "a sparse tensor is indexed by one Int per axis",
-                        )
-                        .at(span));
-                    },
-                }
-            }
-            return crate::sparse::index(sparse, &coordinates, span);
+            return index_sparse(sparse, indices, span);
         }
         let Value::Tensor(tensor) = base else {
             return Err(EvalError::new("E0302", "indexing expects a tensor").at(span));
         };
+        if !tensor_shape_matches_storage_len(&tensor) {
+            return Err(EvalError::new("E0802", "tensor shape and storage disagree").at(span));
+        }
+        if indices.len() > tensor.rank() {
+            return Err(EvalError::new(
+                "E0802",
+                format!(
+                    "a rank-{} tensor has {} selectors",
+                    tensor.rank(),
+                    indices.len()
+                ),
+            )
+            .at(span));
+        }
         // All-scalar indexing selects an element or a sub-tensor.
         if indices
             .iter()
@@ -5088,51 +5211,47 @@ impl Interp {
             let mut coordinates = Vec::with_capacity(indices.len());
             for index in indices {
                 if let SliceValue::Index(value) = index {
-                    let coordinate =
-                        value.ok_or_else(|| EvalError::new("E0802", "index must be an Int"))?;
-                    coordinates.push(coordinate as isize);
+                    coordinates.push(*value);
                 }
             }
             if coordinates.len() == tensor.rank() {
-                return tensor
-                    .get(&coordinates)
+                let positions = coordinates
+                    .iter()
+                    .zip(&tensor.shape)
+                    .map(|(&coordinate, &extent)| normalize_index(coordinate, extent));
+                return flat_coordinate(&tensor.shape, positions)
+                    .and_then(|flat| tensor.get_flat(flat))
                     .ok_or_else(|| index_out_of_range(&coordinates, &tensor.shape).at(span));
             }
             if coordinates.len() < tensor.rank() {
-                let fixed = coordinates.len();
-                let remaining = &tensor.shape[fixed..];
+                let (leading, remaining) = tensor.shape.split_at(coordinates.len());
                 // §9.5: pinning the leading axes is a slice of the trailing
                 // ones, so an `f64` tensor answers with a view over the same
                 // buffer instead of copying the row out of it.
-                let mut pinned = Vec::with_capacity(fixed);
-                for coordinate in &coordinates {
-                    let extent = tensor.shape[pinned.len()] as isize;
-                    let normalized = if *coordinate < 0 {
-                        extent + *coordinate
-                    } else {
-                        *coordinate
-                    };
-                    if normalized < 0 || normalized >= extent {
-                        return Err(index_out_of_range(&coordinates, &tensor.shape).at(span));
-                    }
-                    pinned.push(normalized as usize);
+                let mut pinned = Vec::with_capacity(leading.len());
+                for (coordinate, &extent) in coordinates.iter().zip(leading) {
+                    let normalized = normalize_index(*coordinate, extent)
+                        .ok_or_else(|| index_out_of_range(&coordinates, &tensor.shape).at(span))?;
+                    pinned.push(normalized);
                 }
                 if let Some(view) = tensor.index_view(&pinned) {
                     return Ok(Value::Tensor(Rc::new(view)));
                 }
-                let mut elements = Vec::new();
-                let count = TensorData::element_count(remaining);
-                for index in 0..count {
-                    let tail = unravel(index, remaining);
-                    let mut full = coordinates.clone();
-                    full.extend(tail.iter().map(|value| *value as isize));
-                    if let Some(element) = tensor.get(&full) {
-                        elements.push(element);
-                    }
-                }
+                let bad_index = || EvalError::new("E0802", "index out of range").at(span);
+                let count = crate::value::checked_element_count(remaining).ok_or_else(|| {
+                    EvalError::new("E0802", "indexed shape exceeds the element count range")
+                        .at(span)
+                })?;
                 if count == 0 {
                     return Ok(empty_tensor_like(&tensor, remaining.to_vec()));
                 }
+                let start = flat_coordinate(leading, pinned.into_iter().map(Some))
+                    .and_then(|flat| flat.checked_mul(count))
+                    .ok_or_else(bad_index)?;
+                let end = start.checked_add(count).ok_or_else(bad_index)?;
+                let elements = (start..end)
+                    .map(|flat| tensor.get_flat(flat).ok_or_else(bad_index))
+                    .collect::<Result<Vec<_>, _>>()?;
                 return Ok(crate::host_witness::preserve_tensor_schema(
                     build_tensor(elements, remaining.to_vec(), tensor.dim.clone()),
                     &tensor,
@@ -5146,14 +5265,17 @@ impl Interp {
             .iter()
             .map(|index| matches!(index, SliceValue::Index(_)))
             .collect();
-        let sliced = self.slice_axes(&tensor, indices, span)?;
+        let sliced = Self::slice_axes(&tensor, indices, span)?;
         Ok(drop_indexed_axes(sliced, &dropped))
     }
 
     /// Mixed index/range indexing with every axis kept (an integer index is a
     /// one-element range here; [`Self::index_resolved`] removes those axes).
+    #[allow(
+        clippy::single_call_fn,
+        reason = "dense view construction and fallback copying share an axis-walk contract"
+    )]
     fn slice_axes(
-        &mut self,
         tensor: &Rc<TensorData>,
         indices: &[SliceValue],
         span: Span,
@@ -5167,13 +5289,12 @@ impl Interp {
         // inverted range, while a walk that passes its end immediately is an
         // empty slice (§6.6.4).
         let mut ranges = Vec::with_capacity(indices.len());
-        let mut walks: Vec<(usize, usize, isize)> = Vec::with_capacity(indices.len());
+        let mut walks = Vec::with_capacity(indices.len());
         let mut stepped = false;
-        for (axis, index) in indices.iter().enumerate() {
-            let extent = tensor.shape.get(axis).copied().unwrap_or(0);
+        for (axis, (index, &extent)) in indices.iter().zip(&tensor.shape).enumerate() {
             match index {
                 | SliceValue::Index(value) => {
-                    let coordinate = value.unwrap_or(0.0) as isize;
+                    let coordinate = *value;
                     let normalized = normalize_index(coordinate, extent).ok_or_else(|| {
                         EvalError::new(
                             "E0802",
@@ -5183,7 +5304,7 @@ impl Interp {
                         )
                         .at(span)
                     })?;
-                    ranges.push((normalized, normalized + 1));
+                    ranges.push((normalized, normalized.saturating_add(1)));
                     walks.push((normalized, 1, 1));
                 },
                 | SliceValue::Range {
@@ -5197,81 +5318,54 @@ impl Interp {
                         walks.push(walk_range(*start, *end, *step, extent, span)?);
                         continue;
                     }
-                    let start_value = start.map_or(0, |value| value as isize);
-                    let end_value = end.map_or(extent as isize, |value| value as isize);
-                    let start = normalize_bound(start_value, extent, false);
-                    let end = normalize_bound(end_value, extent, *inclusive);
-                    if start > end {
-                        return Err(EvalError::new("E0802", "empty slice").at(span));
-                    }
+                    let start = normalize_bound(start.unwrap_or(0), extent, false);
+                    let end =
+                        end.map_or(extent, |bound| normalize_bound(bound, extent, *inclusive));
+                    let count = end
+                        .checked_sub(start)
+                        .ok_or_else(|| EvalError::new("E0802", "empty slice").at(span))?;
                     ranges.push((start, end));
-                    walks.push((start, end - start, 1));
+                    walks.push((start, count, 1));
                 },
             }
         }
-        if stepped {
-            while walks.len() < tensor.rank() {
-                let extent = tensor.shape[walks.len()];
-                walks.push((0, extent, 1));
-            }
-            let new_shape: Vec<usize> = walks.iter().map(|(_, count, _)| *count).collect();
-            // A stepped slice of an `f64` tensor is still a view: the stride
-            // is multiplied by the step and a negative step flips the axis, so
-            // `xs[::-1]` allocates nothing and shares the buffer `reverse(xs)`
-            // returns.
-            if let Some(sliced) = tensor.slice_step_view(&walks) {
-                return Ok(Value::Tensor(Rc::new(sliced)));
-            }
-            let count = TensorData::element_count(&new_shape);
-            let mut elements = Vec::with_capacity(count);
-            for index in 0..count {
-                let coordinates = unravel(index, &new_shape);
-                let full: Vec<isize> = coordinates
-                    .iter()
-                    .zip(walks.iter())
-                    .map(|(coordinate, (start, _, step))| {
-                        (*start as isize) + (*coordinate as isize) * *step
-                    })
-                    .collect();
-                if let Some(element) = tensor.get(&full) {
-                    elements.push(element);
-                }
-            }
-            if count == 0 {
-                return Ok(empty_tensor_like(tensor, new_shape));
-            }
-            return Ok(crate::host_witness::preserve_tensor_schema(
-                build_tensor(elements, new_shape, tensor.dim.clone()),
-                tensor,
-            ));
-        }
-        while ranges.len() < tensor.rank() {
-            let extent = tensor.shape[ranges.len()];
-            ranges.push((0, extent));
-        }
-        let new_shape: Vec<usize> = ranges.iter().map(|(start, end)| end - start).collect();
-        // §9.5/§6.6.4: a slice of an `f64` tensor is a *view* — offset and
-        // strides into the buffer it already has — so `xs[1:3]` allocates
-        // nothing and a slice of a view is a view of the same buffer. The
-        // values are the ones `get` returns for the same coordinates.
-        if let Some(sliced) = tensor.slice_view(&ranges) {
+        let trailing = tensor.shape.iter().copied().skip(walks.len());
+        walks.extend(trailing.clone().map(|extent| (0, extent, 1)));
+        // Both range forms can reuse an `f64` buffer. A stepped slice also
+        // scales the strides and can flip an axis.
+        let view = if stepped {
+            let view_walks = walks
+                .iter()
+                .copied()
+                .map(view_walk)
+                .collect::<Option<Vec<_>>>();
+            view_walks.and_then(|walks| tensor.slice_step_view(&walks))
+        } else {
+            ranges.extend(trailing.map(|extent| (0, extent)));
+            tensor.slice_view(&ranges)
+        };
+        if let Some(sliced) = view {
             return Ok(Value::Tensor(Rc::new(sliced)));
         }
-        let count = TensorData::element_count(&new_shape);
-        let mut elements = Vec::with_capacity(count);
-        for index in 0..count {
-            let coordinates = unravel(index, &new_shape);
-            let full: Vec<isize> = coordinates
-                .iter()
-                .zip(ranges.iter())
-                .map(|(coordinate, (start, _))| (start + coordinate) as isize)
-                .collect();
-            if let Some(element) = tensor.get(&full) {
-                elements.push(element);
-            }
-        }
+        let new_shape: Vec<usize> = walks.iter().map(|(_, count, _)| *count).collect();
+        let count = crate::value::checked_element_count(&new_shape).ok_or_else(|| {
+            EvalError::new("E0802", "slice shape exceeds the element count range").at(span)
+        })?;
         if count == 0 {
             return Ok(empty_tensor_like(tensor, new_shape));
+        }
+        let mut elements = Vec::with_capacity(count);
+        let mut coordinates = vec![0; new_shape.len()];
+        for index in 0..count {
+            unravel_into(index, &new_shape, &mut coordinates);
+            let source_coordinates = coordinates
+                .iter()
+                .zip(&walks)
+                .map(|(&offset, &(start, _, step))| walk_index(start, offset, step));
+            let element = flat_coordinate(&tensor.shape, source_coordinates)
+                .and_then(|flat| tensor.get_flat(flat))
+                .ok_or_else(|| EvalError::new("E0802", "index out of range").at(span))?;
+            elements.push(element);
         }
         Ok(crate::host_witness::preserve_tensor_schema(
             build_tensor(elements, new_shape, tensor.dim.clone()),
@@ -5284,13 +5378,13 @@ impl Interp {
     /// Captures one immutable deferred program. A replay-local cursor evaluates
     /// every statement in source order when the action executes.
     fn eval_do(
-        &mut self,
+        &self,
         stmts: &[DoStmt],
         env: &Rc<Scope>,
         span: Span,
-    ) -> Result<Value, EvalError> {
-        Ok(Value::Io(Rc::new(IoAction::Do(
-            crate::io_do::DoBlock::ast(self, stmts, env, span),
+    ) -> Value {
+        Value::Io(Rc::new(IoAction::Do(crate::io_do::DoBlock::ast(
+            self, stmts, env, span,
         ))))
     }
 
@@ -5320,6 +5414,10 @@ impl Interp {
     }
 
     /// The step loop of [`Self::run_io`].
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the iterative dispatcher owns work ordering, capability restoration and both IO budgets"
+    )]
     fn run_io_steps(
         &mut self,
         action: &Rc<IoAction>,
@@ -5348,7 +5446,7 @@ impl Interp {
                 }
             }
 
-            fn continuation(&self) -> bool {
+            const fn continuation(&self) -> bool {
                 !matches!(self, Self::Run(..))
             }
         }
@@ -5364,7 +5462,7 @@ impl Interp {
                         EvalError::new("E0805", "IO continuation depth exceeded").at(work.span())
                     );
                 }
-                *continuations += 1;
+                *continuations = continuations.saturating_add(1);
             }
             pending.push(work);
             Ok(())
@@ -5377,7 +5475,9 @@ impl Interp {
             self.check_cancelled()
                 .map_err(|error| error.at(work.span()))?;
             if work.continuation() {
-                continuations -= 1;
+                continuations = continuations.checked_sub(1).ok_or_else(|| {
+                    EvalError::new("E0809", "invalid IO continuation count").at(work.span())
+                })?;
             }
             if steps >= self.max_io_steps {
                 return Err(
@@ -5386,7 +5486,7 @@ impl Interp {
                         .with_stack(self.frames.clone()),
                 );
             }
-            steps += 1;
+            steps = steps.saturating_add(1);
             let span = work.span();
             let action = match work {
                 | Work::Continue(function, _) => {
@@ -5438,15 +5538,18 @@ impl Interp {
                     continue;
                 },
                 | Work::Sequence(sequence, index, span) => {
+                    let invalid_sequence =
+                        || EvalError::new("E0809", "invalid IO sequence continuation").at(span);
                     let IoAction::Seq(actions) = &*sequence else {
-                        unreachable!()
+                        return Err(invalid_sequence());
                     };
-                    let next = actions[index].clone();
-                    if index + 1 < actions.len() {
+                    let next = actions.get(index).cloned().ok_or_else(invalid_sequence)?;
+                    let next_index = index.saturating_add(1);
+                    if next_index < actions.len() {
                         push(
                             &mut pending,
                             &mut continuations,
-                            Work::Sequence(sequence.clone(), index + 1, span),
+                            Work::Sequence(sequence.clone(), next_index, span),
                             self.max_io_depth,
                         )?;
                     }
@@ -5581,21 +5684,12 @@ impl Interp {
                         .and_then(std::ffi::OsStr::to_str)
                         .unwrap_or_default()
                         .to_ascii_lowercase();
-                    let decoded = if extension != "npy" {
-                        Err(format!(
-                            "E0904: `read_npy` reads .npy files, not `{}`",
-                            if extension.is_empty() {
-                                "a file with no extension"
-                            } else {
-                                &extension
-                            }
-                        ))
-                    } else {
+                    let decoded = if extension == "npy" {
                         std::fs::read(path)
                             .map_err(|error| format!("{}: {error}", io_error_code(&error)))
                             .and_then(|bytes| crate::builtins::npy_decode(&bytes))
                             .and_then(|tensor| {
-                                if tensor.shape.len() == *rank as usize {
+                                if usize::try_from(*rank) == Ok(tensor.shape.len()) {
                                     Ok(tensor)
                                 } else {
                                     Err(format!(
@@ -5604,6 +5698,15 @@ impl Interp {
                                     ))
                                 }
                             })
+                    } else {
+                        Err(format!(
+                            "E0904: `read_npy` reads .npy files, not `{}`",
+                            if extension.is_empty() {
+                                "a file with no extension"
+                            } else {
+                                &extension
+                            }
+                        ))
                     };
                     last = match decoded {
                         | Ok(tensor) => {
@@ -5639,10 +5742,13 @@ impl Interp {
                             "`load_plugin` reads a file and needs the `fs` capability",
                         ));
                     }
-                    last = crate::plugin_source::load_plugin(std::path::Path::new(path));
+                    last = crate::plugin_source::load_plugin(
+                        std::path::Path::new(path),
+                        self.capabilities,
+                    );
                 },
                 | IoAction::Spawn(thunk) => {
-                    last = self.spawn_task(thunk, Span::default())?;
+                    last = self.spawn_task(thunk, Span::default());
                 },
                 | IoAction::Await(task) => {
                     last = self.await_task(task, Span::default())?;
@@ -5828,7 +5934,7 @@ impl Interp {
                                 &mut continuations,
                                 Work::Run(next, span),
                                 self.max_io_depth,
-                            )?
+                            )?;
                         },
                         | other => {
                             return Err(EvalError::new(
@@ -5875,7 +5981,6 @@ impl Interp {
 /// The appendix-B code for an IO failure (§9.12).
 fn io_error_code(error: &std::io::Error) -> &'static str {
     match error.kind() {
-        | std::io::ErrorKind::NotFound => "E0901",
         | std::io::ErrorKind::PermissionDenied => "E0902",
         | _ => "E0901",
     }
@@ -5900,7 +6005,12 @@ pub fn next_unit(state: &mut u64) -> f64 {
     *state = state
         .wrapping_mul(6_364_136_223_846_793_005)
         .wrapping_add(1);
-    (*state >> 11) as f64 / (1u64 << 53) as f64
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "the right shift leaves 53 significant bits, exactly representable in binary64"
+    )]
+    let bits = (*state >> 11) as f64;
+    bits / 9_007_199_254_740_992.0
 }
 
 impl EvalError {
@@ -5922,6 +6032,62 @@ fn to_complex(num: &NumVal) -> (f64, f64) {
     }
 }
 
+/// Divide finite complex values without overflowing or underflowing products.
+#[allow(
+    clippy::suboptimal_flops,
+    reason = "the ordinary branch keeps its binary64 operation order and rounding"
+)]
+#[allow(
+    clippy::single_call_fn,
+    reason = "stable complex division has its own numeric and rounding contract"
+)]
+fn complex_quotient(
+    (ar, ai): (f64, f64),
+    (br, bi): (f64, f64),
+) -> (f64, f64) {
+    // Products of nonzero magnitudes in [2^-500, 2^500] stay normal.
+    // Adding two such products cannot overflow.
+    const LOWER: f64 = f64::from_bits((1023_u64 - 500) << 52);
+    const UPPER: f64 = f64::from_bits((1023_u64 + 500) << 52);
+    let operands = [ar, ai, br, bi];
+    if (br != 0.0 || bi != 0.0)
+        && operands
+            .iter()
+            .any(|value| *value != 0.0 && !(LOWER..=UPPER).contains(&value.abs()))
+        && operands.iter().all(|value| value.is_finite())
+        && let (Some(ar), Some(ai), Some(br), Some(bi)) = (
+            BigRational::from_float(ar),
+            BigRational::from_float(ai),
+            BigRational::from_float(br),
+            BigRational::from_float(bi),
+        )
+    {
+        // Binary64 inputs have bounded numerators and denominators. On this
+        // rare path, form the quotient exactly and round each component once.
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "the intermediates are exact; at least one divisor component is nonzero"
+        )]
+        let (real, imaginary) = {
+            let denominator = &br * &br + &bi * &bi;
+            (
+                (&ar * &br + &ai * &bi) / &denominator,
+                (&ai * &br - &ar * &bi) / denominator,
+            )
+        };
+        return (
+            aevia_dim::rat::to_f64(&real),
+            aevia_dim::rat::to_f64(&imaginary),
+        );
+    }
+    // Keep IEEE behavior for nonfinite operands and a zero divisor.
+    let denominator = br * br + bi * bi;
+    (
+        (ar * br + ai * bi) / denominator,
+        (ai * br - ar * bi) / denominator,
+    )
+}
+
 /// The head of an `instance` in the vocabulary the checked type prints in.
 ///
 /// A nominal type is spelled the same way in both worlds — `type Shape = …`
@@ -5935,18 +6101,6 @@ pub(crate) fn instance_head_name(ty: &Ty) -> Option<String> {
         | TyKind::Named { path, args } if args.is_empty() => path.last().cloned(),
         | _ => None,
     }
-}
-
-/// The class-method call sites of one module, by span.
-fn dictionary_table(uses: &[DictionaryUse]) -> HashMap<Span, Vec<DictionaryUse>> {
-    let mut table: HashMap<Span, Vec<DictionaryUse>> = HashMap::new();
-    for use_site in uses {
-        table
-            .entry(use_site.span)
-            .or_default()
-            .push(use_site.clone());
-    }
-    table
 }
 
 /// The name a type argument is known by at run time.
@@ -5972,27 +6126,38 @@ pub fn type_argument_name(ty: &Ty) -> String {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "unit scale and dimension composition share one checked boundary"
+)]
 fn combine_units(
     left: &UnitDef,
     right: &UnitDef,
     multiply: bool,
-) -> UnitDef {
+    span: Span,
+) -> Result<UnitDef, EvalError> {
+    if left.affine || right.affine {
+        return Err(EvalError::new("E0508", "an affine unit cannot be composed").at(span));
+    }
+    let scale = if multiply {
+        left.scale.checked_mul(&right.scale)
+    } else {
+        left.scale.checked_div(&right.scale)
+    }
+    .ok_or_else(|| {
+        EvalError::new("E0506", "the composed unit scale cannot be represented").at(span)
+    })?;
     let dim = if multiply {
         left.dim.mul(&right.dim)
     } else {
         left.dim.div(&right.dim)
-    };
-    let scale = if multiply {
-        left.scale.mul(&right.scale)
-    } else {
-        left.scale.div(&right.scale)
     };
     let name = if multiply {
         format!("{}*{}", left.display, right.display)
     } else {
         format!("{}/{}", left.display, right.display)
     };
-    UnitDef {
+    Ok(UnitDef {
         name: name.clone(),
         aliases: Vec::new(),
         dim,
@@ -6002,9 +6167,13 @@ fn combine_units(
         affine: false,
         display: name,
         category: "composed".to_string(),
-    }
+    })
 }
 
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "the factorial accumulator is an arbitrary-precision integer"
+)]
 pub(crate) fn factorial(
     interp: &Interp,
     n: i64,
@@ -6020,43 +6189,37 @@ pub(crate) fn factorial(
     while current > 0 {
         interp.check_cancelled().map_err(|error| error.at(span))?;
         result *= BigInt::from(current);
-        current -= step;
+        current = current.saturating_sub(step);
     }
     Ok(result)
 }
 
-fn normalize_index(
-    index: isize,
+pub(crate) fn normalize_index(
+    index: i128,
     extent: usize,
 ) -> Option<usize> {
-    let extent = isize::try_from(extent).ok()?;
+    let magnitude = usize::try_from(index.unsigned_abs()).ok()?;
     let normalized = if index < 0 {
-        extent + index
+        extent.checked_sub(magnitude)?
     } else {
-        index
+        magnitude
     };
-    if normalized < 0 || normalized >= extent {
-        None
-    } else {
-        Some(usize::try_from(normalized).ok()?)
-    }
+    (normalized < extent).then_some(normalized)
 }
 
 fn normalize_bound(
-    value: isize,
+    value: i128,
     extent: usize,
     inclusive: bool,
 ) -> usize {
-    let extent_i = isize::try_from(extent).unwrap_or(isize::MAX);
-    let normalized = if value < 0 {
-        extent_i + value
+    let magnitude = usize::try_from(value.unsigned_abs()).unwrap_or(usize::MAX);
+    let clamped = if value < 0 {
+        extent.saturating_sub(magnitude)
     } else {
-        value
+        magnitude.min(extent)
     };
-    let clamped = normalized.clamp(0, extent_i);
-    let clamped = usize::try_from(clamped).unwrap_or(0);
     if inclusive {
-        (clamped + 1).min(extent)
+        clamped.saturating_add(1).min(extent)
     } else {
         clamped
     }
@@ -6079,79 +6242,108 @@ fn normalize_bound(
 /// this is the same rule for a computed one, and it is an error rather than a
 /// division by zero or a loop that never ends.
 fn walk_range(
-    start: Option<f64>,
-    end: Option<f64>,
-    step: f64,
+    start: Option<i128>,
+    end: Option<i128>,
+    step: i128,
     extent: usize,
     span: Span,
-) -> Result<(usize, usize, isize), EvalError> {
-    if !step.is_finite() || step.fract() != 0.0 || step == 0.0 {
+) -> Result<(usize, usize, i128), EvalError> {
+    if step == 0 {
         return Err(EvalError::new("E0802", "a slice step must be a non-zero Int").at(span));
     }
-    let step = step as isize;
-    let extent = isize::try_from(extent).unwrap_or(isize::MAX);
-    if extent <= 0 {
+    if extent == 0 {
         return Ok((0, 0, step));
     }
+    let unrepresentable = || EvalError::new("E0802", "slice extent is out of range").at(span);
+    let extent = i128::try_from(extent).map_err(|_| unrepresentable())?;
     let forward = step > 0;
-    // A negative bound counts from the end, exactly as an index does. The
-    // clamp keeps a start past the end past the end, so `xs[7:8:1]` is empty
-    // rather than the last element.
-    let from_end = |value: isize| {
+    let high = if forward {
+        extent
+    } else {
+        extent.saturating_sub(1)
+    };
+    // Negative bounds count from the end. The wide coordinates retain the
+    // backward stop sentinel (-1) even for axes larger than isize::MAX.
+    let from_end = |value: i128| {
         if value < 0 {
-            extent + value
+            extent.saturating_add(value)
         } else {
             value
         }
     };
-    let first = match start {
-        | Some(value) => {
-            let high = if forward {
-                extent
-            } else {
-                extent - 1
-            };
-            from_end(value as isize).clamp(0, high)
-        },
-        | None if forward => 0,
-        | None => extent - 1,
-    };
-    let stop = match end {
-        | Some(value) => {
-            let high = if forward {
-                extent
-            } else {
-                extent - 1
-            };
-            from_end(value as isize).clamp(-1, high)
-        },
-        | None if forward => extent,
-        | None => -1,
-    };
-    // `i128` because the step may be any `Int` the source wrote: a step near
-    // `isize::MAX` must count one element, not overflow on `span + step`.
-    let (span, divisor) = if forward {
-        (stop as i128 - first as i128, step as i128)
+    let first = start.map_or_else(
+        || if forward { 0 } else { high },
+        |bound| from_end(bound).clamp(0, high),
+    );
+    let limit = end.map_or_else(
+        || if forward { extent } else { -1 },
+        |bound| from_end(bound).clamp(-1, high),
+    );
+    let distance = if forward {
+        limit.saturating_sub(first)
     } else {
-        (first as i128 - stop as i128, -(step as i128))
+        first.saturating_sub(limit)
     };
-    let count = if span <= 0 {
-        0
-    } else {
-        // `ceil(span / divisor)`, in integers, with both terms positive.
-        ((span + divisor - 1) / divisor) as usize
-    };
-    Ok((
-        if count == 0 {
-            0
-        } else {
-            first as usize
-        },
-        count,
-        step,
-    ))
+    if distance <= 0 {
+        return Ok((0, 0, step));
+    }
+    let distance = u128::try_from(distance).map_err(|_| unrepresentable())?;
+    let count =
+        usize::try_from(distance.div_ceil(step.unsigned_abs())).map_err(|_| unrepresentable())?;
+    let first = usize::try_from(first).map_err(|_| unrepresentable())?;
+    Ok((first, count, step))
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "the lossless conversion into the public dense view uses its own stride domain"
+)]
+fn view_walk((first, count, step): (usize, usize, i128)) -> Option<(usize, usize, isize)> {
+    let stride = match isize::try_from(step) {
+        | Ok(step) => step,
+        // The stride is immaterial for a one-element view.
+        | Err(_) if count == 1 && step < 0 => isize::MIN,
+        | Err(_) if count == 1 => isize::MAX,
+        | Err(_) => return None,
+    };
+    Some((first, count, stride))
+}
+
+fn walk_index(
+    first: usize,
+    offset: usize,
+    step: i128,
+) -> Option<usize> {
+    if offset == 0 {
+        return Some(first);
+    }
+    let distance = offset.checked_mul(usize::try_from(step.unsigned_abs()).ok()?)?;
+    if step < 0 {
+        first.checked_sub(distance)
+    } else {
+        first.checked_add(distance)
+    }
+}
+
+fn flat_coordinate(
+    shape: &[usize],
+    coordinates: impl IntoIterator<Item = Option<usize>>,
+) -> Option<usize> {
+    let mut coordinates = coordinates.into_iter();
+    let flat = shape.iter().try_fold(0usize, |flat, &extent| {
+        let coordinate = coordinates.next()??;
+        if coordinate >= extent {
+            return None;
+        }
+        flat.checked_mul(extent)?.checked_add(coordinate)
+    })?;
+    coordinates.next().is_none().then_some(flat)
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "shape compatibility is checked before broadcast element access"
+)]
 fn broadcast_shape(
     left: &[usize],
     right: &[usize],
@@ -6174,17 +6366,21 @@ fn broadcast_shape(
     Some(shape)
 }
 
-fn unravel(
+fn unravel_into(
     mut index: usize,
     shape: &[usize],
-) -> Vec<usize> {
-    let mut coordinates = vec![0; shape.len()];
-    for axis in (0..shape.len()).rev() {
-        let extent = shape[axis].max(1);
-        coordinates[axis] = index % extent;
-        index /= extent;
+    coordinates: &mut [usize],
+) {
+    for (coordinate, &extent) in coordinates.iter_mut().zip(shape).rev() {
+        // There is no valid index for a zero extent. Keeping the input
+        // quotient and emitting zero matches the empty-axis convention.
+        if let Some(divisor) = std::num::NonZeroUsize::new(extent) {
+            *coordinate = index % divisor;
+            index /= divisor;
+        } else {
+            *coordinate = 0;
+        }
     }
-    coordinates
 }
 
 /// The flat key a qualified field access names, when the base is a path or an
@@ -6208,7 +6404,7 @@ pub fn qualified_name(
 pub fn is_rssn_root(expr: &Expr) -> bool {
     match &expr.kind {
         | ExprKind::Var(name) => name == "Rssn",
-        | ExprKind::QName(path) => path.len() == 1 && path[0] == "Rssn",
+        | ExprKind::QName(path) => matches!(path.as_slice(), [name] if name == "Rssn"),
         | _ => false,
     }
 }
@@ -6222,7 +6418,12 @@ pub fn is_rssn_root(expr: &Expr) -> bool {
 pub fn rssn_operator_name(expr: &Expr) -> Option<String> {
     let name = match &expr.kind {
         | ExprKind::Field { base, name } if is_rssn_root(base) => name.clone(),
-        | ExprKind::QName(path) if path.len() == 2 && path[0] == "Rssn" => path[1].clone(),
+        | ExprKind::QName(path)
+            if let [module, member] = path.as_slice()
+                && module == "Rssn" =>
+        {
+            member.clone()
+        },
         | _ => return None,
     };
     if crate::rssn_module::is_entry_point(&name) || name == "overloads" {
@@ -6235,19 +6436,18 @@ fn element_at_broadcast(
     tensor: &TensorData,
     coordinates: &[usize],
 ) -> Option<Value> {
-    let mut adjusted = Vec::with_capacity(coordinates.len());
-    for (coordinate, extent) in coordinates.iter().zip(tensor.shape.iter()) {
-        adjusted.push(if *extent == 1 {
-            0
-        } else {
-            *coordinate
-        } as isize);
+    if coordinates.len() != tensor.rank() {
+        return None;
     }
-    tensor.get(&adjusted)
+    let adjusted = coordinates
+        .iter()
+        .zip(&tensor.shape)
+        .map(|(&coordinate, &extent)| Some(if extent == 1 { 0 } else { coordinate }));
+    flat_coordinate(&tensor.shape, adjusted).and_then(|index| tensor.get_flat(index))
 }
 
 /// Preserve a tensor's element representation when a slice has no elements.
-fn empty_tensor_like(
+pub(crate) fn empty_tensor_like(
     tensor: &TensorData,
     shape: Vec<usize>,
 ) -> Value {
@@ -6276,156 +6476,78 @@ pub fn build_tensor(
     shape: Vec<usize>,
     dim: Dim,
 ) -> Value {
-    if elements.is_empty() {
-        return Value::Tensor(Rc::new(TensorData {
-            verified_element: None,
-            shape,
-            storage: Storage::Boxed(Vec::new()),
-            dim,
-            display: None,
-        }));
-    }
-    if elements.iter().all(|element| {
-        matches!(
-            element,
-            Value::Num(NumVal {
-                kind: NumKind::Float(_),
-                ..
-            })
-        )
-    }) {
-        let mut values = Vec::with_capacity(elements.len());
-        let mut display = None;
-        for element in &elements {
-            if let Value::Num(num) = element {
-                values.push(num.to_f64().unwrap_or(f64::NAN));
-                if display.is_none() {
-                    display = num.display.clone();
+    let packed = compact_numeric_tensor(&elements).or_else(|| {
+        if !matches!(elements.first(), Some(Value::Bool(_))) {
+            return None;
+        }
+        let values = elements
+            .iter()
+            .map(|element| {
+                match element {
+                    | Value::Bool(value) => Some(*value),
+                    | _ => None,
                 }
-            }
-        }
-        return Value::Tensor(Rc::new(TensorData {
-            verified_element: None,
-            shape,
-            storage: Storage::Dense(Rc::new(values)),
-            dim,
-            display,
-        }));
-    }
-    // §6.6.1: mixing numeric phases widens the storage — `[1, 2.0]` is an
-    // `F64` tensor, not a boxed one — so the elementwise class is the widest
-    // one that holds every element. This runs after the all-`Float` case so a
-    // pure `Float` literal keeps its fast path, and it only applies when every
-    // element is numeric: a tensor of records or variants stays `Boxed`.
-    if elements.iter().any(|element| {
-        matches!(
-            element,
-            Value::Num(NumVal {
-                kind: NumKind::Float(_),
-                ..
             })
-        )
-    }) && elements.iter().all(|element| {
-        matches!(
-            element,
-            Value::Num(NumVal {
-                kind: NumKind::Int(_) | NumKind::Exact(_) | NumKind::Float(_),
-                ..
-            })
-        )
-    }) {
-        let mut values = Vec::with_capacity(elements.len());
-        let mut converted = true;
-        let mut display = None;
-        for element in &elements {
-            if let Value::Num(num) = element {
-                match num.to_f64() {
-                    | Some(value) => values.push(value),
-                    | None => {
-                        converted = false;
-                        break;
-                    },
-                }
-                if display.is_none() {
-                    display = num.display.clone();
-                }
-            }
-        }
-        if converted {
-            return Value::Tensor(Rc::new(TensorData {
-                verified_element: None,
-                shape,
-                storage: Storage::Dense(Rc::new(values)),
-                dim,
-                display,
-            }));
-        }
-    }
-    if elements.iter().all(|element| {
-        matches!(
-            element,
-            Value::Num(NumVal {
-                kind: NumKind::Int(_) | NumKind::Exact(_),
-                ..
-            })
-        )
-    }) {
-        let mut values = Vec::with_capacity(elements.len());
-        let mut display = None;
-        for element in &elements {
-            if let Value::Num(num) = element {
-                values.push(num.to_rational().unwrap_or_else(BigRational::zero));
-                if display.is_none() {
-                    display = num.display.clone();
-                }
-            }
-        }
-        let rep = if elements.iter().all(|element| {
-            matches!(
-                element,
-                Value::Num(NumVal {
-                    kind: NumKind::Int(_),
-                    ..
-                })
-            )
-        }) {
-            value::ExactRep::Int
-        } else {
-            value::ExactRep::Real
-        };
-        return Value::Tensor(Rc::new(TensorData {
-            verified_element: None,
-            shape,
-            storage: Storage::TypedExact(values, rep),
-            dim,
-            display,
-        }));
-    }
-    if elements
-        .iter()
-        .all(|element| matches!(element, Value::Bool(_)))
-    {
-        let mut values = Vec::with_capacity(elements.len());
-        for element in &elements {
-            if let Value::Bool(value) = element {
-                values.push(*value);
-            }
-        }
-        return Value::Tensor(Rc::new(TensorData {
-            verified_element: None,
-            shape,
-            storage: Storage::Bool(values),
-            dim,
-            display: None,
-        }));
-    }
+            .collect::<Option<Vec<_>>>()?;
+        Some((Storage::Bool(values), None))
+    });
+    let (storage, display) = packed.unwrap_or_else(|| (Storage::Boxed(elements), None));
     Value::Tensor(Rc::new(TensorData {
         verified_element: None,
         shape,
-        storage: Storage::Boxed(elements),
+        storage,
         dim,
-        display: None,
+        display,
     }))
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "numeric promotion and display selection form one storage policy"
+)]
+fn compact_numeric_tensor(elements: &[Value]) -> Option<(Storage, Option<Rc<UnitDef>>)> {
+    if elements.is_empty() {
+        return None;
+    }
+    // §6.6.1: one Float widens an Int/Real tensor to f64. Symbolic,
+    // complex and non-numeric elements require their full boxed values.
+    let mut rep = RepKind::Int;
+    let mut display = None;
+    for element in elements {
+        let num = element.as_num()?;
+        let kind = match num.kind {
+            | NumKind::Int(_) => RepKind::Int,
+            | NumKind::Exact(_) => RepKind::Real,
+            | NumKind::Float(_) => RepKind::Float,
+            | NumKind::Sym(_) | NumKind::Complex(..) => return None,
+        };
+        rep = rep.max(kind);
+        if display.is_none() {
+            display.clone_from(&num.display);
+        }
+    }
+    let numbers = elements.iter().map(Value::as_num);
+    let storage = match rep {
+        | RepKind::Float => {
+            let values = numbers
+                .map(|number| number?.to_f64())
+                .collect::<Option<Vec<_>>>()?;
+            Storage::Dense(Rc::new(values))
+        },
+        | RepKind::Int | RepKind::Real => {
+            let exact = if rep == RepKind::Int {
+                value::ExactRep::Int
+            } else {
+                value::ExactRep::Real
+            };
+            let values = numbers
+                .map(|number| Some(number?.to_rational().unwrap_or_else(BigRational::zero)))
+                .collect::<Option<Vec<_>>>()?;
+            Storage::TypedExact(values, exact)
+        },
+        | RepKind::Complex => return None,
+    };
+    Some((storage, display))
 }
 
 /// Formats a value using the module's dimension environment.
@@ -6446,12 +6568,35 @@ pub fn render_scalar(num: &NumVal) -> String {
 enum ObservableType {
     Num(RepKind, Dim),
     Tensor(Vec<usize>, RepKind, Dim),
-    Record(Vec<(String, ObservableType)>),
-    Adt(aevia_types::keys::AdtKey, Vec<ObservableType>),
+    Record(Vec<(String, Self)>),
+    Adt(aevia_types::keys::AdtKey, Vec<Self>),
     Bool,
     Str,
     Unit,
     Prop,
+}
+
+const fn numeric_representation(kind: &NumKind) -> RepKind {
+    match kind {
+        | NumKind::Int(_) => RepKind::Int,
+        | NumKind::Exact(_) | NumKind::Sym(_) => RepKind::Real,
+        | NumKind::Float(_) => RepKind::Float,
+        | NumKind::Complex(..) => RepKind::Complex,
+    }
+}
+
+const fn tensor_scalar_representation(storage: &Storage) -> Option<RepKind> {
+    match storage {
+        | Storage::Dense(_) | Storage::View(_) => Some(RepKind::Float),
+        | Storage::TypedExact(_, value::ExactRep::Int) => Some(RepKind::Int),
+        | Storage::TypedExact(_, value::ExactRep::Real) => Some(RepKind::Real),
+        // Untyped exact storage cannot prove Int or Real.
+        | _ => None,
+    }
+}
+
+fn tensor_shape_matches_storage_len(tensor: &TensorData) -> bool {
+    tensor.checked_element_count() == Some(tensor.storage.len())
 }
 
 fn observable_type(value: &Value) -> Option<ObservableType> {
@@ -6460,31 +6605,18 @@ fn observable_type(value: &Value) -> Option<ObservableType> {
             if !num.dim.vars().is_empty() {
                 return None;
             }
-            let rep = match num.kind {
-                | NumKind::Int(_) => RepKind::Int,
-                | NumKind::Exact(_) | NumKind::Sym(_) => RepKind::Real,
-                | NumKind::Float(_) => RepKind::Float,
-                | NumKind::Complex(..) => RepKind::Complex,
-            };
-            Some(ObservableType::Num(rep, num.dim.clone()))
+            Some(ObservableType::Num(
+                numeric_representation(&num.kind),
+                num.dim.clone(),
+            ))
         },
         | Value::Tensor(tensor) => {
-            if !tensor.dim.vars().is_empty() {
+            if !tensor.dim.vars().is_empty() || !tensor_shape_matches_storage_len(tensor) {
                 return None;
             }
-            let rep = match tensor.storage.backing() {
-                | Storage::Dense(_) | Storage::View(_) => RepKind::Float,
-                // Exact storage loses the Int/Real distinction, even if all
-                // values happen to be integers.
-                | Storage::Exact(_) => return None,
-                | Storage::TypedExact(_, value::ExactRep::Int) => RepKind::Int,
-                | Storage::TypedExact(_, value::ExactRep::Real) => RepKind::Real,
-                | Storage::Bool(_) => return None,
-                | Storage::Boxed(_) | Storage::SharedSlice(_) => return None,
-            };
             Some(ObservableType::Tensor(
                 tensor.shape.clone(),
-                rep,
+                tensor_scalar_representation(tensor.storage.backing())?,
                 tensor.dim.clone(),
             ))
         },
@@ -6586,7 +6718,7 @@ fn runtime_type_matches(
 ) -> bool {
     use aevia_types::Type;
     match (pattern, actual) {
-        | (Type::Var(id), _) | (Type::Param(id), _) => {
+        | (Type::Var(id) | Type::Param(id), _) => {
             bind_runtime_type(
                 (matches!(pattern, Type::Param(_)), *id),
                 observable_type_from_type(actual),
@@ -6642,9 +6774,9 @@ fn variant_type_args_valid(
     }
     let mut types = vec![None; args.len()];
     let mut dims = HashMap::new();
-    for (index, (kind, arg)) in kinds.iter().zip(args).enumerate() {
+    for ((kind, arg), selected) in kinds.iter().zip(args).zip(&mut types) {
         match (kind, arg) {
-            | (adt::ParamKind::Type, ty) => types[index] = Some(ty.clone()),
+            | (adt::ParamKind::Type, ty) => *selected = Some(ty.clone()),
             | (adt::ParamKind::Dim(id), Type::UnitOf(dim)) => {
                 dims.insert(*id, dim.clone());
             },
@@ -6813,7 +6945,7 @@ fn runtime_observable_matches(
 ) -> bool {
     use aevia_types::Type;
     match (pattern, actual) {
-        | (Type::Var(id), _) | (Type::Param(id), _) => {
+        | (Type::Var(id) | Type::Param(id), _) => {
             bind_runtime_type(
                 (matches!(pattern, Type::Param(_)), *id),
                 Some(actual.clone()),
@@ -6889,6 +7021,50 @@ fn runtime_structural_show(value: &Value) -> bool {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "tensor layout and representation evidence have independent matching rules"
+)]
+fn runtime_tensor_head_matches(
+    shape: &aevia_types::ty::Shape,
+    elem: &aevia_types::Type,
+    tensor: &TensorData,
+    bindings: &mut HashMap<(bool, u32), Option<ObservableType>>,
+) -> bool {
+    use aevia_types::Type;
+    if usize::try_from(shape.rank()) != Ok(tensor.rank())
+        || !tensor_shape_matches_storage_len(tensor)
+        || tensor.shape.iter().enumerate().any(|(axis, actual)| {
+            shape
+                .extent(axis)
+                .is_some_and(|expected| expected != *actual)
+        })
+    {
+        return false;
+    }
+    let storage = tensor.storage.backing();
+    match elem {
+        | Type::Var(id) | Type::Param(id) => {
+            let actual = if tensor.dim.vars().is_empty() {
+                if matches!(storage, Storage::Bool(_)) {
+                    Some(ObservableType::Bool)
+                } else {
+                    tensor_scalar_representation(storage)
+                        .map(|rep| ObservableType::Num(rep, tensor.dim.clone()))
+                }
+            } else {
+                None
+            };
+            bind_runtime_type((matches!(elem, Type::Param(_)), *id), actual, bindings)
+        },
+        | Type::Scalar(rep, _) => {
+            RepKind::of(*rep).is_some_and(|rep| tensor_scalar_representation(storage) == Some(rep))
+        },
+        | Type::Bool => matches!(storage, Storage::Bool(_)),
+        | _ => false,
+    }
+}
+
 /// Match an instance head against what the value actually preserves. A repeated
 /// head variable binds once and every later occurrence must agree.
 fn runtime_head_matches(
@@ -6898,7 +7074,7 @@ fn runtime_head_matches(
 ) -> bool {
     use aevia_types::Type;
     match (head, value) {
-        | (Type::Var(id), _) | (Type::Param(id), _) => {
+        | (Type::Var(id) | Type::Param(id), _) => {
             bind_runtime_type(
                 (matches!(head, Type::Param(_)), *id),
                 observable_type(value),
@@ -6906,59 +7082,11 @@ fn runtime_head_matches(
             )
         },
         | (Type::Scalar(rep, _), Value::Num(num)) => {
-            match (rep, &num.kind) {
-                | (Rep::Var(_), _) => true,
-                | (Rep::Int, NumKind::Int(_)) => true,
-                | (Rep::Real, NumKind::Exact(_) | NumKind::Sym(_)) => true,
-                | (Rep::Float, NumKind::Float(_)) => true,
-                | (Rep::Complex, NumKind::Complex(..)) => true,
-                | _ => false,
-            }
+            matches!(rep, Rep::Var(_))
+                || RepKind::of(*rep) == Some(numeric_representation(&num.kind))
         },
         | (Type::Tensor { shape, elem }, Value::Tensor(tensor)) => {
-            if usize::try_from(shape.rank()).ok() != Some(tensor.shape.len()) {
-                return false;
-            }
-            if tensor
-                .shape
-                .iter()
-                .enumerate()
-                .any(|(i, actual)| shape.extent(i).is_some_and(|n| n != *actual))
-            {
-                return false;
-            }
-            match (&**elem, tensor.storage.backing()) {
-                | (Type::Var(id) | Type::Param(id), storage) => {
-                    let actual = if !tensor.dim.vars().is_empty() {
-                        None
-                    } else {
-                        match storage {
-                            | Storage::Dense(_) | Storage::View(_) => {
-                                Some(ObservableType::Num(RepKind::Float, tensor.dim.clone()))
-                            },
-                            | Storage::TypedExact(_, value::ExactRep::Int) => {
-                                Some(ObservableType::Num(RepKind::Int, tensor.dim.clone()))
-                            },
-                            | Storage::TypedExact(_, value::ExactRep::Real) => {
-                                Some(ObservableType::Num(RepKind::Real, tensor.dim.clone()))
-                            },
-                            | Storage::Bool(_) => Some(ObservableType::Bool),
-                            | Storage::Exact(_) | Storage::Boxed(_) | Storage::SharedSlice(_) => {
-                                None
-                            },
-                        }
-                    };
-                    bind_runtime_type((matches!(&**elem, Type::Param(_)), *id), actual, bindings)
-                },
-                | (Type::Scalar(Rep::Float, _), Storage::Dense(_) | Storage::View(_)) => true,
-                | (Type::Scalar(Rep::Int, _), Storage::TypedExact(_, value::ExactRep::Int)) => true,
-                | (Type::Scalar(Rep::Real, _), Storage::TypedExact(_, value::ExactRep::Real)) => {
-                    true
-                },
-                | (Type::Bool, Storage::Bool(_)) => true,
-                // Neither Int nor Real can be proved from exact storage.
-                | _ => false,
-            }
+            runtime_tensor_head_matches(shape, elem, tensor, bindings)
         },
         | (Type::Record(row), Value::Record(record)) => {
             let fields = row.fields();
@@ -7013,15 +7141,11 @@ fn runtime_head_matches(
 #[must_use]
 pub fn witness_of_value(value: &Value) -> Option<Witness> {
     match value {
-        | Value::Num(num) => {
-            Some(Witness::Num(match &num.kind {
-                | NumKind::Int(_) => RepKind::Int,
-                | NumKind::Exact(_) | NumKind::Sym(_) => RepKind::Real,
-                | NumKind::Float(_) => RepKind::Float,
-                | NumKind::Complex(..) => RepKind::Complex,
-            }))
-        },
+        | Value::Num(num) => Some(Witness::Num(numeric_representation(&num.kind))),
         | Value::Tensor(tensor) => {
+            if !tensor_shape_matches_storage_len(tensor) {
+                return None;
+            }
             let storage = match tensor.storage.backing() {
                 | Storage::Dense(_) | Storage::View(_) => StorageClass::Float,
                 | Storage::Exact(_) | Storage::TypedExact(..) => StorageClass::Exact,
@@ -7066,7 +7190,10 @@ pub fn witness_of_value(value: &Value) -> Option<Witness> {
         | Value::Str(_) => Some(Witness::String),
         | Value::Unit => Some(Witness::Unit),
         | Value::Prop(_) => Some(Witness::Prop),
-        | Value::Closure(_) | Value::Native(_) | Value::Ctor { .. } | Value::Io(_) => None,
+        | Value::Closure(_)
+        | Value::Native(_)
+        | Value::Ctor { .. }
+        | Value::Io(_)
         | Value::Sparse(_)
         | Value::Dyn(_)
         | Value::UnitOf(_)
@@ -7101,6 +7228,10 @@ pub fn ctor_in_module(
     })
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "intrinsic result evidence is derived independently of execution"
+)]
 fn builtin_result_schema(
     name: &str,
     args: &[Value],
@@ -7198,7 +7329,7 @@ pub fn ctor_value_at(
     Some(Value::ctor(value::CtorValue {
         adt,
         index,
-        name: name.to_string(),
+        name: name.clone(),
         arity,
         args: Vec::new(),
         origin: None,
@@ -7227,6 +7358,220 @@ pub fn variant_name(
 #[must_use]
 pub fn main_action(interp: &Interp) -> Option<Value> {
     interp.globals.get("main").cloned()
+}
+
+#[cfg(test)]
+mod arithmetic_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn complex_division_keeps_finite_extreme_quotients() {
+        let huge = f64::MAX / 2.0;
+        let tiny = f64::MIN_POSITIVE;
+        let smallest = f64::from_bits(1);
+        for value in [huge, tiny, smallest] {
+            assert_eq!(complex_quotient((value, value), (value, value)), (1.0, 0.0));
+            assert_eq!(
+                complex_quotient((value, value), (value, -value)),
+                (0.0, 1.0)
+            );
+        }
+        assert_eq!(
+            complex_quotient((smallest, 0.0), (tiny, 0.0)),
+            (f64::EPSILON, 0.0),
+        );
+        assert_eq!(
+            complex_quotient((f64::MAX, f64::MAX), (0.5, 0.5)),
+            (f64::INFINITY, 0.0),
+        );
+        assert_eq!(
+            complex_quotient((1.0, 4.0), (2.0, 3.0)),
+            (14.0 / 13.0, 5.0 / 13.0)
+        );
+        let (real, imaginary) = complex_quotient((3.0, 4.0), (0.0, 0.0));
+        assert!(real.is_nan() && imaginary.is_nan());
+    }
+
+    #[test]
+    fn rng_retains_the_previous_binary64_stream() {
+        for seed in [0, 1, 42, u64::MAX] {
+            let mut state = seed;
+            let mut reference = seed;
+            for _ in 0..1024 {
+                reference = reference
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
+                let expected = (reference >> 11) as f64 / (1u64 << 53) as f64;
+                assert_eq!(next_unit(&mut state).to_bits(), expected.to_bits());
+                assert_eq!(state, reference);
+            }
+        }
+    }
+
+    #[test]
+    fn recursion_counters_reject_exhausted_limits_before_increment() {
+        let compilation = crate::compile("recursion-limits.aev", "");
+        let mut interp = Interp::new(&compilation.checked);
+        let span = Span::new(0, 1, 2);
+        let expr = Expr::new(ExprKind::UnitLit, span);
+        let scope = Scope::root();
+
+        interp.max_nodes = usize::MAX;
+        interp.nodes = usize::MAX;
+        assert_eq!(
+            interp.eval(&expr, &scope).err().map(|error| error.code),
+            Some("E0805")
+        );
+        assert_eq!(interp.nodes, usize::MAX);
+        interp.nodes = 0;
+        interp.max_nodes = 1;
+        assert!(matches!(interp.eval(&expr, &scope), Ok(Value::Unit)));
+        assert_eq!(interp.nodes, 0);
+
+        interp.max_depth = usize::MAX;
+        interp.depth = usize::MAX;
+        assert_eq!(
+            interp
+                .apply(Value::Unit, Vec::new(), span)
+                .err()
+                .map(|error| error.code),
+            Some("E0805"),
+        );
+        assert_eq!(interp.depth, usize::MAX);
+        interp.depth = 0;
+        interp.max_depth = 1;
+        let echo = Value::Native(Rc::new(NativeFn(Box::new(|interp, _, _| {
+            assert_eq!(interp.depth, 1);
+            Ok(Value::Unit)
+        }))));
+        assert!(matches!(
+            interp.apply(echo, Vec::new(), span),
+            Ok(Value::Unit)
+        ));
+        assert_eq!(interp.depth, 0);
+    }
+}
+
+#[cfg(test)]
+mod selector_geometry_tests {
+    use super::*;
+
+    #[test]
+    fn selector_geometry_retains_the_full_host_extent() -> Result<(), EvalError> {
+        let last = usize::MAX.saturating_sub(1);
+        let edge = usize::MAX as i128;
+        let span = Span::default();
+        let source_index = Value::Num(NumVal::int(BigInt::from(last)));
+        assert_eq!(
+            normalize_index(slice_integer(&source_index, span)?, usize::MAX),
+            Some(last)
+        );
+        assert_eq!(normalize_index(-edge, usize::MAX), Some(0));
+        assert_eq!(normalize_index(i128::MAX, usize::MAX), None);
+        assert_eq!(normalize_index(i128::MIN, usize::MAX), None);
+        assert_eq!(normalize_bound(-1, usize::MAX, true), usize::MAX);
+        assert_eq!(
+            walk_range(None, None, -1, usize::MAX, span)?,
+            (last, usize::MAX, -1),
+        );
+        assert_eq!(walk_index(last, last, -1), Some(0));
+        assert_eq!(
+            walk_range(None, None, i128::MIN, usize::MAX, span)?,
+            (last, 1, i128::MIN),
+        );
+        assert_eq!(walk_index(last, 0, i128::MIN), Some(last));
+        assert_eq!(walk_index(last, 1, i128::MIN), None);
+        assert_eq!(flat_coordinate(&[2, 3], [Some(1), Some(2)]), Some(5));
+        assert_eq!(flat_coordinate(&[2, 3], [Some(0), Some(3)]), None);
+        assert_eq!(
+            flat_coordinate(&[usize::MAX, 2], [Some(last), Some(1)]),
+            None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn empty_matrix_products_do_not_iterate_a_huge_axis() -> Result<(), EvalError> {
+        let compilation = crate::compile("empty-product.aev", "");
+        let mut interp = Interp::new(&compilation.checked);
+        let shape = vec![usize::MAX, 0];
+        let product = interp.matmul(
+            &build_tensor(Vec::new(), shape.clone(), Dim::one()),
+            &build_tensor(Vec::new(), vec![0, 0], Dim::one()),
+            Span::default(),
+        )?;
+        let Value::Tensor(product) = product else {
+            return Err(EvalError::new("E0809", "expected a tensor product"));
+        };
+        assert_eq!(product.shape, shape);
+        assert_eq!(product.checked_element_count(), Some(0));
+        Ok(())
+    }
+
+    #[test]
+    fn sparse_selectors_can_cross_the_signed_pointer_boundary() -> Result<(), EvalError> {
+        let stride = usize::MAX.div_ceil(2);
+        let last = usize::MAX.saturating_sub(1);
+        let mut entries = crate::sparse::Entries::empty(1);
+        entries.push(&[0], 1.0);
+        entries.push(&[stride], 2.0);
+        entries.push(&[last], 3.0);
+        let sparse = crate::sparse::SparseData::from_entries(
+            crate::sparse::SparseFormat::Coo,
+            vec![usize::MAX],
+            Dim::one(),
+            None,
+            2,
+            entries,
+        )
+        .map_err(|message| EvalError::new("E0802", message))?;
+        let value = Value::Sparse(Rc::new(sparse));
+        let compilation = crate::compile("selector-boundaries.aev", "");
+        let mut interp = Interp::new(&compilation.checked);
+        let span = Span::default();
+        assert_eq!(
+            interp
+                .index_resolved(value.clone(), &[SliceValue::Index(last as i128)], span)?
+                .as_f64(),
+            Some(3.0),
+        );
+        assert_eq!(
+            interp
+                .index_resolved(value.clone(), &[SliceValue::Index(-1)], span)?
+                .as_f64(),
+            Some(3.0),
+        );
+        let get_args = [value.clone(), Value::Num(NumVal::int(BigInt::from(last)))];
+        let builtin_get = crate::sparse::call(
+            &mut interp,
+            crate::builtin_ids::BuiltinId::Get,
+            "get",
+            &get_args,
+            span,
+        )
+        .ok_or_else(|| EvalError::new("E0809", "expected sparse get dispatch"))??;
+        assert_eq!(builtin_get.as_f64(), Some(3.0));
+        let walked = interp.index_resolved(
+            value,
+            &[SliceValue::Range {
+                start: None,
+                end: None,
+                inclusive: false,
+                step: Some(stride as i128),
+            }],
+            span,
+        )?;
+        let Value::Sparse(walked) = walked else {
+            return Err(EvalError::new("E0809", "expected a sparse selection"));
+        };
+        assert_eq!(walked.shape, [2]);
+        assert_eq!(walked.nnz(), 2);
+        assert_eq!(
+            crate::sparse::index(&walked, &[1], span)?.as_f64(),
+            Some(2.0)
+        );
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -7288,6 +7633,39 @@ mod runtime_type_dispatch_tests {
             .into_iter()
             .collect();
         Value::Record(Rc::new(value::RecordValue { fields }))
+    }
+
+    #[test]
+    fn invalid_tensor_storage_does_not_prove_a_runtime_head() {
+        use aevia_types::Type;
+        use aevia_types::ty::Shape;
+
+        let malformed = Value::Tensor(Rc::new(TensorData::new(
+            vec![2],
+            Storage::Dense(Rc::new(vec![1.0])),
+            Dim::one(),
+            None,
+        )));
+        let valid = Value::Tensor(Rc::new(TensorData::new(
+            vec![2],
+            Storage::Dense(Rc::new(vec![1.0, 2.0])),
+            Dim::one(),
+            None,
+        )));
+        let expected = Type::tensor(Shape::Rank(1), Type::float(Dim::one()));
+        let mut bindings = HashMap::new();
+        assert!(!HeadShape::Tensor.accepts(&malformed));
+        assert!(!runtime_head_matches(&expected, &malformed, &mut bindings));
+        assert!(observable_type(&malformed).is_none());
+        assert_eq!(witness_of_value(&malformed), None);
+        assert!(HeadShape::Tensor.accepts(&valid));
+        assert!(runtime_head_matches(&expected, &valid, &mut bindings));
+        assert!(witness_of_value(&valid).is_some());
+    }
+
+    #[test]
+    fn checked_proposition_alias_has_the_same_head_as_prop() {
+        assert_eq!(type_head_shape(&aevia_types::Type::Prop), HeadShape::Prop);
     }
 
     #[test]
@@ -7617,6 +7995,10 @@ pub(crate) fn unit_scale_value(
 ///   kept (`2 * 3 km` is `6 km`), unless that display is affine — scaling a
 ///   temperature point has no meaning in the display unit.
 /// * everything else drops the display and prints in SI.
+#[allow(
+    clippy::single_call_fn,
+    reason = "display propagation is independent of arithmetic and phase promotion"
+)]
 fn propagated_display(
     op: BinOp,
     a: &NumVal,
@@ -7633,15 +8015,7 @@ fn propagated_display(
                 | _ => None,
             }
         },
-        | BinOp::Mul => {
-            if b.dim.is_one() && b.display.is_none() {
-                a.display.clone().filter(|unit| !unit.affine)
-            } else if a.dim.is_one() && a.display.is_none() {
-                b.display.clone().filter(|unit| !unit.affine)
-            } else {
-                None
-            }
-        },
+        | BinOp::Mul => product_display(&a.dim, a.display.as_ref(), &b.dim, b.display.as_ref()),
         | BinOp::Div if b.dim.is_one() && b.display.is_none() => {
             a.display.clone().filter(|unit| !unit.affine)
         },
@@ -7649,9 +8023,111 @@ fn propagated_display(
     }
 }
 
+/// Display unit shared by scalar multiplication and products of dense tensors.
+pub(crate) fn product_display(
+    left_dim: &Dim,
+    left_display: Option<&Rc<UnitDef>>,
+    right_dim: &Dim,
+    right_display: Option<&Rc<UnitDef>>,
+) -> Option<Rc<UnitDef>> {
+    let display = if right_dim.is_one() && right_display.is_none() {
+        left_display
+    } else if left_dim.is_one() && left_display.is_none() {
+        right_display
+    } else {
+        None
+    };
+    display.filter(|unit| !unit.affine).cloned()
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "sparse selectors filter stored coordinates independently of dense views"
+)]
+fn index_sparse(
+    sparse: &crate::sparse::SparseData,
+    indices: &[SliceValue],
+    span: Span,
+) -> Result<Value, EvalError> {
+    if indices
+        .iter()
+        .any(|index| matches!(index, SliceValue::Range { .. }))
+    {
+        // §8.4.1: a range keeps its axis, an integer removes it; the
+        // stored entries are filtered, never densified.
+        if indices.len() != sparse.rank() {
+            return Err(EvalError::new(
+                "E0802",
+                format!(
+                    "a rank-{} sparse tensor is sliced by {} selector(s), found {}",
+                    sparse.rank(),
+                    sparse.rank(),
+                    indices.len()
+                ),
+            )
+            .at(span));
+        }
+        let mut axes = Vec::with_capacity(indices.len());
+        for (axis, (index, &extent)) in indices.iter().zip(&sparse.shape).enumerate() {
+            match index {
+                | SliceValue::Index(value) => {
+                    let coordinate = *value;
+                    let at = normalize_index(coordinate, extent).ok_or_else(|| {
+                        EvalError::new(
+                            "E0802",
+                            format!(
+                                "index {coordinate} is out of bounds for axis {axis} of extent {extent}"
+                            ),
+                        )
+                        .at(span)
+                    })?;
+                    axes.push(crate::sparse::SliceAxis::At(at));
+                },
+                | SliceValue::Range {
+                    start,
+                    end,
+                    inclusive,
+                    step,
+                } => {
+                    if let Some(step) = step {
+                        let (start, count, step) = walk_range(*start, *end, *step, extent, span)?;
+                        axes.push(crate::sparse::SliceAxis::Walk { start, count, step });
+                        continue;
+                    }
+                    let lo = normalize_bound(start.unwrap_or(0), extent, false);
+                    let hi = end.map_or(extent, |bound| normalize_bound(bound, extent, *inclusive));
+                    let count = hi
+                        .checked_sub(lo)
+                        .ok_or_else(|| EvalError::new("E0802", "empty slice").at(span))?;
+                    axes.push(crate::sparse::SliceAxis::Walk {
+                        start: lo,
+                        count,
+                        step: 1,
+                    });
+                },
+            }
+        }
+        return crate::sparse::slice(sparse, &axes, span);
+    }
+    let coordinates: Vec<_> = indices
+        .iter()
+        .filter_map(|index| {
+            match index {
+                | SliceValue::Index(value) => Some(*value),
+                | SliceValue::Range { .. } => None,
+            }
+        })
+        .collect();
+    crate::sparse::index(sparse, &coordinates, span)
+}
+
 /// `s[i]` and `s[i..j]` / `s[i:j:k]` on a string (§8.1.4): positions count
 /// grapheme clusters, so `"é"` written as `e` + combining acute is one
 /// position. Negative positions count from the end, as on tensors.
+#[allow(
+    clippy::single_call_fn,
+    reason = "string selectors count grapheme clusters instead of tensor coordinates"
+)]
 fn index_string(
     text: &str,
     indices: &[SliceValue],
@@ -7669,9 +8145,7 @@ fn index_string(
     };
     match index {
         | SliceValue::Index(value) => {
-            let coordinate = value
-                .ok_or_else(|| EvalError::new("E0802", "index must be an Int").at(span))?
-                as isize;
+            let coordinate = *value;
             let position = normalize_index(coordinate, extent).ok_or_else(|| {
                 EvalError::new(
                     "E0802",
@@ -7681,7 +8155,11 @@ fn index_string(
                 )
                 .at(span)
             })?;
-            Ok(Value::string(clusters[position]))
+            clusters
+                .get(position)
+                .copied()
+                .map(Value::string)
+                .ok_or_else(|| EvalError::new("E0802", "index out of range").at(span))
         },
         | SliceValue::Range {
             start,
@@ -7693,23 +8171,19 @@ fn index_string(
                 let (first, count, stride) = walk_range(*start, *end, *step, extent, span)?;
                 let mut out = String::new();
                 for offset in 0..count {
-                    let position = first as isize + offset as isize * stride;
-                    if let Some(cluster) =
-                        usize::try_from(position).ok().and_then(|p| clusters.get(p))
-                    {
-                        out.push_str(cluster);
-                    }
+                    let cluster = walk_index(first, offset, stride)
+                        .and_then(|position| clusters.get(position))
+                        .ok_or_else(|| EvalError::new("E0802", "index out of range").at(span))?;
+                    out.push_str(cluster);
                 }
                 return Ok(Value::string(out));
             }
-            let start_value = start.map_or(0, |value| value as isize);
-            let end_value = end.map_or(extent as isize, |value| value as isize);
-            let first = normalize_bound(start_value, extent, false);
-            let last = normalize_bound(end_value, extent, *inclusive);
-            if first > last {
-                return Err(EvalError::new("E0802", "empty slice").at(span));
-            }
-            Ok(Value::string(clusters[first..last].concat()))
+            let first = normalize_bound(start.unwrap_or(0), extent, false);
+            let last = end.map_or(extent, |bound| normalize_bound(bound, extent, *inclusive));
+            let slice = clusters
+                .get(first..last)
+                .ok_or_else(|| EvalError::new("E0802", "empty slice").at(span))?;
+            Ok(Value::string(slice.concat()))
         },
     }
 }
@@ -7719,6 +8193,10 @@ fn index_string(
 /// The slice that produced `value` kept them with extent one; the storage is
 /// reshaped (a view stays a view when its elements are contiguous) rather than
 /// copied element by element.
+#[allow(
+    clippy::single_call_fn,
+    reason = "post-slice rank reduction preserves the storage and element witness"
+)]
 fn drop_indexed_axes(
     value: Value,
     dropped: &[bool],
@@ -7766,7 +8244,11 @@ pub(crate) fn rounded_coherent(
 ) -> f64 {
     match value.as_rational() {
         | Some(coefficient) => {
-            let exact = coefficient * scale.rat.clone();
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "coherent decimal values use the exact arbitrary-precision scale"
+            )]
+            let exact = coefficient * &scale.rat;
             let base = aevia_dim::rat::to_f64(&exact);
             if scale.pi == 0 {
                 base
@@ -7780,6 +8262,10 @@ pub(crate) fn rounded_coherent(
 
 /// Resolve a hidden first-initializer constant without consulting published
 /// source globals, which may contain another module's same-named binding.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the prelude constant table is independent of lexical name lookup"
+)]
 fn prelude_constant(name: &str) -> Option<Value> {
     let one = aevia_dim::Dim::one();
     match name {

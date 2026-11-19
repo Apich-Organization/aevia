@@ -1,7 +1,24 @@
 //! Explicit substitutions shared by checked call instantiation and execution.
+//!
 //! Values on the right belong to the target variable universe. Applying a
 //! substitution is deliberately one pass, so independently checked modules may
 //! reuse numeric variable ids without recursively capturing each other's ids.
+
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
 use crate::Infer;
 use crate::Nat;
 use crate::Rep;
@@ -11,15 +28,23 @@ use crate::Type;
 use aevia_dim::Dim;
 use std::collections::HashMap;
 
+/// Maps each kind of source variable into its target universe.
 #[derive(Clone, Debug, Default)]
 pub struct TypeSubstitution {
+    /// Ordinary type variables and their target types.
     pub types: HashMap<u32, Type>,
+    /// Numeric representation variables.
     pub representations: HashMap<u32, Rep>,
+    /// Dimension variables.
     pub dimensions: HashMap<u32, Dim>,
+    /// Open record row variables.
     pub rows: HashMap<u32, Row>,
+    /// Natural number variables in refined tensor extents.
     pub naturals: HashMap<u32, Nat>,
 }
 impl TypeSubstitution {
+    /// Rewrites source variables once throughout `ty`.
+    #[must_use]
     pub fn apply(
         &self,
         ty: &Type,
@@ -67,6 +92,8 @@ impl TypeSubstitution {
         }
     }
 
+    /// Rewrites a representation variable, preserving a concrete representation.
+    #[must_use]
     pub fn rep(
         &self,
         rep: Rep,
@@ -77,6 +104,8 @@ impl TypeSubstitution {
         }
     }
 
+    /// Rewrites the dimension's symbolic factors once.
+    #[must_use]
     pub fn dim(
         &self,
         dim: &Dim,
@@ -84,6 +113,8 @@ impl TypeSubstitution {
         dim.substitute(|id| self.dimensions.get(&id).cloned())
     }
 
+    /// Rewrites row tails and the types of extended fields.
+    #[must_use]
     pub fn row(
         &self,
         row: &Row,
@@ -107,6 +138,16 @@ impl TypeSubstitution {
         ty: &Type,
         infer: &mut Infer,
     ) -> Type {
+        self.register_variables(ty, infer);
+        self.apply(ty)
+    }
+
+    /// Records fresh target variables for the free variables in `ty`.
+    pub(crate) fn register_variables(
+        &mut self,
+        ty: &Type,
+        infer: &mut Infer,
+    ) {
         match ty {
             | Type::Var(id) => {
                 self.types.entry(*id).or_insert_with(|| infer.fresh_type());
@@ -125,25 +166,24 @@ impl TypeSubstitution {
                         }
                     }
                 }
-                self.freshen(elem, infer);
+                self.register_variables(elem, infer);
             },
             | Type::Fn(args, ret) => {
                 for arg in args {
-                    self.freshen(arg, infer);
+                    self.register_variables(arg, infer);
                 }
-                self.freshen(ret, infer);
+                self.register_variables(ret, infer);
             },
             | Type::Record(row) => self.fresh_row(row, infer),
             | Type::Adt(_, args) => {
                 for arg in args {
-                    self.freshen(arg, infer);
+                    self.register_variables(arg, infer);
                 }
             },
-            | Type::Io(inner) => {
-                self.freshen(inner, infer);
-            },
-            | Type::TypeRepIntrinsic(Some(inner)) | Type::FromValueIntrinsic(Some(inner)) => {
-                self.freshen(inner, infer);
+            | Type::Io(value)
+            | Type::TypeRepIntrinsic(Some(value))
+            | Type::FromValueIntrinsic(Some(value)) => {
+                self.register_variables(value, infer);
             },
             | Type::TensorIntrinsic(intrinsic) => {
                 if let Some(rep) = intrinsic.element {
@@ -162,7 +202,6 @@ impl TypeSubstitution {
             | Type::ReadNpyIntrinsic(_)
             | Type::ToCallbackIntrinsic => {},
         }
-        self.apply(ty)
     }
 
     fn fresh_rep(
@@ -200,12 +239,14 @@ impl TypeSubstitution {
                 self.rows.entry(*id).or_insert_with(|| infer.fresh_row());
             },
             | Row::Extend { ty, tail, .. } => {
-                self.freshen(ty, infer);
+                self.register_variables(ty, infer);
                 self.fresh_row(tail, infer);
             },
         }
     }
 
+    /// Resolves each target value against the current inference state.
+    #[must_use]
     pub fn resolved(
         &self,
         infer: &Infer,
@@ -239,6 +280,8 @@ impl TypeSubstitution {
         }
     }
 
+    /// Applies `next` to each target value while retaining this map's source keys.
+    #[must_use]
     pub fn then(
         &self,
         next: &Self,

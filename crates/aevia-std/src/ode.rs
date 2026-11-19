@@ -9,6 +9,20 @@
 //! variable-order BDF and Rosenbrock 2(3) solvers with dense output.
 
 use crate::NumericError;
+use rssn::kernels::ode;
+use rssn::kernels::ode_adaptive::Event;
+use rssn::kernels::ode_adaptive::OdeError;
+use rssn::kernels::ode_adaptive::OdeOptions;
+use rssn::kernels::ode_adaptive::{
+    self,
+};
+use rssn::kernels::ode_geom::GeometricMethod;
+use rssn::kernels::ode_geom::{
+    self,
+};
+use rssn::kernels::ode_stiff;
+use std::cell::Cell;
+use std::cell::RefCell;
 
 pub use rssn::kernels::ode::OdeMethod;
 pub use rssn::kernels::ode::OdeStepMode;
@@ -61,7 +75,7 @@ pub enum Method {
 impl Method {
     /// The capability this method needs, when it is not implemented.
     #[must_use]
-    pub fn capability(&self) -> Option<&'static str> {
+    pub const fn capability(&self) -> Option<&'static str> {
         match self {
             | Self::Rk4
             | Self::Dopri5
@@ -83,7 +97,7 @@ impl Method {
         }
     }
 
-    fn adaptive_geometry(self) -> Option<rssn::kernels::ode_geom::GeometricMethod> {
+    const fn adaptive_geometry(self) -> Option<GeometricMethod> {
         use rssn::kernels::ode_geom::GeometricMethod as G;
         Some(match self {
             | Self::AdaptiveRk4 => G::Rk4,
@@ -96,12 +110,28 @@ impl Method {
         })
     }
 
-    fn is_adaptive(self) -> bool {
-        self.adaptive_geometry().is_some()
-            || matches!(
-                self,
-                Self::Dopri5 | Self::Radau | Self::Bdf | Self::Rosenbrock23 | Self::Auto
-            )
+    const fn fixed_geometry(self) -> Option<GeometricMethod> {
+        use GeometricMethod as G;
+        Some(match self {
+            | Self::Rk4 => G::Rk4,
+            | Self::StormerVerlet => G::StormerVerlet,
+            | Self::Ruth4 => G::Ruth4,
+            | Self::ImplicitMidpoint => G::ImplicitMidpoint,
+            | Self::GaussLegendre4 => G::GaussLegendre4,
+            | Self::GaussLegendre6 => G::GaussLegendre6,
+            | _ => return None,
+        })
+    }
+
+    const fn kernel_method(self) -> Option<OdeMethod> {
+        Some(match self {
+            | Self::Rk4 | Self::AdaptiveRk4 => OdeMethod::RungeKutta4,
+            | Self::Dopri5 => OdeMethod::Dopri5,
+            | Self::Radau => OdeMethod::Radau5,
+            | Self::Bdf => OdeMethod::Bdf,
+            | Self::Rosenbrock23 => OdeMethod::Rosenbrock23,
+            | _ => return None,
+        })
     }
 }
 
@@ -151,8 +181,13 @@ pub type Rate<'a> = dyn FnMut(f64, &[f64]) -> Vec<f64> + 'a;
 pub type EventRate<'a> = dyn FnMut(f64, &[f64]) -> f64 + 'a;
 
 /// Integrate until a terminal event, returning the actual times and states.
-/// Adaptive methods locate roots on their continuous extension; RK4 locates
+///
+/// Adaptive methods locate roots on their continuous extension. RK4 locates
 /// roots within each fixed step by reintegration and bisection.
+///
+/// # Errors
+/// Returns an error for an empty time grid, invalid input or callback results,
+/// or an integration that exceeds its work budget.
 pub fn integrate_until_event(
     rhs: &mut Rate<'_>,
     y0: &[f64],
@@ -160,64 +195,32 @@ pub fn integrate_until_event(
     options: Options,
     event: &mut EventRate<'_>,
 ) -> Result<(Vec<f64>, Vec<Vec<f64>>), NumericError> {
-    use rssn::kernels::ode;
-    use rssn::kernels::ode_adaptive::Event;
-    use rssn::kernels::ode_adaptive::OdeOptions;
-    use rssn::kernels::ode_adaptive::{
-        self,
-    };
-    use rssn::kernels::ode_stiff;
-    use std::cell::Cell;
-    use std::cell::RefCell;
-
-    if ts.is_empty() {
-        return Err(NumericError::Empty);
-    }
-    if !ts.iter().chain(y0).all(|x| x.is_finite())
-        || ts
-            .windows(2)
-            .any(|p| p[1] < p[0] || !(p[1] - p[0]).is_finite())
-        || !options.rtol.is_finite()
-        || options.rtol < 0.0
-        || !options.atol.is_finite()
-        || options.atol <= 0.0
-    {
+    let (&start, &end) = ts.first().zip(ts.last()).ok_or(NumericError::Empty)?;
+    if !valid_time_grid(ts) || !y0.iter().all(|x| x.is_finite()) || !valid_tolerances(options) {
         return Err(NumericError::Domain(
             "invalid ODE times, state or tolerances".into(),
         ));
     }
-    let initial_event = event(ts[0], y0);
+    let initial_event = event(start, y0);
     if !initial_event.is_finite() {
         return Err(NumericError::Domain(
             "event returned a non-finite value".into(),
         ));
     }
     if initial_event == 0.0 {
-        return Ok((vec![ts[0]], vec![y0.to_vec()]));
+        return Ok((vec![start], vec![y0.to_vec()]));
     }
-    let start = ts[0];
-    let end = ts[ts.len() - 1];
-    if start == end {
+    if start >= end {
         return Ok((ts.to_vec(), vec![y0.to_vec(); ts.len()]));
     }
-    if y0.is_empty() {
-        return Err(NumericError::Domain(
-            "event integration requires a non-empty state".into(),
-        ));
-    }
-    if !(end - start).is_finite() {
-        return Err(NumericError::Domain(
-            "the time interval is too large".into(),
-        ));
-    }
+    validate_ode_problem(y0, (start, end))?;
+    let specs = [EventSpec {
+        terminal: true,
+        direction: 0,
+    }];
+    let mut event_fn = |_: usize, t: f64, y: &[f64]| event(t, y);
     if options.method != Method::Rk4 {
-        let specs = [EventSpec {
-            terminal: true,
-            direction: 0,
-        }];
-        let solution = solve(rhs, y0, (start, end), options, &specs, &mut |_, t, y| {
-            event(t, y)
-        })?;
+        let solution = solve(rhs, y0, (start, end), options, &specs, &mut event_fn)?;
         let terminal = *solution.t.last().ok_or(NumericError::NotConverged)?;
         let mut times = Vec::new();
         let mut states = Vec::new();
@@ -225,7 +228,7 @@ pub fn integrate_until_event(
             times.push(t);
             states.push(solution.eval(t).ok_or(NumericError::NotConverged)?);
         }
-        if times.last().copied() != Some(terminal) {
+        if times.last().is_none_or(|time| *time < terminal) {
             times.push(terminal);
             states.push(
                 solution
@@ -237,143 +240,39 @@ pub fn integrate_until_event(
         }
         return Ok((times, states));
     }
-    let rhs = RefCell::new(rhs);
-    let failure = RefCell::new(None);
-    let f = |t: f64, y: &[f64], out: &mut [f64]| {
-        match evaluate(&mut **rhs.borrow_mut(), t, y, out.len()) {
-            | Ok(rate) => out.copy_from_slice(&rate),
-            | Err(error) => {
-                if failure.borrow().is_none() {
-                    *failure.borrow_mut() = Some(error);
-                }
-                out.fill(f64::NAN);
-            },
-        }
-    };
-    let event = RefCell::new(event);
-    let invalid_event = Cell::new(false);
-    let g = |t: f64, y: &[f64]| {
-        let value = event.borrow_mut()(t, y);
-        if !value.is_finite() {
-            invalid_event.set(true);
-        }
-        value
-    };
-    let events = [Event {
-        g: &g,
-        terminal: true,
-        direction: 0,
-    }];
-    let opts = OdeOptions {
-        rtol: options.rtol,
-        atol: options.atol,
-        h0: if options.h0 > 0.0 {
-            Some(options.h0)
-        } else {
-            None
-        },
-        hmin: options.h_min,
-        hmax: options.h_max,
-        max_steps: options.max_steps,
-    };
-    let result = (|| {
-        if options.method == Method::Rk4 {
-            let mut times = vec![start];
-            let mut states = vec![y0.to_vec()];
-            for pair in ts.windows(2) {
-                if pair[0] == pair[1] {
-                    times.push(pair[1]);
-                    states.push(states.last().unwrap().clone());
-                    continue;
-                }
-                let (trajectory, hits) = ode::solve_fixed_events(
-                    f,
-                    states.last().unwrap(),
-                    (pair[0], pair[1]),
-                    options.steps.max(1),
-                    ode::OdeSolverMethod::RungeKutta4,
-                    &events,
-                )
-                .map_err(|_| NumericError::NotConverged)?;
-                if let Some(hit) = hits.first() {
-                    times.push(hit.t);
-                    states.push(hit.y.clone());
-                    break;
-                }
-                times.push(pair[1]);
-                states.push(
-                    trajectory
-                        .y
-                        .last()
-                        .cloned()
-                        .ok_or(NumericError::NotConverged)?,
-                );
+
+    let steps = checked_fixed_steps(options.steps.max(1))?;
+    let rate = KernelRate::new(rhs, options.max_evaluations);
+    let result = with_kernel_events(&specs, &mut event_fn, |events| {
+        let mut times = vec![start];
+        let mut states = vec![y0.to_vec()];
+        for &[lo, hi] in ts.array_windows() {
+            let previous = states.last().ok_or(NumericError::NotConverged)?;
+            if lo >= hi {
+                states.push(previous.clone());
+                times.push(hi);
+                continue;
             }
-            Ok((times, states))
-        } else {
-            let solution = match options.method {
-                | Method::Dopri5 => ode_adaptive::dopri5(f, start, end, y0, &opts, &events),
-                | Method::Radau => ode_stiff::radau5_events(f, start, end, y0, &opts, &events),
-                | Method::Bdf => ode_stiff::bdf_events(f, start, end, y0, &opts, 5, &events),
-                | Method::Rosenbrock23 => {
-                    ode_adaptive::rosenbrock23_events(f, start, end, y0, &opts, &events)
-                },
-                | Method::Rk4
-                | Method::Auto
-                | Method::StormerVerlet
-                | Method::Ruth4
-                | Method::GaussLegendre4
-                | Method::GaussLegendre6
-                | Method::ImplicitMidpoint
-                | Method::AdaptiveRk4
-                | Method::AdaptiveStormerVerlet
-                | Method::AdaptiveRuth4
-                | Method::AdaptiveImplicitMidpoint
-                | Method::AdaptiveGaussLegendre4
-                | Method::AdaptiveGaussLegendre6 => unreachable!(),
+            let (trajectory, mut hits) = ode::solve_fixed_events(
+                |t, y, out| rate.evaluate(t, y, out),
+                previous,
+                (lo, hi),
+                steps,
+                ode::OdeSolverMethod::RungeKutta4,
+                events,
+            )
+            .map_err(|_| NumericError::NotConverged)?;
+            let mut trajectory_states = trajectory.y;
+            states.push(trajectory_states.pop().ok_or(NumericError::NotConverged)?);
+            if let Some(hit) = hits.pop() {
+                times.push(hit.t);
+                break;
             }
-            .map_err(|_| NumericError::NotConverged);
-            solution.and_then(|solution| {
-                let terminal = *solution.t.last().ok_or(NumericError::NotConverged)?;
-                let mut times = Vec::new();
-                let mut states = Vec::new();
-                for &t in ts.iter().take_while(|&&t| t <= terminal) {
-                    times.push(t);
-                    states.push(if t == start {
-                        y0.to_vec()
-                    } else if t == terminal {
-                        solution
-                            .y
-                            .last()
-                            .cloned()
-                            .ok_or(NumericError::NotConverged)?
-                    } else {
-                        solution.eval(t).ok_or(NumericError::NotConverged)?
-                    });
-                }
-                if times.last().copied() != Some(terminal) {
-                    times.push(terminal);
-                    states.push(
-                        solution
-                            .y
-                            .last()
-                            .cloned()
-                            .ok_or(NumericError::NotConverged)?,
-                    );
-                }
-                Ok((times, states))
-            })
+            times.push(hi);
         }
-    })();
-    if let Some(error) = failure.into_inner() {
-        return Err(error);
-    }
-    if invalid_event.get() {
-        return Err(NumericError::Domain(
-            "event returned a non-finite value".into(),
-        ));
-    }
-    result
+        Ok((times, states))
+    });
+    rate.finish(result)
 }
 
 /// Integrates `rhs` from `ts[0]` over the given times.
@@ -391,58 +290,192 @@ pub fn integrate(
     ts: &[f64],
     options: Options,
 ) -> Result<Vec<Vec<f64>>, NumericError> {
-    if ts.is_empty() {
-        return Err(NumericError::Empty);
-    }
+    let (&start, &last) = ts.first().zip(ts.last()).ok_or(NumericError::Empty)?;
     if !ts.iter().all(|x| x.is_finite()) || !y0.iter().all(|x| x.is_finite()) {
         return Err(NumericError::Domain(
             "times and initial state must be finite".into(),
         ));
     }
-    if !options.rtol.is_finite()
-        || options.rtol < 0.0
-        || !options.atol.is_finite()
-        || options.atol <= 0.0
-        || ts
-            .windows(2)
-            .any(|p| p[1] < p[0] || !(p[1] - p[0]).is_finite())
-    {
+    if !valid_tolerances(options) || !valid_time_grid(ts) {
         return Err(NumericError::Domain(
             "invalid adaptive tolerances or time grid".into(),
         ));
     }
-    if options.method.is_adaptive() {
-        let last = ts[ts.len() - 1];
-        if ts[0] == last || y0.is_empty() {
-            return Ok(vec![y0.to_vec(); ts.len()]);
-        }
-        let solution = solve(rhs, y0, (ts[0], last), options, &[], &mut |_, _, _| 0.0)?;
-        return ts
-            .iter()
-            .map(|&t| solution.eval(t).ok_or(NumericError::NotConverged))
-            .collect();
+    if let Some(method) = options.method.fixed_geometry() {
+        return with_eval_budget(rhs, options.max_evaluations, |rhs| {
+            ode_geom::sample_fixed_geometric(rhs, y0, ts, method, options.steps)
+                .map_err(map_ode_geom_err)
+        });
     }
-    use rssn::kernels::ode_geom::GeometricMethod as G;
-    let method = match options.method {
-        | Method::Rk4 => G::Rk4,
-        | Method::StormerVerlet => G::StormerVerlet,
-        | Method::Ruth4 => G::Ruth4,
-        | Method::ImplicitMidpoint => G::ImplicitMidpoint,
-        | Method::GaussLegendre4 => G::GaussLegendre4,
-        | Method::GaussLegendre6 => G::GaussLegendre6,
-        | _ => unreachable!("adaptive methods handled above"),
-    };
-    rssn::kernels::ode_geom::sample_fixed_geometric(rhs, y0, ts, method, options.steps)
-        .map_err(map_ode_geom_err)
+    if start >= last || y0.is_empty() {
+        return Ok(vec![y0.to_vec(); ts.len()]);
+    }
+    let solution = solve(rhs, y0, (start, last), options, &[], &mut |_, _, _| 0.0)?;
+    ts.iter()
+        .map(|&t| solution.eval(t).ok_or(NumericError::NotConverged))
+        .collect()
 }
 
-fn evaluate(
+fn valid_tolerances(options: Options) -> bool {
+    options.rtol.is_finite()
+        && options.rtol >= 0.0
+        && options.atol.is_finite()
+        && options.atol > 0.0
+}
+
+fn valid_time_grid(ts: &[f64]) -> bool {
+    ts.iter().all(|time| time.is_finite())
+        && ts
+            .array_windows()
+            .all(|&[lo, hi]| hi >= lo && (hi - lo).is_finite())
+}
+
+fn checked_fixed_steps(steps: usize) -> Result<usize, NumericError> {
+    // Both RSSN history vectors allocate one entry per step plus the initial sample.
+    let width = std::mem::size_of::<Vec<f64>>().max(std::mem::size_of::<f64>());
+    if steps
+        .checked_add(1)
+        .and_then(|n| n.checked_mul(width))
+        .is_none_or(|bytes| isize::try_from(bytes).is_err())
+    {
+        return Err(NumericError::Domain(
+            "ODE step count overflows trajectory storage".into(),
+        ));
+    }
+    Ok(steps)
+}
+
+fn with_eval_budget<T>(
     rhs: &mut Rate<'_>,
-    t: f64,
-    y: &[f64],
+    mut remaining: usize,
+    solve: impl FnOnce(&mut Rate<'_>) -> Result<T, NumericError>,
+) -> Result<T, NumericError> {
+    let mut limit_hit = false;
+    let mut bounded = |t: f64, y: &[f64]| {
+        if remaining == 0 {
+            limit_hit = true;
+            return vec![f64::NAN; y.len()];
+        }
+        remaining = remaining.saturating_sub(1);
+        rhs(t, y)
+    };
+    let result = solve(&mut bounded);
+    if limit_hit {
+        return Err(NumericError::NotConverged);
+    }
+    result
+}
+
+struct KernelRate<'a, 'rhs> {
+    rhs: RefCell<&'a mut Rate<'rhs>>,
+    failure: RefCell<Option<NumericError>>,
+    evaluations: Cell<usize>,
+    budget: usize,
+}
+
+impl<'a, 'rhs> KernelRate<'a, 'rhs> {
+    const fn new(
+        rhs: &'a mut Rate<'rhs>,
+        budget: usize,
+    ) -> Self {
+        Self {
+            rhs: RefCell::new(rhs),
+            failure: RefCell::new(None),
+            evaluations: Cell::new(0),
+            budget,
+        }
+    }
+
+    fn evaluate(
+        &self,
+        t: f64,
+        y: &[f64],
+        out: &mut [f64],
+    ) {
+        if self.failure.borrow().is_some() {
+            out.fill(f64::NAN);
+            return;
+        }
+        if self.evaluations.get() >= self.budget {
+            *self.failure.borrow_mut() = Some(NumericError::NotConverged);
+            out.fill(f64::NAN);
+            return;
+        }
+        self.evaluations
+            .set(self.evaluations.get().saturating_add(1));
+        let rate = self.rhs.borrow_mut()(t, y);
+        match validate_rate(&rate, out.len()) {
+            | Ok(()) => out.copy_from_slice(&rate),
+            | Err(error) => {
+                *self.failure.borrow_mut() = Some(error);
+                out.fill(f64::NAN);
+            },
+        }
+    }
+
+    fn finish<T>(
+        self,
+        result: Result<T, NumericError>,
+    ) -> Result<T, NumericError> {
+        self.failure.into_inner().map_or(result, Err)
+    }
+}
+
+fn with_kernel_events<T>(
+    specs: &[EventSpec],
+    events: &mut Events<'_>,
+    solve: impl FnOnce(&[Event<'_>]) -> Result<T, NumericError>,
+) -> Result<T, NumericError> {
+    let events = RefCell::new(events);
+    let invalid = Cell::new(false);
+    let adapters: Vec<_> = (0..specs.len())
+        .map(|index| {
+            let events = &events;
+            let invalid = &invalid;
+            move |t, y: &[f64]| {
+                let value = events.borrow_mut()(index, t, y);
+                if !value.is_finite() {
+                    invalid.set(true);
+                }
+                value
+            }
+        })
+        .collect();
+    let kernel_events: Vec<Event<'_>> = adapters
+        .iter()
+        .zip(specs)
+        .map(|(g, spec)| {
+            Event {
+                g,
+                terminal: spec.terminal,
+                direction: spec.direction,
+            }
+        })
+        .collect();
+    let result = solve(&kernel_events);
+    reject_invalid_event(invalid.get(), result)
+}
+
+fn reject_invalid_event<T>(
+    invalid: bool,
+    result: Result<T, NumericError>,
+) -> Result<T, NumericError> {
+    if invalid {
+        return Err(NumericError::Domain(
+            "an event returned a non-finite value".into(),
+        ));
+    }
+    result
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "Validate the callback contract separately from failure propagation into RSSN."
+)]
+fn validate_rate(
+    rate: &[f64],
     expected: usize,
-) -> Result<Vec<f64>, NumericError> {
-    let rate = rhs(t, y);
+) -> Result<(), NumericError> {
     if rate.len() != expected {
         return Err(NumericError::ShapeMismatch(format!(
             "the right-hand side returned {} value(s) for a state of {expected}",
@@ -454,7 +487,7 @@ fn evaluate(
             "the ODE right-hand side returned a non-finite value".into(),
         ));
     }
-    Ok(rate)
+    Ok(())
 }
 
 
@@ -508,27 +541,24 @@ impl Solution {
         if !(first..=last).contains(&t) {
             return None;
         }
-        if t == first {
+        if t <= first {
             return self.y.first().cloned();
         }
-        if t == last {
+        if t >= last {
             return self.y.last().cloned();
         }
         match &self.dense {
             | Dense::Kernel(solution) => solution.eval(t),
             | Dense::Hermite { rates } => {
-                let upper = self
-                    .t
-                    .partition_point(|&node| node < t)
-                    .clamp(1, self.t.len() - 1);
-                let lower = upper - 1;
-                rssn::kernels::ode_geom::hermite_segment(
-                    self.t[lower],
-                    self.t[upper],
-                    &self.y[lower],
-                    &self.y[upper],
-                    &rates[lower],
-                    &rates[upper],
+                let upper = self.t.partition_point(|&node| node < t);
+                let lower = upper.checked_sub(1)?;
+                ode_geom::hermite_segment(
+                    *self.t.get(lower)?,
+                    *self.t.get(upper)?,
+                    self.y.get(lower)?,
+                    self.y.get(upper)?,
+                    rates.get(lower)?,
+                    rates.get(upper)?,
                     t,
                 )
                 .ok()
@@ -552,8 +582,9 @@ impl Solution {
 /// limit and exhausts it.
 const AUTO_STEP_BUDGET: usize = 20_000;
 
-/// Integrates `rhs` over `span = (t0, t1)` (forward in time) and keeps a
-/// continuous extension, watching `specs.len()` event functions `events(i, t, y)`.
+/// Integrate forward in time with dense output and optional events.
+///
+/// Each entry of `specs` declares an event function `events(i, t, y)`.
 ///
 /// Event semantics are the kernel's: a sign change of `g` between accepted
 /// states is located by root finding on the continuous extension (`Rk4`:
@@ -573,54 +604,13 @@ pub fn solve(
     specs: &[EventSpec],
     events: &mut Events<'_>,
 ) -> Result<Solution, NumericError> {
-    use rssn::kernels::ode;
-    use rssn::kernels::ode_adaptive::Event;
-    use rssn::kernels::ode_adaptive::OdeOptions;
-    use rssn::kernels::ode_adaptive::{
-        self,
-    };
-    use rssn::kernels::ode_stiff;
-    use std::cell::Cell;
-    use std::cell::RefCell;
-
     let (start, end) = span;
-    if !start.is_finite()
-        || !end.is_finite()
-        || !y0.iter().all(|x| x.is_finite())
-        || !options.rtol.is_finite()
-        || options.rtol < 0.0
-        || !options.atol.is_finite()
-        || options.atol <= 0.0
-    {
-        return Err(NumericError::Domain(
-            "invalid ODE span, state or tolerances".into(),
-        ));
+    validate_ode_problem(y0, span)?;
+    if !valid_tolerances(options) {
+        return Err(NumericError::Domain("invalid ODE tolerances".into()));
     }
-    if end < start {
-        return Err(NumericError::Domain(
-            "the ODE span must run forward in time".into(),
-        ));
-    }
-    if !(end - start).is_finite() {
-        return Err(NumericError::Domain(
-            "the time interval is too large".into(),
-        ));
-    }
-    if y0.is_empty() {
-        return Err(NumericError::Domain("the ODE state is empty".into()));
-    }
-    if end == start {
-        return Ok(Solution {
-            t: vec![start],
-            y: vec![y0.to_vec()],
-            hits: Vec::new(),
-            nfev: 0,
-            rejected: 0,
-            method: options.method,
-            dense: Dense::Hermite {
-                rates: vec![vec![0.0; y0.len()]],
-            },
-        });
+    if start >= end {
+        return Ok(point_solution(start, y0, options.method));
     }
     if !options.h0.is_finite()
         || options.h0 < 0.0
@@ -636,222 +626,223 @@ pub fn solve(
             "invalid ODE step bounds or work budgets".into(),
         ));
     }
-    let rhs_cell = RefCell::new(rhs);
-    let failure: RefCell<Option<NumericError>> = RefCell::new(None);
-    let evaluations = Cell::new(0usize);
-    let f = |t: f64, y: &[f64], out: &mut [f64]| {
-        if failure.borrow().is_some() || evaluations.get() >= options.max_evaluations {
-            if failure.borrow().is_none() {
-                *failure.borrow_mut() = Some(NumericError::NotConverged);
-            }
-            out.fill(f64::NAN);
-            return;
-        }
-        evaluations.set(evaluations.get() + 1);
 
-        match evaluate(&mut **rhs_cell.borrow_mut(), t, y, out.len()) {
-            | Ok(rate) => out.copy_from_slice(&rate),
-            | Err(error) => {
-                if failure.borrow().is_none() {
-                    *failure.borrow_mut() = Some(error);
-                }
-                out.fill(f64::NAN);
-            },
-        }
-    };
-    let events_cell = RefCell::new(events);
     let invalid_event = Cell::new(false);
-    let guards: Vec<Box<dyn Fn(f64, &[f64]) -> f64 + '_>> = (0..specs.len())
-        .map(|index| {
-            let events_cell = &events_cell;
-            let invalid_event = &invalid_event;
-            Box::new(move |t: f64, y: &[f64]| {
-                let value = events_cell.borrow_mut()(index, t, y);
-                if !value.is_finite() {
-                    invalid_event.set(true);
-                }
-                value
-            }) as Box<dyn Fn(f64, &[f64]) -> f64 + '_>
-        })
-        .collect();
-    let kernel_events: Vec<Event<'_>> = guards
-        .iter()
-        .zip(specs)
-        .map(|(g, spec)| {
-            Event {
-                g: g.as_ref(),
-                terminal: spec.terminal,
-                direction: spec.direction,
-            }
-        })
-        .collect();
+    if options.method.adaptive_geometry().is_some() {
+        let result =
+            solve_adaptive_geometric(rhs, y0, span, options, specs, events, &invalid_event);
+        return reject_invalid_event(invalid_event.get(), result);
+    }
+    if options.method != Method::Rk4 && options.method.fixed_geometry().is_some() {
+        let steps = checked_fixed_steps(options.steps.max(1))?;
+        let result = with_eval_budget(rhs, options.max_evaluations, |rhs| {
+            solve_fixed_geometric_with_stages(
+                rhs,
+                y0,
+                span,
+                steps,
+                options.method,
+                None,
+                specs,
+                events,
+                &invalid_event,
+            )
+        });
+        return reject_invalid_event(invalid_event.get(), result);
+    }
+
+    let rate = KernelRate::new(rhs, options.max_evaluations);
+    let result = with_kernel_events(specs, events, |events| {
+        if options.method == Method::Rk4 {
+            let steps = checked_fixed_steps(options.steps.max(1))?;
+            return solve_dense_rk4(&rate, y0, span, steps, events);
+        }
+
+        solve_adaptive_kernel(&rate, y0, span, options, events)
+    });
+    let result = result.map(|mut solution| {
+        solution.nfev = rate.evaluations.get();
+        solution
+    });
+    rate.finish(result)
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "The adaptive kernel handles solver selection and the explicit-to-stiff fallback."
+)]
+fn solve_adaptive_kernel(
+    rate: &KernelRate<'_, '_>,
+    y0: &[f64],
+    (start, end): (f64, f64),
+    options: Options,
+    events: &[Event<'_>],
+) -> Result<Solution, NumericError> {
+    let f = |t, y: &[f64], out: &mut [f64]| rate.evaluate(t, y, out);
     let opts = OdeOptions {
         rtol: options.rtol,
         atol: options.atol,
-        h0: if options.h0 > 0.0 {
-            Some(options.h0)
-        } else {
-            None
-        },
+        h0: (options.h0 > 0.0).then_some(options.h0),
         hmin: options.h_min,
         hmax: options.h_max,
         max_steps: options.max_steps,
     };
-    let kernel = |method: Method, step_budget: usize| -> Result<Solution, NumericError> {
-        let opts = OdeOptions {
-            max_steps: step_budget,
-            ..opts
-        };
-        let solution = match method {
-            | Method::Dopri5 => ode_adaptive::dopri5(f, start, end, y0, &opts, &kernel_events),
-            | Method::Radau => ode_stiff::radau5_events(f, start, end, y0, &opts, &kernel_events),
-            | Method::Bdf => ode_stiff::bdf_events(f, start, end, y0, &opts, 5, &kernel_events),
-            | Method::Rosenbrock23 => {
-                ode_adaptive::rosenbrock23_events(f, start, end, y0, &opts, &kernel_events)
-            },
-            | Method::Rk4
-            | Method::Auto
-            | Method::StormerVerlet
-            | Method::Ruth4
-            | Method::GaussLegendre4
-            | Method::GaussLegendre6
-            | Method::ImplicitMidpoint
-            | Method::AdaptiveRk4
-            | Method::AdaptiveStormerVerlet
-            | Method::AdaptiveRuth4
-            | Method::AdaptiveImplicitMidpoint
-            | Method::AdaptiveGaussLegendre4
-            | Method::AdaptiveGaussLegendre6 => unreachable!("handled by the caller"),
-        }
-        .map_err(|_| NumericError::NotConverged)?;
-        Ok(kernel_solution_to_solution(solution, method))
+    let method = options.method;
+    let (solution, used_method) = match method {
+        | Method::Dopri5 => {
+            (
+                ode_adaptive::dopri5(f, start, end, y0, &opts, events),
+                method,
+            )
+        },
+        | Method::Radau => {
+            (
+                ode_stiff::radau5_events(f, start, end, y0, &opts, events),
+                method,
+            )
+        },
+        | Method::Bdf => {
+            (
+                ode_stiff::bdf_events(f, start, end, y0, &opts, 5, events),
+                method,
+            )
+        },
+        | Method::Rosenbrock23 => {
+            (
+                ode_adaptive::rosenbrock23_events(f, start, end, y0, &opts, events),
+                method,
+            )
+        },
+        | Method::Auto => {
+            let budgeted = OdeOptions {
+                max_steps: opts.max_steps.min(AUTO_STEP_BUDGET),
+                ..opts
+            };
+            match ode_adaptive::dopri5(f, start, end, y0, &budgeted, events) {
+                | Err(OdeError::StepLimit) if rate.failure.borrow().is_none() => {
+                    // The stiff solver restarts at the original state with a fresh
+                    // step budget. Both attempts share the caller's callback budget.
+                    (
+                        ode_stiff::radau5_events(f, start, end, y0, &opts, events),
+                        Method::Radau,
+                    )
+                },
+                | result => (result, Method::Dopri5),
+            }
+        },
+        | _ => {
+            return Err(NumericError::Domain(
+                "expected an adaptive ODE method".into(),
+            ));
+        },
     };
-    let result = (|| {
-        match options.method {
-            | Method::Rk4 => {
-                let (trajectory, fixed_hits) = ode::solve_fixed_events(
-                    f,
-                    y0,
-                    (start, end),
-                    options.steps.max(1),
-                    ode::OdeSolverMethod::RungeKutta4,
-                    &kernel_events,
-                )
-                .map_err(|_| NumericError::NotConverged)?;
-                let mut rates = Vec::with_capacity(trajectory.t.len());
-                for (&t, y) in trajectory.t.iter().zip(&trajectory.y) {
-                    let mut rate = vec![0.0; y.len()];
-                    f(t, y, &mut rate);
-                    rates.push(rate);
-                }
-                let steps = options.steps.max(1);
-                Ok(Solution {
-                    hits: fixed_hits
-                        .iter()
-                        .map(|hit| {
-                            Hit {
-                                index: hit.index,
-                                t: hit.t,
-                                y: hit.y.clone(),
-                            }
-                        })
-                        .collect(),
-                    nfev: 4 * steps + trajectory.t.len(),
-                    rejected: 0,
-                    method: Method::Rk4,
-                    dense: Dense::Hermite { rates },
-                    t: trajectory.t,
-                    y: trajectory.y,
-                })
-            },
-            | Method::AdaptiveRk4
-            | Method::AdaptiveStormerVerlet
-            | Method::AdaptiveRuth4
-            | Method::AdaptiveImplicitMidpoint
-            | Method::AdaptiveGaussLegendre4
-            | Method::AdaptiveGaussLegendre6 => {
-                solve_adaptive_geometric(
-                    &mut *rhs_cell.borrow_mut(),
-                    y0,
-                    (start, end),
-                    options,
-                    specs,
-                    &mut *events_cell.borrow_mut(),
-                    &invalid_event,
-                )
-            },
-            | Method::ImplicitMidpoint
-            | Method::StormerVerlet
-            | Method::Ruth4
-            | Method::GaussLegendre4
-            | Method::GaussLegendre6 => {
-                solve_fixed_geometric(
-                    &mut *rhs_cell.borrow_mut(),
-                    y0,
-                    (start, end),
-                    options.steps.max(1),
-                    options.method,
-                    specs,
-                    &mut *events_cell.borrow_mut(),
-                    &invalid_event,
-                )
-            },
-            | Method::Auto => {
-                let budgeted = OdeOptions {
-                    max_steps: options.max_steps.min(AUTO_STEP_BUDGET),
-                    ..opts
-                };
-                match ode_adaptive::dopri5(f, start, end, y0, &budgeted, &kernel_events) {
-                    | Ok(solution) => Ok(kernel_solution_to_solution(solution, Method::Dopri5)),
-                    // A genuine failure (non-finite state, callback error) is not
-                    // a stiffness signal; only an exhausted budget is.
-                    | Err(ode_adaptive::OdeError::StepLimit) if failure.borrow().is_none() => {
-                        // The stiff solver restarts from `t0` with its own full
-                        // budget: the explicit attempt's steps are not charged
-                        // against it (a budget at or below `AUTO_STEP_BUDGET`
-                        // would otherwise leave nothing for the fallback).
-                        kernel(Method::Radau, options.max_steps)
-                    },
-                    | Err(_) => Err(NumericError::NotConverged),
-                }
-            },
-            | method => kernel(method, options.max_steps),
-        }
-    })();
-    if let Some(error) = failure.into_inner() {
-        return Err(error);
+    solution
+        .map(|solution| kernel_solution_to_solution(solution, used_method))
+        .map_err(map_ode_err)
+}
+
+fn point_solution(
+    t: f64,
+    state: &[f64],
+    method: Method,
+) -> Solution {
+    Solution {
+        t: vec![t],
+        y: vec![state.to_vec()],
+        hits: Vec::new(),
+        nfev: 0,
+        rejected: 0,
+        method,
+        dense: Dense::Hermite {
+            rates: vec![vec![0.0; state.len()]],
+        },
     }
-    if invalid_event.get() {
-        return Err(NumericError::Domain(
-            "an event returned a non-finite value".into(),
-        ));
-    }
-    result
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "The fixed RK4 kernel stores nodal rates instead of adaptive dense segments."
+)]
+fn solve_dense_rk4(
+    rate: &KernelRate<'_, '_>,
+    y0: &[f64],
+    span: (f64, f64),
+    steps: usize,
+    events: &[Event<'_>],
+) -> Result<Solution, NumericError> {
+    let (trajectory, hits) = ode::solve_fixed_events(
+        |t, y, out| rate.evaluate(t, y, out),
+        y0,
+        span,
+        steps,
+        ode::OdeSolverMethod::RungeKutta4,
+        events,
+    )
+    .map_err(|_| NumericError::NotConverged)?;
+    let rates = trajectory
+        .t
+        .iter()
+        .zip(&trajectory.y)
+        .map(|(&t, y)| {
+            let mut values = vec![0.0; y.len()];
+            rate.evaluate(t, y, &mut values);
+            values
+        })
+        .collect();
+    Ok(Solution {
+        hits: hits
+            .into_iter()
+            .map(|hit| {
+                Hit {
+                    index: hit.index,
+                    t: hit.t,
+                    y: hit.y,
+                }
+            })
+            .collect(),
+        nfev: rate.evaluations.get(),
+        rejected: 0,
+        method: Method::Rk4,
+        dense: Dense::Hermite { rates },
+        t: trajectory.t,
+        y: trajectory.y,
+    })
 }
 
 // ---------------------------------------------------------------------------
 // Higher-order equations (§8.9)
 // ---------------------------------------------------------------------------
 
-/// Rewrites `y⁽ⁿ⁾ = f(t, y, y′, …, y⁽ⁿ⁻¹⁾)` as the first-order system on the
+/// Rewrite a higher-order equation as a first-order system.
+///
+/// For `y⁽ⁿ⁾ = f(t, y, y′, …, y⁽ⁿ⁻¹⁾)`, integrate the
 /// stacked state `z = (y, y′, …, y⁽ⁿ⁻¹⁾)`, `n` blocks of `dim` components:
 /// the first `n − 1` blocks of `z′` are the last `n − 1` blocks of `z`, and the
 /// last block is `f(t, z)`.
 ///
 /// `f` receives the stacked state and answers the `dim` components of the top
-/// derivative. The order and block size are checked by the caller; a wrong
-/// length from `f` is reported by the integrator as a shape mismatch.
+/// derivative. Invalid state and derivative lengths yield an empty rate,
+/// which the integrator reports as a shape mismatch for nonempty states.
 pub fn reduce_order<'a>(
     order: usize,
     dim: usize,
     mut f: impl FnMut(f64, &[f64]) -> Vec<f64> + 'a,
 ) -> impl FnMut(f64, &[f64]) -> Vec<f64> + 'a {
+    let width = order.checked_mul(dim).filter(|&width| width > 0);
     move |t, z| {
-        let mut out = Vec::with_capacity(order * dim);
-        out.extend_from_slice(&z[dim..order * dim]);
-        // A wrong-length answer is passed on unchanged so the integrator
-        // reports it as a shape mismatch rather than the reduction hiding it.
-        out.extend(f(t, z));
+        if width != Some(z.len()) {
+            return Vec::new();
+        }
+        let Some(tail) = z.get(dim..) else {
+            return Vec::new();
+        };
+        let derivative = f(t, z);
+        if derivative.len() != dim {
+            return Vec::new();
+        }
+        let mut out = Vec::with_capacity(z.len());
+        out.extend_from_slice(tail);
+        out.extend(derivative);
         out
     }
 }
@@ -864,8 +855,9 @@ pub fn reduce_order<'a>(
 /// state has components.
 pub type Boundary<'a> = dyn FnMut(&[f64], &[f64]) -> Vec<f64> + 'a;
 
-/// Solves the two-point boundary-value problem `y′ = f(t, y)`,
-/// `r(y(t0), y(t1)) = 0` by single shooting: Newton's method on the initial
+/// Solve a two-point boundary-value problem by single shooting.
+///
+/// For `y′ = f(t, y)`, `r(y(t0), y(t1)) = 0`, apply Newton's method to the initial
 /// state with a forward-difference Jacobian (one integration per unknown) and
 /// a backtracking line search. `guess` is the initial state to start from.
 ///
@@ -932,6 +924,10 @@ fn map_ode_geom_err(err: rssn::kernels::ode_geom::OdeGeomError) -> NumericError 
     }
 }
 
+/// Integrate a separable Hamiltonian given acceleration as a function of position.
+///
+/// # Errors
+/// Rejects invalid initial vectors, time span, or acceleration results.
 pub fn integrate_symplectic<A>(
     accel: &mut A,
     q0: &[f64],
@@ -947,9 +943,13 @@ where
         .map_err(map_ode_geom_err)
 }
 
+/// Integrate a Hamiltonian using separate position and momentum derivatives.
+///
+/// # Errors
+/// Rejects invalid initial vectors, time span, or derivative results.
 pub fn integrate_hamiltonian<FQ, FP>(
-    dq_dt: &mut FQ,
-    dp_dt: &mut FP,
+    position_rate: &mut FQ,
+    momentum_rate: &mut FP,
     q0: &[f64],
     p0: &[f64],
     span: (f64, f64),
@@ -960,10 +960,22 @@ where
     FQ: FnMut(f64, &[f64], &[f64]) -> Vec<f64> + ?Sized,
     FP: FnMut(f64, &[f64], &[f64]) -> Vec<f64> + ?Sized,
 {
-    rssn::kernels::ode_geom::integrate_hamiltonian(dq_dt, dp_dt, q0, p0, span, steps, method)
-        .map_err(map_ode_geom_err)
+    rssn::kernels::ode_geom::integrate_hamiltonian(
+        position_rate,
+        momentum_rate,
+        q0,
+        p0,
+        span,
+        steps,
+        method,
+    )
+    .map_err(map_ode_geom_err)
 }
 
+/// Advance one step with a one-, two-, or three-stage Gauss–Legendre method.
+///
+/// # Errors
+/// Rejects invalid state, stage count, or derivative results, or a failed Newton solve.
 pub fn gauss_legendre_step(
     rhs: &mut Rate<'_>,
     t: f64,
@@ -974,6 +986,8 @@ pub fn gauss_legendre_step(
     rssn::kernels::ode_geom::gauss_legendre_step(rhs, t, y, h, stages).map_err(map_ode_geom_err)
 }
 
+/// Integrate with a fixed-step Gauss–Legendre method and retain dense output.
+///
 /// # Errors
 ///
 /// [`NumericError::Domain`] for invalid inputs, [`NumericError::ShapeMismatch`] for
@@ -1001,36 +1015,12 @@ pub fn solve_gauss_legendre(
         rhs,
         y0,
         span,
-        steps.max(1),
+        checked_fixed_steps(steps.max(1))?,
         method,
         Some(stages),
         &[],
         &mut no_events,
         &invalid_event,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn solve_fixed_geometric(
-    rhs: &mut Rate<'_>,
-    y0: &[f64],
-    span: (f64, f64),
-    steps: usize,
-    method: Method,
-    specs: &[EventSpec],
-    events: &mut Events<'_>,
-    invalid_event: &std::cell::Cell<bool>,
-) -> Result<Solution, NumericError> {
-    solve_fixed_geometric_with_stages(
-        rhs,
-        y0,
-        span,
-        steps,
-        method,
-        None,
-        specs,
-        events,
-        invalid_event,
     )
 }
 
@@ -1046,18 +1036,9 @@ fn solve_fixed_geometric_with_stages(
     events: &mut Events<'_>,
     invalid_event: &std::cell::Cell<bool>,
 ) -> Result<Solution, NumericError> {
-    use rssn::kernels::ode_geom::GeometricMethod;
-    use rssn::kernels::ode_geom::{
-        self,
-    };
-    let kernel_method = match method {
-        | Method::ImplicitMidpoint => GeometricMethod::ImplicitMidpoint,
-        | Method::StormerVerlet => GeometricMethod::StormerVerlet,
-        | Method::Ruth4 => GeometricMethod::Ruth4,
-        | Method::GaussLegendre4 => GeometricMethod::GaussLegendre4,
-        | Method::GaussLegendre6 => GeometricMethod::GaussLegendre6,
-        | _ => return Err(NumericError::Domain("expected a geometric method".into())),
-    };
+    let kernel_method = method
+        .fixed_geometry()
+        .ok_or_else(|| NumericError::Domain("expected a fixed geometric method".into()))?;
     let solution = ode_geom::solve_fixed_geometric(
         rhs,
         y0,
@@ -1085,6 +1066,10 @@ fn solve_fixed_geometric_with_stages(
 
 /// Error-controlled geometric integration, using the selected kernel method.
 #[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::single_call_fn,
+    reason = "Keep method-specific defaults with the adaptive geometric kernel adapter."
+)]
 fn solve_adaptive_geometric(
     rhs: &mut Rate<'_>,
     y0: &[f64],
@@ -1134,7 +1119,10 @@ fn solve_adaptive_geometric(
 // Differential-Algebraic Equation (DAE) Solvers (Index-1 and Index-2)
 // ---------------------------------------------------------------------------
 
-/// Options for Differential-Algebraic Equation (DAE) solvers.
+/// Find consistent initial values for a semi-explicit index-1 DAE.
+///
+/// # Errors
+/// Rejects invalid initial guesses, controls, or callback results and failed nonlinear solves.
 pub fn dae_consistent_ic_index1<F, G>(
     f: &mut F,
     g: &mut G,
@@ -1152,6 +1140,10 @@ where
         .map_err(map_ode_geom_err)
 }
 
+/// Integrate a semi-explicit index-1 DAE starting from algebraic values `z0`.
+///
+/// # Errors
+/// Rejects invalid inputs and callback results, or a failed algebraic or time-stepping solve.
 pub fn solve_dae_index1<F, G>(
     f: &mut F,
     g: &mut G,
@@ -1167,6 +1159,10 @@ where
     rssn::kernels::ode_geom::solve_dae_index1(f, g, y0, z0, span, options).map_err(map_ode_geom_err)
 }
 
+/// Find consistent initial values for a semi-explicit index-2 DAE.
+///
+/// # Errors
+/// Rejects invalid initial guesses, controls, or callback results and failed nonlinear solves.
 pub fn dae_consistent_ic_index2<F, G>(
     f: &mut F,
     g: &mut G,
@@ -1184,6 +1180,10 @@ where
         .map_err(map_ode_geom_err)
 }
 
+/// Integrate a semi-explicit index-2 DAE from the supplied initial guesses.
+///
+/// # Errors
+/// Rejects invalid inputs and callback results, or a failed constraint or time-stepping solve.
 pub fn solve_dae_index2<F, G>(
     f: &mut F,
     g: &mut G,
@@ -1200,6 +1200,10 @@ where
         .map_err(map_ode_geom_err)
 }
 
+/// Integrate an implicit DAE from a residual in time, state, and state derivative.
+///
+/// # Errors
+/// Rejects invalid inputs or residuals, singular systems, and failed nonlinear solves.
 pub fn solve_dae_implicit<R>(
     residual: &mut R,
     y0: &[f64],
@@ -1223,6 +1227,10 @@ where
     })
 }
 
+/// Integrate a delay differential equation with constant delays and a history callback.
+///
+/// # Errors
+/// Rejects invalid delays, time span, or callback results and failed integration.
 pub fn solve_dde<F, H>(
     rhs: &mut F,
     history: &mut H,
@@ -1239,6 +1247,10 @@ where
         .map_err(map_ode_geom_err)
 }
 
+/// Integrate a delay differential equation whose callback selects its history queries.
+///
+/// # Errors
+/// Rejects invalid inputs or callback results and failed integration.
 pub fn solve_dde_state_dependent<F, H>(
     rhs: &mut F,
     history: &mut H,
@@ -1355,242 +1367,107 @@ pub fn solve_with_mode(
     specs: &[EventSpec],
     events: &mut Events<'_>,
 ) -> Result<Solution, NumericError> {
-    use rssn::kernels::ode;
-    use rssn::kernels::ode_adaptive::Event;
-    use rssn::kernels::ode_adaptive::OdeError;
-    use rssn::kernels::ode_geom::GeometricMethod;
-    use std::cell::Cell;
-    use std::cell::RefCell;
-
     let (start, end) = span;
     validate_ode_problem(y0, span)?;
-    if end == start {
-        return Ok(Solution {
-            t: vec![start],
-            y: vec![y0.to_vec()],
-            hits: Vec::new(),
-            nfev: 0,
-            rejected: 0,
-            method,
-            dense: Dense::Hermite {
-                rates: vec![vec![0.0; y0.len()]],
-            },
-        });
+    if start >= end {
+        return Ok(point_solution(start, y0, method));
     }
 
-    let invalid_event = Cell::new(false);
-    let geom_method = match method {
-        | Method::StormerVerlet | Method::AdaptiveStormerVerlet => {
-            Some(GeometricMethod::StormerVerlet)
-        },
-        | Method::Ruth4 | Method::AdaptiveRuth4 => Some(GeometricMethod::Ruth4),
-        | Method::GaussLegendre4 | Method::AdaptiveGaussLegendre4 => {
-            Some(GeometricMethod::GaussLegendre4)
-        },
-        | Method::GaussLegendre6 | Method::AdaptiveGaussLegendre6 => {
-            Some(GeometricMethod::GaussLegendre6)
-        },
-        | Method::ImplicitMidpoint | Method::AdaptiveImplicitMidpoint => {
-            Some(GeometricMethod::ImplicitMidpoint)
-        },
-        | _ => None,
-    };
-
-    if let Some(gm) = geom_method {
-        let sol = rssn::kernels::ode_geom::solve_geometric(
+    if let Some(geom_method) = method
+        .adaptive_geometry()
+        .or_else(|| method.fixed_geometry())
+        .filter(|method| *method != GeometricMethod::Rk4)
+    {
+        let invalid = Cell::new(false);
+        let solution = ode_geom::solve_geometric(
             rhs,
             y0,
             span,
-            gm,
+            geom_method,
             step_mode,
             specs,
             events,
-            &invalid_event,
+            &invalid,
         )
-        .map_err(map_ode_geom_err)?;
-        if invalid_event.get() {
-            return Err(NumericError::Domain(
-                "an event returned a non-finite value".into(),
-            ));
-        }
-        return Ok(Solution {
-            t: sol.t,
-            y: sol.y,
-            hits: sol.hits,
-            nfev: sol.nfev,
-            rejected: sol.rejected,
-            method,
-            dense: Dense::Hermite { rates: sol.rates },
-        });
+        .map_err(map_ode_geom_err);
+        return reject_invalid_event(
+            invalid.get(),
+            solution.map(|solution| {
+                Solution {
+                    t: solution.t,
+                    y: solution.y,
+                    hits: solution.hits,
+                    nfev: solution.nfev,
+                    rejected: solution.rejected,
+                    method,
+                    dense: Dense::Hermite {
+                        rates: solution.rates,
+                    },
+                }
+            }),
+        );
     }
 
-    let rhs_cell = RefCell::new(rhs);
-    let failure: RefCell<Option<NumericError>> = RefCell::new(None);
-    let f = |t: f64, y: &[f64], out: &mut [f64]| {
-        if failure.borrow().is_some() {
-            out.fill(f64::NAN);
-            return;
-        }
-        match evaluate(&mut **rhs_cell.borrow_mut(), t, y, out.len()) {
-            | Ok(rate) => out.copy_from_slice(&rate),
-            | Err(error) => {
-                if failure.borrow().is_none() {
-                    *failure.borrow_mut() = Some(error);
-                }
-                out.fill(f64::NAN);
+    let rate = KernelRate::new(rhs, usize::MAX);
+    let result = with_kernel_events(specs, events, |kernel_events| {
+        let kernel = |method, step_mode| {
+            ode::solve_ode_events(
+                |t, y, out| rate.evaluate(t, y, out),
+                y0,
+                span,
+                method,
+                step_mode,
+                kernel_events,
+            )
+        };
+        let (solution, used_method) = match step_mode {
+            | StepMode::Fixed { .. } if method == Method::Auto => {
+                (kernel(OdeMethod::RungeKutta4, step_mode), Method::Rk4)
             },
-        }
-    };
-    let events_cell = RefCell::new(events);
-    let guards: Vec<Box<dyn Fn(f64, &[f64]) -> f64 + '_>> = (0..specs.len())
-        .map(|index| {
-            let events_cell = &events_cell;
-            let invalid_event = &invalid_event;
-            Box::new(move |t: f64, y: &[f64]| {
-                let value = events_cell.borrow_mut()(index, t, y);
-                if !value.is_finite() {
-                    invalid_event.set(true);
-                }
-                value
-            }) as Box<dyn Fn(f64, &[f64]) -> f64 + '_>
-        })
-        .collect();
-    let kernel_events: Vec<Event<'_>> = guards
-        .iter()
-        .zip(specs)
-        .map(|(g, spec)| {
-            Event {
-                g: g.as_ref(),
-                terminal: spec.terminal,
-                direction: spec.direction,
-            }
-        })
-        .collect();
-
-    let result = match method {
-        | Method::Rk4 | Method::AdaptiveRk4 => {
-            ode::solve_ode_events(
-                f,
-                y0,
-                span,
-                OdeMethod::RungeKutta4,
-                step_mode,
-                &kernel_events,
-            )
-            .map(|sol| kernel_solution_to_solution(sol, method))
-            .map_err(map_ode_err)
-        },
-        | Method::Dopri5 => {
-            ode::solve_ode_events(f, y0, span, OdeMethod::Dopri5, step_mode, &kernel_events)
-                .map(|sol| kernel_solution_to_solution(sol, Method::Dopri5))
-                .map_err(map_ode_err)
-        },
-        | Method::Radau => {
-            ode::solve_ode_events(f, y0, span, OdeMethod::Radau5, step_mode, &kernel_events)
-                .map(|sol| kernel_solution_to_solution(sol, Method::Radau))
-                .map_err(map_ode_err)
-        },
-        | Method::Bdf => {
-            ode::solve_ode_events(f, y0, span, OdeMethod::Bdf, step_mode, &kernel_events)
-                .map(|sol| kernel_solution_to_solution(sol, Method::Bdf))
-                .map_err(map_ode_err)
-        },
-        | Method::Rosenbrock23 => {
-            ode::solve_ode_events(
-                f,
-                y0,
-                span,
-                OdeMethod::Rosenbrock23,
-                step_mode,
-                &kernel_events,
-            )
-            .map(|sol| kernel_solution_to_solution(sol, Method::Rosenbrock23))
-            .map_err(map_ode_err)
-        },
-        | Method::Auto => {
-            match step_mode {
-                | StepMode::Fixed { .. } => {
-                    ode::solve_ode_events(
-                        f,
-                        y0,
-                        span,
-                        OdeMethod::RungeKutta4,
-                        step_mode,
-                        &kernel_events,
-                    )
-                    .map(|sol| kernel_solution_to_solution(sol, Method::Rk4))
-                    .map_err(map_ode_err)
-                },
-                | StepMode::Adaptive {
+            | StepMode::Adaptive {
+                rtol,
+                atol,
+                dt_init,
+                dt_min,
+                dt_max,
+                max_steps,
+            } if method == Method::Auto => {
+                let budgeted = StepMode::Adaptive {
                     rtol,
                     atol,
                     dt_init,
                     dt_min,
                     dt_max,
-                    max_steps,
-                } => {
-                    let budgeted = StepMode::Adaptive {
-                        rtol,
-                        atol,
-                        dt_init,
-                        dt_min,
-                        dt_max,
-                        max_steps: max_steps.min(AUTO_STEP_BUDGET),
-                    };
-                    match ode::solve_ode_events(
-                        f,
-                        y0,
-                        span,
-                        OdeMethod::Dopri5,
-                        budgeted,
-                        &kernel_events,
-                    ) {
-                        | Ok(sol) => Ok(kernel_solution_to_solution(sol, Method::Dopri5)),
-                        | Err(OdeError::StepLimit) if failure.borrow().is_none() => {
-                            // The stiff solver restarts from `t0` with the full
-                            // `max_steps` of its own (the explicit attempt is not
-                            // charged against it).
-                            ode::solve_ode_events(
-                                f,
-                                y0,
-                                span,
-                                OdeMethod::Radau5,
-                                step_mode,
-                                &kernel_events,
-                            )
-                            .map(|sol| kernel_solution_to_solution(sol, Method::Radau))
-                            .map_err(map_ode_err)
-                        },
-                        | Err(e) => Err(map_ode_err(e)),
-                    }
-                },
-            }
-        },
-        | Method::StormerVerlet
-        | Method::Ruth4
-        | Method::GaussLegendre4
-        | Method::GaussLegendre6
-        | Method::ImplicitMidpoint
-        | Method::AdaptiveStormerVerlet
-        | Method::AdaptiveRuth4
-        | Method::AdaptiveImplicitMidpoint
-        | Method::AdaptiveGaussLegendre4
-        | Method::AdaptiveGaussLegendre6 => unreachable!("handled above"),
-    };
-
-    if let Some(error) = failure.into_inner() {
-        return Err(error);
-    }
-    if invalid_event.get() {
-        return Err(NumericError::Domain(
-            "an event returned a non-finite value".into(),
-        ));
-    }
-    result
+                    max_steps: max_steps.min(AUTO_STEP_BUDGET),
+                };
+                match kernel(OdeMethod::Dopri5, budgeted) {
+                    | Err(OdeError::StepLimit) if rate.failure.borrow().is_none() => {
+                        (kernel(OdeMethod::Radau5, step_mode), Method::Radau)
+                    },
+                    | result => (result, Method::Dopri5),
+                }
+            },
+            | _ => {
+                let kernel_method = method.kernel_method().ok_or_else(|| {
+                    NumericError::Domain("expected a supported non-geometric ODE method".into())
+                })?;
+                (kernel(kernel_method, step_mode), method)
+            },
+        };
+        solution
+            .map(|solution| {
+                let mut solution = kernel_solution_to_solution(solution, used_method);
+                solution.nfev = rate.evaluations.get();
+                solution
+            })
+            .map_err(map_ode_err)
+    });
+    rate.finish(result)
 }
 
-/// Unified initial-value ODE solver calling `rssn::kernels::ode::solve_ode_events`
-/// for any [`OdeMethod`] (`Euler`, `Heun`, `RungeKutta4`, `Dopri5`, `Rosenbrock23`,
+/// Solve an initial-value ODE in fixed or adaptive mode.
+///
+/// Calls `rssn::kernels::ode::solve_ode_events` for any [`OdeMethod`] (`Euler`, `Heun`, `RungeKutta4`, `Dopri5`, `Rosenbrock23`,
 /// `Sdirk3`, `Radau5`, `Bdf`, `Exprb32`) in both [`StepMode::Fixed`] and
 /// [`StepMode::Adaptive`] modes.
 ///
@@ -1607,73 +1484,24 @@ pub fn solve_ode(
     specs: &[EventSpec],
     events: &mut Events<'_>,
 ) -> Result<rssn::kernels::ode_adaptive::OdeSolution, NumericError> {
-    use rssn::kernels::ode_adaptive::Event;
-    use std::cell::Cell;
-    use std::cell::RefCell;
-
     validate_ode_problem(y0, span)?;
-    if span.0 == span.1 {
-        // The kernel has no empty-span solution to hand back (`solve_with_mode`
-        // answers this case with a one-point `Solution`).
+    if span.0 >= span.1 {
         return Err(NumericError::Domain("the ODE span is empty".into()));
     }
 
-    let rhs_cell = RefCell::new(rhs);
-    let failure: RefCell<Option<NumericError>> = RefCell::new(None);
-    let f = |t: f64, y: &[f64], out: &mut [f64]| {
-        if failure.borrow().is_some() {
-            out.fill(f64::NAN);
-            return;
-        }
-        match evaluate(&mut **rhs_cell.borrow_mut(), t, y, out.len()) {
-            | Ok(rate) => out.copy_from_slice(&rate),
-            | Err(error) => {
-                if failure.borrow().is_none() {
-                    *failure.borrow_mut() = Some(error);
-                }
-                out.fill(f64::NAN);
-            },
-        }
-    };
-    let events_cell = RefCell::new(events);
-    let invalid_event = Cell::new(false);
-    let guards: Vec<Box<dyn Fn(f64, &[f64]) -> f64 + '_>> = (0..specs.len())
-        .map(|index| {
-            let events_cell = &events_cell;
-            let invalid_event = &invalid_event;
-            Box::new(move |t: f64, y: &[f64]| {
-                let value = events_cell.borrow_mut()(index, t, y);
-                if !value.is_finite() {
-                    invalid_event.set(true);
-                }
-                value
-            }) as Box<dyn Fn(f64, &[f64]) -> f64 + '_>
-        })
-        .collect();
-    let kernel_events: Vec<Event<'_>> = guards
-        .iter()
-        .zip(specs)
-        .map(|(g, spec)| {
-            Event {
-                g: g.as_ref(),
-                terminal: spec.terminal,
-                direction: spec.direction,
-            }
-        })
-        .collect();
-
-    let result =
-        rssn::kernels::ode::solve_ode_events(f, y0, span, method, step_mode, &kernel_events)
-            .map_err(map_ode_err);
-    if let Some(error) = failure.into_inner() {
-        return Err(error);
-    }
-    if invalid_event.get() {
-        return Err(NumericError::Domain(
-            "an event returned a non-finite value".into(),
-        ));
-    }
-    result
+    let rate = KernelRate::new(rhs, usize::MAX);
+    let result = with_kernel_events(specs, events, |kernel_events| {
+        ode::solve_ode_events(
+            |t, y, out| rate.evaluate(t, y, out),
+            y0,
+            span,
+            method,
+            step_mode,
+            kernel_events,
+        )
+        .map_err(map_ode_err)
+    });
+    rate.finish(result)
 }
 
 /// Unified symplectic solver supporting both fixed and adaptive [`StepMode`]s
@@ -1821,6 +1649,80 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_integrators_enforce_the_actual_callback_budget() {
+        let calls = Cell::new(0);
+        let mut rhs = |_: f64, _: &[f64]| {
+            calls.set(calls.get() + 1);
+            vec![1.0]
+        };
+        let options = Options {
+            method: Method::Rk4,
+            steps: 1,
+            max_evaluations: 3,
+            ..Options::default()
+        };
+        assert_eq!(
+            integrate(&mut rhs, &[1.0], &[0.0, 1.0], options),
+            Err(NumericError::NotConverged)
+        );
+        assert_eq!(calls.get(), 3);
+        calls.set(0);
+        assert_eq!(
+            integrate_until_event(&mut rhs, &[1.0], &[0.0, 1.0], options, &mut |_, _| 1.0),
+            Err(NumericError::NotConverged)
+        );
+        assert_eq!(calls.get(), 3);
+    }
+
+    #[test]
+    fn dense_fixed_solution_counts_terminal_event_probes() {
+        let calls = Cell::new(0);
+        let solution = solve(
+            &mut |_, _| {
+                calls.set(calls.get() + 1);
+                vec![1.0]
+            },
+            &[0.0],
+            (0.0, 1.0),
+            Options {
+                method: Method::Rk4,
+                steps: 1,
+                ..Options::default()
+            },
+            &[EventSpec {
+                terminal: true,
+                direction: 1,
+            }],
+            &mut |_, _, y| y[0] - 0.25,
+        )
+        .expect("the terminal event is bracketed");
+        assert!(calls.get() > 6);
+        assert_eq!(solution.nfev, calls.get());
+        assert!((solution.span().1 - 0.25).abs() < 1e-12);
+    }
+
+    #[test]
+    fn dense_fixed_eval_and_order_reduction_handle_invalid_shapes() {
+        let mut solution = solve(
+            &mut |_, _| vec![1.0],
+            &[0.0],
+            (0.0, 1.0),
+            Options {
+                method: Method::Rk4,
+                steps: 1,
+                ..Options::default()
+            },
+            &[],
+            &mut |_, _, _| 0.0,
+        )
+        .expect("a constant derivative converges");
+        solution.y.clear();
+        assert!(solution.eval(0.5).is_none());
+        let mut reduced = reduce_order(usize::MAX, 2, |_, _| unreachable!());
+        assert!(reduced(0.0, &[1.0]).is_empty());
+    }
 
     fn close(
         a: f64,

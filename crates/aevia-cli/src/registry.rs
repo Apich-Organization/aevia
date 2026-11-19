@@ -4,7 +4,7 @@
 //!
 //! The registry client is `aevia-pkg`, a binary in the platform workspace
 //! (`platform/crates/aevia-pkg`). It is deliberately not linked into this
-//! binary: it carries an OpenPGP verifier, an HTTP client and a tarball codec
+//! binary: it carries an `OpenPGP` verifier, an HTTP client and a tarball codec
 //! that a compiler run never needs, and the toolchain's dependency graph is
 //! already the heaviest thing in the project.
 //!
@@ -15,14 +15,15 @@
 //! # Where the binary is looked for
 //!
 //! 1. `AEVIA_PKG`, for a checkout that is not installed.
-//! 2. `aevia-pkg` on `PATH`, which is what `cargo install --path
+//! 2. `aevia-pkg` next to this executable, so a release uses its matching client.
+//! 3. `aevia-pkg` on `PATH`, which is what `cargo install --path
 //!    platform/crates/aevia-pkg` produces.
-//! 3. `aevia-pkg` next to this executable, so an unpacked release works without
-//!    installing anything.
+//! 4. The platform workspace's own target directory in a source checkout.
 //!
 //! When none of them exists the message names all three, because "command not
 //! found" on its own does not tell a user that a second binary is involved.
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::ExitCode;
@@ -42,14 +43,9 @@ const BINARY: &str = if cfg!(windows) {
 ///
 /// A message when the binary cannot be found or run, or exits unsuccessfully.
 pub fn invoke(args: &[String]) -> Result<(), String> {
-    let Some(binary) = locate() else {
-        return Err(format!(
-            "cannot find `{BINARY}` (set `AEVIA_PKG`, put it on `PATH`, or install it with \
-             `cargo install --path platform/crates/aevia-pkg`); it downloads and verifies \
-             registry packages"
-        ));
-    };
-    match Command::new(&binary).args(args).status() {
+    let binary = locate()?;
+    let registry = std::env::var("AEVIA_REGISTRY").ok();
+    match invocation(&binary, args, registry.as_deref()).status() {
         | Ok(status) if status.success() => Ok(()),
         | Ok(status) => {
             Err(format!(
@@ -64,15 +60,21 @@ pub fn invoke(args: &[String]) -> Result<(), String> {
 
 /// Runs `aevia-pkg` with `args`.
 pub fn run(args: &[String]) -> ExitCode {
-    let Some(binary) = locate() else {
-        eprintln!(
-            "aevia pkg: cannot find `{BINARY}`.\n\
-             aevia pkg: install it with `cargo install --path platform/crates/aevia-pkg`,\n\
-             aevia pkg: or point `AEVIA_PKG` at a built binary."
-        );
-        return ExitCode::from(2);
-    };
-    match Command::new(&binary).args(args).status() {
+    match locate() {
+        | Ok(binary) => run_client(&binary, args),
+        | Err(error) => {
+            eprintln!("aevia pkg: {error}");
+            ExitCode::from(2)
+        },
+    }
+}
+
+fn run_client(
+    binary: &Path,
+    args: &[String],
+) -> ExitCode {
+    let registry = std::env::var("AEVIA_REGISTRY").ok();
+    match invocation(binary, args, registry.as_deref()).status() {
         | Ok(status) => {
             match status.code() {
                 | Some(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
@@ -90,6 +92,23 @@ pub fn run(args: &[String]) -> ExitCode {
     }
 }
 
+fn invocation(
+    binary: &Path,
+    args: &[String],
+    registry: Option<&str>,
+) -> Command {
+    let mut process = Command::new(binary);
+    let explicit = args
+        .iter()
+        .take_while(|argument| argument.as_str() != "--")
+        .any(|argument| argument == "--registry" || argument.starts_with("--registry="));
+    if !explicit && let Some(url) = registry.map(str::trim).filter(|url| !url.is_empty()) {
+        process.args(["--registry", url]);
+    }
+    process.args(args);
+    process
+}
+
 /// The commands of the registry client that `aevia` also accepts at top level.
 ///
 /// `aevia search` reads better than `aevia pkg search`, and these are the
@@ -103,6 +122,10 @@ pub const FORWARDED: &[&str] = &[
 
 /// Whether `command` is one of the top-level aliases of the registry client.
 #[must_use]
+#[allow(
+    clippy::single_call_fn,
+    reason = "defines the registry command names available as top-level aliases"
+)]
 pub fn is_forwarded(command: &str) -> bool {
     FORWARDED.contains(&command)
 }
@@ -118,7 +141,18 @@ const DEFAULT_REGISTRY: &str = "https://aevia.apich.org";
 /// that does not compile is refused *before* a key is touched or a challenge
 /// is requested: the registry would reject it anyway, but only after a
 /// passphrase prompt and a round trip.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the publish command performs its compiler preflight before forwarding"
+)]
 pub fn publish(args: &[String]) -> ExitCode {
+    let binary = match locate() {
+        | Ok(binary) => binary,
+        | Err(error) => {
+            eprintln!("aevia publish: {error}");
+            return ExitCode::from(2);
+        },
+    };
     let skip = args.iter().any(|argument| argument == "--no-verify");
     let forwarded: Vec<String> = std::iter::once("publish".to_string())
         .chain(
@@ -134,10 +168,14 @@ pub fn publish(args: &[String]) -> ExitCode {
         );
         return ExitCode::from(1);
     }
-    run(&forwarded)
+    run_client(&binary, &forwarded)
 }
 
 /// Type-checks the package here and verifies its formatting with this binary.
+#[allow(
+    clippy::single_call_fn,
+    reason = "validates the package before registry publication starts"
+)]
 fn preflight() -> bool {
     let Ok(me) = std::env::current_exe() else {
         // Without a path to ourselves there is nothing to run; the registry
@@ -161,47 +199,71 @@ fn preflight() -> bool {
     true
 }
 
-/// `aevia docs [owner/name[@version]] [--open] [--registry URL]`
+/// Resolves a hosted package page or a language documentation section.
 ///
-/// Prints the address of a package's documentation on the registry (the site
-/// the compiler built at publish time), or opens it. With no package, the
-/// documentation landing page.
+/// Prints a package documentation link or the documentation index and can
+/// open the link in the default browser.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the docs command validates language, section and package coordinates"
+)]
 pub fn docs(args: &[String]) -> ExitCode {
     let mut open = false;
-    let mut registry: Option<String> = None;
-    let mut target: Option<String> = None;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
+    let mut registry = None;
+    let mut target = None;
+    let mut section = None;
+    let mut language = None;
+    let mut download = false;
+    let mut args = args.iter().map(String::as_str);
+    while let Some(argument) = args.next() {
+        match argument {
             | "--open" => open = true,
+            | "--download" => download = true,
+            | "--section" => {
+                let value = args.next();
+                if !matches!(value, Some("book" | "architecture" | "spec" | "stdlib")) {
+                    eprintln!("aevia docs: --section expects book, architecture, spec, or stdlib");
+                    return ExitCode::from(2);
+                }
+                section = value;
+            },
+            | "--lang" => {
+                let value = args.next();
+                if !matches!(value, Some("en" | "zh")) {
+                    eprintln!("aevia docs: --lang expects en or zh");
+                    return ExitCode::from(2);
+                }
+                language = value;
+            },
             | "--registry" => {
-                index += 1;
-                let Some(value) = args.get(index) else {
+                let Some(value) = args.next() else {
                     eprintln!("aevia docs: `--registry` expects a URL");
                     return ExitCode::from(2);
                 };
-                registry = Some(value.clone());
+                registry = Some(value);
             },
             | other if other.starts_with('-') => {
-                eprintln!(
-                    "aevia docs: unknown option `{other}` (the options are `--open` and \
-                     `--registry URL`)"
-                );
+                eprintln!("aevia docs: unknown option `{other}` (see `aevia docs --help`)");
                 return ExitCode::from(2);
             },
             | other => {
-                if target.replace(other.to_string()).is_some() {
+                if target.replace(other).is_some() {
                     eprintln!("aevia docs: expected one package, `owner/name[@version]`");
                     return ExitCode::from(2);
                 }
             },
         }
-        index += 1;
     }
+    let environment = std::env::var("AEVIA_REGISTRY").ok();
     let base = registry
-        .or_else(|| std::env::var("AEVIA_REGISTRY").ok())
-        .unwrap_or_else(|| DEFAULT_REGISTRY.to_string());
-    let url = match docs_url(&base, target.as_deref()) {
+        .or_else(|| {
+            environment
+                .as_deref()
+                .map(str::trim)
+                .filter(|url| !url.is_empty())
+        })
+        .unwrap_or(DEFAULT_REGISTRY);
+    let url = match documentation_url(base, target, section, language, download) {
         | Ok(url) => url,
         | Err(message) => {
             eprintln!("aevia docs: {message}");
@@ -215,7 +277,54 @@ pub fn docs(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "resolves and validates one hosted documentation target"
+)]
+fn documentation_url(
+    base: &str,
+    target: Option<&str>,
+    section: Option<&str>,
+    language: Option<&str>,
+    download: bool,
+) -> Result<String, String> {
+    if section.is_some() && target.is_some() {
+        return Err("choose a package or a documentation section".to_owned());
+    }
+    if download && !matches!(section, Some("book" | "architecture")) {
+        return Err("--download needs --section book or --section architecture".to_owned());
+    }
+    let base = base.trim().trim_end_matches('/');
+    let valid_base = base.split_once("://").is_some_and(|(scheme, rest)| {
+        (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
+            && rest.split('/').next().is_some_and(|host| !host.is_empty())
+            && !rest
+                .chars()
+                .any(|ch| ch.is_whitespace() || ch.is_control() || matches!(ch, '?' | '#' | '\\'))
+    });
+    if !valid_base {
+        return Err("the registry address must be an HTTP or HTTPS base URL".to_owned());
+    }
+    let mut url = if let Some(section) = section {
+        format!("{base}/{section}")
+    } else {
+        docs_url(base, target)?
+    };
+    if download {
+        url.push_str("/download");
+    }
+    if let Some(language) = language {
+        url.push_str("?lang=");
+        url.push_str(language);
+    }
+    Ok(url)
+}
+
 /// The documentation address for `target` (`owner/name[@version]`) on `base`.
+#[allow(
+    clippy::single_call_fn,
+    reason = "parses package documentation coordinates independently of CLI flags"
+)]
 fn docs_url(
     base: &str,
     target: Option<&str>,
@@ -228,67 +337,85 @@ fn docs_url(
         | Some((id, version)) => (id, Some(version)),
         | None => (target, None),
     };
-    let valid = id
-        .split_once('/')
-        .is_some_and(|(owner, name)| !owner.is_empty() && !name.is_empty() && !name.contains('/'));
+    let valid = id.split_once('/').is_some_and(|(owner, name)| {
+        !owner.is_empty()
+            && owner.len() <= 39
+            && owner
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            && name.len() <= 64
+            && aevia_core::manifest::valid_package_name(name)
+    });
     if !valid {
         return Err(format!(
             "`{target}` is not `owner/name[@version]` (packages are scoped, `apich/units`)"
         ));
     }
-    Ok(match version {
-        | Some(version) if !version.is_empty() => format!("{base}/docs/{id}/{version}"),
-        | _ => format!("{base}/docs/{id}"),
-    })
+    if let Some(version) = version {
+        let parsed = aevia_resolve::Version::parse(version)
+            .map_err(|error| format!("invalid package version `{version}`: {error}"))?;
+        Ok(format!("{base}/docs/{id}/{parsed}"))
+    } else {
+        Ok(format!("{base}/docs/{id}"))
+    }
 }
 
 /// Opens `url` in the default browser, when standard output is a terminal.
+#[allow(
+    clippy::single_call_fn,
+    reason = "applies the docs command's interactive browser policy"
+)]
 fn open_url(url: &str) {
     use std::io::IsTerminal;
-    if !std::io::stdout().is_terminal() {
-        return;
-    }
-    #[cfg(target_os = "windows")]
-    let spawned = Command::new("cmd")
-        .args(["/C", "start", ""])
-        .arg(url)
-        .spawn();
-    #[cfg(target_os = "macos")]
-    let spawned = Command::new("open").arg(url).spawn();
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let spawned = Command::new("xdg-open").arg(url).spawn();
-    if let Err(error) = spawned {
+    if std::io::stdout().is_terminal()
+        && let Err(error) = crate::terminal::open_default(std::ffi::OsStr::new(url))
+    {
         eprintln!("aevia docs: cannot start a browser ({error})");
     }
 }
 
 /// Finds the client binary.
-fn locate() -> Option<PathBuf> {
+fn locate() -> Result<PathBuf, String> {
     if let Some(explicit) = std::env::var_os("AEVIA_PKG") {
         let path = PathBuf::from(explicit);
-        if path.is_file() {
-            return Some(path);
+        let fail = || {
+            format!(
+                "AEVIA_PKG does not name a registry executable: `{}`",
+                path.display()
+            )
+        };
+        if !path.is_file() {
+            return Err(fail());
         }
+        return std::path::absolute(&path).map_err(|_| fail());
+    }
+    let executable = std::env::current_exe().ok();
+    let profile_dir = executable.as_deref().and_then(Path::parent);
+    if let Some(beside) = profile_dir.map(|directory| directory.join(BINARY))
+        && beside.is_file()
+    {
+        return Ok(beside);
     }
     if let Some(found) = on_path() {
-        return Some(found);
+        return Ok(found);
     }
-    let exe = std::env::current_exe().ok()?;
-    let beside = exe.parent()?.join(BINARY);
-    if beside.is_file() {
-        return Some(beside);
+    if let Some(directory) = profile_dir
+        && let Some(profile) = directory.file_name()
+        && let Some(root) = directory.parent().and_then(Path::parent)
+    {
+        // A source checkout keeps a distinct target directory for the platform.
+        let built = root
+            .join("platform")
+            .join("target")
+            .join(profile)
+            .join(BINARY);
+        if built.is_file() {
+            return Ok(built);
+        }
     }
-    // A checkout: `target/{profile}/aevia` with the platform workspace's own
-    // `platform/target/{profile}/aevia-pkg` next to it, so `cargo build` in
-    // both workspaces is all a contributor needs.
-    let profile = exe.parent()?.file_name()?.to_owned();
-    let root = exe.parent()?.parent()?.parent()?;
-    let built = root
-        .join("platform")
-        .join("target")
-        .join(profile)
-        .join(BINARY);
-    built.is_file().then_some(built)
+    Err(format!(
+        "cannot find `{BINARY}`. Install it beside aevia or on PATH, run          `cargo install --path platform/crates/aevia-pkg`, or set AEVIA_PKG."
+    ))
 }
 
 /// Looks for the binary in `PATH`.
@@ -296,11 +423,16 @@ fn locate() -> Option<PathBuf> {
 /// Written by hand rather than shelling out to `which`: the answer is needed on
 /// Windows too, and `Command::new(BINARY)` would only tell us whether the spawn
 /// worked, not where it came from — which is what the error message wants.
+#[allow(
+    clippy::single_call_fn,
+    reason = "locates the registry executable with platform-specific naming"
+)]
 fn on_path() -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|directory| directory.join(BINARY))
         .find(|candidate| candidate.is_file())
+        .and_then(|candidate| std::path::absolute(candidate).ok())
 }
 
 #[cfg(test)]
@@ -332,6 +464,46 @@ mod tests {
         );
         assert!(docs_url(base, Some("units")).is_err());
         assert!(docs_url(base, Some("/units")).is_err());
+        assert!(docs_url(base, Some("apich/units@../../other")).is_err());
+        assert!(docs_url(base, Some("apich/units?lang=zh")).is_err());
+        assert_eq!(
+            docs_url(base, Some("0000-0002-1825-009X/Lib@1.2.0-rc.1+local")).unwrap(),
+            "https://aevia.apich.org/docs/0000-0002-1825-009X/Lib/1.2.0-rc.1+local"
+        );
+        assert_eq!(
+            documentation_url(base, None, Some("architecture"), Some("zh"), true).unwrap(),
+            "https://aevia.apich.org/architecture/download?lang=zh"
+        );
+        assert!(documentation_url(base, None, Some("stdlib"), None, true).is_err());
+        assert!(documentation_url(base, Some("apich/units"), Some("book"), None, false).is_err());
+        assert!(documentation_url("file:///tmp", None, None, None, false).is_err());
+        assert!(documentation_url("http://", None, None, None, false).is_err());
+        assert_eq!(
+            documentation_url("http://127.0.0.1:8080/registry/", None, None, None, false).unwrap(),
+            "http://127.0.0.1:8080/registry/docs"
+        );
+    }
+
+    #[test]
+    fn explicit_registry_takes_precedence_over_the_environment() {
+        let default = Some(" http://localhost:8080 ");
+        let search = ["search".to_string(), "units".to_string()];
+        let process = invocation(Path::new(BINARY), &search, default);
+        assert_eq!(
+            process.get_args().collect::<Vec<_>>(),
+            ["--registry", "http://localhost:8080", "search", "units"]
+        );
+        let explicit = [
+            "search".to_string(),
+            "--registry=https://other.test".to_string(),
+            "units".to_string(),
+        ];
+        let process = invocation(Path::new(BINARY), &explicit, default);
+        assert!(
+            process
+                .get_args()
+                .eq(explicit.iter().map(std::ffi::OsStr::new))
+        );
     }
 
     #[test]

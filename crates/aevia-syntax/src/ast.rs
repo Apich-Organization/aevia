@@ -21,7 +21,7 @@ pub fn placeholder_param_name(index: usize) -> String {
 }
 
 /// A literal number in a unit literal.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NumberLit {
     /// An integer coefficient: `3 m` is `Real[L]` by default.
     Int(BigInt),
@@ -55,7 +55,7 @@ impl NumberLit {
 
     /// True for the decimal form.
     #[must_use]
-    pub fn is_decimal(&self) -> bool {
+    pub const fn is_decimal(&self) -> bool {
         matches!(self, Self::Decimal(_))
     }
 }
@@ -124,7 +124,7 @@ pub enum BinOp {
 impl BinOp {
     /// The source spelling, for diagnostics.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             | Self::Add => "+",
             | Self::Sub => "-",
@@ -159,7 +159,7 @@ pub struct Expr {
 impl Expr {
     /// Creates an expression node.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         kind: ExprKind,
         span: Span,
     ) -> Self {
@@ -345,6 +345,10 @@ pub struct Param {
 
 /// A statement inside a block.
 #[derive(Clone, Debug)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "preserves the public syntax tree representation without additional allocations"
+)]
 pub enum BlockStmt {
     /// `let p = e`
     Let {
@@ -392,6 +396,10 @@ pub enum DoStmt {
 
 /// An index or slice inside `[...]`.
 #[derive(Clone, Debug)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "preserves the public syntax tree representation without additional allocations"
+)]
 pub enum SliceAst {
     /// `i`
     Index(Expr),
@@ -423,7 +431,7 @@ pub struct Pat {
 impl Pat {
     /// Creates a pattern node.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         kind: PatKind,
         span: Span,
     ) -> Self {
@@ -480,7 +488,7 @@ pub enum PatKind {
 }
 
 /// A literal allowed in a pattern.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PatLit {
     /// An integer.
     Int(BigInt),
@@ -504,7 +512,7 @@ pub struct Ty {
 impl Ty {
     /// Creates a type node.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         kind: TyKind,
         span: Span,
     ) -> Self {
@@ -647,9 +655,9 @@ pub enum NatAst {
     /// A variable.
     Var(String),
     /// `a + b`.
-    Add(Box<NatAst>, Box<NatAst>),
+    Add(Box<Self>, Box<Self>),
     /// `a * b` (`b` must be a literal for the equation to stay linear).
-    Mul(Box<NatAst>, Box<NatAst>),
+    Mul(Box<Self>, Box<Self>),
 }
 
 /// A dimension expression as written in a type.
@@ -660,13 +668,13 @@ pub enum DimAst {
     /// `L`, `Length`, `d`, `Currency`.
     Name(String),
     /// `a*b`
-    Mul(Box<DimAst>, Box<DimAst>),
+    Mul(Box<Self>, Box<Self>),
     /// `a/b`
-    Div(Box<DimAst>, Box<DimAst>),
+    Div(Box<Self>, Box<Self>),
     /// `a^n`
-    Pow(Box<DimAst>, num_rational::BigRational),
+    Pow(Box<Self>, num_rational::BigRational),
     /// `(a)`
-    Paren(Box<DimAst>),
+    Paren(Box<Self>),
 }
 
 impl DimAst {
@@ -685,7 +693,7 @@ impl DimAst {
                     format!(
                         "{}^({})",
                         base.to_source(),
-                        crate::ast::format_rat(exponent)
+                        aevia_dim::format_rational(exponent)
                     )
                 }
             },
@@ -694,9 +702,6 @@ impl DimAst {
     }
 }
 
-fn format_rat(value: &num_rational::BigRational) -> String {
-    aevia_dim::format_rational(value)
-}
 
 /// The kind of a type parameter.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -735,7 +740,7 @@ impl Kind {
 
     /// The source spelling.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             | Self::Type => "Type",
             | Self::Dim => "Dim",
@@ -827,8 +832,9 @@ impl Decl {
             attr.name == "doc"
                 && attr.args.iter().any(|arg| {
                     match (&arg.name, &arg.value.kind) {
-                        | (None, ExprKind::Var(name)) => name == "hidden",
-                        | (Some(name), ExprKind::Bool(true)) => name == "hidden",
+                        | (None, ExprKind::Var(name)) | (Some(name), ExprKind::Bool(true)) => {
+                            name == "hidden"
+                        },
                         | _ => false,
                     }
                 })

@@ -39,9 +39,8 @@ impl SemanticPass for DimensionLiteralPass {
         let Some(ty) = checked.expr_types.get(&expr.span) else {
             return;
         };
-        let dim = match ty {
-            | Type::Scalar(_, d) | Type::Point(d) => d,
-            | _ => return,
+        let (Type::Scalar(_, dim) | Type::Point(dim)) = ty else {
+            return;
         };
         if *dim != aevia_dim::Dim::one() {
             cx.emit(

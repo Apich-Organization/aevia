@@ -1,4 +1,16 @@
 //! Checked non-local returns are control flow, never ordinary error payloads.
+#![deny(
+    missing_docs,
+    clippy::arithmetic_side_effects,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::nursery,
+    clippy::panic,
+    clippy::pedantic,
+    clippy::single_call_fn,
+    clippy::unwrap_used
+)]
+
 use crate::EvalError;
 use crate::Interp;
 use crate::value::Value;
@@ -13,10 +25,10 @@ use std::rc::Rc;
 impl Interp {
     pub(crate) fn try_value(
         &self,
-        value: Value,
+        value: &Value,
         span: Span,
     ) -> Result<Value, EvalError> {
-        let Value::Variant(variant) = &value else {
+        let Value::Variant(variant) = value else {
             return Err(EvalError::new("E0702", "`?` expects Result or Option").at(span));
         };
         let (success, name, arity) = match (variant.adt, variant.index) {
@@ -30,7 +42,11 @@ impl Interp {
             return Err(EvalError::new("E0702", "malformed Result/Option in `?`").at(span));
         }
         if success {
-            return Ok(variant.fields[0].clone());
+            return variant
+                .fields
+                .first()
+                .cloned()
+                .ok_or_else(|| EvalError::new("E0702", "malformed Result/Option in `?`").at(span));
         }
         let Some(target) = self.context.evidence.try_targets.get(&span) else {
             return Err(EvalError::new("E0702", relaxed_try_error(variant))
@@ -98,7 +114,8 @@ impl Interp {
         Err(exit)
     }
 }
-pub(crate) fn finish_function(
+/// Handles an early return when it reaches the function that owns it.
+pub fn finish_function(
     outcome: Result<Value, EvalError>,
     site: Option<Span>,
 ) -> Result<Value, EvalError> {
@@ -116,10 +133,9 @@ pub(crate) fn finish_function(
 }
 
 fn relaxed_try_error(variant: &value::VariantValue) -> String {
-    if variant.adt == adt::RESULT_ID && variant.index == 1 {
-        format!("`?` failed with `Err({})`", value::show(&variant.fields[0]))
-    } else {
-        "`?` failed on `None`".to_string()
+    match (variant.adt, variant.index, variant.fields.as_slice()) {
+        | (adt::RESULT_ID, 1, [error]) => format!("`?` failed with `Err({})`", value::show(error)),
+        | _ => "`?` failed on `None`".to_string(),
     }
 }
 
@@ -127,6 +143,10 @@ fn relaxed_try_error(variant: &value::VariantValue) -> String {
 // boundary. Preserve that language ABI without minting a nominal witness. The
 // exact prelude origin, empty schema and finite family list exclude source ADTs
 // (including a source type with the same spelling) and ordinary concrete errors.
+#[allow(
+    clippy::single_call_fn,
+    reason = "isolate the prelude error compatibility boundary"
+)]
 fn legacy_text_error(
     value: &Value,
     expected: &Type,
@@ -136,12 +156,11 @@ fn legacy_text_error(
     };
     if *id != adt::RESULT_ID
         || value.index != 1
-        || args.len() != 2
         || !matches!(value.fields.as_slice(), [Value::Str(_)])
     {
         return false;
     }
-    let Type::Adt(error, parameters) = &args[1] else {
+    let [_, Type::Adt(error, parameters)] = args.as_slice() else {
         return false;
     };
     let key = adt::key_of(*error);

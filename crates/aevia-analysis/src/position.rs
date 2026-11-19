@@ -51,7 +51,12 @@ impl std::fmt::Display for Position {
         &self,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
-        write!(f, "{}:{}", self.line + 1, self.column + 1)
+        write!(
+            f,
+            "{}:{}",
+            u64::from(self.line).saturating_add(1),
+            u64::from(self.column).saturating_add(1)
+        )
     }
 }
 
@@ -104,7 +109,7 @@ impl LineIndex {
         let mut starts = vec![0];
         for (offset, byte) in text.bytes().enumerate() {
             if byte == b'\n' {
-                starts.push(offset + 1);
+                starts.push(offset.saturating_add(1));
             }
         }
         Self { starts }
@@ -123,20 +128,21 @@ impl LineIndex {
         text: &str,
         line: u32,
     ) -> Option<std::ops::Range<usize>> {
-        let start = *self.starts.get(usize::try_from(line).ok()?)?;
-        let mut end = self
+        let line = usize::try_from(line).ok()?;
+        let start = *self.starts.get(line)?;
+        let end = self
             .starts
-            .get(usize::try_from(line).ok()? + 1)
+            .get(line.saturating_add(1))
             .copied()
             .unwrap_or(text.len());
         // The terminator belongs to no line: a client counting the characters
         // of line 3 of a CRLF file counts neither the `\r` nor the `\n`.
-        while end > start
-            && (text.as_bytes()[end - 1] == b'\n' || text.as_bytes()[end - 1] == b'\r')
-        {
-            end -= 1;
-        }
-        Some(start..end)
+        let raw = text.get(start..end)?;
+        let contents = raw
+            .strip_suffix("\r\n")
+            .or_else(|| raw.strip_suffix('\n'))
+            .unwrap_or(raw);
+        Some(start..start.checked_add(contents.len())?)
     }
 
     /// The text of a line, without its terminator.
@@ -153,9 +159,8 @@ impl LineIndex {
     /// The position of a byte offset.
     ///
     /// An offset past the end is clamped to the end, and an offset in the
-    /// middle of a multi-byte character snaps down to that character's start:
-    /// neither can be expressed as a position, and returning the nearest one
-    /// is what keeps a diagnostic from vanishing.
+    /// middle of a multi-byte character or CRLF sequence snaps down to that
+    /// character or sequence's start.
     #[must_use]
     pub fn position(
         &self,
@@ -166,16 +171,21 @@ impl LineIndex {
             .unwrap_or(usize::MAX)
             .min(text.len());
         while offset > 0 && !text.is_char_boundary(offset) {
-            offset -= 1;
+            offset = offset.saturating_sub(1);
         }
         let line = match self.starts.binary_search(&offset) {
             | Ok(index) => index,
             | Err(index) => index.saturating_sub(1),
         };
         let start = self.starts.get(line).copied().unwrap_or(0);
-        let column = text
-            .get(start..offset)
-            .map_or(0, |slice| slice.chars().map(char::len_utf16).sum());
+        let mut prefix = text.get(start..offset).unwrap_or_default();
+        if text
+            .get(offset..)
+            .is_some_and(|tail| tail.starts_with('\n'))
+        {
+            prefix = prefix.strip_suffix('\r').unwrap_or(prefix);
+        }
+        let column = prefix.encode_utf16().count();
         Position {
             line: u32::try_from(line).unwrap_or(0),
             column: u32::try_from(column).unwrap_or(u32::MAX),
@@ -194,15 +204,16 @@ impl LineIndex {
     ) -> Option<u32> {
         let span = self.line_span(text, position.line)?;
         let line = text.get(span.clone())?;
-        let mut units = 0_u32;
+        let mut units = 0usize;
+        let column = usize::try_from(position.column).ok()?;
         for (index, character) in line.char_indices() {
             // The column is inside this code point when it is at least the
             // units before it and fewer than the units it occupies. Inside a
             // surrogate pair there is no such position; the start of the code
             // point is the nearest one.
-            let next = units + u32::try_from(character.len_utf16()).unwrap_or(1);
-            if position.column < next {
-                return Some(u32::try_from(span.start + index).unwrap_or(u32::MAX));
+            let next = units.checked_add(character.len_utf16())?;
+            if column < next {
+                return Some(u32::try_from(span.start.checked_add(index)?).unwrap_or(u32::MAX));
             }
             units = next;
         }
@@ -238,6 +249,28 @@ mod tests {
         assert_eq!(index.position(text, 4), Position::new(0, 4));
         assert_eq!(index.position(text, 10), Position::new(1, 0));
         assert_eq!(index.line_text(text, 1), Some("let y = 2"));
+    }
+
+    #[test]
+    fn mismatched_text_cannot_index_past_its_end() {
+        let index = LineIndex::new("first\nsecond");
+        assert_eq!(index.line_span("x", 0), None);
+        assert_eq!(index.offset("x", Position::new(0, 0)), None);
+        assert_eq!(
+            Position::new(u32::MAX, u32::MAX).to_string(),
+            "4294967296:4294967296"
+        );
+    }
+
+    #[test]
+    fn a_crlf_pair_has_no_interior_position() {
+        let text = "😀\r\nlet x = 1";
+        let index = LineIndex::new(text);
+        assert_eq!(index.position(text, 4), Position::new(0, 2));
+        assert_eq!(index.position(text, 5), Position::new(0, 2));
+        assert_eq!(index.position(text, 6), Position::new(1, 0));
+        assert_eq!(index.offset(text, Position::new(0, 3)), Some(4));
+        assert_eq!(index.line_text(text, 0), Some("😀"));
     }
 
     #[test]

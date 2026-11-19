@@ -1,7 +1,7 @@
 """Builds the single-file specification editions from `spec/` (Chinese) and
 `spec/en/` (English).
 
-    python tools/bundle_spec.py [--revision N] [--no-html] [--lang zh|en]
+    python tools/bundle_spec.py [--check] [--revision N] [--no-html] [--lang zh|en]
 
 Outputs, at the repository root:
 
@@ -10,8 +10,7 @@ Outputs, at the repository root:
     Aevia-Language-Specification.en.md     English Markdown
     Aevia-Language-Specification.en.html   English HTML
 
-A chapter without an English file is included in Chinese, flagged in the English
-edition, so the two books always have the same shape.
+Both source editions must contain the same chapters and numbered headings.
 
 The HTML edition is rendered chapter by chapter with pandoc (`gfm`), then
 assembled: every heading id and every in-book link is prefixed with its chapter
@@ -26,6 +25,7 @@ The single-file editions are generated, never hand-edited.
 import argparse
 import html
 import pathlib
+import posixpath
 import re
 import shutil
 import subprocess
@@ -113,6 +113,31 @@ def load_chapters(lang: str):
     return chapters
 
 
+def check_sources() -> None:
+    expected = set(ORDER)
+    for directory in (SPEC, SPEC / "en"):
+        found = {path.name for path in directory.glob("*.md")} - {"STYLE.md"}
+        if found != expected:
+            missing = ", ".join(sorted(expected - found)) or "none"
+            extra = ", ".join(sorted(found - expected)) or "none"
+            raise SystemExit(f"{directory}: missing chapters {missing}, unlisted chapters {extra}")
+    numbered = re.compile(r"^#{2,6}\s+(?:§\s*)?((?:[A-Z]|[0-9]+)(?:\.[0-9]+)+)(?=\s|[:：])")
+
+    def sections(path):
+        fenced = False
+        ids = []
+        for line in read(path).splitlines():
+            if line.startswith("```"):
+                fenced = not fenced
+            if not fenced and (match := numbered.match(line)):
+                ids.append(match[1])
+        return ids
+
+    for name in ORDER:
+        if sections(SPEC / name) != sections(SPEC / "en" / name):
+            raise SystemExit(f"{name}: numbered section headings differ between Chinese and English")
+
+
 def first_heading(text: str, fallback: str) -> str:
     for line in text.splitlines():
         if line.startswith("# "):
@@ -136,10 +161,16 @@ def detect_revision(explicit):
 # ----------------------------------------------------------------- Markdown
 
 
-def link_to_anchor(match: re.Match) -> str:
+def repository_link(target: str, chapter_language: str) -> str:
+    directory = "spec/en" if chapter_language == "en" else "spec"
+    path = posixpath.normpath(posixpath.join(directory, target))
+    return f"{REPO_BLOB}/{path}"
+
+
+def link_to_anchor(match: re.Match, chapter_language: str) -> str:
     target = match.group(2)
     if target.startswith("../"):
-        return f"[{match.group(1)}]({REPO_BLOB}/{target[3:]})"
+        return f"[{match.group(1)}]({repository_link(target, chapter_language)})"
     chapter = re.match(r"^([\w-]+)\.md(?:#.*)?$", target)
     if chapter:
         return f"[{match.group(1)}](#ch-{slug_of(chapter.group(1) + '.md')})"
@@ -157,7 +188,12 @@ def build_markdown(lang: str, chapters, revision: str) -> str:
         f"## {t['contents']}\n\n{toc}\n\n---\n"
     ]
     for name, slug, text, fallback in chapters:
-        body = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", link_to_anchor, text.rstrip())
+        chapter_language = "zh" if fallback else lang
+        body = re.sub(
+            r"\[([^\]]+)\]\(([^)]+)\)",
+            lambda match: link_to_anchor(match, chapter_language),
+            text.rstrip(),
+        )
         flag = f"> {t['fallback']}\n\n" if fallback else ""
         parts.append(f'\n<a id="ch-{slug}"></a>\n\n{flag}{body}\n\n')
     return "".join(parts)
@@ -201,7 +237,7 @@ def number_sections(fragment: str) -> str:
     return fragment
 
 
-def namespace(fragment: str, slug: str, known: dict) -> str:
+def namespace(fragment: str, slug: str, known: dict, chapter_language: str) -> str:
     """Prefixes ids and rewrites links so chapters can share one document."""
     ids = set(re.findall(r'\bid="([^"]+)"', fragment))
     fragment = re.sub(
@@ -216,7 +252,7 @@ def namespace(fragment: str, slug: str, known: dict) -> str:
                 return f'href="#{slug}--{anchor}"'
             return match.group(0)
         if target.startswith("../"):
-            return f'href="{REPO_BLOB}/{target[3:]}"'
+            return f'href="{repository_link(target, chapter_language)}"'
         chapter = re.match(r"^([\w-]+)\.md(?:#(.*))?$", target)
         if chapter:
             other = slug_of(chapter.group(1) + ".md")
@@ -335,7 +371,7 @@ def build_html(lang: str, chapters, revision: str, pandoc: str) -> str:
         rendered.append((slug, title, fragment, fallback))
     sections, nav = [], []
     for slug, title, fragment, fallback in rendered:
-        fragment = namespace(fragment, slug, known)
+        fragment = namespace(fragment, slug, known, "zh" if fallback else lang)
         fragment = finish_code(fragment)
         entries = [e for e in toc_entries(fragment) if e[0] == 2]
         notice = f'<p class="fallback">{html.escape(t["fallback"])}</p>' if fallback else ""
@@ -371,26 +407,36 @@ def build_html(lang: str, chapters, revision: str, pandoc: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--check", action="store_true", help="fail if the generated files differ")
     parser.add_argument("--revision", default=None)
     parser.add_argument("--no-html", action="store_true")
     parser.add_argument("--lang", choices=["zh", "en"], default=None)
     args = parser.parse_args()
+    check_sources()
     revision = detect_revision(args.revision)
     pandoc = shutil.which("pandoc")
+    if pandoc is None and not args.no_html:
+        parser.error("pandoc is required to generate HTML; use --no-html for Markdown only")
+    stale = []
+
+    def emit(path, contents):
+        if args.check:
+            if not path.is_file() or read(path) != contents:
+                stale.append(path.name)
+        else:
+            path.write_text(contents, encoding="utf-8", newline="\n")
+            print(f"wrote {path.name}")
+
     for lang in [args.lang] if args.lang else ["zh", "en"]:
         chapters = load_chapters(lang)
         md = ROOT / out_name(lang, "md")
-        md.write_text(build_markdown(lang, chapters, revision), encoding="utf-8", newline="\n")
-        translated = sum(1 for c in chapters if not c[3])
-        print(f"wrote {md.name} ({translated}/{len(chapters)} chapters in {lang}, revision {revision})")
-        if args.no_html:
-            continue
-        if pandoc is None:
-            print("pandoc not found: the HTML edition was not regenerated", file=sys.stderr)
-            continue
-        page = ROOT / out_name(lang, "html")
-        page.write_text(build_html(lang, chapters, revision, pandoc), encoding="utf-8", newline="\n")
-        print(f"wrote {page.name}")
+        emit(md, build_markdown(lang, chapters, revision))
+        if not args.no_html:
+            page = ROOT / out_name(lang, "html")
+            emit(page, build_html(lang, chapters, revision, pandoc))
+    if stale:
+        print(f"outdated specification files: {', '.join(stale)}", file=sys.stderr)
+        return 1
     return 0
 
 

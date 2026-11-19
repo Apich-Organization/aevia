@@ -148,7 +148,7 @@ impl Sym {
 /// coherent SI, and dropping either turns `Units.m` into a dimensionless
 /// symbol. Both directions of the bridge carry the definition, so a unit that
 /// enters the kernel is the unit the checker typed.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnitVal {
     /// The canonical spelling (`m`).
     pub name: String,
@@ -470,6 +470,10 @@ impl Val {
     ///
     /// Rejects the values that only exist on the kernel's side of the
     /// boundary (callbacks) and values the bridge cannot represent.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Handles each wire value variant at the same recursive conversion boundary"
+    )]
     pub fn from_rssn(
         value: &Value,
         session: SessionId,

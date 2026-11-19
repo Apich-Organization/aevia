@@ -23,14 +23,20 @@ pub(crate) fn native_object_kind(kind: &str) -> bool {
     })
 }
 /// Check only a native wire envelope; RSSN independently authenticates its live session object.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Keeps wire envelope checks separate from live object authentication"
+)]
 pub(crate) fn native_handle_envelope(
     kind: &str,
     bytes: &[u8],
 ) -> bool {
+    let ([session, object], []) = bytes.as_chunks::<8>() else {
+        return false;
+    };
     native_object_kind(kind)
-        && bytes.len() == 16
-        && bytes[..8].iter().any(|byte| *byte != 0)
-        && bytes[8..].iter().any(|byte| *byte != 0)
+        && session.iter().any(|byte| *byte != 0)
+        && object.iter().any(|byte| *byte != 0)
 }
 
 use crate::error::KernelError;
@@ -45,8 +51,8 @@ use rssn::kernel::signature::Rational;
 use rssn::kernel::signature::Signature;
 use rssn::kernel::signature::Stability;
 use rssn::kernel::signature::TypeExpr;
-use rssn::kernel::signature::Variadic;
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::sync::OnceLock;
 
 /// Where an overload's signature came from.
@@ -70,13 +76,13 @@ pub enum Source {
 impl Source {
     /// Whether the signature is exact rather than form-level.
     #[must_use]
-    pub fn is_exact(self) -> bool {
+    pub const fn is_exact(self) -> bool {
         matches!(self, Self::Declared | Self::Overlay)
     }
 
     /// The spelling used in generated stubs and the IDE.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             | Self::Declared => "declared",
             | Self::Overlay => "overlay",
@@ -186,7 +192,7 @@ impl Sig {
         let mut text = format!("({}) -> {}", params.join(", "), render_type(&self.ret));
         if let Some((min, max, elem)) = &self.variadic {
             let bound = max.map_or_else(|| "...".to_string(), |max| format!("..{max}"));
-            text.push_str(&format!(" with {min}{bound} x {}", render_type(elem)));
+            let _ = write!(text, " with {min}{bound} x {}", render_type(elem));
         }
         text
     }
@@ -257,7 +263,7 @@ pub struct OpEntry {
 impl OpEntry {
     /// Whether calls use the value-native ABI rather than the dimensionless graph.
     #[must_use]
-    pub fn is_value_native(&self) -> bool {
+    pub const fn is_value_native(&self) -> bool {
         matches!(
             self.eval_kind,
             rssn::kernel::signature::EvalKind::Dynamic
@@ -295,7 +301,7 @@ impl OpEntry {
     /// type is `[α] -> R`, so one list argument at the call site means N
     /// positional arguments at the kernel.
     #[must_use]
-    pub fn is_variadic(&self) -> bool {
+    pub const fn is_variadic(&self) -> bool {
         self.arity.1.is_none()
     }
 
@@ -428,6 +434,10 @@ pub struct Capability {
 
 /// What the build can do.
 #[derive(Clone, Debug, Default)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Capabilities are independent public manifest flags"
+)]
 pub struct Capabilities {
     /// Dynamic calls by name.
     pub dynamic_call: bool,
@@ -617,6 +627,10 @@ impl Capabilities {
 }
 
 /// Whether a signature speaks in affine points (`degC`, `degF`).
+#[allow(
+    clippy::single_call_fn,
+    reason = "Separates affine type discovery from kernel operator availability"
+)]
 fn signature_is_affine(signature: &Sig) -> bool {
     signature
         .params
@@ -704,6 +718,10 @@ pub struct Registry {
 impl Registry {
     /// Indexes a manifest.
     #[must_use]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Builds the name, overload and capability indexes from a single manifest snapshot"
+    )]
     pub fn from_manifest(manifest: &KernelManifest) -> Self {
         let mut ops = BTreeMap::new();
         let mut canonical = Vec::with_capacity(manifest.ops.len());
@@ -835,7 +853,7 @@ impl Registry {
     /// Aliases are spellings of an operator, not operators: this is
     /// `manifest.ops.len()`.
     #[must_use]
-    pub fn op_count(&self) -> usize {
+    pub const fn op_count(&self) -> usize {
         self.canonical.len()
     }
 
@@ -923,10 +941,10 @@ pub fn registry() -> &'static Registry {
     })
 }
 
-fn hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
+pub(crate) fn hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len().saturating_mul(2));
     for byte in bytes {
-        out.push_str(&format!("{byte:02x}"));
+        let _ = write!(out, "{byte:02x}");
     }
     out
 }
@@ -965,22 +983,14 @@ fn convert_signature(signature: &Signature) -> Sig {
             .map(|ty| convert_type_with(ty, &mut dims))
             .collect(),
         ret: convert_type_with(&signature.ret, &mut dims),
-        variadic: signature
-            .variadic
-            .as_ref()
-            .map(|variadic| variadic_bounds_with(variadic, &mut dims)),
+        variadic: signature.variadic.as_ref().map(|variadic| {
+            (
+                usize::from(variadic.min),
+                variadic.max.map(usize::from),
+                convert_type_with(&variadic.elem, &mut dims),
+            )
+        }),
     }
-}
-
-fn variadic_bounds_with(
-    variadic: &Variadic,
-    dims: &mut SignatureDims,
-) -> (usize, Option<usize>, SigType) {
-    (
-        usize::from(variadic.min),
-        variadic.max.map(usize::from),
-        convert_type_with(&variadic.elem, dims),
-    )
 }
 
 fn convert_type_with(
@@ -1213,11 +1223,10 @@ fn convert_dim_with(
         },
         | DimExpr::Pow(base, Exp::Rat(exponent)) => {
             let Some(exponent) = convert_exponent(exponent) else {
-                return Dim::one();
+                return Dim::var(fresh_dim());
             };
             convert_dim_with(base, dims).pow(&exponent)
         },
-        | DimExpr::Pow(_, Exp::Symbol(_)) => Dim::var(fresh_dim()),
         | DimExpr::Inverse(base) => {
             convert_dim_with(base, dims).pow(&num_rational::BigRational::from_integer(
                 num_bigint::BigInt::from(-1),
@@ -1227,9 +1236,11 @@ fn convert_dim_with(
         // Neither non-metric nor container is a dimension. Preserve the fact
         // that it is unknown; callers must consult the raw signature before
         // making a static promise about it.
-        | DimExpr::NonMetric | DimExpr::Container => Dim::var(fresh_dim()),
-        | DimExpr::Var(name) => dims.var(name),
+        | DimExpr::NonMetric
+        | DimExpr::Container
+        | DimExpr::Pow(_, Exp::Symbol(_))
         | DimExpr::Any => Dim::var(fresh_dim()),
+        | DimExpr::Var(name) => dims.var(name),
     }
 }
 
@@ -1253,20 +1264,28 @@ fn fresh_dim() -> u32 {
     })
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "Validates the wire denominator before constructing an exact host ratio"
+)]
 fn convert_exponent(exponent: &Rational) -> Option<num_rational::BigRational> {
-    Some(num_rational::BigRational::new(
-        num_bigint::BigInt::from(exponent.numer),
-        num_bigint::BigInt::from(exponent.denom),
-    ))
+    (exponent.denom != 0).then(|| {
+        num_rational::BigRational::new(
+            num_bigint::BigInt::from(exponent.numer),
+            num_bigint::BigInt::from(exponent.denom),
+        )
+    })
 }
 
-/// Whether any part of a kernel signature uses dimensional semantics that
-/// Aevia's scalar dimension algebra cannot express. Such signatures may still
-/// be called dynamically, but must not be presented as exact static types.
+/// Whether a kernel signature uses dimensions the host cannot express.
+///
+/// These signatures can still be called dynamically when the bridge can
+/// carry their values.
 #[must_use]
 pub fn signature_has_unrepresentable_dimensions(signature: &Signature) -> bool {
     fn dim(d: &DimExpr) -> bool {
         match d {
+            | DimExpr::Pow(_, Exp::Rat(exponent)) if exponent.denom == 0 => true,
             | DimExpr::NonMetric | DimExpr::Container | DimExpr::Pow(_, Exp::Symbol(_)) => true,
             | DimExpr::Pow(base, _) | DimExpr::Inverse(base) => dim(base),
             | DimExpr::Mul(parts) => parts.iter().any(dim),
@@ -1313,7 +1332,10 @@ pub fn to_dim_expr(dim: &Dim) -> DimExpr {
         };
         let base = match atom {
             | aevia_dim::Atom::Base(_) | aevia_dim::Atom::Nominal(_) => {
-                DimExpr::Base(atom.transport_name().expect("base atom"))
+                let Some(name) = atom.transport_name() else {
+                    return DimExpr::Any;
+                };
+                DimExpr::Base(name)
             },
             | aevia_dim::Atom::Var(id) => DimExpr::Var(format!("d{id}")),
         };
@@ -1326,6 +1348,10 @@ pub fn to_dim_expr(dim: &Dim) -> DimExpr {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "Converts the complete kernel unit record at the registry boundary"
+)]
 fn convert_unit(unit: &rssn::kernel::value::UnitValue) -> UnitInfo {
     UnitInfo {
         name: unit.name.clone(),
@@ -1342,6 +1368,10 @@ fn convert_unit(unit: &rssn::kernel::value::UnitValue) -> UnitInfo {
 
 /// A manifest unit system, with each unity quantity's SI value and
 /// dimension taken from the manifest's constants (§5.11).
+#[allow(
+    clippy::single_call_fn,
+    reason = "Maps unit-system bases, constants and dimension maps together"
+)]
 fn convert_unit_system(
     system: &rssn::dim::systems::UnitSystemValue,
     constants: &[rssn::kernel::value::ConstantValue],
@@ -1390,6 +1420,10 @@ impl Registry {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "Converts constant metadata before registry indexing"
+)]
 fn convert_constant(constant: &rssn::kernel::value::ConstantValue) -> ConstantInfo {
     ConstantInfo {
         name: constant.name.clone(),
@@ -1493,8 +1527,7 @@ pub fn render_type(ty: &SigType) -> String {
         },
         | SigType::Table => "Table".to_string(),
         | SigType::Device => "Device".to_string(),
-        | SigType::Opaque(name) => name.clone(),
-        | SigType::Var(name) => name.clone(),
+        | SigType::Opaque(name) | SigType::Var(name) => name.clone(),
         | SigType::Dyn => "Dyn<term>".to_string(),
         | SigType::Never => "Never".to_string(),
     }

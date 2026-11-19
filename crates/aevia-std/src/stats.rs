@@ -1,18 +1,10 @@
 //! Descriptive statistics (§8.7).
 //!
-//! Every function has an exact form and a float form. The exact form is used
-//! when every element of the sample is an `Int`/`Real`, because that is the
-//! representation the signature says it returns: `median([1, 2, 4])` is the
-//! `Int` `2`, not `2.0`.
-//!
-//! Definitions, since §8.7 names the functions without pinning them down:
-//!
-//! * `quantile` is the linear-interpolation quantile (the one `numpy` calls
-//!   `linear`, Hyndman–Fan type 7), which is the common choice in science;
-//! * `cov`/`var` divide by `n - 1` (the sample estimator) unless the caller
-//!   asks for the population form;
-//! * `skewness`/`kurtosis` are the moment ratios `m3/m2^{3/2}` and
-//!   `m4/m2^2 - 3` (excess kurtosis), with the population divisor.
+//! Operations with an exact form preserve rational arithmetic for samples
+//! of `Int` and `Real` values. Float quantiles and exact quantiles both use
+//! Hyndman–Fan type 7. Covariance and variance use the sample divisor unless
+//! the caller requests population normalization. Skewness and excess kurtosis
+//! use population moments.
 
 use crate::NumericError;
 #[cfg(test)]
@@ -34,7 +26,8 @@ pub fn median_exact(values: &mut [BigRational]) -> Result<BigRational, NumericEr
 ///
 /// # Errors
 ///
-/// [`NumericError::Empty`] for an empty sample.
+/// [`NumericError::Empty`] for an empty sample and
+/// [`NumericError::Domain`] for non-finite values.
 pub fn median(values: &mut [f64]) -> Result<f64, NumericError> {
     rssn::kernels::descriptive::median(values).map_err(Into::into)
 }
@@ -57,7 +50,7 @@ pub fn quantile_exact(
 /// # Errors
 ///
 /// [`NumericError::Empty`] for an empty sample and
-/// [`NumericError::Domain`] when `q` is outside `[0, 1]`.
+/// [`NumericError::Domain`] for non-finite values or a `q` outside `[0, 1]`.
 pub fn quantile(
     values: &[f64],
     q: f64,
@@ -65,12 +58,63 @@ pub fn quantile(
     rssn::kernels::descriptive::quantile(values, q).map_err(Into::into)
 }
 
-/// The sample covariance of two equally long samples.
+/// The arithmetic mean of a float sample.
+///
+/// Non-finite inputs follow IEEE addition in sample order.
 ///
 /// # Errors
 ///
-/// [`NumericError::ShapeMismatch`] when the lengths differ, and
-/// [`NumericError::Empty`] when there are no elements.
+/// Returns [`NumericError::Empty`] for an empty sample.
+pub fn mean(values: &[f64]) -> Result<f64, NumericError> {
+    rssn::kernels::descriptive::mean(values).map_err(Into::into)
+}
+
+/// The variance of a float sample.
+///
+/// Use `population` to divide by the sample length. Otherwise, divide by one
+/// less than the length for samples with two or more observations. A singleton
+/// has zero variance.
+///
+/// # Errors
+///
+/// Returns [`NumericError::Empty`] for an empty sample and
+/// [`NumericError::Domain`] for non-finite values or a result outside the
+/// finite range.
+pub fn var(
+    values: &[f64],
+    population: bool,
+) -> Result<f64, NumericError> {
+    rssn::kernels::descriptive::var(values, population).map_err(Into::into)
+}
+
+/// The standard deviation of a float sample.
+///
+/// Uses the same divisor as [`var`]. The standard deviation can be finite
+/// even when the variance exceeds the float range.
+///
+/// # Errors
+///
+/// Returns [`NumericError::Empty`] for an empty sample and
+/// [`NumericError::Domain`] for non-finite values or a result outside the
+/// finite range.
+pub fn std_dev(
+    values: &[f64],
+    population: bool,
+) -> Result<f64, NumericError> {
+    rssn::kernels::descriptive::std_dev(values, population).map_err(Into::into)
+}
+
+/// The sample covariance of two equally long samples.
+///
+/// Use `population` to divide by the sample length. Otherwise, divide by one
+/// less than the length for samples with two or more observations. The
+/// covariance of a pair of singleton samples is zero.
+///
+/// # Errors
+///
+/// Returns [`NumericError::ShapeMismatch`] for different lengths,
+/// [`NumericError::Empty`] for empty samples, and [`NumericError::Domain`]
+/// for non-finite values or a result outside the finite range.
 pub fn cov(
     left: &[f64],
     right: &[f64],
@@ -81,10 +125,13 @@ pub fn cov(
 
 /// The Pearson correlation coefficient of two equally long samples.
 ///
+/// Population and sample normalization give the same coefficient.
+///
 /// # Errors
 ///
-/// [`NumericError::ShapeMismatch`] when the lengths differ, and
-/// [`NumericError::Domain`] when one sample has no spread.
+/// Returns [`NumericError::ShapeMismatch`] for different lengths,
+/// [`NumericError::Empty`] for empty samples, and [`NumericError::Domain`]
+/// for non-finite values or a sample with no spread.
 pub fn corr(
     left: &[f64],
     right: &[f64],
@@ -98,7 +145,7 @@ pub fn corr(
 /// # Errors
 ///
 /// [`NumericError::Empty`] for an empty sample, and [`NumericError::Domain`]
-/// when every element is the same (the ratio is undefined).
+/// for a constant sample or non-finite values.
 pub fn skewness(values: &[f64]) -> Result<f64, NumericError> {
     rssn::kernels::descriptive::skewness(values).map_err(Into::into)
 }
@@ -108,21 +155,24 @@ pub fn skewness(values: &[f64]) -> Result<f64, NumericError> {
 /// # Errors
 ///
 /// [`NumericError::Empty`] for an empty sample, and [`NumericError::Domain`]
-/// when every element is the same.
+/// for a constant sample or non-finite values.
 pub fn kurtosis(values: &[f64]) -> Result<f64, NumericError> {
     rssn::kernels::descriptive::kurtosis(values).map_err(Into::into)
 }
 
 /// A uniform histogram with `bins` buckets.
 ///
-/// Returns `(counts, edges)`; `edges` has `bins + 1` entries spanning the
-/// sample's range, and a value on an interior edge belongs to the bucket above
-/// it, so the last bucket is closed on both ends.
+/// Returns `(counts, edges)`. For a nonconstant sample, the `bins + 1`
+/// edges span the sample range. An interior edge belongs to the bucket above
+/// it, and the highest edge belongs to the last bucket. Edges can coincide
+/// when a bucket is narrower than the representable spacing. Constant samples
+/// use unit-width buckets starting at the value minus 0.5, with all observations
+/// in the first bucket.
 ///
 /// # Errors
 ///
 /// [`NumericError::Empty`] for an empty sample and [`NumericError::Domain`]
-/// when `bins` is zero.
+/// for non-finite values, a zero bucket count, or buckets that cannot be allocated.
 pub fn histogram(
     values: &[f64],
     bins: usize,
@@ -146,7 +196,8 @@ pub fn mode_exact(values: &[BigRational]) -> Result<BigRational, NumericError> {
 ///
 /// # Errors
 ///
-/// [`NumericError::Empty`] for an empty sample.
+/// [`NumericError::Empty`] for an empty sample and
+/// [`NumericError::Domain`] for non-finite values.
 pub fn mode(values: &[f64]) -> Result<f64, NumericError> {
     rssn::kernels::descriptive::mode(values).map_err(Into::into)
 }
@@ -209,6 +260,111 @@ mod tests {
             Ok(rational(4))
         );
         assert_eq!(quantile(&[0.0, 10.0], 0.25), Ok(2.5));
+    }
+
+    #[test]
+    fn interpolation_and_histogram_span_the_full_finite_range() {
+        let sample = [-f64::MAX, 0.0, f64::MAX];
+        assert_eq!(quantile(&[sample[0], sample[2]], 0.0), Ok(sample[0]));
+        assert_eq!(quantile(&[sample[0], sample[2]], 0.5), Ok(0.0));
+        assert_eq!(quantile(&[sample[0], sample[2]], 1.0), Ok(sample[2]));
+        assert_eq!(histogram(&sample, 2), Ok((vec![1, 2], sample.to_vec())));
+
+        let tiny = f64::from_bits(1);
+        let (counts, edges) = histogram(&[tiny, tiny * 2.0], 4).unwrap();
+        assert_eq!(edges.first(), Some(&tiny));
+        assert_eq!(edges.last(), Some(&(tiny * 2.0)));
+        assert_eq!(edges, vec![tiny, tiny, tiny * 2.0, tiny * 2.0, tiny * 2.0]);
+        assert_eq!(counts, vec![0, 1, 0, 1]);
+        assert!(matches!(
+            histogram(&sample, usize::MAX),
+            Err(NumericError::Domain(_))
+        ));
+        assert!(matches!(
+            histogram(&sample, usize::MAX - 1),
+            Err(NumericError::Domain(_))
+        ));
+    }
+
+    #[test]
+    fn scaled_moments_are_finite_across_large_and_small_scales() {
+        let tiny = [1e-300, 2e-300, 3e-300];
+        let large = [1e300, 2e300, 3e300];
+        for population in [false, true] {
+            let expected = if population { 2.0 / 3.0 } else { 1.0 };
+            assert!((cov(&tiny, &large, population).unwrap() - expected).abs() < 1e-12);
+            assert!((corr(&tiny, &large, population).unwrap() - 1.0).abs() < 1e-12);
+        }
+        assert_eq!(cov(&[f64::MAX; 2], &large[..2], false), Ok(0.0));
+        // Disjoint extremes leave a nonzero product of a tiny value and
+        // a large value even if the normalized tiny value rounds to zero.
+        let mixed = [f64::MAX, -f64::MAX, 1e-100, -1e-100];
+        let partner = [0.0, 0.0, f64::MAX, -f64::MAX];
+        assert_eq!(cov(&mixed, &partner, true), Ok((1e-100 * f64::MAX) / 2.0));
+        for scale in [f64::from_bits(1), f64::MAX] {
+            assert_eq!(skewness(&[-scale, scale]), Ok(0.0));
+            assert_eq!(kurtosis(&[-scale, scale]), Ok(-2.0));
+        }
+
+        let sample = [-f64::MAX, f64::MAX];
+        assert!(matches!(var(&sample, true), Err(NumericError::Domain(_))));
+        assert_eq!(std_dev(&sample, true), Ok(f64::MAX));
+        assert!(matches!(
+            std_dev(&sample, false),
+            Err(NumericError::Domain(_))
+        ));
+        assert_eq!(
+            std_dev(&[0.0, f64::from_bits(2)], true),
+            Ok(f64::from_bits(1))
+        );
+        assert_eq!(var(&[0.0, 2.0], true), Ok(1.0));
+        assert_eq!(var(&[0.0, 2.0], false), Ok(2.0));
+    }
+
+    #[test]
+    fn float_mean_recovers_overflow_and_preserves_ieee_inputs() {
+        assert_eq!(mean(&[f64::MAX; 7]), Ok(f64::MAX));
+        assert_eq!(mean(&[-f64::MAX; 9]), Ok(-f64::MAX));
+        assert_eq!(mean(&[f64::MAX, f64::MAX, -f64::MAX, -f64::MAX]), Ok(0.0));
+        assert_eq!(mean(&[1e16, 3.0, -1e16]), Ok(1.0));
+        assert_eq!(mean(&[-0.0]).unwrap().to_bits(), (-0.0f64).to_bits());
+        assert_eq!(mean(&[f64::INFINITY, 1.0]), Ok(f64::INFINITY));
+        assert!(mean(&[f64::INFINITY, f64::NEG_INFINITY]).unwrap().is_nan());
+        assert!(mean(&[1.0, f64::NAN]).unwrap().is_nan());
+        assert_eq!(mean(&[]), Err(NumericError::Empty));
+    }
+
+    #[test]
+    fn finite_only_statistics_reject_any_non_finite_observation() {
+        for unsuitable in [f64::NAN, f64::NEG_INFINITY, f64::INFINITY] {
+            for mut sample in [[unsuitable, 1.0], [1.0, unsuitable]] {
+                assert!(matches!(
+                    histogram(&sample, 2),
+                    Err(NumericError::Domain(_))
+                ));
+                assert!(matches!(
+                    quantile(&sample, 0.0),
+                    Err(NumericError::Domain(_))
+                ));
+                assert!(matches!(mode(&sample), Err(NumericError::Domain(_))));
+                assert!(matches!(var(&sample, true), Err(NumericError::Domain(_))));
+                assert!(matches!(
+                    std_dev(&sample, true),
+                    Err(NumericError::Domain(_))
+                ));
+                assert!(matches!(
+                    cov(&sample, &[1.0; 2], false),
+                    Err(NumericError::Domain(_))
+                ));
+                assert!(matches!(
+                    corr(&[1.0; 2], &sample, false),
+                    Err(NumericError::Domain(_))
+                ));
+                assert!(matches!(skewness(&sample), Err(NumericError::Domain(_))));
+                assert!(matches!(kurtosis(&sample), Err(NumericError::Domain(_))));
+                assert!(matches!(median(&mut sample), Err(NumericError::Domain(_))));
+            }
+        }
     }
 
     #[test]
@@ -385,6 +541,10 @@ fn map_stats_err(err: rssn::kernels::stats_ext::StatsExtError) -> NumericError {
     }
 }
 
+/// Tests a sample mean against the hypothesized mean `mu0`.
+///
+/// # Errors
+/// Rejects samples with fewer than two observations, non-finite data, or zero variance.
 pub fn t_test_one_sample(
     sample: &[f64],
     mu0: f64,
@@ -392,6 +552,10 @@ pub fn t_test_one_sample(
     rssn::kernels::stats_ext::t_test_one_sample(sample, mu0).map_err(map_stats_err)
 }
 
+/// Compares two independent sample means with equal-variance or Welch's t-test.
+///
+/// # Errors
+/// Rejects samples with fewer than two observations or non-finite data, or zero standard error.
 pub fn t_test_two_sample(
     a: &[f64],
     b: &[f64],
@@ -400,6 +564,10 @@ pub fn t_test_two_sample(
     rssn::kernels::stats_ext::t_test_two_sample(a, b, equal_var).map_err(map_stats_err)
 }
 
+/// Applies a one-sample t-test to paired differences.
+///
+/// # Errors
+/// Rejects mismatched lengths or differences with non-finite data or zero variance.
 pub fn t_test_paired(
     a: &[f64],
     b: &[f64],
@@ -407,6 +575,10 @@ pub fn t_test_paired(
     rssn::kernels::stats_ext::t_test_paired(a, b).map_err(map_stats_err)
 }
 
+/// Compares observed counts with expected counts using a chi-squared statistic.
+///
+/// # Errors
+/// Rejects mismatched lengths, invalid counts, or nonpositive expected counts.
 pub fn chi_squared_goodness_of_fit(
     observed: &[f64],
     expected: &[f64],
@@ -414,6 +586,10 @@ pub fn chi_squared_goodness_of_fit(
     rssn::kernels::stats_ext::chi_squared_goodness_of_fit(observed, expected).map_err(map_stats_err)
 }
 
+/// Tests independence in a row-major contingency table.
+///
+/// # Errors
+/// Rejects invalid table dimensions or counts and zero expected frequencies.
 pub fn chi_squared_independence(
     rows: usize,
     cols: usize,
@@ -422,10 +598,18 @@ pub fn chi_squared_independence(
     rssn::kernels::stats_ext::chi_squared_independence(rows, cols, table).map_err(map_stats_err)
 }
 
+/// Tests whether independent group means agree using one-way ANOVA.
+///
+/// # Errors
+/// Rejects invalid groups or zero within-group variance.
 pub fn anova_one_way(groups: &[&[f64]]) -> Result<TestResult, NumericError> {
     rssn::kernels::stats_ext::anova_one_way(groups).map_err(map_stats_err)
 }
 
+/// Compares an empirical distribution against the supplied cumulative distribution.
+///
+/// # Errors
+/// Rejects empty or non-finite data and invalid cumulative probabilities.
 pub fn ks_test_one_sample(
     sample: &[f64],
     cdf: &dyn Fn(f64) -> f64,
@@ -433,6 +617,10 @@ pub fn ks_test_one_sample(
     rssn::kernels::stats_ext::ks_test_one_sample(sample, cdf).map_err(map_stats_err)
 }
 
+/// Compares two empirical distributions by their largest cumulative difference.
+///
+/// # Errors
+/// Rejects empty or non-finite samples.
 pub fn ks_test_two_sample(
     a: &[f64],
     b: &[f64],
@@ -440,6 +628,10 @@ pub fn ks_test_two_sample(
     rssn::kernels::stats_ext::ks_test_two_sample(a, b).map_err(map_stats_err)
 }
 
+/// Tests for a rank shift between two independent samples.
+///
+/// # Errors
+/// Rejects empty or non-finite samples, or an entirely tied combined sample.
 pub fn mann_whitney_u(
     a: &[f64],
     b: &[f64],
@@ -447,6 +639,10 @@ pub fn mann_whitney_u(
     rssn::kernels::stats_ext::mann_whitney_u(a, b).map_err(map_stats_err)
 }
 
+/// Fits ordinary least squares to a row-major design matrix.
+///
+/// # Errors
+/// Rejects invalid shapes or values and failed decomposition.
 pub fn ols(
     rows: usize,
     cols: usize,
@@ -457,6 +653,10 @@ pub fn ols(
     rssn::kernels::stats_ext::ols(rows, cols, x, y, fit_intercept).map_err(map_stats_err)
 }
 
+/// Fits L2-regularized least squares to a row-major design matrix.
+///
+/// # Errors
+/// Rejects invalid shapes, values, or regularization strength and singular systems.
 pub fn ridge(
     rows: usize,
     cols: usize,
@@ -468,6 +668,10 @@ pub fn ridge(
     rssn::kernels::stats_ext::ridge(rows, cols, x, y, alpha, fit_intercept).map_err(map_stats_err)
 }
 
+/// Fits L1-regularized least squares by coordinate descent.
+///
+/// # Errors
+/// Rejects invalid shapes, values, or solver parameters.
 #[allow(clippy::too_many_arguments)] // Preserve matrix shape, data, and convergence controls.
 pub fn lasso(
     rows: usize,
@@ -483,6 +687,10 @@ pub fn lasso(
         .map_err(map_stats_err)
 }
 
+/// Fits a binary logistic model to a row-major design matrix.
+///
+/// # Errors
+/// Rejects invalid shapes, values, labels, or solver parameters and singular systems.
 pub fn logistic_regression(
     rows: usize,
     cols: usize,
@@ -496,6 +704,10 @@ pub fn logistic_regression(
         .map_err(map_stats_err)
 }
 
+/// Computes principal components of a row-major observation matrix.
+///
+/// # Errors
+/// Rejects invalid shapes, values, or component counts and decomposition failures.
 pub fn pca(
     rows: usize,
     cols: usize,
@@ -505,6 +717,10 @@ pub fn pca(
     rssn::kernels::stats_ext::pca(rows, cols, data, n_components).map_err(map_stats_err)
 }
 
+/// Computes Spearman rank correlation using average ranks for ties.
+///
+/// # Errors
+/// Rejects incompatible, undersized, non-finite, or constant samples.
 pub fn spearman(
     x: &[f64],
     y: &[f64],
@@ -512,6 +728,10 @@ pub fn spearman(
     rssn::kernels::stats_ext::spearman(x, y).map_err(map_stats_err)
 }
 
+/// Computes Kendall's tau-b rank correlation, accounting for ties.
+///
+/// # Errors
+/// Rejects incompatible, undersized, non-finite, or degenerate samples.
 pub fn kendall(
     x: &[f64],
     y: &[f64],
@@ -519,6 +739,10 @@ pub fn kendall(
     rssn::kernels::stats_ext::kendall(x, y).map_err(map_stats_err)
 }
 
+/// Estimates a Gaussian kernel density at the requested points.
+///
+/// # Errors
+/// Rejects invalid samples, evaluation points, or bandwidth.
 pub fn kde(
     samples: &[f64],
     eval_points: &[f64],
@@ -540,6 +764,10 @@ fn map_num_to_stats_err(err: NumericError) -> rssn::kernels::stats_ext::StatsExt
     }
 }
 
+/// Evaluates a statistic on resampled data with replacement.
+///
+/// # Errors
+/// Rejects invalid sample or resampling parameters and propagates statistic errors.
 pub fn bootstrap(
     samples: &[f64],
     n_resamples: usize,
@@ -551,6 +779,10 @@ pub fn bootstrap(
         .map_err(map_stats_err)
 }
 
+/// Evaluates a statistic on leave-one-out samples.
+///
+/// # Errors
+/// Rejects insufficient data and propagates statistic errors.
 pub fn jackknife(
     samples: &[f64],
     statistic: &dyn Fn(&[f64]) -> Result<f64, NumericError>,

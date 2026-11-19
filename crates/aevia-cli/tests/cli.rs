@@ -163,6 +163,49 @@ fn add_and_update_resolve_path_dependencies() {
 }
 
 #[test]
+fn add_uses_the_requested_alias_for_a_path_dependency() {
+    let scratch = Scratch::new("add-path-alias");
+    assert_eq!(code(&aevia(scratch.path(), &["init", "dep"])), 0);
+    assert_eq!(code(&aevia(scratch.path(), &["init", "demo"])), 0);
+    scratch.write("dep/src/Convert.aev", "fn mm(x: Int): Int = x * 1000\n");
+    scratch.write(
+        "demo/src/main.aev",
+        "import Renamed.Convert as C\n\nfn main(): IO Unit = println(\"{C.mm(2)}\")\n",
+    );
+    let demo = scratch.path().join("demo");
+    let added = aevia(&demo, &["add", "../dep", "--as", "Renamed"]);
+    assert_eq!(code(&added), 0, "{}", stderr(&added));
+    let manifest = std::fs::read_to_string(demo.join("aevia.toml")).expect("manifest");
+    assert!(
+        manifest.contains("Renamed = { path = \"../dep\" }"),
+        "{manifest}"
+    );
+    let lock = std::fs::read_to_string(demo.join("aevia.lock")).expect("lock");
+    assert!(lock.contains("import = \"Renamed\""), "{lock}");
+    let run = aevia(&demo, &["--locked", "run"]);
+    assert_eq!(code(&run), 0, "{}", stderr(&run));
+    assert_eq!(stdout(&run), "2000\n");
+}
+
+#[test]
+fn add_rejects_extra_packages_before_mutating_the_manifest() {
+    let scratch = Scratch::new("add-extra-package");
+    assert_eq!(code(&aevia(scratch.path(), &["init", "one"])), 0);
+    assert_eq!(code(&aevia(scratch.path(), &["init", "two"])), 0);
+    assert_eq!(code(&aevia(scratch.path(), &["init", "demo"])), 0);
+    let demo = scratch.path().join("demo");
+    let manifest = demo.join("aevia.toml");
+    let lock = demo.join("aevia.lock");
+    let manifest_before = std::fs::read(&manifest).expect("manifest");
+    let lock_before = std::fs::read(&lock).expect("lock");
+    let added = aevia(&demo, &["add", "../one", "../two"]);
+    assert_eq!(code(&added), 2);
+    assert!(stderr(&added).contains("unexpected argument `../two`"));
+    assert_eq!(std::fs::read(&manifest).expect("manifest"), manifest_before);
+    assert_eq!(std::fs::read(&lock).expect("lock"), lock_before);
+}
+
+#[test]
 fn add_refuses_something_that_is_not_a_package() {
     let scratch = Scratch::new("add-bad");
     assert_eq!(code(&aevia(scratch.path(), &["init", "demo"])), 0);
@@ -435,6 +478,23 @@ fn clean_removes_the_build_directory_and_says_when_there_is_none() {
         "{}",
         stderr(&output)
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn clean_keeps_the_contents_of_a_linked_cache_directory() {
+    let scratch = Scratch::new("clean-symlink");
+    assert_eq!(code(&aevia(scratch.path(), &["init", "demo"])), 0);
+    let demo = scratch.path().join("demo");
+    let outside = scratch.path().join("outside");
+    let retained = scratch.write("outside/data.txt", "keep this\n");
+    scratch.write("outside/registry/index", "cached registry data\n");
+    std::os::unix::fs::symlink(&outside, demo.join(".aevia")).unwrap();
+
+    let output = aevia(&demo, &["clean"]);
+    assert_ne!(code(&output), 0);
+    assert!(stderr(&output).contains("must be a cache directory"));
+    assert_eq!(std::fs::read_to_string(retained).unwrap(), "keep this\n");
 }
 
 #[test]
@@ -1060,7 +1120,7 @@ fn doctest_mode_says_so_when_there_is_nothing_to_check() {
     let output = aevia(scratch.path(), &["test", "--doc", "plain.aev"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("no ```aevia code blocks"),
+        stderr(&output).contains("no fenced `aevia` code blocks"),
         "{}",
         stderr(&output)
     );

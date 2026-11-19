@@ -18,39 +18,104 @@ fn map_dist_err(err: DistError) -> NumericError {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Distribution {
     /// `Normal<d> = { mu, sigma }`.
-    Normal { mu: f64, sigma: f64 },
+    Normal {
+        /// Location parameter.
+        mu: f64,
+        /// Positive standard deviation parameter.
+        sigma: f64,
+    },
     /// `Uniform<d> = { lo, hi }`.
-    Uniform { lo: f64, hi: f64 },
+    Uniform {
+        /// Lower endpoint.
+        lo: f64,
+        /// Upper endpoint.
+        hi: f64,
+    },
     /// `Exponential<d> = { rate }`.
-    Exponential { rate: f64 },
+    Exponential {
+        /// Positive rate parameter.
+        rate: f64,
+    },
     /// `Gamma<d> = { shape, rate }`.
-    Gamma { shape: f64, rate: f64 },
+    Gamma {
+        /// Positive shape parameter.
+        shape: f64,
+        /// Positive rate parameter.
+        rate: f64,
+    },
     /// `Beta = { alpha, beta }`.
-    Beta { alpha: f64, beta: f64 },
+    Beta {
+        /// Positive shape parameter.
+        alpha: f64,
+        /// Positive shape parameter.
+        beta: f64,
+    },
     /// `ChiSquared = { df }`.
-    ChiSquared { df: f64 },
+    ChiSquared {
+        /// Positive degrees of freedom.
+        df: f64,
+    },
     /// `StudentT = { df }`.
-    StudentT { df: f64 },
+    StudentT {
+        /// Positive degrees of freedom.
+        df: f64,
+    },
     /// `Poisson = { lambda }`.
-    Poisson { lambda: f64 },
+    Poisson {
+        /// Nonnegative Poisson rate.
+        lambda: f64,
+    },
     /// `Binomial = { n, p }`.
-    Binomial { n: u64, p: f64 },
+    Binomial {
+        /// Number of Bernoulli trials.
+        n: u64,
+        /// Success probability.
+        p: f64,
+    },
     /// `LogNormal<d> = { mu, sigma }`.
-    LogNormal { mu: f64, sigma: f64 },
+    LogNormal {
+        /// Mean of the underlying normal distribution.
+        mu: f64,
+        /// Positive standard deviation of the underlying normal distribution.
+        sigma: f64,
+    },
     /// `Weibull<d> = { shape, scale }`.
-    Weibull { shape: f64, scale: f64 },
+    Weibull {
+        /// Positive shape parameter.
+        shape: f64,
+        /// Positive scale parameter.
+        scale: f64,
+    },
     /// `Cauchy<d> = { loc, scale }`.
-    Cauchy { loc: f64, scale: f64 },
+    Cauchy {
+        /// Location parameter.
+        loc: f64,
+        /// Positive scale parameter.
+        scale: f64,
+    },
     /// `F = { df1, df2 }` (Snedecor's F-distribution).
-    F { df1: f64, df2: f64 },
+    F {
+        /// Numerator degrees of freedom.
+        df1: f64,
+        /// Denominator degrees of freedom.
+        df2: f64,
+    },
     /// `NegativeBinomial = { r, p }`.
-    NegativeBinomial { r: f64, p: f64 },
+    NegativeBinomial {
+        /// Positive target number of successes.
+        r: f64,
+        /// Success probability.
+        p: f64,
+    },
     /// `Geometric = { p }`.
-    Geometric { p: f64 },
+    Geometric {
+        /// Success probability.
+        p: f64,
+    },
 }
 
 impl Distribution {
-    fn to_rssn(self) -> RssnDist {
+    const fn to_rssn(self) -> RssnDist {
         match self {
             | Self::Normal { mu, sigma } => RssnDist::Normal { mu, sigma },
             | Self::Uniform { lo, hi } => RssnDist::Uniform { lo, hi },
@@ -70,6 +135,7 @@ impl Distribution {
         }
     }
 
+    /// Evaluates the probability density or mass at `x`.
     #[must_use]
     pub fn pdf(
         &self,
@@ -78,6 +144,7 @@ impl Distribution {
         self.to_rssn().pdf(x)
     }
 
+    /// Evaluates the cumulative probability at or below `x`.
     #[must_use]
     pub fn cdf(
         &self,
@@ -86,16 +153,22 @@ impl Distribution {
         self.to_rssn().cdf(x)
     }
 
+    /// Returns the expected value, where defined.
     #[must_use]
     pub fn mean(&self) -> f64 {
         self.to_rssn().mean()
     }
 
+    /// Returns the variance, where defined.
     #[must_use]
     pub fn variance(&self) -> f64 {
         self.to_rssn().variance()
     }
 
+    /// Inverts the cumulative distribution at probability `u`.
+    ///
+    /// # Errors
+    /// Rejects invalid distribution parameters or probabilities outside `[0, 1]`.
     pub fn quantile(
         &self,
         u: f64,
@@ -103,6 +176,10 @@ impl Distribution {
         self.to_rssn().quantile(u).map_err(map_dist_err)
     }
 
+    /// Draws one value from a stream of uniform variates.
+    ///
+    /// # Errors
+    /// Rejects invalid distribution parameters.
     pub fn sample(
         &self,
         uniforms: &mut impl FnMut() -> f64,
@@ -115,9 +192,17 @@ impl Distribution {
 #[derive(Clone, Debug, PartialEq)]
 pub enum MultivariateDistribution {
     /// `MultivariateNormal = { mu, cov }`.
-    MultivariateNormal { mu: Vec<f64>, cov: Vec<f64> },
+    MultivariateNormal {
+        /// Mean vector.
+        mu: Vec<f64>,
+        /// Row-major covariance matrix.
+        cov: Vec<f64>,
+    },
     /// `Dirichlet = { alpha }`.
-    Dirichlet { alpha: Vec<f64> },
+    Dirichlet {
+        /// Positive concentration parameters.
+        alpha: Vec<f64>,
+    },
 }
 
 impl MultivariateDistribution {
@@ -133,14 +218,19 @@ impl MultivariateDistribution {
         }
     }
 
+    /// Returns the number of coordinates.
     #[must_use]
-    pub fn dim(&self) -> usize {
+    pub const fn dim(&self) -> usize {
         match self {
             | Self::MultivariateNormal { mu, .. } => mu.len(),
             | Self::Dirichlet { alpha } => alpha.len(),
         }
     }
 
+    /// Evaluates the log-density at `x`.
+    ///
+    /// # Errors
+    /// Rejects invalid parameters, a point of the wrong dimension, or an invalid covariance.
     pub fn log_pdf(
         &self,
         x: &[f64],
@@ -148,6 +238,10 @@ impl MultivariateDistribution {
         self.to_rssn().log_pdf(x).map_err(map_dist_err)
     }
 
+    /// Evaluates the density at `x`.
+    ///
+    /// # Errors
+    /// Rejects invalid parameters, a point of the wrong dimension, or an invalid covariance.
     pub fn pdf(
         &self,
         x: &[f64],
@@ -155,15 +249,26 @@ impl MultivariateDistribution {
         self.to_rssn().pdf(x).map_err(map_dist_err)
     }
 
+    /// Returns the mean vector.
+    ///
+    /// # Errors
+    /// Rejects an invalid distribution.
     pub fn mean(&self) -> Result<Vec<f64>, NumericError> {
         self.to_rssn().mean().map_err(map_dist_err)
     }
 
     /// The row-major covariance matrix.
+    ///
+    /// # Errors
+    /// Rejects an invalid distribution or covariance matrix.
     pub fn cov(&self) -> Result<Vec<f64>, NumericError> {
         self.to_rssn().cov().map_err(map_dist_err)
     }
 
+    /// Draws one vector from a stream of uniform variates.
+    ///
+    /// # Errors
+    /// Rejects invalid parameters or a covariance that cannot be factored.
     pub fn sample(
         &self,
         uniforms: &mut impl FnMut() -> f64,

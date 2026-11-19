@@ -35,7 +35,7 @@ pub enum Severity {
 }
 
 impl Severity {
-    fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             | Self::Error => "error",
             | Self::Warning => "warning",
@@ -285,11 +285,11 @@ fn render_span(
     let lines: Vec<usize> = if last_line.saturating_sub(first_line) <= 2 {
         (first_line..=last_line).collect()
     } else {
-        vec![first_line, first_line + 1, last_line]
+        vec![first_line, first_line.saturating_add(1), last_line]
     };
     let mut previous = first_line;
     for (index, line) in lines.into_iter().enumerate() {
-        if line > previous + 1 {
+        if line > previous.saturating_add(1) {
             let _ = writeln!(out, "{:width$} | ...", "");
         }
         let text = file.line_text(line);
@@ -350,10 +350,11 @@ fn span_range(
     } else {
         start
     };
-    let first_line = file.line_col(start as u32).0;
+    let first_line = file.line_col(u32::try_from(start).unwrap_or(u32::MAX)).0;
     // Spans are half-open: a next-line start does not cover that next line.
     let last_line = if end > start {
-        file.line_col(end.saturating_sub(1) as u32).0
+        file.line_col(u32::try_from(end.saturating_sub(1)).unwrap_or(u32::MAX))
+            .0
     } else {
         first_line
     };
@@ -362,6 +363,10 @@ fn span_range(
 
 /// Nearby labels can share a full source line. Cropped windows stay separate
 /// so a marker can never point to text absent from the displayed excerpt.
+#[allow(
+    clippy::single_call_fn,
+    reason = "isolates inline-diagnostic layout selection"
+)]
 fn inline_line(
     sources: &SourceMap,
     span: Span,
@@ -402,7 +407,7 @@ fn line_view(
     let mut marker_end = 0usize;
     for (offset, grapheme) in text.grapheme_indices(true) {
         let width = grapheme_width(grapheme, column);
-        let limit = offset + grapheme.len();
+        let limit = offset.saturating_add(grapheme.len());
         let covered = if point {
             offset <= start && start < limit
         } else {
@@ -411,15 +416,15 @@ fn line_view(
         if covered {
             marker_start.get_or_insert(column);
             marker_end = if point {
-                column + 1
+                column.saturating_add(1)
             } else {
-                column + width
+                column.saturating_add(width)
             };
         }
-        column += width;
+        column = column.saturating_add(width);
     }
     let marker_start = marker_start.unwrap_or(column);
-    let marker_end = marker_end.max(marker_start + 1);
+    let marker_end = marker_end.max(marker_start.saturating_add(1));
     let desired_start = if column > EXCERPT_WIDTH {
         marker_start.saturating_sub(EXCERPT_WIDTH / 3)
     } else {
@@ -434,7 +439,7 @@ fn line_view(
     for (_, grapheme) in text.grapheme_indices(true) {
         let width = grapheme_width(grapheme, full_column);
         if full_column < desired_start {
-            full_column += width;
+            full_column = full_column.saturating_add(width);
             continue;
         }
         if rendered.is_empty() {
@@ -446,30 +451,40 @@ fn line_view(
         }
         // Reserve room for a suffix even if this particular glyph turns out
         // to be the last one. Short lines retain their original full text.
-        let prefix = usize::from(leading) * 3;
+        let prefix = if leading { 3 } else { 0 };
         let budget = if column > EXCERPT_WIDTH {
             EXCERPT_WIDTH - 3
         } else {
             EXCERPT_WIDTH
         };
-        if full_column - visible_start + width + prefix > budget {
+        if full_column
+            .saturating_sub(visible_start)
+            .saturating_add(width)
+            .saturating_add(prefix)
+            > budget
+        {
             trailing = true;
             break;
         }
         append_grapheme(&mut rendered, grapheme, width);
-        full_column += width;
+        full_column = full_column.saturating_add(width);
         visible_end = full_column;
     }
     if trailing {
         rendered.push_str("...");
     }
-    let prefix = usize::from(leading) * 3;
-    let caret_column = marker_start.saturating_sub(visible_start) + prefix;
+    let prefix = if leading { 3 } else { 0 };
+    let caret_column = marker_start
+        .saturating_sub(visible_start)
+        .saturating_add(prefix);
     let available = visible_end.saturating_sub(marker_start).max(1);
     LineView {
         text: rendered,
         column: caret_column.min(EXCERPT_WIDTH),
-        length: (marker_end - marker_start).min(available).max(1),
+        length: marker_end
+            .saturating_sub(marker_start)
+            .min(available)
+            .max(1),
         cropped: leading || trailing,
     }
 }
@@ -486,7 +501,7 @@ fn grapheme_width(
     column: usize,
 ) -> usize {
     if grapheme == "\t" {
-        return TAB_WIDTH - column % TAB_WIDTH;
+        return TAB_WIDTH.saturating_sub(column.checked_rem(TAB_WIDTH).unwrap_or_default());
     }
     if grapheme.chars().take(MAX_GRAPHEME_CHARS + 1).count() > MAX_GRAPHEME_CHARS {
         return 3;
@@ -500,6 +515,10 @@ fn grapheme_width(
     UnicodeWidthStr::width(grapheme).max(1)
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps grapheme escaping separate from column measurement"
+)]
 fn append_grapheme(
     out: &mut String,
     grapheme: &str,
@@ -568,7 +587,7 @@ impl Diagnostics {
 
     /// True when nothing was recorded.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
 
@@ -601,6 +620,30 @@ impl Diagnostics {
         other: Self,
     ) {
         self.items.extend(other.items);
+    }
+}
+
+/// How a diagnostic is rendered.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Style {
+    /// No escape sequences: what a file or a test sees.
+    #[default]
+    Plain,
+    /// ANSI colour for a terminal.
+    Ansi,
+}
+
+impl Style {
+    /// Wraps `text` in the ANSI sequence `code`, or returns it unchanged.
+    fn paint(
+        self,
+        text: &str,
+        code: &str,
+    ) -> String {
+        match self {
+            | Self::Plain => text.to_string(),
+            | Self::Ansi => format!("\u{1b}[{code}m{text}\u{1b}[0m"),
+        }
     }
 }
 
@@ -890,29 +933,5 @@ mod tests {
         assert_eq!(plain, stripped);
         assert!(ansi.contains("\u{1b}[1;33m"));
         assert!(ansi.contains("\u{1b}[1;36m"));
-    }
-}
-
-/// How a diagnostic is rendered.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum Style {
-    /// No escape sequences: what a file or a test sees.
-    #[default]
-    Plain,
-    /// ANSI colour for a terminal.
-    Ansi,
-}
-
-impl Style {
-    /// Wraps `text` in the ANSI sequence `code`, or returns it unchanged.
-    fn paint(
-        self,
-        text: &str,
-        code: &str,
-    ) -> String {
-        match self {
-            | Self::Plain => text.to_string(),
-            | Self::Ansi => format!("\u{1b}[{code}m{text}\u{1b}[0m"),
-        }
     }
 }

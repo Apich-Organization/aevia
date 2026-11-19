@@ -1,14 +1,30 @@
 //! Stable identities for physical source files and host-owned virtual buffers.
 //!
-//! A source identity does not include a revision, FileId or import alias.
+//! A source identity does not include a revision, `FileId` or import alias.
 //! Hosts should retain a virtual identity while editing one buffer and assign
 //! distinct identities to independent sessions.
+
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
 use aevia_types::keys::ModuleOrigin;
 use aevia_types::keys::ModulePath;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
+/// The stable origin and fallback module name of a physical or virtual source.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceIdentity {
     origin: ModuleOrigin,
@@ -119,16 +135,15 @@ fn stem(name: &str) -> String {
         .unwrap_or_else(|| "<entry>".into())
 }
 
-/// Canonicalize the longest existing ancestor before folding a missing suffix.
-/// This gives a new buffer the identity that an ordinary file creation will
-/// have, without requiring that the buffer already exists on disk.
+/// Canonicalizes a source path, including a missing file.
+///
+/// Resolves the longest existing ancestor before folding the remaining path.
+#[must_use]
 pub fn canonical_path(path: &Path) -> PathBuf {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
-        std::env::current_dir()
-            .map(|dir| dir.join(path))
-            .unwrap_or_else(|_| path.to_path_buf())
+        std::env::current_dir().map_or_else(|_| path.to_path_buf(), |dir| dir.join(path))
     };
     let mut prefix = absolute.clone();
     let mut suffix = Vec::new();
@@ -171,7 +186,7 @@ pub fn has_uri_scheme(name: &str) -> bool {
         return false;
     };
     // A native Windows drive spelling remains a physical path.
-    if scheme.len() == 1 && scheme.as_bytes()[0].is_ascii_alphabetic() {
+    if matches!(scheme.as_bytes(), [letter] if letter.is_ascii_alphabetic()) {
         return false;
     }
     let mut chars = scheme.chars();
@@ -204,36 +219,25 @@ pub fn file_uri_path(name: &str) -> Option<PathBuf> {
     if !path.starts_with('/') {
         return None;
     }
-    let bytes = path.as_bytes();
+    let mut bytes = path.bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            let hex = |byte: u8| (byte as char).to_digit(16).map(|value| value as u8);
-            let high = hex(*bytes.get(index + 1)?)?;
-            let low = hex(*bytes.get(index + 2)?)?;
-            let value = (high << 4) | low;
-            if value == 0 {
-                return None;
-            }
-            decoded.push(value);
-            index += 3;
+    while let Some(byte) = bytes.next() {
+        let value = if byte == b'%' {
+            let hex = |byte: u8| u8::try_from(char::from(byte).to_digit(16)?).ok();
+            (hex(bytes.next()?)? << 4) | hex(bytes.next()?)?
         } else {
-            if bytes[index] == 0 {
-                return None;
-            }
-            decoded.push(bytes[index]);
-            index += 1;
+            byte
+        };
+        if value == 0 {
+            return None;
         }
+        decoded.push(value);
     }
     let decoded = String::from_utf8(decoded).ok()?;
     // Keep native Windows drive spellings consistent even in cross-platform
     // editor tests; a POSIX absolute path otherwise retains its leading slash.
     let path = match decoded.strip_prefix('/') {
-        | Some(rest)
-            if rest.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
-                && rest.as_bytes().get(1) == Some(&b':') =>
-        {
+        | Some(rest) if matches!(rest.as_bytes(), [letter, b':', b'/' | b'\\', ..] if letter.is_ascii_alphabetic()) => {
             rest
         },
         | _ => &decoded,
@@ -241,9 +245,10 @@ pub fn file_uri_path(name: &str) -> Option<PathBuf> {
     Some(PathBuf::from(path))
 }
 
-/// An immutable-at-load snapshot of unsaved physical source buffers. Keys use
-/// canonical physical identity, independently of the importing package owner.
-/// Inserting another spelling of one physical file replaces its buffer text.
+/// A snapshot of unsaved physical source buffers.
+///
+/// Keys follow the physical file. Inserting another spelling of that file
+/// replaces its buffer text.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SourceOverlays {
     sources: std::collections::BTreeMap<PathBuf, std::sync::Arc<str>>,
@@ -272,7 +277,14 @@ impl SourceOverlays {
         &self,
         path: &Path,
     ) -> Option<&str> {
-        self.sources.get(&canonical_path(path)).map(AsRef::as_ref)
+        self.get_physical(&canonical_path(path))
+    }
+
+    fn get_physical(
+        &self,
+        physical: &Path,
+    ) -> Option<&str> {
+        self.sources.get(physical).map(AsRef::as_ref)
     }
 
     /// Removes a buffer, so subsequent loads read that source from disk.
@@ -314,14 +326,20 @@ enum SourceRead {
 }
 
 impl SourceDependency {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "record the initial physical target and availability of a module resolution candidate"
+    )]
     pub(crate) fn observe(
         path: &Path,
         overlays: &SourceOverlays,
     ) -> Self {
+        let canonical = canonical_path(path);
+        let available = overlays.get_physical(&canonical).is_some() || path.is_file();
         Self {
             path: path.to_path_buf(),
-            canonical: canonical_path(path),
-            available: overlays.get(path).is_some() || path.is_file(),
+            canonical,
+            available,
             read: SourceRead::NotRead,
         }
     }
@@ -384,23 +402,24 @@ impl SourceDependency {
         &self,
         overlays: &SourceOverlays,
     ) -> bool {
-        if canonical_path(&self.path) != self.canonical
-            || (overlays.get(&self.path).is_some() || self.path.is_file()) != self.available
-        {
+        let physical = canonical_path(&self.path);
+        if physical != self.canonical {
+            return false;
+        }
+        let overlay = overlays.get_physical(&physical);
+        if (overlay.is_some() || self.path.is_file()) != self.available {
             return false;
         }
         match &self.read {
             | SourceRead::NotRead => true,
             | SourceRead::Loaded(expected) => {
-                match overlays.get(&self.path) {
-                    | Some(text) => text == expected,
-                    | None => {
-                        std::fs::read_to_string(&self.path).is_ok_and(|text| text == *expected)
-                    },
-                }
+                overlay.map_or_else(
+                    || std::fs::read_to_string(&self.path).is_ok_and(|text| text == *expected),
+                    |text| text == expected,
+                )
             },
             | SourceRead::Failed(kind) => {
-                overlays.get(&self.path).is_none()
+                overlay.is_none()
                     && std::fs::read_to_string(&self.path).is_err_and(|error| error.kind() == *kind)
             },
         }
@@ -421,9 +440,13 @@ fn text_hash(text: &str) -> u64 {
 #[must_use]
 pub fn stamp_is_current(stamp: &str) -> bool {
     let mut fields = stamp.split('\t');
-    let (Some(path), Some(canonical), Some(available), Some(read)) =
-        (fields.next(), fields.next(), fields.next(), fields.next())
-    else {
+    let (Some(path), Some(canonical), Some(available), Some(read), None) = (
+        fields.next(),
+        fields.next(),
+        fields.next(),
+        fields.next(),
+        fields.next(),
+    ) else {
         return false;
     };
     let path = Path::new(path);
@@ -434,10 +457,59 @@ pub fn stamp_is_current(stamp: &str) -> bool {
     }
     match read {
         | "-" => true,
-        | hash if hash.starts_with('!') => std::fs::read_to_string(path).is_err(),
+        | failure if failure.starts_with('!') => {
+            std::fs::read_to_string(path)
+                .is_err_and(|error| format!("!{:?}", error.kind()) == failure)
+        },
         | hash => {
             std::fs::read_to_string(path)
                 .is_ok_and(|text| format!("{:016x}", text_hash(&text)) == hash)
         },
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_uri_escapes_decode_once_and_match_absolute_paths() {
+        assert_eq!(
+            file_uri_path("file://localhost/tmp/a%2520%20b.aev"),
+            Some(PathBuf::from("/tmp/a%20 b.aev"))
+        );
+        assert_eq!(
+            file_uri_path("FILE:///D:/a%20b.aev"),
+            Some(PathBuf::from("D:/a b.aev"))
+        );
+        for invalid in [
+            "file://elsewhere/tmp/a",
+            "file:relative.aev",
+            "file:///a%",
+            "file:///a%0",
+            "file:///a%GG",
+            "file:///a%00",
+            "file:///a%FF",
+            "file:///a#b",
+            "file:///a?b",
+        ] {
+            assert_eq!(file_uri_path(invalid), None, "{invalid}");
+        }
+    }
+
+    #[test]
+    fn persistent_observation_requires_the_same_failure_kind() {
+        // A missing child of this binary's path fails before opening a file.
+        let binary = std::env::current_exe().expect("test executable path");
+        let path = binary.join("missing-module.aev");
+        let mut dependency = SourceDependency::observe(&path, &SourceOverlays::new());
+        let error = std::fs::read_to_string(&path).expect_err("invalid child path");
+        dependency.failed(&error);
+        let stamp = dependency.stamp();
+        assert!(stamp_is_current(&stamp));
+        assert!(!stamp_is_current(&format!("{stamp}\textra")));
+        dependency.failed(&std::io::Error::from(std::io::ErrorKind::InvalidData));
+        assert!(!stamp_is_current(&dependency.stamp()));
     }
 }

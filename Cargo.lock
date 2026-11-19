@@ -34,6 +34,7 @@ dependencies = [
  "aevia-lsp",
  "aevia-resolve",
  "aevia-rssn",
+ "aevia-std",
  "aevia-stdlib-model",
  "aevia-syntax",
  "aevia-types",
@@ -41,7 +42,9 @@ dependencies = [
  "ctrlc",
  "nix",
  "rustyline",
+ "serde",
  "serde_json",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -58,6 +61,7 @@ dependencies = [
  "bincode-next",
  "indexmap",
  "num-bigint",
+ "num-integer",
  "num-rational",
  "num-traits",
  "rayon",
@@ -84,8 +88,6 @@ name = "aevia-doc"
 version = "0.1.0-rc.1"
 dependencies = [
  "aevia-fmt",
- "aevia-rssn",
- "aevia-std",
  "aevia-syntax",
  "serde",
  "serde_json",

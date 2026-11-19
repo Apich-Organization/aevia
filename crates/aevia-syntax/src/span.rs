@@ -67,7 +67,7 @@ impl Span {
 
     /// The zero-width span at the start of this one.
     #[must_use]
-    pub fn start_span(self) -> Self {
+    pub const fn start_span(self) -> Self {
         Self {
             file: self.file,
             start: self.start,
@@ -83,7 +83,7 @@ impl Span {
 
     /// True when the span covers no bytes.
     #[must_use]
-    pub fn is_empty(self) -> bool {
+    pub const fn is_empty(self) -> bool {
         self.end <= self.start
     }
 }
@@ -117,18 +117,17 @@ impl SourceFile {
     ) -> Self {
         let text = text.into();
         let mut line_starts = vec![0];
-        let bytes = text.as_bytes();
-        let mut index = 0;
-        while index < bytes.len() {
-            if bytes[index] == b'\r' {
-                if bytes.get(index + 1) == Some(&b'\n') {
-                    index += 1;
-                }
-                line_starts.push(index + 1);
-            } else if bytes[index] == b'\n' {
-                line_starts.push(index + 1);
+        let mut bytes = text.bytes().enumerate().peekable();
+        while let Some((offset, byte)) = bytes.next() {
+            match byte {
+                | b'\r' if matches!(bytes.peek(), Some((_, b'\n'))) => {
+                    if let Some((end, _)) = bytes.next() {
+                        line_starts.push(end.saturating_add(1));
+                    }
+                },
+                | b'\r' | b'\n' => line_starts.push(offset.saturating_add(1)),
+                | _ => {},
             }
-            index += 1;
         }
         Self {
             name: name.into(),
@@ -151,9 +150,16 @@ impl SourceFile {
         let start = self.line_starts.get(line).copied().unwrap_or(0);
         // Both bytes of CRLF denote the same end-of-line insertion point.
         // Offsets supplied by external hosts may be inside a UTF-8 scalar.
-        let content_end = start + self.line_text(line + 1).len();
-        let column = self.text[start..offset.min(content_end)].chars().count() + 1;
-        (line + 1, column)
+        let line_number = line.saturating_add(1);
+        let content_end = start.saturating_add(self.line_text(line_number).len());
+        let column = self
+            .text
+            .get(start..offset.min(content_end))
+            .unwrap_or_default()
+            .chars()
+            .count()
+            .saturating_add(1);
+        (line_number, column)
     }
 
     pub(crate) fn floor_boundary(
@@ -162,7 +168,7 @@ impl SourceFile {
     ) -> usize {
         let mut offset = offset.min(self.text.len());
         while !self.text.is_char_boundary(offset) {
-            offset -= 1;
+            offset = offset.saturating_sub(1);
         }
         offset
     }
@@ -173,7 +179,7 @@ impl SourceFile {
     ) -> usize {
         let mut offset = offset.min(self.text.len());
         while !self.text.is_char_boundary(offset) {
-            offset += 1;
+            offset = offset.saturating_add(1);
         }
         offset
     }
@@ -300,7 +306,10 @@ pub fn display_path(name: &str) -> String {
     if let Ok(cwd) = std::env::current_dir() {
         let cwd = strip_verbatim(&cwd.to_string_lossy());
         let cwd = cwd.trim_end_matches(['/', '\\']);
-        if !cwd.is_empty() && plain.len() > cwd.len() + 1 && plain.is_char_boundary(cwd.len()) {
+        if !cwd.is_empty()
+            && plain.len() > cwd.len().saturating_add(1)
+            && plain.is_char_boundary(cwd.len())
+        {
             let (head, rest) = plain.split_at(cwd.len());
             let same = if cfg!(windows) {
                 head.eq_ignore_ascii_case(cwd)
@@ -308,7 +317,7 @@ pub fn display_path(name: &str) -> String {
                 head == cwd
             };
             if same && rest.starts_with(['/', '\\']) {
-                return rest[1..].to_string();
+                return rest.get(1..).unwrap_or_default().to_string();
             }
         }
     }
@@ -316,13 +325,10 @@ pub fn display_path(name: &str) -> String {
 }
 
 fn strip_verbatim(name: &str) -> String {
-    if let Some(rest) = name.strip_prefix(r"\\?\UNC\") {
-        format!(r"\\{rest}")
-    } else if let Some(rest) = name.strip_prefix(r"\\?\") {
-        rest.to_string()
-    } else {
-        name.to_string()
-    }
+    name.strip_prefix(r"\\?\UNC\").map_or_else(
+        || name.strip_prefix(r"\\?\").unwrap_or(name).to_string(),
+        |rest| format!(r"\\{rest}"),
+    )
 }
 
 #[cfg(test)]

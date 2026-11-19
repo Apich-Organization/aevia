@@ -1,4 +1,16 @@
 //! Cooperative interruption of an interpreter and its dispatched workers.
+#![deny(
+    missing_docs,
+    clippy::arithmetic_side_effects,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::nursery,
+    clippy::panic,
+    clippy::pedantic,
+    clippy::single_call_fn,
+    clippy::unwrap_used
+)]
+
 use crate::EvalError;
 use crate::Interp;
 use std::sync::Arc;
@@ -13,7 +25,7 @@ pub const INTERRUPTED: &str = "E0812";
 #[derive(Default, Debug)]
 struct State {
     requested: Arc<AtomicBool>,
-    children: Mutex<Vec<Weak<State>>>,
+    children: Mutex<Vec<Weak<Self>>>,
 }
 
 thread_local! {
@@ -32,6 +44,10 @@ impl Drop for CancellationScope {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "keep cancellation context private to this module"
+)]
 pub(crate) fn inherited_token() -> Option<CancellationToken> {
     CURRENT.with(|current| current.borrow().clone())
 }
@@ -68,14 +84,12 @@ impl CancellationToken {
             .0
             .children
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         children.retain(|child| {
-            if let Some(child) = child.upgrade() {
+            child.upgrade().is_some_and(|child| {
                 Self(child).cancel();
                 true
-            } else {
-                false
-            }
+            })
         });
     }
 
@@ -87,7 +101,7 @@ impl CancellationToken {
         self.0
             .children
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
         self.0.requested.store(false, Ordering::Release);
     }
@@ -104,7 +118,7 @@ impl CancellationToken {
             .0
             .children
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         children.retain(|child| child.strong_count() > 0);
         if self.is_cancelled() {
             child.cancel();
@@ -113,6 +127,10 @@ impl CancellationToken {
         child
     }
 
+    #[allow(
+        clippy::single_call_fn,
+        reason = "give token holders an explicit scope-entry operation"
+    )]
     pub(crate) fn enter(&self) -> CancellationScope {
         enter_optional(Some(self.clone()))
     }
@@ -134,7 +152,10 @@ impl Interp {
     }
 
     /// Stops before executing the next evaluator step if interruption was requested.
-    /// Runtime scopes, capabilities, and batch rollback use ordinary error unwinding.
+    ///
+    /// # Errors
+    ///
+    /// Returns `E0812` when the interruption token is set.
     pub fn check_cancelled(&self) -> Result<(), EvalError> {
         if self
             .cancellation
@@ -164,6 +185,7 @@ impl Interp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aevia_types::check::CheckedModule;
 
     #[test]
     fn resetting_the_foreground_does_not_revive_dispatched_children() {
@@ -190,14 +212,19 @@ mod tests {
     #[test]
     fn replicas_inherit_the_scoped_request_and_unrelated_jobs_clear_it() {
         let request = CancellationToken::new();
+        let checked = CheckedModule::default();
         {
             let _active = request.enter();
-            let replica = Interp::new(&Default::default());
+            let replica = Interp::new(&checked);
             request.cancel();
-            assert_eq!(replica.check_cancelled().unwrap_err().code, INTERRUPTED);
+            let outcome = replica.check_cancelled();
+            assert!(
+                matches!(&outcome, Err(failure) if failure.code == INTERRUPTED),
+                "{outcome:?}"
+            );
             {
                 let _unrelated = enter_optional(None);
-                assert!(Interp::new(&Default::default()).check_cancelled().is_ok());
+                assert!(Interp::new(&checked).check_cancelled().is_ok());
                 assert!(!aevia_rssn::cancellation::is_cancelled());
             }
             assert!(aevia_rssn::cancellation::is_cancelled());

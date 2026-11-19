@@ -23,8 +23,10 @@ use aevia_analysis::Symbol;
 use aevia_analysis::SymbolKind;
 use aevia_analysis::TextEdit;
 use aevia_analysis::TokenKind;
+use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
+use std::fmt::Write as _;
 
 /// Reads a protocol position (`{ line, character }`, UTF-16 code units).
 ///
@@ -66,7 +68,14 @@ pub fn range_json(range: Range) -> Value {
 ///
 /// The protocol numbers the four ranks; the analysis crate does not, because a
 /// playground that prints `error`/`warning` has no use for a number.
-fn severity_number(severity: Severity) -> u8 {
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "keep the protocol severity table explicit"
+    )
+)]
+const fn severity_number(severity: Severity) -> u8 {
     match severity {
         | Severity::Error => 1,
         | Severity::Warning => 2,
@@ -80,7 +89,14 @@ fn severity_number(severity: Severity) -> u8 {
 /// `Unit` (11) exists in the protocol and is exactly what a unit is; a
 /// dimension has no kind of its own, so it is `TypeParameter` (25) — a
 /// type-level name.
-fn completion_kind(kind: CompletionKind) -> u8 {
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "keep the protocol completion table explicit"
+    )
+)]
+const fn completion_kind(kind: CompletionKind) -> u8 {
     match kind {
         | CompletionKind::Function => 3,
         | CompletionKind::Value => 12,
@@ -95,7 +111,7 @@ fn completion_kind(kind: CompletionKind) -> u8 {
 }
 
 /// The protocol's symbol kind.
-fn symbol_kind(kind: SymbolKind) -> u8 {
+const fn symbol_kind(kind: SymbolKind) -> u8 {
     match kind {
         | SymbolKind::Function => 12,
         | SymbolKind::Method => 6,
@@ -117,14 +133,17 @@ pub fn diagnostic_json(
     uri: &str,
     diagnostic: &Diagnostic,
 ) -> Value {
-    let mut value = json!({
-        "range": range_json(diagnostic.range),
-        "severity": severity_number(diagnostic.severity),
-        "source": "aevia",
-        "message": diagnostic.message,
-    });
+    let mut value = Map::from_iter([
+        ("range".into(), range_json(diagnostic.range)),
+        (
+            "severity".into(),
+            Value::from(severity_number(diagnostic.severity)),
+        ),
+        ("source".into(), Value::from("aevia")),
+        ("message".into(), Value::from(diagnostic.message.clone())),
+    ]);
     if let Some(code) = &diagnostic.code {
-        value["code"] = json!(code);
+        value.insert("code".into(), json!(code));
     }
     if !diagnostic.related.is_empty() {
         let related: Vec<Value> = diagnostic
@@ -137,21 +156,22 @@ pub fn diagnostic_json(
                 })
             })
             .collect();
-        value["relatedInformation"] = Value::Array(related);
+        value.insert("relatedInformation".into(), Value::Array(related));
     }
-    value
+    Value::Object(value)
 }
 
 /// Writes a hover.
 #[must_use]
 pub fn hover_json(hover: &Hover) -> Value {
-    let mut value = json!({
-        "contents": { "kind": "markdown", "value": hover.contents },
-    });
+    let mut value = Map::from_iter([(
+        "contents".into(),
+        json!({ "kind": "markdown", "value": hover.contents }),
+    )]);
     if let Some(range) = hover.range {
-        value["range"] = range_json(range);
+        value.insert("range".into(), range_json(range));
     }
-    value
+    Value::Object(value)
 }
 
 /// Writes a completion list.
@@ -160,14 +180,14 @@ pub fn completion_json(items: &[Completion]) -> Value {
     let items: Vec<Value> = items
         .iter()
         .map(|item| {
-            let mut value = json!({
-                "label": item.label,
-                "kind": completion_kind(item.kind),
-            });
+            let mut value = Map::from_iter([
+                ("label".into(), Value::from(item.label.clone())),
+                ("kind".into(), Value::from(completion_kind(item.kind))),
+            ]);
             if let Some(detail) = &item.detail {
-                value["detail"] = json!(detail);
+                value.insert("detail".into(), Value::from(detail.clone()));
             }
-            value
+            Value::Object(value)
         })
         .collect();
     Value::Array(items)
@@ -236,17 +256,17 @@ pub fn signature_help_json(help: &SignatureHelp) -> Value {
                 .iter()
                 .map(|parameter| json!({ "label": parameter }))
                 .collect();
-            let mut value = json!({
-                "label": signature.label,
-                "parameters": parameters,
-            });
+            let mut value = Map::from_iter([
+                ("label".into(), Value::from(signature.label.clone())),
+                ("parameters".into(), Value::Array(parameters)),
+            ]);
             if let Some(documentation) = &signature.documentation {
-                value["documentation"] = json!({
-                    "kind": "markdown",
-                    "value": documentation,
-                });
+                value.insert(
+                    "documentation".into(),
+                    json!({ "kind": "markdown", "value": documentation }),
+                );
             }
-            value
+            Value::Object(value)
         })
         .collect();
     json!({
@@ -282,14 +302,12 @@ pub fn rename_json(edits: &[FileEdit]) -> Value {
     let mut groups: Vec<(String, Vec<Value>)> = Vec::new();
     for edit in edits {
         let uri = document_uri(&edit.document);
-        let position = groups
-            .iter()
-            .position(|(existing, _)| *existing == uri)
-            .unwrap_or_else(|| {
-                groups.push((uri.clone(), Vec::new()));
-                groups.len() - 1
-            });
-        groups[position].1.push(text_edit_json(&edit.edit));
+        let change = text_edit_json(&edit.edit);
+        if let Some((_, changes)) = groups.iter_mut().find(|(existing, _)| *existing == uri) {
+            changes.push(change);
+        } else {
+            groups.push((uri, vec![change]));
+        }
     }
     let document_changes: Vec<Value> = groups
         .into_iter()
@@ -323,9 +341,8 @@ pub fn uri_from_path(path: &std::path::Path) -> String {
         | Some(rest) if rest.as_bytes().get(1) == Some(&b':') => std::borrow::Cow::Borrowed(rest),
         | _ => lossy,
     };
-    let is_drive = original.len() >= 2
-        && original.as_bytes()[0].is_ascii_alphabetic()
-        && original.as_bytes()[1] == b':';
+    let is_drive =
+        matches!(original.as_bytes(), [letter, b':', ..] if letter.is_ascii_alphabetic());
     let text = if is_drive || cfg!(windows) {
         original.replace('\\', "/")
     } else {
@@ -339,14 +356,11 @@ pub fn uri_from_path(path: &std::path::Path) -> String {
         text
     };
     let mut encoded = String::with_capacity(text.len());
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
     for byte in text.bytes() {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~' | b'/' | b':') {
             encoded.push(char::from(byte));
         } else {
-            encoded.push('%');
-            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
-            encoded.push(char::from(HEX[usize::from(byte & 15)]));
+            let _ = write!(encoded, "%{byte:02X}");
         }
     }
     if is_drive {
@@ -362,20 +376,27 @@ pub fn symbols_json(symbols: &[Symbol]) -> Value {
     Value::Array(symbols.iter().map(symbol_value).collect())
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "serialize one node of a recursive outline"
+    )
+)]
 fn symbol_value(symbol: &Symbol) -> Value {
-    let mut value = json!({
-        "name": symbol.name,
-        "kind": symbol_kind(symbol.kind),
-        "range": range_json(symbol.range),
-        "selectionRange": range_json(symbol.selection),
-    });
+    let mut value = Map::from_iter([
+        ("name".into(), Value::from(symbol.name.clone())),
+        ("kind".into(), Value::from(symbol_kind(symbol.kind))),
+        ("range".into(), range_json(symbol.range)),
+        ("selectionRange".into(), range_json(symbol.selection)),
+    ]);
     if let Some(detail) = &symbol.detail {
-        value["detail"] = json!(detail);
+        value.insert("detail".into(), Value::from(detail.clone()));
     }
     if !symbol.children.is_empty() {
-        value["children"] = symbols_json(&symbol.children);
+        value.insert("children".into(), symbols_json(&symbol.children));
     }
-    value
+    Value::Object(value)
 }
 
 /// Writes a text edit.
@@ -385,7 +406,14 @@ pub fn text_edit_json(edit: &TextEdit) -> Value {
 }
 
 /// The protocol's code-action kind.
-fn code_action_kind(kind: CodeActionKind) -> &'static str {
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "keep the protocol code-action table explicit"
+    )
+)]
+const fn code_action_kind(kind: CodeActionKind) -> &'static str {
     match kind {
         | CodeActionKind::QuickFix => "quickfix",
         | CodeActionKind::RefactorRewrite => "refactor.rewrite",
@@ -437,7 +465,14 @@ pub const TOKEN_TYPES: [&str; 7] = [
 ];
 
 /// The index of a token kind in [`TOKEN_TYPES`].
-fn token_type(kind: TokenKind) -> u32 {
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "map token kinds to the published legend"
+    )
+)]
+const fn token_type(kind: TokenKind) -> u32 {
     match kind {
         | TokenKind::Type => 0,
         | TokenKind::Dimension => 1,
@@ -457,13 +492,13 @@ fn token_type(kind: TokenKind) -> u32 {
 /// conversion is the delta computation and nothing else.
 #[must_use]
 pub fn semantic_tokens_json(tokens: &[SemanticToken]) -> Value {
-    let mut data: Vec<u32> = Vec::with_capacity(tokens.len() * 5);
+    let mut data: Vec<u32> = Vec::with_capacity(tokens.len().saturating_mul(5));
     let mut previous_line = 0u32;
     let mut previous_column = 0u32;
     for token in tokens {
         let line = token.range.start.line;
         let column = token.range.start.column;
-        let delta_line = line - previous_line;
+        let delta_line = line.saturating_sub(previous_line);
         let delta_column = if delta_line == 0 {
             column.saturating_sub(previous_column)
         } else {
@@ -513,7 +548,7 @@ pub fn capabilities() -> Value {
             "save": true,
         },
         "hoverProvider": true,
-        "completionProvider": { "resolveProvider": false },
+        "completionProvider": { "resolveProvider": false, "triggerCharacters": ["."] },
         "definitionProvider": true,
         "typeDefinitionProvider": true,
         "documentSymbolProvider": true,

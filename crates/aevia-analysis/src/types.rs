@@ -121,7 +121,7 @@ pub struct Symbol {
     /// The type or signature, when the checker recorded one.
     pub detail: Option<String>,
     /// Nested declarations.
-    pub children: Vec<Symbol>,
+    pub children: Vec<Self>,
 }
 
 /// One declaration in a workspace-wide symbol search.

@@ -55,15 +55,15 @@ let assert_eq = assert_eq
 ##
 ## *Source: Aevia standard library guide.*
 let compile_fail = compile_fail
-## Checks a property on randomly generated values: forall(fn x => proposition) is true when the proposition holds for every sample.
+## Checks a proposition over fixed numeric samples.
 ##
-## **Signature:** `forall : Arbitrary a => (a -> Prop) -> Bool`
+## **Signature:** `forall : (a -> Prop) -> Bool`
 ##
-## Use it in tests to catch counter-examples; a failure reports the sample that broke it.
+## Use a unary predicate taking a dimensionless Real. The samples are 0, 1, -1, 2, -3, and 1/2. A false verdict returns false. If no verdict is false but a sample is undecidable, the call raises E0804.
 ##
 ## **Examples:**
 ## ```text
-## forall(fn (y: Real) => sym_eq(y + 0, y))
+## forall(fn (x: Real) => x + 0 == x)
 ## ```
 ##
 ## *Source: Aevia standard library guide.*

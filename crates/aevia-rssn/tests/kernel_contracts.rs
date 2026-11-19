@@ -3,6 +3,12 @@
 //! Both repositories use the same source and binary dependencies here. This
 //! avoids rebuilding the scientific engine under a second test profile just
 //! to validate the bridge; the kernel still owns the actual regression tests.
+
+#![allow(
+    clippy::duplicate_mod,
+    reason = "independent RSSN integration tests intentionally share small support modules"
+)]
+
 #[path = "../../../../rssn/tests/callbacks.rs"]
 mod callbacks;
 #[path = "../../../../rssn/tests/numerical_abi.rs"]

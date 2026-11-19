@@ -80,7 +80,7 @@ fn run_source(
             .diagnostics
             .items
             .iter()
-            .map(|item| item.code.to_string())
+            .map(|item| item.code.clone())
             .collect::<Vec<_>>()
             .join(","));
     }
@@ -99,7 +99,7 @@ fn run_source(
     interp.max_tail_calls = 10_000;
     let loaded = interp.load(&module);
     let error = if loaded.has_errors() {
-        loaded.items.first().map(|item| item.code.to_string())
+        loaded.items.first().map(|item| item.code.clone())
     } else {
         match interp.run_main() {
             | Ok(_) => None,
@@ -129,7 +129,7 @@ fn run_file(
             .diagnostics
             .items
             .iter()
-            .map(|item| item.code.to_string())
+            .map(|item| item.code.clone())
             .collect::<Vec<_>>()
             .join(","));
     }
@@ -141,7 +141,7 @@ fn run_file(
     let mut interp = Interp::new(&checked).with_buffer().with_mode(mode);
     let loaded = driver::run_modules(&mut interp, &program);
     let error = if loaded.has_errors() {
-        loaded.items.first().map(|item| item.code.to_string())
+        loaded.items.first().map(|item| item.code.clone())
     } else {
         match interp.run_main() {
             | Ok(_) => None,

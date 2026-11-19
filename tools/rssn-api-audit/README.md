@@ -5,8 +5,11 @@ including conditional declarations. `--check` compares the live inventory with
 the checked-in snapshot; after reviewing intentional source/API changes, run
 `--write` to update it. The check also rejects an ABI descriptor whose declared
 Rust path is no longer a public function. `--coverage-check` independently
-rejects any inventoried callable without a declared adapter, even after an
-inventory snapshot has been updated. Struct-literal and trait-operator
+requires each inventoried callable to have a declared adapter or an exact
+path and rationale in [the Rust host interface inventory](source-boundaries.tsv).
+The latter covers APIs such as a solver that takes a borrowed mutable Rust
+callback or writes into caller-supplied storage. The check rejects stale
+entries and requires an entry to be removed when an adapter is declared. Struct-literal and trait-operator
 adapter helpers omit that provenance instead of claiming a missing inherent method.
 
 Each row states a fully qualified Rust path, an inventory classification, the

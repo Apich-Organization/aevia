@@ -27,16 +27,24 @@ const MAX_DESCRIPTION: usize = 1400;
 ///
 /// `crates_dir` is the workspace's `crates` directory, where `aevia-std/src`
 /// is read for rustdoc.
+///
+/// # Errors
+/// Returns an error when a standard-library declaration is missing or undocumented.
 #[allow(dead_code)]
+#[allow(
+    clippy::single_call_fn,
+    reason = "shared by the generator and standard-library tests"
+)]
 pub fn module_sources(
     spec: &str,
     crates_dir: &Path,
-) -> Vec<(String, String)> {
+) -> Result<Vec<(String, String)>, String> {
     let rust = scan_rustdoc(&crates_dir.join("aevia-std/src"));
     let registry = aevia_rssn::registry();
-    aevia_stdlib_model::stdlib::spec_module_sources_with_docs(spec, &|module, name, specified| {
-        entry(registry, &rust, module, name, specified)
-    })
+    aevia_stdlib_model::stdlib::try_spec_module_sources_with_docs(
+        spec,
+        &|module, name, specified| entry(registry, &rust, module, name, specified),
+    )
 }
 
 /// Chapter-8 entries that share a name with a kernel operator that is a
@@ -50,10 +58,16 @@ const NOT_THE_KERNEL_OPERATOR: &[(&str, &str)] = &[
     ("Prelude", "rank"),
     ("LinearAlgebra", "at"),
     ("LinearAlgebra/Sparse", "contract"),
+    ("Math", "log"),
     ("Measurement", "uncertainty"),
     ("Test", "forall"),
 ];
 
+#[allow(
+    clippy::single_call_fn,
+    clippy::too_many_lines,
+    reason = "keeps documentation precedence and its canonical output order together"
+)]
 fn entry(
     registry: &aevia_rssn::registry::Registry,
     rust: &BTreeMap<String, Vec<String>>,
@@ -72,9 +86,7 @@ fn entry(
         .filter(|op| !op.doc.trim().is_empty())
         .filter(|_| !NOT_THE_KERNEL_OPERATOR.contains(&(module, name)));
     if let Some(op) = op {
-        let (first, rest) = split_summary(&op.doc, name);
-        summary = first;
-        body = rest;
+        (summary, body) = split_summary(&op.doc, name);
         let mut seen = Vec::new();
         for signature in op.signatures.iter().take(4) {
             let text = signature.render();
@@ -91,7 +103,7 @@ fn entry(
                 let _ = write!(
                     kernel,
                     "\n- ... and {} more overloads",
-                    op.signatures.len() - 4
+                    op.signatures.len().saturating_sub(4)
                 );
             }
         }
@@ -128,9 +140,7 @@ fn entry(
         };
         footer = format!("*Source: {origin}.*");
     } else if let Some([text]) = rust.get(name).map(Vec::as_slice) {
-        let (first, rest) = split_summary(text, name);
-        summary = first;
-        body = rest;
+        (summary, body) = split_summary(text, name);
         footer = String::from("*Source: Rust documentation of the `aevia-std` function.*");
     }
     // The guide is written for the Aevia caller, so it replaces whatever
@@ -138,9 +148,7 @@ fn entry(
     // The kernel signatures and the dimension rule stay: they are facts about
     // the operator, not prose.
     if let Some(guide) = aevia_stdlib_model::guides::guide(name) {
-        let (first, rest) = split_summary(guide.description, name);
-        summary = first;
-        body = rest;
+        (summary, body) = split_summary(guide.description, name);
         examples = String::new();
         footer = String::from("*Source: Aevia standard library guide.*");
         if !guide.example.trim().is_empty() {
@@ -176,16 +184,18 @@ fn entry(
 }
 
 /// Cuts at a paragraph boundary near [`MAX_DESCRIPTION`].
+#[allow(
+    clippy::single_call_fn,
+    reason = "isolates the prose length and UTF-8 policy from rendering"
+)]
 fn cap(text: &str) -> String {
     if text.len() <= MAX_DESCRIPTION {
         return text.to_owned();
     }
-    let mut cut = MAX_DESCRIPTION;
-    while !text.is_char_boundary(cut) {
-        cut -= 1;
-    }
-    let head = &text[..cut];
-    let head = head.rfind("\n\n").map_or(head, |at| &head[..at]);
+    let head = text
+        .get(..text.floor_char_boundary(MAX_DESCRIPTION))
+        .unwrap_or(text);
+    let head = head.rsplit_once("\n\n").map_or(head, |(before, _)| before);
     format!("{}\n\n(truncated)", head.trim_end())
 }
 
@@ -211,20 +221,24 @@ fn split_summary(
         }
     }
     let text = lines.join("\n");
-    let first_paragraph_end = text.find("\n\n").unwrap_or(text.len());
-    let paragraph = &text[..first_paragraph_end];
+    let paragraph = text
+        .split_once("\n\n")
+        .map_or(text.as_str(), |(first, _)| first);
     let sentence_end = paragraph
         .match_indices(". ")
-        .map(|(at, _)| at + 1)
+        .map(|(at, _)| at.saturating_add(1))
         .next()
         .unwrap_or(paragraph.len());
-    let mut summary = paragraph[..sentence_end].replace('\n', " ");
+    let mut summary = paragraph
+        .get(..sentence_end)
+        .unwrap_or(paragraph)
+        .replace('\n', " ");
     // `name(a, b)`: ... -> keep the call form out of the summary line.
     let call = format!("`{name}(");
     if summary.starts_with(&call)
-        && let Some(at) = summary.find("`: ")
+        && let Some((_, description)) = summary.split_once("`: ")
     {
-        summary = summary[at + 3..].to_owned();
+        summary = description.to_owned();
     }
     let mut summary = summary.trim().to_owned();
     // A sentence that opens with a call, `defint(f, a, b) is ...`, keeps its
@@ -232,14 +246,24 @@ fn split_summary(
     let word_end = summary
         .find(|c: char| !(c.is_alphanumeric() || c == '_'))
         .unwrap_or(summary.len());
-    let opens_with_call = summary[word_end..].starts_with('(');
-    if !opens_with_call && let Some(first) = summary.get(..1) {
-        summary = format!("{}{}", first.to_uppercase(), &summary[1..]);
+    let opens_with_call = summary
+        .get(word_end..)
+        .is_some_and(|tail| tail.starts_with('('));
+    if !opens_with_call && let Some((first, suffix)) = summary.split_at_checked(1) {
+        summary = format!("{}{suffix}", first.to_uppercase());
     }
-    let rest = text[sentence_end..].trim().to_owned();
+    let rest = text
+        .get(sentence_end..)
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
     (summary, rest)
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps the notation for dimension rules separate from markup"
+)]
 fn dim_rule(rule: &impl std::fmt::Debug) -> String {
     let text = format!("{rule:?}");
     match text.as_str() {
@@ -259,8 +283,8 @@ fn dim_rule(rule: &impl std::fmt::Debug) -> String {
                 .filter_map(|part| part.parse().ok())
                 .collect();
             let (f, x) = (
-                digits.first().copied().unwrap_or(0) + 1,
-                digits.get(1).copied().unwrap_or(1) + 1,
+                digits.first().copied().unwrap_or(0).saturating_add(1),
+                digits.get(1).copied().unwrap_or(1).saturating_add(1),
             );
             if other.starts_with("Diff") {
                 format!("argument {f} divided by argument {x}")
@@ -269,15 +293,19 @@ fn dim_rule(rule: &impl std::fmt::Debug) -> String {
             }
         },
         | other => {
-            if let Some(index) = other
+            other
                 .strip_prefix("Same(")
                 .and_then(|rest| rest.strip_suffix(')'))
                 .and_then(|digits| digits.parse::<usize>().ok())
-            {
-                format!("the result has the dimension of argument {}", index + 1)
-            } else {
-                format!("kernel rule `{other}`")
-            }
+                .map_or_else(
+                    || format!("kernel rule `{other}`"),
+                    |index| {
+                        format!(
+                            "the result has the dimension of argument {}",
+                            index.saturating_add(1)
+                        )
+                    },
+                )
         },
     }
 }
@@ -285,6 +313,10 @@ fn dim_rule(rule: &impl std::fmt::Debug) -> String {
 /// Every documented public free function of the crate sources under `src`,
 /// `name -> [doc]`. Only `pub fn` items with a `///` block count; a name
 /// documented twice is ambiguous and the caller will skip it.
+#[allow(
+    clippy::single_call_fn,
+    reason = "shared source scanner is directly exercised by tests"
+)]
 pub fn scan_rustdoc(src: &Path) -> BTreeMap<String, Vec<String>> {
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut files = Vec::new();

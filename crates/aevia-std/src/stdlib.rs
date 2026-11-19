@@ -46,10 +46,10 @@ pub fn module_paths() -> impl Iterator<Item = &'static str> {
 /// The embedded source of module `path` (`["Units", "SI"]` → `Units/SI.aev`).
 #[must_use]
 pub fn source(path: &[&str]) -> Option<&'static str> {
-    modules()
-        .iter()
-        .find(|module| module.path == path.join("/"))
-        .map(|module| module.source)
+    match path {
+        | [path] => source_by_path(path),
+        | _ => source_by_path(&path.join("/")),
+    }
 }
 
 /// Whether `path` names one of the standard-library modules.
@@ -77,10 +77,7 @@ pub fn exports(path: &[&str]) -> Vec<&'static str> {
             continue;
         }
         let variants = if let Some(rest) = line.strip_prefix("type ") {
-            let rhs = rest
-                .split_once('=')
-                .map(|(_, rhs)| rhs.trim_start())
-                .unwrap_or("");
+            let rhs = rest.split_once('=').map_or("", |(_, rhs)| rhs.trim_start());
             in_sum = rhs.is_empty() || rhs.starts_with('|');
             if in_sum { rhs } else { "" }
         } else if in_sum && line.starts_with('|') {

@@ -17,15 +17,15 @@
 //! and, among the solutions, prefer the one that keeps locked versions and
 //! otherwise takes the highest compatible version of everything.
 //!
-//! # Why one version per series, and not PubGrub
+//! # Why one version per series, and not `PubGrub`
 //!
-//! PubGrub (Dart, uv) is the best algorithm when a package has at most one
+//! `PubGrub` (Dart, uv) is the best algorithm when a package has at most one
 //! version in the solution: its learned incompatibilities give excellent
 //! explanations. Aevia deliberately allows two *incompatible* majors of one
 //! package to coexist (`units 1.x` for one dependent, `units 2.x` for another,
 //! each imported under its own name), as Cargo does. A requirement such as
 //! `>=1, <3` can then be met by either of two different "package slots", which a
-//! PubGrub term cannot express without a disjunction over slots. So this is a
+//! `PubGrub` term cannot express without a disjunction over slots. So this is a
 //! backtracking solver of the Cargo family, with the two properties that matter
 //! in practice:
 //!
@@ -217,33 +217,34 @@ impl Resolution {
     /// The chosen packages with dependencies before dependents (a build order).
     #[must_use]
     pub fn build_order(&self) -> Vec<PackageVersion> {
+        let mut targets = HashMap::<&PackageVersion, Vec<&PackageVersion>>::new();
+        for edge in &self.edges {
+            if let Node::Package(package) = &edge.from {
+                targets.entry(package).or_default().push(&edge.to);
+            }
+        }
         let mut order = Vec::new();
-        let mut seen: HashSet<&PackageVersion> = HashSet::new();
+        let mut seen = HashSet::new();
+        let mut stack = Vec::new();
         for package in &self.packages {
-            self.visit(package, &mut seen, &mut order);
+            stack.push((package, false));
+            while let Some((package, expanded)) = stack.pop() {
+                if expanded {
+                    order.push(package.clone());
+                } else if seen.insert(package) {
+                    stack.push((package, true));
+                    stack.extend(
+                        targets
+                            .get(package)
+                            .into_iter()
+                            .flatten()
+                            .rev()
+                            .map(|target| (*target, false)),
+                    );
+                }
+            }
         }
         order
-    }
-
-    fn visit<'a>(
-        &'a self,
-        package: &'a PackageVersion,
-        seen: &mut HashSet<&'a PackageVersion>,
-        order: &mut Vec<PackageVersion>,
-    ) {
-        if !seen.insert(package) {
-            return;
-        }
-        let node = Node::Package(package.clone());
-        let targets: Vec<&PackageVersion> = self
-            .edges_from(&node)
-            .into_iter()
-            .map(|edge| &edge.to)
-            .collect();
-        for target in targets {
-            self.visit(target, seen, order);
-        }
-        order.push(package.clone());
     }
 }
 
@@ -289,7 +290,7 @@ pub enum Reason {
     Candidates {
         /// Newest first.
         entries: Vec<Entry>,
-        /// Older candidates not listed.
+        /// Candidates outside the retained diagnostic detail.
         omitted: usize,
     },
 }
@@ -317,7 +318,7 @@ pub enum Cause {
     Failed(Box<Failure>),
 }
 
-/// An unsatisfiable resolution, with its derivation.
+/// An unsatisfiable resolution, with a bounded derivation for diagnostics.
 #[derive(Clone, Debug)]
 pub struct Conflict {
     /// The failed search.
@@ -458,13 +459,17 @@ fn join_versions(versions: &[Version]) -> String {
         .map(Version::to_string)
         .collect();
     if versions.len() > SHOWN {
-        text.push(format!("... {} more", versions.len() - SHOWN));
+        text.push(format!("... {} more", versions.len().saturating_sub(SHOWN)));
     }
     text.join(", ")
 }
 
 /// The part of an entry that does not name its own version, so that
 /// consecutive candidates failing the same way fold into one line.
+#[allow(
+    clippy::single_call_fn,
+    reason = "one candidate is rendered independently of grouping"
+)]
 fn entry_body(
     package: &str,
     entry: &Entry,
@@ -491,7 +496,7 @@ fn entry_body(
             } else {
                 body.push_str("was tried, but:\n");
                 let mut nested = String::new();
-                render(inner, left - 1, &mut nested);
+                render(inner, left.saturating_sub(1), &mut nested);
                 // The candidate's own name inside the nested text becomes a
                 // placeholder; the caller puts the right name back.
                 let own = format!("{package} {}", entry.version);
@@ -505,6 +510,10 @@ fn entry_body(
 /// Stands for "this candidate" while consecutive entries are compared.
 const PLACEHOLDER: &str = "\u{a7}";
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "limits the required-by list independently of candidate rendering"
+)]
 fn list_names(names: &[String]) -> String {
     let mut shown: Vec<String> = names
         .iter()
@@ -512,11 +521,15 @@ fn list_names(names: &[String]) -> String {
         .map(|name| format!("`{name}`"))
         .collect();
     if names.len() > 4 {
-        shown.push(format!("{} more", names.len() - 4));
+        shown.push(format!("{} more", names.len().saturating_sub(4)));
     }
     shown.join(", ")
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "the presentation pass groups equivalent failure explanations"
+)]
 fn render_entries(
     package: &str,
     entries: &[Entry],
@@ -524,27 +537,24 @@ fn render_entries(
     left: usize,
     out: &mut String,
 ) {
-    let mut index = 0;
-    while index < entries.len() {
-        let body = entry_body(package, &entries[index], left);
-        let mut end = index + 1;
-        while end < entries.len() && entry_body(package, &entries[end], left) == body {
-            end += 1;
+    let mut entries = entries
+        .iter()
+        .map(|entry| (entry, entry_body(package, entry, left)))
+        .peekable();
+    while let Some((entry, body)) = entries.next() {
+        let first = &entry.version;
+        let mut last = first;
+        let mut count = 1usize;
+        while let Some((next, _)) = entries.next_if(|(_, next_body)| *next_body == body) {
+            last = &next.version;
+            count = count.saturating_add(1);
         }
-        let group = &entries[index..end];
-        let first = &group[0].version;
-        let last = &group[group.len() - 1].version;
-        let heading = if group.len() == 1 {
-            quoted(package, first)
-        } else if group.len() == 2 {
-            format!("`{package} {first}` and `{package} {last}`")
-        } else {
-            format!(
-                "`{package} {first}` down to `{package} {last}` ({} versions)",
-                group.len()
-            )
+        let heading = match count {
+            | 1 => quoted(package, first),
+            | 2 => format!("`{package} {first}` and `{package} {last}`"),
+            | _ => format!("`{package} {first}` down to `{package} {last}` ({count} versions)"),
         };
-        let replacement = if group.len() == 1 {
+        let replacement = if count == 1 {
             format!("{package} {first}")
         } else {
             format!("{package} (each of these)")
@@ -557,7 +567,6 @@ fn render_entries(
         for line in lines {
             let _ = writeln!(out, "    {line}");
         }
-        index = end;
     }
     if omitted > 0 {
         let _ = writeln!(out, "  - ... and {omitted} older candidates fail as well");
@@ -581,14 +590,12 @@ struct Pending {
 
 struct Active {
     package: String,
-    version: Version,
-    summaries: Rc<Vec<Summary>>,
-    at: usize,
+    summary: Rc<Summary>,
 }
 
 impl Active {
     fn dependencies(&self) -> &[Dependency] {
-        &self.summaries[self.at].dependencies
+        &self.summary.dependencies
     }
 }
 
@@ -598,20 +605,64 @@ struct Fail {
     failure: Failure,
 }
 
+type Summaries = Rc<[Rc<Summary>]>;
+
 struct Classified {
-    /// Selectable candidates (indices into the summaries), in preference order.
-    free: Vec<usize>,
+    /// Selectable candidates, in preference order.
+    free: Vec<Rc<Summary>>,
     /// Matching candidates whose series is already taken: (candidate, occupant).
-    taken: Vec<(usize, usize)>,
+    taken: Vec<(Rc<Summary>, usize)>,
     /// Matching yanked versions that are not locked.
     yanked: Vec<Version>,
+}
+
+/// A candidate's place in the active set and its slot for rollback.
+struct Activation {
+    summary: Rc<Summary>,
+    key: Series,
+    level: usize,
+}
+
+struct Decision {
+    chosen: Pending,
+    summaries: Summaries,
+    remaining: Vec<Pending>,
+    options: std::vec::IntoIter<Rc<Summary>>,
+    class: Classified,
+    accumulated: BTreeSet<usize>,
+    tried: Vec<(Rc<Summary>, Failure)>,
+    activation: Option<Activation>,
+}
+
+/// Bound retained conflict trees at the depth the formatter can display.
+/// Child trees already obey the bound, so truncation and destruction stay shallow.
+fn retain_conflict_depth(
+    failure: &mut Failure,
+    depth: usize,
+) {
+    if let Failure::Unsatisfied {
+        reason: Reason::Candidates { entries, omitted },
+        ..
+    } = failure
+    {
+        if depth == 0 {
+            *omitted = omitted.saturating_add(entries.len());
+            entries.clear();
+        } else {
+            for entry in entries {
+                if let Cause::Failed(inner) = &mut entry.cause {
+                    retain_conflict_depth(inner, depth.saturating_sub(1));
+                }
+            }
+        }
+    }
 }
 
 struct Solver<'a> {
     index: &'a dyn Index,
     options: &'a Options,
     roots: &'a [Root],
-    cache: HashMap<String, Rc<Vec<Summary>>>,
+    cache: HashMap<String, Summaries>,
     unknown: HashSet<String>,
     active: Vec<Active>,
     slots: HashMap<String, BTreeMap<Series, usize>>,
@@ -619,8 +670,8 @@ struct Solver<'a> {
     abort: Option<ResolveError>,
 }
 
-impl<'a> Solver<'a> {
-    fn slot_key(
+impl Solver<'_> {
+    const fn slot_key(
         &self,
         version: &Version,
     ) -> Series {
@@ -639,7 +690,7 @@ impl<'a> Solver<'a> {
     fn summaries(
         &mut self,
         package: &str,
-    ) -> Rc<Vec<Summary>> {
+    ) -> Summaries {
         if let Some(found) = self.cache.get(package) {
             return Rc::clone(found);
         }
@@ -657,7 +708,7 @@ impl<'a> Solver<'a> {
         // Order must not depend on the index's iteration order.
         list.sort_by(|left, right| left.version.cmp(&right.version));
         list.dedup_by(|left, right| left.version == right.version);
-        let list = Rc::new(list);
+        let list = list.into_iter().map(Rc::new).collect::<Summaries>();
         self.cache.insert(package.to_string(), Rc::clone(&list));
         list
     }
@@ -669,7 +720,8 @@ impl<'a> Solver<'a> {
         self.slots.get(&dep.package).is_some_and(|slots| {
             slots
                 .values()
-                .any(|index| dep.req.matches(&self.active[*index].version))
+                .filter_map(|index| self.active.get(*index))
+                .any(|active| dep.req.matches(&active.summary.version))
         })
     }
 
@@ -687,12 +739,12 @@ impl<'a> Solver<'a> {
     fn classify(
         &mut self,
         dep: &Dependency,
-    ) -> (Rc<Vec<Summary>>, Classified) {
+    ) -> (Summaries, Classified) {
         let summaries = self.summaries(&dep.package);
         let mut free = Vec::new();
         let mut taken = Vec::new();
         let mut yanked = Vec::new();
-        for (position, summary) in summaries.iter().enumerate() {
+        for summary in summaries.iter() {
             if !dep.req.matches(&summary.version) {
                 continue;
             }
@@ -707,14 +759,14 @@ impl<'a> Solver<'a> {
                 .get(&dep.package)
                 .and_then(|slots| slots.get(&key))
             {
-                | Some(occupant) => taken.push((position, *occupant)),
-                | None => free.push(position),
+                | Some(occupant) => taken.push((Rc::clone(summary), *occupant)),
+                | None => free.push(Rc::clone(summary)),
             }
         }
         // Locked first, then newest first. `summaries` is ascending, so a
         // reverse gives the newest; the stable sort keeps that within a group.
         free.reverse();
-        free.sort_by_key(|position| !self.is_locked(&dep.package, &summaries[*position].version));
+        free.sort_by_key(|summary| !self.is_locked(&dep.package, &summary.version));
         taken.reverse();
         yanked.reverse();
         (summaries, Classified { free, taken, yanked })
@@ -725,10 +777,16 @@ impl<'a> Solver<'a> {
         from: &Origin,
     ) -> String {
         match from {
-            | Origin::Root(index) => self.roots[*index].id.clone(),
+            | Origin::Root(index) => {
+                self.roots
+                    .get(*index)
+                    .map_or_else(|| "<root>".into(), |root| root.id.clone())
+            },
             | Origin::Active(index) => {
-                let active = &self.active[*index];
-                format!("{} {}", active.package, active.version)
+                self.active.get(*index).map_or_else(
+                    || "<package>".into(),
+                    |active| format!("{} {}", active.package, active.summary.version),
+                )
             },
         }
     }
@@ -737,58 +795,51 @@ impl<'a> Solver<'a> {
     /// requirement on that package it satisfies.
     fn wanted_by(
         &self,
-        occupant: usize,
+        target: &Active,
     ) -> Vec<String> {
-        let target = &self.active[occupant];
         let mut out = Vec::new();
         for root in self.roots {
-            if root
-                .dependencies
-                .iter()
-                .any(|dep| dep.package == target.package && dep.req.matches(&target.version))
-            {
+            if root.dependencies.iter().any(|dep| {
+                dep.package == target.package && dep.req.matches(&target.summary.version)
+            }) {
                 out.push(root.id.clone());
             }
         }
         for active in &self.active {
-            if active
-                .dependencies()
-                .iter()
-                .any(|dep| dep.package == target.package && dep.req.matches(&target.version))
-            {
-                out.push(format!("{} {}", active.package, active.version));
+            if active.dependencies().iter().any(|dep| {
+                dep.package == target.package && dep.req.matches(&target.summary.version)
+            }) {
+                out.push(format!("{} {}", active.package, active.summary.version));
             }
         }
         out
     }
 
-    fn aborted() -> Fail {
+    const fn aborted() -> Fail {
         Fail {
             blame: BTreeSet::new(),
             failure: Failure::Cycle { path: Vec::new() },
         }
     }
 
-    // Cold failures retain structured blame; boxing would change the internal error contract.
-    #[allow(clippy::result_large_err)]
-    fn solve(
+    /// Chooses the next outstanding requirement. The pending order breaks ties.
+    #[allow(
+        clippy::single_call_fn,
+        reason = "requirement selection is separate from candidate activation and rollback"
+    )]
+    fn decision(
         &mut self,
         pending: Vec<Pending>,
-    ) -> Result<(), Fail> {
+    ) -> Result<Option<Decision>, ()> {
         let mut remaining: Vec<Pending> = pending
             .into_iter()
             .filter(|pending| !self.satisfied(&pending.dep))
             .collect();
-        if remaining.is_empty() {
-            return self.finish();
-        }
-        // Fewest selectable candidates first; the earliest wins a tie.
-        let mut best: Option<(usize, Rc<Vec<Summary>>, Classified)> = None;
+        let mut best: Option<(usize, Summaries, Classified)> = None;
         for (position, pending) in remaining.iter().enumerate() {
-            let dep = Rc::clone(&pending.dep);
-            let (summaries, class) = self.classify(&dep);
+            let (summaries, class) = self.classify(&pending.dep);
             if self.abort.is_some() {
-                return Err(Self::aborted());
+                return Err(());
             }
             let better = best
                 .as_ref()
@@ -801,72 +852,128 @@ impl<'a> Solver<'a> {
                 break;
             }
         }
-        let Some((position, summaries, class)) = best else {
-            return self.finish();
-        };
-        let chosen = remaining.remove(position);
-        let mut accumulated: BTreeSet<usize> = BTreeSet::new();
-        let mut tried: Vec<(usize, Failure)> = Vec::new();
-        for &candidate in &class.free {
-            self.steps += 1;
-            if self.steps > self.options.max_activations {
-                self.abort = Some(ResolveError::TooComplex {
-                    limit: self.options.max_activations,
-                });
-                return Err(Self::aborted());
+        // The position came from enumerating this same, unmodified vector.
+        Ok(best.map(|(position, summaries, mut class)| {
+            Decision {
+                chosen: remaining.remove(position),
+                summaries,
+                remaining,
+                options: std::mem::take(&mut class.free).into_iter(),
+                class,
+                accumulated: BTreeSet::new(),
+                tried: Vec::new(),
+                activation: None,
             }
-            let level = self.active.len();
-            let summary = &summaries[candidate];
-            let key = self.slot_key(&summary.version);
-            self.active.push(Active {
-                package: chosen.dep.package.clone(),
-                version: summary.version.clone(),
-                summaries: Rc::clone(&summaries),
-                at: candidate,
-            });
-            self.slots
-                .entry(chosen.dep.package.clone())
-                .or_default()
-                .insert(key.clone(), level);
-            let mut next = remaining.clone();
-            for dependency in &summary.dependencies {
-                next.push(Pending {
-                    from: Origin::Active(level),
-                    dep: Rc::new(dependency.clone()),
-                });
-            }
-            let outcome = self.solve(next);
-            match outcome {
-                | Ok(()) => return Ok(()),
-                | Err(fail) => {
-                    self.active.pop();
-                    if let Some(slots) = self.slots.get_mut(&chosen.dep.package) {
-                        slots.remove(&key);
-                    }
-                    if self.abort.is_some() {
-                        return Err(fail);
-                    }
-                    if !fail.blame.contains(&level) {
-                        // The failure does not depend on this candidate, so no
-                        // other candidate of this requirement can repair it.
-                        return Err(fail);
-                    }
-                    accumulated.extend(fail.blame.iter().copied().filter(|l| *l != level));
-                    tried.push((candidate, fail.failure));
-                },
-            }
-        }
-        Err(self.exhausted(&chosen, &summaries, &class, accumulated, tried))
+        }))
     }
 
+    // Cold failures retain structured blame; boxing would change the internal error contract.
+    #[allow(clippy::result_large_err)]
+    #[allow(
+        clippy::single_call_fn,
+        reason = "explicit decision stack drives the separate conflict-directed search"
+    )]
+    fn solve(
+        &mut self,
+        mut pending: Vec<Pending>,
+    ) -> Result<(), Fail> {
+        let mut stack: Vec<Decision> = Vec::new();
+        'requirements: loop {
+            let mut failure = match self.decision(pending).map_err(|()| Self::aborted())? {
+                | Some(decision) => {
+                    stack.push(decision);
+                    None
+                },
+                | None => {
+                    match self.finish() {
+                        | Ok(()) => return Ok(()),
+                        | Err(failure) => Some(failure),
+                    }
+                },
+            };
+            while let Some(mut decision) = stack.pop() {
+                if let Some(failed) = failure.take() {
+                    // A parent decision has one live candidate while its child runs.
+                    let Some(activation) = decision.activation.take() else {
+                        failure = Some(failed);
+                        continue;
+                    };
+                    self.active.pop();
+                    if let Some(slots) = self.slots.get_mut(&decision.chosen.dep.package) {
+                        slots.remove(&activation.key);
+                    }
+                    if !failed.blame.contains(&activation.level) {
+                        // No alternative for this decision can address the failure.
+                        failure = Some(failed);
+                        continue;
+                    }
+                    decision.accumulated.extend(
+                        failed
+                            .blame
+                            .into_iter()
+                            .filter(|level| *level != activation.level),
+                    );
+                    decision.tried.push((activation.summary, failed.failure));
+                }
+                if let Some(summary) = decision.options.next() {
+                    if self.steps >= self.options.max_activations {
+                        self.abort = Some(ResolveError::TooComplex {
+                            limit: self.options.max_activations,
+                        });
+                        return Err(Self::aborted());
+                    }
+                    self.steps = self.steps.saturating_add(1);
+                    let level = self.active.len();
+                    let key = self.slot_key(&summary.version);
+                    let package = &decision.chosen.dep.package;
+                    self.active.push(Active {
+                        package: package.clone(),
+                        summary: Rc::clone(&summary),
+                    });
+                    self.slots
+                        .entry(package.clone())
+                        .or_default()
+                        .insert(key.clone(), level);
+                    pending = if decision.options.len() == 0 {
+                        std::mem::take(&mut decision.remaining)
+                    } else {
+                        decision.remaining.clone()
+                    };
+                    pending.extend(summary.dependencies.iter().map(|dependency| {
+                        Pending {
+                            from: Origin::Active(level),
+                            dep: Rc::new(dependency.clone()),
+                        }
+                    }));
+                    decision.activation = Some(Activation { summary, key, level });
+                    stack.push(decision);
+                    continue 'requirements;
+                }
+                failure = Some(self.exhausted(
+                    &decision.chosen,
+                    &decision.summaries,
+                    &decision.class,
+                    decision.accumulated,
+                    decision.tried,
+                ));
+            }
+            return Err(failure.unwrap_or_else(Self::aborted));
+        }
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "exhaustion constructs the public conflict derivation"
+    )]
     fn exhausted(
         &self,
         chosen: &Pending,
-        summaries: &Rc<Vec<Summary>>,
+        summaries: &[Rc<Summary>],
         class: &Classified,
         mut blame: BTreeSet<usize>,
-        tried: Vec<(usize, Failure)>,
+        tried: Vec<(Rc<Summary>, Failure)>,
     ) -> Fail {
+        const KEEP: usize = 12;
         if let Origin::Active(index) = chosen.from {
             blame.insert(index);
         }
@@ -880,7 +987,7 @@ impl<'a> Solver<'a> {
             } else {
                 Reason::NoVersions
             }
-        } else if class.free.is_empty() && class.taken.is_empty() {
+        } else if tried.is_empty() && class.taken.is_empty() {
             Reason::NoMatch {
                 available: summaries
                     .iter()
@@ -891,23 +998,25 @@ impl<'a> Solver<'a> {
             }
         } else {
             let mut entries: Vec<Entry> = Vec::new();
-            for (candidate, failure) in tried {
+            for (candidate, mut failure) in tried {
+                retain_conflict_depth(&mut failure, EXPLAIN_DEPTH);
                 entries.push(Entry {
-                    version: summaries[candidate].version.clone(),
+                    version: candidate.version.clone(),
                     cause: Cause::Failed(Box::new(failure)),
                 });
             }
             for (candidate, occupant) in &class.taken {
-                entries.push(Entry {
-                    version: summaries[*candidate].version.clone(),
-                    cause: Cause::Taken {
-                        selected: self.active[*occupant].version.clone(),
-                        wanted_by: self.wanted_by(*occupant),
-                    },
-                });
+                if let Some(active) = self.active.get(*occupant) {
+                    entries.push(Entry {
+                        version: candidate.version.clone(),
+                        cause: Cause::Taken {
+                            selected: active.summary.version.clone(),
+                            wanted_by: self.wanted_by(active),
+                        },
+                    });
+                }
             }
             entries.sort_by(|left, right| right.version.cmp(&left.version));
-            const KEEP: usize = 12;
             let omitted = entries.len().saturating_sub(KEEP);
             entries.truncate(KEEP);
             Reason::Candidates { entries, omitted }
@@ -924,80 +1033,102 @@ impl<'a> Solver<'a> {
     }
 
     /// Every requirement is met; reject a ring of dependencies.
-    #[allow(clippy::result_large_err)] // Same structured cold failure as `solve`.
+    #[allow(
+        clippy::result_large_err,
+        reason = "cycle failures carry the same backjump information"
+    )]
+    #[allow(
+        clippy::single_call_fn,
+        reason = "the resolved graph is validated before emitting a solution"
+    )]
     fn finish(&self) -> Result<(), Fail> {
-        let count = self.active.len();
-        let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); count];
-        for (from, active) in self.active.iter().enumerate() {
-            for dependency in active.dependencies() {
-                for (to, other) in self.active.iter().enumerate() {
-                    if other.package == dependency.package && dependency.req.matches(&other.version)
-                    {
-                        adjacency[from].push(to);
+        let adjacency: Vec<Vec<usize>> = self
+            .active
+            .iter()
+            .map(|active| {
+                let mut targets = Vec::new();
+                for dependency in active.dependencies() {
+                    let first = targets.len();
+                    targets.extend(
+                        self.slots
+                            .get(&dependency.package)
+                            .into_iter()
+                            .flat_map(BTreeMap::values)
+                            .filter(|index| {
+                                self.active.get(**index).is_some_and(|target| {
+                                    dependency.req.matches(&target.summary.version)
+                                })
+                            })
+                            .copied(),
+                    );
+                    // Preserve the original ordering: declaration first, then activation.
+                    if let Some(matching) = targets.get_mut(first..) {
+                        matching.sort_unstable();
                     }
                 }
-            }
-        }
-        // 0 = unvisited, 1 = on the stack, 2 = done.
-        let mut state = vec![0u8; count];
-        for start in 0..count {
-            if state[start] != 0 {
+                targets
+            })
+            .collect();
+        let mut complete = HashSet::new();
+        let mut visiting = HashMap::new();
+        for (start, targets) in adjacency.iter().enumerate() {
+            if complete.contains(&start) {
                 continue;
             }
-            let mut stack: Vec<(usize, usize)> = vec![(start, 0)];
-            let mut path: Vec<usize> = vec![start];
-            state[start] = 1;
-            while let Some((node, next)) = stack.pop() {
-                if next < adjacency[node].len() {
-                    stack.push((node, next + 1));
-                    let target = adjacency[node][next];
-                    match state[target] {
-                        | 0 => {
-                            state[target] = 1;
-                            stack.push((target, 0));
-                            path.push(target);
-                        },
-                        | 1 => {
-                            let from = path.iter().position(|n| *n == target).unwrap_or(0);
-                            let ring: Vec<usize> = path[from..].to_vec();
-                            let mut names: Vec<String> = ring
-                                .iter()
-                                .map(|n| {
-                                    format!(
-                                        "{} {}",
-                                        self.active[*n].package, self.active[*n].version
-                                    )
-                                })
-                                .collect();
-                            names.push(names[0].clone());
-                            return Err(Fail {
-                                blame: ring.into_iter().collect(),
-                                failure: Failure::Cycle { path: names },
-                            });
-                        },
-                        | _ => {},
+            let mut stack = vec![(start, targets.iter())];
+            visiting.insert(start, 0);
+            while let Some((node, targets)) = stack.last_mut() {
+                if let Some(&target) = targets.next() {
+                    if complete.contains(&target) {
+                        continue;
+                    }
+                    if let Some(&from) = visiting.get(&target) {
+                        let ring: BTreeSet<usize> =
+                            stack.iter().skip(from).map(|(index, _)| *index).collect();
+                        let mut path: Vec<String> = stack
+                            .iter()
+                            .skip(from)
+                            .filter_map(|(index, _)| self.active.get(*index))
+                            .map(|active| format!("{} {}", active.package, active.summary.version))
+                            .collect();
+                        if let Some(first) = path.first().cloned() {
+                            path.push(first);
+                        }
+                        return Err(Fail {
+                            blame: ring,
+                            failure: Failure::Cycle { path },
+                        });
+                    }
+                    if let Some(targets) = adjacency.get(target) {
+                        visiting.insert(target, stack.len());
+                        stack.push((target, targets.iter()));
                     }
                 } else {
-                    state[node] = 2;
-                    path.pop();
+                    complete.insert(*node);
+                    visiting.remove(node);
+                    stack.pop();
                 }
             }
         }
         Ok(())
     }
 
+    #[allow(
+        clippy::single_call_fn,
+        reason = "converts search state to the public resolution graph"
+    )]
     fn resolution(&self) -> Resolution {
         let target_of = |dependency: &Dependency| -> Option<PackageVersion> {
             self.slots.get(&dependency.package).and_then(|slots| {
                 slots
                     .values()
-                    .map(|index| &self.active[*index])
-                    .filter(|active| dependency.req.matches(&active.version))
-                    .max_by(|left, right| left.version.cmp(&right.version))
+                    .filter_map(|index| self.active.get(*index))
+                    .filter(|active| dependency.req.matches(&active.summary.version))
+                    .max_by(|left, right| left.summary.version.cmp(&right.summary.version))
                     .map(|active| {
                         PackageVersion {
                             package: active.package.clone(),
-                            version: active.version.clone(),
+                            version: active.summary.version.clone(),
                         }
                     })
             })
@@ -1018,7 +1149,7 @@ impl<'a> Solver<'a> {
         for active in &self.active {
             let from = PackageVersion {
                 package: active.package.clone(),
-                version: active.version.clone(),
+                version: active.summary.version.clone(),
             };
             for dependency in active.dependencies() {
                 if let Some(to) = target_of(dependency) {

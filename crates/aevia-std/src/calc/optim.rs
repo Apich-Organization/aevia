@@ -255,9 +255,11 @@ where
             "bounds must match x0 length".to_string(),
         ));
     }
-    for i in 0..n {
-        if lower[i].is_nan() || upper[i].is_nan() || lower[i] > upper[i] {
-            return Err(NumericError::Domain(format!("lower[{i}] > upper[{i}]")));
+    for (index, (&lo, &hi)) in lower.iter().zip(upper).enumerate() {
+        if lo.is_nan() || hi.is_nan() || lo > hi {
+            return Err(NumericError::Domain(format!(
+                "invalid bounds at index {index}: {lo} to {hi}"
+            )));
         }
     }
     let fc = RefCell::new(f);
@@ -328,7 +330,7 @@ pub fn linprog(
             "linprog requires b >= 0 in standard form".to_string(),
         ));
     }
-    let rows: Vec<Vec<f64>> = (0..m).map(|i| a[i * n..(i + 1) * n].to_vec()).collect();
+    let rows: Vec<_> = a.chunks_exact(n).map(<[f64]>::to_vec).collect();
     let rels = vec![Relation::Le; m];
     match optim::simplex(c, &rows, &rels, b) {
         | LpStatus::Optimal { x, value } => Ok((x, value)),

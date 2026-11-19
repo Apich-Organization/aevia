@@ -3,11 +3,13 @@ use aevia_core::Compilation;
 use aevia_core::Interp;
 use aevia_core::Mode;
 use aevia_core::compile;
+use aevia_core::value::RecordValue;
 use aevia_core::value::Value;
 use aevia_syntax::Span;
 use aevia_types::Rep;
 use aevia_types::Shape;
 use aevia_types::Type;
+use std::rc::Rc;
 
 fn checked(source: &str) -> Compilation {
     let result = compile("generics.aev", source);
@@ -144,6 +146,40 @@ fn host_calls_solve_from_actual_data_and_never_reuse_an_unrelated_span() {
             "E0304",
             "{mode:?}"
         );
+    }
+}
+
+#[test]
+fn host_calls_enforce_generic_row_exclusions_before_entering_the_body() {
+    let compilation = checked(
+        "fn update(p: { x: Int, ...r }): Bool = ({ p with z = true }).z\nfn identity(x) = x\n",
+    );
+    let record = |label: &str, value| {
+        Value::Record(Rc::new(RecordValue {
+            fields: [("x".into(), Value::int(1)), (label.into(), value)]
+                .into_iter()
+                .collect(),
+        }))
+    };
+    for mode in [Mode::Ast, Mode::Ir] {
+        let mut interp = install(&compilation, mode);
+        let update = interp.eval_toplevel("update").unwrap();
+        let valid = interp
+            .apply(
+                update.clone(),
+                vec![record("y", Value::Bool(false))],
+                Span::default(),
+            )
+            .unwrap();
+        assert!(matches!(valid, Value::Bool(true)), "{mode:?}");
+
+        let opaque = interp.eval_toplevel("identity").unwrap();
+        for value in [Value::Str("conflict".into()), opaque] {
+            let error = interp
+                .apply(update.clone(), vec![record("z", value)], Span::default())
+                .unwrap_err();
+            assert_eq!(error.code, "E0208", "{mode:?}");
+        }
     }
 }
 

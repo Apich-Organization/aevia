@@ -13,6 +13,8 @@
 //!   client may send `$/cancelRequest` and a server that dies on it is broken;
 //! * `exit` terminates, with code 0 only if `shutdown` came first.
 
+use crate::command;
+use crate::command::REQUEST_FAILED;
 use aevia_analysis::Analysis;
 use aevia_analysis::AnalysisCache;
 use aevia_analysis::Change;
@@ -20,10 +22,12 @@ use aevia_analysis::Document;
 use aevia_analysis::DocumentStore;
 use aevia_analysis::SourceOverlays;
 use aevia_analysis::canonical_source_path as canonical_path;
+use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 
@@ -70,10 +74,22 @@ const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_REQUEST: i64 = -32600;
 const INVALID_PARAMS: i64 = -32602;
 const SERVER_NOT_INITIALIZED: i64 = -32002;
+const DOCUMENT_REQUESTS: &[&str] = &[
+    "textDocument/hover",
+    "textDocument/completion",
+    "textDocument/definition",
+    "textDocument/documentSymbol",
+    "textDocument/formatting",
+    "textDocument/codeAction",
+    "textDocument/codeLens",
+    "textDocument/semanticTokens/full",
+    "textDocument/typeDefinition",
+    "textDocument/references",
+    "textDocument/prepareRename",
+    "textDocument/rename",
+    "textDocument/signatureHelp",
+];
 const PARSE_ERROR: i64 = -32700;
-/// The protocol's "the request was understood but failed" code, used when a
-/// rename is refused (the alternative would be a null result with no reason).
-const REQUEST_FAILED: i64 = -32803;
 
 /// The server's state and its open documents.
 pub struct Server {
@@ -87,6 +103,7 @@ pub struct Server {
     /// Import candidates as well as read files, retained even after an LRU
     /// program eviction so an edit refreshes all affected open documents.
     dependencies: RefCell<BTreeMap<String, Vec<(PathBuf, PathBuf)>>>,
+    commands: Vec<command::Task>,
 }
 
 impl Server {
@@ -99,6 +116,7 @@ impl Server {
             out,
             cache: RefCell::new(AnalysisCache::new()),
             dependencies: RefCell::new(BTreeMap::new()),
+            commands: Vec::new(),
         }
     }
 
@@ -107,33 +125,53 @@ impl Server {
         &mut self,
         message: Value,
     ) -> Control {
-        let id = message.get("id").cloned();
-        let method = message
-            .get("method")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        let params = message.get("params").cloned().unwrap_or(Value::Null);
+        let mut message = match message {
+            | Value::Object(fields) => fields,
+            | _ => Map::new(),
+        };
+        let id = message.remove("id");
+        let method = message.get("method").and_then(Value::as_str);
+        let params = message.get("params").unwrap_or(&Value::Null);
+        let is_response = method.is_none()
+            && message.get("method").is_none()
+            && id.is_some()
+            && (message.get("result").is_some() || message.get("error").is_some());
+        let id_is_valid = id.as_ref().is_none_or(|id| id.is_string() || id.is_i64());
+        if message.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+            || (!is_response && (method.is_none() || !id_is_valid))
+        {
+            self.fail(
+                if id_is_valid {
+                    id.unwrap_or(Value::Null)
+                } else {
+                    Value::Null
+                },
+                &RpcError::new(
+                    INVALID_REQUEST,
+                    "expected a JSON-RPC 2.0 request or notification",
+                ),
+            );
+            return Control::Continue;
+        }
+        self.commands.retain(|task| !task.finished());
         match (method, id) {
-            | (Some(method), Some(id)) if method == "workspace/executeCommand" => {
-                // The command runs on a worker thread that answers `id` itself,
-                // so a long or non-terminating program never blocks the loop.
+            | (Some("workspace/executeCommand"), Some(id)) => {
                 let started = self
                     .require_running()
-                    .and_then(|()| self.execute_command(&params));
-                match started {
-                    | Ok(job) => spawn_command(self.out.clone(), id, job),
-                    | Err(error) => self.fail(id, &error),
+                    .and_then(|()| self.spawn_command(&id, params));
+                if let Err(error) = started {
+                    self.fail(id, &error);
                 }
                 Control::Continue
             },
             | (Some(method), Some(id)) => {
-                match self.request(&method, &params) {
+                match self.request(method, params) {
                     | Ok(result) => self.respond(id, result),
                     | Err(error) => self.fail(id, &error),
                 }
                 Control::Continue
             },
-            | (Some(method), None) => self.notification(&method, &params),
+            | (Some(method), None) => self.notification(method, params),
             // A response to a request this server never sent: it asks the
             // client nothing, so there is nothing to match it against.
             | (None, _) => Control::Continue,
@@ -178,11 +216,9 @@ impl Server {
                 }))
             },
             | "shutdown" => {
-                if self.state != State::Running {
-                    return Err(RpcError::new(
-                        INVALID_REQUEST,
-                        "the server has not been initialized",
-                    ));
+                self.require_running()?;
+                for task in &self.commands {
+                    task.cancel();
                 }
                 self.state = State::ShutDown;
                 Ok(Value::Null)
@@ -227,22 +263,7 @@ impl Server {
     ) -> Result<Value, RpcError> {
         // The method is checked before the parameters: an unknown request must
         // be `-32601` whatever its params look like.
-        if !matches!(
-            method,
-            "textDocument/hover"
-                | "textDocument/completion"
-                | "textDocument/definition"
-                | "textDocument/documentSymbol"
-                | "textDocument/formatting"
-                | "textDocument/codeAction"
-                | "textDocument/codeLens"
-                | "textDocument/semanticTokens/full"
-                | "textDocument/typeDefinition"
-                | "textDocument/references"
-                | "textDocument/prepareRename"
-                | "textDocument/rename"
-                | "textDocument/signatureHelp"
-        ) {
+        if !DOCUMENT_REQUESTS.contains(&method) {
             return Err(RpcError::new(
                 METHOD_NOT_FOUND,
                 format!("`{method}` is not a method this server implements"),
@@ -255,7 +276,7 @@ impl Server {
             // "nothing", which is what every client expects after a close.
             return Ok(Value::Null);
         };
-        let analysis = self.analysis_for(document);
+        let analysis = self.analysis_for(document, &self.overlays());
         let offset = || -> Result<u32, RpcError> {
             let position = params
                 .get("position")
@@ -274,29 +295,26 @@ impl Server {
             | "textDocument/completion" => {
                 crate::protocol::completion_json(&analysis.completion(offset()?))
             },
-            | "textDocument/definition" => {
-                analysis
-                    .definition(offset()?)
-                    .map_or(Value::Null, |location| {
-                        crate::protocol::location_json(&location)
-                    })
-            },
-            | "textDocument/typeDefinition" => {
-                analysis
-                    .type_definition(offset()?)
-                    .map_or(Value::Null, |location| {
-                        crate::protocol::location_json(&location)
-                    })
+            | "textDocument/definition" | "textDocument/typeDefinition" => {
+                let offset = offset()?;
+                let location = if method == "textDocument/definition" {
+                    analysis.definition(offset)
+                } else {
+                    analysis.type_definition(offset)
+                };
+                location.map_or(Value::Null, |location| {
+                    crate::protocol::location_json(&location)
+                })
             },
             | "textDocument/documentSymbol" => crate::protocol::symbols_json(&analysis.symbols()),
-            | "textDocument/codeAction" => {
-                let range = params
-                    .get("range")
-                    .and_then(crate::protocol::range)
-                    .ok_or_else(|| RpcError::new(INVALID_PARAMS, "no valid `range`"))?;
-                crate::protocol::code_actions_json(uri, &analysis.code_actions(range))
+            | "textDocument/codeAction" => document_code_actions(&analysis, uri, params)?,
+            | "textDocument/codeLens" => {
+                if crate::protocol::path_from_uri(uri).is_some() {
+                    crate::protocol::code_lens_json(&analysis.code_lens(uri))
+                } else {
+                    Value::Array(Vec::new())
+                }
             },
-            | "textDocument/codeLens" => crate::protocol::code_lens_json(&analysis.code_lens(uri)),
             | "textDocument/semanticTokens/full" => {
                 crate::protocol::semantic_tokens_json(&analysis.semantic_tokens())
             },
@@ -350,12 +368,20 @@ impl Server {
         params: &Value,
     ) -> Control {
         match method {
-            | "initialized" => Control::Continue,
             | "exit" => {
                 Control::Exit {
                     graceful: self.state == State::ShutDown,
                 }
             },
+            | "$/cancelRequest" => {
+                if let Some(id) = params.get("id")
+                    && let Some(task) = self.commands.iter().find(|task| &task.id == id)
+                {
+                    task.cancel();
+                }
+                Control::Continue
+            },
+            | _ if self.state != State::Running => Control::Continue,
             | "textDocument/didOpen" => {
                 self.did_open(params);
                 Control::Continue
@@ -370,24 +396,20 @@ impl Server {
             },
             | "textDocument/didSave" => {
                 if let Some(uri) = text_document_uri(params) {
-                    self.publish_affected(uri);
+                    self.publish_affected([uri]);
                 }
                 Control::Continue
             },
             | "workspace/didChangeWatchedFiles" => {
                 if let Some(changes) = params.get("changes").and_then(Value::as_array) {
-                    let paths: std::collections::BTreeSet<&str> = changes
+                    let paths = changes
                         .iter()
-                        .filter_map(|change| change.get("uri").and_then(Value::as_str))
-                        .collect();
-                    for uri in paths {
-                        self.publish_affected(uri);
-                    }
+                        .filter_map(|change| change.get("uri").and_then(Value::as_str));
+                    self.publish_affected(paths);
                 }
                 Control::Continue
             },
-            // `$/cancelRequest`, `$/setTrace` and
-            // anything a future client invents: ignored, never fatal.
+            // `$/setTrace` and other unrecognized notifications are ignored.
             | _ => Control::Continue,
         }
     }
@@ -403,10 +425,14 @@ impl Server {
         let Some(uri) = item.get("uri").and_then(Value::as_str) else {
             return;
         };
-        let version = item.get("version").and_then(Value::as_i64).unwrap_or(0);
-        let text = item.get("text").and_then(Value::as_str).unwrap_or_default();
+        let Some(version) = item.get("version").and_then(Value::as_i64) else {
+            return;
+        };
+        let Some(text) = item.get("text").and_then(Value::as_str) else {
+            return;
+        };
         self.documents.open(Document::new(uri, version, text));
-        self.publish_affected(uri);
+        self.publish_affected([uri]);
     }
 
     /// `textDocument/didChange`, incremental or full.
@@ -417,11 +443,13 @@ impl Server {
         let Some(uri) = text_document_uri(params).map(str::to_string) else {
             return;
         };
-        let version = params
+        let Some(version) = params
             .get("textDocument")
             .and_then(|item| item.get("version"))
             .and_then(Value::as_i64)
-            .unwrap_or(0);
+        else {
+            return;
+        };
         let Some(changes) = params.get("contentChanges").and_then(Value::as_array) else {
             return;
         };
@@ -455,7 +483,7 @@ impl Server {
         if doc.apply_batch(&edits, version).is_err() {
             return;
         }
-        self.publish_affected(&uri);
+        self.publish_affected([uri.as_str()]);
     }
 
     /// `textDocument/didClose`.
@@ -466,7 +494,9 @@ impl Server {
         let Some(uri) = text_document_uri(params) else {
             return;
         };
-        self.documents.close(uri);
+        if self.documents.close(uri).is_none() {
+            return;
+        }
         self.dependencies.borrow_mut().remove(uri);
         // Clearing the diagnostics is part of closing: a client that keeps
         // them shows errors for a file it no longer has.
@@ -474,48 +504,64 @@ impl Server {
             "textDocument/publishDiagnostics",
             json!({ "uri": uri, "diagnostics": [] }),
         );
-        self.publish_affected(uri);
+        self.publish_affected([uri]);
     }
 
     /// Refreshes readers of a changed buffer, including previously missing
     /// imports and documents whose programs have left the bounded cache.
-    fn publish_affected(
+    fn publish_affected<'a>(
         &self,
-        changed: &str,
+        changes: impl IntoIterator<Item = &'a str>,
     ) {
-        let path = crate::protocol::path_from_uri(changed).map(|path| canonical_path(&path));
-        let uris: Vec<String> = self
+        use std::collections::BTreeSet;
+        let changes = changes.into_iter().collect::<BTreeSet<_>>();
+        let paths = changes
+            .iter()
+            .filter_map(|uri| crate::protocol::path_from_uri(uri))
+            .collect::<Vec<_>>();
+        // A package's manifest or lockfile can change imports in another
+        // package. The existing cache still reuses unchanged programs.
+        let package_change = paths.iter().any(|path| {
+            path.file_name()
+                .is_some_and(|name| name == "aevia.toml" || name == "aevia.lock")
+        });
+        let physical = paths
+            .iter()
+            .map(|path| canonical_path(path))
+            .collect::<BTreeSet<_>>();
+        let dependencies = self.dependencies.borrow();
+        let documents: Vec<&Document> = self
             .documents
             .iter()
             .filter(|document| {
-                document.name() == changed
-                    || path.as_ref().is_some_and(|path| {
-                        self.dependencies
-                            .borrow()
-                            .get(document.name())
-                            .is_some_and(|inputs| {
-                                inputs.iter().any(|(logical, physical)| {
-                                    physical == path || canonical_path(logical) == *path
-                                })
+                package_change
+                    || changes.contains(document.name())
+                    || (!physical.is_empty()
+                        && dependencies.get(document.name()).is_some_and(|inputs| {
+                            inputs.iter().any(|(logical, old_physical)| {
+                                physical.contains(old_physical)
+                                    || physical.contains(&canonical_path(logical))
                             })
-                    })
+                        }))
             })
-            .map(|document| document.name().to_owned())
             .collect();
-        for uri in uris {
-            self.publish(&uri);
+        drop(dependencies);
+        if !documents.is_empty() {
+            let overlays = self.overlays();
+            for document in documents {
+                self.publish(document, &overlays);
+            }
         }
     }
 
     /// Compiles a document and sends its diagnostics.
     fn publish(
         &self,
-        uri: &str,
+        document: &Document,
+        overlays: &SourceOverlays,
     ) {
-        let Some(document) = self.documents.get(uri) else {
-            return;
-        };
-        let analysis = self.analysis_for(document);
+        let uri = document.name();
+        let analysis = self.analysis_for(document, overlays);
         let diagnostics: Vec<Value> = analysis
             .diagnostics()
             .iter()
@@ -545,7 +591,11 @@ impl Server {
         id: Value,
         result: Value,
     ) {
-        self.send(json!({ "jsonrpc": "2.0", "id": id, "result": result }));
+        self.send(Value::Object(Map::from_iter([
+            ("jsonrpc".into(), Value::from("2.0")),
+            ("id".into(), id),
+            ("result".into(), result),
+        ])));
     }
 
     fn fail(
@@ -553,11 +603,14 @@ impl Server {
         id: Value,
         error: &RpcError,
     ) {
-        self.send(json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "error": { "code": error.code, "message": error.message },
-        }));
+        self.send(Value::Object(Map::from_iter([
+            ("jsonrpc".into(), Value::from("2.0")),
+            ("id".into(), id),
+            (
+                "error".into(),
+                json!({ "code": error.code, "message": error.message }),
+            ),
+        ])));
     }
 
     fn notify(
@@ -565,8 +618,48 @@ impl Server {
         method: &str,
         params: Value,
     ) {
-        self.send(json!({ "jsonrpc": "2.0", "method": method, "params": params }));
+        self.send(Value::Object(Map::from_iter([
+            ("jsonrpc".into(), Value::from("2.0")),
+            ("method".into(), Value::from(method)),
+            ("params".into(), params),
+        ])));
     }
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "keep code action range validation and kind filtering together"
+    )
+)]
+fn document_code_actions(
+    analysis: &Analysis<'_>,
+    uri: &str,
+    params: &Value,
+) -> Result<Value, RpcError> {
+    let range = params
+        .get("range")
+        .and_then(crate::protocol::range)
+        .ok_or_else(|| RpcError::new(INVALID_PARAMS, "no valid `range`"))?;
+    let mut result = crate::protocol::code_actions_json(uri, &analysis.code_actions(range));
+    if let Some(only) = params.pointer("/context/only").and_then(Value::as_array)
+        && let Some(actions) = result.as_array_mut()
+    {
+        actions.retain(|action| {
+            let Some(kind) = action.get("kind").and_then(Value::as_str) else {
+                return false;
+            };
+            only.iter().filter_map(Value::as_str).any(|requested| {
+                requested.is_empty()
+                    || kind == requested
+                    || kind
+                        .strip_prefix(requested)
+                        .is_some_and(|suffix| suffix.starts_with('.'))
+            })
+        });
+    }
+    Ok(result)
 }
 
 /// The `textDocument.uri` of a request or notification.
@@ -575,16 +668,24 @@ fn text_document_uri(params: &Value) -> Option<&str> {
 }
 
 impl Server {
-    /// Validates a server-advertised workspace command (`aevia.runFile` /
-    /// `aevia.testFile`) and builds the process to run.
-    ///
-    /// Only the file URI of an open document is accepted: a client-supplied
-    /// string that is not one must never reach the command line (a value such
-    /// as `--no-cache` would otherwise become a flag).
-    fn execute_command(
-        &self,
+    /// Validates and starts a run or test command for an open, saved document.
+    fn spawn_command(
+        &mut self,
+        id: &Value,
         params: &Value,
-    ) -> Result<CommandJob, RpcError> {
+    ) -> Result<(), RpcError> {
+        if self.commands.len() >= command::MAX_CONCURRENT {
+            return Err(RpcError::new(
+                REQUEST_FAILED,
+                "too many Aevia commands are already running",
+            ));
+        }
+        if self.commands.iter().any(|task| task.id == *id) {
+            return Err(RpcError::new(
+                INVALID_REQUEST,
+                "a command already has this request id",
+            ));
+        }
         let command = params
             .get("command")
             .and_then(Value::as_str)
@@ -594,31 +695,34 @@ impl Server {
             .and_then(|items| items.first())
             .and_then(Value::as_str)
             .ok_or_else(|| RpcError::new(INVALID_PARAMS, "expected a document URI argument"))?;
-        if self.documents.get(uri).is_none() {
-            return Err(RpcError::new(
+        let document = self.documents.get(uri).ok_or_else(|| {
+            RpcError::new(
                 INVALID_PARAMS,
                 "the command applies only to an open document",
-            ));
-        }
+            )
+        })?;
         let path = aevia_analysis::physical_source_path_from_uri(uri)
             .filter(|path| path.is_absolute())
             .ok_or_else(|| RpcError::new(INVALID_PARAMS, "the document is not a `file:` URI"))?;
-        // The CLI reads `--` as the start of program arguments, so the path is
-        // not fenced with it; an absolute path can never be mistaken for a flag.
-        let mut cmd = std::process::Command::new(aevia_executable());
-        match command {
+        if !saved_source_matches(&path, document.text()) {
+            return Err(RpcError::new(
+                REQUEST_FAILED,
+                "save the Aevia file before running or testing it",
+            ));
+        }
+        let mut process = std::process::Command::new(command::executable());
+        process.current_dir(command::working_directory(&path));
+        let label = match command {
             | "aevia.runFile" => {
-                cmd.arg("run").arg(&path);
+                process.arg("run").arg(&path);
+                "run"
             },
             | "aevia.testFile" => {
-                cmd.arg("test").arg(&path);
-                if let Some(filter) = args
-                    .and_then(|items| items.get(1))
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty())
-                {
-                    cmd.arg("--filter").arg(filter);
+                process.arg("test").arg(&path);
+                if let Some(filter) = args.and_then(|items| items.get(1)).and_then(Value::as_str) {
+                    process.arg(format!("--exact={filter}"));
                 }
+                "test"
             },
             | other => {
                 return Err(RpcError::new(
@@ -626,11 +730,20 @@ impl Server {
                     format!("unknown command `{other}`"),
                 ));
             },
-        }
-        Ok(CommandJob {
-            command: command.to_string(),
-            process: cmd,
-        })
+        };
+        let task = command::Task::spawn(
+            self.out.clone(),
+            id.clone(),
+            command::Job { label, process },
+        )
+        .map_err(|error| {
+            RpcError::new(
+                REQUEST_FAILED,
+                format!("could not start Aevia {label}: {error}"),
+            )
+        })?;
+        self.commands.push(task);
+        Ok(())
     }
 
     /// Answers from the opened documents' programs: every declaration of every
@@ -642,8 +755,9 @@ impl Server {
         let query = params.get("query").and_then(Value::as_str).unwrap_or("");
         let mut seen = std::collections::HashSet::new();
         let mut symbols = Vec::new();
+        let overlays = self.overlays();
         for document in self.documents.iter() {
-            let analysis = self.analysis_for(document);
+            let analysis = self.analysis_for(document, &overlays);
             for symbol in analysis.workspace_symbols(query) {
                 let key = (
                     symbol.document.clone(),
@@ -672,13 +786,16 @@ impl Server {
             .and_then(Value::as_array_mut)
         {
             for change in changes {
-                let Some(target) = change.get_mut("textDocument") else {
+                let Some(target) = change
+                    .get_mut("textDocument")
+                    .and_then(Value::as_object_mut)
+                else {
                     continue;
                 };
                 if let Some(uri) = target.get("uri").and_then(Value::as_str)
                     && let Some(document) = self.documents.get(uri)
                 {
-                    target["version"] = Value::from(document.version());
+                    target.insert("version".into(), Value::from(document.version()));
                     continue;
                 }
                 let Some(path) = target
@@ -701,8 +818,8 @@ impl Server {
                 } else {
                     open
                 } {
-                    target["uri"] = Value::String(document.name().to_owned());
-                    target["version"] = Value::from(document.version());
+                    target.insert("uri".into(), Value::String(document.name().to_owned()));
+                    target.insert("version".into(), Value::from(document.version()));
                 }
             }
         }
@@ -717,20 +834,15 @@ impl Server {
     fn analysis_for<'a>(
         &self,
         document: &'a Document,
+        overlays: &SourceOverlays,
     ) -> Analysis<'a> {
         let Some(path) = crate::protocol::path_from_uri(document.name()) else {
             return Analysis::new(document);
         };
-        let mut overlays = SourceOverlays::new();
-        for open in self.documents.iter() {
-            if let Some(path) = crate::protocol::path_from_uri(open.name()) {
-                overlays.insert(&path, open.text());
-            }
-        }
         let program = self.cache.borrow_mut().program_for_document_with_overlays(
             &path,
             document.text(),
-            &overlays,
+            overlays,
         );
         if let Some(program) = &program {
             self.dependencies.borrow_mut().insert(
@@ -752,105 +864,64 @@ impl Server {
             | None => Analysis::new(document),
         }
     }
-}
 
-/// How long a client-requested `aevia run`/`aevia test` may run.
-const COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
-
-/// A validated workspace command, ready to run.
-struct CommandJob {
-    command: String,
-    process: std::process::Command,
-}
-
-/// Runs `job` on a worker thread and answers request `id` through `out`.
-fn spawn_command(
-    out: Sender<Value>,
-    id: Value,
-    job: CommandJob,
-) {
-    std::thread::spawn(move || {
-        let message = match run_with_timeout(job.process, COMMAND_TIMEOUT) {
-            | Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-            | Err(error) => {
-                json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "error": {
-                        "code": REQUEST_FAILED,
-                        "message": format!("failed to run `{}`: {error}", job.command),
-                    },
-                })
-            },
-        };
-        let _ = out.send(message);
-    });
-}
-
-/// Runs `process` with captured output, killing it after `timeout`.
-fn run_with_timeout(
-    mut process: std::process::Command,
-    timeout: std::time::Duration,
-) -> std::io::Result<Value> {
-    use std::io::Read;
-    use std::process::Stdio;
-    let mut child = process
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    // Drain both pipes on their own threads so a chatty child cannot block on
-    // a full pipe while this thread waits for it.
-    fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            if let Some(mut pipe) = pipe {
-                let _ = pipe.read_to_end(&mut bytes);
+    fn overlays(&self) -> SourceOverlays {
+        let mut overlays = SourceOverlays::new();
+        for open in self.documents.iter() {
+            if let Some(path) = crate::protocol::path_from_uri(open.name()) {
+                overlays.insert(&path, open.text());
             }
-            bytes
-        })
+        }
+        overlays
     }
-    let stdout = drain(child.stdout.take());
-    let stderr = drain(child.stderr.take());
-    let deadline = std::time::Instant::now() + timeout;
-    let (status, timed_out) = loop {
-        if let Some(status) = child.try_wait()? {
-            break (status, false);
-        }
-        if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            break (child.wait()?, true);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    };
-    let stdout = String::from_utf8_lossy(&stdout.join().unwrap_or_default()).into_owned();
-    let stderr = String::from_utf8_lossy(&stderr.join().unwrap_or_default()).into_owned();
-    Ok(json!({
-        "success": status.success() && !timed_out,
-        "exitCode": status.code(),
-        "timedOut": timed_out,
-        "stdout": stdout,
-        "stderr": stderr,
-    }))
 }
 
-/// Locates the `aevia` CLI binary, preferring the current executable when
-/// running as `aevia lsp` or a sibling `aevia` binary next to `aevia-lsp`.
-fn aevia_executable() -> std::path::PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        let stem = exe.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
-        if stem.eq_ignore_ascii_case("aevia") {
-            return exe;
+impl Drop for Server {
+    fn drop(&mut self) {
+        for task in &self.commands {
+            task.cancel();
         }
-        let sibling_name = if cfg!(windows) {
-            "aevia.exe"
-        } else {
-            "aevia"
-        };
-        let sibling = exe.with_file_name(sibling_name);
-        if sibling.is_file() {
-            return sibling;
+        for task in self.commands.drain(..) {
+            task.join();
         }
     }
-    std::path::PathBuf::from("aevia")
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "validate the on-disk identity used by editor execution"
+    )
+)]
+fn saved_source_matches(
+    path: &Path,
+    text: &str,
+) -> bool {
+    use std::io::Read;
+    if !path.is_file() {
+        return false;
+    }
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    if !file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+        return false;
+    }
+    // Clients may normalize CRLF or remove the UTF-8 BOM when opening a file.
+    let limit = text.len().saturating_mul(2).saturating_add(4);
+    let mut saved = String::new();
+    if file
+        .take(u64::try_from(limit).unwrap_or(u64::MAX))
+        .read_to_string(&mut saved)
+        .is_err()
+    {
+        return false;
+    }
+    let saved = saved.strip_prefix('\u{feff}').unwrap_or(&saved);
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    saved == text
+        || (saved.len() < limit
+            && saved.lines().eq(text.lines())
+            && saved.ends_with('\n') == text.ends_with('\n'))
 }

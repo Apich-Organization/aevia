@@ -19,5 +19,5 @@ aevia-lint.workspace = true
 aevia-rssn.workspace = true
 unicode-ident.workspace = true
 
-[lints.rust]
-unsafe_code = "forbid"
+[lints]
+workspace = true

@@ -23,10 +23,20 @@
 //! resolved class instance stay keyed by that span.
 
 #![forbid(unsafe_code)]
-#![allow(clippy::too_many_lines)]
-// The IR nodes are plain data kept unboxed so lowering and the interpreter match them directly;
-// lowering helpers thread explicit context instead of bundling it into a struct.
-#![allow(clippy::large_enum_variant, clippy::too_many_arguments)]
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
 
 pub mod lower;
 pub mod optimize;
@@ -126,6 +136,10 @@ pub struct Block {
 
 /// One statement of a block.
 #[derive(Debug)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "keeps the public IR layout and avoids adding allocations during lowering"
+)]
 pub enum Stmt {
     /// `let slot = rhs`.
     Let(Let),
@@ -153,6 +167,10 @@ pub struct Let {
 
 /// The last thing a block does.
 #[derive(Debug)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "keeps the public IR layout and avoids adding allocations during lowering"
+)]
 pub enum Tail {
     /// Produce an atom.
     Return {
@@ -202,6 +220,10 @@ pub struct Arm {
 
 /// A computation that produces one value.
 #[derive(Debug)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "keeps the public IR layout and avoids adding allocations during lowering"
+)]
 pub enum Rhs {
     /// Copy an atom.
     Atom(Atom),
@@ -304,9 +326,13 @@ pub enum Rhs {
     /// identity, so evaluation builds the variant directly: no name lookup,
     /// no first-class constructor value, no re-validation of the payload.
     Construct {
+        /// Nominal type declaring the constructor.
         adt: aevia_types::adt::AdtId,
+        /// Constructor position in the nominal type.
         index: usize,
+        /// Source constructor spelling.
         name: Rc<str>,
+        /// Payload in parameter order.
         args: Vec<Atom>,
     },
     /// A tensor literal.
@@ -394,6 +420,10 @@ pub struct Call {
 
 /// How a call is resolved.
 #[derive(Debug)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "keeps the public IR layout and avoids adding allocations during lowering"
+)]
 pub enum CallKind {
     /// Evaluate the callee and apply it.
     Normal,
@@ -439,18 +469,29 @@ pub struct DoPlan {
 pub enum DoStep {
     /// Evaluate a pure value, then bind it locally.
     Let {
+        /// Pattern that receives the produced value.
         pattern: Pattern,
+        /// Block evaluated when this step runs.
         value: Rc<Block>,
+        /// The source span of this step.
         span: Span,
     },
     /// Evaluate an action, execute it, then bind its result locally.
     Bind {
+        /// Pattern that receives the produced value.
         pattern: Pattern,
+        /// Block evaluated when this step runs.
         value: Rc<Block>,
+        /// The source span of this step.
         span: Span,
     },
     /// Evaluate and execute an action in sequence.
-    Action { value: Rc<Block>, span: Span },
+    Action {
+        /// Block that yields the action to execute.
+        value: Rc<Block>,
+        /// The source span of this step.
+        span: Span,
+    },
 }
 
 /// A pattern whose binders are slots of the current frame.
@@ -465,7 +506,7 @@ pub enum Pattern {
         /// The slot the value is written to.
         slot: Slot,
         /// The sub-pattern, for `as`.
-        inner: Option<Box<Pattern>>,
+        inner: Option<Box<Self>>,
     },
     /// A constructor pattern.
     Ctor {
@@ -474,16 +515,16 @@ pub enum Pattern {
         /// Checked nominal constructor identity; absent for unchecked lowering.
         identity: Option<(aevia_types::adt::AdtId, usize)>,
         /// Its arguments.
-        args: Vec<Pattern>,
+        args: Vec<Self>,
     },
     /// A record pattern, with every field bound.
-    Record(Vec<(String, Pattern)>),
+    Record(Vec<(String, Self)>),
     /// A tuple pattern.
-    Tuple(Vec<Pattern>),
+    Tuple(Vec<Self>),
     /// A tensor pattern.
     Tensor {
         /// The leading elements.
-        items: Vec<Pattern>,
+        items: Vec<Self>,
         /// The `..rest` slot.
         rest: Option<Slot>,
     },

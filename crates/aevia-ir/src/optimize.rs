@@ -155,6 +155,10 @@ fn boolean(
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps right-hand-side rewriting separate from statement traversal"
+)]
 fn rhs(
     rhs: &mut Rhs,
     known: &HashMap<u32, bool>,

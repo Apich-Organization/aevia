@@ -1,6 +1,21 @@
 //! Actual callable signatures and per-activation generic substitutions.
 //! A span supplies an expectation only at a checked source call. The authority
 //! is the immutable signature belonging to the evaluated source closure.
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
 use crate::eval::EvalError;
 use crate::eval::Interp;
 use crate::evidence::ModuleContext;
@@ -8,14 +23,17 @@ use crate::value::Closure;
 use crate::value::Value;
 use aevia_syntax::Span;
 use aevia_types::Infer;
+use aevia_types::Row;
 use aevia_types::Type;
 use aevia_types::TypeSubstitution;
+use aevia_types::UnifyError;
 use aevia_types::check::FunctionEvidence;
 use aevia_types::check::GenericBinder;
 use std::rc::Rc;
 use std::rc::Weak;
 
-pub(crate) fn specialize_closure(
+/// Retain the original closure identity when applying a source proof.
+pub fn specialize_closure(
     closure: &Rc<Closure>,
     proof: Rc<FunctionProof>,
 ) -> Rc<Closure> {
@@ -26,13 +44,15 @@ pub(crate) fn specialize_closure(
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct CallBindings {
+/// The runtime type substitution for one activation.
+pub struct CallBindings {
     pub(crate) context: Weak<ModuleContext>,
     pub(crate) values: TypeSubstitution,
     pub(crate) verified: bool,
 }
 #[derive(Clone, Debug)]
-pub(crate) struct FunctionProof {
+/// Checked callable provenance and its selected generic signature.
+pub struct FunctionProof {
     pub(crate) context: Rc<ModuleContext>,
     pub(crate) definition: FunctionEvidence,
     pub(crate) infer: Infer,
@@ -52,7 +72,7 @@ pub(crate) struct FunctionProof {
 
 /// A per-proof memo of [`FunctionProof::closed`] that a clone does not inherit.
 #[derive(Debug, Default)]
-pub(crate) struct ClosedMemo(std::cell::OnceCell<bool>);
+pub struct ClosedMemo(std::cell::OnceCell<bool>);
 
 impl Clone for ClosedMemo {
     fn clone(&self) -> Self {
@@ -61,7 +81,7 @@ impl Clone for ClosedMemo {
 }
 
 /// Whether every binder value in a substitution is free of variables.
-pub(crate) fn substitution_closed(values: &TypeSubstitution) -> bool {
+fn substitution_closed(values: &TypeSubstitution) -> bool {
     !values.types.values().any(aevia_types::class::has_variables)
         && !values
             .representations
@@ -80,7 +100,7 @@ pub(crate) fn substitution_closed(values: &TypeSubstitution) -> bool {
 /// A cloned proof is about to be refined (`specialize`, call-site selection),
 /// so the original's bindings would be stale for it.
 #[derive(Debug, Default)]
-pub(crate) struct BindingsMemo(std::cell::OnceCell<Rc<CallBindings>>);
+pub struct BindingsMemo(std::cell::OnceCell<Rc<CallBindings>>);
 
 impl Clone for BindingsMemo {
     fn clone(&self) -> Self {
@@ -119,6 +139,16 @@ impl FunctionProof {
             infer
                 .add_numeric_constraint(constraint.substitute(&projection))
                 .ok()?;
+        }
+        for (id, labels) in &definition.scheme.row_lacks {
+            let Type::Record(Row::Var(fresh)) =
+                projection.freshen(&Type::Record(Row::Var(*id)), &mut infer)
+            else {
+                return None;
+            };
+            for label in labels {
+                infer.require_lacks(fresh, label).ok()?;
+            }
         }
         let mut verified = true;
         if let Some(captured) = captured.filter(|captured| {
@@ -306,6 +336,10 @@ impl FunctionProof {
 fn nat_type(nat: aevia_types::Nat) -> Type {
     Type::tensor(aevia_types::Shape::Refined(vec![Some(nat)]), Type::Unit)
 }
+#[allow(
+    clippy::single_call_fn,
+    reason = "maps all five generic binder kinds into the inferencer"
+)]
 fn binder_type(binder: &GenericBinder) -> Type {
     match binder {
         | GenericBinder::Type(ty) => ty.clone(),
@@ -326,7 +360,7 @@ impl Interp {
     ) -> Value {
         let mut closure = Closure::ast(params, body, scope, name);
         closure.proof = self.function_proof(site);
-        closure.captured_bindings = self.bindings.clone();
+        closure.captured_bindings.clone_from(&self.bindings);
         Value::Closure(Rc::new(closure))
     }
 
@@ -434,10 +468,7 @@ impl Interp {
         Ok(Value::Closure(specialize_closure(closure, proof)))
     }
 
-    pub(crate) fn concrete_callable_type(
-        &self,
-        value: &Value,
-    ) -> Option<Type> {
+    pub(crate) fn concrete_callable_type(value: &Value) -> Option<Type> {
         let Value::Closure(closure) = value else {
             return None;
         };
@@ -613,15 +644,25 @@ impl Interp {
         // Runtime data can solve dimensions, extents and representations that
         // the source's unrefined argument annotation intentionally omitted.
         for (parameter, value) in params.iter().zip(args.iter()) {
-            let actual = self.call_argument_schema(value);
+            if !selected.definition.scheme.row_lacks.is_empty()
+                && let Some(field) = forbidden_record_field(value, parameter, &selected.infer)
+            {
+                return Err(EvalError::new(
+                    "E0208",
+                    UnifyError::DuplicateField { field }.to_string(),
+                ));
+            }
+            let actual = Self::call_argument_schema(value);
             if let Some(actual) = actual {
                 let mut names = TypeSubstitution::default();
                 let actual = names.freshen(&actual, &mut selected.infer);
                 let mut trial = selected.infer.clone();
-                if trial.unify(parameter, &actual).is_ok() {
-                    selected.infer = trial;
-                } else {
-                    selected.verified = false;
+                match trial.unify(parameter, &actual) {
+                    | Ok(()) => selected.infer = trial,
+                    | Err(error @ UnifyError::DuplicateField { .. }) => {
+                        return Err(EvalError::new("E0208", error.to_string()));
+                    },
+                    | Err(_) => selected.verified = false,
                 }
             }
         }
@@ -666,18 +707,15 @@ impl Interp {
         for (parameter, value) in params.iter().zip(args.iter_mut()) {
             let valid = match value {
                 | Value::Closure(closure) if matches!(parameter, Type::Fn(..)) => {
-                    if let Some(proof) = &closure.proof {
-                        match proof.specialize(parameter) {
-                            | Ok(proof) => {
-                                let valid = proof.verified;
-                                *value = Value::Closure(specialize_closure(closure, proof));
-                                valid
-                            },
-                            | Err(_) => false,
-                        }
-                    } else {
-                        false
-                    }
+                    closure
+                        .proof
+                        .as_ref()
+                        .and_then(|proof| proof.specialize(parameter).ok())
+                        .is_some_and(|proof| {
+                            let valid = proof.verified;
+                            *closure = specialize_closure(closure, proof);
+                            valid
+                        })
                 },
                 | _ => self.runtime_input_matches(value, parameter),
             };
@@ -786,6 +824,10 @@ impl Interp {
 }
 
 impl Interp {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "recognizes one prelude nominal type before callback validation"
+    )]
     fn opaque_named(
         ty: &Type,
         name: &str,
@@ -810,9 +852,9 @@ impl Interp {
             | (Value::TypeRep(actual), Type::Adt(id, args))
                 if aevia_types::adt::module_of(*id).is_prelude()
                     && aevia_types::adt::name_of(*id) == "TypeRep"
-                    && args.len() == 1 =>
+                    && let [schema] = args.as_slice() =>
             {
-                crate::host_witness::strict_schema_equal(actual, &args[0])
+                crate::host_witness::strict_schema_equal(actual, schema)
             },
             | (Value::Closure(closure), ty @ Type::Fn(..)) => {
                 closure
@@ -827,11 +869,7 @@ impl Interp {
                             .extent(axis)
                             .is_some_and(|expected| expected != *extent)
                     })
-                    || tensor
-                        .shape
-                        .iter()
-                        .try_fold(1usize, |total, extent| total.checked_mul(*extent))
-                        != Some(tensor.storage.len())
+                    || tensor.checked_element_count() != Some(tensor.storage.len())
                 {
                     return false;
                 }
@@ -851,12 +889,10 @@ impl Interp {
                 {
                     let root = TensorInputCache::root(tensor);
                     if tensor.dim == root.dim
+                        && let Ok(rank) = u32::try_from(root.rank())
                         && self.runtime_input_matches(
                             &Value::Tensor(root.clone()),
-                            &Type::tensor(
-                                aevia_types::Shape::Rank(root.rank() as u32),
-                                (**elem).clone(),
-                            ),
+                            &Type::tensor(aevia_types::Shape::Rank(rank), (**elem).clone()),
                         )
                     {
                         return true;
@@ -867,11 +903,15 @@ impl Interp {
                         crate::host_witness::strict_schema_equal(actual, elem)
                     }) || crate::host_witness::capture(value, expected, false).is_some();
                 }
-                let valid = (0..tensor.storage.len()).all(|index| {
-                    tensor
-                        .get_flat(index)
-                        .is_some_and(|value| self.runtime_input_matches(&value, elem))
-                });
+                let valid = if crate::host_witness::is_leaf_schema(elem) {
+                    crate::host_witness::tensor_witnesses(tensor, shape, elem, false).is_some()
+                } else {
+                    (0..tensor.storage.len()).all(|index| {
+                        tensor
+                            .get_flat(index)
+                            .is_some_and(|value| self.runtime_input_matches(&value, elem))
+                    })
+                };
                 if valid {
                     self.tensor_inputs.remember(tensor, elem);
                 }
@@ -889,10 +929,11 @@ impl Interp {
         }
     }
 
-    fn call_argument_schema(
-        &self,
-        value: &Value,
-    ) -> Option<Type> {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "collects structural and opaque input schemas before inference"
+    )]
+    fn call_argument_schema(value: &Value) -> Option<Type> {
         match value {
             | Value::Closure(closure) => {
                 closure.proof.as_ref().map(|proof| proof.signature.clone())
@@ -926,6 +967,36 @@ impl Interp {
     }
 }
 
+/// An opaque field can prevent recovery of the record's complete runtime
+/// schema. Its labels still suffice to check the open row's exclusions.
+fn forbidden_record_field(
+    value: &Value,
+    expected: &Type,
+    infer: &Infer,
+) -> Option<String> {
+    let (Value::Record(record), Type::Record(row)) = (value, infer.resolve(expected)) else {
+        return None;
+    };
+    if let Some(tail) = row.tail_var()
+        && let Some(field) = infer
+            .lacks_of(tail)
+            .into_iter()
+            .find(|label| row.field(label).is_none() && record.fields.contains_key(label))
+    {
+        return Some(field);
+    }
+    let mut fields = &row;
+    while let Row::Extend { label, ty, tail } = fields {
+        if let Some(value) = record.fields.get(label)
+            && let Some(field) = forbidden_record_field(value, ty, infer)
+        {
+            return Some(field);
+        }
+        fields = tail;
+    }
+    None
+}
+
 // Primitive input proofs retain only Weak identities. A live Weak prevents
 // Rc::get_mut; Rc::make_mut either detaches it or clones to a different identity.
 // No proof survives such a change, and no proof keeps the payload alive.
@@ -937,7 +1008,7 @@ impl Interp {
 /// counts every allocation a loop step makes. Entries under one key are told
 /// apart by [`ArgumentSchema`]s, compared in place against the values.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub(crate) struct CallProofKey {
+struct CallProofKey {
     proof: usize,
     callee: Option<Span>,
     bindings: usize,
@@ -953,7 +1024,7 @@ struct ArgumentSchema {
     dim: Option<aevia_dim::Dim>,
 }
 
-fn argument_tag(value: &Value) -> Option<(u8, Option<&aevia_dim::Dim>)> {
+const fn argument_tag(value: &Value) -> Option<(u8, Option<&aevia_dim::Dim>)> {
     Some(match value {
         | Value::Num(number) => {
             let tag = match number.kind {
@@ -974,6 +1045,10 @@ fn argument_tag(value: &Value) -> Option<(u8, Option<&aevia_dim::Dim>)> {
     })
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "checks digest collisions against the full argument schemas"
+)]
 fn schemas_match(
     schemas: &[ArgumentSchema],
     args: &[Value],
@@ -986,6 +1061,10 @@ fn schemas_match(
 }
 
 impl CallProofKey {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "constructs the dynamic call cache key"
+    )]
     fn new(
         interp: &Interp,
         proof: &Rc<FunctionProof>,
@@ -1016,7 +1095,7 @@ impl CallProofKey {
 /// The identity of a call whose selection is decided by static evidence
 /// alone: the proof, the checked site, the active bindings and the module.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub(crate) struct StaticCallKey {
+struct StaticCallKey {
     proof: usize,
     callee: Span,
     bindings: usize,
@@ -1024,6 +1103,10 @@ pub(crate) struct StaticCallKey {
 }
 
 impl StaticCallKey {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "constructs the static call cache key"
+    )]
     fn new(
         interp: &Interp,
         proof: &Rc<FunctionProof>,
@@ -1047,7 +1130,7 @@ impl StaticCallKey {
 /// names alive, so an address in a key can never be reused by a different
 /// object while the entry exists.
 #[derive(Default)]
-pub(crate) struct CallProofCache {
+pub struct CallProofCache {
     /// Statically closed selections; see [`StaticCallKey`].
     statics: std::cell::RefCell<crate::fxhash::FxHashMap<StaticCallKey, StaticCallEntry>>,
     entries: std::cell::RefCell<crate::fxhash::FxHashMap<CallProofKey, Vec<CallProofEntry>>>,
@@ -1098,32 +1181,7 @@ impl CallProofCache {
             return proof;
         }
         let bindings = proof.bindings();
-        if bindings
-            .values
-            .types
-            .values()
-            .any(aevia_types::class::has_variables)
-            || bindings
-                .values
-                .representations
-                .values()
-                .any(|rep| matches!(rep, aevia_types::Rep::Var(_)))
-            || !bindings
-                .values
-                .dimensions
-                .values()
-                .all(aevia_dim::Dim::is_concrete)
-            || bindings
-                .values
-                .rows
-                .values()
-                .any(|row| aevia_types::class::has_variables(&Type::Record(row.clone())))
-            || bindings
-                .values
-                .naturals
-                .values()
-                .any(|nat| !nat.vars().is_empty())
-        {
+        if !substitution_closed(&bindings.values) {
             return proof;
         }
         let mut canonical = self.canonical.borrow_mut();
@@ -1231,7 +1289,8 @@ impl CallProofCache {
 }
 
 #[derive(Default)]
-pub(crate) struct TensorInputCache {
+/// A bounded cache of validated primitive tensor identities.
+pub struct TensorInputCache {
     entries: std::cell::RefCell<
         std::collections::VecDeque<(std::rc::Weak<crate::value::TensorData>, Type)>,
     >,
@@ -1315,6 +1374,21 @@ mod tensor_input_cache_tests {
             &Value::Tensor(tensor.clone()),
             &Type::tensor(aevia_types::Shape::Rank(1), elem),
         )
+    }
+    #[test]
+    fn a_zero_extent_makes_the_product_empty_even_after_large_axes() {
+        let interp = Interp::new(&aevia_types::CheckedModule::default());
+        let tensor = TensorData::new(
+            vec![usize::MAX, 2, 0],
+            Storage::Dense(Rc::new(Vec::new())),
+            aevia_dim::Dim::one(),
+            None,
+        );
+        let expected = Type::tensor(
+            aevia_types::Shape::Rank(3),
+            Type::float(aevia_dim::Dim::one()),
+        );
+        assert!(interp.runtime_input_matches(&Value::Tensor(Rc::new(tensor)), &expected));
     }
     #[test]
     fn weak_identity_proofs_block_get_mut_and_make_mut_invalidates_them() {

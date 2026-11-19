@@ -1,6 +1,22 @@
 //! The language-facing surface of sparse tensors: the builtins, the operator
 //! dispatch (`+ - * / @ == !=`), indexing, equality and rendering.
 
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::unwrap_used
+)]
+#![allow(
+    clippy::single_call_fn,
+    reason = "Each built-in and arithmetic rule has a named handler at the dispatch boundary."
+)]
+
 use super::Entries;
 use super::R;
 use super::SpValues;
@@ -24,9 +40,9 @@ use super::record_of;
 use super::tuple_of;
 use super::zero_num;
 use crate::builtin_ids::BuiltinId;
-use crate::eval::EvalError;
 use crate::eval::Interp;
 use crate::eval::build_tensor;
+use crate::eval::normalize_index;
 use crate::value::NumKind;
 use crate::value::NumVal;
 use crate::value::Storage;
@@ -38,7 +54,10 @@ use aevia_syntax::Span;
 use aevia_syntax::ast::BinOp;
 use aevia_syntax::ast::Ty;
 use aevia_syntax::ast::TyKind;
+use num_traits::ToPrimitive;
+use std::alloc::Layout;
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::rc::Rc;
 
 // ---------------------------------------------------------------------------
@@ -57,48 +76,58 @@ fn boxed(data: &SparseData) -> Cow<'_, SparseData> {
     }
 }
 
-fn zero_rank(data: &SparseData) -> u8 {
+const fn zero_rank(data: &SparseData) -> u8 {
     kind_rank(&data.zero.kind)
 }
 
 /// Like [`wrap`], keeping the block shape of a `Bcsr` operand when it still
 /// divides the result (transposes try the swapped block).
 fn wrap_like<T: Store>(
+    span: Span,
     like: &SparseData,
     shape: Vec<usize>,
     dim: Dim,
     display: Option<Rc<UnitDef>>,
     zero_rank: u8,
     entries: Entries<T>,
-) -> Value {
-    if like.format == SparseFormat::Bcsr && shape.len() == 2 {
+) -> R<Value> {
+    if like.format == SparseFormat::Bcsr
+        && let [rows, cols] = shape.as_slice()
+    {
         let (br, bc) = like.block;
         for (r, c) in [(br, bc), (bc, br)] {
-            if shape[0].is_multiple_of(r) && shape[1].is_multiple_of(c) {
-                return Value::Sparse(Rc::new(SparseData::from_entries_blocked(
-                    shape,
-                    dim,
-                    display,
-                    zero_rank,
-                    (r, c),
-                    entries,
+            if r != 0 && c != 0 && rows.is_multiple_of(r) && cols.is_multiple_of(c) {
+                check_block_capacity::<T>(*rows, *cols, (r, c), &entries, span)?;
+                return Ok(Value::Sparse(Rc::new(
+                    SparseData::from_entries_blocked(
+                        shape,
+                        dim,
+                        display,
+                        zero_rank,
+                        (r, c),
+                        entries,
+                    )
+                    .map_err(|message| err("E0802", message, span))?,
                 )));
             }
         }
     }
-    wrap(like.format, shape, dim, display, zero_rank, entries)
+    wrap(span, like.format, shape, dim, display, zero_rank, entries)
 }
 
 fn wrap<T: Store>(
+    span: Span,
     format: SparseFormat,
     shape: Vec<usize>,
     dim: Dim,
     display: Option<Rc<UnitDef>>,
     zero_rank: u8,
     entries: Entries<T>,
-) -> Value {
-    Value::Sparse(Rc::new(SparseData::from_entries(
-        format, shape, dim, display, zero_rank, entries,
+) -> R<Value> {
+    check_format_capacity(format, &shape, span)?;
+    Ok(Value::Sparse(Rc::new(
+        SparseData::from_entries(format, shape, dim, display, zero_rank, entries)
+            .map_err(|message| err("E0802", message, span))?,
     )))
 }
 
@@ -145,7 +174,15 @@ fn sparse_arg<'a>(
     span: Span,
 ) -> R<&'a Rc<SparseData>> {
     match args.get(index) {
-        | Some(Value::Sparse(data)) => Ok(data),
+        | Some(Value::Sparse(data)) => {
+            if !matches!(
+                name,
+                "get" | "nnz" | "density" | "format_of" | "shape" | "rank" | "block_size"
+            ) {
+                check_sparse_layout(data, span)?;
+            }
+            Ok(data)
+        },
         | Some(other) => {
             Err(err(
                 "E0302",
@@ -159,7 +196,7 @@ fn sparse_arg<'a>(
         | None => {
             Err(err(
                 "E0315",
-                format!("`{name}` is missing argument {}", index + 1),
+                format!("`{name}` is missing argument {}", index.saturating_add(1)),
                 span,
             ))
         },
@@ -173,7 +210,10 @@ fn tensor_arg<'a>(
     span: Span,
 ) -> R<&'a Rc<TensorData>> {
     match args.get(index) {
-        | Some(Value::Tensor(data)) => Ok(data),
+        | Some(Value::Tensor(data)) => {
+            check_dense_layout(data, span)?;
+            Ok(data)
+        },
         | Some(other) => {
             Err(err(
                 "E0302",
@@ -184,7 +224,7 @@ fn tensor_arg<'a>(
         | None => {
             Err(err(
                 "E0315",
-                format!("`{name}` is missing argument {}", index + 1),
+                format!("`{name}` is missing argument {}", index.saturating_add(1)),
                 span,
             ))
         },
@@ -197,25 +237,23 @@ fn int_arg(
     name: &str,
     span: Span,
 ) -> R<usize> {
-    match args.get(index) {
-        | Some(value) => index_of(value, name, span),
-        | None => {
-            Err(err(
-                "E0315",
-                format!("`{name}` is missing argument {}", index + 1),
-                span,
-            ))
-        },
-    }
+    let value = args.get(index).ok_or_else(|| {
+        err(
+            "E0315",
+            format!("`{name}` is missing argument {}", index.saturating_add(1)),
+            span,
+        )
+    })?;
+    index_of(value, name, span)
 }
 
-fn rank2<'a>(
-    data: &'a SparseData,
+fn rank2(
+    data: &SparseData,
     what: &str,
     span: Span,
-) -> R<&'a SparseData> {
-    if data.rank() == 2 {
-        Ok(data)
+) -> R<(usize, usize)> {
+    if let [rows, cols] = data.shape.as_slice() {
+        Ok((*rows, *cols))
     } else {
         Err(err(
             "E0802",
@@ -223,6 +261,38 @@ fn rank2<'a>(
                 "{what} needs a rank-2 sparse matrix, found rank {}",
                 data.rank()
             ),
+            span,
+        ))
+    }
+}
+
+fn check_dense_layout(
+    data: &TensorData,
+    span: Span,
+) -> R<()> {
+    if data.checked_element_count() == Some(data.storage.len()) {
+        Ok(())
+    } else {
+        Err(err(
+            "E0802",
+            "tensor storage does not match its shape",
+            span,
+        ))
+    }
+}
+
+fn materialized_values(
+    data: &TensorData,
+    span: Span,
+) -> R<Vec<Value>> {
+    check_dense_layout(data, span)?;
+    let values = data.elements();
+    if values.len() == data.storage.len() {
+        Ok(values)
+    } else {
+        Err(err(
+            "E0802",
+            "tensor view cannot provide all its elements",
             span,
         ))
     }
@@ -246,6 +316,145 @@ fn check_format_rank(
     Ok(())
 }
 
+const fn index_buffer_fits(count: usize) -> bool {
+    Layout::array::<usize>(count).is_ok()
+}
+
+fn pointer_buffer_fits(lines: usize) -> bool {
+    lines.checked_add(1).is_some_and(index_buffer_fits)
+}
+
+fn check_format_capacity(
+    format: SparseFormat,
+    shape: &[usize],
+    span: Span,
+) -> R<()> {
+    check_format_rank(format, shape.len(), span)?;
+    let fits = match (format, shape) {
+        | (SparseFormat::Csr | SparseFormat::Bcsr, [rows, _]) => pointer_buffer_fits(*rows),
+        | (SparseFormat::Csc, [_, cols]) => pointer_buffer_fits(*cols),
+        | _ => true,
+    };
+    if fits {
+        Ok(())
+    } else {
+        Err(err(
+            "E0802",
+            format!(
+                "{} index storage is too large for shape {shape:?}",
+                format.name()
+            ),
+            span,
+        ))
+    }
+}
+
+fn check_block_capacity<T>(
+    rows: usize,
+    cols: usize,
+    block: (usize, usize),
+    entries: &Entries<T>,
+    span: Span,
+) -> R<()> {
+    let (br, bc) = block;
+    let error = || err("E0802", "block CSR storage is too large", span);
+    let area = br.checked_mul(bc).ok_or_else(error)?;
+    if !rows.checked_div(br).is_some_and(pointer_buffer_fits) || cols.checked_div(bc).is_none() {
+        return Err(error());
+    }
+    let buffers_fit = |blocks: usize| {
+        blocks
+            .checked_mul(area)
+            .is_some_and(|slots| Layout::array::<T>(slots).is_ok())
+    };
+    if !buffers_fit(entries.len()) {
+        // Several nonzeros can share a block. Count them exactly before rejecting a large request.
+        let blocks: Option<HashSet<_>> = entries
+            .coords
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&[row, col]| row.checked_div(br).zip(col.checked_div(bc)))
+            .collect();
+        if !blocks.is_some_and(|blocks| buffers_fit(blocks.len())) {
+            return Err(error());
+        }
+    }
+    Ok(())
+}
+
+/// Checks the public metadata before the private storage is decoded.
+fn sparse_layout_is_consistent(data: &SparseData) -> bool {
+    let slots = data.stored_len();
+    let compressed = |ptr: &[usize], idx: &[usize], outer: usize, inner: usize| {
+        outer.checked_add(1) == Some(ptr.len())
+            && ptr.first() == Some(&0)
+            && ptr.last() == Some(&idx.len())
+            && ptr.array_windows::<2>().all(|[start, end]| start <= end)
+            && idx.iter().all(|index| *index < inner)
+    };
+    match (data.format, &data.pattern, data.shape.as_slice()) {
+        | (SparseFormat::Coo, super::Pattern::Coords(coords), []) => {
+            coords.is_empty() && slots <= 1
+        },
+        | (SparseFormat::Coo, super::Pattern::Coords(coords), shape) => {
+            shape.len().checked_mul(slots) == Some(coords.len())
+                && coords
+                    .chunks_exact(shape.len())
+                    .all(|coordinate| outside_axis(coordinate, shape).is_none())
+        },
+        | (SparseFormat::Csr, super::Pattern::Compressed { ptr, idx }, [rows, cols]) => {
+            idx.len() == slots && compressed(ptr, idx, *rows, *cols)
+        },
+        | (SparseFormat::Csc, super::Pattern::Compressed { ptr, idx }, [rows, cols]) => {
+            idx.len() == slots && compressed(ptr, idx, *cols, *rows)
+        },
+        | (SparseFormat::Bcsr, super::Pattern::Blocked { ptr, idx }, [rows, cols]) => {
+            let (br, bc) = data.block;
+            br != 0
+                && bc != 0
+                && rows.is_multiple_of(br)
+                && cols.is_multiple_of(bc)
+                && idx
+                    .len()
+                    .checked_mul(br)
+                    .and_then(|count| count.checked_mul(bc))
+                    == Some(slots)
+                && br.checked_mul(bc).is_some()
+                && rows
+                    .checked_div(br)
+                    .zip(cols.checked_div(bc))
+                    .is_some_and(|(rows, cols)| compressed(ptr, idx, rows, cols))
+        },
+        | _ => false,
+    }
+}
+
+fn outside_axis(
+    coordinate: &[usize],
+    shape: &[usize],
+) -> Option<usize> {
+    coordinate
+        .iter()
+        .zip(shape)
+        .position(|(index, extent)| index >= extent)
+}
+
+fn check_sparse_layout(
+    data: &SparseData,
+    span: Span,
+) -> R<()> {
+    if sparse_layout_is_consistent(data) {
+        Ok(())
+    } else {
+        Err(err(
+            "E0802",
+            "sparse storage does not match its shape or format",
+            span,
+        ))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Builtins
 // ---------------------------------------------------------------------------
@@ -256,24 +465,22 @@ fn format_of_type(
     span: Span,
 ) -> R<SparseFormat> {
     let name = match &ty.kind {
-        | TyKind::Named { path, args } if args.is_empty() => path.last().cloned(),
-        | TyKind::Var(name) => Some(name.clone()),
+        | TyKind::Named { path, args } if args.is_empty() => path.last().map(String::as_str),
+        | TyKind::Var(name) => Some(name.as_str()),
         | _ => None,
     };
-    match name {
-        | Some(name) => SparseFormat::parse(&name, span),
-        | None => {
-            Err(err(
-                "E0310",
-                "expected a sparse format name (Csr, Csc, Coo or Bcsr)",
-                span,
-            ))
-        },
-    }
+    let name = name.ok_or_else(|| {
+        err(
+            "E0310",
+            "expected a sparse format name (Csr, Csc, Coo or Bcsr)",
+            span,
+        )
+    })?;
+    SparseFormat::parse(name, span)
 }
 
 /// A builtin called with explicit type arguments (`from_dense<Coo>(A)`).
-pub(crate) fn call_typed(
+pub fn call_typed(
     interp: &mut Interp,
     name: &str,
     types: &[Ty],
@@ -289,7 +496,7 @@ pub(crate) fn call_typed(
 
 /// A builtin called without type arguments. `None` means the name (or its
 /// argument types) is not one the sparse runtime serves.
-pub(crate) fn call(
+pub fn call(
     interp: &mut Interp,
     id: BuiltinId,
     name: &str,
@@ -345,16 +552,7 @@ fn run(
         },
         | "to_dense" => to_dense(sparse_arg(args, 0, name, span)?, span),
         | "nnz" => Ok(int_value(sparse_arg(args, 0, name, span)?.nnz())),
-        | "density" => {
-            let data = sparse_arg(args, 0, name, span)?;
-            let total = data.shape.iter().map(|e| *e as f64).product::<f64>();
-            let value = if total == 0.0 {
-                0.0
-            } else {
-                data.nnz() as f64 / total
-            };
-            Ok(Value::float(value))
-        },
+        | "density" => Ok(Value::float(density(sparse_arg(args, 0, name, span)?))),
         | "format_of" => {
             Ok(Value::string(
                 sparse_arg(args, 0, name, span)?.format.name(),
@@ -408,7 +606,7 @@ fn run(
         | "get" => {
             let data = sparse_arg(args, 0, name, span)?;
             let mut coord = Vec::new();
-            for item in &args[1..] {
+            for item in args.iter().skip(1) {
                 coord.push(signed_index(item, span)?);
             }
             index(data, &coord, span)
@@ -429,7 +627,7 @@ fn run(
         | "cg" => cg(args, span),
         | "cg_with" | "gmres_with" | "bicgstab_with" => iterative_with(name, args, span),
         | "map_nonzero" => map_nonzero(interp, args, span),
-        | "nonzeros" => nonzeros(sparse_arg(args, 0, name, span)?),
+        | "nonzeros" => Ok(nonzeros(sparse_arg(args, 0, name, span)?)),
         | "contract" => contract(interp, args, span),
         | other => {
             Err(err(
@@ -441,30 +639,36 @@ fn run(
     }
 }
 
+fn density(data: &SparseData) -> f64 {
+    if data.shape.contains(&0) {
+        return 0.0;
+    }
+    let total = data
+        .shape
+        .iter()
+        .map(|extent| extent.to_f64().unwrap_or(f64::INFINITY))
+        .product::<f64>();
+    data.nnz().to_f64().unwrap_or(f64::INFINITY) / total
+}
+
 fn signed_index(
     value: &Value,
     span: Span,
-) -> R<isize> {
-    value
-        .as_f64()
-        .filter(|f| f.fract() == 0.0)
-        .map(|f| f as isize)
-        .ok_or_else(|| err("E0802", "a sparse index must be an Int", span))
+) -> R<i128> {
+    let coordinate = match value.as_num().map(|number| &number.kind) {
+        | Some(NumKind::Int(integer)) => integer.to_i128(),
+        | Some(NumKind::Exact(rational)) if rational.is_integer() => {
+            rational.to_integer().to_i128()
+        },
+        | Some(NumKind::Float(number)) if number.fract() == 0.0 => number.to_i128(),
+        | _ => None,
+    };
+    coordinate.ok_or_else(|| err("E0802", "a sparse index must be an Int", span))
 }
 
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
-
-fn unflatten_into(
-    flat: usize,
-    shape: &[usize],
-    out: &mut Vec<usize>,
-) {
-    let start = out.len();
-    out.resize(start + shape.len(), 0);
-    kernels::unflatten(flat, shape, &mut out[start..]);
-}
 
 fn from_dense(
     format: SparseFormat,
@@ -480,23 +684,24 @@ fn from_dense(
         ));
     }
     check_format_rank(format, rank, span)?;
+    let mut coord = vec![0; rank];
     if let Some(data) = tensor.dense_flat() {
         let mut entries: Entries<f64> = Entries::empty(rank);
         for (flat, value) in data.iter().enumerate() {
             if *value != 0.0 {
-                let mut coord = Vec::with_capacity(rank);
-                unflatten_into(flat, &tensor.shape, &mut coord);
+                kernels::unflatten(flat, &tensor.shape, &mut coord);
                 entries.push(&coord, *value);
             }
         }
-        return Ok(wrap(
+        return wrap(
+            span,
             format,
             tensor.shape.clone(),
             tensor.dim.clone(),
             tensor.display.clone(),
             2,
             entries,
-        ));
+        );
     }
     let mut entries: Entries<Value> = Entries::empty(rank);
     let mut base = if tensor.storage.is_empty() {
@@ -504,8 +709,7 @@ fn from_dense(
     } else {
         0
     };
-    let mut coord = Vec::with_capacity(rank);
-    for (flat, element) in tensor.elements().into_iter().enumerate() {
+    for (flat, element) in materialized_values(tensor, span)?.into_iter().enumerate() {
         let Value::Num(num) = &element else {
             return Err(err(
                 "E0302",
@@ -518,19 +722,43 @@ fn from_dense(
         };
         base = base.max(kind_rank(&num.kind));
         if !num_is_zero(num) {
-            coord.clear();
-            unflatten_into(flat, &tensor.shape, &mut coord);
+            kernels::unflatten(flat, &tensor.shape, &mut coord);
             entries.push(&coord, element);
         }
     }
-    Ok(wrap(
+    wrap(
+        span,
         format,
         tensor.shape.clone(),
         tensor.dim.clone(),
         tensor.display.clone(),
         base,
         entries,
-    ))
+    )
+}
+
+fn dense_slot<'a, T>(
+    output: &'a mut [T],
+    coordinate: &[usize],
+    shape: &[usize],
+    span: Span,
+) -> R<&'a mut T> {
+    kernels::flat_index(coordinate, shape)
+        .and_then(|offset| output.get_mut(offset))
+        .ok_or_else(|| err("E0802", "sparse coordinate is out of bounds", span))
+}
+
+fn dense_slots<T: Clone>(
+    count: usize,
+    fill: T,
+    span: Span,
+) -> R<Vec<T>> {
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(count)
+        .map_err(|_| err("E0802", "dense result storage is too large", span))?;
+    output.resize(count, fill);
+    Ok(output)
 }
 
 fn to_dense(
@@ -539,9 +767,9 @@ fn to_dense(
 ) -> R<Value> {
     let count = element_count(&data.shape, span)?;
     if let Some(entries) = data.entries::<f64>() {
-        let mut out = vec![0.0; count];
-        for i in 0..entries.len() {
-            out[kernels::flat_index(entries.coord(i), &data.shape)] = entries.vals[i];
+        let mut out = dense_slots(count, 0.0, span)?;
+        for (i, &value) in entries.vals.iter().enumerate() {
+            *dense_slot(&mut out, entries.coord(i), &data.shape, span)? = value;
         }
         return Ok(dense_value_f64(
             data.shape.clone(),
@@ -554,9 +782,9 @@ fn to_dense(
         .entries::<Value>()
         .ok_or_else(|| kernels::class_error(span))?;
     let zero = Value::Num(data.zero.clone());
-    let mut out = vec![zero; count];
-    for i in 0..entries.len() {
-        out[kernels::flat_index(entries.coord(i), &data.shape)] = entries.vals[i].clone();
+    let mut out = dense_slots(count, zero, span)?;
+    for (i, value) in entries.vals.iter().enumerate() {
+        *dense_slot(&mut out, entries.coord(i), &data.shape, span)? = value.clone();
     }
     let result = build_tensor(out, data.shape.clone(), data.dim.clone());
     match (&result, &data.display) {
@@ -577,42 +805,52 @@ fn to_bcsr(
     span: Span,
 ) -> R<Value> {
     check_format_rank(SparseFormat::Bcsr, data.rank(), span)?;
-    if br == 0 || bc == 0 || !data.shape[0].is_multiple_of(br) || !data.shape[1].is_multiple_of(bc)
-    {
+    let (rows, cols) = rank2(data, "`to_bcsr`", span)?;
+    if br == 0 || bc == 0 || !rows.is_multiple_of(br) || !cols.is_multiple_of(bc) {
         return Err(err(
             "E0802",
             format!(
-                "a {br}x{bc} block does not tile a {}x{} matrix (the block extents must be                  positive divisors of the shape)",
-                data.shape[0], data.shape[1]
+                "a {br}x{bc} block does not tile a {rows}x{cols} matrix (the block extents must be positive divisors of the shape)"
             ),
             span,
         ));
+    }
+    if br.checked_mul(bc).is_none() {
+        return Err(err("E0802", "the block area is too large", span));
     }
     if data.format == SparseFormat::Bcsr && data.block == (br, bc) {
         return Ok(Value::Sparse(Rc::new(data.clone())));
     }
     let block = (br, bc);
     Ok(if let Some(entries) = data.entries::<f64>() {
-        Value::Sparse(Rc::new(SparseData::from_entries_blocked(
-            data.shape.clone(),
-            data.dim.clone(),
-            data.display.clone(),
-            2,
-            block,
-            entries,
-        )))
+        check_block_capacity(rows, cols, block, &entries, span)?;
+        Value::Sparse(Rc::new(
+            SparseData::from_entries_blocked(
+                data.shape.clone(),
+                data.dim.clone(),
+                data.display.clone(),
+                2,
+                block,
+                entries,
+            )
+            .map_err(|message| err("E0802", message, span))?,
+        ))
     } else {
         let entries = data
             .entries::<Value>()
             .ok_or_else(|| kernels::class_error(span))?;
-        Value::Sparse(Rc::new(SparseData::from_entries_blocked(
-            data.shape.clone(),
-            data.dim.clone(),
-            data.display.clone(),
-            zero_rank(data),
-            block,
-            entries,
-        )))
+        check_block_capacity(rows, cols, block, &entries, span)?;
+        Value::Sparse(Rc::new(
+            SparseData::from_entries_blocked(
+                data.shape.clone(),
+                data.dim.clone(),
+                data.display.clone(),
+                zero_rank(data),
+                block,
+                entries,
+            )
+            .map_err(|message| err("E0802", message, span))?,
+        ))
     })
 }
 
@@ -625,8 +863,9 @@ fn convert(
     if data.format == target {
         return Ok(Value::Sparse(Rc::new(data.clone())));
     }
-    Ok(if let Some(entries) = data.entries::<f64>() {
+    if let Some(entries) = data.entries::<f64>() {
         wrap(
+            span,
             target,
             data.shape.clone(),
             data.dim.clone(),
@@ -639,6 +878,7 @@ fn convert(
             .entries::<Value>()
             .ok_or_else(|| kernels::class_error(span))?;
         wrap(
+            span,
             target,
             data.shape.clone(),
             data.dim.clone(),
@@ -646,28 +886,33 @@ fn convert(
             zero_rank(data),
             entries,
         )
-    })
+    }
 }
 
 /// The element values of a 1-D tensor, and the representation class they
 /// start the implicit zero at.
-fn tensor_values(tensor: &TensorData) -> R<(Vec<Value>, u8)> {
-    let items = tensor.elements();
-    let mut rank = match &tensor.storage {
-        | Storage::TypedExact(_, crate::value::ExactRep::Int) => 0,
-        | Storage::Exact(_) | Storage::TypedExact(..) => 1,
-        | _ => 2,
+fn tensor_values(
+    tensor: &TensorData,
+    span: Span,
+) -> R<(Vec<Value>, u8)> {
+    let items = materialized_values(tensor, span)?;
+    let mut rank = if items.is_empty() {
+        match &tensor.storage {
+            | Storage::TypedExact(_, crate::value::ExactRep::Int) => 0,
+            | Storage::Exact(_) | Storage::TypedExact(..) => 1,
+            | _ => 2,
+        }
+    } else {
+        0
     };
-    if !items.is_empty() {
-        rank = 0;
-    }
     for item in &items {
         match item {
             | Value::Num(num) => rank = rank.max(kind_rank(&num.kind)),
             | other => {
-                return Err(EvalError::new(
+                return Err(err(
                     "E0302",
                     format!("sparse values must be numbers, found {}", other.type_name()),
+                    span,
                 ));
             },
         }
@@ -690,26 +935,44 @@ fn build_from_triplets(
     }
     if let Some(data) = values.dense_flat() {
         let entries = kernels::assemble(rank, coords, data.to_vec(), &mut FloatRing)?;
-        return Ok(wrap(
+        return wrap(
+            span,
             format,
             shape,
             values.dim.clone(),
             values.display.clone(),
             2,
             entries,
-        ));
+        );
     }
-    let (items, base) = tensor_values(values).map_err(|e| e.at(span))?;
+    let (items, base) = tensor_values(values, span)?;
     let mut ring = ValueRing { interp, span };
     let entries = kernels::assemble(rank, coords, items, &mut ring)?;
-    Ok(wrap(
+    wrap(
+        span,
         format,
         shape,
         values.dim.clone(),
         values.display.clone(),
         base,
         entries,
-    ))
+    )
+}
+
+fn coordinate_buffer(
+    entries: usize,
+    rank: usize,
+    message: &str,
+    span: Span,
+) -> R<Vec<usize>> {
+    let count = entries
+        .checked_mul(rank)
+        .ok_or_else(|| err("E0802", message, span))?;
+    let mut coordinates = Vec::new();
+    coordinates
+        .try_reserve_exact(count)
+        .map_err(|_| err("E0802", message, span))?;
+    Ok(coordinates)
 }
 
 fn sparse_coo(
@@ -735,10 +998,10 @@ fn sparse_coo(
     let nnz = values.storage.len();
     // The index list: an `nnz × rank` matrix, a list of tuples, or (rank 1)
     // a list of Ints.
-    let mut coords: Vec<usize> = Vec::with_capacity(nnz * rank);
-    match indices.rank() {
-        | 2 => {
-            if indices.shape[1] != rank || indices.shape[0] != nnz {
+    let mut coords = coordinate_buffer(nnz, rank, "too many sparse coordinates", span)?;
+    match indices.shape.as_slice() {
+        | [entries, width] => {
+            if *width != rank || *entries != nnz {
                 return Err(err(
                     "E0802",
                     format!(
@@ -748,19 +1011,19 @@ fn sparse_coo(
                     span,
                 ));
             }
-            for item in indices.elements() {
+            for item in materialized_values(indices, span)? {
                 coords.push(index_of(&item, "sparse_coo index", span)?);
             }
         },
-        | 1 => {
-            if indices.shape[0] != nnz {
+        | [entries] => {
+            if *entries != nnz {
                 return Err(err(
                     "E0802",
-                    format!("{} index entr(ies) for {nnz} value(s)", indices.shape[0]),
+                    format!("{entries} index entr(ies) for {nnz} value(s)"),
                     span,
                 ));
             }
-            for item in indices.elements() {
+            for item in materialized_values(indices, span)? {
                 match &item {
                     | Value::Record(record) => {
                         if record.fields.len() != rank {
@@ -793,19 +1056,19 @@ fn sparse_coo(
                 }
             }
         },
-        | other => {
+        | _ => {
             return Err(err(
                 "E0802",
                 format!(
-                    "indices must be an [nnz, rank] matrix or a list of tuples, found rank {other}"
+                    "indices must be an [nnz, rank] matrix or a list of tuples, found rank {}",
+                    indices.rank(),
                 ),
                 span,
             ));
         },
     }
-    for entry in 0..nnz {
-        let coord = &coords[entry * rank..(entry + 1) * rank];
-        if let Some(axis) = (0..rank).find(|a| coord[*a] >= shape[*a]) {
+    for (entry, coord) in coords.chunks_exact(rank).enumerate() {
+        if let Some(axis) = outside_axis(coord, &shape) {
             return Err(err(
                 "E0802",
                 format!(
@@ -837,13 +1100,13 @@ fn sparse_csr(
     )?;
     let values = tensor_arg(args, 4, "sparse_csr", span)?;
     let nnz = values.storage.len();
-    if ptr.len() != rows + 1 || ptr.first() != Some(&0) || ptr.last() != Some(&nnz) {
+    let pointer_count = rows
+        .checked_add(1)
+        .ok_or_else(|| err("E0802", "too many CSR rows", span))?;
+    if ptr.len() != pointer_count || ptr.first() != Some(&0) || ptr.last() != Some(&nnz) {
         return Err(err(
             "E0802",
-            format!(
-                "row_ptr must have {} entries, start at 0 and end at nnz = {nnz}",
-                rows + 1
-            ),
+            format!("row_ptr must have {pointer_count} entries, start at 0 and end at nnz = {nnz}"),
             span,
         ));
     }
@@ -854,31 +1117,42 @@ fn sparse_csr(
             span,
         ));
     }
-    let mut coords = Vec::with_capacity(nnz * 2);
-    for r in 0..rows {
-        if ptr[r] > ptr[r + 1] {
-            return Err(err("E0802", format!("row_ptr decreases at row {r}"), span));
+    let mut coords = coordinate_buffer(nnz, 2, "too many CSR coordinates", span)?;
+    for (row, &[start, end]) in ptr.array_windows::<2>().enumerate() {
+        if start > end {
+            return Err(err(
+                "E0802",
+                format!("row_ptr decreases at row {row}"),
+                span,
+            ));
         }
-        for k in ptr[r]..ptr[r + 1] {
-            if idx[k] >= cols {
+        let columns = idx.get(start..end).ok_or_else(|| {
+            err(
+                "E0802",
+                format!("row_ptr points beyond nnz = {nnz} at row {row}"),
+                span,
+            )
+        })?;
+        let mut previous = None;
+        for &column in columns {
+            if column >= cols {
                 return Err(err(
                     "E0802",
                     format!(
-                        "column index {} is out of bounds for {cols} column(s) (row {r})",
-                        idx[k]
+                        "column index {column} is out of bounds for {cols} column(s) (row {row})"
                     ),
                     span,
                 ));
             }
-            if k > ptr[r] && idx[k - 1] >= idx[k] {
+            if previous.is_some_and(|previous| previous >= column) {
                 return Err(err(
                     "E0802",
-                    format!("column indices of row {r} must be strictly increasing"),
+                    format!("column indices of row {row} must be strictly increasing"),
                     span,
                 ));
             }
-            coords.push(r);
-            coords.push(idx[k]);
+            previous = Some(column);
+            coords.extend_from_slice(&[row, column]);
         }
     }
     build_from_triplets(
@@ -898,10 +1172,15 @@ fn speye(
 ) -> R<Value> {
     check_format_rank(format, 2, span)?;
     let mut entries: Entries<f64> = Entries::empty(2);
+    entries.coords = coordinate_buffer(n, 2, "identity matrix is too large", span)?;
+    entries
+        .vals
+        .try_reserve_exact(n)
+        .map_err(|_| err("E0802", "identity matrix is too large", span))?;
     for i in 0..n {
         entries.push(&[i, i], 1.0);
     }
-    Ok(wrap(format, vec![n, n], Dim::one(), None, 2, entries))
+    wrap(span, format, vec![n, n], Dim::one(), None, 2, entries)
 }
 
 fn spdiag(
@@ -910,10 +1189,10 @@ fn spdiag(
     span: Span,
 ) -> R<Value> {
     check_format_rank(format, 2, span)?;
-    if diagonal.rank() != 1 {
+    let [n] = diagonal.shape.as_slice() else {
         return Err(err("E0802", "`spdiag` expects a rank-1 tensor", span));
-    }
-    let n = diagonal.shape[0];
+    };
+    let n = *n;
     if let Some(data) = diagonal.dense_flat() {
         let mut entries: Entries<f64> = Entries::empty(2);
         for (i, v) in data.iter().enumerate() {
@@ -921,30 +1200,32 @@ fn spdiag(
                 entries.push(&[i, i], *v);
             }
         }
-        return Ok(wrap(
+        return wrap(
+            span,
             format,
             vec![n, n],
             diagonal.dim.clone(),
             diagonal.display.clone(),
             2,
             entries,
-        ));
+        );
     }
-    let (items, base) = tensor_values(diagonal).map_err(|e| e.at(span))?;
+    let (items, base) = tensor_values(diagonal, span)?;
     let mut entries: Entries<Value> = Entries::empty(2);
     for (i, v) in items.into_iter().enumerate() {
         if !matches!(&v, Value::Num(num) if num_is_zero(num)) {
             entries.push(&[i, i], v);
         }
     }
-    Ok(wrap(
+    wrap(
+        span,
         format,
         vec![n, n],
         diagonal.dim.clone(),
         diagonal.display.clone(),
         base,
         entries,
-    ))
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -955,17 +1236,26 @@ fn transpose(
     data: &SparseData,
     span: Span,
 ) -> R<Value> {
-    rank2(data, "`transpose`", span)?;
-    let shape = vec![data.shape[1], data.shape[0]];
-    Ok(if let Some(entries) = data.entries::<f64>() {
-        let t = kernels::transpose(&entries, data.shape[1]);
-        wrap_like(data, shape, data.dim.clone(), data.display.clone(), 2, t)
+    let (rows, cols) = rank2(data, "`transpose`", span)?;
+    let shape = vec![cols, rows];
+    if let Some(entries) = data.entries::<f64>() {
+        let t = kernels::transpose(&entries, cols).map_err(|error| error.at(span))?;
+        wrap_like(
+            span,
+            data,
+            shape,
+            data.dim.clone(),
+            data.display.clone(),
+            2,
+            t,
+        )
     } else {
         let entries = data
             .entries::<Value>()
             .ok_or_else(|| kernels::class_error(span))?;
-        let t = kernels::transpose(&entries, data.shape[1]);
+        let t = kernels::transpose(&entries, cols).map_err(|error| error.at(span))?;
         wrap_like(
+            span,
             data,
             shape,
             data.dim.clone(),
@@ -973,7 +1263,7 @@ fn transpose(
             zero_rank(data),
             t,
         )
-    })
+    }
 }
 
 /// The storage position of `coord`, if it is stored.
@@ -987,10 +1277,12 @@ fn position(
             let n = data.nnz();
             let (mut lo, mut hi) = (0, n);
             while lo < hi {
-                let mid = (lo + hi) / 2;
-                match coords[mid * rank..(mid + 1) * rank].cmp(coord) {
+                let mid = lo.midpoint(hi);
+                let start = mid.checked_mul(rank)?;
+                let end = start.checked_add(rank)?;
+                match coords.get(start..end)?.cmp(coord) {
                     | std::cmp::Ordering::Equal => return Some(mid),
-                    | std::cmp::Ordering::Less => lo = mid + 1,
+                    | std::cmp::Ordering::Less => lo = mid.saturating_add(1),
                     | std::cmp::Ordering::Greater => hi = mid,
                 }
             }
@@ -998,35 +1290,44 @@ fn position(
         },
         | super::Pattern::Blocked { ptr, idx } => {
             let (br, bc) = data.block;
-            let ib = coord[0] / br;
-            let slice = &idx[ptr[ib]..ptr[ib + 1]];
-            let k = ptr[ib] + slice.binary_search(&(coord[1] / bc)).ok()?;
-            let slot = k * br * bc + (coord[0] % br) * bc + coord[1] % bc;
+            let [row, col] = coord else { return None };
+            let block_row = row.checked_div(br)?;
+            let block_col = col.checked_div(bc)?;
+            let [start, end] = *ptr.get(block_row..)?.first_chunk::<2>()?;
+            let relative = idx.get(start..end)?.binary_search(&block_col).ok()?;
+            let block = start.checked_add(relative)?;
+            let slot = block
+                .checked_mul(br)?
+                .checked_add(row.checked_rem(br)?)?
+                .checked_mul(bc)?
+                .checked_add(col.checked_rem(bc)?)?;
             // Padding zeros are not stored entries.
             let live = match &data.values {
-                | super::SpValues::F64(items) => items[slot] != 0.0,
+                | super::SpValues::F64(items) => *items.get(slot)? != 0.0,
                 | super::SpValues::Boxed(items) => {
-                    !matches!(&items[slot], Value::Num(n) if num_is_zero(n))
+                    !matches!(items.get(slot)?, Value::Num(n) if num_is_zero(n))
                 },
             };
             live.then_some(slot)
         },
         | super::Pattern::Compressed { ptr, idx } => {
+            let [row, col] = *coord else { return None };
             let (line, other) = if data.format == SparseFormat::Csc {
-                (coord[1], coord[0])
+                (col, row)
             } else {
-                (coord[0], coord[1])
+                (row, col)
             };
-            let slice = &idx[ptr[line]..ptr[line + 1]];
-            slice.binary_search(&other).ok().map(|k| ptr[line] + k)
+            let [start, end] = *ptr.get(line..)?.first_chunk::<2>()?;
+            let relative = idx.get(start..end)?.binary_search(&other).ok()?;
+            start.checked_add(relative)
         },
     }
 }
 
 /// `A[i, j, …]`: the stored element, or the implicit zero.
-pub(crate) fn index(
+pub fn index(
     data: &SparseData,
-    coordinates: &[isize],
+    coordinates: &[i128],
     span: Span,
 ) -> R<Value> {
     if coordinates.len() != data.rank() {
@@ -1043,23 +1344,26 @@ pub(crate) fn index(
     }
     let mut coord = Vec::with_capacity(coordinates.len());
     for (axis, (c, extent)) in coordinates.iter().zip(&data.shape).enumerate() {
-        let extent_i = isize::try_from(*extent).unwrap_or(isize::MAX);
-        let normalized = if *c < 0 { extent_i + c } else { *c };
-        if normalized < 0 || normalized >= extent_i {
+        let Some(normalized) = normalize_index(*c, *extent) else {
             return Err(err(
                 "E0802",
                 format!("index {c} is out of bounds on axis {axis} for extent {extent}"),
                 span,
             ));
-        }
-        coord.push(normalized as usize);
+        };
+        coord.push(normalized);
     }
     let mut value = match position(data, &coord) {
         | Some(k) => {
             match &data.values {
-                | SpValues::F64(items) => Value::Num(NumVal::float(items[k], data.dim.clone())),
-                | SpValues::Boxed(items) => items[k].clone(),
+                | SpValues::F64(items) => {
+                    items
+                        .get(k)
+                        .map(|value| Value::Num(NumVal::float(*value, data.dim.clone())))
+                },
+                | SpValues::Boxed(items) => items.get(k).cloned(),
             }
+            .ok_or_else(|| err("E0802", "sparse position has no stored value", span))?
         },
         | None => Value::Num(data.zero.clone()),
     };
@@ -1069,14 +1373,14 @@ pub(crate) fn index(
     Ok(value)
 }
 
-fn nonzeros(data: &SparseData) -> R<Value> {
+fn nonzeros(data: &SparseData) -> Value {
     let items: Vec<Value> = data
         .stored()
         .into_iter()
         .map(|(coord, value)| tuple_of(vec![int_tensor(&coord), value]))
         .collect();
     let len = items.len();
-    Ok(build_tensor(items, vec![len], Dim::one()))
+    build_tensor(items, vec![len], Dim::one())
 }
 
 fn map_nonzero(
@@ -1096,8 +1400,8 @@ fn map_nonzero(
     let mut out: Entries<Value> = Entries::empty(entries.rank);
     let mut dim: Option<Dim> = None;
     let mut rank = 0u8;
-    for i in 0..entries.len() {
-        let mapped = interp.apply(function.clone(), vec![entries.vals[i].clone()], span)?;
+    for (i, value) in entries.vals.iter().enumerate() {
+        let mapped = interp.apply(function.clone(), vec![value.clone()], span)?;
         let Value::Num(num) = &mapped else {
             return Err(err(
                 "E0302",
@@ -1129,31 +1433,34 @@ fn map_nonzero(
     } else {
         rank
     };
-    Ok(wrap_like(
+    wrap_like(
+        span,
         data,
         data.shape.clone(),
         dim.unwrap_or_else(|| data.dim.clone()),
         None,
         base,
         out,
-    ))
+    )
 }
 
-pub(crate) fn negate(
+pub fn negate(
     interp: &mut Interp,
     data: &SparseData,
     span: Span,
 ) -> R<Value> {
+    check_sparse_layout(data, span)?;
     if let Some(entries) = data.entries::<f64>() {
         let mapped = kernels::map_values(&entries, &mut FloatRing, |_, v| Ok(-*v))?;
-        return Ok(wrap_like(
+        return wrap_like(
+            span,
             data,
             data.shape.clone(),
             data.dim.clone(),
             data.display.clone(),
             2,
             mapped,
-        ));
+        );
     }
     let entries = data
         .entries::<Value>()
@@ -1163,14 +1470,15 @@ pub(crate) fn negate(
         let zero = ring.zero_like(v);
         ring.sub(&zero, v)
     })?;
-    Ok(wrap_like(
+    wrap_like(
+        span,
         data,
         data.shape.clone(),
         data.dim.clone(),
         data.display.clone(),
         zero_rank(data),
         mapped,
-    ))
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1208,7 +1516,9 @@ fn sum(
             | Some(axis) => {
                 let out = kernels::sum_axis(&entries, &data.shape, axis, &mut FloatRing)?;
                 let mut shape = data.shape.clone();
-                shape[axis] = 1;
+                *shape
+                    .get_mut(axis)
+                    .ok_or_else(|| err("E0802", "reduction axis out of range", span))? = 1;
                 dense_value_f64(
                     shape,
                     out.into_iter().map(|v| v.unwrap_or(0.0)).collect(),
@@ -1230,7 +1540,9 @@ fn sum(
         | Some(axis) => {
             let out = kernels::sum_axis(&entries, &data.shape, axis, &mut ring)?;
             let mut shape = data.shape.clone();
-            shape[axis] = 1;
+            *shape
+                .get_mut(axis)
+                .ok_or_else(|| err("E0802", "reduction axis out of range", span))? = 1;
             dense_from_options(shape, out, zero_rank(data), data.dim.clone())
         },
     })
@@ -1305,7 +1617,7 @@ fn combine(
     };
     if let (Some(x), Some(y)) = (a.entries::<f64>(), b.entries::<f64>()) {
         let merged = kernels::merge(&x, &y, mode, &mut FloatRing)?;
-        return Ok(wrap_like(a, a.shape.clone(), dim, display, 2, merged));
+        return wrap_like(span, a, a.shape.clone(), dim, display, 2, merged);
     }
     let (x, y) = (boxed(a), boxed(b));
     let (Some(ex), Some(ey)) = (x.entries::<Value>(), y.entries::<Value>()) else {
@@ -1313,19 +1625,15 @@ fn combine(
     };
     let mut ring = ValueRing { interp, span };
     let merged = kernels::merge(&ex, &ey, mode, &mut ring)?;
-    Ok(wrap_like(
+    wrap_like(
+        span,
         a,
         a.shape.clone(),
         dim,
         display,
         zero_rank(a).max(zero_rank(b)),
         merged,
-    ))
-}
-
-/// A dense operand's elements as `f64`s or boxed values.
-fn dense_boxed(tensor: &TensorData) -> R<Vec<Value>> {
-    Ok(tensor.elements())
+    )
 }
 
 fn hadamard_dense(
@@ -1338,16 +1646,16 @@ fn hadamard_dense(
     let dim = a.dim.mul(&x.dim);
     if let (Some(e), Some(dense)) = (a.entries::<f64>(), x.dense_flat()) {
         let out = kernels::hadamard_dense(&e, &a.shape, &dense, &mut FloatRing)?;
-        return Ok(wrap_like(a, a.shape.clone(), dim, None, 2, out));
+        return wrap_like(span, a, a.shape.clone(), dim, None, 2, out);
     }
     let b = boxed(a);
     let e = b
         .entries::<Value>()
         .ok_or_else(|| kernels::class_error(span))?;
-    let dense = dense_boxed(x)?;
+    let dense = materialized_values(x, span)?;
     let mut ring = ValueRing { interp, span };
     let out = kernels::hadamard_dense(&e, &a.shape, &dense, &mut ring)?;
-    Ok(wrap_like(a, a.shape.clone(), dim, None, zero_rank(a), out))
+    wrap_like(span, a, a.shape.clone(), dim, None, zero_rank(a), out)
 }
 
 fn scalar_f64(num: &NumVal) -> Option<f64> {
@@ -1380,7 +1688,7 @@ fn scale(
                 v * factor
             })
         })?;
-        return Ok(wrap_like(a, a.shape.clone(), dim, display, 2, mapped));
+        return wrap_like(span, a, a.shape.clone(), dim, display, 2, mapped);
     }
     let b = boxed(a);
     let entries = b
@@ -1395,14 +1703,15 @@ fn scale(
             ring.mul(v, &factor)
         }
     })?;
-    Ok(wrap_like(
+    wrap_like(
+        span,
         a,
         a.shape.clone(),
         dim,
         display,
         zero_rank(a).max(kind_rank(&s.kind)),
         mapped,
-    ))
+    )
 }
 
 fn unit_scalar(
@@ -1425,46 +1734,50 @@ fn unit_scalar(
 /// `sparse @ dense`.
 fn sparse_dense_matmul(
     interp: &mut Interp,
-    a: &SparseData,
-    x: &TensorData,
+    matrix: &SparseData,
+    operand: &TensorData,
     span: Span,
 ) -> R<Value> {
-    rank2(a, "`@`", span)?;
-    let (m, k) = (a.shape[0], a.shape[1]);
-    let (xk, n, out_shape) = match x.rank() {
-        | 1 => (x.shape[0], 1, vec![m]),
-        | 2 => (x.shape[0], x.shape[1], vec![m, x.shape[1]]),
-        | other => {
+    let (rows, inner) = rank2(matrix, "`@`", span)?;
+    let (operand_inner, cols, out_shape) = match operand.shape.as_slice() {
+        | [length] => (*length, 1, vec![rows]),
+        | [length, cols] => (*length, *cols, vec![rows, *cols]),
+        | _ => {
             return Err(err(
                 "E0802",
-                format!("`@` is not defined for a sparse matrix and a rank-{other} tensor"),
+                format!(
+                    "`@` is not defined for a sparse matrix and a rank-{} tensor",
+                    operand.rank()
+                ),
                 span,
             ));
         },
     };
-    if k != xk {
+    if inner != operand_inner {
         return Err(err(
             "E0802",
             format!(
                 "shape mismatch in `matmul`: left shape {:?}, right shape {:?}",
-                a.shape, x.shape
+                matrix.shape, operand.shape
             ),
             span,
         )
         .with_note("matmul requires left columns = right rows"));
     }
-    let dim = a.dim.mul(&x.dim);
-    if a.is_f64()
-        && let Some(dense) = x.dense_flat()
+    check_dense_layout(operand, span)?;
+    let dim = matrix.dim.mul(&operand.dim);
+    if matrix.is_f64()
+        && let Some(dense) = operand.dense_flat()
     {
         if let (SparseFormat::Bcsr, super::Pattern::Blocked { ptr, idx }, SpValues::F64(vals)) =
-            (a.format, &a.pattern, &a.values)
+            (matrix.format, &matrix.pattern, &matrix.values)
         {
-            let out = kernels::bsr_spmm_f64(ptr, idx, vals, a.block, m, &dense, n);
+            let out = kernels::bsr_spmm_f64(ptr, idx, vals, matrix.block, rows, &dense, cols)
+                .map_err(|error| error.at(span))?;
             return Ok(dense_value_f64(out_shape, out, dim, None));
         }
-        let csr = kernels::csr_parts::<f64>(a, span)?;
-        let out = kernels::spmm_f64(&csr, &dense, n);
+        let csr = kernels::csr_parts::<f64>(matrix, span)?;
+        let out = kernels::spmm_f64(&csr, &dense, cols).map_err(|error| error.at(span))?;
         return Ok(dense_value_f64(
             out_shape,
             out.into_iter().map(|v| v.unwrap_or(0.0)).collect(),
@@ -1472,51 +1785,54 @@ fn sparse_dense_matmul(
             None,
         ));
     }
-    let b = boxed(a);
-    let csr = kernels::csr_parts::<Value>(&b, span)?;
-    let dense = dense_boxed(x)?;
+    let boxed_matrix = boxed(matrix);
+    let csr = kernels::csr_parts::<Value>(&boxed_matrix, span)?;
+    let dense = materialized_values(operand, span)?;
     let mut ring = ValueRing { interp, span };
-    let out = kernels::spmm(&csr, &dense, n, &mut ring)?;
-    Ok(dense_from_options(out_shape, out, zero_rank(a), dim))
+    let out = kernels::spmm(&csr, &dense, cols, &mut ring)?;
+    Ok(dense_from_options(out_shape, out, zero_rank(matrix), dim))
 }
 
 /// `dense @ sparse`.
 fn dense_sparse_matmul(
     interp: &mut Interp,
-    x: &TensorData,
-    b: &SparseData,
+    operand: &TensorData,
+    matrix: &SparseData,
     span: Span,
 ) -> R<Value> {
-    rank2(b, "`@`", span)?;
-    let (k, n) = (b.shape[0], b.shape[1]);
-    let (p, xk, out_shape) = match x.rank() {
-        | 1 => (1, x.shape[0], vec![n]),
-        | 2 => (x.shape[0], x.shape[1], vec![x.shape[0], n]),
-        | other => {
+    let (inner, cols) = rank2(matrix, "`@`", span)?;
+    let (rows, operand_inner, out_shape) = match operand.shape.as_slice() {
+        | [length] => (1, *length, vec![cols]),
+        | [rows, length] => (*rows, *length, vec![*rows, cols]),
+        | _ => {
             return Err(err(
                 "E0802",
-                format!("`@` is not defined for a rank-{other} tensor and a sparse matrix"),
+                format!(
+                    "`@` is not defined for a rank-{} tensor and a sparse matrix",
+                    operand.rank()
+                ),
                 span,
             ));
         },
     };
-    if k != xk {
+    if inner != operand_inner {
         return Err(err(
             "E0802",
             format!(
                 "shape mismatch in `matmul`: left shape {:?}, right shape {:?}",
-                x.shape, b.shape
+                operand.shape, matrix.shape
             ),
             span,
         )
         .with_note("matmul requires left columns = right rows"));
     }
-    let dim = x.dim.mul(&b.dim);
-    if b.is_f64()
-        && let Some(dense) = x.dense_flat()
+    check_dense_layout(operand, span)?;
+    let dim = operand.dim.mul(&matrix.dim);
+    if matrix.is_f64()
+        && let Some(dense) = operand.dense_flat()
     {
-        let csr = kernels::csr_parts::<f64>(b, span)?;
-        let out = kernels::dense_spmm(&dense, p, &csr, &mut FloatRing)?;
+        let csr = kernels::csr_parts::<f64>(matrix, span)?;
+        let out = kernels::dense_spmm(&dense, rows, &csr, &mut FloatRing)?;
         return Ok(dense_value_f64(
             out_shape,
             out.into_iter().map(|v| v.unwrap_or(0.0)).collect(),
@@ -1524,12 +1840,12 @@ fn dense_sparse_matmul(
             None,
         ));
     }
-    let bb = boxed(b);
-    let csr = kernels::csr_parts::<Value>(&bb, span)?;
-    let dense = dense_boxed(x)?;
+    let boxed_matrix = boxed(matrix);
+    let csr = kernels::csr_parts::<Value>(&boxed_matrix, span)?;
+    let dense = materialized_values(operand, span)?;
     let mut ring = ValueRing { interp, span };
-    let out = kernels::dense_spmm(&dense, p, &csr, &mut ring)?;
-    Ok(dense_from_options(out_shape, out, zero_rank(b), dim))
+    let out = kernels::dense_spmm(&dense, rows, &csr, &mut ring)?;
+    Ok(dense_from_options(out_shape, out, zero_rank(matrix), dim))
 }
 
 /// `sparse @ sparse`: a CSR matrix.
@@ -1539,9 +1855,9 @@ fn sparse_sparse_matmul(
     b: &SparseData,
     span: Span,
 ) -> R<Value> {
-    rank2(a, "`@`", span)?;
-    rank2(b, "`@`", span)?;
-    if a.shape[1] != b.shape[0] {
+    let (left_rows, left_cols) = rank2(a, "`@`", span)?;
+    let (right_rows, right_cols) = rank2(b, "`@`", span)?;
+    if left_cols != right_rows {
         return Err(err(
             "E0802",
             format!(
@@ -1552,7 +1868,7 @@ fn sparse_sparse_matmul(
         )
         .with_note("matmul requires left columns = right rows"));
     }
-    let shape = vec![a.shape[0], b.shape[1]];
+    let shape = vec![left_rows, right_cols];
     let dim = a.dim.mul(&b.dim);
     if a.is_f64() && b.is_f64() {
         let (x, y) = (
@@ -1560,14 +1876,15 @@ fn sparse_sparse_matmul(
             kernels::csr_parts::<f64>(b, span)?,
         );
         let product = kernels::spgemm(&x, &y, &mut FloatRing)?;
-        return Ok(wrap(
+        return wrap(
+            span,
             SparseFormat::Csr,
             shape,
             dim,
             None,
             2,
-            kernels::entries_of_csr(&product),
-        ));
+            kernels::entries_of_csr(&product).map_err(|error| error.at(span))?,
+        );
     }
     let (ba, bb) = (boxed(a), boxed(b));
     let (x, y) = (
@@ -1576,14 +1893,15 @@ fn sparse_sparse_matmul(
     );
     let mut ring = ValueRing { interp, span };
     let product = kernels::spgemm(&x, &y, &mut ring)?;
-    Ok(wrap(
+    wrap(
+        span,
         SparseFormat::Csr,
         shape,
         dim,
         None,
         zero_rank(a).max(zero_rank(b)),
-        kernels::entries_of_csr(&product),
-    ))
+        kernels::entries_of_csr(&product).map_err(|error| error.at(span))?,
+    )
 }
 
 fn kron(
@@ -1592,9 +1910,15 @@ fn kron(
     b: &SparseData,
     span: Span,
 ) -> R<Value> {
-    rank2(a, "`kron`", span)?;
-    rank2(b, "`kron`", span)?;
-    let shape = vec![a.shape[0] * b.shape[0], a.shape[1] * b.shape[1]];
+    let (left_rows, left_cols) = rank2(a, "`kron`", span)?;
+    let (right_rows, right_cols) = rank2(b, "`kron`", span)?;
+    let (Some(rows), Some(cols)) = (
+        left_rows.checked_mul(right_rows),
+        left_cols.checked_mul(right_cols),
+    ) else {
+        return Err(err("E0802", "`kron` output dimensions overflow", span));
+    };
+    let shape = vec![rows, cols];
     let dim = a.dim.mul(&b.dim);
     if a.is_f64() && b.is_f64() {
         let (x, y) = (
@@ -1602,14 +1926,15 @@ fn kron(
             kernels::csr_parts::<f64>(b, span)?,
         );
         let product = kernels::kron(&x, &y, &mut FloatRing)?;
-        return Ok(wrap(
+        return wrap(
+            span,
             SparseFormat::Csr,
             shape,
             dim,
             None,
             2,
-            kernels::entries_of_csr(&product),
-        ));
+            kernels::entries_of_csr(&product).map_err(|error| error.at(span))?,
+        );
     }
     let (ba, bb) = (boxed(a), boxed(b));
     let (x, y) = (
@@ -1618,40 +1943,46 @@ fn kron(
     );
     let mut ring = ValueRing { interp, span };
     let product = kernels::kron(&x, &y, &mut ring)?;
-    Ok(wrap(
+    wrap(
+        span,
         SparseFormat::Csr,
         shape,
         dim,
         None,
         zero_rank(a).max(zero_rank(b)),
-        kernels::entries_of_csr(&product),
-    ))
+        kernels::entries_of_csr(&product).map_err(|error| error.at(span))?,
+    )
 }
 
 /// The operators on a sparse operand.
-pub(crate) fn binary(
+pub fn binary(
     interp: &mut Interp,
     op: BinOp,
     left: Value,
     right: Value,
     span: Span,
 ) -> R<Value> {
+    for value in [&left, &right] {
+        if let Value::Sparse(data) = value {
+            check_sparse_layout(data, span)?;
+        }
+    }
     match (&left, &right, op) {
         | (Value::Sparse(a), Value::Sparse(b), BinOp::Add) => combine(interp, a, b, Merge::Add, span),
         | (Value::Sparse(a), Value::Sparse(b), BinOp::Sub) => combine(interp, a, b, Merge::Sub, span),
         | (Value::Sparse(a), Value::Sparse(b), BinOp::Mul) => combine(interp, a, b, Merge::Mul, span),
         | (Value::Sparse(a), Value::Sparse(b), BinOp::MatMul) => sparse_sparse_matmul(interp, a, b, span),
-        | (Value::Sparse(a), Value::Sparse(b), BinOp::Eq) => Ok(Value::Bool(equal(a, b, interp, span)?)),
-        | (Value::Sparse(a), Value::Sparse(b), BinOp::Ne) => Ok(Value::Bool(!equal(a, b, interp, span)?)),
+        | (Value::Sparse(a), Value::Sparse(b), BinOp::Eq) => Ok(Value::Bool(equal_entries(a, b))),
+        | (Value::Sparse(a), Value::Sparse(b), BinOp::Ne) => Ok(Value::Bool(!equal_entries(a, b))),
         // Sparse ± dense is dense (§13.9.5: conversions are never implicit, so
         // the result of mixing the two layouts is the layout that holds it).
         | (Value::Sparse(a), Value::Tensor(_), BinOp::Add | BinOp::Sub) => {
             let dense = to_dense(a, span)?;
-            interp.binary(op, dense, right.clone(), span)
+            interp.binary(op, dense, right, span)
         },
         | (Value::Tensor(_), Value::Sparse(b), BinOp::Add | BinOp::Sub) => {
             let dense = to_dense(b, span)?;
-            interp.binary(op, left.clone(), dense, span)
+            interp.binary(op, left, dense, span)
         },
         | (Value::Sparse(a), Value::Tensor(x), BinOp::Mul) => hadamard_dense(interp, a, x, span),
         | (Value::Tensor(x), Value::Sparse(b), BinOp::Mul) => hadamard_dense(interp, b, x, span),
@@ -1696,16 +2027,15 @@ fn spsolve(
     b: &TensorData,
     span: Span,
 ) -> R<Value> {
-    rank2(a, "`spsolve`", span)?;
-    let n = a.shape[0];
-    if a.shape[1] != n {
+    let (n, cols) = rank2(a, "`spsolve`", span)?;
+    if cols != n {
         return Err(err(
             "E0802",
             format!("`spsolve` needs a square matrix, found {:?}", a.shape),
             span,
         ));
     }
-    if b.rank() != 1 || b.shape[0] != n {
+    if b.shape.as_slice() != [n] {
         return Err(err(
             "E0802",
             format!(
@@ -1735,7 +2065,7 @@ fn spsolve(
     }
     let ba = boxed(a);
     let csr = kernels::csr_parts::<Value>(&ba, span)?;
-    let rhs = dense_boxed(b)?;
+    let rhs = materialized_values(b, span)?;
     let mut ring = ValueRing { interp, span };
     let Some(x) = kernels::solve_elimination(&csr, &rhs, &mut ring)? else {
         return Err(err("E0806", "`spsolve`: the matrix is singular", span));
@@ -1763,9 +2093,8 @@ fn cg(
         .and_then(Value::as_f64)
         .ok_or_else(|| err("E0302", "`cg` expects a Float tolerance", span))?;
     let max_iterations = int_arg(args, 3, "cg max iterations", span)?;
-    rank2(a, "`cg`", span)?;
-    let n = a.shape[0];
-    if a.shape[1] != n || b.rank() != 1 || b.shape[0] != n {
+    let (n, cols) = rank2(a, "`cg`", span)?;
+    if cols != n || b.shape.as_slice() != [n] {
         return Err(err(
             "E0802",
             format!("`cg` needs a square matrix and a right-hand side of shape [{n}]"),
@@ -1801,6 +2130,41 @@ fn cg(
     ]))
 }
 
+fn preconditioner(
+    value: &Value,
+    name: &str,
+    span: Span,
+) -> R<aevia_std::sparse::PrecondKind> {
+    use aevia_std::sparse::PrecondKind;
+    let Value::Variant(variant) = value else {
+        return Err(err(
+            "E0302",
+            format!(
+                "`{name}`: `precond` must be a `Precond`, found {}",
+                value.type_name()
+            ),
+            span,
+        ));
+    };
+    Ok(match variant.name.as_str() {
+        | "Identity" => PrecondKind::Identity,
+        | "Jacobi" => PrecondKind::Jacobi,
+        | "BlockJacobi" => PrecondKind::BlockJacobi,
+        | "Ilu0" => PrecondKind::Ilu0,
+        | "Ic0" => PrecondKind::Ic0,
+        | "Auto" => PrecondKind::Auto,
+        | other => {
+            return Err(err(
+                "E0302",
+                format!(
+                    "`{other}` is not a `Precond` (Identity, Jacobi, BlockJacobi, Ilu0, Ic0, Auto)"
+                ),
+                span,
+            ));
+        },
+    })
+}
+
 /// `cg_with(A, b, { tol, maxiter, precond })`: preconditioned conjugate
 /// gradients; `gmres_with(A, b, { tol, maxiter, restart, precond })` and
 /// `bicgstab_with(A, b, { tol, maxiter, precond })`: the Krylov solvers for
@@ -1813,10 +2177,8 @@ fn iterative_with(
     span: Span,
 ) -> R<Value> {
     use aevia_std::sparse::Krylov;
-    use aevia_std::sparse::PrecondKind;
     let expected = match name {
         | "gmres_with" => "{ tol, maxiter, restart, precond }",
-        | "bicgstab_with" => "{ tol, maxiter, precond }",
         | _ => "{ tol, maxiter, precond }",
     };
     let a = sparse_arg(args, 0, name, span)?;
@@ -1841,37 +2203,7 @@ fn iterative_with(
         .as_f64()
         .ok_or_else(|| err("E0302", format!("`{name}`: `tol` must be a Float"), span))?;
     let max_iterations = index_of(field("maxiter")?, "maxiter", span)?;
-    let kind = match field("precond")? {
-        | Value::Variant(variant) => {
-            match variant.name.as_str() {
-                | "Identity" => PrecondKind::Identity,
-                | "Jacobi" => PrecondKind::Jacobi,
-                | "BlockJacobi" => PrecondKind::BlockJacobi,
-                | "Ilu0" => PrecondKind::Ilu0,
-                | "Ic0" => PrecondKind::Ic0,
-                | "Auto" => PrecondKind::Auto,
-                | other => {
-                    return Err(err(
-                        "E0302",
-                        format!(
-                            "`{other}` is not a `Precond` (Identity, Jacobi, BlockJacobi, Ilu0, Ic0, Auto)"
-                        ),
-                        span,
-                    ));
-                },
-            }
-        },
-        | other => {
-            return Err(err(
-                "E0302",
-                format!(
-                    "`{name}`: `precond` must be a `Precond`, found {}",
-                    other.type_name()
-                ),
-                span,
-            ));
-        },
-    };
+    let kind = preconditioner(field("precond")?, name, span)?;
     let method = match name {
         | "gmres_with" => {
             let restart = index_of(field("restart")?, "restart", span)?;
@@ -1887,9 +2219,8 @@ fn iterative_with(
         | "bicgstab_with" => Some(Krylov::Bicgstab),
         | _ => None,
     };
-    rank2(a, &format!("`{name}`"), span)?;
-    let n = a.shape[0];
-    if a.shape[1] != n || b.rank() != 1 || b.shape[0] != n {
+    let (n, cols) = rank2(a, &format!("`{name}`"), span)?;
+    if cols != n || b.shape.as_slice() != [n] {
         return Err(err(
             "E0802",
             format!("`{name}` needs a square matrix and a right-hand side of shape [{n}]"),
@@ -1913,23 +2244,22 @@ fn iterative_with(
         values: &csr.vals,
     };
     let block = (a.format == SparseFormat::Bcsr).then_some(a.block);
-    let result = match method {
-        | None => {
-            aevia_std::sparse::cg_precond(&view, &rhs, tolerance, max_iterations, kind, block)
-        },
-        | Some(method) => {
-            aevia_std::sparse::krylov_precond(
-                &view,
-                &rhs,
-                tolerance,
-                max_iterations,
-                method,
-                kind,
-                block,
-            )
-        },
-    }
-    .map_err(|e| err("E0806", format!("`{name}`: {e}"), span))?;
+    let result = method
+        .map_or_else(
+            || aevia_std::sparse::cg_precond(&view, &rhs, tolerance, max_iterations, kind, block),
+            |method| {
+                aevia_std::sparse::krylov_precond(
+                    &view,
+                    &rhs,
+                    tolerance,
+                    max_iterations,
+                    method,
+                    kind,
+                    block,
+                )
+            },
+        )
+        .map_err(|e| err("E0806", format!("`{name}`: {e}"), span))?;
     Ok(record_of(vec![
         (
             "x",
@@ -1948,7 +2278,7 @@ fn iterative_with(
 
 /// One axis of a sparse slice, already resolved against the extent.
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum SliceAxis {
+pub enum SliceAxis {
     /// `A[…, i, …]`: keep the entries at `i`; the axis disappears.
     At(usize),
     /// `A[…, a..b, …]` or `a:b:s`: `count` positions from `start` in steps of
@@ -1956,8 +2286,27 @@ pub(crate) enum SliceAxis {
     Walk {
         start: usize,
         count: usize,
-        step: isize,
+        step: i128,
     },
+}
+
+fn slice_position(
+    coordinate: usize,
+    start: usize,
+    count: usize,
+    step: i128,
+) -> Option<usize> {
+    let distance = if step < 0 {
+        start.checked_sub(coordinate)?
+    } else {
+        coordinate.checked_sub(start)?
+    };
+    if distance == 0 {
+        return (count != 0 && step != 0).then_some(0);
+    }
+    let magnitude = usize::try_from(step.unsigned_abs()).ok()?;
+    let position = distance.checked_div(magnitude)?;
+    (distance.is_multiple_of(magnitude) && position < count).then_some(position)
 }
 
 /// The entries of `entries` that fall inside `axes`, re-addressed.
@@ -1971,10 +2320,9 @@ fn slice_entries<T: Clone>(
         .count();
     let mut out: Entries<T> = Entries::empty(out_rank);
     let mut coord = Vec::with_capacity(out_rank);
-    'entry: for i in 0..entries.len() {
+    'entry: for (i, value) in entries.vals.iter().enumerate() {
         coord.clear();
-        for (axis, sel) in axes.iter().enumerate() {
-            let c = entries.coord(i)[axis];
+        for (sel, &c) in axes.iter().zip(entries.coord(i)) {
             match *sel {
                 | SliceAxis::At(at) => {
                     if c != at {
@@ -1982,30 +2330,25 @@ fn slice_entries<T: Clone>(
                     }
                 },
                 | SliceAxis::Walk { start, count, step } => {
-                    let d = c as isize - start as isize;
-                    if d % step != 0 {
+                    let Some(position) = slice_position(c, start, count, step) else {
                         continue 'entry;
-                    }
-                    let k = d / step;
-                    if k < 0 || k as usize >= count {
-                        continue 'entry;
-                    }
-                    coord.push(k as usize);
+                    };
+                    coord.push(position);
                 },
             }
         }
-        out.push(&coord, entries.vals[i].clone());
+        out.push(&coord, value.clone());
     }
     if axes
         .iter()
         .any(|a| matches!(a, SliceAxis::Walk { step, .. } if *step < 0))
     {
         // A backwards walk reverses the order: restore the sorted form.
-        let mut order: Vec<usize> = (0..out.len()).collect();
-        order.sort_by(|x, y| out.coord(*x).cmp(out.coord(*y)));
+        let mut order: Vec<_> = out.vals.iter().enumerate().collect();
+        order.sort_by(|(left, _), (right, _)| out.coord(*left).cmp(out.coord(*right)));
         let mut sorted: Entries<T> = Entries::empty(out_rank);
-        for k in order {
-            sorted.push(out.coord(k), out.vals[k].clone());
+        for (index, value) in order {
+            sorted.push(out.coord(index), value.clone());
         }
         return sorted;
     }
@@ -2017,11 +2360,12 @@ fn slice_entries<T: Clone>(
 ///
 /// An integer axis disappears (as for dense tensors), a range keeps its axis.
 /// A result of rank 2 keeps the format of `data`; any other rank is `Coo`.
-pub(crate) fn slice(
+pub fn slice(
     data: &SparseData,
     axes: &[SliceAxis],
     span: Span,
 ) -> R<Value> {
+    check_sparse_layout(data, span)?;
     if axes.len() != data.rank() {
         return Err(err(
             "E0802",
@@ -2048,9 +2392,10 @@ pub(crate) fn slice(
     } else {
         SparseFormat::Coo
     };
-    Ok(if let Some(entries) = data.entries::<f64>() {
+    if let Some(entries) = data.entries::<f64>() {
         let sliced = slice_entries(&entries, axes);
         wrap(
+            span,
             format,
             shape,
             data.dim.clone(),
@@ -2064,6 +2409,7 @@ pub(crate) fn slice(
             .ok_or_else(|| kernels::class_error(span))?;
         let sliced = slice_entries(&entries, axes);
         wrap(
+            span,
             format,
             shape,
             data.dim.clone(),
@@ -2071,7 +2417,7 @@ pub(crate) fn slice(
             zero_rank(data),
             sliced,
         )
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2081,11 +2427,10 @@ pub(crate) fn slice(
 /// A tensor's nonzero entries (a dense operand viewed sparsely).
 fn dense_entries<T: Store>(
     tensor: &TensorData,
-    class: impl Fn(&TensorData) -> Option<Vec<T>>,
+    class: impl Fn(&TensorData) -> R<Vec<T>>,
     is_zero: impl Fn(&T) -> bool,
-    span: Span,
 ) -> R<Entries<T>> {
-    let values = class(tensor).ok_or_else(|| kernels::class_error(span))?;
+    let values = class(tensor)?;
     let mut out = Entries::empty(tensor.rank());
     let mut coord = vec![0usize; tensor.rank()];
     for (flat, v) in values.into_iter().enumerate() {
@@ -2097,11 +2442,59 @@ fn dense_entries<T: Store>(
     Ok(out)
 }
 
+fn contraction_shape(
+    shape_a: &[usize],
+    shape_b: &[usize],
+    axes_a: &[usize],
+    axes_b: &[usize],
+    span: Span,
+) -> R<Vec<usize>> {
+    let mut seen_a = HashSet::with_capacity(axes_a.len());
+    let mut seen_b = HashSet::with_capacity(axes_b.len());
+    for (x, y) in axes_a.iter().zip(axes_b) {
+        let (Some(left_extent), Some(right_extent)) = (shape_a.get(*x), shape_b.get(*y)) else {
+            return Err(err("E0802", "a contraction axis is out of range", span));
+        };
+        if !seen_a.insert(*x) || !seen_b.insert(*y) {
+            return Err(err(
+                "E0802",
+                "a contraction axis appears more than once on the same operand",
+                span,
+            ));
+        }
+        if left_extent != right_extent {
+            return Err(err(
+                "E0802",
+                format!(
+                    "cannot contract axis {x} (extent {left_extent}) with axis {y} (extent {right_extent})"
+                ),
+                span,
+            ));
+        }
+    }
+    let free = |shape: &[usize], axes: &HashSet<usize>| -> Vec<usize> {
+        shape
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(|(i, extent)| (!axes.contains(&i)).then_some(extent))
+            .collect()
+    };
+    let mut out_shape = free(shape_a, &seen_a);
+    out_shape.extend(free(shape_b, &seen_b));
+    Ok(out_shape)
+}
+
 fn contract(
     interp: &mut Interp,
     args: &[Value],
     span: Span,
 ) -> R<Value> {
+    // Operands: sparse, or dense viewed sparsely.
+    enum Operand<'a> {
+        Sparse(&'a SparseData),
+        Dense(&'a TensorData),
+    }
     let axes_a = index_list(args.get(2).unwrap_or(&Value::Unit), "contract axes", span)?;
     let axes_b = index_list(args.get(3).unwrap_or(&Value::Unit), "contract axes", span)?;
     if axes_a.len() != axes_b.len() {
@@ -2111,15 +2504,16 @@ fn contract(
             span,
         ));
     }
-    // Operands: sparse, or dense viewed sparsely.
-    enum Operand<'a> {
-        Sparse(&'a SparseData),
-        Dense(&'a TensorData),
-    }
     let operand = |index: usize| -> R<Operand<'_>> {
         match args.get(index) {
-            | Some(Value::Sparse(data)) => Ok(Operand::Sparse(data)),
-            | Some(Value::Tensor(data)) => Ok(Operand::Dense(data)),
+            | Some(Value::Sparse(data)) => {
+                check_sparse_layout(data, span)?;
+                Ok(Operand::Sparse(data))
+            },
+            | Some(Value::Tensor(data)) => {
+                check_dense_layout(data, span)?;
+                Ok(Operand::Dense(data))
+            },
             | _ => {
                 Err(err(
                     "E0302",
@@ -2131,36 +2525,15 @@ fn contract(
     };
     let (left, right) = (operand(0)?, operand(1)?);
     let (shape_a, dim_a, rank_a) = match &left {
-        | Operand::Sparse(d) => (d.shape.clone(), d.dim.clone(), zero_rank(d)),
-        | Operand::Dense(d) => (d.shape.clone(), d.dim.clone(), 2),
+        | Operand::Sparse(d) => (d.shape.as_slice(), &d.dim, zero_rank(d)),
+        | Operand::Dense(d) => (d.shape.as_slice(), &d.dim, 2),
     };
     let (shape_b, dim_b, rank_b) = match &right {
-        | Operand::Sparse(d) => (d.shape.clone(), d.dim.clone(), zero_rank(d)),
-        | Operand::Dense(d) => (d.shape.clone(), d.dim.clone(), 2),
+        | Operand::Sparse(d) => (d.shape.as_slice(), &d.dim, zero_rank(d)),
+        | Operand::Dense(d) => (d.shape.as_slice(), &d.dim, 2),
     };
-    for (x, y) in axes_a.iter().zip(&axes_b) {
-        if *x >= shape_a.len() || *y >= shape_b.len() {
-            return Err(err("E0802", "a contraction axis is out of range", span));
-        }
-        if shape_a[*x] != shape_b[*y] {
-            return Err(err(
-                "E0802",
-                format!(
-                    "cannot contract axis {x} (extent {}) with axis {y} (extent {})",
-                    shape_a[*x], shape_b[*y]
-                ),
-                span,
-            ));
-        }
-    }
-    let free_a: Vec<usize> = (0..shape_a.len()).filter(|x| !axes_a.contains(x)).collect();
-    let free_b: Vec<usize> = (0..shape_b.len()).filter(|x| !axes_b.contains(x)).collect();
-    let out_shape: Vec<usize> = free_a
-        .iter()
-        .map(|x| shape_a[*x])
-        .chain(free_b.iter().map(|x| shape_b[*x]))
-        .collect();
-    let dim = dim_a.mul(&dim_b);
+    let out_shape = contraction_shape(shape_a, shape_b, &axes_a, &axes_b, span)?;
+    let dim = dim_a.mul(dim_b);
     let both_dense = matches!((&left, &right), (Operand::Dense(_), Operand::Dense(_)));
     if both_dense {
         return Err(err(
@@ -2173,13 +2546,16 @@ fn contract(
     let float_class = match (&left, &right) {
         | (Operand::Sparse(x), Operand::Sparse(y)) => x.is_f64() && y.is_f64(),
         | (Operand::Sparse(x), Operand::Dense(y)) | (Operand::Dense(y), Operand::Sparse(x)) => {
-            x.is_f64() && y.dense_flat().is_some()
+            x.is_f64() && matches!(y.storage.backing(), Storage::Dense(_) | Storage::View(_))
         },
         | _ => false,
     };
     // The result entries (sorted), in the element class of the operands.
-    let finish_f64 = |entries: Entries<f64>| -> R<Value> {
-        finish_contract_f64(entries, out_shape.clone(), dim.clone(), result_sparse, span)
+    let copy_numbers = |tensor: &TensorData| -> R<Vec<f64>> {
+        tensor
+            .dense_flat()
+            .map(Cow::into_owned)
+            .ok_or_else(|| err("E0802", "tensor view cannot provide all its elements", span))
     };
     if float_class {
         let ea: Entries<f64> = match &left {
@@ -2187,31 +2563,17 @@ fn contract(
                 d.entries::<f64>()
                     .ok_or_else(|| kernels::class_error(span))?
             },
-            | Operand::Dense(t) => {
-                dense_entries(
-                    t,
-                    |t| t.dense_flat().map(|c| c.into_owned()),
-                    |v| *v == 0.0,
-                    span,
-                )?
-            },
+            | Operand::Dense(t) => dense_entries(t, copy_numbers, |v| *v == 0.0)?,
         };
         let eb: Entries<f64> = match &right {
             | Operand::Sparse(d) => {
                 d.entries::<f64>()
                     .ok_or_else(|| kernels::class_error(span))?
             },
-            | Operand::Dense(t) => {
-                dense_entries(
-                    t,
-                    |t| t.dense_flat().map(|c| c.into_owned()),
-                    |v| *v == 0.0,
-                    span,
-                )?
-            },
+            | Operand::Dense(t) => dense_entries(t, copy_numbers, |v| *v == 0.0)?,
         };
         let out = kernels::contract(&ea, &eb, &axes_a, &axes_b, &mut FloatRing)?;
-        return finish_f64(out);
+        return finish_contract_f64(out, out_shape, dim, result_sparse, span);
     }
     let boxed_entries = |op: &Operand<'_>| -> R<Entries<Value>> {
         match op {
@@ -2219,9 +2581,8 @@ fn contract(
             | Operand::Dense(t) => {
                 dense_entries(
                     t,
-                    |t| Some(t.elements()),
+                    |t| materialized_values(t, span),
                     |v| matches!(v, Value::Num(n) if num_is_zero(n)),
-                    span,
                 )
             },
         }
@@ -2229,23 +2590,33 @@ fn contract(
     let (ea, eb) = (boxed_entries(&left)?, boxed_entries(&right)?);
     let mut ring = ValueRing { interp, span };
     let out = kernels::contract(&ea, &eb, &axes_a, &axes_b, &mut ring)?;
-    let base = rank_a.max(rank_b);
-    if out_shape.is_empty() {
-        return Ok(out
+    finish_contract_boxed(out, out_shape, dim, rank_a.max(rank_b), result_sparse, span)
+}
+
+fn finish_contract_boxed(
+    entries: Entries<Value>,
+    shape: Vec<usize>,
+    dim: Dim,
+    base: u8,
+    sparse: bool,
+    span: Span,
+) -> R<Value> {
+    if shape.is_empty() {
+        return Ok(entries
             .vals
             .into_iter()
             .next()
             .unwrap_or_else(|| Value::Num(zero_num(base, &dim))));
     }
-    if result_sparse {
-        return Ok(wrap(SparseFormat::Coo, out_shape, dim, None, base, out));
+    if sparse {
+        return wrap(span, SparseFormat::Coo, shape, dim, None, base, entries);
     }
-    let count = element_count(&out_shape, span)?;
-    let mut slots: Vec<Option<Value>> = vec![None; count];
-    for i in 0..out.len() {
-        slots[kernels::flat_index(out.coord(i), &out_shape)] = Some(out.vals[i].clone());
+    let count = element_count(&shape, span)?;
+    let mut slots = dense_slots(count, None, span)?;
+    for (i, value) in entries.vals.iter().enumerate() {
+        *dense_slot(&mut slots, entries.coord(i), &shape, span)? = Some(value.clone());
     }
-    Ok(dense_from_options(out_shape, slots, base, dim))
+    Ok(dense_from_options(shape, slots, base, dim))
 }
 
 fn finish_contract_f64(
@@ -2260,12 +2631,12 @@ fn finish_contract_f64(
         return Ok(Value::Num(NumVal::float(total, dim)));
     }
     if sparse {
-        return Ok(wrap(SparseFormat::Coo, shape, dim, None, 2, entries));
+        return wrap(span, SparseFormat::Coo, shape, dim, None, 2, entries);
     }
     let count = element_count(&shape, span)?;
-    let mut out = vec![0.0; count];
-    for i in 0..entries.len() {
-        out[kernels::flat_index(entries.coord(i), &shape)] = entries.vals[i];
+    let mut out = dense_slots(count, 0.0, span)?;
+    for (i, &value) in entries.vals.iter().enumerate() {
+        *dense_slot(&mut out, entries.coord(i), &shape, span)? = value;
     }
     Ok(dense_value_f64(shape, out, dim, None))
 }
@@ -2277,16 +2648,14 @@ fn finish_contract_f64(
 /// Logical equality: the same shape and the same entries, whatever the
 /// formats. Elements compare as numbers do (`1` equals `1.0`), exactly as
 /// dense tensors compare them.
-pub(crate) fn equal(
+pub fn equal_data(
     a: &SparseData,
     b: &SparseData,
-    _interp: &mut Interp,
-    _span: Span,
-) -> R<bool> {
-    Ok(equal_data(a, b))
+) -> bool {
+    sparse_layout_is_consistent(a) && sparse_layout_is_consistent(b) && equal_entries(a, b)
 }
 
-pub(crate) fn equal_data(
+fn equal_entries(
     a: &SparseData,
     b: &SparseData,
 ) -> bool {
@@ -2309,8 +2678,8 @@ fn show_shape(shape: &[usize]) -> String {
 }
 
 fn coord_text(coord: &[usize]) -> String {
-    if coord.len() == 1 {
-        return coord[0].to_string();
+    if let [index] = coord {
+        return index.to_string();
     }
     let parts: Vec<String> = coord.iter().map(ToString::to_string).collect();
     format!("({})", parts.join(", "))
@@ -2320,10 +2689,14 @@ fn coord_text(coord: &[usize]) -> String {
 ///
 /// `repr` is an expression that rebuilds the same value:
 /// `convert<Csr>(sparse_coo(shape, indices, values))`.
-pub(crate) fn render(
+pub fn render(
     data: &SparseData,
     repr: bool,
 ) -> String {
+    const LIMIT: usize = 64;
+    if !sparse_layout_is_consistent(data) {
+        return "sparse(<invalid storage>)".to_string();
+    }
     let mut stored = data.stored();
     if let Some(display) = &data.display {
         for (_, value) in &mut stored {
@@ -2356,14 +2729,13 @@ pub(crate) fn render(
             format!("convert<{}>({base})", data.format.name())
         };
     }
-    const LIMIT: usize = 64;
     let mut body: Vec<String> = stored
         .iter()
         .take(LIMIT)
         .map(|(c, v)| format!("{} = {}", coord_text(c), text(v)))
         .collect();
-    if stored.len() > LIMIT {
-        body.push(format!("... ({} more)", stored.len() - LIMIT));
+    if let Some(extra) = stored.len().checked_sub(LIMIT).filter(|extra| *extra != 0) {
+        body.push(format!("... ({extra} more)"));
     }
     format!(
         "sparse({}, {}, {{ {} }})",
@@ -2371,4 +2743,53 @@ pub(crate) fn render(
         show_shape(&data.shape),
         body.join(", ")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_overshooting_row_pointer_is_a_shape_error() {
+        let compiled = crate::compile("csr_bounds.aev", "let unused = 0\n");
+        let mut interp = Interp::new(&compiled.checked);
+        let args = [
+            int_value(2),
+            int_value(1),
+            int_tensor(&[0, 2, 1]),
+            int_tensor(&[0]),
+            dense_value_f64(vec![1], vec![1.0], Dim::one(), None),
+        ];
+        let result = sparse_csr(&mut interp, &args, Span::default());
+        assert!(matches!(result, Err(error) if error.code == "E0802"
+            && error.message.contains("beyond nnz")));
+    }
+
+    #[test]
+    fn transpose_rejects_unrepresentable_compressed_output() -> R<()> {
+        let span = Span::default();
+        let source = wrap(
+            span,
+            SparseFormat::Csr,
+            vec![1, usize::MAX],
+            Dim::one(),
+            None,
+            2,
+            Entries::<f64>::empty(2),
+        )?;
+        assert!(matches!(source, Value::Sparse(data)
+            if matches!(transpose(&data, span), Err(error) if error.code == "E0802")));
+        Ok(())
+    }
+
+    #[test]
+    fn sparse_shape_extents_round_trip_as_exact_integers() {
+        let span = Span::default();
+        assert_eq!(
+            index_of(&int_value(usize::MAX), "extent", span).ok(),
+            Some(usize::MAX)
+        );
+        assert!(index_of(&Value::float(f64::MAX), "extent", span).is_err());
+        assert_eq!(element_count(&[usize::MAX, 0], span).ok(), Some(0));
+    }
 }

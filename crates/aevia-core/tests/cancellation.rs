@@ -101,6 +101,10 @@ fn cancellation_during_ast_ir_and_release_initializers_rolls_back_the_batch() {
 }
 
 #[test]
+#[allow(
+    clippy::result_large_err,
+    reason = "exercises the interpreter's existing line reader interface"
+)]
 fn cancelling_program_input_restores_capabilities_and_does_not_print_later_actions() {
     let token = CancellationToken::new();
     let mut interp = Interp::new(&Default::default()).with_buffer();
@@ -222,6 +226,10 @@ fn interruptible_background_tasks_cannot_steal_foreground_input() {
 }
 
 #[test]
+#[allow(
+    clippy::result_large_err,
+    reason = "exercises the interpreter's existing native callback interface"
+)]
 fn interruption_takes_precedence_over_a_native_domain_failure() {
     let token = CancellationToken::new();
     let mut interp = Interp::new(&Default::default());

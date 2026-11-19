@@ -1,5 +1,21 @@
 //! Bounded pattern-matrix coverage. Rows stay together so field correlations
 //! cannot be mistaken for independent coverage. Exhausted work is conservative.
+
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
 use crate::Shape;
 use crate::Type;
 use crate::adt;
@@ -25,11 +41,20 @@ enum Case {
     Cons(Type, Type),
 }
 impl Case {
-    fn types(&self) -> Vec<Type> {
+    const fn arity(&self) -> usize {
         match self {
-            | Self::Ctor(_, fields) => fields.clone(),
-            | Self::Record(fields) => fields.iter().map(|(_, ty)| ty.clone()).collect(),
-            | Self::Cons(head, tail) => vec![head.clone(), tail.clone()],
+            | Self::Ctor(_, fields) => fields.len(),
+            | Self::Record(fields) => fields.len(),
+            | Self::Cons(..) => 2,
+            | _ => 0,
+        }
+    }
+
+    fn into_types(self) -> Vec<Type> {
+        match self {
+            | Self::Ctor(_, fields) => fields,
+            | Self::Record(fields) => fields.into_iter().map(|(_, ty)| ty).collect(),
+            | Self::Cons(head, tail) => vec![head, tail],
             | _ => Vec::new(),
         }
     }
@@ -41,7 +66,7 @@ fn normalize(mut node: Node<'_>) -> Node<'_> {
                 match &pattern.kind {
                     | PatKind::Var(_) | PatKind::Wildcard => return Node::Any,
                     | PatKind::As { pattern, .. } | PatKind::Annot { pattern, .. } => {
-                        node = Node::Pattern(pattern)
+                        node = Node::Pattern(pattern);
                     },
                     | PatKind::Tensor { items, rest } => node = Node::Tensor(items, rest.is_some()),
                     | _ => return node,
@@ -52,12 +77,19 @@ fn normalize(mut node: Node<'_>) -> Node<'_> {
         }
     }
 }
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "specialize one row against a constructor"
+    )
+)]
 fn fields<'a>(
     node: Node<'a>,
     case: &Case,
 ) -> Option<Vec<Node<'a>>> {
     match normalize(node) {
-        | Node::Any => Some(vec![Node::Any; case.types().len()]),
+        | Node::Any => Some(vec![Node::Any; case.arity()]),
         | Node::Pattern(pattern) => {
             match (&pattern.kind, case) {
                 | (PatKind::Ctor { name, args }, Case::Ctor(expected, types))
@@ -84,35 +116,33 @@ fn fields<'a>(
                     )
                 },
                 | (PatKind::Tuple(items), Case::Record(expected))
-                    if items.len() == expected.len()
-                        && expected.iter().all(|(name, _)| {
-                            name.parse::<usize>().is_ok_and(|index| index < items.len())
-                        }) =>
+                    if items.len() == expected.len() =>
                 {
-                    Some(
-                        expected
-                            .iter()
-                            .map(|(name, _)| {
-                                Node::Pattern(
-                                    &items[name.parse::<usize>().expect("checked tuple label")],
-                                )
-                            })
-                            .collect(),
-                    )
+                    expected
+                        .iter()
+                        .map(|(name, _)| {
+                            let index = name.parse::<usize>().ok()?;
+                            items.get(index).map(Node::Pattern)
+                        })
+                        .collect()
                 },
                 | _ => None,
             }
         },
         | Node::Tensor([], false) if matches!(case, Case::Nil) => Some(Vec::new()),
-        | Node::Tensor(items, rest) if !items.is_empty() && matches!(case, Case::Cons(..)) => {
-            Some(vec![
-                Node::Pattern(&items[0]),
-                Node::Tensor(&items[1..], rest),
-            ])
+        | Node::Tensor([first, tail @ ..], rest) if matches!(case, Case::Cons(..)) => {
+            Some(vec![Node::Pattern(first), Node::Tensor(tail, rest)])
         },
         | _ => None,
     }
 }
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "enumerate constructors of the first type column"
+    )
+)]
 fn cases(
     ty: &Type,
     infer: &Infer,
@@ -148,7 +178,9 @@ fn cases(
             }
             if length.is_none_or(|n| n > 0) {
                 let tail = Type::tensor(
-                    length.map_or(Shape::Rank(1), |n| Shape::refined(vec![Some(n - 1)])),
+                    length.map_or(Shape::Rank(1), |n| {
+                        Shape::refined([Some(n.saturating_sub(1))])
+                    }),
                     (*elem).clone(),
                 );
                 cases.push(Case::Cons(*elem, tail));
@@ -168,46 +200,56 @@ fn matrix(
     if rows.is_empty() {
         return false;
     }
-    if rows
-        .iter()
-        .any(|row| row.iter().all(|node| matches!(normalize(*node), Node::Any)))
-    {
+    if rows.iter().any(|row| {
+        row.len() == types.len() && row.iter().all(|node| matches!(normalize(*node), Node::Any))
+    }) {
         return true;
     }
-    if types.is_empty() {
+    let Some((ty, tail_types)) = types.split_first() else {
         return true;
-    }
-    if *budget == 0 || depth >= DEPTH {
+    };
+    let Some(remaining) = budget.checked_sub(1).filter(|_| depth < DEPTH) else {
         return false;
-    }
-    *budget -= 1;
-    let alternatives = cases(&types[0], infer);
+    };
+    *budget = remaining;
+    let next_depth = depth.saturating_add(1);
+    let alternatives = cases(ty, infer);
     if alternatives.is_empty() {
         // Finite literal arms cannot cover an infinite or opaque domain.
         let defaults = rows
             .iter()
-            .filter(|row| matches!(normalize(row[0]), Node::Any))
-            .map(|row| row[1..].to_vec())
+            .filter_map(|row| {
+                let (first, tail) = row.split_first()?;
+                matches!(normalize(*first), Node::Any).then(|| tail.to_vec())
+            })
             .collect::<Vec<_>>();
-        return matrix(&defaults, &types[1..], infer, budget, depth + 1);
+        return matrix(&defaults, tail_types, infer, budget, next_depth);
     }
     for case in alternatives {
         let mut specialized = Vec::new();
-        for row in rows {
-            if let Some(mut fields) = fields(row[0], &case) {
-                fields.extend_from_slice(&row[1..]);
+        for (first, tail) in rows.iter().filter_map(|row| row.split_first()) {
+            if let Some(mut fields) = fields(*first, &case) {
+                fields.extend_from_slice(tail);
                 specialized.push(fields);
             }
         }
-        let mut fields = case.types();
-        fields.extend_from_slice(&types[1..]);
-        if !matrix(&specialized, &fields, infer, budget, depth + 1) {
+        let mut fields = case.into_types();
+        fields.extend_from_slice(tail_types);
+        if !matrix(&specialized, &fields, infer, budget, next_depth) {
             return false;
         }
     }
     true
 }
-pub(crate) fn covers(
+/// Checks whether the patterns cover every value of the scrutinee type.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "perform bounded exhaustiveness checking"
+    )
+)]
+pub fn covers(
     patterns: &[Pat],
     ty: &Type,
     infer: &Infer,

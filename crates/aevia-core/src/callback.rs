@@ -1,5 +1,20 @@
 //! Thread-affine, scoped transport for host callbacks. No interpreter or
 //! closure pointer is sent to another thread; handles contain only tokens.
+
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
 use crate::eval::Interp;
 use crate::value::CallbackValue;
 use crate::value::KernelValue;
@@ -108,6 +123,10 @@ impl BridgeCallback for Handle {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "validate and convert the callback type before moving the interpreter"
+)]
 fn signature(callback: &CallbackValue) -> Result<Sig, KernelError> {
     let Type::Fn(parameters, result) = &callback.schema else {
         return Err(KernelError::capability("core.callback.signature"));
@@ -153,7 +172,11 @@ fn supported_schema(ty: &Type) -> bool {
 /// Move the interpreter into a thread-local scope for the duration of a
 /// synchronous kernel call. The old interpreter is restored on success,
 /// error, or unwind; callback handles cannot outlive their scope.
-pub(crate) fn with_scoped<T>(
+#[allow(
+    clippy::single_call_fn,
+    reason = "the single kernel bridge owns the interpreter transfer and unwind handling"
+)]
+pub fn with_scoped<T>(
     interp: &mut Interp,
     callbacks: Vec<Rc<CallbackValue>>,
     run: impl FnOnce(&[Arc<dyn BridgeCallback>]) -> T,
@@ -189,12 +212,15 @@ pub(crate) fn with_scoped<T>(
     SCOPES.with(|scopes| {
         scopes.borrow_mut().remove(&token);
     });
-    let restored = scope
-        .borrow_mut()
-        .interp
-        .take()
-        .expect("callback scope owns interpreter");
-    *interp = restored;
+    let restored = scope.borrow_mut().interp.take();
+    if let Some(restored) = restored {
+        *interp = restored;
+    } else if result.is_ok() {
+        return Err(KernelError::new(
+            "E1001",
+            "callback interpreter is unavailable",
+        ));
+    }
     match result {
         | Ok(result) => Ok(result),
         | Err(panic) => resume_unwind(panic),
@@ -663,7 +689,7 @@ mod tests {
                 bytes: vec![1; 16],
             };
             let (returned, _) = handles[0]
-                .call(&[payload.clone()], &[DimensionWitness::Unknown])
+                .call(std::slice::from_ref(&payload), &[DimensionWitness::Unknown])
                 .unwrap();
             assert_eq!(returned, payload);
             let forged = Val::Opaque {

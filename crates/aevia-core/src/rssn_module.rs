@@ -26,6 +26,21 @@
 //! [`call_operator`] — so an operator that reaches it is `E1005` rather than a
 //! re-resolution.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
 use crate::eval::EvalError;
 use crate::kernel as bridge;
 use crate::value::NativeFn;
@@ -39,6 +54,8 @@ use aevia_rssn::SigType;
 use aevia_rssn::Val;
 use aevia_rssn::registry;
 use aevia_syntax::Span;
+use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::rc::Rc;
 
 /// Calls `Rssn.<name>`.
@@ -47,6 +64,10 @@ use std::rc::Rc;
 ///
 /// `E1003` when the member is neither a fixed entry point nor a registered
 /// operator, plus whatever the kernel reports.
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "retains the public host call interface with owned arguments"
+)]
 pub fn call(
     name: &str,
     args: Vec<Value>,
@@ -138,6 +159,51 @@ mod empty_composite_schema_tests {
             },
             host_witness: None,
         }))
+    }
+
+    #[test]
+    fn record_validation_rejects_repeated_expected_fields() {
+        let row = |tail| {
+            Row::Extend {
+                label: "first".into(),
+                ty: Box::new(Type::Bool),
+                tail: Box::new(tail),
+            }
+        };
+        let expected = Type::Record(row(row(Row::Empty)));
+        let payload = Val::Record(vec![
+            ("first".into(), Val::Bool(true)),
+            ("other".into(), Val::Bool(false)),
+        ]);
+        let witness = W::Record(vec![
+            ("first".into(), W::Unknown),
+            ("other".into(), W::Unknown),
+        ]);
+        assert!(validate_payload(&payload, &witness, None, &expected).is_err());
+    }
+
+    #[test]
+    fn opaque_list_projection_checks_tensor_storage_and_expected_length() {
+        let expected = Type::tensor(Shape::Rank(1), aevia_types::builtins::dynamic_value_type());
+        let tensor = |shape, data| {
+            Value::KernelValue(Rc::new(crate::value::KernelValue {
+                payload: Val::Tensor { shape, data },
+                witness: W::Unknown,
+                host_witness: None,
+            }))
+        };
+        assert!(from_kernel_value(&tensor(vec![2], vec![Val::Bool(true)]), &expected).is_err());
+        assert!(from_kernel_value(&tensor(vec![1, usize::MAX, 2], vec![]), &expected).is_err());
+        let valid = tensor(vec![2, 0], vec![]);
+        let Value::Tensor(projected) = from_kernel_value(&valid, &expected).unwrap() else {
+            panic!("expected an opaque list");
+        };
+        assert_eq!(projected.storage.len(), 2);
+        let wrong_length = Type::tensor(
+            Shape::refined([Some(1)]),
+            aevia_types::builtins::dynamic_value_type(),
+        );
+        assert!(from_kernel_value(&valid, &wrong_length).is_err());
     }
 
     fn record_schema() -> Type {
@@ -325,19 +391,13 @@ pub fn call_operator(
     args: Vec<Value>,
     span: Span,
 ) -> Result<Value, EvalError> {
-    let Some(entry) = registry().op(&key.name) else {
-        return Err(
-            EvalError::new("E1003", format!("rssn has no operator `{}`", key.name)).at(span),
-        );
-    };
-    call_operator_checked(key, entry, args, span, None)
+    call_operator_with_evidence(key, args, span, None)
 }
 
-/// Executes a pinned call with the resolved call-site return type, when the
-/// interpreter has static evidence. The unifier is local to this call.
+/// Executes a pinned call with its checked result type from the interpreter.
 pub(crate) fn call_operator_with_evidence(
     key: &OpKey,
-    args: Vec<Value>,
+    mut args: Vec<Value>,
     span: Span,
     expected: Option<&aevia_types::Type>,
 ) -> Result<Value, EvalError> {
@@ -346,94 +406,33 @@ pub(crate) fn call_operator_with_evidence(
             EvalError::new("E1003", format!("rssn has no operator `{}`", key.name)).at(span),
         );
     };
-    call_operator_checked(key, entry, args, span, expected)
-}
-fn call_operator_checked(
-    key: &OpKey,
-    entry: &OpEntry,
-    args: Vec<Value>,
-    span: Span,
-    expected: Option<&aevia_types::Type>,
-) -> Result<Value, EvalError> {
-    let converted = arguments(entry, &key.name, &args, span)?;
-    let flat = flatten_arguments(entry, &args);
-    execute_checked(key, entry, &flat, converted, span, expected)
-}
-fn flatten_arguments(
-    entry: &OpEntry,
-    args: &[Value],
-) -> Vec<Value> {
-    let mut flat = Vec::new();
-    for (index, arg) in args.iter().enumerate() {
-        if entry.is_variadic()
-            && index + 1 == args.len()
-            && let Some(items) = list_items(arg)
-        {
-            flat.extend(items);
-            continue;
-        }
-        flat.push(arg.clone());
-    }
-    flat
-}
-
-/// Converts the arguments of a call, honouring the variadic ABI.
-///
-/// A variadic operator is typed `[α] -> R` and generated as
-/// `concat([fixed…], rest)`, so the list the call site passes is *one*
-/// argument statically and N positional arguments at the kernel. Passing the
-/// list through as a single argument is what made `Rssn.and([true, false])`
-/// answer a term where the checker promised a `Bool`.
-fn arguments(
-    entry: &OpEntry,
-    name: &str,
-    args: &[Value],
-    span: Span,
-) -> Result<Vec<Val>, EvalError> {
     if !entry.accepts(args.len()) {
         return Err(EvalError::new(
             "E0315",
             format!(
-                "`{name}` takes {} argument(s), found {}",
+                "`{}` takes {} argument(s), found {}",
+                key.name,
                 entry.arity.0,
                 args.len()
             ),
         )
         .at(span));
     }
-    let variadic = entry.is_variadic();
-    let last = args.len().checked_sub(1);
-    let mut converted = Vec::with_capacity(args.len());
-    for (index, arg) in args.iter().enumerate() {
-        // Only the trailing argument spreads, and only when it is a list: a
-        // rank-1 tensor is the static `[α]`, anything else is a single value.
-        if variadic
-            && Some(index) == last
-            && let Some(items) = list_items(arg)
-        {
-            for item in &items {
-                converted.push(bridge::to_val(item)?);
-            }
-            continue;
-        }
-        converted.push(bridge::to_val(arg)?);
+    // Checked variadic callers pack the final argument as a rank-one list.
+    // Flatten once so the bridge and dimension witnesses see the same inputs.
+    if entry.is_variadic()
+        && let Some(last @ Value::Tensor(tensor)) = args.last()
+        && tensor.rank() == 1
+    {
+        let items = dynamic_arguments(Some(last), span)?;
+        let _ = args.pop();
+        args.extend(items);
     }
-    Ok(converted)
-}
-
-/// The elements of a rank-1 tensor, when the value is one.
-fn list_items(value: &Value) -> Option<Vec<Value>> {
-    let Value::Tensor(tensor) = value else {
-        return None;
-    };
-    if tensor.shape.len() != 1 {
-        return None;
-    }
-    Some(
-        (0..tensor.storage.len())
-            .filter_map(|index| tensor.get_flat(index))
-            .collect(),
-    )
+    let converted = args
+        .iter()
+        .map(bridge::to_val)
+        .collect::<Result<Vec<_>, _>>()?;
+    execute_checked(key, entry, &args, &converted, span, expected)
 }
 
 /// Executes a resolved overload on converted arguments.
@@ -441,7 +440,7 @@ fn execute_checked(
     key: &OpKey,
     entry: &OpEntry,
     args: &[Value],
-    converted: Vec<Val>,
+    converted: &[Val],
     span: Span,
     expected: Option<&aevia_types::Type>,
 ) -> Result<Value, EvalError> {
@@ -458,12 +457,12 @@ fn execute_checked(
     let (value, returned_witness) = if entry.is_value_native() && entry.source.is_exact() {
         let inputs: Vec<_> = args.iter().map(host_dimension_witness).collect();
         let (value, witness) = aevia_rssn::kernel()
-            .call_key_with_witnesses(key, &converted, &inputs)
+            .call_key_with_witnesses(key, converted, &inputs)
             .map_err(|failure| bridge::error(&failure).at(span))?;
         (value, Some(witness))
     } else {
         let value = aevia_rssn::kernel()
-            .call_key(key, &converted)
+            .call_key(key, converted)
             .map_err(|failure| bridge::error(&failure).at(span))?;
         (value, None)
     };
@@ -473,7 +472,11 @@ fn execute_checked(
         }
         return result_with_dimensions(&value, &sig.ret, &dimensions, span);
     }
-    let dim = result_dim(entry, key);
+    let signature = signature.or_else(|| entry.primary());
+    let dim = match signature.map(|sig| &sig.ret) {
+        | Some(SigType::Dim(_, dim) | SigType::Point(dim)) => dim.clone(),
+        | _ => Dim::one(),
+    };
     Ok(bridge::from_val(&value, dim))
 }
 
@@ -596,7 +599,7 @@ fn empty_schema(
                     Some(
                         extents
                             .iter()
-                            .map(|extent| extent.as_ref().and_then(|extent| extent.as_const()))
+                            .map(|extent| extent.as_ref().and_then(aevia_types::Nat::as_const))
                             .collect::<Option<Vec<_>>>()?,
                     )
                 },
@@ -681,7 +684,7 @@ fn empty_schema_matches(
                     actual_shape.as_ref().is_some_and(|actual| {
                         actual.len() == extents.len()
                             && extents.iter().zip(actual).all(|(extent, actual)| {
-                                extent.as_ref().and_then(|extent| extent.as_const())
+                                extent.as_ref().and_then(aevia_types::Nat::as_const)
                                     == Some(*actual)
                             })
                     })
@@ -700,62 +703,72 @@ fn empty_schema_matches(
                 }
                 && empty_schema_matches(elem, actual_elem, actual_element)
         },
-        | (Type::Record(row), SigType::Record(actual_fields), W::Record(actual_witnesses)) => {
-            let mut current = row;
-            let mut count = 0;
-            loop {
-                match current {
-                    | Row::Empty => {
-                        break count == actual_fields.len() && count == actual_witnesses.len();
-                    },
-                    | Row::Var(_) => break false,
-                    | Row::Extend { label, ty, tail } => {
-                        let mut remaining = tail.as_ref();
-                        let mut duplicate = false;
-                        while let Row::Extend {
-                            label: other, tail, ..
-                        } = remaining
-                        {
-                            if other == label {
-                                duplicate = true;
-                                break;
-                            }
-                            remaining = tail;
-                        }
-                        if duplicate {
-                            break false;
-                        }
-                        if actual_fields.iter().filter(|(key, _)| key == label).count() != 1
-                            || actual_witnesses
-                                .iter()
-                                .filter(|(key, _)| key == label)
-                                .count()
-                                != 1
-                        {
-                            break false;
-                        }
-                        let repr = &actual_fields
-                            .iter()
-                            .find(|(key, _)| key == label)
-                            .unwrap()
-                            .1;
-                        let witness = &actual_witnesses
-                            .iter()
-                            .find(|(key, _)| key == label)
-                            .unwrap()
-                            .1;
-                        if !empty_schema_matches(ty, repr, witness) {
-                            break false;
-                        }
-                        count += 1;
-                        current = tail;
-                    },
+        | (Type::Record(row), SigType::Record(actual), W::Record(witnesses)) => {
+            let Some(mut actual) = unique_fields(actual) else {
+                return false;
+            };
+            let Some(mut witnesses) = unique_fields(witnesses) else {
+                return false;
+            };
+            let mut remaining = row;
+            while let Row::Extend { label, ty, tail } = remaining {
+                let label = label.as_str();
+                let Some((repr, witness)) = actual.remove(label).zip(witnesses.remove(label))
+                else {
+                    return false;
+                };
+                if !empty_schema_matches(ty, repr, witness) {
+                    return false;
                 }
+                remaining = tail;
             }
+            matches!(remaining, Row::Empty) && actual.is_empty() && witnesses.is_empty()
         },
         | _ => false,
     }
 }
+/// Index fields exactly once, rejecting duplicate names.
+fn unique_fields<T>(fields: &[(String, T)]) -> Option<HashMap<&str, &T>> {
+    let map: HashMap<_, _> = fields
+        .iter()
+        .map(|(name, field)| (name.as_str(), field))
+        .collect();
+    (map.len() == fields.len()).then_some(map)
+}
+
+fn witness_numeric_dim(
+    sig: &SigType,
+    dims: &DimUnifier,
+) -> Option<Dim> {
+    match sig {
+        | SigType::Dim(_, dim) => Some(dims.resolve(dim)),
+        | SigType::Int | SigType::Real | SigType::Float | SigType::Complex => Some(Dim::one()),
+        | _ => None,
+    }
+}
+
+fn require_result_dim(
+    expected: &Dim,
+    got: Option<&Dim>,
+    span: Span,
+) -> Result<(), EvalError> {
+    if !expected.is_concrete() {
+        return Err(EvalError::new("E1001", "kernel result dimension is unknown").at(span));
+    }
+    match got {
+        | Some(actual) if actual == expected => Ok(()),
+        | Some(_) => {
+            Err(
+                EvalError::new("E0412", "kernel result dimension contradicts its signature")
+                    .at(span),
+            )
+        },
+        | None => {
+            Err(EvalError::new("E1001", "kernel omitted the result dimension witness").at(span))
+        },
+    }
+}
+
 /// Compare explicit kernel witnesses to the independently instantiated result
 /// type. Missing or contradictory physical evidence is never overwritten.
 fn verify_result_witness(
@@ -765,36 +778,14 @@ fn verify_result_witness(
     span: Span,
 ) -> Result<(), EvalError> {
     use aevia_rssn::witness::DimensionWitness as W;
-    fn require(
-        expected: Dim,
-        got: Option<&Dim>,
-        span: Span,
-    ) -> Result<(), EvalError> {
-        if !expected.is_concrete() {
-            return Err(EvalError::new("E1001", "kernel result dimension is unknown").at(span));
-        }
-        match got {
-            | Some(actual) if *actual == expected => Ok(()),
-            | Some(_) => {
-                Err(
-                    EvalError::new("E0412", "kernel result dimension contradicts its signature")
-                        .at(span),
-                )
-            },
-            | None => {
-                Err(EvalError::new("E1001", "kernel omitted the result dimension witness").at(span))
-            },
-        }
+    if let Some(expected) = witness_numeric_dim(sig, dims) {
+        let actual = match witness {
+            | W::Scalar(actual) => Some(actual),
+            | _ => None,
+        };
+        return require_result_dim(&expected, actual, span);
     }
     match (sig, witness) {
-        | (SigType::Dim(_, d), W::Scalar(got)) => require(dims.resolve(d), Some(got), span),
-        | (SigType::Dim(_, d), _) => require(dims.resolve(d), None, span),
-        | (SigType::Int | SigType::Real | SigType::Float | SigType::Complex, W::Scalar(got)) => {
-            require(Dim::one(), Some(got), span)
-        },
-        | (SigType::Int | SigType::Real | SigType::Float | SigType::Complex, _) => {
-            require(Dim::one(), None, span)
-        },
         | (
             SigType::Tensor { elem, .. } | SigType::Sparse { elem, .. },
             W::Tensor {
@@ -804,55 +795,31 @@ fn verify_result_witness(
                 ..
             },
         ) => {
-            match &**elem {
-                | SigType::Dim(_, d) => {
-                    let expected = dims.resolve(d);
-                    require(expected.clone(), dimension.as_ref(), span)?;
-                    for item in elements {
-                        match item {
-                            | W::Scalar(actual) => require(expected.clone(), Some(actual), span)?,
-                            | _ => {
-                                return Err(EvalError::new(
-                                    "E1001",
-                                    "kernel tensor element has an unknown dimension witness",
-                                )
-                                .at(span));
-                            },
-                        }
-                    }
-                },
-                | SigType::Int | SigType::Real | SigType::Float | SigType::Complex => {
-                    require(Dim::one(), dimension.as_ref(), span)?;
-                    for item in elements {
-                        match item {
-                            | W::Scalar(actual) => require(Dim::one(), Some(actual), span)?,
-                            | _ => {
-                                return Err(EvalError::new(
-                                    "E1001",
-                                    "kernel tensor element has an unknown dimension witness",
-                                )
-                                .at(span));
-                            },
-                        }
-                    }
-                },
-                | _ => {
-                    if elements.is_empty() {
-                        if let Some(element) = element {
-                            verify_result_witness(elem, element, dims, span)?;
-                        } else {
-                            return Err(EvalError::new(
-                                "E1001",
-                                "kernel omitted empty tensor element witness",
-                            )
-                            .at(span));
-                        }
-                    } else {
-                        for item in elements {
-                            verify_result_witness(elem, item, dims, span)?;
-                        }
-                    }
-                },
+            if let Some(expected) = witness_numeric_dim(elem, dims) {
+                require_result_dim(&expected, dimension.as_ref(), span)?;
+                for item in elements {
+                    let W::Scalar(actual) = item else {
+                        return Err(EvalError::new(
+                            "E1001",
+                            "kernel tensor element has an unknown dimension witness",
+                        )
+                        .at(span));
+                    };
+                    require_result_dim(&expected, Some(actual), span)?;
+                }
+            } else if elements.is_empty() {
+                let Some(element) = element else {
+                    return Err(EvalError::new(
+                        "E1001",
+                        "kernel omitted empty tensor element witness",
+                    )
+                    .at(span));
+                };
+                verify_result_witness(elem, element, dims, span)?;
+            } else {
+                for item in elements {
+                    verify_result_witness(elem, item, dims, span)?;
+                }
             }
             Ok(())
         },
@@ -896,6 +863,10 @@ fn verify_result_witness(
 }
 
 /// Bind the manifest's dimension variables to the actual argument values.
+#[allow(
+    clippy::single_call_fn,
+    reason = "binds validated input evidence before checking the result context"
+)]
 fn bind_dimensions(
     sig: &aevia_rssn::Sig,
     args: &[Value],
@@ -903,215 +874,220 @@ fn bind_dimensions(
     span: Span,
 ) -> Result<DimUnifier, EvalError> {
     let mut dims = DimUnifier::new();
-    fn bind(
-        sig: &SigType,
-        value: &Value,
-        dims: &mut DimUnifier,
-        span: Span,
-    ) -> Result<(), EvalError> {
-        let mismatch = |_: aevia_dim::DimMismatch| {
-            EvalError::new(
-                "E0412",
-                "kernel argument dimensions do not satisfy its signature",
-            )
-            .at(span)
-        };
-        if let Value::KernelValue(boxed) = value {
-            fn bind_witness(
-                sig: &SigType,
-                witness: &aevia_rssn::witness::DimensionWitness,
-                dims: &mut DimUnifier,
-                span: Span,
-            ) -> Result<(), EvalError> {
-                use aevia_rssn::witness::DimensionWitness as W;
-                let mismatch = |_: aevia_dim::DimMismatch| {
-                    EvalError::new(
-                        "E0412",
-                        "kernel argument dimensions do not satisfy its signature",
-                    )
-                    .at(span)
-                };
-                match (sig, witness) {
-                    | (SigType::Dim(_, d), W::Scalar(actual)) => {
-                        dims.unify(d, actual).map_err(mismatch)
-                    },
-                    | (
-                        SigType::Int | SigType::Real | SigType::Float | SigType::Complex,
-                        W::Scalar(actual),
-                    ) => dims.unify(&Dim::one(), actual).map_err(mismatch),
-                    | (
-                        SigType::Tensor { elem, .. } | SigType::Sparse { elem, .. },
-                        W::Tensor {
-                            dimension: Some(d), ..
-                        },
-                    ) => bind_witness(elem, &W::Scalar(d.clone()), dims, span),
-                    | (SigType::Variant(cases), W::Variant { tag, fields }) => {
-                        if aevia_rssn::registry::option_payload(cases).is_some()
-                            && let Some((_, schema)) = cases.iter().find(|(name, _)| name == tag)
-                            && schema.len() == fields.len()
-                        {
-                            for (sig, proof) in schema.iter().zip(fields) {
-                                bind_witness(sig, proof, dims, span)?;
-                            }
-                        }
-                        Ok(())
-                    },
-                    | (SigType::Record(fields), W::Record(values)) => {
-                        for (name, ty) in fields {
-                            if let Some((_, w)) = values.iter().find(|(n, _)| n == name) {
-                                bind_witness(ty, w, dims, span)?;
-                            }
-                        }
-                        Ok(())
-                    },
-                    | (
-                        SigType::Dim(_, _)
-                        | SigType::Int
-                        | SigType::Real
-                        | SigType::Float
-                        | SigType::Complex,
-                        _,
-                    ) => {
-                        Err(
-                            EvalError::new("E1001", "kernel argument has no dimension witness")
-                                .at(span),
-                        )
-                    },
-                    | _ => Ok(()),
-                }
-            }
-            return bind_witness(sig, &boxed.witness, dims, span);
-        }
-        match (sig, value) {
-            | (SigType::Dim(_, dim), Value::Num(_) | Value::Dyn(_)) => {
-                dims.unify(dim, &crate::value::value_dim(value))
-                    .map_err(mismatch)
-            },
-            | (
-                SigType::Real | SigType::Float | SigType::Int | SigType::Complex,
-                Value::Num(_) | Value::Dyn(_),
-            ) => {
-                dims.unify(&Dim::one(), &crate::value::value_dim(value))
-                    .map_err(mismatch)
-            },
-            | (SigType::Unit(dim) | SigType::Point(dim), Value::UnitOf(unit)) => {
-                dims.unify(dim, &unit.dim).map_err(mismatch)
-            },
-            | (SigType::Point(dim), Value::Num(_)) => {
-                dims.unify(dim, &crate::value::value_dim(value))
-                    .map_err(mismatch)
-            },
-            | (
-                SigType::Tensor { elem, .. } | SigType::Sparse { elem, .. },
-                Value::Tensor(tensor),
-            ) => {
-                match &**elem {
-                    | SigType::Dim(_, dim) => dims.unify(dim, &tensor.dim).map_err(mismatch),
-                    | SigType::Real | SigType::Float | SigType::Int | SigType::Complex => {
-                        dims.unify(&Dim::one(), &tensor.dim).map_err(mismatch)
-                    },
-                    | _ => {
-                        for i in 0..tensor.storage.len() {
-                            if let Some(item) = tensor.get_flat(i) {
-                                bind(elem, &item, dims, span)?;
-                            }
-                        }
-                        Ok(())
-                    },
-                }
-            },
-            | (SigType::Variant(cases), Value::Variant(value))
-                if value.adt == aevia_types::adt::OPTION_ID
-                    && aevia_rssn::registry::option_payload(cases).is_some() =>
-            {
-                let Some((_, fields)) = cases.iter().find(|(name, _)| name == &value.name) else {
-                    return Err(EvalError::new("E1003", "invalid Option tag").at(span));
-                };
-                if fields.len() != value.fields.len() {
-                    return Err(EvalError::new("E1003", "invalid Option payload").at(span));
-                }
-                for (field, actual) in fields.iter().zip(&value.fields) {
-                    bind(field, actual, dims, span)?;
-                }
-                Ok(())
-            },
-            | (SigType::Record(fields), Value::Record(record)) => {
-                for (name, field) in fields {
-                    if let Some(value) = record.fields.get(name) {
-                        bind(field, value, dims, span)?;
-                    }
-                }
-                Ok(())
-            },
-            | _ => Ok(()),
-        }
-    }
-    fn evidence(
-        sig: &SigType,
-        ty: &aevia_types::Type,
-        dims: &mut DimUnifier,
-        span: Span,
-    ) -> Result<(), EvalError> {
-        use aevia_types::Type;
-        let mismatch = |_: aevia_dim::DimMismatch| {
-            EvalError::new(
-                "E0412",
-                "kernel return dimensions disagree with the checked call",
-            )
-            .at(span)
-        };
-        match (sig, ty) {
-            | (SigType::Dim(_, dim), Type::Scalar(_, got))
-            | (SigType::Point(dim), Type::Point(got))
-            | (SigType::Unit(dim), Type::UnitOf(got))
-                if got.is_concrete() =>
-            {
-                // A result annotation is a check, never a source of evidence:
-                // binding an otherwise unknown result dimension from it would
-                // turn `from_value<T>` into a type assertion.
-                let actual = dims.resolve(dim);
-                if actual.is_concrete() {
-                    dims.unify(&actual, got).map_err(mismatch)
-                } else {
-                    Ok(())
-                }
-            },
-            | (
-                SigType::Tensor { elem, .. } | SigType::Sparse { elem, .. },
-                Type::Tensor { elem: got, .. },
-            ) => evidence(elem, got, dims, span),
-            | (SigType::Variant(cases), Type::Adt(id, args))
-                if *id == aevia_types::adt::OPTION_ID && args.len() == 1 =>
-            {
-                if let Some(payload) = aevia_rssn::registry::option_payload(cases) {
-                    evidence(payload, &args[0], dims, span)?;
-                }
-                Ok(())
-            },
-            | (SigType::Record(fields), Type::Record(row)) => {
-                for (name, field) in fields {
-                    if let Some(got) = row.field(name) {
-                        evidence(field, got, dims, span)?;
-                    }
-                }
-                Ok(())
-            },
-            | _ => Ok(()),
-        }
-    }
     for (i, value) in args.iter().enumerate() {
         let param = sig
             .params
             .get(i)
             .or_else(|| sig.variadic.as_ref().map(|(_, _, ty)| ty));
         if let Some(param) = param {
-            bind(param, value, &mut dims, span)?;
+            bind_argument_dimension(param, value, &mut dims, span)?;
         }
     }
     if let Some(expected) = expected {
-        evidence(&sig.ret, expected, &mut dims, span)?;
+        check_result_evidence(&sig.ret, expected, &mut dims, span)?;
     }
     Ok(dims)
+}
+
+fn bind_argument_dimension(
+    sig: &SigType,
+    value: &Value,
+    dims: &mut DimUnifier,
+    span: Span,
+) -> Result<(), EvalError> {
+    let mismatch = |_: aevia_dim::DimMismatch| {
+        EvalError::new(
+            "E0412",
+            "kernel argument dimensions do not satisfy its signature",
+        )
+        .at(span)
+    };
+    if let Value::KernelValue(boxed) = value {
+        return bind_witness(sig, &boxed.witness, dims, span);
+    }
+    match (sig, value) {
+        | (SigType::Dim(_, dim), Value::Num(_) | Value::Dyn(_))
+        | (SigType::Point(dim), Value::Num(_)) => {
+            dims.unify(dim, &crate::value::value_dim(value))
+                .map_err(mismatch)
+        },
+        | (
+            SigType::Real | SigType::Float | SigType::Int | SigType::Complex,
+            Value::Num(_) | Value::Dyn(_),
+        ) => {
+            dims.unify(&Dim::one(), &crate::value::value_dim(value))
+                .map_err(mismatch)
+        },
+        | (SigType::Unit(dim) | SigType::Point(dim), Value::UnitOf(unit)) => {
+            dims.unify(dim, &unit.dim).map_err(mismatch)
+        },
+        | (SigType::Tensor { elem, .. } | SigType::Sparse { elem, .. }, Value::Tensor(tensor)) => {
+            match &**elem {
+                | SigType::Dim(_, dim) => dims.unify(dim, &tensor.dim).map_err(mismatch),
+                | SigType::Real | SigType::Float | SigType::Int | SigType::Complex => {
+                    dims.unify(&Dim::one(), &tensor.dim).map_err(mismatch)
+                },
+                | _ => {
+                    for i in 0..tensor.storage.len() {
+                        if let Some(item) = tensor.get_flat(i) {
+                            bind_argument_dimension(elem, &item, dims, span)?;
+                        }
+                    }
+                    Ok(())
+                },
+            }
+        },
+        | (SigType::Variant(cases), Value::Variant(value))
+            if value.adt == aevia_types::adt::OPTION_ID
+                && aevia_rssn::registry::option_payload(cases).is_some() =>
+        {
+            let Some((_, fields)) = cases.iter().find(|(name, _)| name == &value.name) else {
+                return Err(EvalError::new("E1003", "invalid Option tag").at(span));
+            };
+            if fields.len() != value.fields.len() {
+                return Err(EvalError::new("E1003", "invalid Option payload").at(span));
+            }
+            for (field, actual) in fields.iter().zip(&value.fields) {
+                bind_argument_dimension(field, actual, dims, span)?;
+            }
+            Ok(())
+        },
+        | (SigType::Record(fields), Value::Record(record)) => {
+            for (name, field) in fields {
+                if let Some(value) = record.fields.get(name) {
+                    bind_argument_dimension(field, value, dims, span)?;
+                }
+            }
+            Ok(())
+        },
+        | _ => Ok(()),
+    }
+}
+
+fn bind_witness(
+    sig: &SigType,
+    witness: &aevia_rssn::witness::DimensionWitness,
+    dims: &mut DimUnifier,
+    span: Span,
+) -> Result<(), EvalError> {
+    use aevia_rssn::witness::DimensionWitness as W;
+    let mismatch = |_: aevia_dim::DimMismatch| {
+        EvalError::new(
+            "E0412",
+            "kernel argument dimensions do not satisfy its signature",
+        )
+        .at(span)
+    };
+    match (sig, witness) {
+        | (SigType::Dim(_, d), W::Scalar(actual)) => dims.unify(d, actual).map_err(mismatch),
+        | (SigType::Int | SigType::Real | SigType::Float | SigType::Complex, W::Scalar(actual)) => {
+            dims.unify(&Dim::one(), actual).map_err(mismatch)
+        },
+        | (
+            SigType::Tensor { elem, .. } | SigType::Sparse { elem, .. },
+            W::Tensor {
+                dimension: Some(d), ..
+            },
+        ) => bind_witness(elem, &W::Scalar(d.clone()), dims, span),
+        | (SigType::Variant(cases), W::Variant { tag, fields }) => {
+            if aevia_rssn::registry::option_payload(cases).is_some()
+                && let Some((_, schema)) = cases.iter().find(|(name, _)| name == tag)
+                && schema.len() == fields.len()
+            {
+                for (sig, proof) in schema.iter().zip(fields) {
+                    bind_witness(sig, proof, dims, span)?;
+                }
+            }
+            Ok(())
+        },
+        | (SigType::Record(fields), W::Record(values)) => {
+            for (name, ty) in fields {
+                if let Some((_, w)) = values.iter().find(|(n, _)| n == name) {
+                    bind_witness(ty, w, dims, span)?;
+                }
+            }
+            Ok(())
+        },
+        | (
+            SigType::Dim(_, _) | SigType::Int | SigType::Real | SigType::Float | SigType::Complex,
+            _,
+        ) => Err(EvalError::new("E1001", "kernel argument has no dimension witness").at(span)),
+        | _ => Ok(()),
+    }
+}
+
+fn check_result_evidence(
+    sig: &SigType,
+    ty: &aevia_types::Type,
+    dims: &mut DimUnifier,
+    span: Span,
+) -> Result<(), EvalError> {
+    use aevia_types::Type;
+    let mismatch = |_: aevia_dim::DimMismatch| {
+        EvalError::new(
+            "E0412",
+            "kernel return dimensions disagree with the checked call",
+        )
+        .at(span)
+    };
+    match (sig, ty) {
+        | (SigType::Dim(_, dim), Type::Scalar(_, got))
+        | (SigType::Point(dim), Type::Point(got))
+        | (SigType::Unit(dim), Type::UnitOf(got))
+            if got.is_concrete() =>
+        {
+            // A result annotation is a check, never a source of evidence:
+            // binding an otherwise unknown result dimension from it would
+            // turn `from_value<T>` into a type assertion.
+            let actual = dims.resolve(dim);
+            if actual.is_concrete() {
+                dims.unify(&actual, got).map_err(mismatch)
+            } else {
+                Ok(())
+            }
+        },
+        | (
+            SigType::Tensor { elem, .. } | SigType::Sparse { elem, .. },
+            Type::Tensor { elem: got, .. },
+        ) => check_result_evidence(elem, got, dims, span),
+        | (SigType::Variant(cases), Type::Adt(id, args))
+            if *id == aevia_types::adt::OPTION_ID && matches!(args.as_slice(), [_]) =>
+        {
+            if let (Some(payload), [argument]) =
+                (aevia_rssn::registry::option_payload(cases), args.as_slice())
+            {
+                check_result_evidence(payload, argument, dims, span)?;
+            }
+            Ok(())
+        },
+        | (SigType::Record(fields), Type::Record(row)) => {
+            for (name, field) in fields {
+                if let Some(got) = row.field(name) {
+                    check_result_evidence(field, got, dims, span)?;
+                }
+            }
+            Ok(())
+        },
+        | _ => Ok(()),
+    }
+}
+
+fn resolve_result_dimension(
+    dim: &Dim,
+    dims: &DimUnifier,
+    span: Span,
+) -> Result<Dim, EvalError> {
+    let dim = dims.resolve(dim);
+    if dim.is_concrete() {
+        Ok(dim)
+    } else {
+        Err(EvalError::new(
+            "E1001",
+            "kernel result dimension is not determined by its arguments",
+        )
+        .at(span)
+        .with_note("missing capability: dim.result_inference"))
+    }
 }
 
 /// Restore each result component's own instantiated dimension instead of
@@ -1122,19 +1098,6 @@ fn result_with_dimensions(
     dims: &DimUnifier,
     span: Span,
 ) -> Result<Value, EvalError> {
-    let resolved = |dim: &Dim| {
-        let dim = dims.resolve(dim);
-        if dim.is_concrete() {
-            Ok(dim)
-        } else {
-            Err(EvalError::new(
-                "E1001",
-                "kernel result dimension is not determined by its arguments",
-            )
-            .at(span)
-            .with_note("missing capability: dim.result_inference"))
-        }
-    };
     match (value, sig) {
         | (payload, SigType::Opaque(kind)) if kind == aevia_rssn::registry::NATIVE_AD_VAR_KIND => {
             if !crate::value::is_native_ad_var_payload(payload) {
@@ -1204,7 +1167,9 @@ fn result_with_dimensions(
             SigType::Tensor { elem, .. } | SigType::Sparse { elem, .. },
         ) => {
             let dim = match &**elem {
-                | SigType::Dim(_, d) | SigType::Point(d) => resolved(d)?,
+                | SigType::Dim(_, d) | SigType::Point(d) => {
+                    resolve_result_dimension(d, dims, span)?
+                },
                 | _ => Dim::one(),
             };
             let mut output = Vec::with_capacity(data.len());
@@ -1220,35 +1185,12 @@ fn result_with_dimensions(
             })))
         },
         | (_, SigType::Dim(_, dim) | SigType::Point(dim)) => {
-            Ok(bridge::from_val(value, resolved(dim)?))
+            Ok(bridge::from_val(
+                value,
+                resolve_result_dimension(dim, dims, span)?,
+            ))
         },
         | _ => Ok(bridge::from_val(value, Dim::one())),
-    }
-}
-
-/// The dimension to attach to a result.
-///
-/// The dimension comes from the overload the key names, not from the first
-/// one: when the two differ, reading `primary()` gives the result a dimension
-/// the executed overload never promised.
-fn result_dim(
-    entry: &OpEntry,
-    key: &OpKey,
-) -> Dim {
-    signature_dim(entry, entry.key_index(key))
-}
-
-/// The dimension a signature states, `1` when it states none.
-fn signature_dim(
-    entry: &OpEntry,
-    index: Option<usize>,
-) -> Dim {
-    let signature = index
-        .and_then(|index| entry.signatures.get(index))
-        .or_else(|| entry.primary());
-    match signature.map(|sig| &sig.ret) {
-        | Some(SigType::Dim(_, dim) | SigType::Point(dim)) => dim.clone(),
-        | _ => Dim::one(),
     }
 }
 
@@ -1271,21 +1213,25 @@ pub fn resolve_key(
 }
 
 /// `Rssn.typed` runs a dynamic call and validates the opaque result against a
-/// concrete, non-forgeable TypeRep. The returned payload remains a kernel
+/// concrete, non-forgeable `TypeRep`. The returned payload remains a kernel
 /// Value; `from_value` is the explicit conversion back to an Aevia value.
+#[allow(
+    clippy::single_call_fn,
+    reason = "implements the checked contract of the fixed Rssn.typed entry point"
+)]
 fn typed_call(
     args: &[Value],
     span: Span,
 ) -> Result<Value, EvalError> {
-    if args.len() != 3 {
+    let [_, _, type_rep] = args else {
         return Err(EvalError::new("E0315", "`Rssn.typed` takes three arguments").at(span));
-    }
-    let Value::TypeRep(expected) = &args[2] else {
+    };
+    let Value::TypeRep(expected) = type_rep else {
         return Err(EvalError::new(
             "E0302",
             format!(
                 "`Rssn.typed` expects a TypeRep, found {}",
-                args[2].type_name()
+                type_rep.type_name()
             ),
         )
         .at(span));
@@ -1341,7 +1287,7 @@ fn dynamic_call_from(
         .require("core.dynamic_call")
         .map_err(|failure| bridge::error(&failure).at(span))?;
     let values = dynamic_arguments(args.get(1), span)?;
-    forward(&name, &values, span, false, caller)
+    Ok(forward(&name, &values, caller))
 }
 
 /// How a failure reads to the program that receives it.
@@ -1396,25 +1342,35 @@ fn call_ho(
         .require("core.dynamic_call")
         .map_err(|failure| bridge::error(&failure).at(span))?;
     let values = dynamic_arguments(args.get(1), span)?;
-    forward(&name, &values, span, true, None)
+    Ok(forward(&name, &values, None))
 }
 
 /// Interpreter-aware callback path. The host-only `call` entry point keeps its
 /// capability error because it has no interpreter to scope.
+#[allow(
+    clippy::single_call_fn,
+    reason = "contains ownership and lifetime handling for interpreter callbacks"
+)]
 fn call_ho_with_interp(
     interp: &mut crate::eval::Interp,
     args: &[Value],
     span: Span,
     pinned: bool,
 ) -> Result<Value, EvalError> {
-    let expected = if pinned { 4 } else { 3 };
-    if args.len() != expected {
-        return Err(
-            EvalError::new("E0315", format!("callback call takes {expected} arguments")).at(span),
-        );
-    }
-    let callbacks = dynamic_arguments(args.get(expected - 1), span)?;
-    if callbacks.is_empty() && !pinned {
+    let (name, hash, values, callbacks) = match (pinned, args) {
+        | (false, [name, values, callbacks]) => (name, None, values, callbacks),
+        | (true, [name, hash, values, callbacks]) => (name, Some(hash), values, callbacks),
+        | _ => {
+            let expected = if pinned { 4 } else { 3 };
+            return Err(EvalError::new(
+                "E0315",
+                format!("callback call takes {expected} arguments"),
+            )
+            .at(span));
+        },
+    };
+    let callbacks = dynamic_arguments(Some(callbacks), span)?;
+    if callbacks.is_empty() && hash.is_none() {
         return call_ho(args, span);
     }
     let callbacks: Vec<_> = callbacks
@@ -1432,9 +1388,9 @@ fn call_ho_with_interp(
             }
         })
         .collect::<Result<_, _>>()?;
-    let name = show(&args[0]);
-    let key = if pinned {
-        let hash = show(&args[1]);
+    let name = show(name);
+    let key = if let Some(hash) = hash {
+        let hash = show(hash);
         let Some(key) = registry()
             .op(&name)
             .and_then(|entry| pinned_key(entry, &hash))
@@ -1448,7 +1404,7 @@ fn call_ho_with_interp(
     } else {
         None
     };
-    let values = dynamic_arguments(args.get(if pinned { 2 } else { 1 }), span)?;
+    let values = dynamic_arguments(Some(values), span)?;
     let mut converted = Vec::with_capacity(values.len());
     for value in &values {
         match bridge::to_val(value) {
@@ -1458,11 +1414,10 @@ fn call_ho_with_interp(
     }
     let witnesses: Vec<_> = values.iter().map(host_dimension_witness).collect();
     let result = crate::callback::with_scoped(interp, callbacks, |handles| {
-        if let Some(key) = &key {
-            aevia_rssn::kernel().call_ho_scoped_key(key, &converted, &witnesses, handles)
-        } else {
-            aevia_rssn::kernel().call_ho_scoped(&name, &converted, &witnesses, handles)
-        }
+        key.as_ref().map_or_else(
+            || aevia_rssn::kernel().call_ho_scoped(&name, &converted, &witnesses, handles),
+            |key| aevia_rssn::kernel().call_ho_scoped_key(key, &converted, &witnesses, handles),
+        )
     })
     .and_then(|result| result);
     Ok(match result {
@@ -1486,6 +1441,10 @@ fn call_ho_with_interp(
 /// module loads, and `load_plugin(path)` for a file at run time. A value that
 /// reaches `Rssn.register` is therefore a type error at run time (`E0302`)
 /// with that guidance, not a missing capability.
+#[allow(
+    clippy::single_call_fn,
+    reason = "reports the host-only Plugin boundary for both registration spellings"
+)]
 fn register(
     args: &[Value],
     span: Span,
@@ -1516,38 +1475,33 @@ fn register(
 fn forward(
     name: &str,
     values: &[Value],
-    _span: Span,
-    _higher_order: bool,
     caller: Option<&str>,
-) -> Result<Value, EvalError> {
+) -> Value {
     let mut converted = Vec::with_capacity(values.len());
     for value in values {
         match bridge::to_val(value) {
             | Ok(value) => converted.push(value),
-            | Err(error) => return Ok(err(value_error(error.code, error.message))),
+            | Err(error) => return err(value_error(error.code, error.message)),
         }
     }
-    let kernel = aevia_rssn::kernel();
     let witnesses: Vec<_> = values.iter().map(host_dimension_witness).collect();
-    let result = kernel.call_with_witnesses(name, &converted, &witnesses);
-    match result {
+    match aevia_rssn::kernel().call_with_witnesses(name, &converted, &witnesses) {
         | Ok((payload, witness)) => {
-            Ok(ok(Value::KernelValue(Rc::new(crate::value::KernelValue {
+            ok(Value::KernelValue(Rc::new(crate::value::KernelValue {
                 payload,
                 witness,
                 host_witness: None,
-            }))))
+            })))
         },
-        | Err(failure) => {
-            Ok(err(value_error(
-                failure.code,
-                failure_text(&failure, caller),
-            )))
-        },
+        | Err(failure) => err(value_error(failure.code, failure_text(&failure, caller))),
     }
 }
 
 /// `Rssn.call_key(name, hash, values)`.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps the pinned-key operation and its Result error channel together"
+)]
 fn call_key(
     args: &[Value],
     span: Span,
@@ -1588,7 +1542,7 @@ fn call_key(
         use aevia_rssn::witness::DimensionWitness as W;
         let safe = values.iter().all(|v| {
             match host_dimension_witness(v) {
-                | W::Scalar(d) => d.is_one(),
+                | W::Scalar(d)
                 | W::Tensor {
                     dimension: Some(d), ..
                 } => d.is_one(),
@@ -1654,7 +1608,7 @@ fn invoke(
     let Some(entry) = entry else {
         return Err(EvalError::new("E1003", format!("rssn has no operator `{name}`")).at(span));
     };
-    execute_checked(&key, entry, &values, converted, span, expected)
+    execute_checked(&key, entry, &values, &converted, span, expected)
 }
 
 /// The key of the overload of `entry` whose signature hash is `hash`.
@@ -1669,6 +1623,10 @@ fn pinned_key(
         .cloned()
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "implements the fixed overload-resolution operation and its textual key"
+)]
 fn resolve(
     args: &[Value],
     span: Span,
@@ -1696,6 +1654,10 @@ fn resolve(
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "builds the fixed overload-inspection result"
+)]
 fn overloads(
     args: &[Value],
     span: Span,
@@ -1735,9 +1697,18 @@ fn dynamic_arguments(
 ) -> Result<Vec<Value>, EvalError> {
     match value {
         | Some(Value::Tensor(tensor)) => {
-            Ok((0..tensor.storage.len())
-                .filter_map(|index| tensor.get_flat(index))
-                .collect())
+            let [count] = tensor.shape.as_slice() else {
+                return Err(EvalError::new("E0302", "expected a rank-one list of values").at(span));
+            };
+            let malformed =
+                || EvalError::new("E0802", "argument list does not match its storage").at(span);
+            if *count != tensor.storage.len() {
+                return Err(malformed());
+            }
+            (0..*count)
+                .map(|index| tensor.get_flat(index))
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(malformed)
         },
         | Some(Value::Unit) | None => Ok(Vec::new()),
         | Some(other) => {
@@ -1762,9 +1733,9 @@ fn string_tensor(items: Vec<String>) -> Value {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
+    let mut out = String::with_capacity(bytes.len().saturating_mul(2));
     for byte in bytes {
-        out.push_str(&format!("{byte:02x}"));
+        let _ = write!(out, "{byte:02x}");
     }
     out
 }
@@ -1933,15 +1904,23 @@ pub(crate) fn validate_kernel_value(
 /// Returns `None` when `expected` is not `Tensor<1, Value>` (the ordinary
 /// path), and `Some` for the accessor, with the same all-or-nothing contract:
 /// the payload is only split, never reinterpreted.
+#[allow(
+    clippy::single_call_fn,
+    reason = "checks the shape and allocation of an opaque tensor decomposition"
+)]
 fn kernel_pieces(
     value: &Value,
     expected: &aevia_types::Type,
 ) -> Option<Result<Value, String>> {
     use aevia_rssn::witness::DimensionWitness as W;
-    let aevia_types::Type::Tensor { shape, elem } = expected else {
+    let aevia_types::Type::Tensor {
+        shape: expected_shape,
+        elem,
+    } = expected
+    else {
         return None;
     };
-    if shape.rank() != 1 || **elem != aevia_types::builtins::dynamic_value_type() {
+    if expected_shape.rank() != 1 || **elem != aevia_types::builtins::dynamic_value_type() {
         return None;
     }
     let Value::KernelValue(kernel) = value else {
@@ -1955,6 +1934,23 @@ fn kernel_pieces(
     let &[count, ref inner @ ..] = shape.as_slice() else {
         return Some(Err("kernel value is a scalar, not a list".into()));
     };
+    if expected_shape
+        .extent(0)
+        .is_some_and(|extent| extent != count)
+    {
+        return Some(Err(format!(
+            "kernel list length {count} does not match {expected}"
+        )));
+    }
+    let Some(stride) = crate::value::checked_element_count(inner) else {
+        return Some(Err("kernel tensor shape exceeds the supported range".into()));
+    };
+    if count.checked_mul(stride) != Some(data.len()) {
+        return Some(Err("kernel tensor shape does not match its storage".into()));
+    }
+    if count > crate::sparse::DENSE_LIMIT {
+        return Some(Err("kernel list exceeds the dense element limit".into()));
+    }
     let (dimension, element, parts) = match &kernel.witness {
         | W::Tensor {
             dimension,
@@ -1967,9 +1963,19 @@ fn kernel_pieces(
     if !parts.is_empty() && parts.len() != count {
         return Some(Err("kernel value has a malformed element witness".into()));
     }
-    let stride: usize = inner.iter().product();
-    let mut items = Vec::with_capacity(count);
+    let mut items = Vec::new();
+    if items.try_reserve_exact(count).is_err() {
+        return Some(Err("could not allocate the kernel list".into()));
+    }
+    let mut offset = 0usize;
     for i in 0..count {
+        let Some(next) = offset.checked_add(stride) else {
+            return Some(Err("kernel tensor shape exceeds the supported range".into()));
+        };
+        let Some(row) = data.get(offset..next) else {
+            return Some(Err("kernel tensor shape does not match its storage".into()));
+        };
+        offset = next;
         let (payload, witness) = if inner.is_empty() {
             let witness = parts
                 .get(i)
@@ -1977,13 +1983,16 @@ fn kernel_pieces(
                 .or_else(|| element.cloned())
                 .or_else(|| dimension.clone().map(W::Scalar))
                 .unwrap_or(W::Unknown);
-            (data[i].clone(), witness)
+            let [item] = row else {
+                return Some(Err("kernel tensor shape does not match its storage".into()));
+            };
+            (item.clone(), witness)
         } else {
             // A slice of a uniform tensor has the witness of the whole.
             (
                 Val::Tensor {
                     shape: inner.to_vec(),
-                    data: data[i * stride..(i + 1) * stride].to_vec(),
+                    data: row.to_vec(),
                 },
                 parts
                     .get(i)
@@ -2064,8 +2073,6 @@ fn validate_payload(
     use crate::value::HostWitnessNode as H;
     use aevia_rssn::witness::DimensionWitness as W;
     use aevia_types::Rep;
-    use aevia_types::Row;
-    use aevia_types::Shape;
     use aevia_types::Type;
     // Erased Value requests assert no representation, dimension or nominal
     // identity. Keep its existing evidence for a later checked conversion.
@@ -2135,62 +2142,24 @@ fn validate_payload(
             Ok(())
         },
         | (Val::Variant { tag, payload }, Type::Adt(id, args))
-            if *id == aevia_types::adt::OPTION_ID && args.len() == 1 && host.is_none() =>
+            if *id == aevia_types::adt::OPTION_ID
+                && host.is_none()
+                && let [argument] = args.as_slice() =>
         {
             let W::Variant { tag: proven, fields } = witness else {
                 return Err(mismatch());
             };
-            if proven != tag || fields.len() != payload.len() {
+            if proven != tag {
                 return Err(mismatch());
             }
             match (tag.as_str(), payload.as_slice(), fields.as_slice()) {
                 | ("None", [], []) => Ok(()),
-                | ("Some", [item], [proof]) => validate_payload(item, proof, None, &args[0]),
+                | ("Some", [item], [proof]) => validate_payload(item, proof, None, argument),
                 | _ => Err(mismatch()),
             }
         },
         | (Val::Variant { tag, payload }, Type::Adt(expected_id, _)) => {
-            let Some(crate::value::HostWitness {
-                node:
-                    H::Variant {
-                        adt,
-                        index,
-                        tag: proven_tag,
-                        fields,
-                    },
-                ..
-            }) = host
-            else {
-                return Err(mismatch());
-            };
-            if !aevia_types::adt::same_type(*adt, *expected_id)
-                || tag != proven_tag
-                || payload.len() != fields.len()
-            {
-                return Err(mismatch());
-            }
-            // Nominal identity still comes exclusively from the private host
-            // proof. Independently retained kernel evidence follows each field.
-            let _ = index;
-            let proven = match witness {
-                | W::Variant {
-                    tag: actual,
-                    fields: proofs,
-                } => {
-                    if actual != tag || proofs.len() != payload.len() {
-                        return Err(mismatch());
-                    }
-                    Some(proofs)
-                },
-                | _ => None,
-            };
-            for (i, (item, field)) in payload.iter().zip(fields).enumerate() {
-                let proof = proven
-                    .and_then(|proofs| proofs.get(i))
-                    .unwrap_or(&W::Unknown);
-                validate_payload(item, proof, Some(field), &field.schema)?;
-            }
-            Ok(())
+            validate_nominal_payload(tag, payload, *expected_id, witness, host, mismatch)
         },
         | (
             Val::Tensor { shape, data },
@@ -2198,160 +2167,223 @@ fn validate_payload(
                 shape: expected_shape,
                 elem,
             },
-        ) => {
-            if shape.len() != expected_shape.rank() as usize
-                || shape
-                    .iter()
-                    .try_fold(1usize, |n, extent| n.checked_mul(*extent))
-                    != Some(data.len())
-            {
-                return Err(mismatch());
-            }
-            if let Shape::Refined(extents) = expected_shape {
-                for (actual, extent) in shape.iter().zip(extents) {
-                    if let Some(extent) = extent
-                        && extent.as_const() != Some(*actual)
-                    {
-                        return Err(mismatch());
-                    }
-                }
-            }
-            let W::Tensor {
-                dimension,
-                element,
-                element_repr,
-                elements,
-            } = witness
-            else {
-                return Err(mismatch());
-            };
-            let host_items = match host.map(|h| &h.node) {
-                | Some(H::Tensor(items)) if items.len() == data.len() => Some(items),
-                | Some(H::Tensor(items))
-                    if items.is_empty() && crate::host_witness::is_leaf_schema(elem) =>
-                {
-                    None
-                },
-                | Some(_) => return Err(mismatch()),
-                | None => None,
-            };
-            if data.is_empty() {
-                let valid_repr = matches!(
-                    (elem.as_ref(), element_repr),
-                    (Type::Scalar(Rep::Int, _), Some(SigType::Int))
-                        | (
-                            Type::Scalar(Rep::Real, _),
-                            Some(SigType::Int | SigType::Real)
-                        )
-                        | (Type::Scalar(Rep::Float, _), Some(SigType::Float))
-                        | (Type::Scalar(Rep::Complex, _), Some(SigType::Complex))
-                        | (Type::Bool, Some(SigType::Bool))
-                        | (Type::Str, Some(SigType::Str))
-                );
-                if !valid_repr && host_items.is_none() {
-                    let proven = element_repr
-                        .as_ref()
-                        .zip(element.as_deref())
-                        .is_some_and(|(repr, witness)| empty_schema_matches(elem, repr, witness));
-                    if !proven {
-                        return Err(mismatch());
-                    }
-                }
-                if let Type::Scalar(_, dim) = elem.as_ref()
-                    && (!dim.is_concrete() || dimension.as_ref() != Some(dim))
-                {
-                    return Err(mismatch());
-                }
-                return Ok(());
-            }
-            if let Type::Scalar(_, dim) = elem.as_ref() {
-                if !dim.is_concrete()
-                    || dimension.as_ref() != Some(dim)
-                    || elements
-                        .iter()
-                        .any(|w| !matches!(w, W::Scalar(actual) if actual == dim))
-                {
-                    return Err(mismatch());
-                }
-                let scalar = W::Scalar(dim.clone());
-                for (i, item) in data.iter().enumerate() {
-                    validate_payload(
-                        item,
-                        &scalar,
-                        host_items.and_then(|items| items.get(i)),
-                        elem,
-                    )?;
-                }
-            } else {
-                if !elements.is_empty() && elements.len() != data.len() {
-                    return Err(mismatch());
-                }
-                for (i, item) in data.iter().enumerate() {
-                    let item_witness = elements
-                        .get(i)
-                        .or(element.as_deref())
-                        .unwrap_or(&W::Unknown);
-                    validate_payload(
-                        item,
-                        item_witness,
-                        host_items.and_then(|items| items.get(i)),
-                        elem,
-                    )?;
-                }
-            }
-            Ok(())
-        },
+        ) => validate_tensor_payload(shape, data, expected_shape, elem, witness, host, mismatch),
         | (Val::Record(fields), Type::Record(row)) => {
-            let W::Record(witnesses) = witness else {
-                return Err(mismatch());
-            };
-            let host_fields = match host.map(|h| &h.node) {
-                | Some(H::Record(fields)) => Some(fields),
-                | Some(_) => return Err(mismatch()),
-                | None => None,
-            };
-            let mut row = row;
-            let mut count = 0;
-            loop {
-                match row {
-                    | Row::Empty => break,
-                    | Row::Var(_) => return Err(mismatch()),
-                    | Row::Extend { label, ty, tail } => {
-                        if fields.iter().filter(|(n, _)| n == label).count() != 1
-                            || witnesses.iter().filter(|(n, _)| n == label).count() != 1
-                        {
-                            return Err(mismatch());
-                        }
-                        let (_, item) = fields
-                            .iter()
-                            .find(|(n, _)| n == label)
-                            .ok_or_else(mismatch)?;
-                        let (_, w) = witnesses
-                            .iter()
-                            .find(|(n, _)| n == label)
-                            .ok_or_else(mismatch)?;
-                        let h = match host_fields {
-                            | Some(fs) => {
-                                Some(&fs.iter().find(|(n, _)| n == label).ok_or_else(mismatch)?.1)
-                            },
-                            | None => None,
-                        };
-                        validate_payload(item, w, h, ty)?;
-                        count += 1;
-                        row = tail;
-                    },
-                }
-            }
-            if count != fields.len()
-                || count != witnesses.len()
-                || host_fields.is_some_and(|fs| fs.len() != count)
-            {
-                return Err(mismatch());
-            }
-            Ok(())
+            validate_record_payload(fields, row, witness, host, mismatch)
         },
         | _ => Err(mismatch()),
     }
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "checks nominal constructor identity independently from native Option encoding"
+)]
+fn validate_nominal_payload(
+    tag: &str,
+    payload: &[Val],
+    expected_id: aevia_types::adt::AdtId,
+    witness: &aevia_rssn::witness::DimensionWitness,
+    host: Option<&crate::value::HostWitness>,
+    mismatch: impl Fn() -> String + Copy,
+) -> Result<(), String> {
+    use crate::value::HostWitnessNode as H;
+    use aevia_rssn::witness::DimensionWitness as W;
+    let Some(crate::value::HostWitness {
+        node:
+            H::Variant {
+                adt,
+                tag: proven_tag,
+                fields,
+                ..
+            },
+        ..
+    }) = host
+    else {
+        return Err(mismatch());
+    };
+    if !aevia_types::adt::same_type(*adt, expected_id)
+        || tag != proven_tag
+        || payload.len() != fields.len()
+    {
+        return Err(mismatch());
+    }
+    // Nominal identity still comes exclusively from the private host
+    // proof. Independently retained kernel evidence follows each field.
+    let proven = match witness {
+        | W::Variant {
+            tag: actual,
+            fields: proofs,
+        } => {
+            if actual != tag || proofs.len() != payload.len() {
+                return Err(mismatch());
+            }
+            Some(proofs)
+        },
+        | _ => None,
+    };
+    for (i, (item, field)) in payload.iter().zip(fields).enumerate() {
+        let proof = proven
+            .and_then(|proofs| proofs.get(i))
+            .unwrap_or(&W::Unknown);
+        validate_payload(item, proof, Some(field), &field.schema)?;
+    }
+    Ok(())
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "tensor validation relates physical dimensions, extents, and independently proven elements"
+)]
+fn validate_tensor_payload(
+    shape: &[usize],
+    data: &[Val],
+    expected_shape: &aevia_types::Shape,
+    elem: &aevia_types::Type,
+    witness: &aevia_rssn::witness::DimensionWitness,
+    host: Option<&crate::value::HostWitness>,
+    mismatch: impl Fn() -> String + Copy,
+) -> Result<(), String> {
+    use crate::value::HostWitnessNode as H;
+    use aevia_rssn::witness::DimensionWitness as W;
+    use aevia_types::Rep;
+    use aevia_types::Shape;
+    use aevia_types::Type;
+    if shape.len() != expected_shape.rank() as usize
+        || shape
+            .iter()
+            .try_fold(1usize, |n, extent| n.checked_mul(*extent))
+            != Some(data.len())
+    {
+        return Err(mismatch());
+    }
+    if let Shape::Refined(extents) = expected_shape {
+        for (actual, extent) in shape.iter().zip(extents) {
+            if let Some(extent) = extent
+                && extent.as_const() != Some(*actual)
+            {
+                return Err(mismatch());
+            }
+        }
+    }
+    let W::Tensor {
+        dimension,
+        element,
+        element_repr,
+        elements,
+    } = witness
+    else {
+        return Err(mismatch());
+    };
+    let host_items = match host.map(|h| &h.node) {
+        | Some(H::Tensor(items)) if items.len() == data.len() => Some(items),
+        | Some(H::Tensor(items)) if items.is_empty() && crate::host_witness::is_leaf_schema(elem) => {
+            None
+        },
+        | Some(_) => return Err(mismatch()),
+        | None => None,
+    };
+    if data.is_empty() {
+        let valid_repr = matches!(
+            (elem, element_repr),
+            (Type::Scalar(Rep::Int, _), Some(SigType::Int))
+                | (
+                    Type::Scalar(Rep::Real, _),
+                    Some(SigType::Int | SigType::Real)
+                )
+                | (Type::Scalar(Rep::Float, _), Some(SigType::Float))
+                | (Type::Scalar(Rep::Complex, _), Some(SigType::Complex))
+                | (Type::Bool, Some(SigType::Bool))
+                | (Type::Str, Some(SigType::Str))
+        );
+        let proven = valid_repr
+            || host_items.is_some()
+            || element_repr
+                .as_ref()
+                .zip(element.as_deref())
+                .is_some_and(|(repr, witness)| empty_schema_matches(elem, repr, witness));
+        let dimension_matches = match elem {
+            | Type::Scalar(_, dim) => dim.is_concrete() && dimension.as_ref() == Some(dim),
+            | _ => true,
+        };
+        return (proven && dimension_matches)
+            .then_some(())
+            .ok_or_else(mismatch);
+    }
+    let scalar = if let Type::Scalar(_, dim) = elem {
+        if !dim.is_concrete()
+            || dimension.as_ref() != Some(dim)
+            || elements
+                .iter()
+                .any(|w| !matches!(w, W::Scalar(actual) if actual == dim))
+        {
+            return Err(mismatch());
+        }
+        Some(W::Scalar(dim.clone()))
+    } else {
+        if !elements.is_empty() && elements.len() != data.len() {
+            return Err(mismatch());
+        }
+        None
+    };
+    for (i, item) in data.iter().enumerate() {
+        let proof = scalar
+            .as_ref()
+            .or_else(|| elements.get(i))
+            .or(element.as_deref())
+            .unwrap_or(&W::Unknown);
+        validate_payload(item, proof, host_items.and_then(|items| items.get(i)), elem)?;
+    }
+    Ok(())
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "requires exact shape agreement across three named-field evidence channels"
+)]
+fn validate_record_payload(
+    fields: &[(String, Val)],
+    row: &aevia_types::Row,
+    witness: &aevia_rssn::witness::DimensionWitness,
+    host: Option<&crate::value::HostWitness>,
+    mismatch: impl Fn() -> String + Copy,
+) -> Result<(), String> {
+    use crate::value::HostWitnessNode as H;
+    use aevia_rssn::witness::DimensionWitness as W;
+    use aevia_types::Row;
+
+    let W::Record(witnesses) = witness else {
+        return Err(mismatch());
+    };
+    let mut host_fields = match host.map(|h| &h.node) {
+        | Some(H::Record(fields)) => Some(unique_fields(fields).ok_or_else(mismatch)?),
+        | Some(_) => return Err(mismatch()),
+        | None => None,
+    };
+    let mut payload = unique_fields(fields).ok_or_else(mismatch)?;
+    let mut witnesses = unique_fields(witnesses).ok_or_else(mismatch)?;
+    let mut remaining = row;
+    while let Row::Extend { label, ty, tail } = remaining {
+        let label = label.as_str();
+        let (item, proof) = payload
+            .remove(label)
+            .zip(witnesses.remove(label))
+            .ok_or_else(mismatch)?;
+        let host = host_fields
+            .as_mut()
+            .map(|fields| fields.remove(label).ok_or_else(mismatch))
+            .transpose()?;
+        validate_payload(item, proof, host, ty)?;
+        remaining = tail;
+    }
+    if !matches!(remaining, Row::Empty)
+        || !payload.is_empty()
+        || !witnesses.is_empty()
+        || host_fields.is_some_and(|fields| !fields.is_empty())
+    {
+        return Err(mismatch());
+    }
+    Ok(())
 }
 
 /// Convert a linear quantity in its actual unit, preserving the requested
@@ -2382,7 +2414,7 @@ fn quantity_scalar(
     };
     let mut number = match (payload, rep) {
         | (Val::Num(aevia_rssn::Num::Int(_)), Rep::Int) => {
-            let exact = exact.ok_or_else(mismatch)? * &unit.scale.rat;
+            let exact = scale_exact_quantity(exact.ok_or_else(mismatch)?, &unit.scale.rat);
             if unit.scale.pi != 0 || !exact.is_integer() {
                 return Err(mismatch());
             }
@@ -2391,7 +2423,7 @@ fn quantity_scalar(
             value
         },
         | (Val::Num(aevia_rssn::Num::Int(_) | aevia_rssn::Num::Rat(_)), Rep::Real) => {
-            let exact = exact.ok_or_else(mismatch)? * &unit.scale.rat;
+            let exact = scale_exact_quantity(exact.ok_or_else(mismatch)?, &unit.scale.rat);
             if unit.scale.pi == 0 {
                 crate::value::NumVal::exact(exact, unit.dim.clone())
             } else {
@@ -2447,6 +2479,17 @@ fn quantity_scalar(
     Ok(number)
 }
 
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "exact rational multiplication is arbitrary precision and the unit scale denominator was validated"
+)]
+fn scale_exact_quantity(
+    value: num_rational::BigRational,
+    scale: &num_rational::BigRational,
+) -> num_rational::BigRational {
+    value * scale
+}
+
 fn decode_payload(
     payload: &Val,
     witness: &aevia_rssn::witness::DimensionWitness,
@@ -2456,7 +2499,6 @@ fn decode_payload(
     use crate::value::HostWitnessNode as H;
     use aevia_rssn::witness::DimensionWitness as W;
     use aevia_types::Rep;
-    use aevia_types::Row;
     use aevia_types::Type;
     if *expected == aevia_types::builtins::dynamic_value_type() {
         return Ok(Value::KernelValue(Rc::new(crate::value::KernelValue {
@@ -2493,116 +2535,27 @@ fn decode_payload(
         },
         | (_, Type::Scalar(_, dim)) => Ok(bridge::from_val(payload, dim.clone())),
         | (Val::Tensor { shape, data }, Type::Tensor { elem, .. }) => {
-            let dim = match elem.as_ref() {
-                | Type::Scalar(_, dim) => dim.clone(),
-                | _ => Dim::one(),
-            };
-            let host_items = match host.map(|h| &h.node) {
-                | Some(H::Tensor(items)) => Some(items),
-                | _ => None,
-            };
-            let W::Tensor {
-                dimension,
-                element,
-                elements,
-                ..
-            } = witness
-            else {
-                return Err("validated tensor witness disappeared".into());
-            };
-            let uniform = dimension.as_ref().map(|d| W::Scalar(d.clone()));
-            let storage = if data.is_empty() {
-                match elem.as_ref() {
-                    | Type::Scalar(Rep::Float, _) => {
-                        crate::value::Storage::Dense(Rc::new(Vec::new()))
-                    },
-                    | Type::Scalar(Rep::Int, _) => {
-                        crate::value::Storage::TypedExact(Vec::new(), crate::value::ExactRep::Int)
-                    },
-                    | Type::Scalar(Rep::Real, _) => {
-                        crate::value::Storage::TypedExact(Vec::new(), crate::value::ExactRep::Real)
-                    },
-                    | Type::Bool => crate::value::Storage::Bool(Vec::new()),
-                    | _ => crate::value::Storage::Boxed(Vec::new()),
-                }
-            } else {
-                crate::value::Storage::Boxed(
-                    data.iter()
-                        .enumerate()
-                        .map(|(i, item)| {
-                            let proof = elements
-                                .get(i)
-                                .or(element.as_deref())
-                                .or(uniform.as_ref())
-                                .unwrap_or(&W::Unknown);
-                            decode_payload(
-                                item,
-                                proof,
-                                host_items.and_then(|items| items.get(i)),
-                                elem,
-                            )
-                        })
-                        .collect::<Result<_, _>>()?,
-                )
-            };
-            Ok(Value::Tensor(Rc::new(crate::value::TensorData {
-                // decode_payload is reached only after the shared validator
-                // has authenticated both payload and the element schema.
-                verified_element: Some(Rc::new((**elem).clone())),
-                shape: shape.clone(),
-                storage,
-                dim,
-                display: None,
-            })))
+            decode_tensor_payload(shape, data, elem, witness, host)
         },
         | (Val::Record(fields), Type::Record(row)) => {
-            let host_fields = match host.map(|h| &h.node) {
-                | Some(H::Record(fields)) => Some(fields),
-                | _ => None,
-            };
-            let W::Record(proofs) = witness else {
-                return Err("validated record witness disappeared".into());
-            };
-            let mut row = row;
-            let mut result = indexmap::IndexMap::new();
-            while let Row::Extend { label, ty, tail } = row {
-                let (_, item) = fields
-                    .iter()
-                    .find(|(n, _)| n == label)
-                    .ok_or_else(|| "validated field disappeared".to_string())?;
-                let h =
-                    host_fields.and_then(|fs| fs.iter().find(|(n, _)| n == label).map(|(_, h)| h));
-                let proof = &proofs
-                    .iter()
-                    .find(|(name, _)| name == label)
-                    .ok_or_else(|| "validated field witness disappeared".to_string())?
-                    .1;
-                result.insert(label.clone(), decode_payload(item, proof, h, ty)?);
-                row = tail;
-            }
-            Ok(Value::Record(Rc::new(crate::value::RecordValue {
-                fields: result,
-            })))
+            decode_record_payload(fields, row, witness, host)
         },
         | (Val::Variant { tag, payload }, Type::Adt(id, args))
-            if *id == aevia_types::adt::OPTION_ID && args.len() == 1 && host.is_none() =>
+            if *id == aevia_types::adt::OPTION_ID
+                && host.is_none()
+                && let [argument] = args.as_slice() =>
         {
             let W::Variant { fields: proofs, .. } = witness else {
                 return Err("validated Option witness disappeared".into());
             };
-            let (index, fields) = match (tag.as_str(), payload.as_slice()) {
-                | ("None", []) => (0, Vec::new()),
-                | ("Some", [item]) => (1, vec![decode_payload(item, &proofs[0], None, &args[0])?]),
+            let (index, fields) = match (tag.as_str(), payload.as_slice(), proofs.as_slice()) {
+                | ("None", [], []) => (0, Vec::new()),
+                | ("Some", [item], [proof]) => {
+                    (1, vec![decode_payload(item, proof, None, argument)?])
+                },
                 | _ => return Err("invalid native Option payload".into()),
             };
-            let mut result = crate::value::make_variant(*id, index, tag, fields);
-            if let Value::Variant(value) = &mut result {
-                let value = Rc::make_mut(value);
-                value.constructor_origin = true;
-                value.verified_type = Some(expected.clone());
-                value.type_args = Some(args.clone());
-            }
-            Ok(result)
+            Ok(decoded_variant(*id, index, tag, fields, expected, args))
         },
         | (Val::Variant { tag, payload }, Type::Adt(id, args)) => {
             let Some(crate::value::HostWitness {
@@ -2627,18 +2580,141 @@ fn decode_payload(
                     decode_payload(item, proof, Some(field), &field.schema)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let mut result = crate::value::make_variant(*id, *index, tag, values);
-            if let Value::Variant(variant) = &mut result {
-                let variant = Rc::make_mut(variant);
-                variant.constructor_origin = true;
-                variant.verified_type = Some(expected.clone());
-                variant.type_args = Some(args.clone());
-            }
-            Ok(result)
+            Ok(decoded_variant(*id, *index, tag, values, expected, args))
         },
         | (Val::Variant { .. }, Type::Unit) => Ok(Value::Unit),
         | _ => Ok(bridge::from_val(payload, Dim::one())),
     }
+}
+
+fn decoded_variant(
+    id: aevia_types::adt::AdtId,
+    index: usize,
+    tag: &str,
+    fields: Vec<Value>,
+    expected: &aevia_types::Type,
+    args: &[aevia_types::Type],
+) -> Value {
+    let mut result = crate::value::make_variant(id, index, tag, fields);
+    if let Value::Variant(value) = &mut result {
+        let value = Rc::make_mut(value);
+        value.constructor_origin = true;
+        value.verified_type = Some(expected.clone());
+        value.type_args = Some(args.to_vec());
+    }
+    result
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "preserves typed empty storage and decodes witnessed elements of a tensor"
+)]
+fn decode_tensor_payload(
+    shape: &[usize],
+    data: &[Val],
+    elem: &aevia_types::Type,
+    witness: &aevia_rssn::witness::DimensionWitness,
+    host: Option<&crate::value::HostWitness>,
+) -> Result<Value, String> {
+    use crate::value::HostWitnessNode as H;
+    use aevia_rssn::witness::DimensionWitness as W;
+    use aevia_types::Rep;
+    use aevia_types::Type;
+    let dim = match elem {
+        | Type::Scalar(_, dim) => dim.clone(),
+        | _ => Dim::one(),
+    };
+    let host_items = match host.map(|h| &h.node) {
+        | Some(H::Tensor(items)) => Some(items),
+        | _ => None,
+    };
+    let W::Tensor {
+        dimension,
+        element,
+        elements,
+        ..
+    } = witness
+    else {
+        return Err("validated tensor witness disappeared".into());
+    };
+    let uniform = dimension.as_ref().map(|d| W::Scalar(d.clone()));
+    let storage = if data.is_empty() {
+        match elem {
+            | Type::Scalar(Rep::Float, _) => crate::value::Storage::Dense(Rc::new(Vec::new())),
+            | Type::Scalar(Rep::Int, _) => {
+                crate::value::Storage::TypedExact(Vec::new(), crate::value::ExactRep::Int)
+            },
+            | Type::Scalar(Rep::Real, _) => {
+                crate::value::Storage::TypedExact(Vec::new(), crate::value::ExactRep::Real)
+            },
+            | Type::Bool => crate::value::Storage::Bool(Vec::new()),
+            | _ => crate::value::Storage::Boxed(Vec::new()),
+        }
+    } else {
+        crate::value::Storage::Boxed(
+            data.iter()
+                .enumerate()
+                .map(|(i, item)| {
+                    let proof = elements
+                        .get(i)
+                        .or(element.as_deref())
+                        .or(uniform.as_ref())
+                        .unwrap_or(&W::Unknown);
+                    decode_payload(item, proof, host_items.and_then(|items| items.get(i)), elem)
+                })
+                .collect::<Result<_, _>>()?,
+        )
+    };
+    Ok(Value::Tensor(Rc::new(crate::value::TensorData {
+        // decode_payload is reached only after the shared validator
+        // has authenticated both payload and the element schema.
+        verified_element: Some(Rc::new(elem.clone())),
+        shape: shape.to_vec(),
+        storage,
+        dim,
+        display: None,
+    })))
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "reconstructs a validated record in the expected field order"
+)]
+fn decode_record_payload(
+    fields: &[(String, Val)],
+    row: &aevia_types::Row,
+    witness: &aevia_rssn::witness::DimensionWitness,
+    host: Option<&crate::value::HostWitness>,
+) -> Result<Value, String> {
+    use crate::value::HostWitnessNode as H;
+    use aevia_rssn::witness::DimensionWitness as W;
+    use aevia_types::Row;
+    let host_fields = match host.map(|h| &h.node) {
+        | Some(H::Record(fields)) => Some(fields),
+        | _ => None,
+    };
+    let W::Record(proofs) = witness else {
+        return Err("validated record witness disappeared".into());
+    };
+    let mut row = row;
+    let mut result = indexmap::IndexMap::new();
+    while let Row::Extend { label, ty, tail } = row {
+        let (_, item) = fields
+            .iter()
+            .find(|(n, _)| n == label)
+            .ok_or_else(|| "validated field disappeared".to_string())?;
+        let h = host_fields.and_then(|fs| fs.iter().find(|(n, _)| n == label).map(|(_, h)| h));
+        let proof = &proofs
+            .iter()
+            .find(|(name, _)| name == label)
+            .ok_or_else(|| "validated field witness disappeared".to_string())?
+            .1;
+        result.insert(label.clone(), decode_payload(item, proof, h, ty)?);
+        row = tail;
+    }
+    Ok(Value::Record(Rc::new(crate::value::RecordValue {
+        fields: result,
+    })))
 }
 
 #[cfg(test)]

@@ -1,5 +1,16 @@
 //! Regenerate or check standard-library sources and the embedding table.
 //! Usage: cargo run -p aevia-stdlib-gen -- --check|--write [--root DIR]
+#![deny(
+    missing_docs,
+    clippy::arithmetic_side_effects,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::nursery,
+    clippy::pedantic,
+    clippy::single_call_fn,
+    clippy::unwrap_used
+)]
+
 mod support;
 
 use std::collections::BTreeMap;
@@ -20,7 +31,8 @@ fn source_files(
         if path.is_dir() {
             source_files(root, &path, files)?;
         } else if path.extension().is_some_and(|ext| ext == "aev") {
-            files.insert(path.strip_prefix(root).unwrap().to_path_buf());
+            let relative = path.strip_prefix(root).map_err(std::io::Error::other)?;
+            files.insert(relative.to_path_buf());
         }
     }
     Ok(())
@@ -57,10 +69,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let spec_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/08-stdlib.md");
     let spec = std::fs::read_to_string(spec_path)?;
     let crates_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates");
-    let mut expected: BTreeMap<PathBuf, String> = support::docs::module_sources(&spec, &crates_dir)
-        .into_iter()
-        .map(|(path, source)| (PathBuf::from(format!("stdlib/{path}.aev")), source))
-        .collect();
+    let mut expected: BTreeMap<PathBuf, String> =
+        support::docs::module_sources(&spec, &crates_dir)?
+            .into_iter()
+            .map(|(path, source)| (PathBuf::from(format!("stdlib/{path}.aev")), source))
+            .collect();
     expected.insert(
         PathBuf::from("stdlib/Units/Constants.aev"),
         support::constants_module_source(),
@@ -94,7 +107,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
         if write {
-            std::fs::create_dir_all(target.parent().unwrap())?;
+            let parent = target
+                .parent()
+                .ok_or("generated target has no parent directory")?;
+            std::fs::create_dir_all(parent)?;
             std::fs::write(&target, source)?;
             eprintln!("wrote {}", path.display());
         } else {

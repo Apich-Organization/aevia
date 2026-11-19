@@ -148,53 +148,44 @@ impl LevelResolver {
         let mut errors = Vec::new();
 
         if is_root_package {
-            for (target, setting) in &config.manifest_lints {
+            let manifest_overrides = config.manifest_lints.iter().map(|(target, setting)| {
+                (
+                    target,
+                    Level::from_manifest(setting.level),
+                    " in `[lints]`",
+                    "",
+                )
+            });
+            let cli_overrides = config
+                .cli_overrides
+                .iter()
+                .map(|ov| (&ov.target, ov.level, "", " with CLI flag"));
+            for (target, new_level, unknown_context, forbidden_context) in
+                manifest_overrides.chain(cli_overrides)
+            {
                 let Some(ids) = store.expand_target(target) else {
                     errors.push(Diagnostic::error(
                         "E0212",
-                        format!("unknown lint or group `{target}` in `[lints]`"),
-                        Span::default(),
-                    ));
-                    continue;
-                };
-                let new_level = Level::from_manifest(setting.level);
-                for id in ids {
-                    if base[id.0] == Level::Forbid && new_level != Level::Forbid {
-                        errors.push(Diagnostic::error(
-                            "E0211",
-                            format!(
-                                "cannot lower forbidden lint `{}`",
-                                store.get(id).map_or("", |l| l.name)
-                            ),
-                            Span::default(),
-                        ));
-                    } else {
-                        base[id.0] = new_level;
-                    }
-                }
-            }
-
-            for ov in &config.cli_overrides {
-                let Some(ids) = store.expand_target(&ov.target) else {
-                    errors.push(Diagnostic::error(
-                        "E0212",
-                        format!("unknown lint or group `{}`", ov.target),
+                        format!("unknown lint or group `{target}`{unknown_context}"),
                         Span::default(),
                     ));
                     continue;
                 };
                 for id in ids {
-                    if base[id.0] == Level::Forbid && ov.level != Level::Forbid {
+                    let Some(level) = base.get_mut(id.0) else {
+                        continue;
+                    };
+                    if *level == Level::Forbid && new_level != Level::Forbid {
                         errors.push(Diagnostic::error(
                             "E0211",
                             format!(
-                                "cannot lower forbidden lint `{}` with CLI flag",
+                                "cannot lower forbidden lint `{}`{forbidden_context}",
                                 store.get(id).map_or("", |l| l.name)
                             ),
                             Span::default(),
                         ));
                     } else {
-                        base[id.0] = ov.level;
+                        *level = new_level;
                     }
                 }
             }
@@ -216,7 +207,7 @@ impl LevelResolver {
                 if entry.level == Level::Forbid {
                     continue;
                 }
-                let base_forbid = base[entry.lint.0] == Level::Forbid;
+                let base_forbid = base.get(entry.lint.0) == Some(&Level::Forbid);
                 let outer_forbid = scoped.iter().any(|outer| {
                     outer.lint == entry.lint
                         && outer.level == Level::Forbid
@@ -397,7 +388,12 @@ fn extract_lint_name(expr: &Expr) -> Option<String> {
     }
     match &expr.kind {
         | ExprKind::Var(name) => Some(name.clone()),
-        | ExprKind::QName(segs) if segs.len() == 1 => Some(segs[0].clone()),
+        | ExprKind::QName(segs) => {
+            let [name] = segs.as_slice() else {
+                return None;
+            };
+            Some(name.clone())
+        },
         | ExprKind::Binary {
             op: BinOp::Sub,
             left,

@@ -13,6 +13,7 @@
 //! continue: the frame was consumed, so the next message is still in sync.
 
 use std::io::BufRead;
+use std::io::Read;
 use std::io::Write;
 use std::io::{
     self,
@@ -27,6 +28,8 @@ pub enum TransportError {
     MissingLength,
     /// The length was invalid or appeared more than once.
     InvalidLength,
+    /// The frame exceeds the transport's header or body size limit.
+    TooLarge,
     /// The body was not JSON.
     Json(serde_json::Error),
 }
@@ -40,6 +43,9 @@ impl std::fmt::Display for TransportError {
             | Self::Io(error) => write!(f, "transport: {error}"),
             | Self::MissingLength => f.write_str("transport: a message had no Content-Length"),
             | Self::InvalidLength => f.write_str("transport: invalid or duplicate Content-Length"),
+            | Self::TooLarge => {
+                f.write_str("transport: message header or body exceeds its size limit")
+            },
             | Self::Json(error) => write!(f, "transport: the body was not JSON: {error}"),
         }
     }
@@ -53,6 +59,9 @@ impl From<io::Error> for TransportError {
     }
 }
 
+const MAX_HEADER_BYTES: usize = 8 * 1024;
+const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
+
 /// Reads framed messages.
 pub struct Reader<R> {
     inner: R,
@@ -60,7 +69,7 @@ pub struct Reader<R> {
 
 impl<R: BufRead> Reader<R> {
     /// Reads from `inner`.
-    pub fn new(inner: R) -> Self {
+    pub const fn new(inner: R) -> Self {
         Self { inner }
     }
 
@@ -74,8 +83,9 @@ impl<R: BufRead> Reader<R> {
     pub fn next_message(&mut self) -> Result<Option<serde_json::Value>, TransportError> {
         let mut length = None;
         let mut started = false;
+        let mut remaining_header = MAX_HEADER_BYTES;
         loop {
-            let Some(line) = read_line(&mut self.inner)? else {
+            let Some(line) = read_line(&mut self.inner, &mut remaining_header)? else {
                 return if started {
                     Err(
                         io::Error::new(io::ErrorKind::UnexpectedEof, "incomplete header block")
@@ -112,6 +122,9 @@ impl<R: BufRead> Reader<R> {
         if length == 0 {
             return Err(TransportError::InvalidLength);
         }
+        if length > MAX_BODY_BYTES {
+            return Err(TransportError::TooLarge);
+        }
         let mut body = Vec::new();
         body.try_reserve_exact(length).map_err(|_| {
             TransportError::Io(io::Error::new(
@@ -127,19 +140,34 @@ impl<R: BufRead> Reader<R> {
 }
 
 /// Reads one line without its terminator, or `None` at end of stream.
-fn read_line(reader: &mut impl BufRead) -> Result<Option<String>, TransportError> {
+#[cfg_attr(
+    not(test),
+    expect(clippy::single_call_fn, reason = "isolate the framing byte budget")
+)]
+fn read_line(
+    reader: &mut impl BufRead,
+    remaining: &mut usize,
+) -> Result<Option<String>, TransportError> {
+    if *remaining == 0 {
+        return Err(TransportError::TooLarge);
+    }
     let mut bytes = Vec::new();
-    let read = reader.read_until(b'\n', &mut bytes)?;
+    let limit = u64::try_from(*remaining).map_err(|_| TransportError::TooLarge)?;
+    let read = reader.take(limit).read_until(b'\n', &mut bytes)?;
     if read == 0 {
         return Ok(None);
     }
+    *remaining = remaining
+        .checked_sub(read)
+        .ok_or(TransportError::TooLarge)?;
     if bytes.last() != Some(&b'\n') {
+        if *remaining == 0 {
+            return Err(TransportError::TooLarge);
+        }
         return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "incomplete header line").into());
     }
-    while bytes
-        .last()
-        .is_some_and(|byte| *byte == b'\n' || *byte == b'\r')
-    {
+    bytes.pop();
+    if bytes.last() == Some(&b'\r') {
         bytes.pop();
     }
     String::from_utf8(bytes).map(Some).map_err(|_| {
@@ -157,7 +185,7 @@ pub struct Writer<W> {
 
 impl<W: Write> Writer<W> {
     /// Writes to `inner`.
-    pub fn new(inner: W) -> Self {
+    pub const fn new(inner: W) -> Self {
         Self { inner }
     }
 
@@ -295,11 +323,26 @@ mod tests {
     }
 
     #[test]
-    fn impossible_body_allocation_is_reported() {
-        let frame = format!("Content-Length: {}\r\n\r\n", usize::MAX);
+    fn oversized_body_is_rejected_before_reading_it() {
+        let frame = format!("Content-Length: {}\r\n\r\n", MAX_BODY_BYTES + 1);
         let mut reader = Reader::new(Cursor::new(frame));
-        assert!(
-            matches!(reader.next_message(), Err(TransportError::Io(e)) if e.kind() == io::ErrorKind::InvalidData)
-        );
+        assert!(matches!(
+            reader.next_message(),
+            Err(TransportError::TooLarge)
+        ));
+    }
+
+    #[test]
+    fn the_header_limit_applies_to_each_line_and_to_the_whole_block() {
+        for frame in [
+            "A".repeat(MAX_HEADER_BYTES),
+            "Ignored: value\r\n".repeat(MAX_HEADER_BYTES / 4),
+        ] {
+            let mut reader = Reader::new(Cursor::new(frame));
+            assert!(matches!(
+                reader.next_message(),
+                Err(TransportError::TooLarge)
+            ));
+        }
     }
 }

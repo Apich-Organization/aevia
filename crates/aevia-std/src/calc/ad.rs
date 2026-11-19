@@ -11,6 +11,10 @@ pub use rssn::kernels::autodiff::Dual;
 pub use rssn::kernels::autodiff::Tape;
 pub use rssn::kernels::autodiff::Var;
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Maps an owned error with Result::map_err."
+)]
 fn map_ad_err(err: AdError) -> NumericError {
     match err {
         | AdError::Empty => NumericError::Empty,

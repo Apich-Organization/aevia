@@ -23,12 +23,29 @@
 //! is an early cutoff), the capability set and the compiler identity. A
 //! missing, truncated, corrupt, foreign or old-format file is a silent miss.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
 use aevia_syntax::Diagnostics;
 use aevia_syntax::FileId;
 use aevia_types::check::CheckOptions;
 use aevia_types::check::CheckedModule;
 use aevia_types::check::ModuleInterface;
 use aevia_types::persist;
+use std::fmt::Write as _;
+use std::io::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -98,8 +115,12 @@ impl StableHasher {
     #[must_use]
     pub fn finish(&self) -> Digest {
         let mut out = [0u8; 16];
-        out[..8].copy_from_slice(&self.a.to_le_bytes());
-        out[8..].copy_from_slice(&self.b.to_le_bytes());
+        for (dest, byte) in out
+            .iter_mut()
+            .zip(self.a.to_le_bytes().into_iter().chain(self.b.to_le_bytes()))
+        {
+            *dest = byte;
+        }
         out
     }
 }
@@ -112,20 +133,22 @@ fn fnv64(data: &[u8]) -> u64 {
     hash
 }
 
-fn hex(digest: &Digest) -> String {
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 /// What identifies the compiler that wrote an entry: the checker's behaviour
 /// must be a function of this string. The executable's size and modification
 /// time make a rebuilt checker invalidate entries even at an unchanged version.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps process identity generation and caching together"
+)]
 fn compiler_identity() -> &'static str {
     static IDENTITY: OnceLock<String> = OnceLock::new();
     IDENTITY.get_or_init(|| {
         let exe = std::env::current_exe()
             .and_then(std::fs::metadata)
-            .map(|meta| format!("{}|{:?}", meta.len(), meta.modified().ok()))
-            .unwrap_or_default();
+            .map_or_else(
+                |_| String::new(),
+                |meta| format!("{}|{:?}", meta.len(), meta.modified().ok()),
+            );
         format!(
             "aevia-core {}|aevi-format {FORMAT_VERSION}|codec {}|rssn {}|exe {exe}",
             env!("CARGO_PKG_VERSION"),
@@ -220,6 +243,10 @@ pub struct Hit {
     pub interface: Digest,
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "separates portable filenames from cache key hashing"
+)]
 fn sanitize(path: &[String]) -> String {
     let joined = if path.is_empty() {
         "entry".to_string()
@@ -303,8 +330,12 @@ impl DiskCache {
         }
         let digest = hasher.finish();
         let prefix = sanitize(inputs.path);
+        let mut filename_digest = String::with_capacity(16);
+        for byte in digest.first_chunk::<8>()? {
+            let _ = write!(filename_digest, "{byte:02x}");
+        }
         Some(Key {
-            file_name: format!("{prefix}-{}.aevi", &hex(&digest)[..16]),
+            file_name: format!("{prefix}-{filename_digest}.aevi"),
             prefix,
             digest,
         })
@@ -318,16 +349,17 @@ impl DiskCache {
         file: FileId,
     ) -> Option<Hit> {
         let bytes = std::fs::read(self.dir.join(&key.file_name)).ok()?;
-        if bytes.len() < HEADER_LEN || &bytes[..4] != MAGIC {
+        let (magic, rest) = bytes.split_first_chunk::<4>()?;
+        let (version, rest) = rest.split_first_chunk::<4>()?;
+        let (digest, rest) = rest.split_first_chunk::<16>()?;
+        if magic != MAGIC || *version != FORMAT_VERSION.to_le_bytes() || *digest != key.digest {
             return None;
         }
-        if bytes[4..8] != FORMAT_VERSION.to_le_bytes() || bytes[8..24] != key.digest {
-            return None;
-        }
-        let length = usize::try_from(u64::from_le_bytes(bytes[24..32].try_into().ok()?)).ok()?;
-        let checksum = u64::from_le_bytes(bytes[32..40].try_into().ok()?);
-        let body = bytes.get(HEADER_LEN..)?;
-        if body.len() != length || fnv64(body) != checksum {
+        let (length, rest) = rest.split_first_chunk::<8>()?;
+        let (checksum, body) = rest.split_first_chunk::<8>()?;
+        if usize::try_from(u64::from_le_bytes(*length)).ok()? != body.len()
+            || u64::from_le_bytes(*checksum) != fnv64(body)
+        {
             return None;
         }
         let entry: Entry = persist::decode(body).ok()?;
@@ -348,6 +380,8 @@ impl DiskCache {
         diagnostics: &Diagnostics,
         module: &CheckedModule,
     ) -> bool {
+        static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+
         let Ok(body) = persist::encode(&EntryRef {
             file,
             interface,
@@ -356,24 +390,34 @@ impl DiskCache {
         }) else {
             return false;
         };
-        let mut data = Vec::with_capacity(HEADER_LEN + body.len());
-        data.extend_from_slice(MAGIC);
-        data.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
-        data.extend_from_slice(&key.digest);
-        data.extend_from_slice(&(body.len() as u64).to_le_bytes());
-        data.extend_from_slice(&fnv64(&body).to_le_bytes());
-        data.extend_from_slice(&body);
+        let mut header = [0; HEADER_LEN];
+        let fields = MAGIC
+            .iter()
+            .copied()
+            .chain(FORMAT_VERSION.to_le_bytes())
+            .chain(key.digest)
+            .chain((body.len() as u64).to_le_bytes())
+            .chain(fnv64(&body).to_le_bytes());
+        for (dest, byte) in header.iter_mut().zip(fields) {
+            *dest = byte;
+        }
         if std::fs::create_dir_all(&*self.dir).is_err() {
             return false;
         }
-        static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
         let temporary = self.dir.join(format!(
             "{}.{}.{}.tmp",
             key.file_name,
             std::process::id(),
             SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ));
-        if std::fs::write(&temporary, &data).is_err() {
+        let Ok(mut cache_file) = std::fs::File::create_new(&temporary) else {
+            return false;
+        };
+        let written = cache_file
+            .write_all(&header)
+            .and_then(|()| cache_file.write_all(&body));
+        drop(cache_file);
+        if written.is_err() {
             let _ = std::fs::remove_file(&temporary);
             return false;
         }

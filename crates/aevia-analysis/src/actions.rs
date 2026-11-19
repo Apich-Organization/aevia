@@ -28,12 +28,28 @@ use crate::walk;
 use aevia_syntax::Diagnostics;
 use aevia_syntax::Severity;
 use aevia_syntax::Span;
-use aevia_syntax::ast::*;
+use aevia_syntax::ast::BlockStmt;
+use aevia_syntax::ast::DeclKind;
+use aevia_syntax::ast::DoStmt;
+use aevia_syntax::ast::Expr;
+use aevia_syntax::ast::ExprKind;
+use aevia_syntax::ast::Module;
+use aevia_syntax::ast::Param;
+use aevia_syntax::ast::Pat;
+use aevia_syntax::ast::PatKind;
+use aevia_syntax::ast::Ty;
 use aevia_types::check::CheckedModule;
 
 /// Builds the actions that apply to `request`.
 #[must_use]
-pub(crate) fn actions(
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "assemble the independently validated editor actions"
+    )
+)]
+pub fn actions(
     document: &Document,
     module: &Module,
     checked: &CheckedModule,
@@ -78,6 +94,13 @@ struct Binder<'a> {
 }
 
 /// Every binder in the module whose type may be written.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "visit binders independently of type-annotation edit generation"
+    )
+)]
 fn binders<'a>(module: &'a Module) -> Vec<Binder<'a>> {
     let mut binders = Vec::new();
     let push_params = |params: &'a [Param], binders: &mut Vec<Binder<'a>>| {
@@ -97,7 +120,7 @@ fn binders<'a>(module: &'a Module) -> Vec<Binder<'a>> {
                     pattern,
                     ty: ty.as_ref(),
                     annotatable: true,
-                })
+                });
             },
             | DeclKind::Instance { methods, .. } => {
                 for method in methods {
@@ -123,7 +146,7 @@ fn binders<'a>(module: &'a Module) -> Vec<Binder<'a>> {
                     pattern,
                     ty: ty.as_ref(),
                     annotatable: true,
-                })
+                });
             },
             | ExprKind::Block { stmts, .. } => {
                 for statement in stmts {
@@ -154,6 +177,13 @@ fn binders<'a>(module: &'a Module) -> Vec<Binder<'a>> {
 }
 
 /// Offers `: T` on a binder the checker knows the type of.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "keep type-annotation fixes separate from other rewrites"
+    )
+)]
 fn annotation_actions(
     document: &Document,
     module: &Module,
@@ -203,6 +233,13 @@ fn annotation_actions(
 
 // --- Celsius to kelvin -----------------------------------------------------
 
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "keep affine temperature conversion separate from other rewrites"
+    )
+)]
 fn celsius_actions(
     document: &Document,
     module: &Module,
@@ -249,6 +286,13 @@ fn celsius_actions(
 /// The interpreter is the conversion the language defines, so the replacement
 /// is the value the user would get from `to(K, …)` in their own code. A value
 /// the runtime cannot express in kelvin produces no action.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "isolate affine temperature conversion"
+    )
+)]
 fn convert_to_kelvin(source: &str) -> Option<String> {
     let program = format!("let __converted = to(K, ({source}))\n");
     let compilation = aevia_core::compile("<code-action>.aev", &program);
@@ -266,6 +310,13 @@ fn convert_to_kelvin(source: &str) -> Option<String> {
 
 // --- extract a let ---------------------------------------------------------
 
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "keep extraction and validation together"
+    )
+)]
 fn extract_actions(
     document: &Document,
     module: &Module,
@@ -297,20 +348,25 @@ fn extract_actions(
         let Some(declaration_source) = slice(text, declaration.span) else {
             continue;
         };
-        let offset = usize::try_from(extracted.span.start - declaration.span.start).ok();
-        let end_offset = usize::try_from(extracted.span.end - declaration.span.start).ok();
+        let relative =
+            |offset: u32| usize::try_from(offset.checked_sub(declaration.span.start)?).ok();
+        let offset = relative(extracted.span.start);
+        let end_offset = relative(extracted.span.end);
         let (Some(offset), Some(end_offset)) = (offset, end_offset) else {
             continue;
         };
-        if offset > declaration_source.len() || end_offset > declaration_source.len() {
+        let (Some(before), Some(after)) = (
+            declaration_source.get(..offset),
+            declaration_source.get(end_offset..),
+        ) else {
             continue;
-        }
-        let mut replaced = String::with_capacity(declaration_source.len() + 32);
-        replaced.push_str(&declaration_source[..offset]);
+        };
+        let mut replaced = String::with_capacity(declaration_source.len().saturating_add(32));
+        replaced.push_str(before);
         replaced.push_str(&binding);
-        replaced.push_str(&declaration_source[end_offset..]);
+        replaced.push_str(after);
         let replacement = format!("let {binding} = {extracted_source}\n{replaced}");
-        let edit = (declaration.span, replacement.clone());
+        let edit = (declaration.span, replacement);
         if !compiles_at_least_as_well(document, &edit, old_errors) {
             continue;
         }
@@ -324,6 +380,13 @@ fn extract_actions(
 }
 
 /// The innermost expression inside `outer` that the request touches.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "select the expression wholly contained in the cursor range"
+    )
+)]
 fn innermost_inside(
     outer: &Expr,
     start: u32,
@@ -346,6 +409,13 @@ fn innermost_inside(
 }
 
 /// A name derived from `base` that nothing in the module already uses.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "generate an extraction binding outside all visible spellings"
+    )
+)]
 fn fresh_name(
     text: &str,
     module: &Module,
@@ -367,18 +437,25 @@ fn fresh_name(
     if !used.contains(base) {
         return base.to_string();
     }
-    let mut index = 2;
+    let mut index = 2usize;
     loop {
         let candidate = format!("{base}{index}");
         if !used.contains(&candidate) {
             return candidate;
         }
-        index += 1;
+        index = index.saturating_add(1);
     }
 }
 
 // --- fix a dimension mismatch ---------------------------------------------
 
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "derive edits from dimension diagnostics"
+    )
+)]
 fn dimension_actions(
     document: &Document,
     module: &Module,
@@ -448,27 +525,21 @@ fn dimension_actions(
 /// a bare number.
 fn unit_suffix(text: &str) -> Option<&str> {
     let text = text.trim();
-    let bytes = text.as_bytes();
-    let mut index = 0;
-    while index < bytes.len()
-        && (bytes[index].is_ascii_digit() || bytes[index] == b'.' || bytes[index] == b'_')
-    {
-        index += 1;
-    }
-    if index == 0 {
+    let number = text
+        .bytes()
+        .take_while(|b| b.is_ascii_digit() || matches!(b, b'.' | b'_'))
+        .count();
+    if number == 0 {
         return None;
     }
+    let mut rest = text.get(number..)?;
     // An exponent belongs to the number: `1e-3 m`.
-    if index < bytes.len() && (bytes[index] == b'e' || bytes[index] == b'E') {
-        index += 1;
-        if index < bytes.len() && (bytes[index] == b'+' || bytes[index] == b'-') {
-            index += 1;
-        }
-        while index < bytes.len() && bytes[index].is_ascii_digit() {
-            index += 1;
-        }
+    if let Some(exponent) = rest.strip_prefix(['e', 'E']) {
+        let exponent = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
+        let digits = exponent.bytes().take_while(u8::is_ascii_digit).count();
+        rest = exponent.get(digits..)?;
     }
-    let rest = text.get(index..)?.trim();
+    let rest = rest.trim();
     if rest.is_empty()
         || rest.starts_with(&['*', '+', '-', '/', '^', ')', ','][..])
         || rest.contains(char::is_whitespace)
@@ -479,6 +550,13 @@ fn unit_suffix(text: &str) -> Option<&str> {
 }
 
 /// True when `text` is a numeric literal and nothing else.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "distinguish whole literals from compound expressions"
+    )
+)]
 fn is_number_literal(text: &str) -> bool {
     let text = text.trim();
     text.starts_with(|character: char| character.is_ascii_digit())
@@ -526,7 +604,7 @@ fn candidate_text(
     let original = document.text();
     let mut ordered: Vec<&(Span, String)> = edits.iter().collect();
     ordered.sort_by_key(|(span, _)| span.start);
-    let mut out = String::with_capacity(original.len() + 64);
+    let mut out = String::with_capacity(original.len().saturating_add(64));
     let mut cursor = 0usize;
     for (span, text) in ordered {
         let start = usize::try_from(span.start)
@@ -535,14 +613,17 @@ fn candidate_text(
         let end = usize::try_from(span.end)
             .unwrap_or(usize::MAX)
             .min(original.len());
-        if start < cursor || end < start {
+        if end < start || !original.is_char_boundary(end) {
             continue;
         }
-        out.push_str(&original[cursor..start]);
+        let Some(before) = original.get(cursor..start) else {
+            continue;
+        };
+        out.push_str(before);
         out.push_str(text);
         cursor = end;
     }
-    out.push_str(&original[cursor..]);
+    out.push_str(original.get(cursor..).unwrap_or_default());
     out
 }
 
