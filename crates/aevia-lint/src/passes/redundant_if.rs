@@ -98,9 +98,15 @@ impl SyntaxPass for RedundantIfPass {
                     )
                     .help("both branches evaluate to the same value");
                 if let Some(branch_src) = branch_src {
+                    let applicability = if matches!(cond.kind, ExprKind::Bool(_)) {
+                        Applicability::MachineApplicable
+                    } else {
+                        // Removing the condition also removes errors it can raise.
+                        Applicability::MaybeIncorrect
+                    };
                     builder = builder.fix(Fix {
                         title: "replace `if` with branch expression".to_string(),
-                        applicability: Applicability::MachineApplicable,
+                        applicability,
                         edits: vec![TextEdit {
                             span: expr.span,
                             replacement: branch_src,

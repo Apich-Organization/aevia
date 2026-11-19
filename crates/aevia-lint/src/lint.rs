@@ -549,7 +549,7 @@ pub static W0709_REDUNDANT_IF: Lint = Lint {
     default_level: Level::Warn,
     compiler_lint: false,
     summary: "redundant `if` expression",
-    explanation: "An `if` expression that returns `true`/`false` directly or has identical branches can be simplified.",
+    explanation: "An `if` expression that returns `true`/`false` directly can use the condition or its negation. Before replacing identical branches with their shared expression, check whether skipping evaluation of the condition could hide an error.",
 };
 
 /// Reports repeated imports of the same module.

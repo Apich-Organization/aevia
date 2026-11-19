@@ -9,6 +9,7 @@ use axum::body::Bytes;
 use axum::extract::Path;
 use axum::extract::State;
 use axum::http::HeaderMap;
+use axum::http::Method;
 use axum::http::StatusCode;
 use axum::http::header;
 use axum::response::IntoResponse;
@@ -31,6 +32,7 @@ use crate::state::AppState;
 pub async fn archive(
     State(state): State<AppState>,
     Path((owner, name, version)): Path<(String, String, String)>,
+    method: Method,
     headers: HeaderMap,
 ) -> ApiResult<Response> {
     const CACHE: &str = "public, max-age=31536000, immutable";
@@ -75,7 +77,9 @@ pub async fn archive(
     })
     .await
     .map_err(|error| ApiError::internal(format!("the archive read task failed: {error}")))??;
-    state.download_counts.record(row.id);
+    if method == Method::GET {
+        state.download_counts.record(row.id);
+    }
     Ok((
         StatusCode::OK,
         [

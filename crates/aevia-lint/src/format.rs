@@ -245,6 +245,7 @@ pub fn render_sarif(
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
         "runs": [{
+            "columnKind": "unicodeCodePoints",
             "tool": {
                 "driver": {
                     "name": "aevia-lint",

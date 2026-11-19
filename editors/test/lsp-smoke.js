@@ -3,16 +3,22 @@
 // feature the plugins rely on answers. Usage: node lsp-smoke.js [path-to-aevia-lsp]
 'use strict';
 const { spawn } = require('child_process');
+const { mkdtempSync, rmSync, writeFileSync } = require('fs');
+const { tmpdir } = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
 
 const bin = process.argv[2] || process.env.AEVIA_LSP || 'aevia-lsp';
-const file = path.resolve(__dirname, 'smoke.aev');
-const text = 'let distance = 3.2 km\nfn main(): IO Unit = println(distance)\n';
+const fixture = mkdtempSync(path.join(tmpdir(), 'aevia lsp '));
+const file = path.join(fixture, 'smoke.aev');
+const text = 'let distance = 3.2 km\nfn main(): IO Unit = println("editor run complete")\n\n'
+  + 'test "selection" = false\n\ntest "exact selection" = true\n';
+writeFileSync(file, text);
 const uri = pathToFileURL(file).href;
 
 const child = spawn(bin, ['--stdio'], { stdio: ['pipe', 'pipe', 'inherit'] });
 const closed = new Promise(resolve => child.once('close', resolve));
+child.once('close', () => rmSync(fixture, { force: true, recursive: true }));
 const timeout = setTimeout(() => {
   console.error('Aevia language server smoke timed out');
   child.kill();
@@ -88,6 +94,42 @@ function check(name, ok, detail) {
   check('semanticTokens', sem.result && sem.result.data && sem.result.data.length > 0);
   const fmt = await request('textDocument/formatting', { textDocument: td, options: { tabSize: 4, insertSpaces: true } });
   check('formatting', fmt.error === undefined);
+
+  const lenses = await request('textDocument/codeLens', { textDocument: td });
+  const commands = (lenses.result || []).map(lens => lens.command);
+  const run = commands.find(command => command.command === 'aevia.runFile');
+  const selected = commands.find(command =>
+    command.command === 'aevia.testFile' && command.arguments[1] === 'exact selection');
+  const failing = commands.find(command =>
+    command.command === 'aevia.testFile' && command.arguments[1] === 'selection');
+  check('run and test code lenses', commands.length === 3 && [run, selected, failing]
+    .every(command => command?.arguments[0] === uri), JSON.stringify(commands));
+
+  if (run && selected && failing) {
+    notify('textDocument/didChange', {
+      textDocument: { uri, version: 2 },
+      contentChanges: [{ text: text.replace('editor run complete', 'unsaved replacement') }],
+    });
+    const unsaved = await request('workspace/executeCommand', run);
+    check('unsaved source refuses to run', unsaved.error?.code === -32803
+      && unsaved.error.message.includes('save the Aevia file'), JSON.stringify(unsaved));
+    notify('textDocument/didChange', {
+      textDocument: { uri, version: 3 }, contentChanges: [{ text }],
+    });
+    const ran = await request('workspace/executeCommand', run);
+    check('run captures the real CLI output', ran.result?.success && ran.result.exitCode === 0
+      && ran.result.stdout.trim() === 'editor run complete'
+      && !ran.result.timedOut && !ran.result.stdoutTruncated, JSON.stringify(ran.result || ran.error));
+    check('run publishes output to the editor log', notes.some(note =>
+      note.method === 'window/logMessage' && note.params.message.includes('editor run complete')));
+    const passed = await request('workspace/executeCommand', selected);
+    check('test code lens selects one exact name', passed.result?.success
+      && passed.result.stdout.includes('1 passed, 0 failed'), JSON.stringify(passed.result || passed.error));
+    const result = await request('workspace/executeCommand', failing);
+    check('failing test is reported to the editor', result.result?.success === false
+      && result.result.exitCode === 1 && result.result.stdout.includes('0 passed, 1 failed'),
+      JSON.stringify(result.result || result.error));
+  }
 
   // a deliberate type error must come back as a diagnostic
   const bad = pathToFileURL(path.resolve(__dirname, 'bad.aev')).href;

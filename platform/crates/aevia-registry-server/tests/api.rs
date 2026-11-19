@@ -19,7 +19,8 @@
 //! ```
 //!
 //! Without that variable every test returns immediately, so the suite passes on
-//! a machine with no PostgreSQL. The signed-publish test additionally needs
+//! a machine with no PostgreSQL. Set `AEVIA_REQUIRE_TEST_FIXTURES=1` when a
+//! missing database or signing fixture must fail the run. The signed-publish test additionally needs
 //! `gpg` on `PATH` and a `GNUPGHOME` keyring holding a secret key; it skips with
 //! a message when either is missing.
 //!
@@ -57,12 +58,14 @@ use aevia_registry_core::manifest::PackageManifest;
 use aevia_registry_core::signature::SignerKey;
 use aevia_registry_core::tarball;
 use aevia_registry_db::models::GithubOrganisation;
+use aevia_registry_db::models::NewVersion;
 use aevia_registry_db::repo;
 
 /// The application under test, plus what it needs to stay alive.
 struct TestApp {
     /// The router the binary serves.
     app: Router,
+    state: AppState,
     /// The pool, for the SQL a browser flow would have performed.
     pool: PgPool,
     /// The archive store; held so the directory outlives the test.
@@ -134,6 +137,10 @@ async fn start_with_docs(docs_enabled: bool) -> Option<TestApp> {
     let url = match std::env::var("AEVIA_TEST_DATABASE_URL") {
         | Ok(value) if !value.trim().is_empty() => value.trim().to_string(),
         | _ => {
+            assert!(
+                std::env::var_os("AEVIA_REQUIRE_TEST_FIXTURES").is_none(),
+                "AEVIA_TEST_DATABASE_URL is required by AEVIA_REQUIRE_TEST_FIXTURES"
+            );
             eprintln!(
                 "skipping: set AEVIA_TEST_DATABASE_URL to run the integration tests, e.g. \
                  `podman run -d --name aevia-tests-db -e POSTGRES_USER=aevia -e \
@@ -224,7 +231,8 @@ async fn start_with_docs(docs_enabled: bool) -> Option<TestApp> {
     );
     let docs_worker = aevia_registry::docs_queue::spawn(state.clone());
     Some(TestApp {
-        app: router(state),
+        app: router(state.clone()),
+        state,
         pool,
         _storage: storage,
         _spec: spec_dir,
@@ -370,8 +378,9 @@ impl Signer {
             });
         }
         assert!(
-            std::env::var_os("GNUPGHOME").is_none(),
-            "GNUPGHOME is configured, but GnuPG could not list and export a test signing key"
+            std::env::var_os("GNUPGHOME").is_none()
+                && std::env::var_os("AEVIA_REQUIRE_TEST_FIXTURES").is_none(),
+            "GnuPG could not list and export a test signing key from GNUPGHOME"
         );
         eprintln!(
             "skipping the signed publish: set GNUPGHOME to a keyring holding a secret key; \
@@ -866,6 +875,56 @@ async fn seed_publisher(
     .expect("seed a signing key");
 }
 
+/// Seeds a catalogue entry without signing, for tests of downstream readers.
+async fn catalogue_version(
+    app: &TestApp,
+    version: &str,
+    checksum: &str,
+    size: usize,
+    build_docs: bool,
+) -> aevia_registry_db::models::Version {
+    let owner: i64 = sqlx::query_scalar(
+        "INSERT INTO publishers (kind, handle, display_name)
+         VALUES ('github', 'test-reader', 'Test Publisher')
+         ON CONFLICT (kind, handle) DO UPDATE SET display_name = EXCLUDED.display_name
+         RETURNING id",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("seed a catalogue owner");
+    let package = match repo::package_by_identity(&app.pool, owner, "archive_fixture")
+        .await
+        .unwrap()
+    {
+        | Some(package) => package,
+        | None => {
+            repo::create_package(&app.pool, owner, "archive_fixture")
+                .await
+                .unwrap()
+        },
+    };
+    repo::insert_version(
+        &app.pool,
+        &NewVersion {
+            package_id: package.id,
+            version,
+            checksum,
+            size_bytes: i64::try_from(size).expect("fixture fits in bigint"),
+            manifest: serde_json::json!({"name": "archive_fixture", "version": version}),
+            dependencies: serde_json::json!([]),
+            readme: None,
+            published_by: owner,
+            key_kind: "openpgp",
+            fingerprint: "fixture",
+            signature: "fixture signature",
+            statement: "fixture statement\n",
+            build_docs,
+        },
+    )
+    .await
+    .expect("insert a version into the catalogue")
+}
+
 /// Assembles the two-part `multipart/form-data` body by hand.
 ///
 /// Byte for byte what `aevia-pkg` sends, which is the point: the test should
@@ -1119,6 +1178,123 @@ async fn an_unknown_package_and_an_empty_specification_are_not_found() {
 }
 
 #[tokio::test]
+async fn archive_validators_and_head_do_not_inflate_download_counts() {
+    let Some(app) = start().await else {
+        return;
+    };
+    let version = "1.0.0";
+    let (_dir, archive, checksum) = fixture("archive_fixture", version);
+    app.state.storage.write(&checksum, &archive).unwrap();
+    let entry = catalogue_version(&app, version, &checksum, archive.len(), false).await;
+    let uri = "/api/v1/download/test-reader/archive_fixture/1.0.0";
+    let etag = format!("\"{checksum}\"");
+
+    let head = Request::builder()
+        .method("HEAD")
+        .uri(uri)
+        .body(Body::empty())
+        .unwrap();
+    let (status, headers, body) = send(&app.app, head).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::ETAG], etag);
+    assert_eq!(headers[header::CONTENT_LENGTH], archive.len().to_string());
+    assert!(body.is_empty());
+
+    for validator in [etag.clone(), format!("\"different\", W/{etag}"), "*".into()] {
+        let request = Request::builder()
+            .uri(uri)
+            .header(header::IF_NONE_MATCH, validator)
+            .body(Body::empty())
+            .unwrap();
+        let (status, headers, body) = send(&app.app, request).await;
+        assert_eq!(status, StatusCode::NOT_MODIFIED);
+        assert_eq!(headers[header::ETAG], etag);
+        assert_eq!(
+            headers[header::CACHE_CONTROL],
+            "public, max-age=31536000, immutable"
+        );
+        assert!(body.is_empty());
+    }
+
+    let request = Request::builder()
+        .uri(uri)
+        .header(header::IF_NONE_MATCH, "\"different\"")
+        .body(Body::empty())
+        .unwrap();
+    let (status, headers, body) = send(&app.app, request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::ETAG], etag);
+    assert_eq!(body, archive);
+    let (status, _, signature) = get(&app.app, &format!("{uri}/signature")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(signature, b"fixture statement\nfixture signature");
+
+    // Start the worker after all requests so the complete batch is observed.
+    let worker = aevia_registry::spawn_download_counts(app.state.clone());
+    let downloads = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let count = repo::package_downloads(&app.pool, entry.package_id)
+                .await
+                .unwrap();
+            if count != 0 {
+                break count;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await;
+    worker.abort();
+    assert_eq!(downloads.expect("the download worker flushes its batch"), 1);
+}
+
+#[tokio::test]
+async fn a_failed_documentation_job_does_not_block_the_next_version() {
+    let Some(app) = start_with_docs(true).await else {
+        return;
+    };
+    let missing = tarball::checksum(b"archive absent from storage");
+    let failed = catalogue_version(&app, "1.0.0", &missing, 0, true).await;
+    let version = "1.0.1";
+    let (_dir, archive, checksum) = fixture("archive_fixture", version);
+    app.state.storage.write(&checksum, &archive).unwrap();
+    let valid = catalogue_version(&app, version, &checksum, archive.len(), true).await;
+    assert_eq!(failed.package_id, valid.package_id);
+
+    let failed_uri = "/docs/test-reader/archive_fixture/1.0.0?lang=zh";
+    let valid_uri = "/docs/test-reader/archive_fixture/1.0.1?lang=en";
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            let (status, _, body) = get(&app.app, valid_uri).await;
+            if status == StatusCode::OK {
+                assert!(String::from_utf8_lossy(&body).contains("archive_fixture"));
+                break;
+            }
+            assert_eq!(
+                status,
+                StatusCode::ACCEPTED,
+                "{}",
+                String::from_utf8_lossy(&body)
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("the documentation worker reaches the valid release");
+    let (status, headers, body) = get(&app.app, failed_uri).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(headers[header::CONTENT_LANGUAGE], "zh");
+    let body = String::from_utf8_lossy(&body);
+    assert!(body.contains("此版本的文档生成失败"), "{body}");
+    assert!(!body.contains("archive absent from storage"));
+    let failed = repo::version(&app.pool, failed.package_id, "1.0.0")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(failed.docs_status, "failed");
+    assert!(failed.docs_error.is_some());
+}
+
+#[tokio::test]
 async fn the_language_switch_sets_a_cookie_and_renders_chinese() {
     let Some(app) = start().await else {
         return;
@@ -1336,6 +1512,10 @@ async fn ssh_keys_register_publish_yank_and_emit_pgp_warnings() {
         .arg(&key_path)
         .output();
     let Ok(output) = keygen else {
+        assert!(
+            std::env::var_os("AEVIA_REQUIRE_TEST_FIXTURES").is_none(),
+            "ssh-keygen is required by AEVIA_REQUIRE_TEST_FIXTURES"
+        );
         eprintln!("skipping ssh publish test: `ssh-keygen` not available");
         return;
     };

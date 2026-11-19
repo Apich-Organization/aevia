@@ -10,9 +10,12 @@ const path = require('node:path');
 const { setTimeout: delay } = require('node:timers/promises');
 
 const bin = process.argv[2] || process.env.AEVIA_CLI || 'aevia';
+const exceptionCase = process.argv[3] === '--exception';
 const fixture = mkdtempSync(path.join(tmpdir(), 'aevia debugger '));
 const program = path.join(fixture, 'motion.aev');
-writeFileSync(program, `# A debugger session starts here.
+writeFileSync(program, exceptionCase ? `fn fail(n: Int): Int = rem(n, 0)
+fn main(): IO Unit = println(fail(3))
+` : `# A debugger session starts here.
 fn increment(x: Int): Int = x + 1
 
 fn main(): IO Unit = do
@@ -70,6 +73,40 @@ function event(name, filter = () => true) {
 }
 
 async function main() {
+  if (exceptionCase) {
+    const capabilities = await request('initialize', {
+      clientID: 'aevia-smoke', linesStartAt1: false, columnsStartAt1: false,
+    });
+    assert.equal(capabilities.supportsExceptionInfoRequest, true);
+    assert.ok(capabilities.exceptionBreakpointFilters.some(filter => filter.filter === 'uncaught'));
+    await event('initialized');
+    await request('setExceptionBreakpoints', { filters: ['uncaught'] });
+    await request('launch', { program });
+    await request('configurationDone');
+    const stopped = await event('stopped');
+    assert.equal(stopped.body.reason, 'exception');
+    assert.equal(stopped.body.allThreadsStopped, true);
+    const threadId = stopped.body.threadId;
+    const stack = await request('stackTrace', { threadId, levels: 1 });
+    assert.equal(stack.stackFrames.length, 1);
+    assert.equal(stack.stackFrames[0].line, 0);
+    assert.match(stack.stackFrames[0].name, /fail/);
+    const info = await request('exceptionInfo', { threadId });
+    assert.equal(info.exceptionId, 'E0801');
+    assert.equal(info.breakMode, 'unhandled');
+    assert.match(info.description, /modulo by zero/);
+    assert.match((await event('output', body => body.category === 'stderr')).body.output,
+      /error\[E0801\]/);
+    await request('continue', { threadId });
+    assert.equal((await event('exited')).body.exitCode, 1);
+    await event('terminated');
+    assert.deepEqual((await request('threads')).threads, []);
+    await request('disconnect');
+    child.stdin.end();
+    assert.deepEqual(await closed, [0, null]);
+    console.log('Aevia DAP exception smoke passed');
+    return;
+  }
   const capabilities = await request('initialize', { clientID: 'aevia-smoke', linesStartAt1: true, columnsStartAt1: true });
   assert.equal(capabilities.supportsConfigurationDoneRequest, true);
   await request('launch', { program });
@@ -95,6 +132,10 @@ async function main() {
   const distances = fields.variables.find(variable => variable.name === 'distances');
   const elements = await request('variables', { variablesReference: distances.variablesReference });
   assert.match(elements.variables[0].value, /^1(\.0)? m$/);
+  const page = await request('variables', {
+    variablesReference: distances.variablesReference, start: 1, count: 1,
+  });
+  assert.deepEqual(page.variables, [elements.variables[1]]);
 
   await request('stepIn', { threadId: 1 });
   const stepped = await event('stopped');

@@ -187,4 +187,52 @@ mod tests {
         let another: IpAddr = "2001:db8::16".parse().unwrap();
         assert_eq!(network(client), network(another));
     }
+
+    #[test]
+    fn a_full_global_bucket_resets_without_blocking_a_different_operation() {
+        let now = Instant::now();
+        let mut window = Window::starting_at(now);
+        let bucket = Bucket::Playground;
+        let (per_client, total) = bucket.allowances();
+        for index in 0..total {
+            // Each client stays within its own allowance until all global slots are used.
+            let host = u8::try_from(index / per_client + 1).unwrap();
+            let client = Ipv4Addr::new(192, 0, 2, host).into();
+            assert!(window.allow(bucket, client, now));
+        }
+        let fresh = Ipv4Addr::new(192, 0, 2, 254).into();
+        assert!(!window.allow(bucket, fresh, now + WINDOW - Duration::from_millis(1)));
+        assert!(window.allow(Bucket::DeviceStart, fresh, now));
+        assert!(window.allow(bucket, fresh, now + WINDOW));
+    }
+
+    #[test]
+    fn mapped_ipv6_does_not_create_a_second_limit_for_an_ipv4_client() {
+        let ipv4 = Ipv4Addr::new(192, 0, 2, 6);
+        assert_eq!(network(ipv4.to_ipv6_mapped().into()), network(ipv4.into()));
+        let another: IpAddr = "2001:db8:0:1::1".parse().unwrap();
+        let client: IpAddr = "2001:db8::1".parse().unwrap();
+        assert_ne!(network(client), network(another));
+    }
+
+    #[test]
+    fn a_rate_limit_covers_only_its_http_method_and_route() {
+        let limits = RateLimits::new();
+        let request = |method, uri| {
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .body(axum::body::Body::empty())
+                .unwrap()
+        };
+        let run = request(Method::POST, "/api/v1/playground/run?lang=en");
+        for _ in 0..Bucket::Playground.allowances().0 {
+            assert!(limits.allow(&run, false));
+        }
+        assert!(!limits.allow(&run, false));
+        let other_method = request(Method::GET, "/api/v1/playground/run");
+        let other_bucket = request(Method::POST, "/api/v1/auth/device");
+        assert!(limits.allow(&other_method, false));
+        assert!(limits.allow(&other_bucket, false));
+    }
 }

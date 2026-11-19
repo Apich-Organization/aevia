@@ -9,7 +9,8 @@
 //!
 //! Every test **detects `gpg` and skips** when it is not installed: a machine
 //! without GnuPG cannot exercise the OpenPGP path, and failing there would
-//! report a missing tool as a broken client.
+//! report a missing tool as a broken client. When
+//! `AEVIA_REQUIRE_TEST_FIXTURES=1` is set, a missing fixture fails the test.
 //!
 //! The publish test generates a temporary key and serves the package API on
 //! loopback. It needs no live registry or persistent account.
@@ -76,13 +77,17 @@ fn gpg_home(home: &Path) -> Option<String> {
     if let Some(posix) = posix_path(home) {
         candidates.push(posix);
     }
-    for candidate in candidates {
-        if generate_key(&candidate) {
-            return Some(candidate);
-        }
-    }
-    eprintln!("skipping: gpg could not create a key in any path spelling");
-    None
+    candidates
+        .into_iter()
+        .find(|candidate| generate_key(candidate))
+}
+
+fn skip_without_fixture(reason: &str) {
+    assert!(
+        std::env::var_os("AEVIA_REQUIRE_TEST_FIXTURES").is_none(),
+        "{reason}"
+    );
+    eprintln!("skipping: {reason}");
 }
 
 /// The fingerprint of the first secret key in `home`, read the way the client
@@ -174,16 +179,16 @@ fn binary() -> &'static str {
 #[test]
 fn key_list_reads_a_real_gpg_home() {
     if !gpg_available() {
-        eprintln!("skipping: gpg is not installed");
+        skip_without_fixture("gpg is not installed");
         return;
     }
     let Some(scratch) = Scratch::new("keylist") else {
-        eprintln!("skipping: no scratch directory");
+        skip_without_fixture("cannot create a scratch directory");
         return;
     };
     let home = scratch.join("gnupg");
     let Some(home) = gpg_home(&home) else {
-        eprintln!("skipping: gpg could not create a key");
+        skip_without_fixture("gpg could not create a key");
         return;
     };
 
@@ -213,16 +218,16 @@ fn key_list_reads_a_real_gpg_home() {
 #[test]
 fn a_signed_publish_reaches_the_registry() {
     if !gpg_available() {
-        eprintln!("skipping: gpg is not installed");
+        skip_without_fixture("gpg is not installed");
         return;
     }
     let Some(scratch) = Scratch::new("publish") else {
-        eprintln!("skipping: no scratch directory");
+        skip_without_fixture("cannot create a scratch directory");
         return;
     };
     let home = scratch.join("gnupg");
     let Some(home) = gpg_home(&home) else {
-        eprintln!("skipping: gpg could not create a key");
+        skip_without_fixture("gpg could not create a key");
         return;
     };
     let package = scratch.join("pkg");
@@ -231,7 +236,7 @@ fn a_signed_publish_reaches_the_registry() {
     // Two keys on one machine is the normal case (a gpg key and an ssh key),
     // and the client refuses to guess between them, so the test names one.
     let Some(fingerprint) = fingerprint(&home) else {
-        eprintln!("skipping: gpg lists no secret key");
+        skip_without_fixture("gpg lists no secret key");
         return;
     };
 
