@@ -5,8 +5,8 @@ let current_compiler = 'aevia'
 let s:cpo_save = &cpo
 set cpo&vim
 
-CompilerSet makeprg=aevia\ run\ %:S
-CompilerSet errorformat=%E%f:%l:%c:\ error:\ %m,%W%f:%l:%c:\ warning:\ %m,%-G%.%#
+CompilerSet makeprg=aevia\ --color\ never\ run\ %:S
+CompilerSet errorformat=%Eerror%*[^:]:\ %m,%Wwarning%*[^:]:\ %m,%Z\ \ -->\ %f:%l:%c,%-G%.%#
 
 let &cpo = s:cpo_save
 unlet s:cpo_save

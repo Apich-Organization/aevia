@@ -1,0 +1,10 @@
+<idea-plugin>
+    <actions>
+        <action id="Aevia.OpenRepl"
+                class="dev.aevia.jetbrains.AeviaReplAction"
+                text="Open Aevia REPL"
+                description="Start an interactive Aevia REPL in the terminal">
+            <add-to-group group-id="RunMenu" anchor="after" relative-to-action="Aevia.TestFile"/>
+        </action>
+    </actions>
+</idea-plugin>

@@ -3,12 +3,16 @@ node_modules/
 *.elc
 .vsc-test-*/
 zed/target/
-zed/Cargo.lock
 zed/extension.wasm
 jetbrains/build/
 jetbrains/.gradle/
+jetbrains/.intellijPlatform/
 jetbrains/.kotlin/
 tree-sitter-aevia/node_modules/
 tree-sitter-aevia/build/
 tree-sitter-aevia/*.so
 tree-sitter-aevia/*.wasm
+tree-sitter-aevia/**/*.obj
+tree-sitter-aevia/**/*.exp
+tree-sitter-aevia/**/*.lib
+sublime/**/__pycache__/

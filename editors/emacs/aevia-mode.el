@@ -29,6 +29,8 @@
 ;;; Code:
 
 (require 'rx)
+(require 'compile)
+(require 'term)
 
 (defvar eglot-server-programs)
 (defvar lsp-language-id-configuration)
@@ -54,7 +56,7 @@ When nil, use `aevia-lsp --stdio' if it is on `exec-path', else
   :type '(choice (const :tag "Auto-detect" nil) (repeat string)))
 
 (defcustom aevia-cli-command "aevia"
-  "Path or name of the `aevia' CLI executable used to run and test files."
+  "Path or name of the `aevia' CLI executable used for run, test and REPL."
   :type 'string)
 
 (defun aevia-lsp-server-command ()
@@ -204,16 +206,37 @@ The opening and closing `#' become generic comment fences."
 
 ;;;; Running & Testing
 
+(defun aevia--cli ()
+  "Find the configured CLI on the host of the current buffer."
+  (or (executable-find aevia-cli-command t)
+      (user-error "Aevia CLI not found: %s" aevia-cli-command)))
+
+(defun aevia--working-directory ()
+  "Return the nearest package directory, or the current file's directory."
+  (let ((containing (or (and buffer-file-name (file-name-directory buffer-file-name))
+                        default-directory)))
+    (or (locate-dominating-file containing "aevia.toml") containing)))
+
+(add-to-list 'compilation-error-regexp-alist-alist
+             '(aevia "^ +--> \\(.+\\):\\([0-9]+\\):\\([0-9]+\\)$" 1 2 3))
+
+(define-compilation-mode aevia-compilation-mode "Aevia"
+  "Read locations produced by Aevia."
+  (setq-local compilation-error-regexp-alist '(aevia)))
+
 (defun aevia--run-subcommand (subcommand)
   "Run `aevia SUBCOMMAND' on the current buffer's file via `compile'."
   (unless buffer-file-name
     (user-error "Buffer is not visiting a file; save it first"))
   (when (buffer-modified-p)
     (save-buffer))
-  (let ((cli (or (executable-find aevia-cli-command) aevia-cli-command)))
-    (compile (mapconcat #'shell-quote-argument
-                        (list cli subcommand buffer-file-name)
-                        " "))))
+  (let ((default-directory (aevia--working-directory)))
+    (compilation-start
+     (mapconcat #'shell-quote-argument
+                (list (aevia--cli) "--color" "never" subcommand
+                      (file-local-name buffer-file-name))
+                " ")
+     'aevia-compilation-mode)))
 
 (defun aevia-run-file ()
   "Run the current `.aev' file with `aevia run'."
@@ -225,12 +248,22 @@ The opening and closing `#' become generic comment fences."
   (interactive)
   (aevia--run-subcommand "test"))
 
+;;;###autoload
+(defun aevia-repl ()
+  "Open an interactive Aevia REPL for the current package."
+  (interactive)
+  (let ((default-directory (aevia--working-directory)))
+    (when (file-remote-p default-directory)
+      (user-error "Open a terminal on the remote host and run aevia repl"))
+    (ansi-term (aevia--cli) "Aevia REPL")))
+
 ;;;; Mode
 
 (defvar aevia-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-r") #'aevia-run-file)
     (define-key map (kbd "C-c C-t") #'aevia-test-file)
+    (define-key map (kbd "C-c C-z") #'aevia-repl)
     map)
   "Keymap for `aevia-mode'.")
 

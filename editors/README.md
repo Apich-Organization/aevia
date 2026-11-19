@@ -1,94 +1,140 @@
-# Editor support for Aevia
+# Aevia editor support / Aevia 编辑器支持
 
-Every plugin here does two things: highlight `.aev` files, and start the
-language server (`aevia-lsp --stdio`, or `aevia lsp --stdio`; spec §9.10).
-All semantic features (diagnostics, hover, completion, go to definition and
-type definition, references, rename, signature help, formatting, code
-actions, document/workspace symbols, semantic tokens) come from the server,
-so none of the plugins re-implement them.
+Install `aevia` and `aevia-lsp` on your editor's `PATH`. Use `aevia lsp --stdio`
+in a client that accepts a custom server command if you installed the CLI alone.
+The server supplies diagnostics, hover, navigation, completion, signature help,
+rename, formatting, quick fixes, and semantic highlighting for `.aev` files.
 
-**Prerequisite for all of them:** `aevia-lsp` (or `aevia`) on `PATH`.
+将 `aevia` 和 `aevia-lsp` 安装到编辑器的 `PATH` 中。若只安装了 CLI，可在
+支持自定义服务器命令的客户端中配置 `aevia lsp --stdio`。语言服务器为
+`.aev` 文件提供诊断、悬停提示、符号跳转、补全、签名提示、重命名、格式化、
+快速修复和语义高亮。
 
-```bash
-cargo build --release -p aevia-lsp      # produces target/release/aevia-lsp
-```
+| Editor / 编辑器 | Setup / 安装 |
+|---|---|
+| VS Code | [Extension / 扩展](vscode/README.md) |
+| JetBrains IDEs | [Plugin / 插件](jetbrains/README.md) |
+| Zed | [Extension / 扩展](zed/README.md) |
+| GNU Emacs | [Major mode / 主模式](#emacs) |
+| Vim / Neovim | [Runtime files / 运行时文件](#vim--neovim) |
+| Helix | [Language and grammar / 语言和语法](helix/README.md) |
+| Sublime Text | [Syntax and LSP / 语法和语言服务器](#sublime-text) |
+| Kate | [Syntax and LSP / 语法和语言服务器](kate/README.md) |
 
-| Editor | Directory | Highlighting | LSP client | Status |
-|---|---|---|---|---|
-| VS Code | [`vscode/`](vscode) | TextMate | `vscode-languageclient` | launched with the extension; server starts; grammar tested |
-| GNU Emacs | [`emacs/`](emacs) | font-lock | Eglot / lsp-mode | tested in Emacs 31: highlighting, indentation, Eglot connects and shows server diagnostics; lsp-mode untested |
-| Vim / Neovim | [`vim/`](vim) | syntax file | vim-lsp, yegappan/lsp, coc, Neovim native | syntax/ftdetect/indent tested in Vim 9; Neovim and LSP clients untested (not installed) |
-| Zed | [`zed/`](zed) | tree-sitter | extension (wasm) | extension builds for `wasm32-wasip2`, queries checked; not loaded in Zed yet |
-| Helix | [`helix/`](helix) | tree-sitter | built in | queries checked against the grammar; Helix not installed here |
-| Sublime Text | [`sublime/`](sublime) | `.sublime-syntax` | `LSP` package | YAML validated; not loaded in Sublime yet |
-| Kate | [`kate/`](kate) | KSyntaxHighlighting XML | built-in LSP client | XML well-formed; not loaded in Kate yet |
-| JetBrains | [`jetbrains/`](jetbrains) | bundled TextMate | LSP4IJ | compiles against RustRover 2025.2 and the zip contains the TextMate bundle; not loaded in an IDE yet |
+## Run, test, and inspect / 运行、测试与调试
 
-[`tree-sitter-aevia/`](tree-sitter-aevia) is the grammar behind Zed and
-Helix. It is deliberately *lexical*: Aevia is layout-sensitive and a number
-followed by identifiers is a unit literal (spec §1.8.1), so the grammar tokenizes
-and recognises declaration heads, and never reports a syntax error — the
-server owns those. `src/parser.c` is generated and checked in, so consumers
-need no `tree-sitter` CLI; regenerate with `tree-sitter generate`.
+From the package root, run `aevia run`, `aevia test path/to/file.aev`, or
+`aevia repl` in an interactive terminal. Within the REPL, `:help` lists commands
+and `:type EXPR` inspects an expression. Editor launchers operate on saved files.
 
-[`test/lsp-smoke.js`](test/lsp-smoke.js) drives the server the way an editor
-does (initialize, hover, symbols, completion, semantic tokens, formatting, a
-diagnostic on a dimension error) and is the quickest way to tell a server
-problem from a plugin problem:
+在项目根目录的交互式终端运行 `aevia run`、`aevia test path/to/file.aev`
+或 `aevia repl`。在 REPL 中输入 `:help` 查看命令，输入 `:type EXPR` 查看表达式
+类型。编辑器中的运行命令使用已保存的文件。
 
-```bash
-node editors/test/lsp-smoke.js target/release/aevia-lsp
-```
+VS Code, JetBrains, Zed, and Kate launch the Aevia debugger from their debugger UI.
+Put line breakpoints on executable expressions and use step in, over, or out,
+the call stack, and the stopped frame's lexical bindings. Watches and hover
+inspect binding names. Debug sessions execute the typed AST serially and take
+program input lines from the launch configuration's `stdin` list. Any editor
+with a DAP client can start the adapter using `aevia debug --stdio` and a
+`launch` request with the source path in `program`.
 
-## Semantic token legend
+VS Code、JetBrains、Zed 和 Kate 可从调试界面启动 Aevia 调试器。在可执行表达式所在
+的行设置断点，使用步入、步过和步出，并查看调用栈及当前执行帧的词法绑定。
+监视和悬停可查看绑定名称对应的值。调试会话串行执行带类型的 AST，程序输入取自
+启动配置中的 `stdin` 字符串列表。其他支持 DAP 的编辑器可以启动
+`aevia debug --stdio`，并在 `launch` 请求中通过 `program` 传入源文件路径。
 
-The server advertises `type, dimension, unit, operator, function, variable,
-enumMember`. `dimension` and `unit` are not standard LSP token types; the
-plugins map them to `type`-like highlights (VS Code declares them with
-`superType: type`; Neovim links `@lsp.type.dimension`/`@lsp.type.unit`).
+## Emacs
 
-## Per-editor quick start
+Add `editors/emacs` to `load-path`, then enable Eglot or lsp-mode. Run and
+test with `C-c C-r` and `C-c C-t`. Open an interactive terminal REPL with
+`M-x aevia-repl` or `C-c C-z`. Set `aevia-cli-command` for a custom CLI path.
 
-### VS Code
-```bash
-cd editors/vscode && npm install
-code --extensionDevelopmentPath "$PWD"          # try it
-npx @vscode/vsce package                        # aevia-0.1.0.vsix, then: code --install-extension aevia-0.1.0.vsix
-```
-Settings: `aevia.server.path`, `aevia.server.args`, `aevia.trace.server`.
+将 `editors/emacs` 加入 `load-path`，然后启用 Eglot 或 lsp-mode。
+`C-c C-r` 运行当前文件，`C-c C-t` 测试，`M-x aevia-repl` 或 `C-c C-z`
+打开交互式 REPL。通过 `aevia-cli-command` 配置 CLI 路径。
 
-### GNU Emacs
 ```elisp
 (add-to-list 'load-path "/path/to/aevia/editors/emacs")
 (require 'aevia-mode)
-(add-hook 'aevia-mode-hook #'eglot-ensure)       ; or #'lsp-deferred
+(add-hook 'aevia-mode-hook #'eglot-ensure)  ; or lsp-deferred
 ```
 
-### Vim / Neovim
-Add `editors/vim` to `runtimepath` (or copy its subdirectories into `~/.vim` / `~/.config/nvim`).
-Neovim 0.11+ starts the server by itself (`vim.g.aevia_lsp_autostart = false` to disable);
-`nvim-lspconfig`, vim-lsp and yegappan/lsp are registered when present. For coc.nvim add to `coc-settings.json`:
+To debug with Dape, save the buffer and select the following configuration
+using `M-x dape`. 使用 Dape 调试时，先保存缓冲区，再通过 `M-x dape`
+选择以下配置。
+
+```elisp
+(with-eval-after-load 'dape
+  (add-to-list 'dape-configs
+               '(aevia modes (aevia-mode)
+                       command "aevia"
+                       command-args ("debug" "--stdio")
+                       :request "launch"
+                       :program dape-buffer-default)))
+```
+
+## Vim / Neovim
+
+Add `editors/vim` to `runtimepath` and enable filetype plugins. In an Aevia
+buffer, use `:AeviaRun`, `:AeviaTest`, and `:AeviaRepl`. Set `g:aevia_cli`
+to select the CLI executable. Neovim 0.11 or later starts Aevia's LSP client
+on file open. Set `g:aevia_lsp_autostart` to `v:false` for manual setup.
+Use vim-lsp or yegappan/lsp in Vim. With coc.nvim, configure the server as follows.
+
+将 `editors/vim` 加入 `runtimepath` 并启用文件类型插件。在 Aevia 缓冲区使用
+`:AeviaRun`、`:AeviaTest` 和 `:AeviaRepl`，可用 `g:aevia_cli` 指定 CLI。
+Neovim 0.11 及以上版本打开文件时会启动 LSP；将 `g:aevia_lsp_autostart` 设为
+`v:false` 可改用手动配置。Vim 支持 vim-lsp 或 yegappan/lsp。coc.nvim 可使用
+以下服务器配置。
+
 ```json
-{ "languageserver": { "aevia": { "command": "aevia-lsp", "args": ["--stdio"], "filetypes": ["aevia"], "rootPatterns": ["aevia.toml"] } } }
+{
+  "languageserver": {
+    "aevia": {
+      "command": "aevia-lsp",
+      "args": ["--stdio"],
+      "filetypes": ["aevia"],
+      "rootPatterns": ["aevia.toml"]
+    }
+  }
+}
 ```
 
-### Zed
-`pwsh editors/zed/scripts/prepare-dev.ps1`, then command palette → `zed: install dev extension` → pick `editors/zed`.
-Optional, for semantic highlighting, in Zed `settings.json`:
-```json
-{ "languages": { "Aevia": { "semantic_tokens": "combined" } } }
+With nvim-dap installed, add the configuration below and use
+`:DapToggleBreakpoint` and `:DapContinue` on a saved Aevia source file.
+安装 nvim-dap 后，添加以下配置，并在已保存的源文件中使用
+`:DapToggleBreakpoint` 和 `:DapContinue`。
+
+```lua
+local dap = require('dap')
+dap.adapters.aevia = { type = 'executable', command = 'aevia', args = { 'debug', '--stdio' } }
+dap.configurations.aevia = {
+  { type = 'aevia', request = 'launch', name = 'Debug Aevia file', program = '${file}' },
+}
 ```
 
-### Helix
-`pwsh editors/helix/scripts/install.ps1` (or `install.sh`), then `hx --grammar build` and `hx --health aevia`.
+## Sublime Text
 
-### Sublime Text
-Install the `LSP` package (Package Control), then copy or symlink `sublime/Aevia` and `sublime/LSP-aevia`
-into `Packages/` (`Preferences → Browse Packages…`).
+Install the LSP package. From **Preferences → Browse Packages**, copy or
+symlink [Aevia](sublime/Aevia) and [LSP-aevia](sublime/LSP-aevia) into
+`Packages/`. Save the source before invoking **Build** or selecting **Test**
+under **Tools → Build With**. Install Terminus to open an interactive terminal
+with **Aevia: Open REPL**.
 
-### Kate
-Copy `kate/aevia.xml` to `%LOCALAPPDATA%\org.kde.syntax-highlighting\syntax\` (Linux: `~/.local/share/org.kde.syntax-highlighting/syntax/`),
-merge `kate/lspclient-settings.json` into Kate's LSP Client settings (Settings → Configure Kate → LSP Client → User Server Settings), restart Kate.
+安装 LSP 包。打开 **Preferences → Browse Packages**，将
+[Aevia](sublime/Aevia) 和 [LSP-aevia](sublime/LSP-aevia) 复制或链接到
+`Packages/`。保存源文件后使用 **Build** 运行，或在 **Tools → Build With**
+下选择 **Test**。安装 Terminus 后，可用 **Aevia: Open REPL** 打开交互式终端。
 
-### JetBrains (IntelliJ IDEA, RustRover, PyCharm, CLion, …)
-See [`jetbrains/README.md`](jetbrains/README.md).
+## Verification / 验证
+
+Run the protocol smoke checks against your toolchain build.
+使用构建好的工具链运行协议冒烟测试。
+
+```sh
+node editors/test/lsp-smoke.js target/debug/aevia-lsp
+node editors/test/dap-smoke.js target/debug/aevia
+npm --prefix editors/vscode test
+```

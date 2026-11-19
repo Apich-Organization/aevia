@@ -4,5 +4,5 @@
     "command": ["aevia-lsp", "--stdio"],
     "selector": "source.aevia",
     "initializationOptions": {},
-    "settings": {},
+    "settings": {}
 }

@@ -18,6 +18,18 @@ indent = { tab-width = 4, unit = "    " }
 language-servers = ["aevia-lsp"]
 auto-format = false
 
+[language.debugger]
+name = "aevia"
+transport = "stdio"
+command = "aevia"
+args = ["debug", "--stdio"]
+
+[[language.debugger.templates]]
+name = "source"
+request = "launch"
+completion = [{ name = "Aevia source", completion = "filename" }]
+args = { program = "{0}" }
+
 [[grammar]]
 name = "aevia"
 # Replaced by the install script with the absolute path of ../tree-sitter-aevia.

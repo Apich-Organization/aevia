@@ -3,16 +3,26 @@
 // feature the plugins rely on answers. Usage: node lsp-smoke.js [path-to-aevia-lsp]
 'use strict';
 const { spawn } = require('child_process');
-const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
 
 const bin = process.argv[2] || process.env.AEVIA_LSP || 'aevia-lsp';
-const file = path.resolve(__dirname, '../../examples/units.aev');
-const text = fs.readFileSync(file, 'utf8');
+const file = path.resolve(__dirname, 'smoke.aev');
+const text = 'let distance = 3.2 km\nfn main(): IO Unit = println(distance)\n';
 const uri = pathToFileURL(file).href;
 
 const child = spawn(bin, ['--stdio'], { stdio: ['pipe', 'pipe', 'inherit'] });
+const closed = new Promise(resolve => child.once('close', resolve));
+const timeout = setTimeout(() => {
+  console.error('Aevia language server smoke timed out');
+  child.kill();
+  process.exitCode = 1;
+}, 30_000);
+child.on('error', error => {
+  console.error(error.message);
+  clearTimeout(timeout);
+  process.exitCode = 1;
+});
 let buf = Buffer.alloc(0);
 const pending = new Map();
 const notes = [];
@@ -28,8 +38,11 @@ child.stdout.on('data', (d) => {
     if (buf.length < sep + 4 + len) return;
     const msg = JSON.parse(buf.slice(sep + 4, sep + 4 + len).toString('utf8'));
     buf = buf.slice(sep + 4 + len);
-    if (msg.id !== undefined && pending.has(msg.id)) pending.get(msg.id)(msg);
-    else notes.push(msg);
+    if (msg.id !== undefined && pending.has(msg.id)) {
+      const resolve = pending.get(msg.id);
+      pending.delete(msg.id);
+      resolve(msg);
+    } else notes.push(msg);
   }
 });
 
@@ -65,12 +78,12 @@ function check(name, ok, detail) {
   notify('textDocument/didOpen', { textDocument: { uri, languageId: 'aevia', version: 1, text } });
 
   const td = { uri };
-  const hover = await request('textDocument/hover', { textDocument: td, position: { line: 4, character: 8 } });
-  check('hover', hover.error === undefined, JSON.stringify(hover.result || null).slice(0, 80));
+  const hover = await request('textDocument/hover', { textDocument: td, position: { line: 0, character: 4 } });
+  check('hover', typeof hover.result?.contents?.value === 'string', JSON.stringify(hover.result || null).slice(0, 80));
   const sym = await request('textDocument/documentSymbol', { textDocument: td });
   check('documentSymbol', Array.isArray(sym.result) && sym.result.length > 0);
-  const comp = await request('textDocument/completion', { textDocument: td, position: { line: 4, character: 8 } });
-  check('completion', comp.error === undefined);
+  const comp = await request('textDocument/completion', { textDocument: td, position: { line: 1, character: 21 } });
+  check('completion', Array.isArray(comp.result) && comp.result.length > 0);
   const sem = await request('textDocument/semanticTokens/full', { textDocument: td });
   check('semanticTokens', sem.result && sem.result.data && sem.result.data.length > 0);
   const fmt = await request('textDocument/formatting', { textDocument: td, options: { tabSize: 4, insertSpaces: true } });
@@ -88,5 +101,13 @@ function check(name, ok, detail) {
 
   await request('shutdown', null);
   notify('exit', null);
-  setTimeout(() => process.exit(failed ? 1 : 0), 200);
-})();
+  child.stdin.end();
+  check('shutdown', (await closed) === 0);
+  clearTimeout(timeout);
+  process.exitCode = failed ? 1 : 0;
+})().catch(error => {
+  console.error(error);
+  child.kill();
+  clearTimeout(timeout);
+  process.exitCode = 1;
+});

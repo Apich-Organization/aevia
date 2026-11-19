@@ -1,6 +1,12 @@
 # Installs the Aevia language definition into the user's Helix configuration.
-param([string]$ConfigDir = (Join-Path $env:APPDATA 'helix'))
+param([string]$ConfigDir)
 $ErrorActionPreference = 'Stop'
+if (-not $ConfigDir) {
+    $baseConfig = if ($env:APPDATA) { $env:APPDATA }
+        elseif ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME }
+        else { Join-Path $HOME '.config' }
+    $ConfigDir = Join-Path $baseConfig 'helix'
+}
 $here = Split-Path -Parent $PSScriptRoot
 $grammar = (Resolve-Path (Join-Path $here '..\tree-sitter-aevia')).Path -replace '\\', '/'
 
@@ -9,7 +15,7 @@ New-Item -ItemType Directory -Force (Join-Path $ConfigDir 'runtime\grammars') | 
 Copy-Item -Force (Join-Path $here 'runtime\queries\aevia\*.scm') (Join-Path $ConfigDir 'runtime\queries\aevia')
 
 $target = Join-Path $ConfigDir 'languages.toml'
-$snippet = (Get-Content -Raw (Join-Path $here 'languages.toml')) -replace '\.\./tree-sitter-aevia', $grammar
+$snippet = (Get-Content -Raw (Join-Path $here 'languages.toml')).Replace('../tree-sitter-aevia', $grammar.Replace('"', '\"'))
 $marker = '# --- aevia (managed by editors/helix/scripts/install.ps1) ---'
 $hadTarget = Test-Path $target
 $existing = if ($hadTarget) { Get-Content -Raw $target } else { '' }

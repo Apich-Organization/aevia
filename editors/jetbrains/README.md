@@ -1,28 +1,48 @@
-# Aevia for JetBrains IDEs
+# Aevia for JetBrains IDEs / Aevia 的 JetBrains 插件
 
-* Highlighting: the bundled **TextMate** plugin, fed the same grammar as VS Code
-  (`../vscode/syntaxes`, copied in at build time).
-* Language server: **[LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij)**, which works in every
-  JetBrains IDE (Community editions included), unlike the native LSP API of the paid ones.
+Use a JetBrains IDE from the 2025.2 series or newer with the TextMate and
+[LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij) plugins enabled.
+The Aevia plugin uses LSP4IJ for editor language features and source debugging.
 
-The server is `$AEVIA_LSP` if set, else `aevia-lsp --stdio` from `PATH`, else `aevia lsp --stdio`.
-Hover documentation, diagnostics, completion, formatting, and semantic tokens are provided by `aevia-lsp`.
+使用 2025.2 系列或更新版本的 JetBrains IDE，并启用 TextMate 和
+[LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij) 插件。
+Aevia 插件通过 LSP4IJ 提供代码编辑和源码调试功能。
 
-## Running & Testing `.aev` Files
+## Run and debug / 运行与调试
 
-* **Run Aevia File** (`aevia run <file>`): *Run → Run Aevia File*, editor context menu, or `Ctrl+Alt+R`.
-* **Test Aevia File** (`aevia test <file>`): *Run → Test Aevia File*, editor context menu, or `Ctrl+Alt+T`.
-* The `aevia` CLI is resolved from `$AEVIA_CLI`, then `PATH`, then `~/.cargo/bin` / `~/.local/bin` / `target/`.
+- **Run Aevia File** and **Test Aevia File** are in the Run and editor context menus.
+  **Run Aevia File** 和 **Test Aevia File** 可从 Run 菜单或编辑器上下文菜单启动。
+- **Open Aevia REPL** starts a terminal with the CLI. Enable the IDE Terminal plugin to use it.
+  **Open Aevia REPL** 在终端中启动 CLI，需要启用 IDE 的 Terminal 插件。
+- To debug, create a **Debug Adapter Protocol** configuration and select the **Aevia**
+  server. Set the `.aev` file and place a breakpoint on an executable line.
+  调试时创建 **Debug Adapter Protocol** 配置，选择 **Aevia** 服务器，指定
+  `.aev` 文件并在可执行行上设置断点。
 
-## Build
+The IDE looks for the tools on `PATH`, in `~/.cargo/bin`, and in
+`~/.local/bin`. Use `AEVIA_LSP` or `AEVIA_CLI` to select an executable.
+Open **View → Tool Windows → Language Servers** for the server log.
 
-```bash
-# against an installed IDE (no download), e.g. RustRover:
-AEVIA_IDE_PATH="C:/Program Files/JetBrains/RustRover 2025.2" gradle buildPlugin
-# or against IntelliJ IDEA Community 2025.2 (downloaded):
-gradle buildPlugin
-```
-The zip lands in `build/distributions/`. Install with *Settings → Plugins → ⚙ → Install Plugin from Disk…*
-(LSP4IJ is pulled in as a dependency from the Marketplace). `gradle runIde` starts a sandbox IDE.
+IDE 会在 `PATH`、`~/.cargo/bin` 和 `~/.local/bin` 中查找工具。
+可通过 `AEVIA_LSP` 或 `AEVIA_CLI` 指定可执行文件。在
+**View → Tool Windows → Language Servers** 中查看服务器日志。
 
-Language-server diagnostics and the server log are under *View → Tool Windows → Language Servers*.
+## Build and install / 构建与安装
+
+Download `aevia-jetbrains-<version>.zip` from the release assets or extract it
+from the `aevia-editor-extensions` artifact of a [CI run][ci]. Open
+**Settings → Plugins → Install Plugin from Disk** and select the ZIP.
+
+从发布附件下载 `aevia-jetbrains-<版本>.zip`，或从 [CI 运行][ci]的
+`aevia-editor-extensions` 构建产物中解压该文件。打开
+**Settings → Plugins → Install Plugin from Disk** 并选择 ZIP 文件。
+
+To build from source with JDK 21 and Gradle 8.14.3, run `gradle buildPlugin`
+from `editors/jetbrains`. The ZIP appears in `build/distributions/`. To build
+against a local IDE distribution, set `AEVIA_IDE_PATH` to its installation directory.
+
+若要从源码构建，请使用 JDK 21 和 Gradle 8.14.3，在 `editors/jetbrains`
+中运行 `gradle buildPlugin`。ZIP 文件会生成在 `build/distributions/` 下。
+若要使用本地 IDE 构建，将 `AEVIA_IDE_PATH` 设为其安装目录。
+
+[ci]: https://github.com/Apich-Organization/aevia/actions/workflows/ci.yml

@@ -4,7 +4,6 @@ The server is not downloaded: install the Aevia toolchain so that
 `aevia-lsp` (or the `aevia` CLI) is on PATH, or set "command" in
 Preferences > Package Settings > LSP > Servers > LSP-aevia.
 """
-import sublime
 from LSP.plugin import AbstractPlugin, register_plugin, unregister_plugin
 
 

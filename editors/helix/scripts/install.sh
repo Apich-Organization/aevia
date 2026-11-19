@@ -4,6 +4,8 @@ set -eu
 here="$(cd "$(dirname "$0")/.." && pwd)"
 config="${1:-${XDG_CONFIG_HOME:-$HOME/.config}/helix}"
 grammar="$(cd "$here/../tree-sitter-aevia" && pwd)"
+grammar_toml="$(printf '%s' "$grammar" | sed 's/[\\"]/\\&/g')"
+grammar_replacement="$(printf '%s' "$grammar_toml" | sed 's/[\\&|]/\\&/g')"
 
 mkdir -p "$config/runtime/queries/aevia" "$config/runtime/grammars"
 cp "$here"/runtime/queries/aevia/*.scm "$config/runtime/queries/aevia/"
@@ -16,7 +18,7 @@ else
   if [ ! -f "$target" ]; then
     printf '# Only build the local aevia grammar (prebuilt system grammars stay active).\nuse-grammars = { only = ["aevia"] }\n' > "$target"
   fi
-  { echo; echo "$marker"; sed "s|../tree-sitter-aevia|$grammar|" "$here/languages.toml"; } >> "$target"
+  { echo; echo "$marker"; sed "s|\.\./tree-sitter-aevia|$grammar_replacement|" "$here/languages.toml"; } >> "$target"
   echo "appended the Aevia block to $target"
 fi
 if ! grep -q 'use-grammars' "$target"; then

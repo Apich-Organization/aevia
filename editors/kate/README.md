@@ -1,29 +1,32 @@
-# Aevia for Kate
+# Aevia for Kate / Aevia 的 Kate 配置
 
-KSyntaxHighlighting XML definition (`aevia.xml`) and built-in LSP Client configuration (`lspclient-settings.json`) for hover documentation, diagnostics, completion, and formatting.
+1. Copy [aevia.xml](aevia.xml) into the KSyntaxHighlighting syntax directory.
+   将 [aevia.xml](aevia.xml) 复制到 KSyntaxHighlighting 的语法目录。
+   - Linux `~/.local/share/org.kde.syntax-highlighting/syntax/`
+   - Windows `%LOCALAPPDATA%\org.kde.syntax-highlighting\syntax\`
+2. Enable **LSP Client**, then merge [lspclient-settings.json](lspclient-settings.json)
+   into **LSP Client → User Server Settings** and restart Kate.
+   启用 **LSP Client**，将 [lspclient-settings.json](lspclient-settings.json) 合并到
+   **LSP Client → User Server Settings**，然后重启 Kate。
 
-## Installation
+Enable **External Tools** to configure run and test actions. Use executable
+`aevia`, arguments from the table, working directory `%{Document:Path}`, and
+choose to save the current document and display output in a pane.
 
-1. Copy `aevia.xml` to:
-   - Windows: `%LOCALAPPDATA%\org.kde.syntax-highlighting\syntax\`
-   - Linux: `~/.local/share/org.kde.syntax-highlighting/syntax/`
-2. Merge `lspclient-settings.json` into Kate's LSP Client settings (*Settings → Configure Kate → LSP Client → User Server Settings*) and restart Kate.
+启用 **External Tools** 后可配置运行和测试动作。可执行文件设为 `aevia`，
+参数见下表，工作目录设为 `%{Document:Path}`。选择保存当前文档并在面板显示输出。
 
-## Running & Testing `.aev` Files
+| Action / 动作 | Arguments / 参数 |
+|---|---|
+| Aevia Run | `run "%{Document:FilePath}"` |
+| Aevia Test | `test "%{Document:FilePath}"` |
 
-Configure Kate's **External Tools** plugin (*Settings → Configure Kate → Plugins → External Tools*, then *Settings → Configure Kate → External Tools → Add*):
+For source debugging, enable Kate's **GDB** plugin and set its user
+configuration file to [dap-settings.json](dap-settings.json). Select **aevia /
+launch** in the Debug settings and set the Aevia source file. In Kate's
+Terminal tool view, run `aevia repl` for an interactive session.
 
-- **Aevia Run**
-  - Executable: `aevia`
-  - Arguments: `run "%{Document:FilePath}"`
-  - Working directory: `%{Document:Path}`
-  - Save: Current Document
-  - Output: Display in Pane
-- **Aevia Test**
-  - Executable: `aevia`
-  - Arguments: `test "%{Document:FilePath}"`
-  - Working directory: `%{Document:Path}`
-  - Save: Current Document
-  - Output: Display in Pane
-
-Hover documentation is provided automatically by `aevia-lsp` when the cursor rests on a symbol.
+调试源码时，启用 Kate 的 **GDB** 插件，并将其用户配置文件设为
+[dap-settings.json](dap-settings.json)。在 Debug 设置中选择 **aevia /
+launch** 并指定 Aevia 源文件。可在 Kate 的 Terminal 面板运行 `aevia repl`
+进入交互式会话。

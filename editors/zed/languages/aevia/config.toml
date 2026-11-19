@@ -1,5 +1,6 @@
 name = "Aevia"
 grammar = "aevia"
+debuggers = ["aevia"]
 path_suffixes = ["aev"]
 line_comments = ["# ", "## "]
 first_line_pattern = '^#!.*\baevia\b'

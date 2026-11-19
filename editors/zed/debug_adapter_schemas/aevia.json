@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Aevia debugger",
+  "type": "object",
+  "required": ["request", "program"],
+  "properties": {
+    "request": { "const": "launch" },
+    "program": { "type": "string", "description": "Saved Aevia source file containing main." },
+    "cwd": { "type": "string", "description": "Program working directory." },
+    "args": { "type": "array", "items": { "type": "string" } },
+    "stdin": { "type": "array", "items": { "type": "string" } },
+    "stopOnEntry": { "type": "boolean", "default": false }
+  }
+}

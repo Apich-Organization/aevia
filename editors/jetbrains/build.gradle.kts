@@ -14,12 +14,12 @@ repositories {
 dependencies {
     intellijPlatform {
         // Build against an installed IDE when AEVIA_IDE_PATH is set (no download);
-        // otherwise against IntelliJ IDEA Community. The plugin itself works in
-        // every JetBrains IDE from 2024.3 on: highlighting comes from the bundled
-        // TextMate plugin, language-server features from LSP4IJ.
+        // otherwise against IntelliJ IDEA Community. TextMate supplies
+        // highlighting, and LSP4IJ supplies the language and debug clients.
         val local = providers.environmentVariable("AEVIA_IDE_PATH").orNull
         if (local != null) local(local) else intellijIdeaCommunity("2025.2")
         bundledPlugin("org.jetbrains.plugins.textmate")
+        bundledPlugin("org.jetbrains.plugins.terminal")
         plugin("com.redhat.devtools.lsp4ij", "0.19.1")
     }
 }
@@ -30,7 +30,7 @@ intellijPlatform {
     pluginConfiguration {
         name = "Aevia"
         ideaVersion {
-            sinceBuild = "243"
+            sinceBuild = "252"
             untilBuild = provider { null }
         }
     }

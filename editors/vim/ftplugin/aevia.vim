@@ -15,24 +15,43 @@ setlocal suffixesadd=.aev
 setlocal include=^\\s*\\(import\\\|open\\)\\s\\+
 setlocal matchpairs=(:),[:],{:}
 
-if !exists(':AeviaRun')
-  function! s:AeviaExec(subcmd) abort
-    if empty(expand('%'))
-      echohl WarningMsg | echom 'Aevia: save the buffer before running' | echohl None
+function! s:AeviaExec(subcmd) abort
+  let l:cli = get(g:, 'aevia_cli', 'aevia')
+  if !executable(l:cli)
+    echoerr 'Aevia CLI not found: ' . l:cli
+    return
+  endif
+  let l:file = expand('%:p')
+  let l:args = [l:cli, a:subcmd]
+  if a:subcmd !=# 'repl'
+    if empty(l:file) || &buftype !=# ''
+      echoerr 'Aevia: save the buffer to an .aev file first'
       return
     endif
-    silent! update
-    let l:cmd = 'aevia ' . a:subcmd . ' ' . shellescape(expand('%:p'))
-    if exists(':terminal') == 2 && has('nvim')
-      execute 'botright split | terminal ' . l:cmd
-    else
-      execute '!' . l:cmd
-    endif
-  endfunction
+    update
+    call add(l:args, l:file)
+  endif
+  let l:directory = empty(l:file) ? getcwd() : fnamemodify(l:file, ':h')
+  let l:manifest = findfile('aevia.toml', escape(l:directory, ' ,;') . ';')
+  let l:cwd = empty(l:manifest) ? l:directory : fnamemodify(l:manifest, ':p:h')
+  if has('nvim-0.11')
+    botright new
+    call jobstart(l:args, {'term': v:true, 'cwd': l:cwd})
+    startinsert
+  elseif has('nvim')
+    botright new
+    call termopen(l:args, {'cwd': l:cwd})
+    startinsert
+  elseif has('terminal')
+    call term_start(l:args, {'cwd': l:cwd})
+  else
+    execute '!' . join(map(l:args, 'shellescape(v:val, 1)'))
+  endif
+endfunction
 
-  command! -buffer AeviaRun call <SID>AeviaExec('run')
-  command! -buffer AeviaTest call <SID>AeviaExec('test')
-endif
+command! -buffer AeviaRun call <SID>AeviaExec('run')
+command! -buffer AeviaTest call <SID>AeviaExec('test')
+command! -buffer AeviaRepl call <SID>AeviaExec('repl')
 
 if !exists('b:current_compiler')
   silent! compiler aevia
@@ -40,7 +59,8 @@ endif
 
 let b:undo_ftplugin = 'setlocal commentstring< comments< formatoptions< expandtab< shiftwidth<'
       \ . ' softtabstop< tabstop< foldmethod< iskeyword< suffixesadd< include< matchpairs<'
-      \ . ' | silent! delcommand AeviaRun | silent! delcommand AeviaTest'
+      \ . ' | silent! delcommand -buffer AeviaRun | silent! delcommand -buffer AeviaTest'
+      \ . ' | silent! delcommand -buffer AeviaRepl'
 
 let &cpo = s:save_cpo
 unlet s:save_cpo
