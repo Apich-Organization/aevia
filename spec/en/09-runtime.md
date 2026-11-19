@@ -352,7 +352,7 @@ no `Dyn`, no records or variants).
   program without control flow.
 
 Optional build: `cargo build -p aevia-cli --features jit` enables RSSN's Cranelift backend
-(Rust 1.97 or newer). It is off by default, and `@jit` is then `E1001`. Reference test:
+(Rust 1.100 or newer). It is off by default, and `@jit` is then `E1001`. Reference test:
 `tests/jit_native.aev`.
 
 ### 9.6.4 Device targets
@@ -377,10 +377,11 @@ and `Gpu(n)` is a separate mechanism (rssn `Device`, §10.6.5); a function that 
 
 ### 9.7.1 Memory
 
-Tensors are `Arc` + copy-on-write, slices share, and storage is reused in place when the
-reference is unique; closures are `Rc` (no cycle collector, §9.3.1); symbolic terms are rssn's
-hash-consed graph and term ids do not cross sessions; a REPL session arena grows and `:reset`
-releases it.
+Tensors and closures use `Rc` within each interpreter. `f64` slices share the backing buffer,
+and tensor tails bound by a pattern share their source tensor. Record updates reuse storage when
+ownership is unique. Closures have no cycle collector (§9.3.1). RSSN sessions reuse graph nodes
+for identical symbolic terms, and each term ID belongs to its session. `:reset` releases the
+storage held by the REPL session.
 
 ### 9.7.2 Parallel evaluation: shared-nothing replicas
 
@@ -391,12 +392,14 @@ releases it.
   thread holds a **replica**: a host-installed `Replica` factory rebuilds the interpreter from
   the same source on that thread (once per thread, then reused). Threads exchange **portable
   values** (`Portable`): numbers with dimension and display unit, strings, tensors, records,
-  variants, constructors and IR closures.
+  variants, constructors and reconstructible Core IR closures. Workers preserve constructor
+  specializations, variant types and tensor element types, including the types of empty tensors.
 - **Closures cross threads as code identity plus captured data.** A lambda is "the function's
   source position plus its captured values"; the position is a **module identity** (logical
   source path + owning package) plus a byte offset (`FileId` is assigned per load and does not
   cross threads), and the replica resolves it back to the same function through the
-  same-named module.
+  same-named module. Explicitly specialized generic closures carry their selected types and
+  dispatch evidence, which the receiving replica checks against its module interface.
 - **Guarantee: parallelism never changes a value.** When a value cannot cross threads (a
   symbolic term may hold a handle of the thread's session, a kernel handle, an IO action, a
   closure with activation-time generic evidence), when there is no replica factory, under
@@ -426,7 +429,8 @@ pure  : a -> IO a
 ```
 
 - `spawn(f)` runs `f()` on a worker thread and returns a `Task`; `await(t)` waits and fetches
-  the result.
+  the result. The task receives only capabilities active when it was submitted and allowed by the
+  worker's policy. Awaiting a task that was canceled before its worker started reports `E0812`.
 - **A task's console output is buffered and written at `await`, in await order**, so program
   output is deterministic however tasks interleave; other effects such as files happen directly
   on the task's thread.
@@ -559,7 +563,8 @@ aevia test [--filter PAT] [file.aev]               run `test` declarations
 aevia test --doc [--filter PAT] [files…]           compile the aevia blocks of `##` docs (§9.12)
 aevia repl                                         interactive session (§9.8)
 aevia fmt [--check] [files…]                       format source, the package's src/ by default
-aevia doc [--open] [--out DIR] [files…]            write Markdown API docs, default docs/
+aevia doc [--open] [--out DIR] [--json] [files…]   write package API docs, default docs/
+aevia doc --stdlib [--lang en|zh] [--out DIR] [--json]  write the standard-library reference
 aevia bench [--filter PAT] [--iterations N] [--warmup N] [--save-baseline FILE]
             [--compare-baseline FILE] [--threshold RATIO] [files…]
 aevia init <name>                                  create a package: aevia.toml, src/main.aev, aevia.lock
@@ -569,13 +574,15 @@ aevia fetch [--offline] [--force]                  download and verify the regis
 aevia tree [--offline]                             print the dependency tree
 aevia clean [--registry]                           remove `.aevia/` (`.aevia/registry` stays unless asked)
 aevia lsp [--stdio]                                language server (§9.10)
+aevia debug [--stdio]                             source debug adapter for editors
 aevia rssn [--audit] [--emit [--out DIR] [--namespaces]]   audit a Kernel Manifest / generate the Rssn module (chapter 13)
 aevia login                                        bind a signing key to your registry account (browser)
-aevia publish [--no-verify] [--dry-run] [options…] check, format-check, sign and upload this package
+aevia publish [--owner HANDLE] [--no-verify] [--dry-run] [options…]  check, sign and upload this package
 aevia search <query>      aevia info <owner/name>  search the registry / show a package page
 aevia yank <owner/name@version> [--undo]           withdraw or restore a version
 aevia verify <owner/name@version>                  check a download against its signature
-aevia docs [owner/name[@version]] [--open]         print (or open) the address of a package's documentation site
+aevia docs [owner/name[@version]] [--lang en|zh] [--open]
+aevia docs --section book|architecture|spec|stdlib [--lang en|zh] [--open] [--download]
 aevia pkg <command>                                every registry-client command (`key`, `status`, `lock`, …), forwarded to aevia-pkg
 aevia --version
 ```
@@ -600,30 +607,35 @@ Global flags (before the program-argument separator `--`):
 - **Program arguments**: `aevia run [file] -- args…` hands only the strings **after** `--` to the
   program, which reads them with `args()` (§8.1.8, a `Tensor<1, String>`; `[]` when there are
   none). `check`, `test` and `bench` do not forward arguments.
-- **Registry commands**: `login`, `search`, `info`, `yank`, `verify`, `key`, `status`, `lock` and
-  `index` are forwarded to `aevia-pkg`; `add`, `update`, `fetch` and `tree` are native to the
-  toolchain (they edit `aevia.toml` and `aevia.lock` and call the client only for the network
-  part); `publish` is native too: it first runs `aevia check --all` and `aevia fmt --check` with
-  this binary and, on failure, refuses before a key is touched (`--no-verify` skips this), then
-  hands over to `aevia-pkg publish`. If `aevia-pkg` is not on `PATH`, point `AEVIA_PKG` at a
-  built binary or run `cargo install --path platform/crates/aevia-pkg`.
-- **Options of `aevia-pkg publish`**: `--key FINGERPRINT`, `--description TEXT`, `--license SPDX`,
-  `--keyword K` (up to five), `--repository URL`, `--dry-run` (print the statement and the
-  checksum, sign nothing) and `--allow-dirty`. There are no API tokens: every authenticated
-  action is a detached signature, made with the publisher's own OpenPGP (GPG) or SSH
-  (`ssh-ed25519`) key, over a short-lived server-issued statement that names one archive, carries
-  a single-use nonce and is valid for five minutes. Developers may register and sign releases with
-  `ssh-ed25519` keys, but the client and registry always **prefer OpenPGP keys** automatically and
-  emit a warning recommending OpenPGP (PGP) keys — preferably backed by a hardware security key —
-  whenever an SSH key is registered, listed or used.
-- `aevia docs` only prints the documentation address
-  (`<registry>/docs[/<owner>/<name>[/<version>]]`; the registry comes from `--registry`,
-  `AEVIA_REGISTRY` or the default `https://aevia.apich.org`); `--open` opens a browser when
-  stdout is a terminal.
-
-Status: the "packages" paragraph of `aevia --help` still says "there is no registry", which
-contradicts registry dependencies and should be deleted; a prebuilt `aevia` binary older than
-`publish`/`login`/`search`/`docs` does not list them in its help.
+- **Registry commands.** Aevia forwards `login`, `search`, `info`, `yank`, `verify`,
+  `key`, `status`, `lock`, and `index` to `aevia-pkg`. The toolchain resolves
+  dependencies locally for `add`, `update`, `fetch`, and `tree` and uses the
+  companion for network requests. Set `AEVIA_PKG` to select a specific executable.
+  Otherwise Aevia looks beside its own executable, on `PATH`, and in the platform
+  build directory of a source checkout. Forwarded `--registry URL` takes precedence
+  over `AEVIA_REGISTRY`, followed by the client configuration and public registry.
+- **Publishing.** `aevia publish` runs `aevia check --all` and `aevia fmt --check`
+  before invoking the registry client. `--no-verify` skips those local checks.
+  `--owner HANDLE` selects a namespace where the signer has publishing permission.
+  `--dry-run` prepares the archive and prints the checksum and server statement
+  without signing or uploading. Client options include `--key FINGERPRINT`,
+  `--description TEXT`, `--license SPDX`, up to five `--keyword K` flags,
+  `--repository URL`, and `--allow-dirty`. Publishing and withdrawal use detached
+  OpenPGP or SSH (`ssh-ed25519`) signatures over a server-issued statement with a
+  single-use nonce and a five-minute lifetime. The client prefers OpenPGP keys and
+  recommends a hardware-backed OpenPGP key when using SSH.
+- **Documentation.** `aevia docs` prints a hosted documentation address. Supply a
+  package and optionally its version, or select the book, architecture, specification,
+  or standard library with `--section`. `--lang en|zh` chooses the edition.
+  `--download` selects standalone HTML for the book or architecture. `--open`
+  opens the address when stdout is a terminal. The base URL comes from `--registry`,
+  `AEVIA_REGISTRY`, or `https://aevia.apich.org` in that order.
+  `aevia doc --stdlib` writes local Markdown in the selected language and
+  `--json` adds a bilingual bundle.
+- **Debugging.** Editors start `aevia debug --stdio` using the Debug Adapter
+  Protocol. A launch supplies a saved source file, optional program arguments,
+  and optional input lines. Line breakpoints and stepping expose the call stack
+  and visible bindings.
 
 ## 9.10 LSP
 
@@ -744,8 +756,9 @@ One file per checked module, at
 library modules are cached too, while the kernel namespace generated on the fly from the RSSN
 manifest and check results containing errors are not. File layout: magic `AEVI`, format version
 (`FORMAT_VERSION`, little-endian u32), a 128-bit key, the body length and an FNV-1a checksum,
-and the body (`bincode` written by `persist::encode`: the entry's `FileId`, the interface
-digest, diagnostics and the **complete** `CheckedModule`). Writes go to a temporary file and are
+and the body. The body uses native bincode-next 3.2 encoding with deterministic ordering
+and a schema fingerprint. It contains the entry's `FileId`, the interface digest, diagnostics
+and the complete `CheckedModule`. Writes go to a temporary file and are
 renamed; a missing, truncated, checksum-failing or key- or version-mismatched file is a silent
 miss and is overwritten; at most 4 revisions per module name are kept.
 
@@ -770,16 +783,13 @@ miss and is overwritten; at most 4 revisions per module name are kept.
   `driver::load_with_disk_cache` and `driver::load_incremental_with_disk_cache`
   (`DiskCache::beside(entry)`).
 
-Status: known limits — each file carries the complete unit table and dimension environment and
-is larger than the interface; hashing the interface digests of the dependency closure grows
-linearly with closure size on large graphs; `watch`, the LSP and `test` do not use the disk
-cache yet; old-revision cleanup is the heuristic "keep 4 per module name" with no global
-capacity limit.
+The cache stores the checked module with its unit table and dimension environment.
+Computing a key visits the interfaces in the dependency closure. The CLI uses this
+cache for `check` and `run`. The four-revision retention applies per module name.
 
 ## 9.12 Tests and benchmarks
 
-- Unit tests: `test` declarations, `aevia test [--filter PAT]`. Property tests: `forall` +
-  `Arbitrary`.
+- Unit tests: `test` declarations, `aevia test [--filter PAT]`. Use `forall` to test propositions over fixed numeric samples (§8.13).
 - Doctests: `aevia test --doc [FILE…/DIRS…]` extracts every fenced block tagged `aevia` from
   `##` comments and compiles each. The first line of a block may be `compile_fail` (compilation
   must fail) or `compile_fail EXXXX` (it must fail and include that code); without a marker the
@@ -839,12 +849,11 @@ with_cap : (String, () -> IO a) -> IO a
   `Err("E0902: permission denied: …")` and any other action terminates with `E0902`; an unknown
   capability name is `E0302`.
 - A program has every capability by default; `aevia run --caps fs,rand` starts with the given set
-  and `--caps ""` sandboxes completely.
+  and `--caps ""` grants no language capabilities.
 
-Status: `fs` and `rand` are actually checked; the standard library currently has no `net`, `env`
-or `gpu` actions, so those names are accepted and take part in intersection. A missing backend
-capability is `E1001` (§13.8). `[capabilities]` in the manifest is not read (§7.5.1). "A
-configurable memory limit" exists today only as the interpreter thread's stack limit.
+The standard-library actions that check permissions use `fs` or `rand`. The capability
+set also accepts `net`, `env` and `gpu`. A missing backend capability produces `E1001` (§13.8).
+For untrusted programs, apply a process sandbox and operating-system resource limits.
 
 ## 9.15 Error reporting
 
@@ -853,5 +862,4 @@ and help. A dimension error carries the canonical forms and the difference; a ty
 carries the expected and actual types and, where possible, the "most likely fix"; a parse error
 carries the expected token and the nearest legal repair.
 
-The next chapter defines the concrete mapping between Aevia and rssn: which capabilities are
-used directly, which need a wrapper and which are known gaps.
+The next chapter covers direct RSSN operator mappings, typed wrappers and error behavior.

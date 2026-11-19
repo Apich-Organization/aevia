@@ -1,0 +1,33 @@
+module SensorCalibration
+
+## A shared offset estimated from paired reference and measured positions.
+## A median limits the influence of a gross outlier in an odd-sized batch.
+fn estimate_offset(reference: Tensor<[5], Float[Length]>, observed: Tensor<[5], Float[Length]>): Float[Length] =
+    median(observed - reference)
+
+## Correct subsequent observations and report both signs and magnitudes.
+fn report(reference: Tensor<[5], Float[Length]>, observed: Tensor<[5], Float[Length]>, tolerance: Float[Length]) =
+    let offset = estimate_offset(reference, observed)
+    let residuals = observed - reference - [offset, offset, offset, offset, offset]
+    let accepted = map(fn residual => abs(residual) <= tolerance, residuals)
+    { offset = offset, residuals = residuals, accepted = accepted }
+
+let reference = [0.0 m, 0.5 m, 1.0 m, 1.5 m, 2.0 m]
+
+let observed = [0.04 m, 0.54 m, 1.04 m, 1.54 m, 3.6 m]
+
+test "median isolates the shared offset" =
+    abs(estimate_offset(reference, observed) - 0.04 m) < 0.000001 m
+
+test "one reading is outside the calibration tolerance" =
+    let summary = report(reference, observed, 0.01 m)
+    summary.accepted[0] && summary.accepted[3] && !summary.accepted[4]
+
+test "identical readings have no offset" =
+    estimate_offset(reference, reference) == 0.0 m
+
+fn main(): IO Unit = do
+    let summary = report(reference, observed, 0.01 m)
+    println("Estimated offset = {summary.offset}")
+    println("Signed residuals = {summary.residuals}")
+    println("Accepted readings = {summary.accepted}")

@@ -333,8 +333,9 @@ kinematics/
   docs/
 ```
 
-- Every `.aev` file under `src/` is a module; `main.aev` is the default entry. `aevia test`
-  compiles and runs `tests/`.
+- Every `.aev` file under `src/` is a module. The default entry is `src/main.aev`.
+  Keep separate test files in `tests/` and pass each path to `aevia test`, for example
+  `aevia test tests/fall_time.aev`.
 - `aevia run --example name` resolves `examples/<name>.aev` by name (a name is not a path; one
   with a path separator is rejected) and lists the available examples when it finds none;
   `--example` and a file argument are mutually exclusive.
@@ -350,8 +351,9 @@ test "fall time from 20 m" =
     approx_eq(fall_time(20.0 m), 2.019 s, 0.001 s)
 ```
 
-- A `test` declaration is a `Bool` expression; `aevia test` runs them all. `approx_eq(a, b, tol)`
-  requires `a`, `b` and `tol` to have the same dimension.
+- A `test` declaration is a `Bool` expression. `aevia test [file.aev]` runs the test
+  declarations in the selected file, using the package entry when no file is given.
+  `approx_eq(a, b, tol)` requires `a`, `b` and `tol` to share a dimension.
 - To test a compile-time error use `compile_fail("<source>")` (§8.13): it hands a source
   fragment to the compiler and requires that **compilation fail**; only fragments without
   imports are supported at present. `@compile_fail` is not an attribute (an unknown attribute
@@ -371,8 +373,9 @@ test "fall time from 20 m" =
 
 ## 7.6 Versions and compatibility
 
-- `edition` selects syntax and semantics (the manifest does not read it yet, §7.5.1); libraries
-  follow SemVer: a breaking change raises major, a new API raises minor, a fix raises patch.
+- `edition` is optional package metadata. The reader preserves the string, and the language
+  uses the syntax and semantics defined here for every package. Libraries follow SemVer:
+  breaking changes raise major, new APIs raise minor, and fixes raise patch.
 - A change to a type or dimension signature, to a unit's scale or offset, or adding or removing
   an instance is breaking; adding a unit is minor.
 

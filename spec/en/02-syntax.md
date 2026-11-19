@@ -120,8 +120,8 @@ Syntax and semantics are in chapter 05.
 test "fall time from 20 m" =
     approx_eq(fall_time(20.0 m), 2.019 s, 0.001 s)
 
-test "energy is positive" =
-    forall(fn (v: Real[L/T]) => kinetic_energy(1 kg, v) >= 0 J)
+test "zero is the additive identity" =
+    forall(fn (x: Real) => x + 0 == x)
 ```
 
 The name is a string and the body is a `Bool` (or `Prop`, §8.13) expression; `aevia test`
@@ -246,8 +246,8 @@ let w = xs |> map(f, _) |> sum
   direction per expression.
 - An operator section such as `(== 1)` or `(* 2)` is `E0205`; write `fn y => y == 1`.
 
-> **Status:** a bare operator `(+)` parses but its name is not yet bound to a function
-> (`E0301`); write a lambda for now.
+To pass an operator as a function, write a lambda such as `fn (x, y) => x + y`.
+A parenthesized operator symbol such as `(+)` produces `E0301`.
 
 ### 2.3.8 Records
 
@@ -302,7 +302,9 @@ let ev = v[::2]                      # strided slice
 
 - Indices start at 0 and negative ones count from the end. `..` is half-open and `..=` closed;
   an omitted end means the boundary. `a[i]` takes an element at rank 1 and the i-th slice
-  (rank minus one) at rank > 1; `a[i, j]` needs rank ≥ 2.
+  (rank minus one) at rank > 1. Each selector addresses one source axis. An integer removes
+  that axis, a range retains it, and unwritten trailing axes are unchanged. More selectors
+  than axes is `E0802`. Indices, bounds and steps are dimensionless `Int` values.
 - `a[i:j:s]` is a strided slice; `i`, `j` and `s` may each be omitted (`s` defaults to 1), and
   `a[i:j]` is the same node as `a[i..j]`.
 - `::` is always cons (§2.6), so `xs[1::2]` is `xs[1 :: 2]`. With a start and a stride, write
@@ -310,8 +312,7 @@ let ev = v[::2]                      # strided slice
   Inside `[...]` a `:` is the slice separator, so an annotated subscript needs parentheses:
   `xs[(i : Int)]`.
 - An out-of-bounds index is run-time `E0802`; the compiler checks literal indices statically.
-  A slice is semantically a copy, and the runtime may share the buffer; a negative-stride slice
-  is always a view (§6.6.4.1).
+  A slice produces an immutable value. The runtime may share its backing buffer (§6.6.3.1).
 
 ### 2.3.12 `do` and IO
 
@@ -484,8 +485,8 @@ Logical or is the two-character `||`. There are no anonymous union types.
   `!` binds tighter than prefix `-` and than `^`: `-3!` = `-6` and `2^3!` = `2^6`. For the
   factorial of a compound expression write `factorial(n + 1)`.
 
-> **Status:** `(n + 1)!`, with `!` right after a closing parenthesis, is currently rejected by
-> the parser (`E0202`); write `factorial(n + 1)`.
+Use `factorial(n + 1)` for a parenthesized operand. A postfix `!` immediately after
+a closing parenthesis produces `E0202`.
 
 ### 2.7.6 Unary `-`
 

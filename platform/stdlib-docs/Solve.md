@@ -10,7 +10,7 @@ The `Solve` module of §8.20.
 let linsolve = linsolve
 ```
 
-Solution `x` to the linear system `A x = b`.
+Solves A x = b for x, returning a Result; a singular or non-square system gives Err(LinAlgError).
 
 **Signature:** `linsolve : (Tensor<2, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Result<Tensor<1, Scalar<div_rep(ρ),e/d>>, LinAlgError>`
 
@@ -22,20 +22,21 @@ Solution `x` to the linear system `A x = b`.
 
 **Dimensions:** kernel rule `Custom("")`
 
-**Examples:**
-- `linsolve(list(list(1, 1, 1)), list(3))` returns a `[Expr]`
-- `linsolve(list(list(1, 1), list(1, 1)), list(1, 2))` returns a `[Never]`
-- `linsolve(list(list(1, 1/2), list(1/2, 1/3)), list(1/3, 1/4))` returns a `[Rat]`
-(recorded kernel calls; the result is shown as its sort)
+The solution has the dimension of b divided by that of A. For over-determined systems use lstsq.
 
-*Source: rssn operator `linalg.linsolve`.*
+**Examples:**
+```text
+linsolve([[2.0, 0.0], [0.0, 4.0]], [2.0, 4.0])
+```
+
+*Source: Aevia standard library guide.*
 ## `let nsolve`
 
 ```aevia
 let nsolve = nsolve
 ```
 
-Numerically finds a root of `eq_or_system` starting from `guess`.
+nsolve(f, x0) finds a root of f numerically, starting the search at x0.
 
 **Signature:** `nsolve : (Real[d] -> Real[e], Real[d]) -> Result<Real[d], MathError>`
 
@@ -44,37 +45,55 @@ Numerically finds a root of `eq_or_system` starting from `guess`.
 
 **Dimensions:** the result has the dimension of argument 2
 
-*Source: rssn operator `solve.nsolve`.*
+It returns Ok(root) or Err(MathError) when the iteration does not converge, so check the Result and try a different start. root is a synonym.
+
+**Examples:**
+```text
+nsolve(fn x => x^2 - 2, 1)
+```
+
+*Source: Aevia standard library guide.*
 ## `let nsolve_f`
 
 ```aevia
 let nsolve_f = nsolve_f
 ```
 
+Float version of nsolve: finds a root of a Float function from a Float starting point.
+
 **Signature:** `nsolve_f : (Float[d] -> Float[e], Float[d]) -> Result<Float[d], MathError>`
+
+Returns Err(MathError) when it does not converge.
+
+**Examples:**
+```text
+nsolve_f(fn x => x * x - 2.0, 1.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let root`
 
 ```aevia
 let root = root
 ```
 
-A root of `f` near `guess`, by Newton's method with a bisection fallback.
+A synonym for nsolve: finds a root of f near the starting point x0, returning a Result.
 
 **Signature:** `root : 同上`
 
-**Errors**
+**Examples:**
+```text
+root(fn x => x * x - 2.0, 1.0)
+```
 
-[`NumericError::NotConverged`] when neither method finds a sign change or a
-stationary point.
-
-*Source: Rust documentation of the `aevia-std` function.*
+*Source: Aevia standard library guide.*
 ## `let solve`
 
 ```aevia
 let solve = solve
 ```
 
-Symbolically solves an equation, inequality, or system for `var_or_vars`.
+solve(f) finds the real roots of f(x) = 0 symbolically.
 
 **Signature:** `solve : (Real[d] -> Real[e]) -> Result<Solutions<Real,d>, MathError>`
 
@@ -84,14 +103,21 @@ Symbolically solves an equation, inequality, or system for `var_or_vars`.
 
 **Dimensions:** the result has the dimension of argument 2
 
-*Source: rssn operator `solve.solve`.*
+It returns a Result holding a record with the roots, their multiplicities, any conditions they depend on (such as a != 0) and a complete flag that is true when the list is exhaustive. For numerical root finding use nsolve.
+
+**Examples:**
+```text
+solve(fn x => x^2 - 4)
+```
+
+*Source: Aevia standard library guide.*
 ## `let solve_complex`
 
 ```aevia
 let solve_complex = solve_complex
 ```
 
-Finds all complex roots of polynomial `poly` in `var`.
+Like solve, but for a function that returns a Complex value: it finds all roots of f(x) = 0, including non-real ones, as a Result holding the same record as solve.
 
 **Signature:** `solve_complex : (Real[d] -> Complex[e]) -> Result<Solutions<Complex,d>, MathError>`
 
@@ -101,23 +127,26 @@ Finds all complex roots of polynomial `poly` in `var`.
 **Dimensions:** the result has the dimension of argument 2
 
 **Examples:**
-- `solve_complex(x^2 + 1, x)` returns a `[Expr]`
-(recorded kernel calls; the result is shown as its sort)
+```text
+solve_complex(fn x => complex(x^2 + 1, 0))
+```
 
-*Source: rssn operator `solve.solve_complex`.*
+*Source: Aevia standard library guide.*
 ## `let solve_system`
 
 ```aevia
 let solve_system = solve_system
 ```
 
-A solution of the square system `f(x) = 0`, by Newton's method.
+solve_system(f, x0) solves a system of equations f(x) = 0, where f maps a vector to a vector of the same length, starting from x0.
 
 **Signature:** `solve_system : (Tensor<1, Real[d]> -> Tensor<1, Real[e]>, Tensor<1, Real[d]>) -> Result<Tensor<1, Real[d]>, MathError>`
 
-**Errors**
+Returns Ok(solution) or Err(MathError).
 
-[`NumericError::NotConverged`] when the iteration does not settle, and
-[`NumericError::Singular`] when the Jacobian vanishes.
+**Examples:**
+```text
+solve_system(fn v => [v[0] + v[1] - 3, v[0] - v[1] - 1], [1, 1])
+```
 
-*Source: Rust documentation of the `aevia-std` function.*
+*Source: Aevia standard library guide.*

@@ -2,9 +2,7 @@
 
 Diagnostics are part of the language experience. An error message MUST contain the code, the
 primary location and expected versus actual, and, when it can be determined, at least one
-actionable fix. This appendix lists the codes, severities and the message format. Every code in
-the tables has an emission site in the compiler (checked by `grep` over all crates); exceptions
-are noted in the "Status" paragraphs.
+actionable fix. This appendix defines the codes, severities and message format.
 
 ## B.1 Format
 

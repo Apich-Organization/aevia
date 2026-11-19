@@ -31,17 +31,15 @@ The language is built on the `rssn` computer-algebra and scientific-computing en
 | [Appendix A — Grammar](appendix-a-grammar.md) | Complete EBNF | Yes |
 | [Appendix B — Diagnostics](appendix-b-diagnostics.md) | Error codes and message format | Yes |
 
-The backend interface contract is in the rssn repository's `docs/KERNEL.md` (Kernel Manifest, dynamic-call ABI, plugins, units and dimensions) and `docs/DIMENSIONS.md`; it is a precondition of this specification, not an optional implementation detail. The division of the implementation into crates is in [ARCHITECTURE.md](../ARCHITECTURE.md) at the repository root. Every chapter also has a Chinese edition (the source text); authoring and terminology rules are in `spec/STYLE.md`.
+The backend interface contract is in the rssn repository's `docs/KERNEL.md` (Kernel Manifest, dynamic-call ABI, plugins, units and dimensions) and `docs/DIMENSIONS.md`; it is a precondition of this specification, not an optional implementation detail. The division of the implementation into crates is in [ARCHITECTURE.md](../../ARCHITECTURE.md) at the repository root. Every chapter also has a Chinese edition (the source text); authoring and terminology rules are in `spec/STYLE.md`.
 
 ## Conformance language
 
 The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT** and **MAY** are to be interpreted as described in RFC 2119. A conforming implementation MUST accept every program in this specification's test corpus, MUST reject every program marked ill-typed, and MUST produce the specified diagnostic category (the exact wording is not normative).
 
-## Design status
+## Conformance and introspection
 
-This is a **design standard**, not a frozen implementation. Chapters marked normative are intended to be implemented as written. The current text is **Revision 23**, aligned with **`rssn 3.0.0-rc.1`** (`api_version = 2`). The size of the manifest is a measurement, not a constant; the live output of `aevia rssn` is authoritative (at that version: 1620 operators, 82 units, 30 constants). Dispatch and extension follow the boundary stated in chapter 13: no run-time multimethods, no multi-parameter classes, no per-type monomorphisation; instances are selected statically or by canonical witnesses.
-
-There is **no v1/v2 language split**: every capability is designed in; a backend that does not yet implement one reports a capability diagnostic (`E1001`) instead of removing the language feature.
+The numbered chapters define the language contract. A backend reports `E1001` when the requested capability is unavailable. Use `aevia rssn` to inspect the active Kernel Manifest and its operator, unit and constant counts. Chapter 13 defines how the compiler selects instances and pins the kernel overload for each call.
 
 ## A one-sentence summary
 

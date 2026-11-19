@@ -10,7 +10,7 @@ The `Math/Complex` module of §8.20.
 let arg = arg
 ```
 
-Principal argument (phase angle) of `z` in `(-pi, pi]`.
+The phase angle of a complex number in radians, in (-pi, pi].
 
 **Signature:** `arg : Complex[d] -> Real[1]`
 
@@ -19,51 +19,101 @@ Principal argument (phase angle) of `z` in `(-pi, pi]`.
 
 **Dimensions:** the result is dimensionless
 
-The argument, `arg z`, in `(-π, π]`.
+**Examples:**
+```text
+arg(complex(0, 1))
+```
 
-*Source: rssn operator `complex.arg`; rustdoc of `crate::kernels::complex_scalar::arg` (by name).*
+*Source: Aevia standard library guide.*
 ## `let complex`
 
 ```aevia
 let complex = complex
 ```
 
+complex(re, im) builds a complex number from its real and imaginary parts.
+
 **Signature:** `complex : (Real[1], Real[1]) -> Complex[1]`
+
+**Examples:**
+```text
+complex(1, 2)
+```
+
+*Source: Aevia standard library guide.*
 ## `let complex_exp`
 
 ```aevia
 let complex_exp = complex_exp
 ```
 
+The complex exponential e^z for a dimensionless Complex z.
+
 **Signature:** `complex_exp : Complex[1] -> Complex[1]`
+
+**Examples:**
+```text
+complex_exp(complex(0, 1))
+```
+
+*Source: Aevia standard library guide.*
 ## `let complex_ln`
 
 ```aevia
 let complex_ln = complex_ln
 ```
 
+The principal natural logarithm of a dimensionless Complex number; the imaginary part lies in (-pi, pi].
+
 **Signature:** `complex_ln : Complex[1] -> Complex[1]`
+
+**Examples:**
+```text
+complex_ln(complex(1, 1))
+```
+
+*Source: Aevia standard library guide.*
 ## `let complex_sin`
 
 ```aevia
 let complex_sin = complex_sin
 ```
 
+The sine of a dimensionless Complex number.
+
 **Signature:** `complex_sin : Complex[1] -> Complex[1]`
+
+**Examples:**
+```text
+complex_sin(complex(0, 1))
+```
+
+*Source: Aevia standard library guide.*
 ## `let complex_sqrt`
 
 ```aevia
 let complex_sqrt = complex_sqrt
 ```
 
+Principal square root of a complex number.
+
 **Signature:** `complex_sqrt : Complex[d] -> Complex[d^(1/2)]`
+
+The dimension is raised to the power 1/2.
+
+**Examples:**
+```text
+complex_sqrt(complex(-4, 0))
+```
+
+*Source: Aevia standard library guide.*
 ## `let conj`
 
 ```aevia
 let conj = conj
 ```
 
-Complex conjugate `re(z) - I * im(z)` of `z`.
+The complex conjugate: the imaginary part changes sign.
 
 **Signature:** `conj : Complex[d] -> Complex[d]`
 
@@ -75,18 +125,18 @@ Complex conjugate `re(z) - I * im(z)` of `z`.
 **Dimensions:** the result has the dimension of argument 1
 
 **Examples:**
-- `conj(2)` returns a `Int`
-- `conj(-1/3)` returns a `Rat`
-(recorded kernel calls; the result is shown as its sort)
+```text
+conj(complex(1, 2))
+```
 
-*Source: rssn operator `complex.conj`.*
+*Source: Aevia standard library guide.*
 ## `let cos`
 
 ```aevia
 let cos = cos
 ```
 
-Cosine of angle `x` in radians.
+Trigonometric function.
 
 **Signature:** `cos : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -98,16 +148,22 @@ Cosine of angle `x` in radians.
 
 **Dimensions:** the result is dimensionless
 
-`cos z`.
+Its argument must be dimensionless; angle units such as deg carry an exact conversion scale.
 
-*Source: rssn operator `elementary.cos`; rustdoc of `crate::kernels::complex_scalar::cos` (by name).*
+**Examples:**
+```text
+sin(30 deg)
+cos(0.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let im`
 
 ```aevia
 let im = im
 ```
 
-Imaginary part of complex number `z`.
+The imaginary part of a complex number.
 
 **Signature:** `im : Complex[d] -> Real[d]`
 
@@ -116,21 +172,37 @@ Imaginary part of complex number `z`.
 
 **Dimensions:** the result has the dimension of argument 1
 
-*Source: rssn operator `complex.im`.*
+**Examples:**
+```text
+im(complex(1, 2))
+```
+
+*Source: Aevia standard library guide.*
 ## `let magnitude`
 
 ```aevia
 let magnitude = magnitude
 ```
 
+The modulus (absolute value) of a complex number, keeping its dimension.
+
 **Signature:** `magnitude : Complex[d] -> Real[d]`
+
+Use this instead of abs for Complex.
+
+**Examples:**
+```text
+magnitude(complex(3, 4))
+```
+
+*Source: Aevia standard library guide.*
 ## `let re`
 
 ```aevia
 let re = re
 ```
 
-Real part of complex number `z`.
+The real part of a complex number.
 
 **Signature:** `re : Complex[d] -> Real[d]`
 
@@ -139,4 +211,9 @@ Real part of complex number `z`.
 
 **Dimensions:** the result has the dimension of argument 1
 
-*Source: rssn operator `complex.re`.*
+**Examples:**
+```text
+re(complex(1, 2))
+```
+
+*Source: Aevia standard library guide.*

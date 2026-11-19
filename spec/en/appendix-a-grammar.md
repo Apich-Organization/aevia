@@ -188,8 +188,7 @@ quantity_lit   ::= ( INT | FLOAT ) unit_expr
 
 - `LT_APP` is a `<` touching the preceding identifier (§2.7.2); `record_body` uses `with` to tell an update from a literal.
 - `quantity_lit` arises only when a numeric literal is immediately followed by a unit expression (§1.8.1).
-- `"_"` is valid only as a call argument (§2.3.6); `"(" operator ")"` parses, but the name is not yet bound
-  (status note in §2.3.7).
+- `"_"` is valid only as a call argument (§2.3.6). A parenthesized operator such as `(+)` produces `E0301` (§2.3.7).
 - A `qname` starts with a `UIDENT`; `Physics.Ising.run` parses as a `qname` plus the field `.run`.
 - Postfix `!` MUST touch the end of its operand (§2.7.5).
 

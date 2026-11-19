@@ -10,54 +10,71 @@ The `Math/Special` module of §8.20.
 let bessel_j0 = bessel_j0
 ```
 
-The Bessel function of the first kind, order zero.
+Bessel function of the first kind of order 0, J0(x).
 
 **Signature:** `bessel_j0 : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-*Source: Rust documentation of the `aevia-std` function.*
+**Examples:**
+```text
+bessel_j0(1.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let bessel_jn`
 
 ```aevia
 let bessel_jn = bessel_jn
 ```
 
-The Bessel function of the first kind, order `n`.
+bessel_jn(n, x) is the Bessel function of the first kind of integer order n.
 
 **Signature:** `bessel_jn : (Int, Scalar<ρ,1>) -> Scalar<ρ,1>`
 
-Upward recurrence where it is stable (`n <= x`) and Miller's downward
-recurrence where it is not, normalised against `J0`.
+**Examples:**
+```text
+bessel_jn(2, 1.0)
+```
 
-*Source: Rust documentation of the `aevia-std` function.*
+*Source: Aevia standard library guide.*
 ## `let bessel_y0`
 
 ```aevia
 let bessel_y0 = bessel_y0
 ```
 
-The Bessel function of the second kind, order zero.
+Bessel function of the second kind of order 0, Y0(x), for x > 0.
 
 **Signature:** `bessel_y0 : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-*Source: Rust documentation of the `aevia-std` function.*
+**Examples:**
+```text
+bessel_y0(1.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let bessel_yn`
 
 ```aevia
 let bessel_yn = bessel_yn
 ```
 
-The Bessel function of the second kind, order `n`.
+bessel_yn(n, x) is the Bessel function of the second kind of integer order n, for x > 0.
 
 **Signature:** `bessel_yn : (Int, Scalar<ρ,1>) -> Scalar<ρ,1>`
 
-*Source: Rust documentation of the `aevia-std` function.*
+**Examples:**
+```text
+bessel_yn(2, 1.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let beta`
 
 ```aevia
 let beta = beta
 ```
 
-Euler beta function `B(x, y) = Gamma(x) Gamma(y) / Gamma(x + y)`.
+The beta function B(a, b) = gamma(a) gamma(b) / gamma(a + b) of two dimensionless numbers.
 
 **Signature:** `beta : (Scalar<ρ,1>, Scalar<ρ,1>) -> Scalar<ρ,1>`
 
@@ -71,19 +88,18 @@ Euler beta function `B(x, y) = Gamma(x) Gamma(y) / Gamma(x + y)`.
 **Dimensions:** the result is dimensionless
 
 **Examples:**
-- `beta(2, 3)` returns a `Rat`
-- `beta(2, 3.5)` returns a `Float`
-- `beta(2.5, 4.5)` returns a `Float`
-(recorded kernel calls; the result is shown as its sort)
+```text
+beta(2.0, 3.0)
+```
 
-*Source: rssn operator `special.beta`.*
+*Source: Aevia standard library guide.*
 ## `let chebyshev_t`
 
 ```aevia
 let chebyshev_t = chebyshev_t
 ```
 
-`chebyshevt(n, x)`: Chebyshev polynomial of the first kind `T_n(x)`.
+chebyshev_t(n, x) is the Chebyshev polynomial of the first kind T_n(x); on [-1, 1] it equals cos(n acos x).
 
 **Signature:** `chebyshev_t : (Int, Scalar<ρ,1>) -> Scalar<ρ,1>`
 
@@ -96,19 +112,18 @@ let chebyshev_t = chebyshev_t
 **Dimensions:** the result is dimensionless
 
 **Examples:**
-- `chebyshevt(1, 1/3)` returns a `Rat`
-- `chebyshevt(0, 1/3)` returns a `Int`
-- `chebyshevt(7, 1)` returns a `Int`
-(recorded kernel calls; the result is shown as its sort)
+```text
+chebyshev_t(3, 0.5)
+```
 
-*Source: rssn operator `special.chebyshev_t`.*
+*Source: Aevia standard library guide.*
 ## `let chebyshev_u`
 
 ```aevia
 let chebyshev_u = chebyshev_u
 ```
 
-`chebyshevu(n, x)`: Chebyshev polynomial of the second kind `U_n(x)`.
+chebyshev_u(n, x) is the Chebyshev polynomial of the second kind U_n(x).
 
 **Signature:** `chebyshev_u : (Int, Scalar<ρ,1>) -> Scalar<ρ,1>`
 
@@ -120,18 +135,18 @@ let chebyshev_u = chebyshev_u
 **Dimensions:** the result is dimensionless
 
 **Examples:**
-- `chebyshevu(1, 1/3)` returns a `Rat`
-- `chebyshevu(0, 1/3)` returns a `Int`
-(recorded kernel calls; the result is shown as its sort)
+```text
+chebyshev_u(3, 0.5)
+```
 
-*Source: rssn operator `special.chebyshev_u`.*
+*Source: Aevia standard library guide.*
 ## `let erf`
 
 ```aevia
 let erf = erf
 ```
 
-Gauss error function `(2 / sqrt(pi)) * int_0^x exp(-t^2) dt`.
+The error function, 2/sqrt(pi) times the integral of exp(-t^2) from 0 to x.
 
 **Signature:** `erf : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -141,14 +156,21 @@ Gauss error function `(2 / sqrt(pi)) * int_0^x exp(-t^2) dt`.
 
 **Dimensions:** the result is dimensionless
 
-*Source: rssn operator `special.erf`.*
+It maps the reals onto (-1, 1) and is the building block of the normal CDF.
+
+**Examples:**
+```text
+erf(1.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let erfc`
 
 ```aevia
 let erfc = erfc
 ```
 
-Complementary error function `1 - erf(x)`.
+The complementary error function, 1 - erf(x).
 
 **Signature:** `erfc : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -158,14 +180,21 @@ Complementary error function `1 - erf(x)`.
 
 **Dimensions:** the result is dimensionless
 
-*Source: rssn operator `special.erfc`.*
+Use it for large x, where 1 - erf(x) loses all its digits to cancellation.
+
+**Examples:**
+```text
+erfc(3.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let fresnel_c`
 
 ```aevia
 let fresnel_c = fresnel_c
 ```
 
-`fresnelc(x)`: Fresnel cosine integral `int_0^x cos(pi * t^2 / 2) dt`.
+Fresnel cosine integral C(x), the integral of cos(pi t^2 / 2) from 0 to x.
 
 **Signature:** `fresnel_c : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -175,14 +204,21 @@ let fresnel_c = fresnel_c
 
 **Dimensions:** the result is dimensionless
 
-*Source: rssn operator `special.fresnel_c`.*
+Exact arguments stay symbolic; a Float argument gives a Float.
+
+**Examples:**
+```text
+fresnel_c(1.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let fresnel_s`
 
 ```aevia
 let fresnel_s = fresnel_s
 ```
 
-`fresnels(x)`: Fresnel sine integral `int_0^x sin(pi * t^2 / 2) dt`.
+Fresnel sine integral S(x), the integral of sin(pi t^2 / 2) from 0 to x.
 
 **Signature:** `fresnel_s : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -192,14 +228,21 @@ let fresnel_s = fresnel_s
 
 **Dimensions:** the result is dimensionless
 
-*Source: rssn operator `special.fresnel_s`.*
+Exact arguments stay symbolic so you can differentiate or integrate them; a Float argument gives a Float.
+
+**Examples:**
+```text
+fresnel_s(1.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let gamma`
 
 ```aevia
 let gamma = gamma
 ```
 
-Euler gamma function `Gamma(z)`.
+The gamma function, which extends factorial: gamma(n) == factorial(n - 1) for positive integers.
 
 **Signature:** `gamma : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -211,59 +254,85 @@ Euler gamma function `Gamma(z)`.
 
 **Dimensions:** the result is dimensionless
 
-**Examples:**
-- `gamma(1/1)` returns a `Int`
-- `gamma(1.75)` returns a `Float`
-(recorded kernel calls; the result is shown as its sort)
+The argument must be dimensionless. At zero and the negative integers it has poles, where a Float result is an infinity or an enormous number.
 
-*Source: rssn operator `special.gamma`.*
+**Examples:**
+```text
+gamma(5.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let hermite_h`
 
 ```aevia
 let hermite_h = hermite_h
 ```
 
-The physicists' Hermite polynomial `H_n(x)`.
+hermite_h(n, x) is the physicists' Hermite polynomial H_n(x), which appears in the quantum harmonic oscillator.
 
 **Signature:** `hermite_h : (Int, Scalar<ρ,1>) -> Scalar<ρ,1>`
 
-*Source: Rust documentation of the `aevia-std` function.*
+**Examples:**
+```text
+hermite_h(3, 0.5)
+```
+
+*Source: Aevia standard library guide.*
 ## `let j1`
 
 ```aevia
 let j1 = j1
 ```
 
+Bessel function of the first kind of order 1; the same as bessel_j1.
+
 **Signature:** `j1 : Scalar<ρ,1> -> Scalar<ρ,1>`
+
+**Examples:**
+```text
+j1(1.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let laguerre_l`
 
 ```aevia
 let laguerre_l = laguerre_l
 ```
 
-The Laguerre polynomial `L_n(x)`.
+laguerre_l(n, x) is the Laguerre polynomial L_n(x), which appears in the radial hydrogen wavefunctions.
 
 **Signature:** `laguerre_l : (Int, Scalar<ρ,1>) -> Scalar<ρ,1>`
 
-*Source: Rust documentation of the `aevia-std` function.*
+**Examples:**
+```text
+laguerre_l(2, 0.5)
+```
+
+*Source: Aevia standard library guide.*
 ## `let legendre_p`
 
 ```aevia
 let legendre_p = legendre_p
 ```
 
-The Legendre polynomial `P_n(x)`, by the three-term recurrence.
+legendre_p(n, x) is the Legendre polynomial of degree n, orthogonal on [-1, 1].
 
 **Signature:** `legendre_p : (Int, Scalar<ρ,1>) -> Scalar<ρ,1>`
 
-*Source: Rust documentation of the `aevia-std` function.*
+**Examples:**
+```text
+legendre_p(2, 0.5)
+```
+
+*Source: Aevia standard library guide.*
 ## `let lgamma`
 
 ```aevia
 let lgamma = lgamma
 ```
 
-Natural logarithm of `|Gamma(z)|`.
+Natural logarithm of the absolute value of gamma.
 
 **Signature:** `lgamma : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -274,25 +343,37 @@ Natural logarithm of `|Gamma(z)|`.
 
 **Dimensions:** the result is dimensionless
 
-**Examples:**
-- `lgamma(2.5)` returns a `Float`
-(recorded kernel calls; the result is shown as its sort)
+Prefer it to log(gamma(x)) for large x, where gamma itself overflows.
 
-*Source: rssn operator `special.lgamma`.*
+**Examples:**
+```text
+lgamma(100.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let y1`
 
 ```aevia
 let y1 = y1
 ```
 
+Bessel function of the second kind of order 1; the same as bessel_y1.
+
 **Signature:** `y1 : Scalar<ρ,1> -> Scalar<ρ,1>`
+
+**Examples:**
+```text
+y1(1.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let zeta`
 
 ```aevia
 let zeta = zeta
 ```
 
-Riemann zeta function `sum_{n=1}^infty n^{-s}`.
+The Riemann zeta function for a dimensionless argument.
 
 **Signature:** `zeta : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -302,4 +383,11 @@ Riemann zeta function `sum_{n=1}^infty n^{-s}`.
 
 **Dimensions:** the result is dimensionless
 
-*Source: rssn operator `special.zeta`.*
+zeta(2) is pi^2/6. It has a pole at 1.
+
+**Examples:**
+```text
+zeta(2.0)
+```
+
+*Source: Aevia standard library guide.*

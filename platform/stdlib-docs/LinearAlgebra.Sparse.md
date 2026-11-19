@@ -9,55 +9,105 @@ The `LinearAlgebra/Sparse` module of §8.20.
 ```aevia
 type Precond
 ```
+
+The preconditioner an iterative sparse solver applies before iterating: Identity (none), Jacobi (diagonal scaling), BlockJacobi (inverted diagonal blocks), Ilu0 (incomplete LU with no fill), Ic0 (incomplete Cholesky for symmetric positive-definite matrices) or Auto (let the solver choose). A good preconditioner can cut the iteration count a great deal.
 ## `let bicgstab_with`
 
 ```aevia
 let bicgstab_with = bicgstab_with
 ```
 
+BiCGSTAB iterative solver for general sparse systems: bicgstab_with(a, b, { tol, maxiter, precond }).
+
 **Signature:** `bicgstab_with : (Sparse<F, [n,n], Float[d]>, Tensor<1, Float[e]>, { tol: Float, maxiter: Int, precond: Precond }) -> { x: Tensor<1, Float[e/d]>, iterations: Int, residual: Float, converged: Bool, precond: String }`
+
+It needs little memory per iteration. Check the converged field of the result.
+
+**Examples:**
+```text
+import LinearAlgebra.Sparse { Jacobi }
+bicgstab_with(speye(3), [1.0, 2.0, 3.0], { tol = 0.000001, maxiter = 100, precond = Jacobi })
+```
+
+*Source: Aevia standard library guide.*
 ## `let block_size`
 
 ```aevia
 let block_size = block_size
 ```
 
+The (rows, columns) of the dense blocks of a block-compressed sparse tensor.
+
 **Signature:** `block_size : Sparse<F, shape, τ> -> (Int, Int)`
+
+**Examples:**
+```text
+block_size(to_bcsr(speye(4), 2, 2))
+```
+
+*Source: Aevia standard library guide.*
 ## `let cg`
 
 ```aevia
 let cg = cg
 ```
 
-RSSN `cg` adapter with the established Aevia result layout.
+Conjugate-gradient solver for a symmetric positive-definite sparse system: cg(a, b, tol, max_iterations).
 
 **Signature:** `cg : (Sparse<F, [n,n], Float[d]>, Tensor<1, Float[e]>, Float, Int) -> { x: Tensor<1, Float[e/d]>, iterations: Int, residual: Float, converged: Bool }`
 
-**Errors**
-Invalid dimensions, sparse data, controls, or numerical factorization failure.
+Returns a record with x, the iteration count, the final residual and whether it converged, so check converged before trusting x. For non-symmetric systems use gmres_with.
 
-*Source: Rust documentation of the `aevia-std` function.*
+**Examples:**
+```text
+cg(speye(3), [1.0, 2.0, 3.0], 0.000001, 100)
+```
+
+*Source: Aevia standard library guide.*
 ## `let cg_with`
 
 ```aevia
 let cg_with = cg_with
 ```
 
+Preconditioned conjugate gradients: cg_with(a, b, { tol, maxiter, precond }), where precond is one of Identity, Jacobi, BlockJacobi, Ilu0, Ic0 or Auto.
+
 **Signature:** `cg_with : (Sparse<F, [n,n], Float[d]>, Tensor<1, Float[e]>, { tol: Float, maxiter: Int, precond: Precond }) -> { x: Tensor<1, Float[e/d]>, iterations: Int, residual: Float, converged: Bool, precond: String }`
+
+The result record also names the preconditioner it used.
+
+**Examples:**
+```text
+import LinearAlgebra.Sparse { Jacobi }
+cg_with(speye(3), [1.0, 2.0, 3.0], { tol = 0.000001, maxiter = 100, precond = Jacobi })
+```
+
+*Source: Aevia standard library guide.*
 ## `let contract`
 
 ```aevia
 let contract = contract
 ```
 
+Contracts two tensors over chosen axes, like tensordot: contract(a, b, axes_a, axes_b) sums products over the paired axes.
+
 **Signature:** `contract : (Sparse<F, shape, τ>, Sparse<G, shape, τ>, [Int], [Int]) -> Sparse<Coo, shape, τ>`
+
+The axis lists must be written as literal lists. Two sparse arguments give a sparse result; one sparse gives a dense one.
+
+**Examples:**
+```text
+contract(speye(2), speye(2), [1], [0])
+```
+
+*Source: Aevia standard library guide.*
 ## `let convert`
 
 ```aevia
 let convert = convert
 ```
 
-Converts quantity `qty` to compatible `target_unit`.
+Changes the storage format of a sparse tensor, named as a type argument: convert<Coo>(a).
 
 **Signature:** `convert : Sparse<F, shape, τ> -> Sparse<G, shape, τ>`
 
@@ -68,42 +118,90 @@ Converts quantity `qty` to compatible `target_unit`.
 
 **Dimensions:** the result has the dimension of argument 1
 
-*Source: rssn operator `units.convert`.*
+The contents do not change; only how they are laid out.
+
+**Examples:**
+```text
+convert<Coo>(speye(3))
+```
+
+*Source: Aevia standard library guide.*
 ## `let density`
 
 ```aevia
 let density = density
 ```
 
+The fraction of entries of a sparse tensor that are stored, between 0 and 1.
+
 **Signature:** `density : Sparse<F, shape, τ> -> Float`
+
+**Examples:**
+```text
+density(speye(4))
+```
+
+*Source: Aevia standard library guide.*
 ## `let format_of`
 
 ```aevia
 let format_of = format_of
 ```
 
+The storage format of a sparse tensor as a string: "Csr", "Csc", "Coo" or "Bcsr".
+
 **Signature:** `format_of : Sparse<F, shape, τ> -> String`
+
+**Examples:**
+```text
+format_of(speye(3))
+```
+
+*Source: Aevia standard library guide.*
 ## `let from_dense`
 
 ```aevia
 let from_dense = from_dense
 ```
 
+Converts a dense tensor to a sparse one, storing only the non-zero entries.
+
 **Signature:** `from_dense : Tensor<shape, τ> -> Sparse<F, shape, τ>`
+
+The storage format is a type argument: from_dense<Coo>(a), from_dense<Csc>(a) or from_dense<Bcsr>(a); with none it uses Csr.
+
+**Examples:**
+```text
+from_dense([[1.0, 0.0], [0.0, 2.0]])
+```
+
+*Source: Aevia standard library guide.*
 ## `let gmres_with`
 
 ```aevia
 let gmres_with = gmres_with
 ```
 
+Restarted GMRES for general (non-symmetric) sparse systems: gmres_with(a, b, { tol, maxiter, restart, precond }).
+
 **Signature:** `gmres_with : (Sparse<F, [n,n], Float[d]>, Tensor<1, Float[e]>, { tol: Float, maxiter: Int, restart: Int, precond: Precond }) -> { x: Tensor<1, Float[e/d]>, iterations: Int, residual: Float, converged: Bool, precond: String }`
+
+Floating-point elements only. Check the converged field of the result.
+
+**Examples:**
+```text
+import LinearAlgebra.Sparse { Jacobi }
+gmres_with(speye(3), [1.0, 2.0, 3.0], { tol = 0.000001, maxiter = 100, restart = 20, precond = Jacobi })
+```
+
+*Source: Aevia standard library guide.*
 ## `let kron`
 
 ```aevia
 let kron = kron
 ```
 
-Kronecker product `A otimes B` of matrices `A` and `B`.
+The Kronecker product of two sparse matrices, a block matrix with a[i][j] * b in block (i, j).
 
 **Signature:** `kron : (Sparse<F, [m,n], Scalar<ρ,d>>, Sparse<G, [p,q], Scalar<ρ,e>>) -> Sparse<Csr, [m*p,n*q], Scalar<ρ,d*e>>`
 
@@ -113,25 +211,37 @@ Kronecker product `A otimes B` of matrices `A` and `B`.
 
 **Dimensions:** the result is the product of the argument dimensions
 
-**Examples:**
-- `kron(list(list(1, 2), list(3, 4)), list(list(0, 1), list(1, 0)))` returns a `[[Int]]`
-(recorded kernel calls; the result is shown as its sort)
+It is how a 2-D Laplacian is built from 1-D ones.
 
-*Source: rssn operator `linalg.kron`.*
+**Examples:**
+```text
+kron(speye(2), spdiag([1.0, 2.0]))
+```
+
+*Source: Aevia standard library guide.*
 ## `let map_nonzero`
 
 ```aevia
 let map_nonzero = map_nonzero
 ```
 
+Applies a function to every stored entry of a sparse tensor, leaving the zeros alone, so the function should map zero to zero.
+
 **Signature:** `map_nonzero : ((Scalar<ρ,d>) -> Scalar<σ,e>, Sparse<F, shape, Scalar<ρ,d>>) -> Sparse<F, shape, Scalar<σ,e>>`
+
+**Examples:**
+```text
+map_nonzero(fn x => 2.0 * x, speye(3))
+```
+
+*Source: Aevia standard library guide.*
 ## `let matmul`
 
 ```aevia
 let matmul = matmul
 ```
 
-Matrix product of two or more matrices or vectors.
+Matrix product of an n x k and a k x m matrix.
 
 **Signature:** `matmul : (Tensor<2, Scalar<ρ,d>>, Tensor<2, Scalar<ρ,e>>) -> Tensor<2, Scalar<ρ,d*e>>`
 
@@ -145,83 +255,173 @@ Matrix product of two or more matrices or vectors.
 
 **Dimensions:** the result is the product of the argument dimensions
 
-**Examples:**
-- `matmul(dirac_gamma(0), dirac_gamma(2))` returns a `[[Expr]]`
-- `matmul(dirac_gamma(2), dirac_gamma(0))` returns a `[[Expr]]`
-- `matmul(pauli_x, pauli_y)` returns a `[[Expr]]`
-(recorded kernel calls; the result is shown as its sort)
+The result dimension is the product of the two dimensions. A sparse matrix may be multiplied by a vector. A shape mismatch is rejected by the checker when the shapes are known.
 
-*Source: rssn operator `linalg.matmul`.*
+**Examples:**
+```text
+matmul([[1.0, 2.0], [3.0, 4.0]], [[0.0, 1.0], [1.0, 0.0]])
+```
+
+*Source: Aevia standard library guide.*
 ## `let nnz`
 
 ```aevia
 let nnz = nnz
 ```
 
+The number of stored (non-zero) entries of a sparse tensor.
+
 **Signature:** `nnz : Sparse<F, shape, τ> -> Int`
+
+**Examples:**
+```text
+nnz(speye(3))
+```
+
+*Source: Aevia standard library guide.*
 ## `let nonzeros`
 
 ```aevia
 let nonzeros = nonzeros
 ```
 
+Lists the stored entries of a sparse tensor as (index vector, value) pairs, in order.
+
 **Signature:** `nonzeros : Sparse<F, shape, Scalar<ρ,d>> -> Tensor<1, (Tensor<1, Int>, Scalar<ρ,d>)>`
+
+**Examples:**
+```text
+nonzeros(speye(2))
+```
+
+*Source: Aevia standard library guide.*
 ## `let sparse_coo`
 
 ```aevia
 let sparse_coo = sparse_coo
 ```
 
+Assembles a sparse tensor from its non-zeros: sparse_coo(shape, indices, values) with one index tuple per value.
+
 **Signature:** `sparse_coo : (Tensor<1, Int>, Tensor<2, Int>, Tensor<1, Scalar<ρ,d>>) -> Sparse<Coo, shape, Scalar<ρ,d>>`
+
+Duplicate indices are summed, which is how finite-element assembly adds contributions; entries that sum to zero are dropped.
+
+**Examples:**
+```text
+sparse_coo([3, 3], [(0, 0), (1, 1), (2, 2)], [1.0, 2.0, 3.0])
+```
+
+*Source: Aevia standard library guide.*
 ## `let sparse_csr`
 
 ```aevia
 let sparse_csr = sparse_csr
 ```
 
+Builds a compressed-sparse-row matrix from its raw arrays: sparse_csr(rows, cols, row_pointers, column_indices, values).
+
 **Signature:** `sparse_csr : (Int, Int, Tensor<1, Int>, Tensor<1, Int>, Tensor<1, Scalar<ρ,d>>) -> Sparse<Csr, [m,n], Scalar<ρ,d>>`
+
+Prefer sparse_coo unless you already hold CSR arrays.
+
+**Examples:**
+```text
+sparse_csr(2, 2, [0, 1, 2], [0, 1], [1.0, 2.0])
+```
+
+*Source: Aevia standard library guide.*
 ## `let spdiag`
 
 ```aevia
 let spdiag = spdiag
 ```
 
+A sparse square matrix with the given vector on its diagonal; elements keep their dimension.
+
 **Signature:** `spdiag : Tensor<1, Scalar<ρ,d>> -> Sparse<F, [n,n], Scalar<ρ,d>>`
+
+**Examples:**
+```text
+spdiag([1.0, 2.0, 3.0])
+```
+
+*Source: Aevia standard library guide.*
 ## `let speye`
 
 ```aevia
 let speye = speye
 ```
 
+The n x n sparse identity matrix of Floats.
+
 **Signature:** `speye : Int -> Sparse<F, [n,n], Float>`
+
+**Examples:**
+```text
+speye(4)
+```
+
+*Source: Aevia standard library guide.*
 ## `let spsolve`
 
 ```aevia
 let spsolve = spsolve
 ```
 
+Solves a sparse square system A x = b directly (sparse LU) and returns x, whose dimension is that of b over that of A.
+
 **Signature:** `spsolve : (Sparse<F, [n,n], Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Tensor<1, Scalar<div_rep(ρ),e/d>>`
+
+Use cg or gmres_with for large systems where an iterative method is cheaper.
+
+**Examples:**
+```text
+spsolve(speye(3), [1.0, 2.0, 3.0])
+```
+
+*Source: Aevia standard library guide.*
 ## `let to_bcsr`
 
 ```aevia
 let to_bcsr = to_bcsr
 ```
 
+to_bcsr(a, br, bc) re-stores a sparse matrix as dense br x bc blocks.
+
 **Signature:** `to_bcsr : (Sparse<F, [m,n], τ>, Int, Int) -> Sparse<Bcsr, [m,n], τ>`
+
+Block sizes that do not divide the matrix shape are a runtime error. Block storage pays off when non-zeros cluster.
+
+**Examples:**
+```text
+to_bcsr(speye(4), 2, 2)
+```
+
+*Source: Aevia standard library guide.*
 ## `let to_dense`
 
 ```aevia
 let to_dense = to_dense
 ```
 
+Converts a sparse tensor back to an ordinary dense tensor with explicit zeros.
+
 **Signature:** `to_dense : Sparse<F, shape, τ> -> Tensor<shape, τ>`
+
+**Examples:**
+```text
+to_dense(speye(3))
+```
+
+*Source: Aevia standard library guide.*
 ## `let transpose`
 
 ```aevia
 let transpose = transpose
 ```
 
-Transpose `A^T` of matrix `A`.
+Swaps the rows and columns of a matrix.
 
 **Signature:** `transpose : Tensor<n, a> -> Tensor<n, a>`
 
@@ -233,4 +433,11 @@ Transpose `A^T` of matrix `A`.
 
 **Dimensions:** the result has the dimension of argument 1
 
-*Source: rssn operator `linalg.transpose`.*
+Sparse matrices stay sparse.
+
+**Examples:**
+```text
+transpose([[1, 2], [3, 4]])
+```
+
+*Source: Aevia standard library guide.*

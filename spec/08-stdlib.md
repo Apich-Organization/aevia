@@ -188,6 +188,10 @@ argmin   : Tensor<1, Scalar<ρ,d>> -> Int
 （`builtins::schemes`，供悬停与首类函数使用），调用时检查器按实参的秩实例化模板；实参的秩与任何实例都不符是 `E0302`，并带期望/实际类型。`first`/`last` 对空张量给 `None`；
 `argmax`/`argmin` 对空张量是 `E0802`，NaN 不会胜出，相等时取最前的下标。
 
+`range(start, stop, step)` 从 `start` 开始生成精确整数，不含终点 `stop`。
+步长默认为 `1`，负步长产生降序序列，朝终点反方向前进时得到空张量。
+步长为零或结果超过张量大小上限时报告 `E0802`。
+
 **序列操作按第一个轴。** 秩 `n ≥ 2` 的张量是沿第一个轴的 `n−1` 秩切片（“行”）的序列（`Tensor<0, a>` 即 `a`，所以秩 1 的“行”是元素）：
 
 - `reverse` 翻转第一个轴并保持形状（展平请显式写 `reverse(flatten(m))`）；`reverse_axis(t, k)` 翻转第 `k` 轴（负数从末尾数，越界 `E0802`）。`f64` 张量上两者都是视图，不复制缓冲区（§9.5）。
@@ -379,7 +383,7 @@ zeros_of<shape>() : Tensor<shape, Float>              # 细化形状构造
 ones_of<shape>()  : Tensor<shape, Float>
 ones     : (Int, ..., Int) -> Tensor<n, Float>
 fill     : (Scalar<ρ,d>, Int, ..., Int) -> Tensor<n, Scalar<ρ,d>>
-linspace : (Scalar<ρ,d>, Scalar<ρ,d>, Int) -> Tensor<1, Scalar<ρ,d>>
+linspace : (Scalar<ρ,d>, Scalar<ρ,d>, Int) -> Tensor<1, Float[d]>
 reshape<shape> : Tensor<shape0, τ> -> Result<Tensor<shape, τ>, ShapeError>
 reshape_dyn : (Tensor<n, τ>, Tensor<1, Int>) -> Result<Tensor<n, τ>, ShapeError>
 refine_shape<shape> : Tensor<n, τ> -> Option<Tensor<shape, τ>>
@@ -429,6 +433,8 @@ extent 必须是字面量或 `?`：类型级变量在运行时没有值，`refin
 `@` 按秩分派：`A @ B`（2×2）、`A @ x`（2×1）、`x @ A`（1×2）、
 `x @ y`（1×1 点积）。`matmul` 只做 2×2；`matvec`/`vecmat`/`dot` 是显式
 版本。
+
+`diag(v)` 把数值向量或布尔向量放在方阵的主对角线上，其余位置使用输入表示中的零或 `false`。`diag(A)` 将矩阵的主对角线取为向量，并保留元素类型。`eye(n)` 返回 `n` 行 `n` 列的浮点单位矩阵。密集矩阵构造函数在分配前检查结果大小。`linspace(start, end, n)` 返回 `n` 个浮点采样值，量纲与端点一致。对有限端点，`n ≥ 2` 时包含两个端点，`n = 1` 时只取 `start`，`n ≤ 0` 时返回空张量。
 
 `det` 只接受无量纲；带量纲用 `det_unit`：
 
@@ -545,7 +551,7 @@ nonzeros      : Sparse<F, shape, Scalar<ρ,d>> -> Tensor<1, (Tensor<1, Int>, Sca
 
 **与内核的边界。** rssn 的 `TypeExpr::Sparse` 只有 `rank`，所以 `Sparse<F, shape, τ>` 在边界降为 rank + 运行时格式；`aevia-rssn` 的 `Val::Sparse` 与 rssn 的 `Value::Sparse` 一一对应，**不稠密化**。
 rssn 的 `term_of_value` 不接受 `Value::Sparse` 进入项图（`manifest.value_kinds` 里 `in_term_graph = false`），所以稀疏值不能直接喂给通用重写算子；Aevia 负责布局转换，RSSN 负责稀疏算法与其 `faer` 稀疏 LU 后端。
-用户自定义格式要等 rssn 开放 `Format`（§13.9.5）。
+稀疏格式构成封闭集合（§13.9.5）。
 
 注：`storage.sparse` 能力启用稀疏运算；`gmres_with`/`bicgstab_with` 仅接受浮点元素；标准库不提供稀疏特征值与 SVD。
 
@@ -685,7 +691,7 @@ cov       : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Scalar<div_rep
 corr      : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Scalar<div_rep(ρ),1>
 skewness  : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,1>
 kurtosis  : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,1>
-histogram : (Tensor<1, Scalar<ρ,d>>, Int) -> { counts: Tensor<1, Int>, edges: Tensor<1, Scalar<ρ,d>> }
+histogram : (Tensor<1, Scalar<ρ,d>>, Int) -> { counts: Tensor<1, Int>, edges: Tensor<1, Float[d]> }
 mode      : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,d>
 ```
 
@@ -1242,8 +1248,7 @@ Robin 表示 `alpha*u + beta*du/dn = gamma`。FVM 通量为 `U*L/T`，特征速�
 ## 8.11 Data
 
 ```
-type Table<ρ>                  # 行多态静态 schema；ρ 是记录类型
-type Column
+type Table<ρ>                  # 带行类型参数的不透明表格类型
 
 read_csv<ρ>   : String -> IO (Result<Table<ρ>, DataError>)
 read_csv_dyn  : String -> IO (Result<Table<Dynamic>, DataError>)
@@ -1253,12 +1258,12 @@ write_npy     : (String, Tensor<n, Float>) -> IO (Result<(), DataError>)
 read_json     : String -> IO (Result<Json, DataError>)
 write_json    : (String, Json) -> IO (Result<(), DataError>)
 
-column        : (Table<ρ>, String) -> Result<Tensor<1, ρ[name]>, DataError>
+column        : (Table<ρ>, String) -> Result<Tensor<1, a>, DataError>
 column_dyn    : (Table<ρ>, String) -> Result<Tensor<1, Value>, DataError>
 row           : (Table<ρ>, Int) -> Result<ρ, DataError>
-select<σ>     : (Table<ρ>, Tensor<1, String>) -> Table<σ>   # σ ⊆ ρ
+select        : (Table<ρ>, Tensor<1, String>) -> Table<σ>
 filter        : ((ρ -> Bool), Table<ρ>) -> Table<ρ>
-join          : (Table<ρ>, Table<σ>, String) -> Table<ρ + σ>
+join          : (Table<ρ>, Table<σ>, String) -> Table<τ>
 schema        : Table<ρ> -> Tensor<1, ColumnInfo>
 to_table<ρ>   : Tensor<1, ρ> -> Result<Table<ρ>, DataError>
 to_dynamic    : Table<ρ> -> Table<Dynamic>
@@ -1266,26 +1271,13 @@ to_dynamic    : Table<ρ> -> Table<Dynamic>
 type ColumnInfo = { name: String, dtype: String, unit: Option<String> }
 ```
 
-`Table<ρ>` 是**行多态静态 schema**：`ρ` 的字段名、类型、量纲在编译期
-已知。`read_csv<ρ>` 从表头单位推断字段类型；无法推断时报
-`DataError.Schema`，用户可给显式 `ρ`。`read_csv_dyn` 返回
-`Table<Dynamic>`，用于未知 schema；`to_table<ρ>` 在运行时校验并转换。
+对于运行时才获知列的文件，`read_csv_dyn` 返回 `Table<Dynamic>`。`read_csv` 的行类型参数由显式类型实参或外围表达式给出。两种读取函数都接受以逗号分隔的 `.csv` 文件和以制表符分隔的 `.tsv` 文件，并校验引号格式和各行的列数。`schema(t)` 返回运行时列名、检测到的单元格类型和可选的单位。表头 `time [s]` 将 `s` 保留为列元数据。数值单元格读为无量纲 `Float`，其余读为 `String`。
 
-`column` 的字段名必须是**字符串字面量**；类型检查器把字面量提升为
-类型级 label，在 `ρ` 中查找 `ρ[name]` 并返回其元素类型。字段不存在报
-`E0306`；量纲不匹配报 `E0401`。非字面量用 `column_dyn`（返回
-`Tensor<1, Value>`），不走静态 schema。`select`/
-`filter`/`join` 保持行多态；`join` 的结果行是 `ρ + σ`（`+` 是类型级行
-并集；冲突字段报 `E0208`）。
+`column` 和 `column_dyn` 在运行时按字符串查找列名，列不存在时返回错误。`column` 的结果元素类型 `a` 由外围类型上下文给出，与表的行类型参数独立。`row` 从所选行构造记录。`filter` 保留行类型参数。`select` 和 `join` 在运行时确定结果列。连接时两张表必须各自包含键列，其余列名必须互异。`to_table` 从记录向量构造表格，`to_dynamic` 将同一表格表示为 `Table<Dynamic>`。
 
-`read_npy` 的秩无法从文件静态推断，必须写 `read_npy<2>(path)`；省略是
-`E0314`。类型参数目前必须是具体自然数；文件的实际秩不一致时，IO 动作
-返回 `Err(DataError)`，不会把错误秩的张量交给程序。
+`read_npy` 的秩必须是具体自然数，例如 `read_npy<2>(path)`。省略时报告 `E0314`。文件的实际秩不符时，IO 动作返回 `Err(DataError)`。
 
-CSV 表头可以带单位：`time [s]`、`velocity [m/s]`。`read_csv<ρ>` 解析
-表头单位；`column(t, "time")` 在编译期用 `ρ` 的字段类型检查，运行时再做
-一次防御性校验。没有表头单位时，列被当作无量纲；显式 `ρ` 可以覆盖，
-但运行时校验失败报 `DataError.DimensionMismatch`。
+`read_json` 接受 `.json` 文件。`read_csv`、`read_csv_dyn` 和 `read_json` 遇到不支持的扩展名时，在 IO 动作执行后返回含 `E0904` 的 `Err(DataError)`。
 
 NPY 支持 1.0/2.0/3.0、小端与大端 float32/float64、C 与 Fortran 排列（Fortran 输入转换为行优先存储；写出用小端 float64、C 排列）；`read_npy<n>` 保存并验证具体秩，`write_npy` 接受任意秩的无量纲 `Float` 张量；未具体化的泛型秩报 `E0304`。
 IO 错误码：文件不存在 `E0901`，非法参数 `E0902`，损坏/截断/秩不匹配/大小溢出 `E0903`，不支持的格式、dtype 或扩展名 `E0904`，绘图写出失败 `E0905`；NPY 错误在 IO 动作执行后作为 `Err(DataError)` 返回。
@@ -1296,33 +1288,35 @@ IO 错误码：文件不存在 `E0901`，非法参数 `E0902`，损坏/截断/�
 type PlotSpec
 type Series
 
-line      : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Series
-line_with : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, PlotOpts) -> Series
-scatter   : 同上（默认参数）
-scatter_with : 同上（带 PlotOpts）
-errorbar  : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>,
-             Tensor<1, Scalar<ρ,e>>) -> Series
-errorbar_with : 同上 + PlotOpts
-hist      : (Tensor<1, Scalar<ρ,d>>, Int) -> Series
-hist_with : (Tensor<1, Scalar<ρ,d>>, Int, PlotOpts) -> Series
-heatmap   : (Tensor<2, Scalar<ρ,d>>) -> Series
-heatmap_with : (Tensor<2, Scalar<ρ,d>>, PlotOpts) -> Series
-label     : (Series, String) -> Series
-combine   : Tensor<1, Series> -> PlotSpec
-plot      : PlotSpec -> IO Unit
-save      : (String, PlotSpec) -> IO Unit
-
+line          : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Series
+line_with     : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, PlotOpts) -> Series
+scatter       : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Series
+scatter_with  : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, PlotOpts) -> Series
+errorbar      : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<1, Scalar<ρ,e>>) -> Series
+errorbar_with : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<1, Scalar<ρ,e>>, PlotOpts) -> Series
+hist          : (Tensor<1, Scalar<ρ,d>>, Int) -> Series
+hist_with     : (Tensor<1, Scalar<ρ,d>>, Int, PlotOpts) -> Series
+heatmap       : (Tensor<2, Scalar<ρ,d>>) -> Series
+heatmap_with  : (Tensor<2, Scalar<ρ,d>>, PlotOpts) -> Series
+label         : (Series, String) -> Series
+combine       : Tensor<1, Series> -> PlotSpec
+plot          : PlotSpec -> IO Unit
+save          : (String, PlotSpec) -> IO Unit
+plot_save_gif : (String, Tensor<1, PlotSpec>, Int) -> IO Result<Unit, IOError>
 default_plot_opts : PlotOpts
 ```
 
-`PlotOpts` 是完整记录：`{ label: Option<String>, color: Option<String>,
-xunit: Option<String>, yunit: Option<String>, xscale: AxisScale, yscale: AxisScale,
-xlim: Option<(Float, Float)>, ylim: Option<(Float, Float)> }`。
-`line(x, y)` 使用默认值，自动从 `x`、`y` 的量纲生成轴标签
-（`t / s`、`v / (m/s)`）；`line_with` 接受完整 `PlotOpts`；`label(series,
-"v(t)")` 是设置标签的快捷方式。`plot` 默认写 `plot.html`；`save` 指定文件名。
+`line`、`scatter` 和 `errorbar` 接受等长向量，坐标须能求值为实数。含 NaN 或无穷大的坐标对会被跳过。折线连接相邻的有效坐标对，散点图逐点绘制标记。误差量须非负且与 `y` 同量纲。误差量为非有限值时仍绘制中心点，并省略该点的误差条。
 
-`plot` 与 `save` 使用内嵌 `<svg>` 的 HTML 渲染器，生成同一格式的 HTML 文档，`save` **不按扩展名**切换格式（写 `.svg` 文件时内容仍是 HTML 文档）。写失败报 `E0905`，`plot`/`save` 为致命 IO 动作（失败以诊断退出，不返回 `Result`）。
+`hist(data, bins)` 使用正整数个等宽区间，至少需要一个有限观测值，并跳过非有限观测值。`heatmap` 将矩阵的每个元素映射到一个单元格，第零行位于顶部。非有限值对应的单元格留空。
+
+`PlotOpts` 是一个记录。`label`、`color`、`xunit` 和 `yunit` 的类型为 `Option<String>`。`xscale` 和 `yscale` 可取 `Linear` 或 `Log`。`xlim` 和 `ylim` 的类型为 `Option<(Float, Float)>`。可用记录更新从 `default_plot_opts` 设置字段。显式指定刻度时，可从 `FFT` 导入 `Linear` 和 `Log`。颜色接受六位十六进制 RGB 字符串和名称 `red`、`blue`、`green`、`orange`、`purple`、`black`。SVG 将标签显示为提示文字，并在坐标轴上标注单位。`label(series, text)` 可覆盖提示文字。
+
+同一帧内的系列共用坐标轴，坐标量纲和显式指定的轴设置须一致。默认采用相干单位、线性刻度和自动轴限。指定单位时使用已注册的单位名，支持有效的 SI 前缀。轴限以显示单位给出，须是有限且递增的一对值。`Log` 表示以十为底的对数刻度，要求轴限为正，并跳过该轴坐标非正的点。
+
+SVG 和 GIF 均使用 800 × 400 画布，绘图区为 720 × 340。`plot` 将内嵌 SVG 的 HTML 写入 `plot.html`。`save` 对扩展名为 `.svg` 的路径写入独立 SVG，扩展名匹配不区分大小写。其他路径写入内嵌 SVG 的 HTML。无效图形或写入失败报 `E0905`。
+
+`plot_save_gif` 按顺序渲染非空的图形规格向量，动画持续循环。`Plot.plot_save_gif(path, frames, delay_cs)` 显式指定帧延时，单位为百分之一秒，可取 0 到 65535 的整数。直接调用 `plot_save_gif(path, frames)` 时，延时为 10。栅格分配上限允许最多 312 帧。IO 动作返回 `Ok(())` 或 `Err(IOError)`。帧数据或延时不合法时，错误值包含 `E0902`。
 
 ## 8.13 Test
 
@@ -1330,14 +1324,17 @@ xlim: Option<(Float, Float)>, ylim: Option<(Float, Float)> }`。
 assert      : Bool -> IO Unit
 assert_eq   : (Eq a, Show a) => (a, a) -> IO Unit
 approx_eq   : (Scalar<ρ,d>, Scalar<ρ,d>, Scalar<ρ,d>) -> Bool
-forall      : Arbitrary a => (a -> Prop) -> Bool
+forall      : (a -> Prop) -> Bool
 compile_fail: String -> Bool
 ```
 
-`approx_eq(a, b, tol)` 要求三者同量纲；`tol` 是绝对容差。`forall` 对
-`Arbitrary` 类型生成随机样本，对每个样本 `decide` 命题；任一为
-`Some(false)` 则失败，全部为 `Some(true)` 才通过，出现 `None` 报
-`E0804`。`compile_fail` 接受一段源码字符串，在**隔离**环境中编译（无导入、
+`approx_eq(a, b, tol)` 要求三个实参的量纲相同。`tol` 是绝对容差。
+
+`forall` 的谓词应接受一个无量纲的 `Real`。样本依次为 `0`、`1`、`-1`、`2`、`-3` 和 `1/2`。
+若每个样本均满足命题，返回 `true`。遇到第一个反例时返回 `false`。没有反例但存在无法判定的样本时报 `E0804`。
+谓词必须返回 `Prop`，而 `Real` 上的比较会产生 `Prop`。类型检查器允许参数类型为泛型，运行时始终提供上述无量纲数值。
+
+`compile_fail` 接受一段源码字符串，在**隔离**环境中编译（无导入、
 无调用模块声明，仅 Prelude），产生至少一个错误时返回 `true`；它不检查
 错误码——需要断言错误码时用 doctest 的 `compile_fail EXXXX` 标记
 （§7.5.5/§9.12）。
@@ -1519,8 +1516,7 @@ Rssn.register_plugin : Plugin -> Result<PluginId, PluginError>   # alias
 - `to_callback(f)` 对当前 evaluator 会话中已检查的源码闭包验证具体函数类型，构造不透明的 `Callback`（别名和已具体化的泛型函数保留此证据；内建函数先包装在源码 lambda 中）。回调桥支持具体数值、
   `Bool`、`String`、密封宿主类型 `NativeAdVar` 及由它们递归组成的张量和闭合记录；源码同名类型及其他不透明回调类型仍拒绝。具体量纲、秩和完整已知形状都会校验，空结构张量需要独立的元素类型及量纲证据。各算子可进一步限制签名，例如当前数值求解器使用 `Float` 标量与向量。
   调用在原线程同步执行，句柄在外层调用返回后失效；跨线程、同一作用域重入及回调错误均返回错误；空回调列表等价于动态调用。
-- `Rssn.register`/`Rssn.register_plugin` 接受 host `Plugin`；Aevia 源码不持有这种值（运行期 `E0302`，附注指向源码机制）。源码插件经声明发布（§13.5.2）：`@op`/`@rule` 函数在模块加载时注册，
-  `load_plugin(path) : String -> IO (Result<Int, String>)` 在运行期加载一个插件文件。
+- `Plugin` 接口供 RSSN 宿主使用。用 Aevia 值调用 `Rssn.register` 或 `Rssn.register_plugin` 时报告 `E0302`。Aevia 在模块加载时注册 `@op` 和 `@rule` 函数。`load_plugin(path) : String -> IO (Result<Int, String>)` 按 §13.5.2 和 §13.5.3 的条件加载本地源码文件。
 - `core.callback` 标记受限回调桥可用，`core.plugin.source` 标记源码插件可用。生成的高阶绑定保留显式 `(values, callbacks)` 动态接口；对声明精确、回调和结果结构均可认证的单重载，另生成钉住签名的 typed
   别名，在调用时认证回调的具体签名并按实例化结果类型验证返回值；无法证明类型或维度的签名只提供动态入口。例如 `Rssn_numerical_callback` 的 `num_least_squares` 别名：参数与残差分别具有量纲 `D`、`E`，
   残差容差用 `E`，其余控制量无量纲，结果带 `converged` 与 `status`（残差/梯度收敛、预算耗尽、停滞）。
@@ -1644,10 +1640,8 @@ Physics
 `Rssn` 是**生成的模块**，不是手写库：构建时从 Kernel Manifest 生成
 `Rssn.<op>` 类型化声明和 `Rssn.dynamic` 动态入口（§13.2）。`Rssn` 的
 内容随 RSSN 版本变化，Aevia 源码不硬编码算子清单。`Sparse` 提供
-`Csr`/`Csc`/`Coo`/`Block`/`Bcsr` 格式标签与 §8.4.1 的全部稀疏内建
-（`nnz`/`to_dense`/`from_dense`/`convert`、稀疏 `matmul`/`transpose`/`kron`、
-`@` 的布局分派、`spsolve`/`cg`）；`Layout` 仍是内建函数集合而不是可实例化的
-类型类（§13.9.5）；`Device` 提供 `Cpu`/`Gpu`/`Distributed` 与
+`Csr`/`Csc`/`Coo`/`Block`/`Bcsr` 格式标签与 §8.4.1 的稀疏内建函数。布局分派见 §13.9.5。
+`Device` 提供 `Cpu`/`Gpu`/`Distributed` 与
 `on`/`to_device`（§13.9.4，无 `core.gpu` 时 `E1001`）。
 
 下一章定义运行时：从源码到值，从值到 rssn 项，从 REPL 到 JIT。

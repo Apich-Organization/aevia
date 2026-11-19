@@ -10,25 +10,69 @@ The `Pde` module of §8.20.
 let solve_advection = solve_advection
 ```
 
+Solves the advection (transport) equation on a regular grid, returning the field at each time step as Ok(fields), or Err(PdeError) for an unstable time step or mismatched grid.
+
 **Signature:** `solve_advection : AdvectionSpec -> Result<Tensor<1, Field>, PdeError>`
+
+See the Pde module for the record fields.
+
+**Examples:**
+```text
+let solver = solve_advection
+```
+
+*Source: Aevia standard library guide.*
 ## `let solve_heat`
 
 ```aevia
 let solve_heat = solve_heat
 ```
 
+Solves the heat (diffusion) equation on a regular grid by finite differences, returning the field at each time step as Ok(fields), or Err(PdeError) for an unstable time step or mismatched grid.
+
 **Signature:** `solve_heat : HeatSpec -> Result<Tensor<1, Field>, PdeError>`
+
+See the Pde module for the record fields.
+
+**Examples:**
+```text
+let solver = solve_heat
+```
+
+*Source: Aevia standard library guide.*
 ## `let solve_poisson`
 
 ```aevia
 let solve_poisson = solve_poisson
 ```
 
+Solves the Poisson equation on a regular rectangular grid by finite differences.
+
 **Signature:** `solve_poisson : PoissonSpec -> Result<Field, PdeError>`
+
+The argument is a record holding the grid and the source field; boundary values are zero. Returns Ok(field) with the grid and the values, or Err(PdeError) when the grid and field disagree. See the Pde module for the record fields.
+
+**Examples:**
+```text
+let solver = solve_poisson
+```
+
+*Source: Aevia standard library guide.*
 ## `let solve_wave`
 
 ```aevia
 let solve_wave = solve_wave
 ```
 
+Solves the wave equation on a regular grid by finite differences, returning the field at each time step as Ok(fields), or Err(PdeError) for an unstable time step or mismatched grid.
+
 **Signature:** `solve_wave : WaveSpec -> Result<Tensor<1, Field>, PdeError>`
+
+See the Pde module for the record fields.
+
+**Examples:**
+```text
+let solver = solve_wave
+```
+
+*Source: Aevia standard library guide.*

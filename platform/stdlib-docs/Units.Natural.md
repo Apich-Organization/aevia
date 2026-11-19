@@ -2,14 +2,10 @@
 
 Source: `stdlib/Units/Natural.aev`
 
-The constants in natural units: c = hbar = k_B = epsilon_0 = 1.
+Physical constants in particle-physics natural units: c = hbar = k_B = epsilon_0 = 1 (Heaviside-Lorentz); every mechanical, thermal and electromagnetic dimension is a power of energy.
 
-particle-physics natural units: c = hbar = k_B = epsilon_0 = 1 (Heaviside-Lorentz); every mechanical, thermal and electromagnetic dimension is a power of energy.
-
-Generated from the rssn Kernel Manifest (`manifest.unit_systems` and
-`manifest.constants`, §5.11.7). Do not edit; regenerate with
-`cargo run -p aevia-stdlib-gen -- --write`.
-rssn 3.0.0-rc.1, api 2
+Use `module Example with units natural` to apply the same convention
+to your module's unit literals and dimension annotations.
 
 ## `let f`
 
@@ -17,7 +13,8 @@ rssn 3.0.0-rc.1, api 2
 let f: Float[1/Amount]
 ```
 
-Faraday constant (SI 2019 definition, exact); an irrational power of the unity constants, so a Float
+Faraday constant (SI 2019 definition, exact).
+The conversion uses a fractional power, so this constant is a `Float` in these units.
 ## `let g`
 
 ```aevia
@@ -38,7 +35,8 @@ conductance quantum (SI 2019 definition, exact)
 let k_J: Float
 ```
 
-Josephson constant (SI 2019 definition, exact); an irrational power of the unity constants, so a Float
+Josephson constant (SI 2019 definition, exact).
+The conversion uses a fractional power, so this constant is a `Float` in these units.
 ## `let k_cd`
 
 ```aevia
@@ -66,7 +64,8 @@ Avogadro constant (SI 2019 definition, exact)
 let phi_0: Float
 ```
 
-magnetic flux quantum (SI 2019 definition, exact); an irrational power of the unity constants, so a Float
+magnetic flux quantum (SI 2019 definition, exact).
+The conversion uses a fractional power, so this constant is a `Float` in these units.
 ## `let r`
 
 ```aevia
@@ -136,7 +135,8 @@ caesium hyperfine frequency (SI 2019 definition, exact)
 let e: Float
 ```
 
-elementary charge (SI 2019 definition, exact); an irrational power of the unity constants, so a Float
+elementary charge (SI 2019 definition, exact).
+The conversion uses a fractional power, so this constant is a `Float` in these units.
 ## `let epsilon_0`
 
 ```aevia
@@ -213,7 +213,8 @@ vacuum magnetic permeability (CODATA 2022, measured)
 let mu_B: Float[Time^2/(Length^2*Mass)]
 ```
 
-Bohr magneton (CODATA 2022, measured); an irrational power of the unity constants, so a Float
+Bohr magneton (CODATA 2022, measured).
+The conversion uses a fractional power, so this constant is a `Float` in these units.
 ## `let sigma_SB`
 
 ```aevia

@@ -1,6 +1,6 @@
 # Aevia Language Specification
 
-**Single-file edition · Revision 23**
+**Single-file edition · Revision 1**
 
 > Generated from the chapters under `spec/en/` by `tools/bundle_spec.py`.
 
@@ -69,11 +69,9 @@ The backend interface contract is in the rssn repository's `docs/KERNEL.md` (Ker
 
 The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT** and **MAY** are to be interpreted as described in RFC 2119. A conforming implementation MUST accept every program in this specification's test corpus, MUST reject every program marked ill-typed, and MUST produce the specified diagnostic category (the exact wording is not normative).
 
-## Design status
+## Conformance and introspection
 
-This is a **design standard**, not a frozen implementation. Chapters marked normative are intended to be implemented as written. The current text is **Revision 23**, aligned with **`rssn 3.0.0-rc.1`** (`api_version = 2`). The size of the manifest is a measurement, not a constant; the live output of `aevia rssn` is authoritative (at that version: 1620 operators, 82 units, 30 constants). Dispatch and extension follow the boundary stated in chapter 13: no run-time multimethods, no multi-parameter classes, no per-type monomorphisation; instances are selected statically or by canonical witnesses.
-
-There is **no v1/v2 language split**: every capability is designed in; a backend that does not yet implement one reports a capability diagnostic (`E1001`) instead of removing the language feature.
+The numbered chapters define the language contract. A backend reports `E1001` when the requested capability is unavailable. Use `aevia rssn` to inspect the active Kernel Manifest and its operator, unit and constant counts. Chapter 13 defines how the compiler selects instances and pins the kernel overload for each call.
 
 ## A one-sentence summary
 
@@ -534,8 +532,7 @@ treated specially only in type position; they are not keywords. `in` belongs to 
 `for` to `instance … for` and `derive … for`, and `rec` to `let rec`. `pure` is a Prelude
 function, not a keyword (§9.7.3).
 
-> **Status:** backtick identifiers (naming an external item that collides with a keyword) are
-> not implemented; a backtick is `E0105`.
+Use a non-keyword name for an imported binding. A backtick in source produces `E0105`.
 
 ### 1.5.3 Naming conventions (informative)
 
@@ -832,8 +829,8 @@ Syntax and semantics are in chapter 05.
 test "fall time from 20 m" =
     approx_eq(fall_time(20.0 m), 2.019 s, 0.001 s)
 
-test "energy is positive" =
-    forall(fn (v: Real[L/T]) => kinetic_energy(1 kg, v) >= 0 J)
+test "zero is the additive identity" =
+    forall(fn (x: Real) => x + 0 == x)
 ```
 
 The name is a string and the body is a `Bool` (or `Prop`, §8.13) expression; `aevia test`
@@ -958,8 +955,8 @@ let w = xs |> map(f, _) |> sum
   direction per expression.
 - An operator section such as `(== 1)` or `(* 2)` is `E0205`; write `fn y => y == 1`.
 
-> **Status:** a bare operator `(+)` parses but its name is not yet bound to a function
-> (`E0301`); write a lambda for now.
+To pass an operator as a function, write a lambda such as `fn (x, y) => x + y`.
+A parenthesized operator symbol such as `(+)` produces `E0301`.
 
 ### 2.3.8 Records
 
@@ -1014,7 +1011,9 @@ let ev = v[::2]                      # strided slice
 
 - Indices start at 0 and negative ones count from the end. `..` is half-open and `..=` closed;
   an omitted end means the boundary. `a[i]` takes an element at rank 1 and the i-th slice
-  (rank minus one) at rank > 1; `a[i, j]` needs rank ≥ 2.
+  (rank minus one) at rank > 1. Each selector addresses one source axis. An integer removes
+  that axis, a range retains it, and unwritten trailing axes are unchanged. More selectors
+  than axes is `E0802`. Indices, bounds and steps are dimensionless `Int` values.
 - `a[i:j:s]` is a strided slice; `i`, `j` and `s` may each be omitted (`s` defaults to 1), and
   `a[i:j]` is the same node as `a[i..j]`.
 - `::` is always cons (§2.6), so `xs[1::2]` is `xs[1 :: 2]`. With a start and a stride, write
@@ -1022,8 +1021,7 @@ let ev = v[::2]                      # strided slice
   Inside `[...]` a `:` is the slice separator, so an annotated subscript needs parentheses:
   `xs[(i : Int)]`.
 - An out-of-bounds index is run-time `E0802`; the compiler checks literal indices statically.
-  A slice is semantically a copy, and the runtime may share the buffer; a negative-stride slice
-  is always a view (§6.6.4.1).
+  A slice produces an immutable value. The runtime may share its backing buffer (§6.6.3.1).
 
 ### 2.3.12 `do` and IO
 
@@ -1196,8 +1194,8 @@ Logical or is the two-character `||`. There are no anonymous union types.
   `!` binds tighter than prefix `-` and than `^`: `-3!` = `-6` and `2^3!` = `2^6`. For the
   factorial of a compound expression write `factorial(n + 1)`.
 
-> **Status:** `(n + 1)!`, with `!` right after a closing parenthesis, is currently rejected by
-> the parser (`E0202`); write `factorial(n + 1)`.
+Use `factorial(n + 1)` for a parenthesized operand. A postfix `!` immediately after
+a closing parenthesis produces `E0202`.
 
 ### 2.7.6 Unary `-`
 
@@ -1373,7 +1371,7 @@ any structurally identical record or variant. Constructors may take type paramet
 ### 3.2.5 Type schemes
 
 `σ ::= ∀a:κ. σ | C => σ | τ`. `∀` quantifies type, dimension, natural, row and representation
-variables. `C` includes class constraints (`Show a`) and numeric constraints: the
+variables. `C` includes class constraints (`Show a`), row exclusions (`r lacks z`), and numeric constraints: the
 representation domain of a literal, `Join(ρ1, ρ2, ρout)`, `Divide(ρin, ρout)` and the
 input-dependent private-literal reading rules. Constraints are stored with schemes, function
 aliases and module interfaces and are rebuilt by the compiler; users never write them.
@@ -1497,6 +1495,11 @@ Division, negative exponents, roots and inversion promote integers to exact rati
 `Int / Int` is `Real[1]` (`7 / 2` is exactly `7/2` and cannot be annotated `Int`); integer
 division is `div(a,b)` or `quot(a,b)`; `2^-1` is the `Real` `1/2`. `min`, `max`, `mod` and `rem`
 require `ρ ≠ Complex`; the modulus of a complex number is `magnitude` (§8.15), not `abs`.
+`div` uses Euclidean division and `mod` returns its nonnegative remainder. `quot` truncates the
+quotient toward zero and `rem` returns the remainder with the dividend's sign. These operations on
+`Int` retain arbitrary precision, as do `gcd` and `lcm`. Remainders of exact rational inputs also
+remain exact. `to_int` truncates finite dimensionless values toward zero and reports `E0806` when
+the input has no finite real value.
 
 ### 3.4.3 Static limits on powers
 
@@ -1691,10 +1694,13 @@ fn norm(p: { x: Real[L], y: Real[L], ...r }): Real[L] =
 
 ### 3.6.2 Record update
 
-`{ p with x = 3.0 m }` requires `p` to have field `x`; the result has the type of `p` with `x`
-replaced by the new type. If the field does not exist it is added, which requires
-`row(p) lacks z` (otherwise `E0208`). Updates are pure and the old record is unchanged; the
-runtime updates in place when the record is uniquely owned.
+Updating an explicit field replaces its value and type. For example, `{ p with x = true }`
+sets the type of `x` to `Bool`. A field missing from the known row is added. For an open row, adding `z`
+requires that the tail exclude `z`. The compiler carries this constraint through function calls,
+aliases and imports. Supplying a tail that already contains `z` raises `E0208`.
+
+An update produces a record without changing the original value. The runtime reuses its storage
+when the record is uniquely owned.
 
 ### 3.6.3 Variants and exhaustiveness
 
@@ -1800,7 +1806,6 @@ that owns the type or the module that owns the class (the orphan rule), so users
 | `Num a` `Fractional a` `Floating a` | arithmetic, `from_int`, `sqrt`, … | **dimensionless** user numeric types only |
 | `Container f` | `map`, `fold` | tensors, `Option`, `Set` |
 | `Sized a` | `length` | `String`, `Tensor` |
-| `Arbitrary a` | `arbitrary` | random generator for property tests |
 | `Parallel a` | `par_map` | only `Int`/`Float[d]` and their tensors; symbolic `Real` is not parallelised |
 
 - `Num` and friends do not apply to dimensioned scalars, because `*` changes the dimension and
@@ -3275,7 +3280,7 @@ let sol = dsolve(eq, y, t)           # Result<(Real[T] -> Real[L]), MathError>, 
 - A non-exhaustive match is `E0309` at compile time, and a match never falls through at run
   time; an arm that can never be selected warns `W0201`.
 
-Status: exhaustiveness and redundancy analysis is bounded recursion with a **pattern nesting
+Exhaustiveness and redundancy analysis is bounded recursion with a **pattern nesting
 limit of 24**; beyond it a pattern is treated as covered, which can only suppress a
 diagnostic, never produce a false one. Or-patterns and empty enums cannot be expressed in the
 current grammar; a match with zero arms on a type with no constructors counts as exhaustive.
@@ -3329,7 +3334,8 @@ non-integer stride is `E0302`.
 - An omitted `s` is 1; `a[i:j]` and `a[i..j]` are the same node.
 - Omitted endpoints follow the direction of the stride: for `s > 0`, `i` defaults to 0 and `j`
   to the axis length; for `s < 0`, `i` defaults to the last index and `j` to **before** the
-  first index. So `xs[::-1]` is `reverse(xs)` and `xs[::-2]` is `xs[4], xs[2], xs[0]`.
+  first index. Thus `xs[::-1]` reads `xs` in reverse. For a five-element `xs`, `xs[::-2]` reads
+  `xs[4]`, `xs[2]`, then `xs[0]`.
 - A negative explicit endpoint counts from the end and is clamped to the valid range; the end
   is half-open: `xs[4:0:-1]` is `xs[4]…xs[1]`.
 
@@ -3338,19 +3344,15 @@ A slice whose first step already passes `b` is **empty** (`xs[5:2:1]`, `xs[0:3:-
 not panic. `s == 0` never advances: it is a static `E0802` when the stride is a literal and a
 run-time `E0802` otherwise.
 
-A negative stride yields a **view**: same buffer, different offset, that axis reversed
-(`View { strides, reversed }`); a positive stride multiplies that axis's stride by `s`. So
-`xs[::-1]` and `reverse(xs)` share one buffer, and `m[:, ::-1]` flips only the second axis.
+The runtime uses a view when a nonempty `F64` slice can share its buffer. It scales the
+axis stride by the magnitude of the step and reverses direction for a negative step. Other
+storage types materialize the slice. In `m[:, ::-1]` only the second axis is reversed.
 
 ### 6.6.4 Linear algebra
 
-- `matmul`, `solve`, `inv`, `eig`, `svd`, `qr`, `lu` on `F64`/`C128` use rssn's numeric
-  kernels; small `Exact`/`Boxed` matrices use symbolic linear-algebra rules, and a large matrix
-  that cannot be numericised returns `Err` or stays symbolic.
-- `det` accepts only dimensionless input; a dimensioned matrix uses `det_unit`, which returns
-  `Dyn<ρ>` (`E0410`).
-- `solve`/`inv` of a singular matrix return `Err(SingularMatrix)`; `eig` always returns
-  `Complex`.
+- `det`, `inv`, and `linsolve` use rational elimination for exact integer and rational operands. Floating-point inputs use the RSSN dense kernel.
+- `det` takes a dimensionless square matrix and returns zero for a singular matrix. Use `det_unit` for a dynamically dimensioned determinant. A non-finite floating-point entry is `E0806`.
+- `inv` and `linsolve` report `Err(Singular)` for a singular matrix, `Err(ShapeMismatch)` for incompatible shapes, and `Err(NotConverged)` for non-finite floating-point input. `eig` returns complex eigenvalues.
 
 ### 6.6.5 Reductions
 
@@ -3430,10 +3432,9 @@ are `max_iterations = 24`, `max_nodes = 20_000`, `match_limit = 1_000`, `reduce_
 `patience = 3`, `time_limit = None`. Exhaustion is `E0808`; heavy requests
 (`integrate`/`solve`) return `Err`.
 
-Status: there is no language-level `with_budget(seconds, rewrites, thunk)` yet. The CLI's
-`--budget` is the **tail-call budget** (§9.3.4), not the symbolic budget; the symbolic budget
-takes the kernel defaults and is adjusted through the kernel `Config`/`Budget` API (embedding
-layer).
+The CLI option `--budget` bounds Aevia's tail calls and IO steps (§9.3.4). Symbolic
+operations use the kernel defaults. Embedding hosts configure symbolic limits through
+RSSN's `Config` and `Budget`.
 
 ### 6.9.2 Error classes
 
@@ -3881,8 +3882,9 @@ kinematics/
   docs/
 ```
 
-- Every `.aev` file under `src/` is a module; `main.aev` is the default entry. `aevia test`
-  compiles and runs `tests/`.
+- Every `.aev` file under `src/` is a module. The default entry is `src/main.aev`.
+  Keep separate test files in `tests/` and pass each path to `aevia test`, for example
+  `aevia test tests/fall_time.aev`.
 - `aevia run --example name` resolves `examples/<name>.aev` by name (a name is not a path; one
   with a path separator is rejected) and lists the available examples when it finds none;
   `--example` and a file argument are mutually exclusive.
@@ -3898,8 +3900,9 @@ test "fall time from 20 m" =
     approx_eq(fall_time(20.0 m), 2.019 s, 0.001 s)
 ```
 
-- A `test` declaration is a `Bool` expression; `aevia test` runs them all. `approx_eq(a, b, tol)`
-  requires `a`, `b` and `tol` to have the same dimension.
+- A `test` declaration is a `Bool` expression. `aevia test [file.aev]` runs the test
+  declarations in the selected file, using the package entry when no file is given.
+  `approx_eq(a, b, tol)` requires `a`, `b` and `tol` to share a dimension.
 - To test a compile-time error use `compile_fail("<source>")` (§8.13): it hands a source
   fragment to the compiler and requires that **compilation fail**; only fragments without
   imports are supported at present. `@compile_fail` is not an attribute (an unknown attribute
@@ -3919,8 +3922,9 @@ test "fall time from 20 m" =
 
 ## 7.6 Versions and compatibility
 
-- `edition` selects syntax and semantics (the manifest does not read it yet, §7.5.1); libraries
-  follow SemVer: a breaking change raises major, a new API raises minor, a fix raises patch.
+- `edition` is optional package metadata. The reader preserves the string, and the language
+  uses the syntax and semantics defined here for every package. Libraries follow SemVer:
+  breaking changes raise major, new APIs raise minor, and fixes raise patch.
 - A change to a type or dimension signature, to a unit's scale or offset, or adding or removing
   an instance is breaking; adding a unit is minor.
 
@@ -4114,6 +4118,10 @@ argmin   : Tensor<1, Scalar<ρ,d>> -> Int
 
 **Any rank.** Operations written `Tensor<n, …>` are typed for **every rank** `n`: `sum`, `prod`, `mean`, `var`, `std`, `norm`, `normalize`, `map`, `map2`/`zip_with` (same shape), `flatten` (rank ≥ 2), `transpose`, the keepdims form of `sum(a, axis)`, the whole FFT family of §8.8, and the sequence operations below. Rank is not a first-class type parameter, so these signatures are **templates over the rank**: the type table lists instances for ranks 1 to 4 (`builtins::schemes`, used for hovers and first-class use), and the checker instantiates the template at the rank of the actual argument. An argument whose rank matches no instance is `E0302`, with expected and actual types. `first`/`last` give `None` on an empty tensor; `argmax`/`argmin` on an empty tensor are `E0802`; NaN never wins, and ties take the lowest index.
 
+`range(start, stop, step)` produces exact integers from `start` up to the exclusive `stop`.
+The default step is `1`. A negative step descends, and a step pointing away from `stop` produces
+an empty tensor. A zero step or a result that exceeds the tensor size limit is `E0802`.
+
 **Sequence operations act on the first axis.** A tensor of rank `n ≥ 2` is a sequence of rank-`n−1` slices along the first axis ("rows"); `Tensor<0, a>` is `a`, so a "row" of a rank-1 tensor is an element.
 
 - `reverse` reverses the first axis and keeps the shape (to flatten, write `reverse(flatten(m))`). `reverse_axis(t, k)` reverses axis `k` (negative counts from the end, out of range `E0802`). On `f64` tensors both are views and do not copy the buffer (§9.5).
@@ -4288,7 +4296,7 @@ zeros_of<shape>() : Tensor<shape, Float>              # refined-shape constructo
 ones_of<shape>()  : Tensor<shape, Float>
 ones     : (Int, ..., Int) -> Tensor<n, Float>
 fill     : (Scalar<ρ,d>, Int, ..., Int) -> Tensor<n, Scalar<ρ,d>>
-linspace : (Scalar<ρ,d>, Scalar<ρ,d>, Int) -> Tensor<1, Scalar<ρ,d>>
+linspace : (Scalar<ρ,d>, Scalar<ρ,d>, Int) -> Tensor<1, Float[d]>
 reshape<shape> : Tensor<shape0, τ> -> Result<Tensor<shape, τ>, ShapeError>
 reshape_dyn : (Tensor<n, τ>, Tensor<1, Int>) -> Result<Tensor<n, τ>, ShapeError>
 refine_shape<shape> : Tensor<n, τ> -> Option<Tensor<shape, τ>>
@@ -4320,6 +4328,8 @@ match refine_shape<[3, 3]>(m) with
 An extent MUST be a literal or `?`: type-level variables have no run-time value, so `refine_shape<[n]>(a)` is `E0304` (refining a variable extent can only be solved from equations in a signature, not by a run-time test).
 
 `@` dispatches on rank: `A @ B` (2×2), `A @ x` (2×1), `x @ A` (1×2), `x @ y` (1×1 dot product). `matmul` is 2×2 only; `matvec`/`vecmat`/`dot` are the explicit forms.
+
+`diag(v)` places a numeric or Boolean vector on the diagonal of a square matrix, filling the other entries with zero in the input representation or with `false`. `diag(A)` extracts the main diagonal of a matrix as a vector and keeps its element type. `eye(n)` returns an `n` by `n` floating-point identity matrix. Dense constructors check the result size before allocating. `linspace(start, end, n)` returns `n` floating-point samples with the endpoints’ dimension. For finite inputs it includes both endpoints when `n ≥ 2`, keeps only `start` when `n = 1`, and returns an empty tensor when `n ≤ 0`.
 
 `det` accepts only dimensionless matrices; use `det_unit` for dimensioned ones:
 
@@ -4406,7 +4416,7 @@ nonzeros      : Sparse<F, shape, Scalar<ρ,d>> -> Tensor<1, (Tensor<1, Int>, Sca
 
 **Rank N and contraction.** `contract(A, B, axes_a, axes_b)` is pairwise tensor contraction (`tensordot`): `axes_a`/`axes_b` are **list literals** (so the result rank is static), and the result axes are the free axes of `A` followed by those of `B`. Two sparse operands give `Sparse<Coo, …>`; one sparse and one dense give a dense `Tensor`; contracting all axes gives a scalar; two dense operands are a type error. `map_nonzero(f, A)` calls `f` only on **stored entries**, so `f(0) = 0` is required (entries returning zero are dropped); `nonzeros(A)` returns a list of `(index, value)` tuples.
 
-**Boundary with the kernel.** rssn's `TypeExpr::Sparse` has only a `rank`, so `Sparse<F, shape, τ>` is lowered at the boundary to rank plus a run-time format; `aevia-rssn`'s `Val::Sparse` corresponds one-to-one to rssn's `Value::Sparse`, **without densifying**. rssn's `term_of_value` does not accept `Value::Sparse` into the term graph (`in_term_graph = false` in `manifest.value_kinds`), so a sparse value cannot be fed directly to general rewriting operators; Aevia converts layouts; RSSN owns sparse algorithms and its `faer` sparse-LU backend. User-defined formats wait until rssn opens `Format` (§13.9.5).
+**Boundary with the kernel.** rssn's `TypeExpr::Sparse` has only a `rank`, so `Sparse<F, shape, τ>` is lowered at the boundary to rank plus a run-time format; `aevia-rssn`'s `Val::Sparse` corresponds one-to-one to rssn's `Value::Sparse`, **without densifying**. rssn's `term_of_value` does not accept `Value::Sparse` into the term graph (`in_term_graph = false` in `manifest.value_kinds`), so a sparse value cannot be fed directly to general rewriting operators; Aevia converts layouts; RSSN owns sparse algorithms and its `faer` sparse-LU backend. The sparse formats form a closed set (§13.9.5).
 
 Note: `storage.sparse` enables sparse operations; `gmres_with`/`bicgstab_with` accept floating-point elements only; sparse eigenvalues and SVD are not provided.
 
@@ -4509,7 +4519,7 @@ cov       : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Scalar<div_rep
 corr      : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Scalar<div_rep(ρ),1>
 skewness  : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,1>
 kurtosis  : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,1>
-histogram : (Tensor<1, Scalar<ρ,d>>, Int) -> { counts: Tensor<1, Int>, edges: Tensor<1, Scalar<ρ,d>> }
+histogram : (Tensor<1, Scalar<ρ,d>>, Int) -> { counts: Tensor<1, Int>, edges: Tensor<1, Float[d]> }
 mode      : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,d>
 ```
 
@@ -4983,8 +4993,7 @@ event time; wave results add `velocities`. Assertions are in `examples/pde_adapt
 ## 8.11 Data
 
 ```
-type Table<ρ>                  # row-polymorphic static schema; ρ is a record type
-type Column
+type Table<ρ>                  # opaque table with a row type parameter
 
 read_csv<ρ>   : String -> IO (Result<Table<ρ>, DataError>)
 read_csv_dyn  : String -> IO (Result<Table<Dynamic>, DataError>)
@@ -4994,12 +5003,12 @@ write_npy     : (String, Tensor<n, Float>) -> IO (Result<(), DataError>)
 read_json     : String -> IO (Result<Json, DataError>)
 write_json    : (String, Json) -> IO (Result<(), DataError>)
 
-column        : (Table<ρ>, String) -> Result<Tensor<1, ρ[name]>, DataError>
+column        : (Table<ρ>, String) -> Result<Tensor<1, a>, DataError>
 column_dyn    : (Table<ρ>, String) -> Result<Tensor<1, Value>, DataError>
 row           : (Table<ρ>, Int) -> Result<ρ, DataError>
-select<σ>     : (Table<ρ>, Tensor<1, String>) -> Table<σ>   # σ ⊆ ρ
+select        : (Table<ρ>, Tensor<1, String>) -> Table<σ>
 filter        : ((ρ -> Bool), Table<ρ>) -> Table<ρ>
-join          : (Table<ρ>, Table<σ>, String) -> Table<ρ + σ>
+join          : (Table<ρ>, Table<σ>, String) -> Table<τ>
 schema        : Table<ρ> -> Tensor<1, ColumnInfo>
 to_table<ρ>   : Tensor<1, ρ> -> Result<Table<ρ>, DataError>
 to_dynamic    : Table<ρ> -> Table<Dynamic>
@@ -5007,13 +5016,13 @@ to_dynamic    : Table<ρ> -> Table<Dynamic>
 type ColumnInfo = { name: String, dtype: String, unit: Option<String> }
 ```
 
-`Table<ρ>` is a **row-polymorphic static schema**: the field names, types and dimensions of `ρ` are known at compile time. `read_csv<ρ>` infers field types from header units; when it cannot, it reports `DataError.Schema` and the user may supply an explicit `ρ`. `read_csv_dyn` returns `Table<Dynamic>` for unknown schemas; `to_table<ρ>` validates and converts at run time.
+`read_csv_dyn` returns `Table<Dynamic>` for files whose columns are determined at run time. For `read_csv`, an explicit type argument or the surrounding expression supplies the row type parameter. Both readers accept `.csv` files with comma separators and `.tsv` files with tab separators. They validate quoting and row widths. `schema(t)` reports the run-time column names, detected cell types and optional units. A header such as `time [s]` records `s` as column metadata. Numeric cells are exposed as dimensionless `Float` values and other cells as `String` values.
 
-The field name of `column` MUST be a **string literal**; the type checker lifts the literal to a type-level label, looks up `ρ[name]` in `ρ` and returns its element type. A missing field is `E0306`; a dimension mismatch is `E0401`. For a non-literal use `column_dyn` (returning `Tensor<1, Value>`), which does not use the static schema. `select`/`filter`/`join` stay row-polymorphic; the result row of `join` is `ρ + σ` (`+` is type-level row union; a conflicting field is `E0208`).
+`column` and `column_dyn` look up a string name at run time and return an error for a missing column. The result element type `a` in `column` comes from the surrounding type context independently of the table's row type. `row` returns a record built from the selected row. `filter` preserves the row type parameter. `select` and `join` determine their result columns at run time. For a join, both tables must contain the key column and their other column names must be distinct. `to_table` constructs a table from a vector of records, and `to_dynamic` describes the same table as `Table<Dynamic>`.
 
-The rank of `read_npy` cannot be inferred statically from the file and MUST be written `read_npy<2>(path)`; omitting it is `E0314`. The type argument currently MUST be a concrete natural number; if the file's actual rank differs, the IO action returns `Err(DataError)` and never hands a tensor of the wrong rank to the program.
+Supply a concrete natural number for the `read_npy` rank, as in `read_npy<2>(path)`. Omitting it is `E0314`. If the file has a different rank, the IO action returns `Err(DataError)`.
 
-CSV headers may carry units: `time [s]`, `velocity [m/s]`. `read_csv<ρ>` parses the header units; `column(t, "time")` is checked at compile time against the field types of `ρ` and validated defensively again at run time. Without header units, columns are dimensionless; an explicit `ρ` can override this, but a run-time validation failure is `DataError.DimensionMismatch`.
+`read_json` accepts `.json` files. For `read_csv`, `read_csv_dyn` and `read_json`, an unsupported extension produces `Err(DataError)` with `E0904` when the IO action runs.
 
 NPY supports NPY 1.0/2.0/3.0, little- and big-endian float32/float64, C and Fortran order (Fortran input is converted to row-major storage; output is little-endian float64, C order); `read_npy<n>` stores and verifies a concrete rank, `write_npy` accepts dimensionless `Float` tensors of any rank; an unresolved generic rank is `E0304`. IO error codes: missing file `E0901`, invalid argument `E0902`, corrupt/truncated/rank mismatch/size overflow `E0903`, unsupported format, dtype or extension `E0904`, failed plot write `E0905`; NPY errors are returned as `Err(DataError)` after the IO action runs.
 
@@ -5023,28 +5032,35 @@ NPY supports NPY 1.0/2.0/3.0, little- and big-endian float32/float64, C and Fort
 type PlotSpec
 type Series
 
-line      : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Series
-line_with : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, PlotOpts) -> Series
-scatter   : same as line (default options)
-scatter_with : same as line_with (with PlotOpts)
-errorbar  : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>,
-             Tensor<1, Scalar<ρ,e>>) -> Series
-errorbar_with : same as errorbar + PlotOpts
-hist      : (Tensor<1, Scalar<ρ,d>>, Int) -> Series
-hist_with : (Tensor<1, Scalar<ρ,d>>, Int, PlotOpts) -> Series
-heatmap   : (Tensor<2, Scalar<ρ,d>>) -> Series
-heatmap_with : (Tensor<2, Scalar<ρ,d>>, PlotOpts) -> Series
-label     : (Series, String) -> Series
-combine   : Tensor<1, Series> -> PlotSpec
-plot      : PlotSpec -> IO Unit
-save      : (String, PlotSpec) -> IO Unit
-
+line          : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Series
+line_with     : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, PlotOpts) -> Series
+scatter       : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Series
+scatter_with  : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, PlotOpts) -> Series
+errorbar      : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<1, Scalar<ρ,e>>) -> Series
+errorbar_with : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<1, Scalar<ρ,e>>, PlotOpts) -> Series
+hist          : (Tensor<1, Scalar<ρ,d>>, Int) -> Series
+hist_with     : (Tensor<1, Scalar<ρ,d>>, Int, PlotOpts) -> Series
+heatmap       : (Tensor<2, Scalar<ρ,d>>) -> Series
+heatmap_with  : (Tensor<2, Scalar<ρ,d>>, PlotOpts) -> Series
+label         : (Series, String) -> Series
+combine       : Tensor<1, Series> -> PlotSpec
+plot          : PlotSpec -> IO Unit
+save          : (String, PlotSpec) -> IO Unit
+plot_save_gif : (String, Tensor<1, PlotSpec>, Int) -> IO Result<Unit, IOError>
 default_plot_opts : PlotOpts
 ```
 
-`PlotOpts` is a full record: `{ label: Option<String>, color: Option<String>, xunit: Option<String>, yunit: Option<String>, xscale: AxisScale, yscale: AxisScale, xlim: Option<(Float, Float)>, ylim: Option<(Float, Float)> }`. `line(x, y)` uses the defaults and generates axis labels automatically from the dimensions of `x` and `y` (`t / s`, `v / (m/s)`); `line_with` takes a full `PlotOpts`; `label(series, "v(t)")` is the shortcut for setting a label. `plot` writes `plot.html` by default; `save` gives the file name.
+`line`, `scatter` and `errorbar` take equal-length vectors whose coordinates can be evaluated as real numbers. A pair containing NaN or infinity is omitted. Lines join consecutive surviving pairs, and scatter draws individual markers. Error bars use nonnegative magnitudes with the dimension of `y`. If an error magnitude is non-finite, the central point is drawn without its whisker.
 
-`plot` and `save` use an HTML renderer with inline `<svg>` and produce the same HTML format; `save` does **not** switch format by extension (writing a `.svg` file still produces an HTML document). A write failure is `E0905`, and `plot`/`save` are fatal IO actions (failure exits with a diagnostic and is not a `Result`).
+`hist(data, bins)` uses a positive number of equal-width bins and requires at least one finite observation. Non-finite observations are skipped. `heatmap` draws a cell per matrix entry with row zero at the top. Non-finite cells are left blank.
+
+`PlotOpts` is a record with `label`, `color`, `xunit` and `yunit` of type `Option<String>`, `xscale` and `yscale` set to `Linear` or `Log`, and `xlim` and `ylim` of type `Option<(Float, Float)>`. Copy `default_plot_opts` with a record update to set these fields. Import `Linear` and `Log` from `FFT` to set the scales explicitly. Colors accept six-digit RGB hex strings and the names `red`, `blue`, `green`, `orange`, `purple` and `black`. The SVG includes the label as a tooltip and captions each axis with its unit. `label(series, text)` overrides the tooltip text.
+
+Series in a frame share axes and must agree on their coordinate dimensions and any specified axis settings. The default is linear scaling in coherent units with automatic limits. Unit overrides name registered units, including valid SI prefixes. Limits are finite increasing pairs in the displayed units. `Log` is base ten, requires positive limits and omits points with non-positive coordinates on that axis.
+
+Both SVG and GIF use an 800 × 400 canvas with a 720 × 340 plotting area. `plot` writes `plot.html` containing inline SVG. `save` writes standalone SVG for a case-insensitive `.svg` extension and HTML with inline SVG for other paths. Invalid plots and failed writes raise `E0905`.
+
+`plot_save_gif` renders a nonempty vector of plot specifications in order and loops the animation continuously. `Plot.plot_save_gif(path, frames, delay_cs)` takes an explicit delay in hundredths of a second and accepts integers from 0 through 65535. The unqualified call `plot_save_gif(path, frames)` uses a delay of 10. Up to 312 frames fit the raster allocation limit. The IO action returns `Ok(())` or `Err(IOError)`. Invalid frames and delays report `E0902` in the error payload.
 
 ## 8.13 Test
 
@@ -5052,11 +5068,15 @@ default_plot_opts : PlotOpts
 assert      : Bool -> IO Unit
 assert_eq   : (Eq a, Show a) => (a, a) -> IO Unit
 approx_eq   : (Scalar<ρ,d>, Scalar<ρ,d>, Scalar<ρ,d>) -> Bool
-forall      : Arbitrary a => (a -> Prop) -> Bool
+forall      : (a -> Prop) -> Bool
 compile_fail: String -> Bool
 ```
 
-`approx_eq(a, b, tol)` requires all three to have the same dimension; `tol` is an absolute tolerance. `forall` generates random samples of an `Arbitrary` type and `decide`s the proposition on each; any `Some(false)` fails, all `Some(true)` passes, and a `None` is `E0804`. `compile_fail` takes a string of source and compiles it in an **isolated** environment (no imports, no calling-module declarations, Prelude only), returning `true` if at least one error results; it does not check the error code — to assert a code, use the doctest `compile_fail EXXXX` marker (§7.5.5/§9.12).
+The arguments to `approx_eq(a, b, tol)` must share a dimension. The tolerance is absolute.
+
+Use `forall` with a unary predicate on a dimensionless `Real`. The samples are `0`, `1`, `-1`, `2`, `-3`, and `1/2`, in that order. If every sample satisfies the predicate, the result is `true`. The first false verdict returns `false`. If there is no false verdict and a verdict is undecidable, the call raises `E0804`. The predicate must return `Prop`, which a `Real` comparison produces. The checker permits a generic parameter type, but the sampler always supplies this same sequence of dimensionless numeric values.
+
+`compile_fail` takes a string of source and compiles it in an **isolated** environment (no imports, no calling-module declarations, Prelude only), returning `true` if at least one error results; it does not check the error code — to assert a code, use the doctest `compile_fail EXXXX` marker (§7.5.5/§9.12).
 
 ## 8.14 Measurement
 
@@ -5209,7 +5229,7 @@ Reachability and limits of the fixed entry points:
 
 - `type_rep<T>()` makes an unforgeable `TypeRep` from a concrete checked type; an unresolved generic cannot be reflected without a run-time type dictionary. `Rssn.typed` performs the dynamic call and checks the result against that witness; a mismatch or insufficient evidence returns `Err(OpError)`, and a successful result is still an opaque `Value` to be validated and converted with `from_value<T>`.
 - `to_callback(f)` checks the concrete function type of a checked source closure in the current evaluator session and builds an opaque `Callback` (aliases and concretised generic functions keep this evidence; wrap built-in functions in a source lambda first). The callback bridge supports concrete numbers, `Bool`, `String`, the sealed host type `NativeAdVar`, and tensors and closed records built recursively from them; same-named source types and other opaque callback types remain rejected. Concrete dimensions, ranks and fully known shapes are checked, and an empty structured tensor needs independent element-type and dimension evidence. Each operator may restrict signatures further; for example the numeric solvers use `Float` scalars and vectors. The call runs synchronously on the original thread and the handle expires when the outer call returns; calls across threads, re-entry in the same scope and callback errors all return errors; an empty callback list is equivalent to a dynamic call.
-- `Rssn.register`/`Rssn.register_plugin` accept a host `Plugin`; Aevia source does not hold such values (run-time `E0302`, with a note pointing to the source mechanism). Source plugins are published by declaration (§13.5.2): `@op`/`@rule` functions are registered at module load, and `load_plugin(path) : String -> IO (Result<Int, String>)` loads a plugin file at run time.
+- The host `Plugin` interface is reserved for RSSN hosts. Calling `Rssn.register` or `Rssn.register_plugin` with Aevia values reports `E0302`. Aevia registers `@op` and `@rule` functions at module load. `load_plugin(path) : String -> IO (Result<Int, String>)` loads a local source file under the conditions in §13.5.2 and §13.5.3.
 - `core.callback` marks the restricted callback bridge as available, and `core.plugin.source` marks source plugins as available. Generated higher-order bindings keep the explicit `(values, callbacks)` dynamic interface; for a single overload with an exact declaration whose callbacks and results can be certified, a typed alias pinned to the signature is also generated, which certifies the concrete callback signature at call time and validates the result against the instantiated type; signatures whose type or dimension cannot be proved offer only the dynamic entry. For example the `num_least_squares` alias of `Rssn_numerical_callback`: parameters and residuals have dimensions `D` and `E`, the residual tolerance uses `E`, the other controls are dimensionless, and the result carries `converged` and `status` (residual/gradient convergence, budget exhausted, stagnation).
 
 `Rssn.dynamic` is a **first-class capability**, not a degraded path: plugin operators, leaf operators and experimental entries all use it. With several registrations rssn chooses at run time by `Exact > Widened > Shaped > Generic > No` and reports `E1002` on ties; an argument accepted by no overload is `OpError::Type` (`check_args`). Each name in the standard set has one registration, so this path does no registration-level scoring, but it **does** validate at the signature level. `Rssn.call_key` does not resolve at all and runs the overload named by name + `signature_hash` directly.
@@ -5307,7 +5327,7 @@ Physics
 
 The standard-library modules live in the `aevia-std` package; the Prelude is imported automatically and the rest on demand with `import`. A module name is its path: `import A.B` resolves `A/B.aev` (§7), `import Math { sqrt }` brings in only `sqrt`, and `open Units.SI` puts the exports of `Units.SI` into the current scope. Local files take precedence over embedded standard-library modules. `Units/*` are documentation modules: unit names are already ambient `Unit[d]` values, and exporting quantity bindings would shadow them and change the semantics of `Tensor / Unit`, so they are not exported (§5.3.4). The `Sde` module re-exports the five entry points of §8.9.1 and declares the option ADTs; `Physics.Ising`/`Physics.Geodesic` provide the typed wrappers of §8.17. Function names, the nominal variant constructors of `Sde` and transparent type aliases (`type X = { … }`, e.g. `Params` of `Physics.Ising`) can all be brought in with `import { X }`/`open`.
 
-`Rssn` is a **generated module**, not a hand-written library: at build time `Rssn.<op>` typed declarations and the `Rssn.dynamic` dynamic entry are generated from the Kernel Manifest (§13.2). The content of `Rssn` varies with the rssn version, and Aevia source hard-codes no operator list. `Sparse` provides the format tags `Csr`/`Csc`/`Coo`/`Block`/`Bcsr` and all the sparse built-ins of §8.4.1 (`nnz`/`to_dense`/`from_dense`/`convert`, sparse `matmul`/`transpose`/`kron`, layout dispatch of `@`, `spsolve`/`cg`); `Layout` remains a set of built-in functions rather than an instantiable type class (§13.9.5); `Device` provides `Cpu`/`Gpu`/`Distributed` and `on`/`to_device` (§13.9.4, `E1001` without `core.gpu`).
+`Rssn` is a **generated module**, not a hand-written library: at build time `Rssn.<op>` typed declarations and the `Rssn.dynamic` dynamic entry are generated from the Kernel Manifest (§13.2). The content of `Rssn` varies with the rssn version, and Aevia source hard-codes no operator list. `Sparse` provides the format tags `Csr`/`Csc`/`Coo`/`Block`/`Bcsr` and the sparse built-ins of §8.4.1. Layout dispatch is described in §13.9.5. `Device` provides `Cpu`/`Gpu`/`Distributed` and `on`/`to_device` (§13.9.4, `E1001` without `core.gpu`).
 
 The next chapter defines the run time: from source to values, from values to rssn terms, from the REPL to the JIT.
 
@@ -5668,7 +5688,7 @@ no `Dyn`, no records or variants).
   program without control flow.
 
 Optional build: `cargo build -p aevia-cli --features jit` enables RSSN's Cranelift backend
-(Rust 1.97 or newer). It is off by default, and `@jit` is then `E1001`. Reference test:
+(Rust 1.100 or newer). It is off by default, and `@jit` is then `E1001`. Reference test:
 `tests/jit_native.aev`.
 
 ### 9.6.4 Device targets
@@ -5693,10 +5713,11 @@ and `Gpu(n)` is a separate mechanism (rssn `Device`, §10.6.5); a function that 
 
 ### 9.7.1 Memory
 
-Tensors are `Arc` + copy-on-write, slices share, and storage is reused in place when the
-reference is unique; closures are `Rc` (no cycle collector, §9.3.1); symbolic terms are rssn's
-hash-consed graph and term ids do not cross sessions; a REPL session arena grows and `:reset`
-releases it.
+Tensors and closures use `Rc` within each interpreter. `f64` slices share the backing buffer,
+and tensor tails bound by a pattern share their source tensor. Record updates reuse storage when
+ownership is unique. Closures have no cycle collector (§9.3.1). RSSN sessions reuse graph nodes
+for identical symbolic terms, and each term ID belongs to its session. `:reset` releases the
+storage held by the REPL session.
 
 ### 9.7.2 Parallel evaluation: shared-nothing replicas
 
@@ -5707,12 +5728,14 @@ releases it.
   thread holds a **replica**: a host-installed `Replica` factory rebuilds the interpreter from
   the same source on that thread (once per thread, then reused). Threads exchange **portable
   values** (`Portable`): numbers with dimension and display unit, strings, tensors, records,
-  variants, constructors and IR closures.
+  variants, constructors and reconstructible Core IR closures. Workers preserve constructor
+  specializations, variant types and tensor element types, including the types of empty tensors.
 - **Closures cross threads as code identity plus captured data.** A lambda is "the function's
   source position plus its captured values"; the position is a **module identity** (logical
   source path + owning package) plus a byte offset (`FileId` is assigned per load and does not
   cross threads), and the replica resolves it back to the same function through the
-  same-named module.
+  same-named module. Explicitly specialized generic closures carry their selected types and
+  dispatch evidence, which the receiving replica checks against its module interface.
 - **Guarantee: parallelism never changes a value.** When a value cannot cross threads (a
   symbolic term may hold a handle of the thread's session, a kernel handle, an IO action, a
   closure with activation-time generic evidence), when there is no replica factory, under
@@ -5742,7 +5765,8 @@ pure  : a -> IO a
 ```
 
 - `spawn(f)` runs `f()` on a worker thread and returns a `Task`; `await(t)` waits and fetches
-  the result.
+  the result. The task receives only capabilities active when it was submitted and allowed by the
+  worker's policy. Awaiting a task that was canceled before its worker started reports `E0812`.
 - **A task's console output is buffered and written at `await`, in await order**, so program
   output is deterministic however tasks interleave; other effects such as files happen directly
   on the task's thread.
@@ -5875,7 +5899,8 @@ aevia test [--filter PAT] [file.aev]               run `test` declarations
 aevia test --doc [--filter PAT] [files…]           compile the aevia blocks of `##` docs (§9.12)
 aevia repl                                         interactive session (§9.8)
 aevia fmt [--check] [files…]                       format source, the package's src/ by default
-aevia doc [--open] [--out DIR] [files…]            write Markdown API docs, default docs/
+aevia doc [--open] [--out DIR] [--json] [files…]   write package API docs, default docs/
+aevia doc --stdlib [--lang en|zh] [--out DIR] [--json]  write the standard-library reference
 aevia bench [--filter PAT] [--iterations N] [--warmup N] [--save-baseline FILE]
             [--compare-baseline FILE] [--threshold RATIO] [files…]
 aevia init <name>                                  create a package: aevia.toml, src/main.aev, aevia.lock
@@ -5885,13 +5910,15 @@ aevia fetch [--offline] [--force]                  download and verify the regis
 aevia tree [--offline]                             print the dependency tree
 aevia clean [--registry]                           remove `.aevia/` (`.aevia/registry` stays unless asked)
 aevia lsp [--stdio]                                language server (§9.10)
+aevia debug [--stdio]                             source debug adapter for editors
 aevia rssn [--audit] [--emit [--out DIR] [--namespaces]]   audit a Kernel Manifest / generate the Rssn module (chapter 13)
 aevia login                                        bind a signing key to your registry account (browser)
-aevia publish [--no-verify] [--dry-run] [options…] check, format-check, sign and upload this package
+aevia publish [--owner HANDLE] [--no-verify] [--dry-run] [options…]  check, sign and upload this package
 aevia search <query>      aevia info <owner/name>  search the registry / show a package page
 aevia yank <owner/name@version> [--undo]           withdraw or restore a version
 aevia verify <owner/name@version>                  check a download against its signature
-aevia docs [owner/name[@version]] [--open]         print (or open) the address of a package's documentation site
+aevia docs [owner/name[@version]] [--lang en|zh] [--open]
+aevia docs --section book|architecture|spec|stdlib [--lang en|zh] [--open] [--download]
 aevia pkg <command>                                every registry-client command (`key`, `status`, `lock`, …), forwarded to aevia-pkg
 aevia --version
 ```
@@ -5916,30 +5943,35 @@ Global flags (before the program-argument separator `--`):
 - **Program arguments**: `aevia run [file] -- args…` hands only the strings **after** `--` to the
   program, which reads them with `args()` (§8.1.8, a `Tensor<1, String>`; `[]` when there are
   none). `check`, `test` and `bench` do not forward arguments.
-- **Registry commands**: `login`, `search`, `info`, `yank`, `verify`, `key`, `status`, `lock` and
-  `index` are forwarded to `aevia-pkg`; `add`, `update`, `fetch` and `tree` are native to the
-  toolchain (they edit `aevia.toml` and `aevia.lock` and call the client only for the network
-  part); `publish` is native too: it first runs `aevia check --all` and `aevia fmt --check` with
-  this binary and, on failure, refuses before a key is touched (`--no-verify` skips this), then
-  hands over to `aevia-pkg publish`. If `aevia-pkg` is not on `PATH`, point `AEVIA_PKG` at a
-  built binary or run `cargo install --path platform/crates/aevia-pkg`.
-- **Options of `aevia-pkg publish`**: `--key FINGERPRINT`, `--description TEXT`, `--license SPDX`,
-  `--keyword K` (up to five), `--repository URL`, `--dry-run` (print the statement and the
-  checksum, sign nothing) and `--allow-dirty`. There are no API tokens: every authenticated
-  action is a detached signature, made with the publisher's own OpenPGP (GPG) or SSH
-  (`ssh-ed25519`) key, over a short-lived server-issued statement that names one archive, carries
-  a single-use nonce and is valid for five minutes. Developers may register and sign releases with
-  `ssh-ed25519` keys, but the client and registry always **prefer OpenPGP keys** automatically and
-  emit a warning recommending OpenPGP (PGP) keys — preferably backed by a hardware security key —
-  whenever an SSH key is registered, listed or used.
-- `aevia docs` only prints the documentation address
-  (`<registry>/docs[/<owner>/<name>[/<version>]]`; the registry comes from `--registry`,
-  `AEVIA_REGISTRY` or the default `https://aevia.apich.org`); `--open` opens a browser when
-  stdout is a terminal.
-
-Status: the "packages" paragraph of `aevia --help` still says "there is no registry", which
-contradicts registry dependencies and should be deleted; a prebuilt `aevia` binary older than
-`publish`/`login`/`search`/`docs` does not list them in its help.
+- **Registry commands.** Aevia forwards `login`, `search`, `info`, `yank`, `verify`,
+  `key`, `status`, `lock`, and `index` to `aevia-pkg`. The toolchain resolves
+  dependencies locally for `add`, `update`, `fetch`, and `tree` and uses the
+  companion for network requests. Set `AEVIA_PKG` to select a specific executable.
+  Otherwise Aevia looks beside its own executable, on `PATH`, and in the platform
+  build directory of a source checkout. Forwarded `--registry URL` takes precedence
+  over `AEVIA_REGISTRY`, followed by the client configuration and public registry.
+- **Publishing.** `aevia publish` runs `aevia check --all` and `aevia fmt --check`
+  before invoking the registry client. `--no-verify` skips those local checks.
+  `--owner HANDLE` selects a namespace where the signer has publishing permission.
+  `--dry-run` prepares the archive and prints the checksum and server statement
+  without signing or uploading. Client options include `--key FINGERPRINT`,
+  `--description TEXT`, `--license SPDX`, up to five `--keyword K` flags,
+  `--repository URL`, and `--allow-dirty`. Publishing and withdrawal use detached
+  OpenPGP or SSH (`ssh-ed25519`) signatures over a server-issued statement with a
+  single-use nonce and a five-minute lifetime. The client prefers OpenPGP keys and
+  recommends a hardware-backed OpenPGP key when using SSH.
+- **Documentation.** `aevia docs` prints a hosted documentation address. Supply a
+  package and optionally its version, or select the book, architecture, specification,
+  or standard library with `--section`. `--lang en|zh` chooses the edition.
+  `--download` selects standalone HTML for the book or architecture. `--open`
+  opens the address when stdout is a terminal. The base URL comes from `--registry`,
+  `AEVIA_REGISTRY`, or `https://aevia.apich.org` in that order.
+  `aevia doc --stdlib` writes local Markdown in the selected language and
+  `--json` adds a bilingual bundle.
+- **Debugging.** Editors start `aevia debug --stdio` using the Debug Adapter
+  Protocol. A launch supplies a saved source file, optional program arguments,
+  and optional input lines. Line breakpoints and stepping expose the call stack
+  and visible bindings.
 
 ## 9.10 LSP
 
@@ -6060,8 +6092,9 @@ One file per checked module, at
 library modules are cached too, while the kernel namespace generated on the fly from the RSSN
 manifest and check results containing errors are not. File layout: magic `AEVI`, format version
 (`FORMAT_VERSION`, little-endian u32), a 128-bit key, the body length and an FNV-1a checksum,
-and the body (`bincode` written by `persist::encode`: the entry's `FileId`, the interface
-digest, diagnostics and the **complete** `CheckedModule`). Writes go to a temporary file and are
+and the body. The body uses native bincode-next 3.2 encoding with deterministic ordering
+and a schema fingerprint. It contains the entry's `FileId`, the interface digest, diagnostics
+and the complete `CheckedModule`. Writes go to a temporary file and are
 renamed; a missing, truncated, checksum-failing or key- or version-mismatched file is a silent
 miss and is overwritten; at most 4 revisions per module name are kept.
 
@@ -6086,16 +6119,13 @@ miss and is overwritten; at most 4 revisions per module name are kept.
   `driver::load_with_disk_cache` and `driver::load_incremental_with_disk_cache`
   (`DiskCache::beside(entry)`).
 
-Status: known limits — each file carries the complete unit table and dimension environment and
-is larger than the interface; hashing the interface digests of the dependency closure grows
-linearly with closure size on large graphs; `watch`, the LSP and `test` do not use the disk
-cache yet; old-revision cleanup is the heuristic "keep 4 per module name" with no global
-capacity limit.
+The cache stores the checked module with its unit table and dimension environment.
+Computing a key visits the interfaces in the dependency closure. The CLI uses this
+cache for `check` and `run`. The four-revision retention applies per module name.
 
 ## 9.12 Tests and benchmarks
 
-- Unit tests: `test` declarations, `aevia test [--filter PAT]`. Property tests: `forall` +
-  `Arbitrary`.
+- Unit tests: `test` declarations, `aevia test [--filter PAT]`. Use `forall` to test propositions over fixed numeric samples (§8.13).
 - Doctests: `aevia test --doc [FILE…/DIRS…]` extracts every fenced block tagged `aevia` from
   `##` comments and compiles each. The first line of a block may be `compile_fail` (compilation
   must fail) or `compile_fail EXXXX` (it must fail and include that code); without a marker the
@@ -6155,12 +6185,11 @@ with_cap : (String, () -> IO a) -> IO a
   `Err("E0902: permission denied: …")` and any other action terminates with `E0902`; an unknown
   capability name is `E0302`.
 - A program has every capability by default; `aevia run --caps fs,rand` starts with the given set
-  and `--caps ""` sandboxes completely.
+  and `--caps ""` grants no language capabilities.
 
-Status: `fs` and `rand` are actually checked; the standard library currently has no `net`, `env`
-or `gpu` actions, so those names are accepted and take part in intersection. A missing backend
-capability is `E1001` (§13.8). `[capabilities]` in the manifest is not read (§7.5.1). "A
-configurable memory limit" exists today only as the interpreter thread's stack limit.
+The standard-library actions that check permissions use `fs` or `rand`. The capability
+set also accepts `net`, `env` and `gpu`. A missing backend capability produces `E1001` (§13.8).
+For untrusted programs, apply a process sandbox and operating-system resource limits.
 
 ## 9.15 Error reporting
 
@@ -6169,15 +6198,14 @@ and help. A dimension error carries the canonical forms and the difference; a ty
 carries the expected and actual types and, where possible, the "most likely fix"; a parse error
 carries the expected token and the nearest legal repair.
 
-The next chapter defines the concrete mapping between Aevia and rssn: which capabilities are
-used directly, which need a wrapper and which are known gaps.
+The next chapter covers direct RSSN operator mappings, typed wrappers and error behavior.
 
 
 <a id="ch-10-backend"></a>
 
 # 10 — The rssn backend mapping
 
-Aevia does not reimplement computer algebra. rssn provides the term representation, the rewriting engine, the dimension layer, numeric kernels, the JIT and simulation; Aevia provides syntax, type and dimension checking, closures, records, tensor shapes, modules, IO and the orchestration of the standard library. This chapter defines the contract between the two: what maps directly, what needs a wrapper, and what the known gaps are.
+Aevia does not reimplement computer algebra. rssn provides the term representation, the rewriting engine, the dimension layer, numeric kernels, the JIT and simulation; Aevia provides syntax, type and dimension checking, closures, records, tensor shapes, modules, IO and the orchestration of the standard library. This chapter defines the contract between the two, including direct operator mappings, typed wrappers and their error behavior.
 
 ## 10.0 Reflection first: no hand-written operator bindings
 
@@ -6361,7 +6389,12 @@ The flat `Rssn.<op>` and the per-rule-set `Rssn_<rule_set>` follow the **kernel'
 
 Examples: `tests/domain_number_theory.aev`, `domain_combinatorics.aev`, `domain_finite_fields.aev`, `domain_numeric.aev`.
 
-**Language gap (not implemented)**: `let x: Zmod<17> = 5; x * x ^ -1` needs three language changes, all in `aevia-types`/`aevia-core`: (1) variant types accepting `Nat` parameters (currently `E0317`); (2) `Num`/`Fractional` classes with `add/sub/mul/neg/from_int/inv` methods, and binary operators dispatching to instances for user nominal types; (3) integer literals promoted through `from_int` by the expected type. Until then the modulus of `Zmod` is carried at run time and operations are written as functions (`zmod_mul(x, inv)`).
+`Zmod` is a nominal residue type that stores its modulus at run time, so the same program can use
+moduli it computes from inputs. Construct a residue with `Rssn_NumberTheory.zmod(value, modulus)` and
+use `zmod_add`, `zmod_mul`, `zmod_inv`, or `zmod_pow`. Construction and arithmetic return
+`Result<Zmod, String>`. Binary operations check that the moduli agree, and inversion checks that the
+residue is invertible. For example, modulo 17, `zmod_pow(x, -1)` computes the inverse and
+`zmod_mul(x, inverse)` returns the residue 1.
 
 ## 10.4 The dimension bridge
 
@@ -6436,51 +6469,22 @@ A `Term<'s>` is borrowed only during a `compute` call and converted to a `u32` i
 
 `Term::compile` compiles a closed `Float` expression into a function; Aevia's hot functions take this path. `TieredBackend` interprets first and compiles in the background; if the JIT fails it falls back to the interpreter with no change of semantics. The default build has `features.jit = false`, and `@jit` MUST read `Features`, otherwise it reports `E1001("core.jit")`.
 
-### 10.6.5 Devices: data-parallel execution
+### 10.6.5 Devices and data-parallel execution
 
-rssn has two independent execution axes:
+Aevia's `Device` values identify a requested execution location. `device_of(tensor)`
+returns its location. `to_device(tensor, device)` and `on(device, thunk)` are IO
+actions. CPU execution is supported. An unsupported GPU or distributed request reports
+`E1001` with capability `core.gpu` or `core.distributed` (§13.9.4).
 
-| Axis | rssn abstraction | The question it answers |
-|---|---|---|
-| How one term becomes a function | `Backend` / `Compiled` | evaluate at one point |
-| Where many rows run | `Device` / `Buffer` / `KernelIr` | evaluate on 10⁶ rows; integrate 10⁴ initial values |
+RSSN's device layer exposes buffers, a numerical kernel IR, CPU reference and parallel
+executors, and a WGSL backend behind `gpu-wgpu`. Embedding hosts can use it for batch
+evaluation, array operations, and fixed-step ensembles. The Aevia interpreter's CPU
+batch path accepts the pure scalar subset described in §9.6.1. Device enumeration,
+launch fusion and explicit GPU buffer transfers are RSSN host APIs.
 
-The JIT (§9.6) belongs to the first axis and is **not** the GPU path; `@jit(target = Gpu(n))` selects a device on the second axis.
-
-**Capability discovery.** Build level: manifest `features.devices` (`cpu`, `cpu-parallel`, plus `gpu-wgpu` when that feature is enabled) is a compile-time fact and may enter `manifest_hash`; `core.gpu` holds when `features.devices` contains any `gpu-*`. Run level: `rssn::backend::device::registry().list()` returns `DeviceInfo` (`id`, `kind`, `dtypes`, `ops`, `parallelism`, `unified_memory`, `deterministic`); having no adapter is not an error, just no GPU device. The Aevia-side wrapper is `aevia_rssn::device` (`available()`, `has_gpu()`, `resolve(Selector)`).
-
-**`Device` to rssn device.**
-
-| Aevia | rssn id | Note |
-|---|---|---|
-| `Cpu` | `cpu` | single-threaded; reference semantics |
-| `Cpu` (hint `cpu_parallel`, `Selector::CpuParallel`) | `cpu-parallel` | rayon; **bit-identical** to `cpu` |
-| `Gpu(n)` | the `n`-th `DeviceKind::Gpu` (`gpu:wgpu:n`) | if absent, `E1001("core.gpu")` with the number of registered GPUs in the message |
-| `Distributed(c)` | none | `E1001("core.distributed")`; outside this design |
-
-**Transfers are explicit.** `to_device(t, Gpu(n))` is one `upload` (an `F64` tensor is converted to `f32` on an `f32`-only device, which changes values); `device_of` reads the tensor's device tag; bringing a result back to the host needs a `download`, and there are no implicit transfers. `on(device, thunk)` is scoped execution: batch primitives inside `thunk` use that device and buffers are released when the scope ends.
-
-**Precision contract.** The semantics of kernel IR is `f64`. `cpu` and `cpu-parallel` provide `F64` bit-identical to the interpreter (including NaN, `select`, and out-of-range `gather` reading NaN), extending §9.7.2 ("the thread count never changes any result") to devices. `gpu:*` (WGSL) provides `F32` and a **double-single `F64`**: WGSL has no `f64`, so the wgpu device represents `Dtype::F64` as a pair of `f32` values `(hi, lo)`, with about 48 bits of precision (on an RTX 3060 / Vulkan the relative error is `4e-15` for `+ - * /`, `1e-14` for `sqrt`, `7e-14` for `exp`; the device tests require `5e-12`). Limits: the exponent range is still that of `f32` (keep data within `1e-30 .. 1e30`), `sin`/`cos`/`tan` return NaN for `|x| > 1e6`, and `F32` and `F64` buffers cannot be mixed in one launch. So it is **not** IEEE double precision and is not bit-identical to the CPU. Aevia never silently turns a `Float` result into `f32`; code needing bit-exact results chooses `Cpu`/`CpuParallel`.
-
-**Launch fusion.** rssn's `device::plan` fuses a chain of element-wise kernels into one launch (intermediate columns become registers and never reach device memory); fusion changes where values are kept, not how they are computed, so on deterministic devices it is bit-identical to the unfused plan. This is an explicit rssn-side API and is not yet exposed in Aevia.
-
-**Functions that can be lowered to a device** follow the JIT gate of §9.6.1: no captures, `Float` scalar arithmetic, elementary functions, comparisons and `if` (both sides pure, evaluated eagerly and then `select`ed). Terms containing host calls (the `EvalFn` of gamma/erf/Bessel, C externs) cannot be lowered to a device, and `Device.map` falls back to the interpreter row by row, with values unchanged (on a CPU device).
-
-**Batch primitives (design).**
-
-```
-Device.available : () -> IO (List DeviceInfo)       # registry snapshot
-Device.map       : (Float -> Float, Tensor<[n],Float>) -> Tensor<[n],Float>
-                                                     # on Cpu/CpuParallel; pure, deterministic
-Device.map_on    : (Device, Float -> Float, Tensor<[n],Float>) -> IO (Tensor<[n],Float>)
-Device.reduce    : (Reduce, Tensor<[n],Float>) -> Float   # Sum | Prod | Min | Max
-Device.ensemble  : (OdeSystem, Tensor<[m,k],Float>, Float, Float, Int) -> Tensor<[m,k],Float>
-                                                     # one program, k initial values; fixed-step RK4
-```
-
-Only the pure, bit-deterministic versions are promised on CPU devices; `map_on(Gpu(n), ..)` is `IO` because allocation and transfer are effects, and the result is subject to the device's precision.
-
-**Status.** Implemented: the whole rssn device layer (registry, `Buffer`, `KernelIr`, CPU reference device, WGSL emitter, optional `gpu-wgpu`, `ensemble_rk4`, and `device::array` reductions / matmul / CSR product / stencil, etc.); the manifest `features.devices`; `aevia_rssn::device` and `jit::map_floats` in `aevia-core` (apply a pure `Float` function in batch on a CPU device). **Not implemented**: `Device.map`/`map_on`/`reduce`/`ensemble`/`available` as language primitives (entries are needed in the type table and the built-in table, and `Device.aev` regenerated); `to_device`/`on` on `Gpu(n)` still report `E1001("core.gpu")` (tensor values do not yet carry device buffer handles).
+The RSSN GPU backend represents its emulated F64 buffers as two F32 parts. Programs
+requiring IEEE F64 results use the CPU backend. A host controls transfers and checks
+device capabilities before loading a kernel.
 
 ## 10.7 Error mapping
 
@@ -6495,35 +6499,36 @@ Only the pure, bit-deterministic versions are promised on CPU devices; `map_on(G
 
 `Answer.diagnostics` become Aevia warnings; under `Advisory` mode they do not fail.
 
-## 10.8 Known gaps and risks
+## 10.8 Kernel boundary invariants
 
-**The numbers below are measurements; the live manifest (`aevia rssn`) is the only source of truth.** On `rssn 3.0.0-rc.1` (`api_version = 2`): 1620 operators (99 declared + 103 overlay + 1418 derived, none dynamic-only), 82 units, 30 constants (18 exact), `manifest_hash = d12fc2b7…`. rssn has implemented the Manifest, dynamic `Value`/`call_value`/`call_key`, overload resolution, 100% signature coverage, the physical-constant table, the cdylib plugin ABI, `rssn::dim`, custom base dimensions, `Config::dimension_term`, `fork/merge`, structured results and JIT lowering. Only the integration gaps that **still exist** are listed.
+- A term belongs to one RSSN session. Parallel work prepares or imports it on
+  a thread with an appropriate session, and returned results are restored in
+  input order (§10.5.1).
+- The kernel manifest for that session determines operator availability, units,
+  constant values and which values may enter the term graph. Generated bindings
+  use that manifest's `api_version` and full `hash_hex()` when identifying the
+  interface. The truncated `hash_u64()` is used for ABI reporting and display.
+- An exact typed binding pins a supported signature. Derived or witnessed
+  signatures are used only where the generator can state and verify their
+  contract. The dynamic boundary preserves operation errors (§10.3.5).
+- `Solutions.multiplicities` may be empty when multiplicity was not established.
+  A solver reports completeness only when its method produced a complete
+  solution set. Conditions accompany the solutions to which they apply.
+- A compile-time dimension in Aevia may contain rational exponents (§4.12.3).
+  Some RSSN hosts can also represent symbolic exponents. Dynamic interfaces
+  must preserve their dimension evidence or report an error.
+- Callback handles are scoped to their originating host call (§8.19).
+  Simulation parameters may enter as a schema-checked record or through the
+  generic JSON interface (§8.17). Optional native code and device capabilities
+  are determined at the point of selection (§10.6).
 
-1. **`Session` is single-threaded.** Crossing threads needs `fork/merge`, not a shared session; the bridge currently shares no symbolic values across threads (§10.5.1).
-2. **`compute` still clones the graph.** `OpTable` is an `Arc` (clones share it) and `DimArena` is copy-on-write, leaving the shallow-copy cost of the node table; `Session::prepare` is not public.
-3. **The JIT is off by default** (see §10.6.4).
-4. **The "not reported" semantics of `Solutions`.** An empty `multiplicities` means not reported and MUST NOT be filled with 1; the kernel fills it when it can prove it (a univariate rational polynomial whose roots are all exact numbers, via exact square-free decomposition); `conditions` holds only conditions declarable by construction; `complete` is distinguished by whether the result is a `list(...)`, and `Solutions::new` defaults to `false`. Aevia MUST NOT declare exhaustiveness unconditionally when constructing one.
-5. **Constants are values, not units.** `manifest.constants` is not in the `UnitRegistry` and cannot take part in `quantity` parsing; `e` (elementary charge) has the same name as `Math.e` and MUST be qualified when both modules are `open`.
-6. **100% typed, but only `Declared` + `Overlay` are exact.** `Derived` distinguishes only numeric `(Real,…)` from symbolic `(Term,…)` and not `Tensor`/`Quantity`/`Int`, so `Derived` MUST be marked "conservatively inferred".
-7. **`assuming` is mostly unary predicates**; general equations and inequalities have no language entry point (§10.2.2).
-8. **Symbolic exponents: the bridge round-trips, the language does not support them.** `DimExpr::to_term` interns `Length^n` as an atom and `try_from_term` is its exact inverse; Aevia's static type positions still accept only rational exponents (§4.12.3). Do not read "the backend can represent it" as "the language should support it".
-9. **Simulation parameters are still JSON**; typed wrappers come from the `Physics.*` source modules or the generated `Rssn_Sim_<Name>` (§8.17).
-10. **Budgets and interruption.** rssn's budget lives inside `compute`; Aevia's outer timeout/cancellation is cooperative and cannot kill.
-11. **Version drift.** Aevia pins `api_version` + `manifest_hash` and runs conformance. The version-2 manifest adds Rust source-path metadata, and its binary layout is incompatible with version 1 with no version negotiation before decoding, so a host MUST know the producer version in advance. The manifest may still change during the rc cycle, which is why numbers in this document are measurements and not constants.
-12. **`manifest_hash` is a bincode BLAKE3 and can be taken two ways.** `hash_hex()` (64 hex characters, which hosts SHOULD pin) and `hash_u64()` (the first 8 bytes read little-endian, for ABI/display only) are not interchangeable; JSON is for humans, and hashing or comparing JSON text is not allowed.
-13. **Whether a `Value` can enter the term graph follows `manifest.value_kinds`** (10 of 17 variants can, 7 cannot, §13.3.1); sparse operations MUST go through `eval_dyn` or Aevia's local layout kernels. A generator MUST NOT hard-code this table.
-14. **The callback and plugin bridges.** `core.callback` calls a checked source closure through a same-thread scoped handle, and the handle expires when the outer call returns (§8.19); `core.plugin.source` traces `@op` functions into kernel definitions and `@rule` into rewrites, registered as in-process plugins (§13.5.2).
-15. **Units belong to a session.** A unit registered by `Session::register_unit` appears only in that session's manifest; the process-level `KernelManifest::build` gives a different unit table and hash, and Aevia MUST use `Session::manifest()`.
-16. **SDE.** The manifest exposes only the noise primitives and the scheme metadata `sde_scheme_info` (strong order only; the weak order is the host-side `sde_order`, §8.9.1); the solve loop needs a `&Fn + Sync` host closure that the manifest's `Value` ABI cannot carry, so it stays on the host side (`aevia-std::sde`), and `sdeint_*` are not `Rssn` operators.
+### 10.8.1 Compatibility and validation
 
-### 10.8.1 Mitigations
-
-- **Conformance tests**: for every standard operator, compare Aevia's static dimension with rssn's `Answer.dimension`; any disagreement fails.
-- **Unit-table validation**: at start-up compare base, derived and affine units one by one, against `manifest.units` only.
-- **Fallback paths**: a JIT failure falls back to the interpreter; a failed symbolic solve returns `Err` and never panics.
-- **Budget defaults**: 2 s / 1e6 rewrites; adjustable by the user.
-- **Version pinning**: pin `api_version` + `hash_hex()`; run the full conformance suite on upgrade; operator and unit counts in documents never enter cache keys.
-- **Bridge isolation**: every rssn call is concentrated in `aevia-rssn`, and upper layers do not depend on `rssn` types directly.
+Use `aevia rssn --audit` to report the signatures and capabilities provided by the
+linked kernel. Conformance tests compare source declarations and checked adapters,
+exercise structured values and units, and verify the compiled evaluator against
+the reference path. Runtime and symbolic budgets are separate (§6.9.1). Native
+evaluators that cannot execute a supported code path can return to the interpreter.
 
 ## 10.9 An end-to-end call chain
 
@@ -6782,34 +6787,47 @@ Points to note:
 
 ## 11.6 Data analysis: `Table` and dynamic columns
 
+Save the following data as `measurements.csv`. The two numeric columns record time in seconds and velocity in metres per second.
+
+```csv
+time [s],velocity [m/s]
+0,1.0
+1,1.5
+2,2.1
+```
+
 ```aevia
 module Analysis
 
 open Units.SI
-import Data.Csv { read_csv, column, Table }
+import Data.Csv { read_csv_dyn, column }
 import Stats { mean, std }
 import Plot { line, combine, plot, label }
 
+fn report_data(times: Tensor<1, Float>, velocities: Tensor<1, Float>): IO Unit = do
+    let t = times * 1.0 s
+    let v = velocities * (1.0 m / 1.0 s)
+    println("mean speed = {mean(v)}")
+    println("std  speed = {std(v)}")
+    let spec = label(line(t, v), "v(t)")
+    plot(combine([spec]))
+
 fn main(): IO Unit = do
-    r <- read_csv<{ time: Float[T], velocity: Float[L/T] }>("measurements.csv")
+    r <- read_csv_dyn("measurements.csv")
     match r with
     | Err(e) -> println("cannot read: {e}")
     | Ok(tbl) ->
         match (column(tbl, "time"), column(tbl, "velocity")) with
-        | (Ok(t), Ok(v)) -> do
-            println("mean speed = {mean(v)}")
-            println("std  speed = {std(v)}")
-            let spec = label(line(t, v), "v(t)")
-            plot(combine([spec]))
-        | _ -> println("column type mismatch")
+        | (Ok(t), Ok(v)) -> report_data(t, v)
+        | _ -> println("expected time and velocity columns")
 ```
 
 Points to note:
 
-- `read_csv<ρ>` is `IO (Result<Table<ρ>, DataError>)`; `ρ` is the row type, and header units are used to infer field types. `<-` binds the result and `match` handles the error.
-- `column(t, "time")` is checked at compile time against the field types of `Table<ρ>` and validated defensively at run time; CSV headers may carry units (`time [s]`), without which columns are dimensionless, and an explicit `ρ` can override this.
-- `line` accepts dimensioned `x`/`y` tensors and generates axis labels automatically (`t / s`, `v / (m/s)`); to override, use `PlotOpts.xunit`/`yunit`.
-- `combine([spec])` builds a `PlotSpec`; `plot` writes HTML/SVG.
+- `read_csv_dyn` returns an IO action producing `Result<Table<Dynamic>, DataError>`. `<-` binds the result and `match` handles read errors.
+- `column` looks up a column at run time. For this sample, the cells are dimensionless `Float` values, as expected by `report_data`. Header units are metadata available through `schema`. `report_data` attaches the units stated in the sample by multiplying the values by `1.0 s` and `1.0 m / 1.0 s`.
+- `line` accepts dimensioned `x`/`y` tensors and generates SVG axis labels with units. Use `line_with` to select display units.
+- `combine([spec])` builds a `PlotSpec`; `plot` writes `plot.html` with inline SVG.
 
 ## 11.7 Simulation: typed wrappers
 
@@ -7024,7 +7042,7 @@ These are **deliberate design boundaries**, not "later" to-dos. Each says why it
 | 12.8.3 | `Point[d]` is represented as `Float` + `UnitId`; symbolic absolute temperatures do not enter `Point` | Symbolic thermodynamics cannot do absolute-temperature algebra directly; use differences plus a reference point, or `Dyn` |
 | 12.8.4 | Uncertainty is not a core type: `Measurement<d>` does independent error propagation only, correlated errors use `Covariance<d,e>` | Uncertainty in experimental data must be managed explicitly; it is a library type |
 | 12.8.5 | No user-defined effects or macros: `IO` is the only effect; the extension points are rssn operators, plugins, `Rssn` dynamic calls and the registry | Use `@op`, plugins and `Rssn.dynamic` for DSLs and code generation |
-| 12.8.6 | `Table<ρ>` is a static schema; dynamic CSV returns `Table<Dynamic>` and `to_table<ρ>` validates at run time | Give an explicit `ρ` when reading, or use `Table<Dynamic>` plus validation |
+| 12.8.6 | `Table<ρ>` carries a row type parameter; external columns and unit metadata come from the input at run time | Use `read_csv_dyn` for unknown columns and inspect the result with `schema` (§8.11) |
 | 12.8.7 | Symbolic values are bound to an rssn session and cannot cross threads: the `par_map` workers each hold a replica, and values that cannot cross threads fall back to sequential evaluation (§9.7.2) | Keep the symbolic phase serial and the numeric phase parallel |
 | 12.8.8 | Unit-name ambiguity: `ms` may be milliseconds or metre-seconds; the longest match wins | Write an explicit `*` for rare combinations; the formatter hints |
 | 12.8.9 | `Real` absorbs `Float`: `Real + Float` becomes `Real` and the `Float` is converted exactly to a rational | Mixing symbolic and float leaves the fast path and produces large numerators and denominators; keep hot paths `Float` throughout; the compiler hints `W0302` |
@@ -7055,7 +7073,7 @@ These are final decisions; implementation may proceed in stages, but the languag
 | 5 | Mixing `Real`/`Float`? | `Real` absorbs `Float`; hot paths use explicit `Float` |
 | 6 | `Dyn` errors? | arithmetic `panic` + `try_*`; `check` returns `Result` |
 | 7 | Nested `RateOf`? | scalars, records, tuples, tensors, defined recursively |
-| 8 | Static `Table` schema? | Yes, row-polymorphic `Table<ρ>`; `Table<Dynamic>` kept |
+| 8 | How are table column types determined? | `Table<ρ>` carries a row type parameter. `schema` reports the types detected in the loaded data (§8.11). |
 | 9 | `@` or `*` for matrix product? | keep `@`; `*` is element-wise |
 | 10 | `%` for modulo? | No; `mod`/`rem` |
 | 11 | Is `let` recursive by default? | No; `fn` is recursive, `let rec` is explicit |
@@ -7084,7 +7102,7 @@ The next chapter covers extensibility and the rssn integration; after it come th
 
 # 13 — Extensibility and the rssn integration
 
-This chapter is part of the specification and **takes precedence over** any "unsupported for now / to be evaluated later" wording elsewhere. Aevia has no `v1`/`v2` layering: language capabilities are designed once and in full, and whatever the backend has not yet implemented is reported as a **capability diagnostic** (`E1001`) rather than by removing a language feature.
+A backend reports the capability diagnostic `E1001` when it cannot provide a requested operation.
 
 The detailed backend contract is in rssn's `docs/KERNEL.md` (Kernel Manifest, dynamic-call ABI, plugins), `docs/DIMENSIONS.md` and `docs/CALLBACKS.md`; this chapter defines the normative contract on the Aevia side.
 
@@ -7095,8 +7113,6 @@ The detailed backend contract is in rssn's `docs/KERNEL.md` (Kernel Manifest, dy
 1. **A single operator registry.** rssn's `OpTable` is the only source of truth. Aevia keeps no list of "which operators are supported"; it reads the **Kernel Manifest** and generates the `Rssn` module. A new operator registered in rssn is visible at Aevia's next build.
 2. **A single dimension/unit layer.** `rssn::dim`'s `DimTerm`/`DimArena`/`UnitRegistry` is the canonical layer shared by run time and compile time; Aevia's `Dim` is its type-level mirror, and `Units.*` is generated from `manifest.units` with no second unit table.
 3. **Dynamic calls are a first-class capability.** An operator without a type signature can still be called through `Rssn.dynamic(name, args)`; the typed façade is an increment to the static experience, not a precondition for capability. rssn validates on the dynamic path at the **signature level** (`check_args`) and does no dimension or type inference; the full check belongs to Aevia's static checker or `Rssn.typed`.
-
-Together these answer two things: **thousands of operators cannot be covered by hand-written bindings** (they drift, miss things and rot), and **new capabilities cannot wait for "the next version"** (the language, the manifest and the plugin ABI are fixed now, and the backend fills in capabilities step by step).
 
 ---
 
@@ -7138,7 +7154,7 @@ At build time:
 4. Generate `Rssn.Version`, `Rssn.ManifestHash`, `Rssn.Capabilities`, `Rssn.ValueKinds`, `Rssn.Constants` and `Rssn.Units`.
 5. Generate LSP completions, documentation and signature stubs, recording the source of each declaration.
 
-**Coverage is a measurement, not a constant.** On `rssn 3.0.0-rc.1` (`aevia rssn` gives the live figures) all 1620 operators have signatures (99 declared + 103 overlay + 1418 derived). The precision tiers the generator MUST distinguish:
+Run `aevia rssn` to inspect the current coverage and signature sources. The generator MUST distinguish these signature tiers.
 
 | Source | Precision | What is generated |
 |---|---|---|
@@ -7232,7 +7248,7 @@ Rssn.Units           : Tensor<1, String>     # unit names; values are in the gen
 - Arguments are injected with `to_value(x)` and results converted back to a static type with `from_value(v)`. Operators without signatures, plugin operators and experimental entries use `dynamic`; the standard set currently has no `None`, so on it `dynamic` is only the plugin channel.
 - `type_rep<T>()` keeps the concrete type resolved by the checker; it is an opaque value that an ordinary record cannot forge. After the dynamic call, `Rssn.typed` checks representation, shape and dimensions against that witness; a mismatch or missing evidence returns `Err(OpError)`. A successful result is still a `Value`, validated and converted through `from_value<T>`; a generic not made concrete by a run-time type dictionary cannot produce a `TypeRep`.
 - Higher-order operators use `Rssn.call_ho(name, args, fns)`; `to_callback` builds an opaque callback from a checked source closure, with the limits of §8.19. A callback runs synchronously on the original thread and expires when the outer call ends; calls across threads and re-entry in the same scope are rejected, and callback errors come back through `OpError`; an empty list is just a dynamic call.
-- `Rssn.register`/`Rssn.register_plugin` accept a host `Plugin`; source plugins are published by `@op`/`@rule` and `load_plugin` (§13.5.2). `core.plugin.source` is enabled in builds with in-process plugins; `core.callback` means the restricted callback bridge is available.
+- Aevia publishes source extensions through `@op`, `@rule` and `load_plugin` (§13.5.2). `Rssn.register` and `Rssn.register_plugin` name the host-only `Plugin` boundary and report `E0302` for Aevia values. `core.plugin.source` marks support for source extensions. `core.callback` marks support for the restricted callback bridge.
 
 ### 13.3.3 Errors
 
@@ -7317,36 +7333,9 @@ Rules: `Derived` reads only `eval`/`PREDICATE`/`Binder`/`Variadic`/`LEAF` and ne
 
 ### 13.5.1 Plugins
 
-A plugin is not new syntax but an **ordinary Aevia package + a manifest marker + attributes**:
+An Aevia source extension is a module containing functions annotated with `@op` or `@rule`. It uses the ordinary package manifest described in §7.5.1. Loading the module publishes its declarations, as shown in §13.5.2.
 
-```toml
-# aevia.toml
-[plugin]
-kind = "aevia"          # in-process; corresponds to rssn's PluginKind::InProcess
-abi = 1
-```
-
-| `[plugin] kind` | rssn | Loaded by |
-|---|---|---|
-| `"aevia"` / `"in-process"` | `PluginKind::InProcess` | `Session::register(Box<dyn Plugin>)` |
-| `"cdylib"` | `PluginKind::Cdylib` | `Session::load_plugin(path)` (needs `plugin-cdylib`) |
-
-The C ABI of `cdylib` is a **byte buffer**: the entry symbol is `rssn_plugin_v1`, and arguments and results are bincode-encoded `Vec<Value>`/`Result<Value, String>`, not a `#[repr(C)]` mirror of `Value`; `cdylib::load` checks `PLUGIN_ABI` and `RssnPluginDesc`, and `Session::load_plugin` = `load` + `register`. The module is controlled by the `plugin-cdylib` feature (off by default, included only in `full`) because loading a dynamic library runs arbitrary code inside the host process with no sandbox. Aevia MUST check `manifest.features.plugin_kinds` before loading: without `"cdylib"` it reports `E1001("core.plugin.cdylib")` instead of letting the loader throw a low-level error.
-
-```aevia
-module MyDomain
-
-@op("mydomain/softplus")
-fn softplus(x: Real[1]): Real[1] = ln(1 + exp(x))
-
-@rule("softplus(x) => ln(1 + exp(x))")
-let softplus_rule = ()
-
-dimension MyDim
-unit myunit : Length = 0.5 m
-```
-
-`Rssn.register` (alias `register_plugin`) wraps `Session::register(Box<dyn Plugin>)`: `Rssn.register(plugin)  # -> Result<PluginId, PluginError>`. A plugin can register operators + signatures + eval callbacks, rewrite rules, dimension rules, units and base dimensions, and (optionally) a JIT lowering.
+RSSN hosts register in-process Rust plugins with `Session::register(Box<dyn Plugin>)`. Host plugins can supply operators, signatures, evaluators, rewrite and dimension rules, units, base dimensions and JIT lowering. With the opt-in `plugin-cdylib` feature, an RSSN host can also call `Session::load_plugin` on a shared library. The native entry point is `rssn_plugin_v1`; its ABI passes byte buffers containing bincode-encoded `Vec<Value>` arguments and `Result<Value, String>` results. The native loader checks the plugin ABI version and descriptor. Aevia source uses the module-based extension interface.
 
 ### 13.5.2 Aevia functions as rssn operators
 
@@ -7372,9 +7361,7 @@ The `mydomain/` in `@op("mydomain/softplus")` is **part of the operator name** (
 
 ### 13.5.3 Security
 
-- Plugins MUST be signed; by default only plugins the registry trusts are loaded.
-- A plugin declares capabilities (`fs`, `net`, `unsafe`); undeclared capabilities are denied in the sandbox.
-- A plugin ABI version mismatch is `E1006`.
+The package registry verifies a publisher's signature when a package is published (§13.7). `load_plugin` takes a local source path and trusts the named file and its imports. The caller needs `fs` to open the file, and the interpreter that evaluates the module inherits the caller's capability mask. Load only trusted local source. Source plugins and native RSSN plugins execute in the host process. Use process isolation and operating-system resource limits for untrusted code (§9.14).
 
 ---
 
@@ -7558,9 +7545,9 @@ After type checking the Aevia compiler checks capabilities; when one is missing:
 
 **Decision: `Tensor<shape, Point[d]>` is supported.** Element-wise `+`/`-` follow the point rules (`Point - Point -> Float[d]`, `Point + Float[d] -> Point`, `Point + Point` is `E0405`); `mean` accepts only `Float`/`Real`, and the mean of points uses `centroid : Tensor<1,Point[d]> -> Point[d]`; a temperature field can be a `Tensor<[nx,ny], Point[Θ]>` directly; storage is `Float` + `UnitId`, and the affine offset is handled only in element-wise operations.
 
-### 13.9.3 Row-polymorphic `Table` schemas
+### 13.9.3 The `Table` row parameter
 
-**Decision: `Table<ρ>` uses a row-polymorphic static schema, and the dynamic `Table` is kept.** `ρ` is a row type (field names + types + dimensions); `read_csv<ρ>(path)` infers field types from header units and reports `DataError.Schema` when it cannot; `column(t, "time")` is a type-level field lookup; `select`/`join`/`rename` stay row-polymorphic, and new fields require a `lacks` constraint; dynamic CSV returns `Table<Dynamic>` and `to_table<ρ>` validates at run time (details in §8.11).
+`Table<ρ>` carries a row type parameter determined by the program's type context. External data supplies column names, cells and unit metadata at run time. Inspect those with `schema` and use the table operations described in §8.11.
 
 ### 13.9.4 Devices, GPU, distributed
 
@@ -7570,23 +7557,23 @@ After type checking the Aevia compiler checks capabilities; when one is missing:
 - `to_device : (Tensor<n,τ>, Device) -> IO (Tensor<n,τ>)`; `on : (Device, () -> a) -> IO a` is scoped execution (allocation and transfer are IO).
 - `@jit(target = Gpu(0))` names the JIT target; without `core.gpu` it reports `E1001`. Distributed tensors use the library type `Sharded<Mesh, Tensor<...>>`, with `Mesh` a run-time topology. This avoids a combinatorial explosion of types for devices and shards.
 
-**Status**: the `Device` value and `to_device`/`on`/`device_of` are typed; without `core.gpu`, `to_device`/`on` report `E1001("core.gpu")`. `@jit(target = Cpu)` is equivalent to `@jit`; `@jit(target = Gpu(n))` and `Distributed(..)` are accepted by the language and report `E1001("core.gpu")`/`E1001("core.distributed")` at check time; any other argument is `E0210`. In attribute arguments a "constructor applied to constants" (`Gpu(0)`) counts as a compile-time constant (§2.2.7). `Gpu`/`Distributed` have no backend and are only constructible run-time values (the rssn-side device layer is in §10.6.5).
+`@jit(target = Cpu)` is equivalent to `@jit`. Requests for unsupported GPU or distributed targets report `E1001` at check time. Invalid target arguments report `E0210`. A constructor applied to compile-time constants, such as `Gpu(0)`, is a constant attribute argument (§2.2.7). The RSSN host APIs for devices are described in §10.6.5.
 
 ### 13.9.5 Sparse and layouts
 
 **Decision: `Sparse<F, shape, τ>` is a core type constructor and `F` is a format type.**
 
-- Formats: `Csr`, `Csc`, `Coo`, `Bcsr` (`Block` is a synonym); the set is currently closed, and user-defined formats wait until rssn opens the `Format` kind (plugins can currently register only operators and units).
-- The `Layout` class (in the design): `nnz`, `to_dense`, `from_dense`, `matmul`, `transpose`; the current implementation is built-in functions, not an instantiable type class.
+- `Csr`, `Csc`, `Coo` and `Bcsr` form a closed set of formats. `Block` is a synonym for `Bcsr`.
+- Layout operations include the built-in functions `nnz`, `to_dense`, `from_dense`, `matmul` and `transpose`. Aevia dispatches them on supported formats and operand types.
 - `@` dispatches on layout (dense×sparse, sparse×dense, sparse×sparse); only explicit conversions exist between `Sparse` and `Tensor`. rssn's `TypeExpr::Sparse` has only a `rank`, so `Sparse<F,shape,τ>` is lowered at the boundary to rank + run-time shape; refined shapes are checked and propagated by Aevia itself.
 
-**Status**: implemented and `storage.sparse` is enabled — the run-time `Value::Sparse`, the four layout dispatches, `Bcsr`, preconditioned `cg_with`, non-symmetric Krylov solvers, slicing and rank-N contraction; details, exactness and error codes are in §8.4.1. **Remaining gaps**: the format set is still closed; sparse values cannot enter the rssn term graph.
+The `storage.sparse` capability covers the four formats, preconditioned and nonsymmetric iterative solvers, slicing and tensor contraction. See §8.4.1 for dimensions and errors. Sparse values cross the dynamic kernel boundary as structured values.
 
 ### 13.9.6 Effects and capabilities
 
 **Decision: no user-defined effect handlers; `IO` stays a single type.** The extension points are operators, plugins and the registry, not a language-level effect system. An `IO` action may declare the **capabilities** it needs (`fs`, `net`, `env`, `rand`, `gpu`) — a run-time permission, not a type parameter; `with_cap(cap, thunk)` runs in a sandbox, and an IO action fails when the capability is missing. This avoids effect rows intruding on every standard-library signature. Use plugins and operators for DSLs and code generation, not macros.
 
-**Status**: `with_cap(caps, thunk)` and `aevia run --caps` are implemented, with semantics in §9.14 (capability sets narrow per block, nesting takes the intersection, a missing one is `E0902`). They are a different thing from the backend capability table of §13.8.2: the latter describes what the backend can do, the former what the program is allowed to do.
+See §9.14 for the semantics of `with_cap(caps, thunk)` and the `--caps` option. The backend capability table in §13.8.2 describes which facilities the toolchain supplies.
 
 ### 13.9.7 Macros and syntax extension
 
@@ -7817,8 +7804,7 @@ quantity_lit   ::= ( INT | FLOAT ) unit_expr
 
 - `LT_APP` is a `<` touching the preceding identifier (§2.7.2); `record_body` uses `with` to tell an update from a literal.
 - `quantity_lit` arises only when a numeric literal is immediately followed by a unit expression (§1.8.1).
-- `"_"` is valid only as a call argument (§2.3.6); `"(" operator ")"` parses, but the name is not yet bound
-  (status note in §2.3.7).
+- `"_"` is valid only as a call argument (§2.3.6). A parenthesized operator such as `(+)` produces `E0301` (§2.3.7).
 - A `qname` starts with a `UIDENT`; `Physics.Ising.run` parses as a `qname` plus the field `.run`.
 - Postfix `!` MUST touch the end of its operand (§2.7.5).
 
@@ -7953,9 +7939,7 @@ keyword.
 
 Diagnostics are part of the language experience. An error message MUST contain the code, the
 primary location and expected versus actual, and, when it can be determined, at least one
-actionable fix. This appendix lists the codes, severities and the message format. Every code in
-the tables has an emission site in the compiler (checked by `grep` over all crates); exceptions
-are noted in the "Status" paragraphs.
+actionable fix. This appendix defines the codes, severities and message format.
 
 ## B.1 Format
 

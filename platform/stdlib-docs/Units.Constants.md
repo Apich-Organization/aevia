@@ -2,12 +2,11 @@
 
 Source: `stdlib/Units/Constants.aev`
 
-The `Units.Constants` module of §8.20.
+Physical constants in SI units. Each entry names its reference and
+says whether the value is exact or measured.
 
-Generated from the rssn Kernel Manifest: one quantity per physical
-constant of `manifest.constants` (§13.6.5). Do not edit; regenerate with
-`cargo run -p aevia-stdlib-gen -- --write`.
-rssn 3.0.0-rc.1, api 2
+Use `import Units.Constants as C` to refer to the speed of light as
+`C.c` and the reduced Planck constant as `C.hbar`.
 
 ## `let f`
 

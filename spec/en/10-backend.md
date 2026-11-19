@@ -1,6 +1,6 @@
 # 10 — The rssn backend mapping
 
-Aevia does not reimplement computer algebra. rssn provides the term representation, the rewriting engine, the dimension layer, numeric kernels, the JIT and simulation; Aevia provides syntax, type and dimension checking, closures, records, tensor shapes, modules, IO and the orchestration of the standard library. This chapter defines the contract between the two: what maps directly, what needs a wrapper, and what the known gaps are.
+Aevia does not reimplement computer algebra. rssn provides the term representation, the rewriting engine, the dimension layer, numeric kernels, the JIT and simulation; Aevia provides syntax, type and dimension checking, closures, records, tensor shapes, modules, IO and the orchestration of the standard library. This chapter defines the contract between the two, including direct operator mappings, typed wrappers and their error behavior.
 
 ## 10.0 Reflection first: no hand-written operator bindings
 
@@ -184,7 +184,12 @@ The flat `Rssn.<op>` and the per-rule-set `Rssn_<rule_set>` follow the **kernel'
 
 Examples: `tests/domain_number_theory.aev`, `domain_combinatorics.aev`, `domain_finite_fields.aev`, `domain_numeric.aev`.
 
-**Language gap (not implemented)**: `let x: Zmod<17> = 5; x * x ^ -1` needs three language changes, all in `aevia-types`/`aevia-core`: (1) variant types accepting `Nat` parameters (currently `E0317`); (2) `Num`/`Fractional` classes with `add/sub/mul/neg/from_int/inv` methods, and binary operators dispatching to instances for user nominal types; (3) integer literals promoted through `from_int` by the expected type. Until then the modulus of `Zmod` is carried at run time and operations are written as functions (`zmod_mul(x, inv)`).
+`Zmod` is a nominal residue type that stores its modulus at run time, so the same program can use
+moduli it computes from inputs. Construct a residue with `Rssn_NumberTheory.zmod(value, modulus)` and
+use `zmod_add`, `zmod_mul`, `zmod_inv`, or `zmod_pow`. Construction and arithmetic return
+`Result<Zmod, String>`. Binary operations check that the moduli agree, and inversion checks that the
+residue is invertible. For example, modulo 17, `zmod_pow(x, -1)` computes the inverse and
+`zmod_mul(x, inverse)` returns the residue 1.
 
 ## 10.4 The dimension bridge
 
@@ -259,51 +264,22 @@ A `Term<'s>` is borrowed only during a `compute` call and converted to a `u32` i
 
 `Term::compile` compiles a closed `Float` expression into a function; Aevia's hot functions take this path. `TieredBackend` interprets first and compiles in the background; if the JIT fails it falls back to the interpreter with no change of semantics. The default build has `features.jit = false`, and `@jit` MUST read `Features`, otherwise it reports `E1001("core.jit")`.
 
-### 10.6.5 Devices: data-parallel execution
+### 10.6.5 Devices and data-parallel execution
 
-rssn has two independent execution axes:
+Aevia's `Device` values identify a requested execution location. `device_of(tensor)`
+returns its location. `to_device(tensor, device)` and `on(device, thunk)` are IO
+actions. CPU execution is supported. An unsupported GPU or distributed request reports
+`E1001` with capability `core.gpu` or `core.distributed` (§13.9.4).
 
-| Axis | rssn abstraction | The question it answers |
-|---|---|---|
-| How one term becomes a function | `Backend` / `Compiled` | evaluate at one point |
-| Where many rows run | `Device` / `Buffer` / `KernelIr` | evaluate on 10⁶ rows; integrate 10⁴ initial values |
+RSSN's device layer exposes buffers, a numerical kernel IR, CPU reference and parallel
+executors, and a WGSL backend behind `gpu-wgpu`. Embedding hosts can use it for batch
+evaluation, array operations, and fixed-step ensembles. The Aevia interpreter's CPU
+batch path accepts the pure scalar subset described in §9.6.1. Device enumeration,
+launch fusion and explicit GPU buffer transfers are RSSN host APIs.
 
-The JIT (§9.6) belongs to the first axis and is **not** the GPU path; `@jit(target = Gpu(n))` selects a device on the second axis.
-
-**Capability discovery.** Build level: manifest `features.devices` (`cpu`, `cpu-parallel`, plus `gpu-wgpu` when that feature is enabled) is a compile-time fact and may enter `manifest_hash`; `core.gpu` holds when `features.devices` contains any `gpu-*`. Run level: `rssn::backend::device::registry().list()` returns `DeviceInfo` (`id`, `kind`, `dtypes`, `ops`, `parallelism`, `unified_memory`, `deterministic`); having no adapter is not an error, just no GPU device. The Aevia-side wrapper is `aevia_rssn::device` (`available()`, `has_gpu()`, `resolve(Selector)`).
-
-**`Device` to rssn device.**
-
-| Aevia | rssn id | Note |
-|---|---|---|
-| `Cpu` | `cpu` | single-threaded; reference semantics |
-| `Cpu` (hint `cpu_parallel`, `Selector::CpuParallel`) | `cpu-parallel` | rayon; **bit-identical** to `cpu` |
-| `Gpu(n)` | the `n`-th `DeviceKind::Gpu` (`gpu:wgpu:n`) | if absent, `E1001("core.gpu")` with the number of registered GPUs in the message |
-| `Distributed(c)` | none | `E1001("core.distributed")`; outside this design |
-
-**Transfers are explicit.** `to_device(t, Gpu(n))` is one `upload` (an `F64` tensor is converted to `f32` on an `f32`-only device, which changes values); `device_of` reads the tensor's device tag; bringing a result back to the host needs a `download`, and there are no implicit transfers. `on(device, thunk)` is scoped execution: batch primitives inside `thunk` use that device and buffers are released when the scope ends.
-
-**Precision contract.** The semantics of kernel IR is `f64`. `cpu` and `cpu-parallel` provide `F64` bit-identical to the interpreter (including NaN, `select`, and out-of-range `gather` reading NaN), extending §9.7.2 ("the thread count never changes any result") to devices. `gpu:*` (WGSL) provides `F32` and a **double-single `F64`**: WGSL has no `f64`, so the wgpu device represents `Dtype::F64` as a pair of `f32` values `(hi, lo)`, with about 48 bits of precision (on an RTX 3060 / Vulkan the relative error is `4e-15` for `+ - * /`, `1e-14` for `sqrt`, `7e-14` for `exp`; the device tests require `5e-12`). Limits: the exponent range is still that of `f32` (keep data within `1e-30 .. 1e30`), `sin`/`cos`/`tan` return NaN for `|x| > 1e6`, and `F32` and `F64` buffers cannot be mixed in one launch. So it is **not** IEEE double precision and is not bit-identical to the CPU. Aevia never silently turns a `Float` result into `f32`; code needing bit-exact results chooses `Cpu`/`CpuParallel`.
-
-**Launch fusion.** rssn's `device::plan` fuses a chain of element-wise kernels into one launch (intermediate columns become registers and never reach device memory); fusion changes where values are kept, not how they are computed, so on deterministic devices it is bit-identical to the unfused plan. This is an explicit rssn-side API and is not yet exposed in Aevia.
-
-**Functions that can be lowered to a device** follow the JIT gate of §9.6.1: no captures, `Float` scalar arithmetic, elementary functions, comparisons and `if` (both sides pure, evaluated eagerly and then `select`ed). Terms containing host calls (the `EvalFn` of gamma/erf/Bessel, C externs) cannot be lowered to a device, and `Device.map` falls back to the interpreter row by row, with values unchanged (on a CPU device).
-
-**Batch primitives (design).**
-
-```
-Device.available : () -> IO (List DeviceInfo)       # registry snapshot
-Device.map       : (Float -> Float, Tensor<[n],Float>) -> Tensor<[n],Float>
-                                                     # on Cpu/CpuParallel; pure, deterministic
-Device.map_on    : (Device, Float -> Float, Tensor<[n],Float>) -> IO (Tensor<[n],Float>)
-Device.reduce    : (Reduce, Tensor<[n],Float>) -> Float   # Sum | Prod | Min | Max
-Device.ensemble  : (OdeSystem, Tensor<[m,k],Float>, Float, Float, Int) -> Tensor<[m,k],Float>
-                                                     # one program, k initial values; fixed-step RK4
-```
-
-Only the pure, bit-deterministic versions are promised on CPU devices; `map_on(Gpu(n), ..)` is `IO` because allocation and transfer are effects, and the result is subject to the device's precision.
-
-**Status.** Implemented: the whole rssn device layer (registry, `Buffer`, `KernelIr`, CPU reference device, WGSL emitter, optional `gpu-wgpu`, `ensemble_rk4`, and `device::array` reductions / matmul / CSR product / stencil, etc.); the manifest `features.devices`; `aevia_rssn::device` and `jit::map_floats` in `aevia-core` (apply a pure `Float` function in batch on a CPU device). **Not implemented**: `Device.map`/`map_on`/`reduce`/`ensemble`/`available` as language primitives (entries are needed in the type table and the built-in table, and `Device.aev` regenerated); `to_device`/`on` on `Gpu(n)` still report `E1001("core.gpu")` (tensor values do not yet carry device buffer handles).
+The RSSN GPU backend represents its emulated F64 buffers as two F32 parts. Programs
+requiring IEEE F64 results use the CPU backend. A host controls transfers and checks
+device capabilities before loading a kernel.
 
 ## 10.7 Error mapping
 
@@ -318,35 +294,36 @@ Only the pure, bit-deterministic versions are promised on CPU devices; `map_on(G
 
 `Answer.diagnostics` become Aevia warnings; under `Advisory` mode they do not fail.
 
-## 10.8 Known gaps and risks
+## 10.8 Kernel boundary invariants
 
-**The numbers below are measurements; the live manifest (`aevia rssn`) is the only source of truth.** On `rssn 3.0.0-rc.1` (`api_version = 2`): 1620 operators (99 declared + 103 overlay + 1418 derived, none dynamic-only), 82 units, 30 constants (18 exact), `manifest_hash = d12fc2b7…`. rssn has implemented the Manifest, dynamic `Value`/`call_value`/`call_key`, overload resolution, 100% signature coverage, the physical-constant table, the cdylib plugin ABI, `rssn::dim`, custom base dimensions, `Config::dimension_term`, `fork/merge`, structured results and JIT lowering. Only the integration gaps that **still exist** are listed.
+- A term belongs to one RSSN session. Parallel work prepares or imports it on
+  a thread with an appropriate session, and returned results are restored in
+  input order (§10.5.1).
+- The kernel manifest for that session determines operator availability, units,
+  constant values and which values may enter the term graph. Generated bindings
+  use that manifest's `api_version` and full `hash_hex()` when identifying the
+  interface. The truncated `hash_u64()` is used for ABI reporting and display.
+- An exact typed binding pins a supported signature. Derived or witnessed
+  signatures are used only where the generator can state and verify their
+  contract. The dynamic boundary preserves operation errors (§10.3.5).
+- `Solutions.multiplicities` may be empty when multiplicity was not established.
+  A solver reports completeness only when its method produced a complete
+  solution set. Conditions accompany the solutions to which they apply.
+- A compile-time dimension in Aevia may contain rational exponents (§4.12.3).
+  Some RSSN hosts can also represent symbolic exponents. Dynamic interfaces
+  must preserve their dimension evidence or report an error.
+- Callback handles are scoped to their originating host call (§8.19).
+  Simulation parameters may enter as a schema-checked record or through the
+  generic JSON interface (§8.17). Optional native code and device capabilities
+  are determined at the point of selection (§10.6).
 
-1. **`Session` is single-threaded.** Crossing threads needs `fork/merge`, not a shared session; the bridge currently shares no symbolic values across threads (§10.5.1).
-2. **`compute` still clones the graph.** `OpTable` is an `Arc` (clones share it) and `DimArena` is copy-on-write, leaving the shallow-copy cost of the node table; `Session::prepare` is not public.
-3. **The JIT is off by default** (see §10.6.4).
-4. **The "not reported" semantics of `Solutions`.** An empty `multiplicities` means not reported and MUST NOT be filled with 1; the kernel fills it when it can prove it (a univariate rational polynomial whose roots are all exact numbers, via exact square-free decomposition); `conditions` holds only conditions declarable by construction; `complete` is distinguished by whether the result is a `list(...)`, and `Solutions::new` defaults to `false`. Aevia MUST NOT declare exhaustiveness unconditionally when constructing one.
-5. **Constants are values, not units.** `manifest.constants` is not in the `UnitRegistry` and cannot take part in `quantity` parsing; `e` (elementary charge) has the same name as `Math.e` and MUST be qualified when both modules are `open`.
-6. **100% typed, but only `Declared` + `Overlay` are exact.** `Derived` distinguishes only numeric `(Real,…)` from symbolic `(Term,…)` and not `Tensor`/`Quantity`/`Int`, so `Derived` MUST be marked "conservatively inferred".
-7. **`assuming` is mostly unary predicates**; general equations and inequalities have no language entry point (§10.2.2).
-8. **Symbolic exponents: the bridge round-trips, the language does not support them.** `DimExpr::to_term` interns `Length^n` as an atom and `try_from_term` is its exact inverse; Aevia's static type positions still accept only rational exponents (§4.12.3). Do not read "the backend can represent it" as "the language should support it".
-9. **Simulation parameters are still JSON**; typed wrappers come from the `Physics.*` source modules or the generated `Rssn_Sim_<Name>` (§8.17).
-10. **Budgets and interruption.** rssn's budget lives inside `compute`; Aevia's outer timeout/cancellation is cooperative and cannot kill.
-11. **Version drift.** Aevia pins `api_version` + `manifest_hash` and runs conformance. The version-2 manifest adds Rust source-path metadata, and its binary layout is incompatible with version 1 with no version negotiation before decoding, so a host MUST know the producer version in advance. The manifest may still change during the rc cycle, which is why numbers in this document are measurements and not constants.
-12. **`manifest_hash` is a bincode BLAKE3 and can be taken two ways.** `hash_hex()` (64 hex characters, which hosts SHOULD pin) and `hash_u64()` (the first 8 bytes read little-endian, for ABI/display only) are not interchangeable; JSON is for humans, and hashing or comparing JSON text is not allowed.
-13. **Whether a `Value` can enter the term graph follows `manifest.value_kinds`** (10 of 17 variants can, 7 cannot, §13.3.1); sparse operations MUST go through `eval_dyn` or Aevia's local layout kernels. A generator MUST NOT hard-code this table.
-14. **The callback and plugin bridges.** `core.callback` calls a checked source closure through a same-thread scoped handle, and the handle expires when the outer call returns (§8.19); `core.plugin.source` traces `@op` functions into kernel definitions and `@rule` into rewrites, registered as in-process plugins (§13.5.2).
-15. **Units belong to a session.** A unit registered by `Session::register_unit` appears only in that session's manifest; the process-level `KernelManifest::build` gives a different unit table and hash, and Aevia MUST use `Session::manifest()`.
-16. **SDE.** The manifest exposes only the noise primitives and the scheme metadata `sde_scheme_info` (strong order only; the weak order is the host-side `sde_order`, §8.9.1); the solve loop needs a `&Fn + Sync` host closure that the manifest's `Value` ABI cannot carry, so it stays on the host side (`aevia-std::sde`), and `sdeint_*` are not `Rssn` operators.
+### 10.8.1 Compatibility and validation
 
-### 10.8.1 Mitigations
-
-- **Conformance tests**: for every standard operator, compare Aevia's static dimension with rssn's `Answer.dimension`; any disagreement fails.
-- **Unit-table validation**: at start-up compare base, derived and affine units one by one, against `manifest.units` only.
-- **Fallback paths**: a JIT failure falls back to the interpreter; a failed symbolic solve returns `Err` and never panics.
-- **Budget defaults**: 2 s / 1e6 rewrites; adjustable by the user.
-- **Version pinning**: pin `api_version` + `hash_hex()`; run the full conformance suite on upgrade; operator and unit counts in documents never enter cache keys.
-- **Bridge isolation**: every rssn call is concentrated in `aevia-rssn`, and upper layers do not depend on `rssn` types directly.
+Use `aevia rssn --audit` to report the signatures and capabilities provided by the
+linked kernel. Conformance tests compare source declarations and checked adapters,
+exercise structured values and units, and verify the compiled evaluator against
+the reference path. Runtime and symbolic budgets are separate (§6.9.1). Native
+evaluators that cannot execute a supported code path can return to the interpreter.
 
 ## 10.9 An end-to-end call chain
 

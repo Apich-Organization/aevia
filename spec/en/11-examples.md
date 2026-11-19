@@ -235,34 +235,47 @@ Points to note:
 
 ## 11.6 Data analysis: `Table` and dynamic columns
 
+Save the following data as `measurements.csv`. The two numeric columns record time in seconds and velocity in metres per second.
+
+```csv
+time [s],velocity [m/s]
+0,1.0
+1,1.5
+2,2.1
+```
+
 ```aevia
 module Analysis
 
 open Units.SI
-import Data.Csv { read_csv, column, Table }
+import Data.Csv { read_csv_dyn, column }
 import Stats { mean, std }
 import Plot { line, combine, plot, label }
 
+fn report_data(times: Tensor<1, Float>, velocities: Tensor<1, Float>): IO Unit = do
+    let t = times * 1.0 s
+    let v = velocities * (1.0 m / 1.0 s)
+    println("mean speed = {mean(v)}")
+    println("std  speed = {std(v)}")
+    let spec = label(line(t, v), "v(t)")
+    plot(combine([spec]))
+
 fn main(): IO Unit = do
-    r <- read_csv<{ time: Float[T], velocity: Float[L/T] }>("measurements.csv")
+    r <- read_csv_dyn("measurements.csv")
     match r with
     | Err(e) -> println("cannot read: {e}")
     | Ok(tbl) ->
         match (column(tbl, "time"), column(tbl, "velocity")) with
-        | (Ok(t), Ok(v)) -> do
-            println("mean speed = {mean(v)}")
-            println("std  speed = {std(v)}")
-            let spec = label(line(t, v), "v(t)")
-            plot(combine([spec]))
-        | _ -> println("column type mismatch")
+        | (Ok(t), Ok(v)) -> report_data(t, v)
+        | _ -> println("expected time and velocity columns")
 ```
 
 Points to note:
 
-- `read_csv<ρ>` is `IO (Result<Table<ρ>, DataError>)`; `ρ` is the row type, and header units are used to infer field types. `<-` binds the result and `match` handles the error.
-- `column(t, "time")` is checked at compile time against the field types of `Table<ρ>` and validated defensively at run time; CSV headers may carry units (`time [s]`), without which columns are dimensionless, and an explicit `ρ` can override this.
-- `line` accepts dimensioned `x`/`y` tensors and generates axis labels automatically (`t / s`, `v / (m/s)`); to override, use `PlotOpts.xunit`/`yunit`.
-- `combine([spec])` builds a `PlotSpec`; `plot` writes HTML/SVG.
+- `read_csv_dyn` returns an IO action producing `Result<Table<Dynamic>, DataError>`. `<-` binds the result and `match` handles read errors.
+- `column` looks up a column at run time. For this sample, the cells are dimensionless `Float` values, as expected by `report_data`. Header units are metadata available through `schema`. `report_data` attaches the units stated in the sample by multiplying the values by `1.0 s` and `1.0 m / 1.0 s`.
+- `line` accepts dimensioned `x`/`y` tensors and generates SVG axis labels with units. Use `line_with` to select display units.
+- `combine([spec])` builds a `PlotSpec`; `plot` writes `plot.html` with inline SVG.
 
 ## 11.7 Simulation: typed wrappers
 

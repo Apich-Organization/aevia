@@ -2,14 +2,10 @@
 
 Source: `stdlib/Units/Planck.aev`
 
-The constants in planck units: c = hbar = G = k_B = 4 pi epsilon_0 = 1.
+Physical constants in Planck units: c = hbar = G = k_B = 4 pi epsilon_0 = 1 (Gaussian charge); mechanical, thermal and electromagnetic quantities are pure numbers.
 
-Planck units: c = hbar = G = k_B = 4 pi epsilon_0 = 1 (Gaussian charge); mechanical, thermal and electromagnetic quantities are pure numbers.
-
-Generated from the rssn Kernel Manifest (`manifest.unit_systems` and
-`manifest.constants`, §5.11.7). Do not edit; regenerate with
-`cargo run -p aevia-stdlib-gen -- --write`.
-rssn 3.0.0-rc.1, api 2
+Use `module Example with units planck` to apply the same convention
+to your module's unit literals and dimension annotations.
 
 ## `let f`
 
@@ -17,7 +13,8 @@ rssn 3.0.0-rc.1, api 2
 let f: Float[1/Amount]
 ```
 
-Faraday constant (SI 2019 definition, exact); an irrational power of the unity constants, so a Float
+Faraday constant (SI 2019 definition, exact).
+The conversion uses a fractional power, so this constant is a `Float` in these units.
 ## `let g`
 
 ```aevia
@@ -38,7 +35,8 @@ conductance quantum (SI 2019 definition, exact)
 let k_J: Float
 ```
 
-Josephson constant (SI 2019 definition, exact); an irrational power of the unity constants, so a Float
+Josephson constant (SI 2019 definition, exact).
+The conversion uses a fractional power, so this constant is a `Float` in these units.
 ## `let k_cd`
 
 ```aevia
@@ -52,7 +50,8 @@ luminous efficacy (SI 2019 definition, exact)
 let m_u: Float[1/Amount]
 ```
 
-molar mass constant (SI 2019 definition, exact); an irrational power of the unity constants, so a Float
+molar mass constant (SI 2019 definition, exact).
+The conversion uses a fractional power, so this constant is a `Float` in these units.
 ## `let n_A`
 
 ```aevia
@@ -66,7 +65,8 @@ Avogadro constant (SI 2019 definition, exact)
 let phi_0: Float
 ```
 
-magnetic flux quantum (SI 2019 definition, exact); an irrational power of the unity constants, so a Float
+magnetic flux quantum (SI 2019 definition, exact).
+The conversion uses a fractional power, so this constant is a `Float` in these units.
 ## `let r`
 
 ```aevia
@@ -87,21 +87,24 @@ von Klitzing constant (SI 2019 definition, exact)
 let r_inf: Float
 ```
 
-Rydberg constant (CODATA 2022, measured); an irrational power of the unity constants, so a Float
+Rydberg constant (CODATA 2022, measured).
+The conversion uses a fractional power, so this constant is a `Float` in these units.
 ## `let t_tp`
 
 ```aevia
 let t_tp: Float
 ```
 
-triple point of water (CGPM 1954, exact); an irrational power of the unity constants, so a Float
+triple point of water (CGPM 1954, exact).
+The conversion uses a fractional power, so this constant is a `Float` in these units.
 ## `let a_0`
 
 ```aevia
 let a_0: Float
 ```
 
-Bohr radius (CODATA 2022, measured); an irrational power of the unity constants, so a Float
+Bohr radius (CODATA 2022, measured).
+The conversion uses a fractional power, so this constant is a `Float` in these units.
 ## `let alpha`
 
 ```aevia
@@ -129,14 +132,16 @@ speed of light in vacuum (SI 2019 definition, exact)
 let dnu_Cs: Float
 ```
 
-caesium hyperfine frequency (SI 2019 definition, exact); an irrational power of the unity constants, so a Float
+caesium hyperfine frequency (SI 2019 definition, exact).
+The conversion uses a fractional power, so this constant is a `Float` in these units.
 ## `let e`
 
 ```aevia
 let e: Float
 ```
 
-elementary charge (SI 2019 definition, exact); an irrational power of the unity constants, so a Float
+elementary charge (SI 2019 definition, exact).
+The conversion uses a fractional power, so this constant is a `Float` in these units.
 ## `let epsilon_0`
 
 ```aevia
@@ -150,7 +155,8 @@ vacuum electric permittivity (CODATA 2022, measured)
 let g_n: Float
 ```
 
-standard acceleration of gravity (CGPM 1901, exact); an irrational power of the unity constants, so a Float
+standard acceleration of gravity (CGPM 1901, exact).
+The conversion uses a fractional power, so this constant is a `Float` in these units.
 ## `let h`
 
 ```aevia
@@ -178,28 +184,32 @@ Boltzmann constant (SI 2019 definition, exact)
 let m_e: Float
 ```
 
-electron mass (CODATA 2022, measured); an irrational power of the unity constants, so a Float
+electron mass (CODATA 2022, measured).
+The conversion uses a fractional power, so this constant is a `Float` in these units.
 ## `let m_n`
 
 ```aevia
 let m_n: Float
 ```
 
-neutron mass (CODATA 2022, measured); an irrational power of the unity constants, so a Float
+neutron mass (CODATA 2022, measured).
+The conversion uses a fractional power, so this constant is a `Float` in these units.
 ## `let m_p`
 
 ```aevia
 let m_p: Float
 ```
 
-proton mass (CODATA 2022, measured); an irrational power of the unity constants, so a Float
+proton mass (CODATA 2022, measured).
+The conversion uses a fractional power, so this constant is a `Float` in these units.
 ## `let m_u_2`
 
 ```aevia
 let m_u_2: Float
 ```
 
-atomic mass constant (CODATA 2022, measured); an irrational power of the unity constants, so a Float
+atomic mass constant (CODATA 2022, measured).
+The conversion uses a fractional power, so this constant is a `Float` in these units.
 ## `let mu_0`
 
 ```aevia
@@ -213,7 +223,8 @@ vacuum magnetic permeability (CODATA 2022, measured)
 let mu_B: Float
 ```
 
-Bohr magneton (CODATA 2022, measured); an irrational power of the unity constants, so a Float
+Bohr magneton (CODATA 2022, measured).
+The conversion uses a fractional power, so this constant is a `Float` in these units.
 ## `let sigma_SB`
 
 ```aevia

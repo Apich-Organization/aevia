@@ -10,21 +10,43 @@ The `Tensor` module of §8.20.
 let fill = fill
 ```
 
+fill(value, n1, n2, ...) builds a tensor of the given shape with every element equal to value, keeping its type and dimension: fill(2.0 m, 3) is three lengths of 2 m.
+
 **Signature:** `fill : (Scalar<ρ,d>, Int, ..., Int) -> Tensor<n, Scalar<ρ,d>>`
+
+**Examples:**
+```text
+fill(1.5, 2, 3)
+fill(2.0 m, 3)
+```
+
+*Source: Aevia standard library guide.*
 ## `let ones`
 
 ```aevia
 let ones = ones
 ```
 
+ones(n1, n2, ...) builds a tensor of ones with one extent per argument.
+
 **Signature:** `ones : (Int, ..., Int) -> Tensor<n, Float>`
+
+The elements are Float unless you give a type argument: ones<Int>(3).
+
+**Examples:**
+```text
+ones(2, 3)
+ones<Int>(3)
+```
+
+*Source: Aevia standard library guide.*
 ## `let zeros`
 
 ```aevia
 let zeros = zeros
 ```
 
-`m x n` zero matrix.
+zeros(n1, n2, ...) builds a tensor of zeros with one extent per argument, so zeros(3) is a vector and zeros(2, 3) a 2 x 3 matrix.
 
 **Signature:** `zeros : (Int, ..., Int) -> Tensor<n, Float>`
 
@@ -34,10 +56,12 @@ let zeros = zeros
 
 **Dimensions:** kernel rule `List`
 
-The zero vector of length `n`.
+The elements are Float unless you give a type argument: zeros<Int>(3) or zeros<Real>(3). When the shape is a compile-time constant zeros_of<[2, 3]>() carries it in the type.
 
 **Examples:**
-- `zeros(4, 4)` returns a `[[Int]]`
-(recorded kernel calls; the result is shown as its sort)
+```text
+zeros(2, 3)
+zeros<Int>(3)
+```
 
-*Source: rssn operator `linalg.zeros`; rustdoc of `crate::kernels::qlinalg::zeros` (by name).*
+*Source: Aevia standard library guide.*

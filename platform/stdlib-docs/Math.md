@@ -10,7 +10,7 @@ The `Math` module of §8.20.
 let acos = acos
 ```
 
-Principal inverse cosine of `x`, in `[0, pi]` for real `x` in `[-1, 1]`.
+Inverse cosine in radians.
 
 **Signature:** `acos : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -20,14 +20,21 @@ Principal inverse cosine of `x`, in `[0, pi]` for real `x` in `[-1, 1]`.
 
 **Dimensions:** the result is dimensionless
 
-*Source: rssn operator `elementary.acos`.*
+The argument must be dimensionless and in [-1, 1]; outside that range it is a runtime error (E0806).
+
+**Examples:**
+```text
+acos(0.5)
+```
+
+*Source: Aevia standard library guide.*
 ## `let acosh`
 
 ```aevia
 let acosh = acosh
 ```
 
-Principal inverse hyperbolic cosine `ln(x + sqrt(x^2 - 1))`.
+Inverse hyperbolic cosine.
 
 **Signature:** `acosh : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -37,14 +44,21 @@ Principal inverse hyperbolic cosine `ln(x + sqrt(x^2 - 1))`.
 
 **Dimensions:** the result is dimensionless
 
-*Source: rssn operator `elementary.acosh`.*
+The argument must be at least 1; smaller arguments are a runtime error (E0806).
+
+**Examples:**
+```text
+acosh(2.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let asin`
 
 ```aevia
 let asin = asin
 ```
 
-Principal inverse sine of `x`, in `[-pi/2, pi/2]` for real `x` in `[-1, 1]`.
+Inverse sine in radians.
 
 **Signature:** `asin : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -54,14 +68,21 @@ Principal inverse sine of `x`, in `[-pi/2, pi/2]` for real `x` in `[-1, 1]`.
 
 **Dimensions:** the result is dimensionless
 
-*Source: rssn operator `elementary.asin`.*
+The argument must be dimensionless and in [-1, 1]; outside that range it is a runtime error (E0806).
+
+**Examples:**
+```text
+asin(1.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let asinh`
 
 ```aevia
 let asinh = asinh
 ```
 
-Inverse hyperbolic sine `ln(x + sqrt(x^2 + 1))`.
+Inverse hyperbolic sine of a dimensionless argument.
 
 **Signature:** `asinh : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -71,14 +92,21 @@ Inverse hyperbolic sine `ln(x + sqrt(x^2 + 1))`.
 
 **Dimensions:** the result is dimensionless
 
-*Source: rssn operator `elementary.asinh`.*
+Defined for every real input.
+
+**Examples:**
+```text
+asinh(1.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let atan`
 
 ```aevia
 let atan = atan
 ```
 
-Principal inverse tangent of `x`, in `(-pi/2, pi/2)` for real `x`.
+Inverse tangent in radians, in (-pi/2, pi/2).
 
 **Signature:** `atan : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -88,14 +116,21 @@ Principal inverse tangent of `x`, in `(-pi/2, pi/2)` for real `x`.
 
 **Dimensions:** the result is dimensionless
 
-*Source: rssn operator `elementary.atan`.*
+For the angle of a point (x, y) use atan2, which also knows the quadrant.
+
+**Examples:**
+```text
+atan(1.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let atan2`
 
 ```aevia
 let atan2 = atan2
 ```
 
-Two-argument arctangent of `(y, x)`, giving the angle in `(-pi, pi]` from the positive x-axis.
+The angle, in radians in (-pi, pi], of the point (x, y) measured from the positive x axis; note the order atan2(y, x).
 
 **Signature:** `atan2 : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,1>`
 
@@ -105,14 +140,22 @@ Two-argument arctangent of `(y, x)`, giving the angle in `(-pi, pi]` from the po
 
 **Dimensions:** the result is an angle (dimensionless)
 
-*Source: rssn operator `elementary.atan2`.*
+Both arguments must have the same dimension, so lengths work directly and the result is dimensionless.
+
+**Examples:**
+```text
+atan2(1.0, -1.0)
+atan2(2.0 m, 2.0 m)
+```
+
+*Source: Aevia standard library guide.*
 ## `let atanh`
 
 ```aevia
 let atanh = atanh
 ```
 
-Inverse hyperbolic tangent `ln((1 + x) / (1 - x)) / 2`.
+Inverse hyperbolic tangent.
 
 **Signature:** `atanh : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -122,21 +165,40 @@ Inverse hyperbolic tangent `ln((1 + x) / (1 - x)) / 2`.
 
 **Dimensions:** the result is dimensionless
 
-*Source: rssn operator `elementary.atanh`.*
+The argument must lie between -1 and 1; beyond that range it is a runtime error (E0806), and at exactly 1 or -1 a Float gives an infinity.
+
+**Examples:**
+```text
+atanh(0.5)
+```
+
+*Source: Aevia standard library guide.*
 ## `let cbrt`
 
 ```aevia
 let cbrt = cbrt
 ```
 
+Cube root of an Int, Real or Float.
+
 **Signature:** `cbrt : Scalar<ρ,d> -> Scalar<ρ,d^(1/3)>`
+
+The result dimension is the argument's dimension to the power 1/3, so cbrt(8 m^3) is 2 m. Negative arguments give the real cube root.
+
+**Examples:**
+```text
+cbrt(27.0)
+cbrt(8 m^3)
+```
+
+*Source: Aevia standard library guide.*
 ## `let cos`
 
 ```aevia
 let cos = cos
 ```
 
-Cosine of angle `x` in radians.
+Trigonometric function.
 
 **Signature:** `cos : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -148,16 +210,22 @@ Cosine of angle `x` in radians.
 
 **Dimensions:** the result is dimensionless
 
-`cos z`.
+Its argument must be dimensionless; angle units such as deg carry an exact conversion scale.
 
-*Source: rssn operator `elementary.cos`; rustdoc of `crate::kernels::complex_scalar::cos` (by name).*
+**Examples:**
+```text
+sin(30 deg)
+cos(0.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let cosh`
 
 ```aevia
 let cosh = cosh
 ```
 
-Hyperbolic cosine `(e^x + e^-x) / 2`.
+Hyperbolic cosine of a dimensionless argument.
 
 **Signature:** `cosh : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -167,28 +235,53 @@ Hyperbolic cosine `(e^x + e^-x) / 2`.
 
 **Dimensions:** the result is dimensionless
 
-*Source: rssn operator `elementary.cosh`.*
+**Examples:**
+```text
+cosh(0.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let curry`
 
 ```aevia
 let curry = curry
 ```
 
+curry(f) turns a two-argument function into a function that takes one argument and returns a function waiting for the other.
+
 **Signature:** `curry : ((a, b) -> c) -> (a -> (b -> c))`
+
+**Examples:**
+```text
+curry(fn (a, b) => a + b)(1)(2)
+```
+
+*Source: Aevia standard library guide.*
 ## `let e`
 
 ```aevia
 let e = e
 ```
 
+Euler's number 2.718…, as an exact symbolic Real constant.
+
 **Signature:** `e : Real[1]`
+
+It stays exact until you ask for a Float with approx, so exp(1) and e are the same value.
+
+**Examples:**
+```text
+approx(e)
+```
+
+*Source: Aevia standard library guide.*
 ## `let exp`
 
 ```aevia
 let exp = exp
 ```
 
-Natural exponential function `e^x`.
+Exponential or logarithmic function on a dimensionless input.
 
 **Signature:** `exp : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -198,28 +291,58 @@ Natural exponential function `e^x`.
 
 **Dimensions:** the result is dimensionless
 
-*Source: rssn operator `elementary.exp`.*
+Domain failures and unresolved symbolic values are distinct from a numerical approximation.
+
+**Examples:**
+```text
+exp(1)
+ln(2.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let hypot`
 
 ```aevia
 let hypot = hypot
 ```
 
+The length of the vector (a, b), sqrt(a^2 + b^2), computed without intermediate overflow.
+
 **Signature:** `hypot : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,d>`
+
+Both arguments must share a dimension, which the result keeps.
+
+**Examples:**
+```text
+hypot(3.0 m, 4.0 m)
+```
+
+*Source: Aevia standard library guide.*
 ## `let i`
 
 ```aevia
 let i = i
 ```
 
+The imaginary unit as a Complex constant, so 3 + 4*i builds a complex number.
+
 **Signature:** `i : Complex[1]`
+
+Complex arithmetic follows the usual rules, i*i == -1.
+
+**Examples:**
+```text
+i * i
+```
+
+*Source: Aevia standard library guide.*
 ## `let ln`
 
 ```aevia
 let ln = ln
 ```
 
-Natural logarithm (base `e`) of `x`.
+Natural logarithm of a dimensionless argument.
 
 **Signature:** `ln : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -230,56 +353,93 @@ Natural logarithm (base `e`) of `x`.
 
 **Dimensions:** the result is dimensionless
 
-**Examples:**
-- `ln(0.3)` returns a `Float`
-(recorded kernel calls; the result is shown as its sort)
+It is the inverse of `exp` on the positive real line.
 
-*Source: rssn operator `elementary.ln`.*
+**Examples:**
+```text
+ln(2.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let log`
 
 ```aevia
 let log = log
 ```
 
-Logarithm of `x` to base `b`, equal to `ln(x) / ln(b)`.
+Natural logarithm of one dimensionless argument.
 
 **Signature:** `log : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
-- `log : (Real, Real) -> Real`
-- `log : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+This is the same function as `ln`.
 
-**Dimensions:** the result is dimensionless
+**Examples:**
+```text
+log(2.0)
+```
 
-*Source: rssn operator `elementary.log`.*
+*Source: Aevia standard library guide.*
 ## `let log10`
 
 ```aevia
 let log10 = log10
 ```
 
+Base-10 logarithm of a dimensionless argument.
+
 **Signature:** `log10 : Scalar<ρ,1> -> Scalar<ρ,1>`
+
+A tenfold increase adds one to the logarithm.
+
+**Examples:**
+```text
+log10(100.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let log2`
 
 ```aevia
 let log2 = log2
 ```
 
+Base-2 logarithm of a dimensionless argument.
+
 **Signature:** `log2 : Scalar<ρ,1> -> Scalar<ρ,1>`
+
+Doubling the input adds one to the logarithm.
+
+**Examples:**
+```text
+log2(8.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let nan`
 
 ```aevia
 let nan = nan
 ```
 
+The IEEE not-a-number Float.
+
 **Signature:** `nan : Float[1]`
+
+It compares unequal to everything, itself included, so test it with is_nan rather than ==.
+
+**Examples:**
+```text
+is_nan(nan)
+```
+
+*Source: Aevia standard library guide.*
 ## `let oo`
 
 ```aevia
 let oo = oo
 ```
 
-`oo`: positive real infinity (`+infinity`).
+Positive infinity as an exact Real.
 
 **Signature:** `oo : Real[1]`
 
@@ -289,21 +449,37 @@ let oo = oo
 
 **Dimensions:** dimensionally polymorphic
 
-*Source: rssn operator `calculus.oo`.*
+Write -oo for negative infinity. Use it as a limit or integration bound; combinations that would need NaN stay symbolic instead of producing one.
+
+**Examples:**
+```text
+limit(fn x => 1 / x, oo)
+```
+
+*Source: Aevia standard library guide.*
 ## `let partial`
 
 ```aevia
 let partial = partial
 ```
 
+partial(f, a) fixes the first argument of a two-argument function and returns a function of the second.
+
 **Signature:** `partial : ((a, b) -> c, a) -> (b -> c)`
+
+**Examples:**
+```text
+partial(fn (a, b) => a * b, 3)(4)
+```
+
+*Source: Aevia standard library guide.*
 ## `let pi`
 
 ```aevia
 let pi = pi
 ```
 
-`pi`: Archimedes' constant, the ratio of a circle's circumference to its diameter.
+The exact symbolic constant pi.
 
 **Signature:** `pi : Real[1]`
 
@@ -313,14 +489,22 @@ let pi = pi
 
 **Dimensions:** the result is dimensionless
 
-*Source: rssn operator `elementary.pi`.*
+It is not a pre-rounded Float; use approx for a numerical approximation.
+
+**Examples:**
+```text
+pi
+approx(pi)
+```
+
+*Source: Aevia standard library guide.*
 ## `let sin`
 
 ```aevia
 let sin = sin
 ```
 
-Sine of angle `x` in radians.
+Trigonometric function.
 
 **Signature:** `sin : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -331,20 +515,22 @@ Sine of angle `x` in radians.
 
 **Dimensions:** the result is dimensionless
 
-`sin z`.
+Its argument must be dimensionless; angle units such as deg carry an exact conversion scale.
 
 **Examples:**
-- `sin(0.5)` returns a `Float`
-(recorded kernel calls; the result is shown as its sort)
+```text
+sin(30 deg)
+cos(0.0)
+```
 
-*Source: rssn operator `elementary.sin`; rustdoc of `crate::kernels::complex_scalar::sin` (by name).*
+*Source: Aevia standard library guide.*
 ## `let sinh`
 
 ```aevia
 let sinh = sinh
 ```
 
-Hyperbolic sine `(e^x - e^-x) / 2`.
+Hyperbolic sine of a dimensionless argument.
 
 **Signature:** `sinh : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -354,14 +540,19 @@ Hyperbolic sine `(e^x - e^-x) / 2`.
 
 **Dimensions:** the result is dimensionless
 
-*Source: rssn operator `elementary.sinh`.*
+**Examples:**
+```text
+sinh(1.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let sqrt`
 
 ```aevia
 let sqrt = sqrt
 ```
 
-Principal square root of `x`.
+Compute a square root.
 
 **Signature:** `sqrt : Scalar<ρ,d> -> Scalar<ρ,d^(1/2)>`
 
@@ -371,14 +562,22 @@ Principal square root of `x`.
 
 **Dimensions:** kernel rule `Root(2)`
 
-*Source: rssn operator `elementary.sqrt`.*
+Exact inputs may remain exact or symbolic; Float inputs produce numerical results. A quantity's dimension is raised to one half.
+
+**Examples:**
+```text
+sqrt(16.0)
+sqrt(9 m^2)
+```
+
+*Source: Aevia standard library guide.*
 ## `let tan`
 
 ```aevia
 let tan = tan
 ```
 
-Tangent `sin(x) / cos(x)` of angle `x` in radians.
+Trigonometric function.
 
 **Signature:** `tan : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -388,14 +587,22 @@ Tangent `sin(x) / cos(x)` of angle `x` in radians.
 
 **Dimensions:** the result is dimensionless
 
-*Source: rssn operator `elementary.tan`.*
+Its argument must be dimensionless; angle units such as deg carry an exact conversion scale.
+
+**Examples:**
+```text
+sin(30 deg)
+cos(0.0)
+```
+
+*Source: Aevia standard library guide.*
 ## `let tanh`
 
 ```aevia
 let tanh = tanh
 ```
 
-Hyperbolic tangent `sinh(x) / cosh(x)`.
+Hyperbolic tangent of a dimensionless argument.
 
 **Signature:** `tanh : Scalar<ρ,1> -> Scalar<ρ,1>`
 
@@ -405,13 +612,29 @@ Hyperbolic tangent `sinh(x) / cosh(x)`.
 
 **Dimensions:** the result is dimensionless
 
-*Source: rssn operator `elementary.tanh`.*
+The result is always in (-1, 1).
+
+**Examples:**
+```text
+tanh(0.5)
+```
+
+*Source: Aevia standard library guide.*
 ## `let uncurry`
 
 ```aevia
 let uncurry = uncurry
 ```
 
+uncurry(f) turns a function of the form a => b => c into one that takes both arguments together.
+
 **Signature:** `uncurry : ((a -> (b -> c))) -> ((a, b) -> c)`
 
 **Signature:** `uncurry : (a -> (b -> c)) -> ((a, b) -> c)`
+
+**Examples:**
+```text
+uncurry(fn a => fn b => a + b)(1, 2)
+```
+
+*Source: Aevia standard library guide.*

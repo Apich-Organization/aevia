@@ -129,7 +129,7 @@ true     type      unit      where      with
 `instance … for` 与 `derive … for`，`rec` 属于 `let rec`。`pure` 是 Prelude 函数，
 不是关键字（§9.7.3）。
 
-> **状态：** 反引号标识符（用关键字作外部名）尚未实现，反引号是 `E0105`。
+导入绑定使用非关键字名称。源码中的反引号报 `E0105`。
 
 ### 1.5.3 命名约定（非规范）
 

@@ -2,7 +2,7 @@
 
 Aevia 不重新实现计算机代数。rssn 提供项表示、重写引擎、量纲层、数值内核、JIT 和仿真；
 Aevia 提供语法、类型/量纲检查、闭包、记录、张量形状、模块、IO 和标准库编排。本章定义两者的
-契约：哪些能力直接映射，哪些要包一层，哪些是已知缺口。
+契约，包括直接映射的算子、类型化封装及其错误行为。
 
 ## 10.0 反射优先：没有手写算子绑定
 
@@ -255,10 +255,10 @@ rssn 的场景目录（`rssn::sim::schema`）在导入时生成（§8.17）。`i
 
 示例：`tests/domain_number_theory.aev`、`domain_combinatorics.aev`、`domain_finite_fields.aev`、`domain_numeric.aev`。
 
-**语言缺口（未实现）**：`let x: Zmod<17> = 5; x * x ^ -1` 需要三项语言改动，均在 `aevia-types`/`aevia-core`：
-(1) 变体类型接受 `Nat` 参数（目前 `E0317`）；(2) `Num`/`Fractional` 类带 `add/sub/mul/neg/from_int/inv` 方法，并让二元运算符
-对用户名义类型分派到实例；(3) 整数字面量按期望类型经 `from_int` 提升。在此之前 `Zmod` 的模数是运行期携带的，运算以函数形式给出
-（`zmod_mul(x, inv)`）。
+`Zmod` 是携带运行时模数的名义类型，因此同一段代码可以接收计算得出的模数。用
+`Rssn_NumberTheory.zmod(value, modulus)` 构造余数，然后调用 `zmod_add`、`zmod_mul`、
+`zmod_inv` 或 `zmod_pow`。构造和运算返回 `Result<Zmod, String>`。二元运算检查模数相等，
+求逆会检查余数是否可逆。例如，模 17 时 `zmod_pow(x, -1)` 求逆，`zmod_mul(x, inverse)` 返回余数 1。
 
 ## 10.4 量纲桥
 
@@ -345,67 +345,20 @@ pub fn kernel() -> Rc<Kernel>;   // 当前线程的会话，首次使用时创�
 `Term::compile` 把闭式 `Float` 表达式编译成函数；Aevia 的热点函数走这条路径。`TieredBackend` 先解释、后台编译；JIT 失败回退
 解释器，不改变语义。默认构建 `features.jit = false`，`@jit` 必须读 `Features`，否则报 `E1001("core.jit")`。
 
-### 10.6.5 设备：数据并行执行
+### 10.6.5 设备与数据并行执行
 
-rssn 有两条互相独立的执行轴：
+Aevia 的 `Device` 值标识请求的执行位置。`device_of(tensor)` 返回张量所在位置。
+`to_device(tensor, device)` 和 `on(device, thunk)` 是 IO 动作。默认支持 CPU 执行。
+请求不可用的 GPU 或分布式设备时，报 `E1001`，其能力名分别为 `core.gpu` 或
+`core.distributed`（§13.9.4）。
 
-| 轴 | rssn 抽象 | 回答的问题 |
-|---|---|---|
-| 一个项怎样变成函数 | `Backend` / `Compiled` | 在一个点上求值 |
-| 许多行在哪里跑 | `Device` / `Buffer` / `KernelIr` | 在 10⁶ 行上求值；对 10⁴ 个初值积分 |
+RSSN 设备层提供缓冲区、数值内核 IR、CPU 参考及并行执行器，以及通过 `gpu-wgpu`
+启用的 WGSL 后端。嵌入宿主可用它批量求值、执行数组运算与固定步长集合仿真。
+Aevia 解释器的 CPU 批量路径接受 §9.6.1 所述纯标量子集。设备枚举、启动融合和显式
+GPU 缓冲区传输由 RSSN 宿主 API 提供。
 
-JIT（§9.6）属于第一条轴，**不是** GPU 路径；`@jit(target = Gpu(n))` 选择第二条轴的设备。
-
-**能力发现。** 构建层：manifest `features.devices`（`cpu`、`cpu-parallel`，启用 `gpu-wgpu` 时再加 `gpu-wgpu`），是编译期
-事实，可进 `manifest_hash`；`core.gpu` = `features.devices` 含任一 `gpu-*`。运行层：`rssn::backend::device::registry().list()`
-返回 `DeviceInfo`（`id`、`kind`、`dtypes`、`ops`、`parallelism`、`unified_memory`、`deterministic`）；没有适配器不是错误，
-只是没有 GPU 设备。Aevia 侧封装在 `aevia_rssn::device`（`available()`、`has_gpu()`、`resolve(Selector)`）。
-
-**`Device` 到 rssn 设备。**
-
-| Aevia | rssn id | 说明 |
-|---|---|---|
-| `Cpu` | `cpu` | 单线程；参考语义 |
-| `Cpu`（`cpu_parallel` 提示，`Selector::CpuParallel`） | `cpu-parallel` | rayon；与 `cpu` **逐位相同** |
-| `Gpu(n)` | 第 `n` 个 `DeviceKind::Gpu`（`gpu:wgpu:n`） | 无则 `E1001("core.gpu")`，消息带已注册 GPU 数 |
-| `Distributed(c)` | 无 | `E1001("core.distributed")`；不在本设计内 |
-
-**传输是显式的。** `to_device(t, Gpu(n))` 是一次 `upload`（`F64` 张量在只有 `f32` 的设备上转为 `f32`，会改变数值）；`device_of` 读
-张量的设备标签；结果回宿主要 `download`，不存在隐式传输。`on(device, thunk)` 是作用域执行：`thunk` 内的批量原语用该设备，
-作用域结束释放缓冲区。
-
-**精度合约。** 内核 IR 的语义是 `f64`。`cpu`、`cpu-parallel`：`F64`，与解释器逐位相同（含 NaN、`select`、越界 `gather` 读 NaN），
-这是 §9.7.2 “线程数不改变任何结果”在设备上的延伸。`gpu:*`（WGSL）：`F32`，以及**双单精度的 `F64`**——WGSL 没有 `f64`，
-wgpu 设备把 `Dtype::F64` 做成一对 `f32 (hi, lo)`，约 48 位精度（RTX 3060 / Vulkan 上 `+ - * /` 相对误差 `4e-15`，`sqrt`
-`1e-14`，`exp` `7e-14`，设备测试要求 `5e-12`）；限制：指数范围仍是 `f32` 的（数据请落在 `1e-30 .. 1e30`），`sin`/`cos`/`tan` 在
-`|x| > 1e6` 返回 NaN，`F32` 与 `F64` 缓冲区不能混在一次启动里。所以它**不是** IEEE 双精度，也不与 CPU 逐位相同。Aevia 不会
-悄悄把 `Float` 结果换成 `f32`；要求位精确的代码选 `Cpu`/`CpuParallel`。
-
-**启动融合。** rssn 的 `device::plan` 把一串逐元素内核融合为一次启动（中间列变成寄存器，不落显存）；融合改变值存放的位置而不是
-怎么算，所以在确定性设备上与未融合逐位相同。这是 rssn 侧的显式 API，Aevia 尚未暴露。
-
-**可降低到设备的函数**与 §9.6.1 的 JIT 门控一致：无捕获、`Float` 标量算术、初等函数、比较、`if`（两侧纯，急切求值后 `select`）。
-含宿主调用的项（gamma/erf/Bessel 等 `EvalFn`、C 外部函数）不能降到设备，`Device.map` 回退解释器逐行求值，值不变（CPU 设备上）。
-
-**批量原语（设计）。**
-
-```
-Device.available : () -> IO (List DeviceInfo)       # 注册表快照
-Device.map       : (Float -> Float, Tensor<[n],Float>) -> Tensor<[n],Float>
-                                                     # 在 Cpu/CpuParallel 上；纯，确定
-Device.map_on    : (Device, Float -> Float, Tensor<[n],Float>) -> IO (Tensor<[n],Float>)
-Device.reduce    : (Reduce, Tensor<[n],Float>) -> Float   # Sum | Prod | Min | Max
-Device.ensemble  : (OdeSystem, Tensor<[m,k],Float>, Float, Float, Int) -> Tensor<[m,k],Float>
-                                                     # 同一程序、k 个初值；固定步长 RK4
-```
-
-纯、位确定的版本只在 CPU 设备上承诺；`map_on(Gpu(n), ..)` 是 `IO`，因为分配与传输是效应，结果受设备精度约束。
-
-**状态。** 已实现：rssn 侧完整设备层（注册表、`Buffer`、`KernelIr`、CPU 参考设备、WGSL 发射器、可选 `gpu-wgpu`、
-`ensemble_rk4`、归约/matmul/CSR 乘/stencil 等 `device::array`）；manifest `features.devices`；`aevia_rssn::device` 与
-`aevia-core` 的 `jit::map_floats`（把纯 `Float` 函数在 CPU 设备上批量应用）。**未实现**：`Device.map`/`map_on`/`reduce`/
-`ensemble`/`available` 作为语言原语（需在类型表与内建表加条目并重新生成 `Device.aev`）；`to_device`/`on` 对 `Gpu(n)` 仍报
-`E1001("core.gpu")`（张量值尚不携带设备缓冲区句柄）。
+RSSN GPU 后端用两个 F32 分量模拟 F64 缓冲区。要求 IEEE F64 结果的程序使用 CPU
+后端。宿主负责传输，并在装入内核前检查设备能力。
 
 ## 10.7 错误映射
 
@@ -420,49 +373,27 @@ Device.ensemble  : (OdeSystem, Tensor<[m,k],Float>, Float, Float, Int) -> Tensor
 
 `Answer.diagnostics` 转成 Aevia 警告；`Advisory` 模式下不失败。
 
-## 10.8 已知缺口与风险
+## 10.8 内核边界约定
 
-**下面的数字是测量，live manifest（`aevia rssn`）是唯一事实来源。** 在 `rssn 3.0.0-rc.1`（`api_version = 2`）上：1620 个算子
-（99 declared + 103 overlay + 1418 derived，0 仅动态）、82 个单位、30 个常数（18 个精确）、`manifest_hash = d12fc2b7…`。
-rssn 已实现 Manifest、动态 `Value`/`call_value`/`call_key`、重载解析、100% 签名覆盖、物理常数表、cdylib 插件 ABI、`rssn::dim`、
-自定义基量纲、`Config::dimension_term`、`fork/merge`、结构化结果和 JIT lowering。下面只列**仍然存在**的集成缺口。
+- 项属于一个 RSSN 会话。并行任务在具有对应会话的线程上准备或导入项，并按输入顺序
+  恢复返回结果（§10.5.1）。
+- 该会话的内核清单决定可用算子、单位、常数，以及哪些值可进入项图。生成绑定使用
+  清单的 `api_version` 与完整的 `hash_hex()` 标识接口。截断的 `hash_u64()`
+  用于 ABI 报告与显示。
+- 精确类型化绑定固定受支持的签名。推导或观测签名仅在生成工具能表达并验证其约定时
+  使用。动态接口保留算子错误（§10.3.5）。
+- 无法确定重数时，`Solutions.multiplicities` 可以为空。只有求解方法得到完整解集时
+  才报告完备性。条件与其对应的解一同返回。
+- Aevia 的静态量纲可以使用有理指数（§4.12.3）。一些 RSSN 宿主还可表示符号指数。
+  动态接口必须保留量纲证据或报告错误。
+- 回调句柄限于发起它的宿主调用（§8.19）。仿真参数可通过模式检查的记录或通用 JSON
+  接口传入（§8.17）。可选本机代码与设备能力在选用时确定（§10.6）。
 
-1. **`Session` 单线程。** 跨线程要用 `fork/merge`，不是共享会话；桥当前不跨线程共享符号值（§10.5.1）。
-2. **`compute` 仍克隆图。** `OpTable` 是 `Arc`（clone 共享），`DimArena` 写时复制，剩下节点表的浅拷贝成本；`Session::prepare` 未公开。
-3. **JIT 默认关闭**（见 §10.6.4）。
-4. **`Solutions` 的“未报告”语义。** `multiplicities` 为空表示未报告，不能填 1；kernel 在能证明时填它（一元有理多项式且全部根是精确数时，
-   用精确 square-free 分解）；`conditions` 只填构造上可声明的条件；`complete` 按“是否 `list(...)`”区分，`Solutions::new` 默认 `false`。
-   Aevia 自己构造时不要无条件声明穷尽。
-5. **常数是值，不是单位。** `manifest.constants` 不在 `UnitRegistry` 里，不能参与 `quantity` 解析；`e`（基本电荷）与 `Math.e` 同名，
-   `open` 两个模块时必须限定。
-6. **100% typed，但只有 `Declared`+`Overlay` 精确。** `Derived` 只区分数值 `(Real,…)` / 符号 `(Term,…)`，不区分 `Tensor`/`Quantity`/`Int`，
-   所以 `Derived` 必须标成“保守推断”。
-7. **`assuming` 以单元谓词为主**；一般等式/不等式没有语言入口（§10.2.2）。
-8. **符号指数：桥接可往返，语言不支持。** `DimExpr::to_term` 把 `Length^n` intern 成原子，`try_from_term` 是其精确逆；Aevia 的静态
-   类型位置仍只接受有理指数（§4.12.3）。不要把“后端能表示”误读成“语言该支持”。
-9. **仿真参数仍是 JSON**，类型化包装器靠 `Physics.*` 源模块或生成的 `Rssn_Sim_<Name>`（§8.17）。
-10. **预算/中断。** rssn 的预算在 `compute` 内；Aevia 外层超时/取消是协作式的，不能强杀。
-11. **版本漂移。** Aevia pin `api_version` + `manifest_hash`，并跑 conformance。版本 2 的 manifest 增加 Rust 源路径元数据，二进制布局与版本 1
-    不兼容，且没有解码前的版本协商，宿主须事先知道生产者版本。rc 周期内 manifest 仍可能变化，所以文档数字是测量而不是常量。
-12. **`manifest_hash` 是 bincode BLAKE3，有两种取法。** `hash_hex()`（64 个 hex 字符，宿主应 pin）与 `hash_u64()`（前 8 字节小端读出，只用于
-    ABI/显示）不可互换；JSON 只供人读，不能对 JSON 文本做哈希/比较。
-13. **`Value` 的可入项图性按 `manifest.value_kinds` 走**（17 个变体中 10 个可入图、7 个不可，§13.3.1）；稀疏运算必须走 `eval_dyn` 或 Aevia 本地
-    布局内核。生成器不要硬编码这张表。
-14. **回调与插件桥。** `core.callback` 经同线程作用域句柄调用已检查源码闭包，句柄在外层调用返回后失效（§8.19）；`core.plugin.source` 把 `@op`
-    函数追踪为 kernel 定义、`@rule` 为重写，作为进程内插件注册（§13.5.2）。
-15. **单位属于 session。** `Session::register_unit` 注册的单位只出现在该 session 的 manifest；进程级 `KernelManifest::build` 给出不同的单位表与
-    hash，Aevia 必须用 `Session::manifest()`。
-16. **SDE。** manifest 只暴露噪声原语与方案元数据 `sde_scheme_info`（只给强阶，弱阶在宿主侧 `sde_order`，§8.9.1）；求解循环需要 `&Fn + Sync`
-    host 闭包，manifest 的 `Value` ABI 传不了，所以保持在宿主侧（`aevia-std::sde`），`sdeint_*` 不是 `Rssn` 算子。
+### 10.8.1 兼容性与验证
 
-### 10.8.1 缓解措施
-
-- **一致性测试**：对每个标准算子，比较 Aevia 静态量纲与 rssn `Answer.dimension`；不一致即失败。
-- **单位表校验**：启动时逐项比较基/派生/仿射单位，只以 `manifest.units` 为准。
-- **回退路径**：JIT 失败回退解释器；符号求解失败返回 `Err`，不 panic。
-- **预算默认值**：2 s / 1e6 重写；用户可调。
-- **版本 pin**：pin `api_version` + `hash_hex()`；升级时跑全量 conformance；文档里的算子/单位计数不进缓存键。
-- **桥接层隔离**：所有 rssn 调用集中在 `aevia-rssn`，上层不直接依赖 `rssn` 类型。
+使用 `aevia rssn --audit` 查看所链接内核的签名及能力。一致性测试比较源码声明与已检查
+适配器，覆盖结构化值与单位，并将编译求值与参考路径对照。运行时预算与符号预算分别
+设定（§6.9.1）。本机求值器无法执行某条受支持的路径时，可回到解释器。
 
 ## 10.9 一个端到端的调用链
 

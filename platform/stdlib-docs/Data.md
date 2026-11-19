@@ -10,143 +10,299 @@ The `Data` module of §8.20.
 let column = column
 ```
 
-**Signature:** `column : (Table<ρ>, String) -> Result<Tensor<1, ρ[name]>, DataError>`
+Looks up a column by name at run time and returns its cells in a rank-one tensor.
+
+**Signature:** `column : (Table<ρ>, String) -> Result<Tensor<1, a>, DataError>`
+
+The surrounding expression supplies the expected element type independently of the table’s row type. Numeric cells are dimensionless Float values and other cells are String values. A missing column returns Err(DataError). Use column_dyn when the cells’ types are determined at run time.
+
+**Examples:**
+```text
+fn readings(t: Table<{ time: Float }>, name: String): Result<Tensor<1, Float>, DataError> = column(t, name)
+```
+
+*Source: Aevia standard library guide.*
 ## `let column_dyn`
 
 ```aevia
 let column_dyn = column_dyn
 ```
 
+Looks up a column by name at run time and returns a rank-one tensor of dynamic Value cells.
+
 **Signature:** `column_dyn : (Table<ρ>, String) -> Result<Tensor<1, Value>, DataError>`
+
+Numeric cells are dimensionless Float values and other cells are String values. This works with any table row type. A missing column returns Err(DataError).
+
+**Examples:**
+```text
+fn pick(t: Table<Dynamic>, name: String): Result<Tensor<1, Value>, DataError> = column_dyn(t, name)
+```
+
+*Source: Aevia standard library guide.*
 ## `let filter`
 
 ```aevia
 let filter = filter
 ```
 
+Keeps the elements for which the predicate is true, in order.
+
 **Signature:** `filter : ((a -> Bool), Tensor<1, a>) -> Tensor<1, a>`
 
 **Signature:** `filter : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Tensor<n, a>`
 
 **Signature:** `filter : ((ρ -> Bool), Table<ρ>) -> Table<ρ>`
+
+On a matrix the predicate sees one row at a time; on a Table it sees one row record.
+
+**Examples:**
+```text
+filter(fn x => x > 1, [1, 2, 3])
+```
+
+*Source: Aevia standard library guide.*
 ## `let join`
 
 ```aevia
 let join = join
 ```
 
+join(sep, parts) joins a vector of strings with sep between them.
+
 **Signature:** `join : (String, Tensor<1, String>) -> String`
 
-**Signature:** `join : (Table<ρ>, Table<σ>, String) -> Table<ρ + σ>`
+**Signature:** `join : (Table<ρ>, Table<σ>, String) -> Table<τ>`
+
+It is the inverse of split.
+
+join(left, right, key) joins two tables on a named column in each table. Each pair of matching rows contributes one output row. The left rows keep their order and each left row's matches follow the order of the right table. The output keeps the left columns in order and appends the right non-key columns. A missing key or an ambiguous column name raises E0903.
+
+**Examples:**
+```text
+join(", ", ["a", "b", "c"])
+fn joined(left: Table<{ id: Float, x: Float }>, right: Table<{ id: Float, y: Float }>): Table<{ id: Float, x: Float, y: Float }> = join(left, right, "id")
+```
+
+*Source: Aevia standard library guide.*
 ## `let read_csv`
 
 ```aevia
 let read_csv = read_csv
 ```
 
+Reads comma-separated .csv or tab-separated .tsv files.
+
 **Signature:** `read_csv : String -> IO (Result<Table<ρ>, DataError>)`
+
+An explicit type argument or the surrounding expression supplies the row type, which is used only for static checking. The reader checks quoting and row widths using the file’s header. Header units such as s in time [s] are column metadata reported by schema, and numeric cells are dimensionless Float values. The IO action returns Ok(table) or Err(DataError).
+
+**Examples:**
+```text
+read_csv<{ time: Float, speed: Float }>("run.csv")
+```
+
+*Source: Aevia standard library guide.*
 ## `let read_csv_dyn`
 
 ```aevia
 let read_csv_dyn = read_csv_dyn
 ```
 
+Reads comma-separated .csv or tab-separated .tsv files as Table<Dynamic>.
+
 **Signature:** `read_csv_dyn : String -> IO (Result<Table<Dynamic>, DataError>)`
+
+The reader checks quoting and row widths. Header units such as s in time [s] are column metadata reported by schema, and numeric cells are dimensionless Float values. The IO action returns Ok(table) or Err(DataError). Use column_dyn to get values by column name.
+
+**Examples:**
+```text
+read_csv_dyn("run.tsv")
+```
+
+*Source: Aevia standard library guide.*
 ## `let read_json`
 
 ```aevia
 let read_json = read_json
 ```
 
+Reads a JSON file as a dynamic Json value, returning Ok(json) or Err(DataError).
+
 **Signature:** `read_json : String -> IO (Result<Json, DataError>)`
+
+Convert parts of it to typed values with from_json. It is an IO action.
+
+**Examples:**
+```text
+read_json("config.json")
+```
+
+*Source: Aevia standard library guide.*
 ## `let read_npy`
 
 ```aevia
 let read_npy = read_npy
 ```
 
-Read a NumPy Float array in C or Fortran order, preserving its rank.
+Reads a NumPy .npy file of floats as a tensor.
 
 **Signature:** `read_npy : String -> IO (Result<Tensor<n, Float>, DataError>)`
 
-**Errors**
-Returns a domain error for unsupported or malformed data.
+You must state the rank as a type argument, read_npy<2>(path), so the result type is known; a file of a different rank gives Err(DataError). It is an IO action.
 
-*Source: Rust documentation of the `aevia-std` function.*
+**Examples:**
+```text
+read_npy<2>("matrix.npy")
+```
+
+*Source: Aevia standard library guide.*
 ## `let row`
 
 ```aevia
 let row = row
 ```
 
+Builds a record from the selected row of a table.
+
 **Signature:** `row : (Table<ρ>, Int) -> Result<ρ, DataError>`
+
+Indices start at zero, and -1 selects the last row. An out-of-range index returns Err(DataError).
+
+**Examples:**
+```text
+fn last_row(t: Table<{ x: Float }>) = row(t, -1)
+```
+
+*Source: Aevia standard library guide.*
 ## `let schema`
 
 ```aevia
 let schema = schema
 ```
 
+Reports each run-time column’s name, detected cell type and optional unit.
+
 **Signature:** `schema : Table<ρ> -> Tensor<1, ColumnInfo>`
+
+A column whose cells all parse as numbers has dtype Float. Other columns have dtype String. The unit is the text stored in the column header.
+
+**Examples:**
+```text
+fn describe(t: Table<{ x: Float }>) = schema(t)
+```
+
+*Source: Aevia standard library guide.*
 ## `let select`
 
 ```aevia
 let select = select
 ```
 
+Keeps only the named columns of a Table: select(table, ["time", "speed"]).
+
 **Signature:** `select : (Table<ρ>, Tensor<1, String>) -> Table<σ>`
+
+**Examples:**
+```text
+fn narrow(t: Table<{ time: Float, speed: Float, note: String }>) = select(t, ["time", "speed"])
+```
+
+*Source: Aevia standard library guide.*
 ## `let to_dynamic`
 
 ```aevia
 let to_dynamic = to_dynamic
 ```
 
+Changes the static row type of a table to Dynamic while retaining all rows, column names and unit metadata.
+
 **Signature:** `to_dynamic : Table<ρ> -> Table<Dynamic>`
+
+Use column_dyn to read cells by name.
+
+**Examples:**
+```text
+fn loosen(t: Table<{ time: Float }>): Table<Dynamic> = to_dynamic(t)
+```
+
+*Source: Aevia standard library guide.*
 ## `let to_table`
 
 ```aevia
 let to_table = to_table
 ```
 
+Builds a table from a vector of records.
+
 **Signature:** `to_table : Tensor<1, ρ> -> Result<Table<ρ>, DataError>`
+
+Field names supply the columns and values become cell text. An element that is not a record returns Err(DataError). On success the result is Ok(table).
+
+**Examples:**
+```text
+to_table([{ x = 1.0 }, { x = 2.0 }])
+```
+
+*Source: Aevia standard library guide.*
 ## `let write_csv`
 
 ```aevia
 let write_csv = write_csv
 ```
 
-Serialises a table as CSV, with the unit back in the header.
+Writes a table as comma-separated CSV and includes any column units in the header.
 
 **Signature:** `write_csv : (String, Table<ρ>) -> IO (Result<(), DataError>)`
 
-*Source: Rust documentation of the `aevia-std` function.*
+The IO action returns Ok(()) or Err(DataError).
+
+**Examples:**
+```text
+fn dump(t: Table<{ x: Float }>) = write_csv("out.csv", t)
+```
+
+*Source: Aevia standard library guide.*
 ## `let write_json`
 
 ```aevia
 let write_json = write_json
 ```
 
-Serialises JSON, compactly.
+Writes a Json value to a file.
 
 **Signature:** `write_json : (String, Json) -> IO (Result<(), DataError>)`
 
-*Source: Rust documentation of the `aevia-std` function.*
+Build the value with to_json. It is an IO action returning Ok(()) or Err(DataError).
+
+**Examples:**
+```text
+write_json("out.json", to_json([1, 2, 3]))
+```
+
+*Source: Aevia standard library guide.*
 ## `let write_npy`
 
 ```aevia
 let write_npy = write_npy
 ```
 
-Encode a valid NumPy Float array.
+Writes a dimensionless Float tensor of any rank to a NumPy .npy file (little-endian float64).
 
 **Signature:** `write_npy : (String, Tensor<n, Float>) -> IO (Result<(), DataError>)`
 
-**Panics**
-Panics if the shape and data do not agree; use [`try_write_npy`] for
-untrusted input and a recoverable error.
+It is an IO action returning Ok(()) or Err(DataError).
 
-*Source: Rust documentation of the `aevia-std` function.*
+**Examples:**
+```text
+write_npy("matrix.npy", [[1.0, 2.0], [3.0, 4.0]])
+```
+
+*Source: Aevia standard library guide.*
 ## `type Table`
 
 ```aevia
 type Table<a>
 ```
+
+A table with named columns and a row type parameter. Table<{ time: Float }> provides a static row type for operations such as row. For a table read from a file, the header supplies the actual column names and optional unit metadata. Use schema to inspect that metadata and column_dyn to read cells whose types are determined at run time.

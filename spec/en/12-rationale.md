@@ -65,7 +65,7 @@ These are **deliberate design boundaries**, not "later" to-dos. Each says why it
 | 12.8.3 | `Point[d]` is represented as `Float` + `UnitId`; symbolic absolute temperatures do not enter `Point` | Symbolic thermodynamics cannot do absolute-temperature algebra directly; use differences plus a reference point, or `Dyn` |
 | 12.8.4 | Uncertainty is not a core type: `Measurement<d>` does independent error propagation only, correlated errors use `Covariance<d,e>` | Uncertainty in experimental data must be managed explicitly; it is a library type |
 | 12.8.5 | No user-defined effects or macros: `IO` is the only effect; the extension points are rssn operators, plugins, `Rssn` dynamic calls and the registry | Use `@op`, plugins and `Rssn.dynamic` for DSLs and code generation |
-| 12.8.6 | `Table<ρ>` is a static schema; dynamic CSV returns `Table<Dynamic>` and `to_table<ρ>` validates at run time | Give an explicit `ρ` when reading, or use `Table<Dynamic>` plus validation |
+| 12.8.6 | `Table<ρ>` carries a row type parameter; external columns and unit metadata come from the input at run time | Use `read_csv_dyn` for unknown columns and inspect the result with `schema` (§8.11) |
 | 12.8.7 | Symbolic values are bound to an rssn session and cannot cross threads: the `par_map` workers each hold a replica, and values that cannot cross threads fall back to sequential evaluation (§9.7.2) | Keep the symbolic phase serial and the numeric phase parallel |
 | 12.8.8 | Unit-name ambiguity: `ms` may be milliseconds or metre-seconds; the longest match wins | Write an explicit `*` for rare combinations; the formatter hints |
 | 12.8.9 | `Real` absorbs `Float`: `Real + Float` becomes `Real` and the `Float` is converted exactly to a rational | Mixing symbolic and float leaves the fast path and produces large numerators and denominators; keep hot paths `Float` throughout; the compiler hints `W0302` |
@@ -96,7 +96,7 @@ These are final decisions; implementation may proceed in stages, but the languag
 | 5 | Mixing `Real`/`Float`? | `Real` absorbs `Float`; hot paths use explicit `Float` |
 | 6 | `Dyn` errors? | arithmetic `panic` + `try_*`; `check` returns `Result` |
 | 7 | Nested `RateOf`? | scalars, records, tuples, tensors, defined recursively |
-| 8 | Static `Table` schema? | Yes, row-polymorphic `Table<ρ>`; `Table<Dynamic>` kept |
+| 8 | How are table column types determined? | `Table<ρ>` carries a row type parameter. `schema` reports the types detected in the loaded data (§8.11). |
 | 9 | `@` or `*` for matrix product? | keep `@`; `*` is element-wise |
 | 10 | `%` for modulo? | No; `mod`/`rem` |
 | 11 | Is `let` recursive by default? | No; `fn` is recursive, `let rec` is explicit |

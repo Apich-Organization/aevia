@@ -246,38 +246,48 @@ T3 = 35.0 °C
 
 ## 11.6 数据分析：`Table` 与动态列
 
+将以下数据保存为 `measurements.csv`。两列数值分别记录以秒表示的时间和以米每秒表示的速度。
+
+```csv
+time [s],velocity [m/s]
+0,1.0
+1,1.5
+2,2.1
+```
+
 ```aevia
 module Analysis
 
 open Units.SI
-import Data.Csv { read_csv, column, Table }
+import Data.Csv { read_csv_dyn, column }
 import Stats { mean, std }
 import Plot { line, combine, plot, label }
 
+fn report_data(times: Tensor<1, Float>, velocities: Tensor<1, Float>): IO Unit = do
+    let t = times * 1.0 s
+    let v = velocities * (1.0 m / 1.0 s)
+    println("mean speed = {mean(v)}")
+    println("std  speed = {std(v)}")
+    let spec = label(line(t, v), "v(t)")
+    plot(combine([spec]))
+
 fn main(): IO Unit = do
-    r <- read_csv<{ time: Float[T], velocity: Float[L/T] }>("measurements.csv")
+    r <- read_csv_dyn("measurements.csv")
     match r with
     | Err(e) -> println("cannot read: {e}")
     | Ok(tbl) ->
         match (column(tbl, "time"), column(tbl, "velocity")) with
-        | (Ok(t), Ok(v)) -> do
-            println("mean speed = {mean(v)}")
-            println("std  speed = {std(v)}")
-            let spec = label(line(t, v), "v(t)")
-            plot(combine([spec]))
-        | _ -> println("column type mismatch")
+        | (Ok(t), Ok(v)) -> report_data(t, v)
+        | _ -> println("expected time and velocity columns")
 ```
 
 要点：
 
-- `read_csv<ρ>` 是 `IO (Result<Table<ρ>, DataError>)`；`ρ` 是行类型，
-  表头单位用于推断字段类型。`<-` 绑定结果，`match` 处理错误。
-- `column(t, "time")` 在编译期用 `Table<ρ>` 的字段类型检查，运行时再做
-  防御性校验；CSV 表头可以带单位（`time [s]`），没有时列被当作无量纲，
-  显式 `ρ` 可以覆盖。
-- `line` 接受带量纲的 `x`/`y` 张量，自动生成轴标签（`t / s`、
-  `v / (m/s)`）；需要覆盖时用 `PlotOpts.xunit`/`yunit`。
-- `combine([spec])` 构造 `PlotSpec`；`plot` 写 HTML/SVG。
+- `read_csv_dyn` 返回一个产生 `Result<Table<Dynamic>, DataError>` 的 IO 动作。`<-` 绑定结果，`match` 处理读取错误。
+- `column` 在运行时查找列。本例的单元格读为无量纲 `Float`，符合 `report_data` 的参数类型。表头单位是可通过 `schema` 查看的元数据。`report_data` 将数值分别乘以 `1.0 s` 和 `1.0 m / 1.0 s`，赋予样例声明的单位。
+- `line` 接受带量纲的 `x`/`y` 张量，自动生成轴标签（`x / s`、
+  `y / (m/s)`）；改用 `line_with` 可指定显示单位。
+- `combine([spec])` 构造 `PlotSpec`；`plot` 将内嵌 SVG 的 HTML 写入 `plot.html`。
 
 ## 11.7 仿真：类型化包装器
 

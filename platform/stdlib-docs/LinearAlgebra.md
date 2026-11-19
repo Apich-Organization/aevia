@@ -10,21 +10,43 @@ The `LinearAlgebra` module of §8.20.
 let approx_map = approx_map
 ```
 
+Applies approx to every element of a vector of exact values, returning a Result of a Float vector.
+
 **Signature:** `approx_map : ((Real[d] -> Real[e]), Tensor<1, Real[d]>) -> Result<Tensor<1, Float[e]>, EvalError>`
+
+It fails if any element still contains a free symbol.
+
+**Examples:**
+```text
+approx_map(fn x => x, [1 / 3, 2 / 3])
+```
+
+*Source: Aevia standard library guide.*
 ## `let at`
 
 ```aevia
 let at = at
 ```
 
+at(t, i) is the i-th row of a tensor (an element for a vector), counting from 0.
+
 **Signature:** `at : (Tensor<n, a>, Int) -> Tensor<n-1, a>`
+
+A negative index counts from the end, and an out-of-range index is a runtime error; t[i] is the same operation.
+
+**Examples:**
+```text
+at([10, 20, 30], 1)
+```
+
+*Source: Aevia standard library guide.*
 ## `let cholesky`
 
 ```aevia
 let cholesky = cholesky
 ```
 
-Lower-triangular Cholesky factor `L` with `A = L L^T` for positive-definite `A`.
+Cholesky factor L of a symmetric positive-definite matrix, A = L L^T.
 
 **Signature:** `cholesky : Tensor<2, Scalar<ρ,d>> -> Result<Tensor<2, Scalar<ρ,d^(1/2)>>, LinAlgError>`
 
@@ -34,23 +56,21 @@ Lower-triangular Cholesky factor `L` with `A = L L^T` for positive-definite `A`.
 
 **Dimensions:** kernel rule `Root(2)`
 
-Cholesky factor `L` (lower triangular) with `A = L L^T`.
-
-**Errors**
-[`DenseError::Singular`] if `A` is not symmetric positive definite.
+Returns Err(LinAlgError) when the matrix is not positive definite.
 
 **Examples:**
-- `cholesky(list(list(4, 2), list(2, 3)))` returns a `[[Expr]]`
-(recorded kernel calls; the result is shown as its sort)
+```text
+cholesky([[4.0, 2.0], [2.0, 3.0]])
+```
 
-*Source: rssn operator `linalg.cholesky`; rustdoc of `crate::kernels::dense::cholesky` (by name).*
+*Source: Aevia standard library guide.*
 ## `let det`
 
 ```aevia
 let det = det
 ```
 
-Determinant of square matrix `A`.
+The determinant of a square, dimensionless matrix.
 
 **Signature:** `det : Tensor<2, Scalar<ρ,1>> -> Scalar<ρ,1>`
 
@@ -60,21 +80,39 @@ Determinant of square matrix `A`.
 
 **Dimensions:** kernel rule `Custom("")`
 
-*Source: rssn operator `linalg.det`.*
+For a matrix with units use det_unit, because the determinant's dimension depends on the matrix size.
+
+**Examples:**
+```text
+det([[1.0, 2.0], [3.0, 4.0]])
+```
+
+*Source: Aevia standard library guide.*
 ## `let det_unit`
 
 ```aevia
 let det_unit = det_unit
 ```
 
+Determinant of a square matrix whose entries carry a unit.
+
 **Signature:** `det_unit : (Tensor<2, Scalar<ρ,d>>, Unit[d]) -> Dyn<ρ>`
+
+Because the determinant's dimension is the entry dimension to the power n, you supply the unit of the entries and the result is a dynamically typed quantity.
+
+**Examples:**
+```text
+det_unit([[1.0 m, 2.0 m], [3.0 m, 4.0 m]], m)
+```
+
+*Source: Aevia standard library guide.*
 ## `let diag`
 
 ```aevia
 let diag = diag
 ```
 
-Build a diagonal matrix from vector `v`, or extract the main diagonal of matrix `A`.
+On a vector, builds the square matrix with that vector on its diagonal; on a matrix, extracts the diagonal as a vector.
 
 **Signature:** `diag : Tensor<1, a> -> Tensor<2, a>`
 
@@ -87,17 +125,19 @@ Build a diagonal matrix from vector `v`, or extract the main diagonal of matrix 
 **Dimensions:** kernel rule `List`
 
 **Examples:**
-- `diag(list(1, a, 3))` returns a `[[Expr]]`
-(recorded kernel calls; the result is shown as its sort)
+```text
+diag([1.0, 2.0, 3.0])
+diag([[1, 2], [3, 4]])
+```
 
-*Source: rssn operator `linalg.diag`.*
+*Source: Aevia standard library guide.*
 ## `let dot`
 
 ```aevia
 let dot = dot
 ```
 
-Euclidean dot product `sum_i u_i v_i` of vectors `u` and `v`.
+The inner product of two vectors of equal length.
 
 **Signature:** `dot : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Scalar<ρ,d*e>`
 
@@ -107,81 +147,128 @@ Euclidean dot product `sum_i u_i v_i` of vectors `u` and `v`.
 
 **Dimensions:** the result is the product of the argument dimensions
 
-Dimension-generic dot product: dispatches on the vector type.
+The result dimension is the product of the element dimensions, so the dot product of a force and a displacement is an energy.
 
-*Source: rssn operator `linalg.dot`; rustdoc of `crate::kernels::computer_graphics::dot` (by name).*
+**Examples:**
+```text
+dot([1.0, 2.0, 3.0], [4.0, 5.0, 6.0])
+```
+
+*Source: Aevia standard library guide.*
 ## `let eig`
 
 ```aevia
 let eig = eig
 ```
 
-The eigenvalues and eigenvectors of a square matrix.
+Eigen-decomposition of a square matrix.
 
 **Signature:** `eig : Tensor<2, Scalar<ρ,d>> -> (Tensor<1, Complex[d]>, Tensor<2, Complex<1>>)`
 
-The eigenvectors are the columns of the returned matrix: the result is
-`(values, vectors)` with `vectors` row-major `n × n`, and column `j` is the
-eigenvector of `values[j]`.
+Returns a pair: the vector of eigenvalues and a matrix whose columns are the matching eigenvectors. Both are Complex, since a real matrix can have complex eigenvalues. Use eigvals when you only need the values.
 
-**Errors**
+**Examples:**
+```text
+eig([[2.0, 0.0], [0.0, 3.0]])
+```
 
-[`NumericError::NotSquare`] when the matrix is not square, and
-[`NumericError::NotConverged`] when the eigenvalue iteration fails.
-
-*Source: Rust documentation of the `aevia-std` function.*
+*Source: Aevia standard library guide.*
 ## `let eigvals`
 
 ```aevia
 let eigvals = eigvals
 ```
 
-The eigenvalues of a square matrix.
+The eigenvalues of a square matrix, as a vector of Complex numbers that keep the matrix's dimension.
 
 **Signature:** `eigvals : Tensor<2, Scalar<ρ,d>> -> Tensor<1, Complex[d]>`
 
-**Errors**
+**Examples:**
+```text
+eigvals([[2.0, 0.0], [0.0, 3.0]])
+```
 
-[`NumericError::NotSquare`] when the matrix is not square.
-
-*Source: Rust documentation of the `aevia-std` function.*
+*Source: Aevia standard library guide.*
 ## `let eye`
 
 ```aevia
 let eye = eye
 ```
 
+The n x n identity matrix as Float.
+
 **Signature:** `eye : Int -> Tensor<2, Float>`
+
+Use it as a starting matrix or to check inv(A) * A.
+
+**Examples:**
+```text
+eye(3)
+```
+
+*Source: Aevia standard library guide.*
 ## `let fill`
 
 ```aevia
 let fill = fill
 ```
 
+fill(value, n1, n2, ...) builds a tensor of the given shape with every element equal to value, keeping its type and dimension: fill(2.0 m, 3) is three lengths of 2 m.
+
 **Signature:** `fill : (Scalar<ρ,d>, Int, ..., Int) -> Tensor<n, Scalar<ρ,d>>`
+
+**Examples:**
+```text
+fill(1.5, 2, 3)
+fill(2.0 m, 3)
+```
+
+*Source: Aevia standard library guide.*
 ## `let flatten`
 
 ```aevia
 let flatten = flatten
 ```
 
+Collapses a tensor of rank 2 or more into a vector, reading the elements row by row.
+
 **Signature:** `flatten : Tensor<n, Tensor<m, a>> -> Tensor<n+m, a>`
 
 **Signature:** `flatten : Tensor<n, a> -> Tensor<1, a>`
+
+To change the shape instead of dropping it use reshape.
+
+**Examples:**
+```text
+flatten([[1, 2], [3, 4]])
+```
+
+*Source: Aevia standard library guide.*
 ## `let inv`
 
 ```aevia
 let inv = inv
 ```
 
+The inverse of a square matrix, returned as a Result: a singular matrix gives Err(LinAlgError).
+
 **Signature:** `inv : Tensor<2, Scalar<ρ,d>> -> Result<Tensor<2, Scalar<div_rep(ρ),1/d>>, LinAlgError>`
+
+The elements of the inverse carry the reciprocal dimension. To solve a system prefer linsolve, which is more accurate than multiplying by an inverse.
+
+**Examples:**
+```text
+inv([[1.0, 2.0], [3.0, 4.0]])
+```
+
+*Source: Aevia standard library guide.*
 ## `let linsolve`
 
 ```aevia
 let linsolve = linsolve
 ```
 
-Solution `x` to the linear system `A x = b`.
+Solves A x = b for x, returning a Result; a singular or non-square system gives Err(LinAlgError).
 
 **Signature:** `linsolve : (Tensor<2, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Result<Tensor<1, Scalar<div_rep(ρ),e/d>>, LinAlgError>`
 
@@ -193,27 +280,40 @@ Solution `x` to the linear system `A x = b`.
 
 **Dimensions:** kernel rule `Custom("")`
 
-**Examples:**
-- `linsolve(list(list(1, 1, 1)), list(3))` returns a `[Expr]`
-- `linsolve(list(list(1, 1), list(1, 1)), list(1, 2))` returns a `[Never]`
-- `linsolve(list(list(1, 1/2), list(1/2, 1/3)), list(1/3, 1/4))` returns a `[Rat]`
-(recorded kernel calls; the result is shown as its sort)
+The solution has the dimension of b divided by that of A. For over-determined systems use lstsq.
 
-*Source: rssn operator `linalg.linsolve`.*
+**Examples:**
+```text
+linsolve([[2.0, 0.0], [0.0, 4.0]], [2.0, 4.0])
+```
+
+*Source: Aevia standard library guide.*
 ## `let linspace`
 
 ```aevia
 let linspace = linspace
 ```
 
-**Signature:** `linspace : (Scalar<ρ,d>, Scalar<ρ,d>, Int) -> Tensor<1, Scalar<ρ,d>>`
+Returns evenly spaced floating-point samples with the endpoints’ dimension.
+
+**Signature:** `linspace : (Scalar<ρ,d>, Scalar<ρ,d>, Int) -> Tensor<1, Float[d]>`
+
+For finite endpoints, two or more samples include both limits. One sample returns the start, and a nonpositive count returns an empty tensor.
+
+**Examples:**
+```text
+linspace(0.0, 1.0, 5)
+linspace(0.0 m, 10.0 m, 3)
+```
+
+*Source: Aevia standard library guide.*
 ## `let lstsq`
 
 ```aevia
 let lstsq = lstsq
 ```
 
-Least-squares solution minimizing `||A x - b||_2`.
+Least-squares solution of A x = b for a tall matrix A: the x that minimises the length of A x - b.
 
 **Signature:** `lstsq : (Tensor<2, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Result<Tensor<1, Scalar<div_rep(ρ),e/d>>, LinAlgError>`
 
@@ -223,18 +323,21 @@ Least-squares solution minimizing `||A x - b||_2`.
 
 **Dimensions:** kernel rule `Custom("")`
 
-**Examples:**
-- `lstsq(list(list(1, 0), list(1, 1), list(1, 2)), list(1, 2, 2))` returns a `[Rat]`
-(recorded kernel calls; the result is shown as its sort)
+Returns a Result, so a rank-deficient system gives Err(LinAlgError). Use it to fit a linear model.
 
-*Source: rssn operator `linalg.lstsq`.*
+**Examples:**
+```text
+lstsq([[1.0, 0.0], [1.0, 1.0], [1.0, 2.0]], [1.0, 2.0, 3.0])
+```
+
+*Source: Aevia standard library guide.*
 ## `let lu`
 
 ```aevia
 let lu = lu
 ```
 
-LU factorization `list(L, U, P)` with `P A = L U`.
+LU decomposition with pivoting.
 
 **Signature:** `lu : Tensor<2, Scalar<ρ,d>> -> (Tensor<2, Scalar<ρ,1>>, Tensor<2, Scalar<ρ,1>>, Tensor<2, Scalar<ρ,d>>)`
 
@@ -244,25 +347,37 @@ LU factorization `list(L, U, P)` with `P A = L U`.
 
 **Dimensions:** kernel rule `Container`
 
-**Examples:**
-- `lu(list(list(0, 2, 1), list(1, 1, 0), list(2, 1, 3)))` returns a `[[[Rat]]]`
-(recorded kernel calls; the result is shown as its sort)
+Returns the triple (P, L, U) satisfying P A = L U, where P is the permutation matrix that records the row swaps, L is unit lower-triangular and U is upper-triangular.
 
-*Source: rssn operator `linalg.lu`.*
+**Examples:**
+```text
+lu([[1.0, 2.0], [3.0, 4.0]])
+```
+
+*Source: Aevia standard library guide.*
 ## `let map_indexed`
 
 ```aevia
 let map_indexed = map_indexed
 ```
 
+map_indexed(f, xs) calls f(i, x) for every element, passing its position as well as its value.
+
 **Signature:** `map_indexed : ((Int, a) -> b, Tensor<1, a>) -> Tensor<1, b>`
+
+**Examples:**
+```text
+map_indexed(fn (i, x) => i * x, [5, 6, 7])
+```
+
+*Source: Aevia standard library guide.*
 ## `let matmul`
 
 ```aevia
 let matmul = matmul
 ```
 
-Matrix product of two or more matrices or vectors.
+Matrix product of an n x k and a k x m matrix.
 
 **Signature:** `matmul : (Tensor<2, Scalar<ρ,d>>, Tensor<2, Scalar<ρ,e>>) -> Tensor<2, Scalar<ρ,d*e>>`
 
@@ -276,27 +391,37 @@ Matrix product of two or more matrices or vectors.
 
 **Dimensions:** the result is the product of the argument dimensions
 
-**Examples:**
-- `matmul(dirac_gamma(0), dirac_gamma(2))` returns a `[[Expr]]`
-- `matmul(dirac_gamma(2), dirac_gamma(0))` returns a `[[Expr]]`
-- `matmul(pauli_x, pauli_y)` returns a `[[Expr]]`
-(recorded kernel calls; the result is shown as its sort)
+The result dimension is the product of the two dimensions. A sparse matrix may be multiplied by a vector. A shape mismatch is rejected by the checker when the shapes are known.
 
-*Source: rssn operator `linalg.matmul`.*
+**Examples:**
+```text
+matmul([[1.0, 2.0], [3.0, 4.0]], [[0.0, 1.0], [1.0, 0.0]])
+```
+
+*Source: Aevia standard library guide.*
 ## `let matvec`
 
 ```aevia
 let matvec = matvec
 ```
 
+Matrix times column vector: for an n x k matrix and a vector of length k, the vector of n row dot-products.
+
 **Signature:** `matvec : (Tensor<2, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Tensor<1, Scalar<ρ,d*e>>`
+
+**Examples:**
+```text
+matvec([[1.0, 2.0], [3.0, 4.0]], [1.0, 1.0])
+```
+
+*Source: Aevia standard library guide.*
 ## `let mean`
 
 ```aevia
 let mean = mean
 ```
 
-Arithmetic mean of list `xs`.
+The arithmetic mean of every element of a tensor of any rank; the result has the elements' dimension.
 
 **Signature:** `mean : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>`
 
@@ -306,27 +431,22 @@ Arithmetic mean of list `xs`.
 
 **Dimensions:** the result has the dimension of argument 1
 
-Computes the mean of a slice of data.
-
-**Arguments**
-* `data` - A unmutable slice of `f64` data points.
-
-**Returns**
-The mean of the data as an `f64`.
+An Int tensor gives an exact Real quotient.
 
 **Examples:**
-- `mean(list(1, 2, 4))` returns a `Rat`
-- `mean(list(5))` returns a `Int`
-(recorded kernel calls; the result is shown as its sort)
+```text
+mean([1.0, 2.0, 3.0, 6.0])
+mean([1.0 m, 2.0 m, 3.0 m])
+```
 
-*Source: rssn operator `stats.mean`; rustdoc of `crate::kernels::stats::mean` (by name).*
+*Source: Aevia standard library guide.*
 ## `let norm`
 
 ```aevia
 let norm = norm
 ```
 
-Euclidean (L2) norm `||v||_2` of vector `v`.
+The Euclidean (2-) norm of a vector, or the Frobenius norm of a matrix, in the elements' dimension.
 
 **Signature:** `norm : Tensor<n, Scalar<ρ,d>> -> Scalar<ρ,d>`
 
@@ -338,14 +458,22 @@ Euclidean (L2) norm `||v||_2` of vector `v`.
 
 **Dimensions:** the result has the dimension of argument 1
 
-*Source: rssn operator `linalg.norm`.*
+A second Int argument selects the p-norm of a vector.
+
+**Examples:**
+```text
+norm([3.0, 4.0])
+norm([1.0, 2.0, 3.0], 1)
+```
+
+*Source: Aevia standard library guide.*
 ## `let normalize`
 
 ```aevia
 let normalize = normalize
 ```
 
-Unit vector `v / ||v||_2` in the direction of `v`.
+Divides a tensor by its norm, so the result has norm 1 and is dimensionless.
 
 **Signature:** `normalize : Tensor<n, Scalar<ρ,d>> -> Tensor<n, Scalar<ρ,1>>`
 
@@ -355,32 +483,58 @@ Unit vector `v / ||v||_2` in the direction of `v`.
 
 **Dimensions:** kernel rule `Custom("")`
 
-**Examples:**
-- `normalize(list(3, 4))` returns a `[Rat]`
-(recorded kernel calls; the result is shown as its sort)
+Normalising a zero tensor gives NaN entries, since it divides zero by zero.
 
-*Source: rssn operator `linalg.normalize`.*
+**Examples:**
+```text
+normalize([3.0, 4.0])
+```
+
+*Source: Aevia standard library guide.*
 ## `let ones`
 
 ```aevia
 let ones = ones
 ```
 
+ones(n1, n2, ...) builds a tensor of ones with one extent per argument.
+
 **Signature:** `ones : (Int, ..., Int) -> Tensor<n, Float>`
+
+The elements are Float unless you give a type argument: ones<Int>(3).
+
+**Examples:**
+```text
+ones(2, 3)
+ones<Int>(3)
+```
+
+*Source: Aevia standard library guide.*
 ## `let ones_of`
 
 ```aevia
 let ones_of = ones_of
 ```
 
+A tensor of ones whose shape is a type argument: ones_of<[2, 3]>().
+
 **Signature:** `ones_of : Tensor<shape, Float>`
+
+The shape is checked at compile time. When the shape is only known at run time use ones.
+
+**Examples:**
+```text
+ones_of<[2, 3]>()
+```
+
+*Source: Aevia standard library guide.*
 ## `let outer`
 
 ```aevia
 let outer = outer
 ```
 
-Outer product matrix `u v^T` of vectors `u` and `v`.
+The outer product of two vectors: entry (i, j) is a[i] * b[j], giving a matrix of shape length(a) x length(b).
 
 **Signature:** `outer : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Tensor<2, Scalar<ρ,d*e>>`
 
@@ -391,17 +545,18 @@ Outer product matrix `u v^T` of vectors `u` and `v`.
 **Dimensions:** the result is the product of the argument dimensions
 
 **Examples:**
-- `outer(list(1, 2), list(3, 4))` returns a `[[Int]]`
-(recorded kernel calls; the result is shown as its sort)
+```text
+outer([1.0, 2.0], [3.0, 4.0])
+```
 
-*Source: rssn operator `linalg.outer`.*
+*Source: Aevia standard library guide.*
 ## `let qr`
 
 ```aevia
 let qr = qr
 ```
 
-QR factorization `list(Q, R)` with orthogonal `Q` and upper triangular `R`.
+QR decomposition A = Q R of a matrix into an orthogonal Q and an upper-triangular R.
 
 **Signature:** `qr : Tensor<2, Scalar<ρ,d>> -> (Tensor<2, Scalar<ρ,1>>, Tensor<2, Scalar<ρ,d>>)`
 
@@ -411,18 +566,21 @@ QR factorization `list(Q, R)` with orthogonal `Q` and upper triangular `R`.
 
 **Dimensions:** kernel rule `Container`
 
-**Examples:**
-- `qr(list(list(3, 1), list(4, 2)))` returns a `[[[Rat]]]`
-(recorded kernel calls; the result is shown as its sort)
+Returns the pair (Q, R).
 
-*Source: rssn operator `linalg.qr`.*
+**Examples:**
+```text
+qr([[1.0, 2.0], [3.0, 4.0]])
+```
+
+*Source: Aevia standard library guide.*
 ## `let rank`
 
 ```aevia
 let rank = rank
 ```
 
-Rank of matrix `A`.
+The number of axes of a tensor: 1 for a vector, 2 for a matrix.
 
 **Signature:** `rank : Tensor<n, a> -> Int`
 
@@ -434,42 +592,93 @@ Rank of matrix `A`.
 
 **Dimensions:** kernel rule `Custom("")`
 
-*Source: rssn operator `linalg.rank`.*
+A scalar has rank 0. Use shape for the length of each axis.
+
+**Examples:**
+```text
+rank([[1, 2], [3, 4]])
+```
+
+*Source: Aevia standard library guide.*
 ## `let refine_shape`
 
 ```aevia
 let refine_shape = refine_shape
 ```
 
+Checks at run time that a tensor has a given shape, written as a type argument where ? matches any size: refine_shape<[3, ?]>(m).
+
 **Signature:** `refine_shape : Tensor<n, τ> -> Option<Tensor<shape, τ>>`
+
+Returns Some(tensor) with the sharper type when it matches and None otherwise, so you can branch on it with match.
+
+**Examples:**
+```text
+refine_shape<[2, ?]>([[1, 2], [3, 4]])
+```
+
+*Source: Aevia standard library guide.*
 ## `let reshape`
 
 ```aevia
 let reshape = reshape
 ```
 
+Gives a tensor a new shape with the same elements, written as a type argument: reshape<[3, 2]>(t).
+
 **Signature:** `reshape : Tensor<shape0, τ> -> Result<Tensor<shape, τ>, ShapeError>`
+
+Returns Err(ShapeError) when the element counts differ (a mismatch between two shapes both known at compile time is reported as an error before the program runs). For a shape known only at run time use reshape_dyn.
+
+**Examples:**
+```text
+reshape<[2, 2]>([1, 2, 3, 4])
+```
+
+*Source: Aevia standard library guide.*
 ## `let reshape_dyn`
 
 ```aevia
 let reshape_dyn = reshape_dyn
 ```
 
+`reshape_dyn(t, shape)` takes one nonnegative `Int` extent per input axis.
+
 **Signature:** `reshape_dyn : (Tensor<n, τ>, Tensor<1, Int>) -> Result<Tensor<n, τ>, ShapeError>`
+
+It returns `Ok(t)` with the reshaped tensor, or a shape error for invalid extents, rank, or element count.
+
+**Examples:**
+```text
+reshape_dyn([[1, 2], [3, 4]], [4, 1])
+```
+
+*Source: Aevia standard library guide.*
 ## `let set`
 
 ```aevia
 let set = set
 ```
 
+`set(t, index, value)` returns a copy of the tensor with one element replaced.
+
 **Signature:** `set : (Tensor<n, a>, Tensor<1, Int>, a) -> Tensor<n, a>`
+
+Supply one `Int` index per axis. Indices start at zero, and negative indices count back from the end of the axis.
+
+**Examples:**
+```text
+set([1, 2, 3], [1], 9)
+```
+
+*Source: Aevia standard library guide.*
 ## `let std`
 
 ```aevia
 let std = std
 ```
 
-Population standard deviation of list `xs`.
+Computes sample standard deviation in the elements’ dimension.
 
 **Signature:** `std : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>`
 
@@ -478,14 +687,21 @@ Population standard deviation of list `xs`.
 
 **Dimensions:** the result has the dimension of argument 1
 
-*Source: rssn operator `stats.std`.*
+A singleton has zero standard deviation.
+
+**Examples:**
+```text
+std([1.0, 2.0, 3.0, 4.0])
+```
+
+*Source: Aevia standard library guide.*
 ## `let sum`
 
 ```aevia
 let sum = sum
 ```
 
-Symbolic/numeric summation over bound index `k` from `lo` to `hi`, or tensor reduction along `axis`.
+Sum tensor elements, or use the function-and-bounds overload for a finite summation.
 
 **Signature:** `sum : Tensor<n, Scalar<ρ,d>> -> Scalar<ρ,d>`
 
@@ -502,14 +718,21 @@ Symbolic/numeric summation over bound index `k` from `lo` to `hi`, or tensor red
 
 **Dimensions:** kernel rule `SumOver { f: 0, index: 1 }`
 
-*Source: rssn operator `calculus.sum`.*
+Empty tensor reductions return a phase-appropriate zero.
+
+**Examples:**
+```text
+sum([1, 2, 3])
+```
+
+*Source: Aevia standard library guide.*
 ## `let svd`
 
 ```aevia
 let svd = svd
 ```
 
-Singular value decomposition `list(U, S, V)` of matrix `A`.
+Singular value decomposition A = U S V^T.
 
 **Signature:** `svd : Tensor<2, Scalar<ρ,d>> -> (Tensor<2, Scalar<ρ,1>>, Tensor<1, Scalar<ρ,d>>, Tensor<2, Scalar<ρ,1>>)`
 
@@ -519,28 +742,21 @@ Singular value decomposition `list(U, S, V)` of matrix `A`.
 
 **Dimensions:** kernel rule `Container`
 
-Thin singular-value decomposition using the bidiagonal SVD backend.
-
-Rank-deficient matrices retain orthonormal null-space columns. No Gram
-matrix is formed, so small singular values do not lose accuracy through
-squaring the condition number.
-
-**Errors**
-Returns [`DenseError::Shape`] for inconsistent storage or non-finite input,
-and [`DenseError::NoConvergence`] if the backend does not converge.
+Returns the triple (U, singular values, V^T); the singular values are in descending order and keep the matrix's dimension.
 
 **Examples:**
-- `svd(list(list(3, 0), list(0, -2)))` returns a `([[Float]],[Float],[[Float]])`
-(recorded kernel calls; the result is shown as its sort)
+```text
+svd([[3.0, 0.0], [0.0, 4.0]])
+```
 
-*Source: rssn operator `linalg.svd`; rustdoc of `crate::kernels::dense::svd` (by name).*
+*Source: Aevia standard library guide.*
 ## `let trace`
 
 ```aevia
 let trace = trace
 ```
 
-Trace `sum_i A_{ii}` of square matrix `A`.
+The sum of the diagonal of a square matrix, in the elements' dimension.
 
 **Signature:** `trace : Tensor<2, Scalar<ρ,d>> -> Scalar<ρ,d>`
 
@@ -550,19 +766,19 @@ Trace `sum_i A_{ii}` of square matrix `A`.
 
 **Dimensions:** the result has the dimension of argument 1
 
-Computes the trace of a square sparse matrix.
+**Examples:**
+```text
+trace([[1.0, 2.0], [3.0, 4.0]])
+```
 
-**Errors**
-Returns an error if the matrix is not square.
-
-*Source: rssn operator `linalg.trace`; rustdoc of `crate::kernels::sparse::trace` (by name).*
+*Source: Aevia standard library guide.*
 ## `let transpose`
 
 ```aevia
 let transpose = transpose
 ```
 
-Transpose `A^T` of matrix `A`.
+Swaps the rows and columns of a matrix.
 
 **Signature:** `transpose : Tensor<n, a> -> Tensor<n, a>`
 
@@ -574,52 +790,90 @@ Transpose `A^T` of matrix `A`.
 
 **Dimensions:** the result has the dimension of argument 1
 
-*Source: rssn operator `linalg.transpose`.*
+Sparse matrices stay sparse.
+
+**Examples:**
+```text
+transpose([[1, 2], [3, 4]])
+```
+
+*Source: Aevia standard library guide.*
 ## `let tril`
 
 ```aevia
 let tril = tril
 ```
 
-The lower triangle of a matrix, the rest zeroed.
+The lower-triangular part of a matrix: entries above the diagonal become zero.
 
 **Signature:** `tril : Tensor<2, a> -> Tensor<2, a>`
 
-*Source: Rust documentation of the `aevia-std` function.*
+**Examples:**
+```text
+tril([[1, 2], [3, 4]])
+```
+
+*Source: Aevia standard library guide.*
 ## `let triu`
 
 ```aevia
 let triu = triu
 ```
 
-The upper triangle of a matrix, the rest zeroed.
+The upper-triangular part of a matrix: entries below the diagonal become zero.
 
 **Signature:** `triu : Tensor<2, a> -> Tensor<2, a>`
 
-*Source: Rust documentation of the `aevia-std` function.*
+**Examples:**
+```text
+triu([[1, 2], [3, 4]])
+```
+
+*Source: Aevia standard library guide.*
 ## `let var`
 
 ```aevia
 let var = var
 ```
 
+Computes sample variance with divisor `n - 1` for two or more observations.
+
 **Signature:** `var : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d^2>`
 
 **Signature:** `var : (Tensor<n, Scalar<ρ,d>>, Bool) -> Scalar<div_rep(ρ),d^2>`
+
+A singleton has zero variance. The result dimension is the element dimension squared. A second Bool argument chooses the population variance when true.
+
+**Examples:**
+```text
+var([1.0, 2.0, 3.0, 4.0])
+var([1.0, 2.0, 3.0, 4.0], true)
+```
+
+*Source: Aevia standard library guide.*
 ## `let vecmat`
 
 ```aevia
 let vecmat = vecmat
 ```
 
+Row vector times matrix: for a vector of length n and an n x m matrix, the vector of m column dot-products.
+
 **Signature:** `vecmat : (Tensor<1, Scalar<ρ,d>>, Tensor<2, Scalar<ρ,e>>) -> Tensor<1, Scalar<ρ,d*e>>`
+
+**Examples:**
+```text
+vecmat([1.0, 1.0], [[1.0, 2.0], [3.0, 4.0]])
+```
+
+*Source: Aevia standard library guide.*
 ## `let zeros`
 
 ```aevia
 let zeros = zeros
 ```
 
-`m x n` zero matrix.
+zeros(n1, n2, ...) builds a tensor of zeros with one extent per argument, so zeros(3) is a vector and zeros(2, 3) a 2 x 3 matrix.
 
 **Signature:** `zeros : (Int, ..., Int) -> Tensor<n, Float>`
 
@@ -629,20 +883,22 @@ let zeros = zeros
 
 **Dimensions:** kernel rule `List`
 
-The zero vector of length `n`.
+The elements are Float unless you give a type argument: zeros<Int>(3) or zeros<Real>(3). When the shape is a compile-time constant zeros_of<[2, 3]>() carries it in the type.
 
 **Examples:**
-- `zeros(4, 4)` returns a `[[Int]]`
-(recorded kernel calls; the result is shown as its sort)
+```text
+zeros(2, 3)
+zeros<Int>(3)
+```
 
-*Source: rssn operator `linalg.zeros`; rustdoc of `crate::kernels::qlinalg::zeros` (by name).*
+*Source: Aevia standard library guide.*
 ## `let zeros_of`
 
 ```aevia
 let zeros_of = zeros_of
 ```
 
-List of `list(q, order)` pairs for the zeros of `f(z)`.
+A tensor of zeros whose shape is a type argument: zeros_of<[2, 3]>().
 
 **Signature:** `zeros_of : Tensor<shape, Float>`
 
@@ -651,8 +907,11 @@ List of `list(q, order)` pairs for the zeros of `f(z)`.
 
 **Dimensions:** kernel rule `Custom("")`
 
-**Examples:**
-- `zeros_of(z^2 - 4, z)` returns a `[[Int]]`
-(recorded kernel calls; the result is shown as its sort)
+The shape is checked at compile time. When the shape is only known at run time use zeros.
 
-*Source: rssn operator `complex.zeros_of`.*
+**Examples:**
+```text
+zeros_of<[2, 3]>()
+```
+
+*Source: Aevia standard library guide.*

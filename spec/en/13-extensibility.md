@@ -1,6 +1,6 @@
 # 13 — Extensibility and the rssn integration
 
-This chapter is part of the specification and **takes precedence over** any "unsupported for now / to be evaluated later" wording elsewhere. Aevia has no `v1`/`v2` layering: language capabilities are designed once and in full, and whatever the backend has not yet implemented is reported as a **capability diagnostic** (`E1001`) rather than by removing a language feature.
+A backend reports the capability diagnostic `E1001` when it cannot provide a requested operation.
 
 The detailed backend contract is in rssn's `docs/KERNEL.md` (Kernel Manifest, dynamic-call ABI, plugins), `docs/DIMENSIONS.md` and `docs/CALLBACKS.md`; this chapter defines the normative contract on the Aevia side.
 
@@ -11,8 +11,6 @@ The detailed backend contract is in rssn's `docs/KERNEL.md` (Kernel Manifest, dy
 1. **A single operator registry.** rssn's `OpTable` is the only source of truth. Aevia keeps no list of "which operators are supported"; it reads the **Kernel Manifest** and generates the `Rssn` module. A new operator registered in rssn is visible at Aevia's next build.
 2. **A single dimension/unit layer.** `rssn::dim`'s `DimTerm`/`DimArena`/`UnitRegistry` is the canonical layer shared by run time and compile time; Aevia's `Dim` is its type-level mirror, and `Units.*` is generated from `manifest.units` with no second unit table.
 3. **Dynamic calls are a first-class capability.** An operator without a type signature can still be called through `Rssn.dynamic(name, args)`; the typed façade is an increment to the static experience, not a precondition for capability. rssn validates on the dynamic path at the **signature level** (`check_args`) and does no dimension or type inference; the full check belongs to Aevia's static checker or `Rssn.typed`.
-
-Together these answer two things: **thousands of operators cannot be covered by hand-written bindings** (they drift, miss things and rot), and **new capabilities cannot wait for "the next version"** (the language, the manifest and the plugin ABI are fixed now, and the backend fills in capabilities step by step).
 
 ---
 
@@ -54,7 +52,7 @@ At build time:
 4. Generate `Rssn.Version`, `Rssn.ManifestHash`, `Rssn.Capabilities`, `Rssn.ValueKinds`, `Rssn.Constants` and `Rssn.Units`.
 5. Generate LSP completions, documentation and signature stubs, recording the source of each declaration.
 
-**Coverage is a measurement, not a constant.** On `rssn 3.0.0-rc.1` (`aevia rssn` gives the live figures) all 1620 operators have signatures (99 declared + 103 overlay + 1418 derived). The precision tiers the generator MUST distinguish:
+Run `aevia rssn` to inspect the current coverage and signature sources. The generator MUST distinguish these signature tiers.
 
 | Source | Precision | What is generated |
 |---|---|---|
@@ -148,7 +146,7 @@ Rssn.Units           : Tensor<1, String>     # unit names; values are in the gen
 - Arguments are injected with `to_value(x)` and results converted back to a static type with `from_value(v)`. Operators without signatures, plugin operators and experimental entries use `dynamic`; the standard set currently has no `None`, so on it `dynamic` is only the plugin channel.
 - `type_rep<T>()` keeps the concrete type resolved by the checker; it is an opaque value that an ordinary record cannot forge. After the dynamic call, `Rssn.typed` checks representation, shape and dimensions against that witness; a mismatch or missing evidence returns `Err(OpError)`. A successful result is still a `Value`, validated and converted through `from_value<T>`; a generic not made concrete by a run-time type dictionary cannot produce a `TypeRep`.
 - Higher-order operators use `Rssn.call_ho(name, args, fns)`; `to_callback` builds an opaque callback from a checked source closure, with the limits of §8.19. A callback runs synchronously on the original thread and expires when the outer call ends; calls across threads and re-entry in the same scope are rejected, and callback errors come back through `OpError`; an empty list is just a dynamic call.
-- `Rssn.register`/`Rssn.register_plugin` accept a host `Plugin`; source plugins are published by `@op`/`@rule` and `load_plugin` (§13.5.2). `core.plugin.source` is enabled in builds with in-process plugins; `core.callback` means the restricted callback bridge is available.
+- Aevia publishes source extensions through `@op`, `@rule` and `load_plugin` (§13.5.2). `Rssn.register` and `Rssn.register_plugin` name the host-only `Plugin` boundary and report `E0302` for Aevia values. `core.plugin.source` marks support for source extensions. `core.callback` marks support for the restricted callback bridge.
 
 ### 13.3.3 Errors
 
@@ -233,36 +231,9 @@ Rules: `Derived` reads only `eval`/`PREDICATE`/`Binder`/`Variadic`/`LEAF` and ne
 
 ### 13.5.1 Plugins
 
-A plugin is not new syntax but an **ordinary Aevia package + a manifest marker + attributes**:
+An Aevia source extension is a module containing functions annotated with `@op` or `@rule`. It uses the ordinary package manifest described in §7.5.1. Loading the module publishes its declarations, as shown in §13.5.2.
 
-```toml
-# aevia.toml
-[plugin]
-kind = "aevia"          # in-process; corresponds to rssn's PluginKind::InProcess
-abi = 1
-```
-
-| `[plugin] kind` | rssn | Loaded by |
-|---|---|---|
-| `"aevia"` / `"in-process"` | `PluginKind::InProcess` | `Session::register(Box<dyn Plugin>)` |
-| `"cdylib"` | `PluginKind::Cdylib` | `Session::load_plugin(path)` (needs `plugin-cdylib`) |
-
-The C ABI of `cdylib` is a **byte buffer**: the entry symbol is `rssn_plugin_v1`, and arguments and results are bincode-encoded `Vec<Value>`/`Result<Value, String>`, not a `#[repr(C)]` mirror of `Value`; `cdylib::load` checks `PLUGIN_ABI` and `RssnPluginDesc`, and `Session::load_plugin` = `load` + `register`. The module is controlled by the `plugin-cdylib` feature (off by default, included only in `full`) because loading a dynamic library runs arbitrary code inside the host process with no sandbox. Aevia MUST check `manifest.features.plugin_kinds` before loading: without `"cdylib"` it reports `E1001("core.plugin.cdylib")` instead of letting the loader throw a low-level error.
-
-```aevia
-module MyDomain
-
-@op("mydomain/softplus")
-fn softplus(x: Real[1]): Real[1] = ln(1 + exp(x))
-
-@rule("softplus(x) => ln(1 + exp(x))")
-let softplus_rule = ()
-
-dimension MyDim
-unit myunit : Length = 0.5 m
-```
-
-`Rssn.register` (alias `register_plugin`) wraps `Session::register(Box<dyn Plugin>)`: `Rssn.register(plugin)  # -> Result<PluginId, PluginError>`. A plugin can register operators + signatures + eval callbacks, rewrite rules, dimension rules, units and base dimensions, and (optionally) a JIT lowering.
+RSSN hosts register in-process Rust plugins with `Session::register(Box<dyn Plugin>)`. Host plugins can supply operators, signatures, evaluators, rewrite and dimension rules, units, base dimensions and JIT lowering. With the opt-in `plugin-cdylib` feature, an RSSN host can also call `Session::load_plugin` on a shared library. The native entry point is `rssn_plugin_v1`; its ABI passes byte buffers containing bincode-encoded `Vec<Value>` arguments and `Result<Value, String>` results. The native loader checks the plugin ABI version and descriptor. Aevia source uses the module-based extension interface.
 
 ### 13.5.2 Aevia functions as rssn operators
 
@@ -288,9 +259,7 @@ The `mydomain/` in `@op("mydomain/softplus")` is **part of the operator name** (
 
 ### 13.5.3 Security
 
-- Plugins MUST be signed; by default only plugins the registry trusts are loaded.
-- A plugin declares capabilities (`fs`, `net`, `unsafe`); undeclared capabilities are denied in the sandbox.
-- A plugin ABI version mismatch is `E1006`.
+The package registry verifies a publisher's signature when a package is published (§13.7). `load_plugin` takes a local source path and trusts the named file and its imports. The caller needs `fs` to open the file, and the interpreter that evaluates the module inherits the caller's capability mask. Load only trusted local source. Source plugins and native RSSN plugins execute in the host process. Use process isolation and operating-system resource limits for untrusted code (§9.14).
 
 ---
 
@@ -474,9 +443,9 @@ After type checking the Aevia compiler checks capabilities; when one is missing:
 
 **Decision: `Tensor<shape, Point[d]>` is supported.** Element-wise `+`/`-` follow the point rules (`Point - Point -> Float[d]`, `Point + Float[d] -> Point`, `Point + Point` is `E0405`); `mean` accepts only `Float`/`Real`, and the mean of points uses `centroid : Tensor<1,Point[d]> -> Point[d]`; a temperature field can be a `Tensor<[nx,ny], Point[Θ]>` directly; storage is `Float` + `UnitId`, and the affine offset is handled only in element-wise operations.
 
-### 13.9.3 Row-polymorphic `Table` schemas
+### 13.9.3 The `Table` row parameter
 
-**Decision: `Table<ρ>` uses a row-polymorphic static schema, and the dynamic `Table` is kept.** `ρ` is a row type (field names + types + dimensions); `read_csv<ρ>(path)` infers field types from header units and reports `DataError.Schema` when it cannot; `column(t, "time")` is a type-level field lookup; `select`/`join`/`rename` stay row-polymorphic, and new fields require a `lacks` constraint; dynamic CSV returns `Table<Dynamic>` and `to_table<ρ>` validates at run time (details in §8.11).
+`Table<ρ>` carries a row type parameter determined by the program's type context. External data supplies column names, cells and unit metadata at run time. Inspect those with `schema` and use the table operations described in §8.11.
 
 ### 13.9.4 Devices, GPU, distributed
 
@@ -486,23 +455,23 @@ After type checking the Aevia compiler checks capabilities; when one is missing:
 - `to_device : (Tensor<n,τ>, Device) -> IO (Tensor<n,τ>)`; `on : (Device, () -> a) -> IO a` is scoped execution (allocation and transfer are IO).
 - `@jit(target = Gpu(0))` names the JIT target; without `core.gpu` it reports `E1001`. Distributed tensors use the library type `Sharded<Mesh, Tensor<...>>`, with `Mesh` a run-time topology. This avoids a combinatorial explosion of types for devices and shards.
 
-**Status**: the `Device` value and `to_device`/`on`/`device_of` are typed; without `core.gpu`, `to_device`/`on` report `E1001("core.gpu")`. `@jit(target = Cpu)` is equivalent to `@jit`; `@jit(target = Gpu(n))` and `Distributed(..)` are accepted by the language and report `E1001("core.gpu")`/`E1001("core.distributed")` at check time; any other argument is `E0210`. In attribute arguments a "constructor applied to constants" (`Gpu(0)`) counts as a compile-time constant (§2.2.7). `Gpu`/`Distributed` have no backend and are only constructible run-time values (the rssn-side device layer is in §10.6.5).
+`@jit(target = Cpu)` is equivalent to `@jit`. Requests for unsupported GPU or distributed targets report `E1001` at check time. Invalid target arguments report `E0210`. A constructor applied to compile-time constants, such as `Gpu(0)`, is a constant attribute argument (§2.2.7). The RSSN host APIs for devices are described in §10.6.5.
 
 ### 13.9.5 Sparse and layouts
 
 **Decision: `Sparse<F, shape, τ>` is a core type constructor and `F` is a format type.**
 
-- Formats: `Csr`, `Csc`, `Coo`, `Bcsr` (`Block` is a synonym); the set is currently closed, and user-defined formats wait until rssn opens the `Format` kind (plugins can currently register only operators and units).
-- The `Layout` class (in the design): `nnz`, `to_dense`, `from_dense`, `matmul`, `transpose`; the current implementation is built-in functions, not an instantiable type class.
+- `Csr`, `Csc`, `Coo` and `Bcsr` form a closed set of formats. `Block` is a synonym for `Bcsr`.
+- Layout operations include the built-in functions `nnz`, `to_dense`, `from_dense`, `matmul` and `transpose`. Aevia dispatches them on supported formats and operand types.
 - `@` dispatches on layout (dense×sparse, sparse×dense, sparse×sparse); only explicit conversions exist between `Sparse` and `Tensor`. rssn's `TypeExpr::Sparse` has only a `rank`, so `Sparse<F,shape,τ>` is lowered at the boundary to rank + run-time shape; refined shapes are checked and propagated by Aevia itself.
 
-**Status**: implemented and `storage.sparse` is enabled — the run-time `Value::Sparse`, the four layout dispatches, `Bcsr`, preconditioned `cg_with`, non-symmetric Krylov solvers, slicing and rank-N contraction; details, exactness and error codes are in §8.4.1. **Remaining gaps**: the format set is still closed; sparse values cannot enter the rssn term graph.
+The `storage.sparse` capability covers the four formats, preconditioned and nonsymmetric iterative solvers, slicing and tensor contraction. See §8.4.1 for dimensions and errors. Sparse values cross the dynamic kernel boundary as structured values.
 
 ### 13.9.6 Effects and capabilities
 
 **Decision: no user-defined effect handlers; `IO` stays a single type.** The extension points are operators, plugins and the registry, not a language-level effect system. An `IO` action may declare the **capabilities** it needs (`fs`, `net`, `env`, `rand`, `gpu`) — a run-time permission, not a type parameter; `with_cap(cap, thunk)` runs in a sandbox, and an IO action fails when the capability is missing. This avoids effect rows intruding on every standard-library signature. Use plugins and operators for DSLs and code generation, not macros.
 
-**Status**: `with_cap(caps, thunk)` and `aevia run --caps` are implemented, with semantics in §9.14 (capability sets narrow per block, nesting takes the intersection, a missing one is `E0902`). They are a different thing from the backend capability table of §13.8.2: the latter describes what the backend can do, the former what the program is allowed to do.
+See §9.14 for the semantics of `with_cap(caps, thunk)` and the `--caps` option. The backend capability table in §13.8.2 describes which facilities the toolchain supplies.
 
 ### 13.9.7 Macros and syntax extension
 

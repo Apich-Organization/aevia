@@ -146,8 +146,7 @@ treated specially only in type position; they are not keywords. `in` belongs to 
 `for` to `instance … for` and `derive … for`, and `rec` to `let rec`. `pure` is a Prelude
 function, not a keyword (§9.7.3).
 
-> **Status:** backtick identifiers (naming an external item that collides with a keyword) are
-> not implemented; a backtick is `E0105`.
+Use a non-keyword name for an imported binding. A backtick in source produces `E0105`.
 
 ### 1.5.3 Naming conventions (informative)
 

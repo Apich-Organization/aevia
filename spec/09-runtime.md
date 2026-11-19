@@ -269,7 +269,7 @@ RSSN 拥有数值算法，包括精确整数/有理数、复数、张量收缩�
 - JIT 结果与解释器 MUST 逐位一致；不能保证一致的情形 MUST bail，不一致是 bug。
 - `map_floats`（设备接缝）仍用直线 tape 降级，因为 GPU 需要无控制流的程序。
 
-可选构建：`cargo build -p aevia-cli --features jit` 启用 RSSN 的 Cranelift 后端（需 Rust 1.97+）；默认关闭，
+可选构建：`cargo build -p aevia-cli --features jit` 启用 RSSN 的 Cranelift 后端（需 Rust 1.100+）；默认关闭，
 `@jit` 报 `E1001`。参考测试 `tests/jit_native.aev`。
 
 ### 9.6.4 设备目标
@@ -289,8 +289,9 @@ RSSN 拥有数值算法，包括精确整数/有理数、复数、张量收缩�
 
 ### 9.7.1 内存
 
-张量 `Arc` + COW，切片共享，唯一持有时原地；闭包 `Rc`（无循环回收，§9.3.1）；符号项是 rssn 的 hash-consed 图，
-项 id 不跨会话；REPL 的会话 arena 增长，`:reset` 释放。
+张量与闭包在各自的解释器中通过 `Rc` 持有。`f64` 切片共享底层缓冲区，模式匹配取得的张量尾部共享原张量。
+记录更新在唯一持有时复用存储。闭包无循环回收（§9.3.1）。RSSN 会话对相同的符号项复用图节点，项标识只在所属会话内有效。
+`:reset` 释放 REPL 会话占用的存储。
 
 ### 9.7.2 并行求值：无共享副本
 
@@ -298,9 +299,10 @@ RSSN 拥有数值算法，包括精确整数/有理数、复数、张量收缩�
 - **无共享副本（replica）设计。** 解释器建立在 `Rc` 上，把运行时改成 `Arc` 会让每个程序为少数并行程序付费。
   因此每个工作线程持有一个**副本**：宿主安装的 `Replica` 工厂在该线程上从同一份源码再构建一次解释器（每线程
   一次，之后复用）。线程之间交换**可移植值**（`Portable`）：带量纲与显示单位的数、字符串、张量、记录、变体、
-  构造器，以及 IR 闭包。
+  构造器，以及可重建的 Core IR 闭包。工作线程保留构造器特化、变体类型和张量元素类型，包括空张量的类型。
 - **闭包按代码身份 + 捕获数据跨线程。** lambda 是“函数的源码位置 + 捕获值”；位置以**模块身份**（逻辑源码路径 +
   所属包）加字节偏移表示（`FileId` 按加载分配，不可跨线程），副本里由同名模块解析回同一函数。
+  显式特化的泛型闭包携带已选择的类型和分派依据，接收方根据其模块接口校验。
 - **保证：并行从不改变值。** 值不能跨线程（符号项可能持有本线程会话句柄、kernel 句柄、IO 动作、带激活期泛型
   证据的闭包）、没有副本工厂、`--jobs 1`，或工作线程失败时，原语回退为顺序求值，顺序重算给出程序本来会给出的
   值或错误（含位置与调用栈）；`AEVIA_PARALLEL_TRACE=1` 打印回退原因。
@@ -321,7 +323,8 @@ await : Task a -> IO a
 pure  : a -> IO a
 ```
 
-- `spawn(f)` 在工作线程上运行 `f()`，返回 `Task`；`await(t)` 等待并取结果。
+- `spawn(f)` 在工作线程上运行 `f()`，返回 `Task`；`await(t)` 等待并取结果。任务只拥有提交时已启用且工作线程策略允许的权限。
+  在工作线程启动前取消的任务，之后在 `await` 处报告 `E0812`。
 - **任务的控制台输出被缓冲，在 `await` 时按 await 顺序写出**，所以程序输出确定；文件等其他效应在任务线程上直接
   发生。
 - thunk 不能跨线程时任务在 `spawn` 时于本线程执行（同样缓冲），`spawn` 总是可用。工作线程上的运行期错误在
@@ -415,7 +418,8 @@ aevia test [--filter PAT] [file.aev]               运行 `test` 声明
 aevia test --doc [--filter PAT] [files…]           编译 `##` 文档中的 aevia 代码块（§9.12）
 aevia repl                                         交互会话（§9.8）
 aevia fmt [--check] [files…]                       格式化，默认包的 src/
-aevia doc [--open] [--out DIR] [files…]            生成 Markdown API 文档，默认 docs/
+aevia doc [--open] [--out DIR] [--json] [files…]   生成包的 API 文档，默认 docs/
+aevia doc --stdlib [--lang en|zh] [--out DIR] [--json]  生成标准库参考
 aevia bench [--filter PAT] [--iterations N] [--warmup N] [--save-baseline FILE]
             [--compare-baseline FILE] [--threshold RATIO] [files…]
 aevia init <name>                                  新建包：aevia.toml、src/main.aev、aevia.lock
@@ -425,13 +429,15 @@ aevia fetch [--offline] [--force]                  下载并校验 aevia.lock �
 aevia tree [--offline]                             打印依赖树
 aevia clean [--registry]                           删除 `.aevia/`（`.aevia/registry` 除非指定否则保留）
 aevia lsp [--stdio]                                语言服务器（§9.10）
+aevia debug [--stdio]                             为编辑器提供源码调试适配器
 aevia rssn [--audit] [--emit [--out DIR] [--namespaces]]   审计 Kernel Manifest / 生成 Rssn 模块（第 13 章）
 aevia login                                        用浏览器把签名密钥绑定到 registry 账户
-aevia publish [--no-verify] [--dry-run] [选项…]    检查、格式检查、签名并上传本包
+aevia publish [--owner HANDLE] [--no-verify] [--dry-run] [选项…]  检查、签名并上传本包
 aevia search <query>      aevia info <owner/name>  搜索 registry / 显示包页面
 aevia yank <owner/name@version> [--undo]           撤回或恢复一个版本
 aevia verify <owner/name@version>                  对照签名校验下载的版本
-aevia docs [owner/name[@version]] [--open]         打印（或打开）包文档站点的地址
+aevia docs [owner/name[@version]] [--lang en|zh] [--open]
+aevia docs --section book|architecture|spec|stdlib [--lang en|zh] [--open] [--download]
 aevia pkg <command>                                注册表客户端的全部命令（`key`、`status`、`lock`、…），转发给 aevia-pkg
 aevia --version
 ```
@@ -455,22 +461,25 @@ aevia --version
 
 - **程序参数**：`aevia run [file] -- args…` 只把 `--` **之后**的字符串交给程序，程序用 `args()` 读取
   （§8.1.8，返回 `Tensor<1, String>`；无参数为 `[]`）。`check`/`test`/`bench` 不转发参数。
-- **registry 命令**：`login`、`search`、`info`、`yank`、`verify`、`key`、`status`、`lock`、`index` 直接转发给
-  `aevia-pkg`；`add`/`update`/`fetch`/`tree` 是工具链原生命令（改写 `aevia.toml` 与 `aevia.lock`，仅网络部分调用
-  客户端）；`publish` 也是原生的：先用本二进制执行 `aevia check --all` 与 `aevia fmt --check`，失败则在触碰密钥
-  之前拒绝（`--no-verify` 跳过），再交给 `aevia-pkg publish`。`aevia-pkg` 不在 PATH 时，可用
-  `AEVIA_PKG` 指向二进制，或 `cargo install --path platform/crates/aevia-pkg`。
-- **`aevia-pkg publish` 的选项**：`--key FINGERPRINT`、`--description TEXT`、`--license SPDX`、
-  `--keyword K`（至多 5 个）、`--repository URL`、`--dry-run`（只打印声明与校验和，不签名）、`--allow-dirty`。
-  没有 API token：每个需认证的动作都是用发布者自己的 OpenPGP（GPG）或 SSH（`ssh-ed25519`）密钥对一份
-  服务器签发的短时声明做的分离签名，声明指名一个归档并带一次性 nonce，五分钟内有效。支持注册并使用
-  `ssh-ed25519` 密钥发布/撤回，但客户端与注册表始终**优先选用 OpenPGP 密钥**，并在注册、列出或使用
-  SSH 密钥时发出警告，建议改用 OpenPGP（PGP）密钥及硬件安全密钥。
-- `aevia docs` 只打印文档地址（`<registry>/docs[/<owner>/<name>[/<version>]]`，registry 取 `--registry`、
-  `AEVIA_REGISTRY`、默认 `https://aevia.apich.org`）；`--open` 在终端中打开浏览器。
-
-状态：`aevia --help` 的“packages”段仍写着“there is no registry”，与上述 registry 依赖矛盾，应删除；`aevia`
-的预编译二进制若早于 `publish`/`login`/`search`/`docs`，帮助中不会列出它们。
+- **注册中心命令。** Aevia 将 `login`、`search`、`info`、`yank`、`verify`、`key`、`status`、`lock`
+  和 `index` 转发给 `aevia-pkg`。`add`、`update`、`fetch` 和 `tree` 由工具链在本地处理依赖，
+  并委托配套客户端处理网络请求。用 `AEVIA_PKG` 指定可执行文件。默认依次在 Aevia 可执行文件所在目录、
+  `PATH` 和源码工作区的平台构建目录中查找。转发命令的注册中心依次取 `--registry URL`、
+  `AEVIA_REGISTRY`、客户端配置和公共注册中心。
+- **发布。** `aevia publish` 在调用注册中心客户端前运行 `aevia check --all` 和 `aevia fmt --check`。
+  `--no-verify` 跳过本地检查。`--owner HANDLE` 选择签名者拥有发布权限的命名空间。
+  `--dry-run` 准备归档并打印校验和与服务器声明，省略签名和上传。客户端选项包括 `--key FINGERPRINT`、
+  `--description TEXT`、`--license SPDX`、最多五个 `--keyword K`、`--repository URL` 和
+  `--allow-dirty`。发布和撤回使用 OpenPGP 或 SSH（`ssh-ed25519`）密钥对服务器声明做分离签名。
+  声明包含一次性随机数，有效期为五分钟。客户端优先选择 OpenPGP 密钥，使用 SSH 时建议改用硬件保护的
+  OpenPGP 密钥。
+- **文档。** `aevia docs` 打印在线文档地址。可指定包及可选版本，或用 `--section` 选择教程、架构、
+  规范或标准库。`--lang en|zh` 选择语言。`--download` 获取教程或架构文档的独立 HTML 地址。
+  当标准输出为终端时，`--open` 打开该地址。地址前缀依次取 `--registry`、`AEVIA_REGISTRY`
+  或 `https://aevia.apich.org`。`aevia doc --stdlib` 生成指定语言的本地 Markdown，`--json`
+  额外生成双语文档包。
+- **调试。** 编辑器通过调试适配器协议启动 `aevia debug --stdio`。启动请求指定已保存的源码文件、
+  可选的程序参数和输入行。行断点和单步执行支持查看调用栈及当前可见绑定。
 
 ## 9.10 LSP
 
@@ -563,8 +572,8 @@ LSP 复用 `aevia-syntax`/`aevia-types`，不启动运行时。文件已保存�
 
 每个已检查模块一个文件，位于入口旁的 `.aevia/cache/modules/<模块路径>-<键的 16 位十六进制>.aevi`；标准库模块也缓存，
 由 RSSN 清单即时生成的内核命名空间与含错误的检查结果不缓存。文件：魔数 `AEVI`、格式版本（`FORMAT_VERSION`，小端 u32）、
-128 位键、正文长度与 FNV-1a 校验、正文（`persist::encode` 写出的 `bincode`：入口的 `FileId`、接口摘要、诊断和**完整的**
-`CheckedModule`）。写入先写临时文件再改名；缺失、截断、校验失败、键或版本不符一律是静默未命中并被覆盖；同一模块名最多
+128 位键、正文长度与 FNV-1a 校验、正文。正文使用 bincode-next 3.2 原生编码，采用确定性排序与模式指纹，
+内容包括入口的 `FileId`、接口摘要、诊断和完整的 `CheckedModule`。写入先写临时文件再改名；缺失、截断、校验失败、键或版本不符一律是静默未命中并被覆盖；同一模块名最多
 保留 4 个修订。
 
 - **键**是下列输入的稳定 128 位哈希（两路 FNV-1a，不是 `DefaultHasher`）：模块源码、`FileId`、模块路径与加载器给的名义
@@ -578,12 +587,12 @@ LSP 复用 `aevia-syntax`/`aevia-types`，不启动运行时。文件已保存�
 - 缓存项只在同一 `FileId` 下复用，`FileId` 同时在键和文件里。`LoadStats` 增加 `disk_hits`/`disk_writes`；入口函数是
   `driver::load_with_disk_cache` 与 `driver::load_incremental_with_disk_cache`（`DiskCache::beside(entry)`）。
 
-状态：已知限制——每个文件带完整的单位表与量纲环境，比接口大；键对依赖闭包的接口摘要求哈希，大图上随闭包大小线性增长；
-`watch`、LSP 与 `test` 尚未接入磁盘缓存；旧修订清理是“每个模块名保留 4 个”的启发式，没有全局容量限制。
+缓存保存完整的已检查模块、单位表和量纲环境。计算缓存键会读取依赖闭包中的接口。
+CLI 的 `check` 和 `run` 使用此缓存，按模块名保留至多四个修订。
 
 ## 9.12 测试与基准
 
-- 单元测试：`test` 声明；`aevia test [--filter PAT]`。属性测试：`forall` + `Arbitrary`。
+- 单元测试：`test` 声明；`aevia test [--filter PAT]`。用 `forall` 在固定数值样本上检验命题（§8.13）。
 - Doctest：`aevia test --doc [FILE…/DIRS…]` 抽取 `##` 注释中所有标 `aevia` 的围栏块并逐个编译。块首行可写
   `compile_fail`（要求编译失败）或 `compile_fail EXXXX`（要求失败且含该代码）；不写标记要求编译通过。每个片段是独立合成
   模块：声明模块的 `import`/`open` 行被复制，导入按声明文件的包与相邻目录解析，模块自身声明不隐式进入片段；片段使用内存
@@ -626,10 +635,10 @@ with_cap : (String, () -> IO a) -> IO a
   `""` 什么都不给）。嵌套取交集，块结束（含出错）时恢复外层。
 - 需要能力的动作：文件读写、NPY、`plot`/`save`（`fs`），`random()`（`rand`）。缺少能力时，返回 `Result` 的数据动作给出
   `Err("E0902: permission denied: …")`，其余动作以 `E0902` 终止；未知能力名是 `E0302`。
-- 程序默认拥有全部能力；`aevia run --caps fs,rand` 以给定集合启动，`--caps ""` 完全沙箱化。
+- 程序默认拥有全部能力；`aevia run --caps fs,rand` 以给定集合启动，`--caps ""` 不授予任何语言级能力。
 
-状态：`fs`、`rand` 有实际检查；标准库目前没有 `net`/`env`/`gpu` 动作，这些名字被接受并参与交集。后端能力缺失按 §13.8 报
-`E1001`。清单中的 `[capabilities]` 不被读取（§7.5.1）。“内存上限可配置”目前只有解释器线程栈上限。
+标准库中需要检查权限的动作使用 `fs` 或 `rand`。能力集合也接受 `net`、`env` 和 `gpu`。
+后端能力缺失报 `E1001`（§13.8）。执行不可信程序时使用进程隔离和操作系统资源限制。
 
 ## 9.15 错误报告
 

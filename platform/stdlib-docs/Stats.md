@@ -10,66 +10,75 @@ The `Stats` module of §8.20.
 let centroid = centroid
 ```
 
+The mean point of a vector of Points.
+
 **Signature:** `centroid : Tensor<1, Point[d]> -> Point[d]`
+
+**Examples:**
+```text
+centroid([point(0.0, degC), point(10.0, degC)])
+```
+
+*Source: Aevia standard library guide.*
 ## `let corr`
 
 ```aevia
 let corr = corr
 ```
 
-The Pearson correlation coefficient of two equally long samples.
+Pearson correlation coefficient of two vectors of equal length, a dimensionless number between -1 and 1.
 
 **Signature:** `corr : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Scalar<div_rep(ρ),1>`
 
-**Errors**
+**Examples:**
+```text
+corr([1.0, 2.0, 3.0], [2.0, 4.0, 7.0])
+```
 
-[`NumericError::ShapeMismatch`] when the lengths differ, and
-[`NumericError::Domain`] when one sample has no spread.
-
-*Source: Rust documentation of the `aevia-std` function.*
+*Source: Aevia standard library guide.*
 ## `let cov`
 
 ```aevia
 let cov = cov
 ```
 
-The sample covariance of two equally long samples.
+Sample covariance of two vectors of equal length.
 
 **Signature:** `cov : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Scalar<div_rep(ρ),d*e>`
 
-**Errors**
+The result's dimension is the product of the two element dimensions.
 
-[`NumericError::ShapeMismatch`] when the lengths differ, and
-[`NumericError::Empty`] when there are no elements.
+**Examples:**
+```text
+cov([1.0, 2.0, 3.0], [2.0, 4.0, 7.0])
+```
 
-*Source: Rust documentation of the `aevia-std` function.*
+*Source: Aevia standard library guide.*
 ## `let histogram`
 
 ```aevia
 let histogram = histogram
 ```
 
-A uniform histogram with `bins` buckets.
+`histogram(xs, bins)` counts finite sample values in a positive number of equal-width bins.
 
-**Signature:** `histogram : (Tensor<1, Scalar<ρ,d>>, Int) -> { counts: Tensor<1, Int>, edges: Tensor<1, Scalar<ρ,d>> }`
+**Signature:** `histogram : (Tensor<1, Scalar<ρ,d>>, Int) -> { counts: Tensor<1, Int>, edges: Tensor<1, Float[d]> }`
 
-Returns `(counts, edges)`; `edges` has `bins + 1` entries spanning the
-sample's range, and a value on an interior edge belongs to the bucket above
-it, so the last bucket is closed on both ends.
+Returns integer counts and `bins + 1` Float edges in the sample’s dimension.
 
-**Errors**
+**Examples:**
+```text
+histogram([1.0, 2.0, 2.5, 3.0, 9.0], 4)
+```
 
-[`NumericError::Empty`] for an empty sample and [`NumericError::Domain`]
-when `bins` is zero.
-
-*Source: Rust documentation of the `aevia-std` function.*
+*Source: Aevia standard library guide.*
 ## `let kurtosis`
 
 ```aevia
 let kurtosis = kurtosis
 ```
 
-Pearson kurtosis `m4 / m2^2` of list `xs`.
+Sample kurtosis of a vector, a dimensionless measure of how heavy the tails are.
 
 **Signature:** `kurtosis : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,1>`
 
@@ -79,27 +88,19 @@ Pearson kurtosis `m4 / m2^2` of list `xs`.
 
 **Dimensions:** the result is dimensionless
 
-Computes the unbiased sample excess kurtosis `G2` (the estimator used by
-Excel's `KURT` and `scipy.stats.kurtosis(fisher=True, bias=False)`); a
-normal distribution has expected value 0.
-
-With `g2 = m4 / m2^2 - 3` (central moments divided by `n`),
-`G2 = (n - 1) / ((n - 2)(n - 3)) * ((n + 1) g2 + 6)`.
-
-Returns `NaN` for fewer than four points and `0.0` for constant data.
-
 **Examples:**
-- `kurtosis(list(1, 2, 3, 4))` returns a `Rat`
-(recorded kernel calls; the result is shown as its sort)
+```text
+kurtosis([1.0, 2.0, 2.0, 3.0, 9.0])
+```
 
-*Source: rssn operator `stats.kurtosis`; rustdoc of `crate::kernels::stats::kurtosis` (by name).*
+*Source: Aevia standard library guide.*
 ## `let mean`
 
 ```aevia
 let mean = mean
 ```
 
-Arithmetic mean of list `xs`.
+The arithmetic mean of every element of a tensor of any rank; the result has the elements' dimension.
 
 **Signature:** `mean : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>`
 
@@ -109,27 +110,22 @@ Arithmetic mean of list `xs`.
 
 **Dimensions:** the result has the dimension of argument 1
 
-Computes the mean of a slice of data.
-
-**Arguments**
-* `data` - A unmutable slice of `f64` data points.
-
-**Returns**
-The mean of the data as an `f64`.
+An Int tensor gives an exact Real quotient.
 
 **Examples:**
-- `mean(list(1, 2, 4))` returns a `Rat`
-- `mean(list(5))` returns a `Int`
-(recorded kernel calls; the result is shown as its sort)
+```text
+mean([1.0, 2.0, 3.0, 6.0])
+mean([1.0 m, 2.0 m, 3.0 m])
+```
 
-*Source: rssn operator `stats.mean`; rustdoc of `crate::kernels::stats::mean` (by name).*
+*Source: Aevia standard library guide.*
 ## `let median`
 
 ```aevia
 let median = median
 ```
 
-Median (50th percentile) of list `xs`.
+The middle value of a vector; for an even length, the mean of the two middle values.
 
 **Signature:** `median : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,d>`
 
@@ -140,28 +136,21 @@ Median (50th percentile) of list `xs`.
 
 **Dimensions:** the result has the dimension of argument 1
 
-Computes the median of a slice of data.
-
-**Arguments**
-* `data` - A mutable slice of `f64` data points.
-
-**Returns**
-The median of the data as an `f64`.
+The dimension is kept.
 
 **Examples:**
-- `median(list(4, 1, 3, 2))` returns a `Rat`
-- `median(list(3, 1, 2))` returns a `Int`
-- `median(list(-1, 1/2, 3))` returns a `Rat`
-(recorded kernel calls; the result is shown as its sort)
+```text
+median([3.0, 1.0, 2.0, 10.0])
+```
 
-*Source: rssn operator `stats.median`; rustdoc of `crate::kernels::stats::median` (by name).*
+*Source: Aevia standard library guide.*
 ## `let mode`
 
 ```aevia
 let mode = mode
 ```
 
-Most frequent value (mode) of list `xs`.
+The most frequent value of a vector; ties go to the smallest value.
 
 **Signature:** `mode : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,d>`
 
@@ -172,23 +161,19 @@ Most frequent value (mode) of list `xs`.
 
 **Dimensions:** the result has the dimension of argument 1
 
-Finds the mode (most frequent value) of a slice of data.
-For continuous data, rounds to a specified number of decimal places.
-Returns None if no mode exists (all values unique or empty).
-
 **Examples:**
-- `mode(list(1, 2, 2, 3))` returns a `Int`
-- `mode(list(a, b, a))` returns a `Sym`
-(recorded kernel calls; the result is shown as its sort)
+```text
+mode([1, 2, 2, 3])
+```
 
-*Source: rssn operator `stats.mode`; rustdoc of `crate::kernels::stats::mode` (by name).*
+*Source: Aevia standard library guide.*
 ## `let quantile`
 
 ```aevia
 let quantile = quantile
 ```
 
-`p`-th quantile (interpolated order statistic, `p in [0, 1]`) of list `xs`.
+quantile(xs, q) is the value below which a fraction q (between 0 and 1) of the data falls, with linear interpolation; quantile(xs, 0.5) is the median.
 
 **Signature:** `quantile : (Tensor<1, Scalar<ρ,d>>, Scalar<ρ,1>) -> Scalar<ρ,d>`
 
@@ -201,19 +186,18 @@ let quantile = quantile
 **Dimensions:** the result has the dimension of argument 1
 
 **Examples:**
-- `quantile(list(1, 2, 3, 4, 5), 1/3)` returns a `Rat`
-- `quantile(list(1, 2, 3, 4, 5), 1/2)` returns a `Int`
-- `quantile(list(1, 2, 3, 4, 5), 0)` returns a `Int`
-(recorded kernel calls; the result is shown as its sort)
+```text
+quantile([1.0, 2.0, 3.0, 4.0], 0.25)
+```
 
-*Source: rssn operator `stats.quantile`.*
+*Source: Aevia standard library guide.*
 ## `let skewness`
 
 ```aevia
 let skewness = skewness
 ```
 
-Pearson skewness `m3 / m2^(3/2)` of list `xs`.
+Sample skewness of a vector: positive when the long tail is on the right.
 
 **Signature:** `skewness : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,1>`
 
@@ -222,22 +206,21 @@ Pearson skewness `m3 / m2^(3/2)` of list `xs`.
 
 **Dimensions:** the result is dimensionless
 
-Computes the adjusted Fisher-Pearson sample skewness coefficient `G1`
-(the estimator used by Excel's `SKEW` and by `scipy.stats.skew(bias=False)`).
+The result is dimensionless.
 
-With `g1 = m3 / m2^(3/2)` (central moments divided by `n`),
-`G1 = sqrt(n (n - 1)) / (n - 2) * g1`.
+**Examples:**
+```text
+skewness([1.0, 2.0, 2.0, 3.0, 9.0])
+```
 
-Returns `NaN` for fewer than three points and `0.0` for constant data.
-
-*Source: rssn operator `stats.skewness`; rustdoc of `crate::kernels::stats::skewness` (by name).*
+*Source: Aevia standard library guide.*
 ## `let std`
 
 ```aevia
 let std = std
 ```
 
-Population standard deviation of list `xs`.
+Computes sample standard deviation in the elements’ dimension.
 
 **Signature:** `std : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>`
 
@@ -246,13 +229,32 @@ Population standard deviation of list `xs`.
 
 **Dimensions:** the result has the dimension of argument 1
 
-*Source: rssn operator `stats.std`.*
+A singleton has zero standard deviation.
+
+**Examples:**
+```text
+std([1.0, 2.0, 3.0, 4.0])
+```
+
+*Source: Aevia standard library guide.*
 ## `let var`
 
 ```aevia
 let var = var
 ```
 
+Computes sample variance with divisor `n - 1` for two or more observations.
+
 **Signature:** `var : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d^2>`
 
 **Signature:** `var : (Tensor<n, Scalar<ρ,d>>, Bool) -> Scalar<div_rep(ρ),d^2>`
+
+A singleton has zero variance. The result dimension is the element dimension squared. A second Bool argument chooses the population variance when true.
+
+**Examples:**
+```text
+var([1.0, 2.0, 3.0, 4.0])
+var([1.0, 2.0, 3.0, 4.0], true)
+```
+
+*Source: Aevia standard library guide.*

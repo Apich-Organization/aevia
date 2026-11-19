@@ -97,7 +97,7 @@ any structurally identical record or variant. Constructors may take type paramet
 ### 3.2.5 Type schemes
 
 `σ ::= ∀a:κ. σ | C => σ | τ`. `∀` quantifies type, dimension, natural, row and representation
-variables. `C` includes class constraints (`Show a`) and numeric constraints: the
+variables. `C` includes class constraints (`Show a`), row exclusions (`r lacks z`), and numeric constraints: the
 representation domain of a literal, `Join(ρ1, ρ2, ρout)`, `Divide(ρin, ρout)` and the
 input-dependent private-literal reading rules. Constraints are stored with schemes, function
 aliases and module interfaces and are rebuilt by the compiler; users never write them.
@@ -221,6 +221,11 @@ Division, negative exponents, roots and inversion promote integers to exact rati
 `Int / Int` is `Real[1]` (`7 / 2` is exactly `7/2` and cannot be annotated `Int`); integer
 division is `div(a,b)` or `quot(a,b)`; `2^-1` is the `Real` `1/2`. `min`, `max`, `mod` and `rem`
 require `ρ ≠ Complex`; the modulus of a complex number is `magnitude` (§8.15), not `abs`.
+`div` uses Euclidean division and `mod` returns its nonnegative remainder. `quot` truncates the
+quotient toward zero and `rem` returns the remainder with the dividend's sign. These operations on
+`Int` retain arbitrary precision, as do `gcd` and `lcm`. Remainders of exact rational inputs also
+remain exact. `to_int` truncates finite dimensionless values toward zero and reports `E0806` when
+the input has no finite real value.
 
 ### 3.4.3 Static limits on powers
 
@@ -415,10 +420,13 @@ fn norm(p: { x: Real[L], y: Real[L], ...r }): Real[L] =
 
 ### 3.6.2 Record update
 
-`{ p with x = 3.0 m }` requires `p` to have field `x`; the result has the type of `p` with `x`
-replaced by the new type. If the field does not exist it is added, which requires
-`row(p) lacks z` (otherwise `E0208`). Updates are pure and the old record is unchanged; the
-runtime updates in place when the record is uniquely owned.
+Updating an explicit field replaces its value and type. For example, `{ p with x = true }`
+sets the type of `x` to `Bool`. A field missing from the known row is added. For an open row, adding `z`
+requires that the tail exclude `z`. The compiler carries this constraint through function calls,
+aliases and imports. Supplying a tail that already contains `z` raises `E0208`.
+
+An update produces a record without changing the original value. The runtime reuses its storage
+when the record is uniquely owned.
 
 ### 3.6.3 Variants and exhaustiveness
 
@@ -524,7 +532,6 @@ that owns the type or the module that owns the class (the orphan rule), so users
 | `Num a` `Fractional a` `Floating a` | arithmetic, `from_int`, `sqrt`, … | **dimensionless** user numeric types only |
 | `Container f` | `map`, `fold` | tensors, `Option`, `Set` |
 | `Sized a` | `length` | `String`, `Tensor` |
-| `Arbitrary a` | `arbitrary` | random generator for property tests |
 | `Parallel a` | `par_map` | only `Int`/`Float[d]` and their tensors; symbolic `Real` is not parallelised |
 
 - `Num` and friends do not apply to dimensioned scalars, because `*` changes the dimension and

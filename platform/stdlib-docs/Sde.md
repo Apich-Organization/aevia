@@ -9,117 +9,253 @@ The `Sde` module of §8.20.
 ```aevia
 type SdeMethod
 ```
+
+The scheme for a stochastic differential equation. The name fixes the stochastic calculus: names containing Stratonovich converge to the Stratonovich solution and the rest to the Ito solution. EulerMaruyama is the simplest (strong order 1/2); Milstein, SrkPlaten and their variants reach strong order 1; DriftImplicitEuler, ThetaMaruyama and DriftImplicitMilstein treat the drift implicitly for stiff drifts.
 ## `type SdeStructure`
 
 ```aevia
 type SdeStructure
 ```
+
+How the noise enters the state: Diagonal gives each component its own noise channel, General(m) uses m channels that commute, and GeneralNoncommutative(m) uses m channels that do not commute, which needs extra Levy-area terms in the higher-order schemes.
 ## `type SdeFixedOpts`
 
 ```aevia
 type SdeFixedOpts<T>
 ```
+
+Options for a fixed-step SDE run: the noise structure, the method, the seed (the same seed always gives the same path), the start time t0, the step dt and the number of steps, and terms, the number of Fourier terms for Levy areas (0 picks a default).
 ## `type SdeAdaptiveOpts`
 
 ```aevia
 type SdeAdaptiveOpts<T>
 ```
+
+Options for an adaptive-step SDE run: the noise structure, method and seed, the time span t0 to t1, tolerances rtol and atol, a limit max_steps, and cells, the finest noise resolution (0 picks 4096; other values round up to a power of two).
 ## `type SdeOpts`
 
 ```aevia
 type SdeOpts<T>
 ```
+
+Chooses the stepping of an SDE run: Fixed(options) for a uniform grid or Adaptive(options) for error-controlled steps.
 ## `type SdeEvent`
 
 ```aevia
 type SdeEvent<s>
 ```
+
+An event for sde_events: g(t, y) is a dimensionless function whose sign change marks the event, terminal says whether the path stops there, and direction is -1 for falling crossings, 1 for rising and 0 for both.
 ## `type SdeHit`
 
 ```aevia
 type SdeHit<s>
 ```
+
+One event found on an SDE path: the index of the event, the time t it happened and the interpolated state y.
 ## `let sde_at`
 
 ```aevia
 let sde_at = sde_at
 ```
 
+The state of an SDE path at an arbitrary time, found by linear interpolation between the stored steps.
+
 **Signature:** `sde_at : (SdePath<s>, Float[T]) -> s`
+
+**Examples:**
+```text
+let lookup = sde_at
+```
+
+*Source: Aevia standard library guide.*
 ## `let sde_ensemble_diag`
 
 ```aevia
 let sde_ensemble_diag = sde_ensemble_diag
 ```
 
+Integrates n independent paths of a diagonal-noise SDE with seeds derived from the base seed, and returns a vector with one Result per path.
+
 **Signature:** `sde_ensemble_diag : (((Float[T], s) -> RateOf<s>), ((Float[T], s) -> DiffusionOf<s>), s, SdeOpts<T>, Int) -> Tensor<1, Result<SdePath<s>, SdeError>>`
+
+The result does not depend on how the work is scheduled.
+
+**Examples:**
+```text
+let solver = sde_ensemble_diag
+```
+
+*Source: Aevia standard library guide.*
 ## `let sde_ensemble_general`
 
 ```aevia
 let sde_ensemble_general = sde_ensemble_general
 ```
 
+Integrates n independent paths of a general-noise SDE with seeds derived from the base seed, and returns a vector with one Result per path.
+
 **Signature:** `sde_ensemble_general : (((Float[T], s) -> RateOf<s>), ((Float[T], s) -> GeneralDiffusionOf<s>), s, SdeOpts<T>, Int) -> Tensor<1, Result<SdePath<s>, SdeError>>`
+
+**Examples:**
+```text
+let solver = sde_ensemble_general
+```
+
+*Source: Aevia standard library guide.*
 ## `let sde_ensemble_seed`
 
 ```aevia
 let sde_ensemble_seed = sde_ensemble_seed
 ```
 
+The seed used for member number index of an ensemble started from seed.
+
 **Signature:** `sde_ensemble_seed : (Int, Int) -> Int`
+
+It is a pure function, so you can reproduce one member of an ensemble on its own.
+
+**Examples:**
+```text
+sde_ensemble_seed(42, 3)
+```
+
+*Source: Aevia standard library guide.*
 ## `let sde_events`
 
 ```aevia
 let sde_events = sde_events
 ```
 
+Finds where event functions change sign along an SDE path.
+
 **Signature:** `sde_events : (SdePath<s>, Tensor<1, SdeEvent<s>>) -> { path: SdePath<s>, hits: Tensor<1, SdeHit<s>> }`
+
+Returns the path, cut at the first terminal event, and the list of hits with their times and states.
+
+**Examples:**
+```text
+let detect = sde_events
+```
+
+*Source: Aevia standard library guide.*
 ## `let sde_interp`
 
 ```aevia
 let sde_interp = sde_interp
 ```
 
+Turns an SDE path into a function of time that interpolates linearly between the stored steps.
+
 **Signature:** `sde_interp : SdePath<s> -> ((Float[T]) -> s)`
+
+**Examples:**
+```text
+let lookup = sde_interp
+```
+
+*Source: Aevia standard library guide.*
 ## `let sde_order`
 
 ```aevia
 let sde_order = sde_order
 ```
 
+The strong and weak convergence orders of an SDE scheme for commutative noise, as a record { strong, weak }.
+
 **Signature:** `sde_order : SdeMethod -> { strong: Float[1], weak: Float[1] }`
+
+**Examples:**
+```text
+import Sde { Milstein }
+sde_order(Milstein)
+```
+
+*Source: Aevia standard library guide.*
 ## `let sde_order_with`
 
 ```aevia
 let sde_order_with = sde_order_with
 ```
 
+Like sde_order, but for a given noise structure, since some schemes lose accuracy when the noise channels do not commute.
+
 **Signature:** `sde_order_with : (SdeMethod, SdeStructure) -> { strong: Float[1], weak: Float[1] }`
+
+**Examples:**
+```text
+import Sde { Milstein, Diagonal }
+sde_order_with(Milstein, Diagonal)
+```
+
+*Source: Aevia standard library guide.*
 ## `let sde_resample`
 
 ```aevia
 let sde_resample = sde_resample
 ```
 
+The states of an SDE path at each time in a vector of times, by linear interpolation between stored steps.
+
 **Signature:** `sde_resample : (SdePath<s>, Tensor<1, Float[T]>) -> Tensor<1, s>`
+
+**Examples:**
+```text
+let lookup = sde_resample
+```
+
+*Source: Aevia standard library guide.*
 ## `let sdeint_diag`
 
 ```aevia
 let sdeint_diag = sdeint_diag
 ```
 
+Integrates a stochastic differential equation dy = drift dt + diffusion dW in which every state component has its own independent noise: sdeint_diag(drift, diffusion, y0, options).
+
 **Signature:** `sdeint_diag : (((Float[T], s) -> RateOf<s>), ((Float[T], s) -> DiffusionOf<s>), s, SdeOpts<T>) -> Result<SdePath<s>, SdeError>`
+
+The options say whether to use a fixed or adaptive step, which scheme (EulerMaruyama, Milstein, ...), the seed and the time grid. The same seed always gives the same path. Returns Ok(path) or Err(SdeError).
+
+**Examples:**
+```text
+let solver = sdeint_diag
+```
+
+*Source: Aevia standard library guide.*
 ## `let sdeint_general`
 
 ```aevia
 let sdeint_general = sdeint_general
 ```
 
+Like sdeint_diag, for noise that couples the components: the diffusion returns a matrix with one column per noise channel.
+
 **Signature:** `sdeint_general : (((Float[T], s) -> RateOf<s>), ((Float[T], s) -> GeneralDiffusionOf<s>), s, SdeOpts<T>) -> Result<SdePath<s>, SdeError>`
+
+The structure option states how many channels there are and whether they commute.
+
+**Examples:**
+```text
+let solver = sdeint_general
+```
+
+*Source: Aevia standard library guide.*
 ## `let wiener`
 
 ```aevia
 let wiener = wiener
 ```
 
+wiener(seed, channels, steps, dt) generates the increments of independent Brownian motions as a steps x channels matrix.
+
 **Signature:** `wiener : (Int, Int, Int, Float[T]) -> Tensor<2, Float[T^(1/2)]>`
+
+Each entry has the dimension of the square root of dt, and the same seed reproduces the same values.
+
+**Examples:**
+```text
+wiener(42, 2, 5, 0.01 s)
+```
+
+*Source: Aevia standard library guide.*

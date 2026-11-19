@@ -2,14 +2,10 @@
 
 Source: `stdlib/Units/Atomic.aev`
 
-The constants in atomic units: hbar = m_e = e = 4 pi epsilon_0 = 1.
+Physical constants in Hartree atomic units: hbar = m_e = e = 4 pi epsilon_0 = 1; lengths are in bohr and energies in hartree.
 
-Hartree atomic units: hbar = m_e = e = 4 pi epsilon_0 = 1; lengths are in bohr and energies in hartree.
-
-Generated from the rssn Kernel Manifest (`manifest.unit_systems` and
-`manifest.constants`, §5.11.7). Do not edit; regenerate with
-`cargo run -p aevia-stdlib-gen -- --write`.
-rssn 3.0.0-rc.1, api 2
+Use `module Example with units atomic` to apply the same convention
+to your module's unit literals and dimension annotations.
 
 ## `let f`
 

@@ -218,7 +218,7 @@ let sol = dsolve(eq, y, t)           # Result<(Real[T] -> Real[L]), MathError>, 
 - A non-exhaustive match is `E0309` at compile time, and a match never falls through at run
   time; an arm that can never be selected warns `W0201`.
 
-Status: exhaustiveness and redundancy analysis is bounded recursion with a **pattern nesting
+Exhaustiveness and redundancy analysis is bounded recursion with a **pattern nesting
 limit of 24**; beyond it a pattern is treated as covered, which can only suppress a
 diagnostic, never produce a false one. Or-patterns and empty enums cannot be expressed in the
 current grammar; a match with zero arms on a type with no constructors counts as exhaustive.
@@ -272,7 +272,8 @@ non-integer stride is `E0302`.
 - An omitted `s` is 1; `a[i:j]` and `a[i..j]` are the same node.
 - Omitted endpoints follow the direction of the stride: for `s > 0`, `i` defaults to 0 and `j`
   to the axis length; for `s < 0`, `i` defaults to the last index and `j` to **before** the
-  first index. So `xs[::-1]` is `reverse(xs)` and `xs[::-2]` is `xs[4], xs[2], xs[0]`.
+  first index. Thus `xs[::-1]` reads `xs` in reverse. For a five-element `xs`, `xs[::-2]` reads
+  `xs[4]`, `xs[2]`, then `xs[0]`.
 - A negative explicit endpoint counts from the end and is clamped to the valid range; the end
   is half-open: `xs[4:0:-1]` is `xs[4]…xs[1]`.
 
@@ -281,19 +282,15 @@ A slice whose first step already passes `b` is **empty** (`xs[5:2:1]`, `xs[0:3:-
 not panic. `s == 0` never advances: it is a static `E0802` when the stride is a literal and a
 run-time `E0802` otherwise.
 
-A negative stride yields a **view**: same buffer, different offset, that axis reversed
-(`View { strides, reversed }`); a positive stride multiplies that axis's stride by `s`. So
-`xs[::-1]` and `reverse(xs)` share one buffer, and `m[:, ::-1]` flips only the second axis.
+The runtime uses a view when a nonempty `F64` slice can share its buffer. It scales the
+axis stride by the magnitude of the step and reverses direction for a negative step. Other
+storage types materialize the slice. In `m[:, ::-1]` only the second axis is reversed.
 
 ### 6.6.4 Linear algebra
 
-- `matmul`, `solve`, `inv`, `eig`, `svd`, `qr`, `lu` on `F64`/`C128` use rssn's numeric
-  kernels; small `Exact`/`Boxed` matrices use symbolic linear-algebra rules, and a large matrix
-  that cannot be numericised returns `Err` or stays symbolic.
-- `det` accepts only dimensionless input; a dimensioned matrix uses `det_unit`, which returns
-  `Dyn<ρ>` (`E0410`).
-- `solve`/`inv` of a singular matrix return `Err(SingularMatrix)`; `eig` always returns
-  `Complex`.
+- `det`, `inv`, and `linsolve` use rational elimination for exact integer and rational operands. Floating-point inputs use the RSSN dense kernel.
+- `det` takes a dimensionless square matrix and returns zero for a singular matrix. Use `det_unit` for a dynamically dimensioned determinant. A non-finite floating-point entry is `E0806`.
+- `inv` and `linsolve` report `Err(Singular)` for a singular matrix, `Err(ShapeMismatch)` for incompatible shapes, and `Err(NotConverged)` for non-finite floating-point input. `eig` returns complex eigenvalues.
 
 ### 6.6.5 Reductions
 
@@ -373,10 +370,9 @@ are `max_iterations = 24`, `max_nodes = 20_000`, `match_limit = 1_000`, `reduce_
 `patience = 3`, `time_limit = None`. Exhaustion is `E0808`; heavy requests
 (`integrate`/`solve`) return `Err`.
 
-Status: there is no language-level `with_budget(seconds, rewrites, thunk)` yet. The CLI's
-`--budget` is the **tail-call budget** (§9.3.4), not the symbolic budget; the symbolic budget
-takes the kernel defaults and is adjusted through the kernel `Config`/`Budget` API (embedding
-layer).
+The CLI option `--budget` bounds Aevia's tail calls and IO steps (§9.3.4). Symbolic
+operations use the kernel defaults. Embedding hosts configure symbolic limits through
+RSSN's `Config` and `Budget`.
 
 ### 6.9.2 Error classes
 

@@ -1,7 +1,6 @@
 # 13 — 可扩展性与 RSSN 集成
 
-本章是规范的一部分，并且**优先于**其他章节中任何“暂不支持/以后评估”的表述。Aevia 不按 `v1`/`v2` 分层：语言能力一次设计到位；后端尚未实现的部分用
-**capability 诊断**（`E1001`）报告，而不是删掉语言特性。
+当后端无法提供所请求的操作时，报告能力诊断 `E1001`。
 
 后端接口的详细契约在 rssn 仓库的 `docs/KERNEL.md`（Kernel Manifest、动态调用 ABI、插件）、`docs/DIMENSIONS.md` 与 `docs/CALLBACKS.md`；
 本章定义 Aevia 侧的规范性契约。
@@ -16,8 +15,6 @@
    `Units.*` 由 `manifest.units` 生成，不维护第二张单位表。
 3. **动态调用是正式能力。** 没有类型签名的算子仍可经 `Rssn.dynamic(name, args)` 调用；类型化 façade 是静态体验的增量，不是能力门槛。rssn 在动态路径上做
    **签名级**校验（`check_args`），不做量纲/类型推导；完整检查由 Aevia 静态检查器或 `Rssn.typed` 负责。
-
-这两个结论合起来：**上千个算子不能靠手写绑定**（会漂移、会漏、会腐烂）；**新能力不能靠“下个版本”补**（语言、manifest、插件 ABI 现在就定，后端按 capability 逐步补齐）。
 
 ---
 
@@ -67,7 +64,7 @@ KernelManifest
 4. 生成 `Rssn.Version`、`Rssn.ManifestHash`、`Rssn.Capabilities`、`Rssn.ValueKinds`、`Rssn.Constants`、`Rssn.Units`。
 5. 生成 LSP 补全、文档、签名存根，并记录每条声明的来源。
 
-**覆盖是测量，不是常量。** `rssn 3.0.0-rc.1` 上（`aevia rssn` 给出 live 数字）：1620 个算子 100% 有签名，来源 99 declared + 103 overlay + 1418 derived。
+运行 `aevia rssn` 可查询当前的覆盖情况和签名来源。
 精度分档（生成器必须区分）：
 
 | 来源 | 精度 | 生成什么 |
@@ -174,8 +171,7 @@ Rssn.Units           : Tensor<1, String>     # 单位名；单位值在生成的
   成功结果仍是 `Value`，经 `from_value<T>` 验证并转换；未经运行时类型字典具体化的泛型不能生成 `TypeRep`。
 - 高阶算子用 `Rssn.call_ho(name, args, fns)`；`to_callback` 从已检查源码闭包生成不透明回调，限制见 §8.19。回调在原线程同步执行，外层调用结束即失效；
   跨线程调用和同作用域重入被拒绝，回调错误经 `OpError` 传回；空列表就是一次动态调用。
-- `Rssn.register`/`Rssn.register_plugin` 接受 host `Plugin`；源码插件由 `@op`/`@rule` 与 `load_plugin` 发布（§13.5.2）。`core.plugin.source` 在有进程内插件的构建中 enabled；
-  `core.callback` 表示受限回调桥可用。
+- Aevia 通过 `@op`、`@rule` 和 `load_plugin` 发布源码扩展（§13.5.2）。`Rssn.register` 与 `Rssn.register_plugin` 对应仅供宿主使用的 `Plugin` 接口，传入 Aevia 值时报 `E0302`。`core.plugin.source` 表示支持源码扩展，`core.callback` 表示受限回调桥可用。
 
 ### 13.3.3 错误
 
@@ -266,39 +262,9 @@ Aevia 自己的静态解析规则（与 rssn 的格同构，供 Aevia 自己的�
 
 ### 13.5.1 插件
 
-插件不是新语法，而是**普通 Aevia 包 + 清单标记 + 属性**：
+Aevia 源码扩展由含 `@op` 或 `@rule` 注解函数的模块定义，使用 §7.5.1 的普通包清单。加载模块时发布这些声明，示例见 §13.5.2。
 
-```toml
-# aevia.toml
-[plugin]
-kind = "aevia"          # 进程内；对应 rssn 的 PluginKind::InProcess
-abi = 1
-```
-
-| `[plugin] kind` | rssn | 加载方式 |
-|---|---|---|
-| `"aevia"` / `"in-process"` | `PluginKind::InProcess` | `Session::register(Box<dyn Plugin>)` |
-| `"cdylib"` | `PluginKind::Cdylib` | `Session::load_plugin(path)`（需 `plugin-cdylib`） |
-
-`cdylib` 的 C ABI 是**字节缓冲**：入口符号 `rssn_plugin_v1`，参数与返回值是 bincode 编码的 `Vec<Value>`/`Result<Value, String>`，不是 `#[repr(C)]` 的 `Value` 镜像；`cdylib::load` 校验
-`PLUGIN_ABI` 和 `RssnPluginDesc`，`Session::load_plugin` = `load` + `register`。该模块由 `plugin-cdylib` feature 控制（默认关闭，`full` 才包含），因为加载动态库会在宿主进程里执行任意代码、没有沙箱。
-Aevia 在加载前必须查 `manifest.features.plugin_kinds`：没有 `"cdylib"` 时报 `E1001("core.plugin.cdylib")`，而不是让加载器抛底层错误。
-
-```aevia
-module MyDomain
-
-@op("mydomain/softplus")
-fn softplus(x: Real[1]): Real[1] = ln(1 + exp(x))
-
-@rule("softplus(x) => ln(1 + exp(x))")
-let softplus_rule = ()
-
-dimension MyDim
-unit myunit : Length = 0.5 m
-```
-
-`Rssn.register`（别名 `register_plugin`）是 `Session::register(Box<dyn Plugin>)` 的包装：`Rssn.register(plugin)  # -> Result<PluginId, PluginError>`。插件可以注册算子 + 签名 + eval 回调、
-重写规则、量纲规则、单位/基量纲，以及（可选）JIT lowering。
+RSSN 宿主通过 `Session::register(Box<dyn Plugin>)` 注册进程内 Rust 插件。宿主插件可以提供算子、签名、求值器、重写规则、量纲规则、单位、基量纲和 JIT 代码生成规则。启用可选的 `plugin-cdylib` 特性后，RSSN 宿主也可通过 `Session::load_plugin` 加载动态库。原生入口为 `rssn_plugin_v1`，其 ABI 通过字节缓冲区传递 bincode 编码的 `Vec<Value>` 参数和 `Result<Value, String>` 结果。原生加载器检查插件 ABI 版本和描述符。Aevia 源码使用基于模块的扩展接口。
 
 ### 13.5.2 Aevia 函数作为 rssn 算子
 
@@ -330,9 +296,7 @@ fn sinh_exp(x: Real[1]) = (sinh(x), (exp(x) - exp(-x)) / 2)
 
 ### 13.5.3 安全
 
-- 插件必须签名；默认只加载 registry 信任的插件。
-- 插件声明 capabilities（`fs`、`net`、`unsafe`）；未声明的能力在沙箱中被拒绝。
-- 插件 ABI 版本不匹配报 `E1006`。
+发布包时，注册中心验证发布者的签名（§13.7）。`load_plugin` 接收本地源码路径，并信任指定的文件及其导入。调用方需要 `fs` 能力打开文件，求值模块的解释器继承调用方的能力掩码。只加载可信的本地源码。源码插件和 RSSN 原生插件都在宿主进程内执行。执行不可信代码时使用进程隔离和操作系统资源限制（§9.14）。
 
 ---
 
@@ -530,10 +494,9 @@ Aevia 编译器在类型检查后检查 capability；缺失时：静态可知（
 **决定：支持 `Tensor<shape, Point[d]>`。** 元素级 `+`/`-` 按点规则（`Point - Point -> Float[d]`，`Point + Float[d] -> Point`，`Point + Point` 报 `E0405`）；`mean` 只接受 `Float`/`Real`，点的平均用
 `centroid : Tensor<1,Point[d]> -> Point[d]`；温度场可以直接是 `Tensor<[nx,ny], Point[Θ]>`；存储是 `Float` + `UnitId`，仿射偏移只在元素级运算时处理。
 
-### 13.9.3 `Table` 行多态 schema
+### 13.9.3 `Table` 的行类型参数
 
-**决定：`Table<ρ>` 使用行多态静态 schema，动态 `Table` 仍保留。**`ρ` 是行类型（字段名 + 类型 + 量纲）；`read_csv<ρ>(path)` 从表头单位推断字段类型，无法推断时报 `DataError.Schema`；
-`column(t, "time")` 是类型级字段查找；`select`/`join`/`rename` 保持行多态，新增字段要求 `lacks` 约束；动态 CSV 返回 `Table<Dynamic>`，`to_table<ρ>` 运行时校验（细节见 §8.11）。
+`Table<ρ>` 的行类型参数由程序的类型上下文确定。外部数据在运行时提供列名、单元格和单位元数据。使用 `schema` 查询表格的运行时结构，表格操作见 §8.11。
 
 ### 13.9.4 设备、GPU、分布式
 
@@ -543,29 +506,25 @@ Aevia 编译器在类型检查后检查 capability；缺失时：静态可知（
 - `to_device : (Tensor<n,τ>, Device) -> IO (Tensor<n,τ>)`；`on : (Device, () -> a) -> IO a` 是作用域执行（分配/传输是 IO）。
 - `@jit(target = Gpu(0))` 指定 JIT 目标；没有 `core.gpu` 时报 `E1001`。分布式张量用库类型 `Sharded<Mesh, Tensor<...>>`，`Mesh` 是运行时拓扑。这样不为设备/分片生成类型组合爆炸。
 
-**状态**：`Device` 值、`to_device`/`on`/`device_of` 已类型化；没有 `core.gpu` 时 `to_device`/`on` 报 `E1001("core.gpu")`。`@jit(target = Cpu)` 与 `@jit` 等价；`@jit(target = Gpu(n))` 与
-`Distributed(..)` 被语言接受，在检查期报 `E1001("core.gpu")`/`E1001("core.distributed")`；其他参数是 `E0210`。属性参数里“构造器作用于常量”（`Gpu(0)`）算编译期常量（§2.2.7）。
-`Gpu`/`Distributed` 没有后端，只是可构造的运行时值（rssn 侧设备层见 §10.6.5）。
+`@jit(target = Cpu)` 与 `@jit` 等价。请求不可用的 GPU 或分布式目标时，检查阶段报 `E1001`。目标参数无效时，报 `E0210`。用常量调用构造器（如 `Gpu(0)`）可用作常量属性参数（§2.2.7）。RSSN 的宿主设备 API 见 §10.6.5。
 
 ### 13.9.5 稀疏与布局
 
 **决定：`Sparse<F, shape, τ>` 是核心类型构造器，`F` 是格式类型。**
 
-- 格式：`Csr`、`Csc`、`Coo`、`Bcsr`（`Block` 是同义写法）；当前是封闭集合，用户自定义格式要等 rssn 开放 `Format` kind（当前插件只能注册算子/单位）。
-- `Layout` 类（设计上）：`nnz`、`to_dense`、`from_dense`、`matmul`、`transpose`；当前实现是内建函数，不是可实例化的类型类。
+- `Csr`、`Csc`、`Coo` 和 `Bcsr` 构成封闭的格式集合。`Block` 是 `Bcsr` 的同义写法。
+- 布局操作包括内建函数 `nnz`、`to_dense`、`from_dense`、`matmul` 和 `transpose`。Aevia 按支持的格式和操作数类型分派。
 - `@` 按布局分派（dense×sparse、sparse×dense、sparse×sparse）；`Sparse` 与 `Tensor` 之间只有显式转换。rssn 的 `TypeExpr::Sparse` 只有 `rank`，所以 `Sparse<F,shape,τ>` 在边界降为
   rank + 运行时 shape；细化形状由 Aevia 自己检查与传播。
 
-**状态**：已实现，`storage.sparse` 已启用——运行时 `Value::Sparse`、四种布局分派、`Bcsr`、预条件 `cg_with`、非对称 Krylov、切片与秩 N 收缩；细节、精确性与错误码见 §8.4.1。**剩余缺口**：
-格式仍是封闭集合；稀疏值不能进入 rssn 项图。
+`storage.sparse` 能力涵盖四种格式、预条件与非对称迭代解法、切片和张量收缩。量纲和错误见 §8.4.1。稀疏值以结构化值通过动态内核边界。
 
 ### 13.9.6 效果与能力
 
 **决定：不做用户自定义 effect handlers；`IO` 保持单一类型。** 扩展点是算子/插件/registry，不是语言级效果系统。`IO` 动作可声明所需 capability（`fs`、`net`、`env`、`rand`、`gpu`）——这是运行时
 权限，不是类型参数；`with_cap(cap, thunk)` 在沙箱中执行，没有能力时 IO 动作失败。这避免 effect row 侵入全部标准库签名。需要 DSL/代码生成时用插件/算子，不用宏。
 
-**状态**：`with_cap(caps, thunk)` 与 `aevia run --caps` 已实现，语义见 §9.14（能力集按块收窄、嵌套取交集、缺失时 `E0902`）。它与 §13.8.2 的后端能力表是两回事：后者描述后端能做什么，
-前者描述程序被允许做什么。
+`with_cap(caps, thunk)` 与 `--caps` 选项的语义见 §9.14。后端能力表（§13.8.2）说明工具链提供的功能。
 
 ### 13.9.7 宏与语法扩展
 

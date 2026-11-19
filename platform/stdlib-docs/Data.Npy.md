@@ -10,26 +10,33 @@ The `Data/Npy` module of §8.20.
 let read_npy = read_npy
 ```
 
-Read a NumPy Float array in C or Fortran order, preserving its rank.
+Reads a NumPy .npy file of floats as a tensor.
 
 **Signature:** `read_npy : String -> IO (Result<Tensor<n, Float>, DataError>)`
 
-**Errors**
-Returns a domain error for unsupported or malformed data.
+You must state the rank as a type argument, read_npy<2>(path), so the result type is known; a file of a different rank gives Err(DataError). It is an IO action.
 
-*Source: Rust documentation of the `aevia-std` function.*
+**Examples:**
+```text
+read_npy<2>("matrix.npy")
+```
+
+*Source: Aevia standard library guide.*
 ## `let write_npy`
 
 ```aevia
 let write_npy = write_npy
 ```
 
-Encode a valid NumPy Float array.
+Writes a dimensionless Float tensor of any rank to a NumPy .npy file (little-endian float64).
 
 **Signature:** `write_npy : (String, Tensor<n, Float>) -> IO (Result<(), DataError>)`
 
-**Panics**
-Panics if the shape and data do not agree; use [`try_write_npy`] for
-untrusted input and a recoverable error.
+It is an IO action returning Ok(()) or Err(DataError).
 
-*Source: Rust documentation of the `aevia-std` function.*
+**Examples:**
+```text
+write_npy("matrix.npy", [[1.0, 2.0], [3.0, 4.0]])
+```
+
+*Source: Aevia standard library guide.*

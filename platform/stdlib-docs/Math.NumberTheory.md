@@ -10,7 +10,7 @@ The `Math/NumberTheory` module of §8.20.
 let factor = factor
 ```
 
-Factors a polynomial or rational expression into irreducible factors over the rationals.
+On an Int, returns its prime factorisation as a vector of (prime, exponent) pairs: factor(12) is [(2, 2), (3, 1)].
 
 **Signature:** `factor : Real[d] -> Real[d]`
 
@@ -22,14 +22,23 @@ Factors a polynomial or rational expression into irreducible factors over the ra
 
 **Dimensions:** the result has the dimension of argument 1
 
-*Source: rssn operator `poly.factor`.*
+On an exact expression, factors it over the rationals.
+
+**Examples:**
+```text
+factor(12)
+let x = symbol("x")
+factor(x^2 - 1)
+```
+
+*Source: Aevia standard library guide.*
 ## `let gcd`
 
 ```aevia
 let gcd = gcd
 ```
 
-Greatest common divisor of integers `a` and `b`.
+Greatest common divisor of two Ints; the result is never negative, and gcd(0, 0) is 0.
 
 **Signature:** `gcd : (Int, Int) -> Int`
 
@@ -40,34 +49,37 @@ Greatest common divisor of integers `a` and `b`.
 
 **Dimensions:** the result is dimensionless
 
-Computes the greatest common divisor (GCD) of two numbers using the Euclidean algorithm.
-
-**Arguments**
-* `a` - The first number.
-* `b` - The second number.
-
-**Returns**
-The greatest common divisor of `a` and `b`.
-
 **Examples:**
-- `gcd(12, 18)` returns a `Int`
-(recorded kernel calls; the result is shown as its sort)
+```text
+gcd(12, 18)
+```
 
-*Source: rssn operator `number_theory.gcd`; rustdoc of `crate::kernels::number_theory::gcd` (by name).*
+*Source: Aevia standard library guide.*
 ## `let is_prime`
 
 ```aevia
 let is_prime = is_prime
 ```
 
+True when an Int is prime.
+
 **Signature:** `is_prime : Int -> Bool`
+
+Negative numbers, 0 and 1 are not.
+
+**Examples:**
+```text
+is_prime(97)
+```
+
+*Source: Aevia standard library guide.*
 ## `let lcm`
 
 ```aevia
 let lcm = lcm
 ```
 
-Least common multiple of integers `a` and `b`.
+Least common multiple of two Ints; zero if either argument is zero.
 
 **Signature:** `lcm : (Int, Int) -> Int`
 
@@ -78,23 +90,19 @@ Least common multiple of integers `a` and `b`.
 
 **Dimensions:** the result is dimensionless
 
-Computes the least common multiple (LCM) of two numbers.
-
-Returns `0` when either argument is `0`, and `u64::MAX` when the true
-value does not fit (use [`checked_lcm`] to tell the two apart).
-
 **Examples:**
-- `lcm(4, 6)` returns a `Int`
-(recorded kernel calls; the result is shown as its sort)
+```text
+lcm(4, 6)
+```
 
-*Source: rssn operator `number_theory.lcm`; rustdoc of `crate::kernels::number_theory::lcm` (by name).*
+*Source: Aevia standard library guide.*
 ## `let primes`
 
 ```aevia
 let primes = primes
 ```
 
-List of all prime numbers `<= n`.
+All primes up to and including n, as a vector.
 
 **Signature:** `primes : Int -> Tensor<1, Int>`
 
@@ -104,11 +112,9 @@ List of all prime numbers `<= n`.
 
 **Dimensions:** kernel rule `List`
 
-Prime numbers strictly below `limit`; negative limits yield an empty list.
-
 **Examples:**
-- `primes(30)` returns a `[Int]`
-- `primes(1)` returns a `[Never]`
-(recorded kernel calls; the result is shown as its sort)
+```text
+primes(30)
+```
 
-*Source: rssn operator `number_theory.primes`; rustdoc of `crate::kernels::number_exact::primes` (by name).*
+*Source: Aevia standard library guide.*

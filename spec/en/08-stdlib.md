@@ -170,6 +170,10 @@ argmin   : Tensor<1, Scalar<ρ,d>> -> Int
 
 **Any rank.** Operations written `Tensor<n, …>` are typed for **every rank** `n`: `sum`, `prod`, `mean`, `var`, `std`, `norm`, `normalize`, `map`, `map2`/`zip_with` (same shape), `flatten` (rank ≥ 2), `transpose`, the keepdims form of `sum(a, axis)`, the whole FFT family of §8.8, and the sequence operations below. Rank is not a first-class type parameter, so these signatures are **templates over the rank**: the type table lists instances for ranks 1 to 4 (`builtins::schemes`, used for hovers and first-class use), and the checker instantiates the template at the rank of the actual argument. An argument whose rank matches no instance is `E0302`, with expected and actual types. `first`/`last` give `None` on an empty tensor; `argmax`/`argmin` on an empty tensor are `E0802`; NaN never wins, and ties take the lowest index.
 
+`range(start, stop, step)` produces exact integers from `start` up to the exclusive `stop`.
+The default step is `1`. A negative step descends, and a step pointing away from `stop` produces
+an empty tensor. A zero step or a result that exceeds the tensor size limit is `E0802`.
+
 **Sequence operations act on the first axis.** A tensor of rank `n ≥ 2` is a sequence of rank-`n−1` slices along the first axis ("rows"); `Tensor<0, a>` is `a`, so a "row" of a rank-1 tensor is an element.
 
 - `reverse` reverses the first axis and keeps the shape (to flatten, write `reverse(flatten(m))`). `reverse_axis(t, k)` reverses axis `k` (negative counts from the end, out of range `E0802`). On `f64` tensors both are views and do not copy the buffer (§9.5).
@@ -344,7 +348,7 @@ zeros_of<shape>() : Tensor<shape, Float>              # refined-shape constructo
 ones_of<shape>()  : Tensor<shape, Float>
 ones     : (Int, ..., Int) -> Tensor<n, Float>
 fill     : (Scalar<ρ,d>, Int, ..., Int) -> Tensor<n, Scalar<ρ,d>>
-linspace : (Scalar<ρ,d>, Scalar<ρ,d>, Int) -> Tensor<1, Scalar<ρ,d>>
+linspace : (Scalar<ρ,d>, Scalar<ρ,d>, Int) -> Tensor<1, Float[d]>
 reshape<shape> : Tensor<shape0, τ> -> Result<Tensor<shape, τ>, ShapeError>
 reshape_dyn : (Tensor<n, τ>, Tensor<1, Int>) -> Result<Tensor<n, τ>, ShapeError>
 refine_shape<shape> : Tensor<n, τ> -> Option<Tensor<shape, τ>>
@@ -376,6 +380,8 @@ match refine_shape<[3, 3]>(m) with
 An extent MUST be a literal or `?`: type-level variables have no run-time value, so `refine_shape<[n]>(a)` is `E0304` (refining a variable extent can only be solved from equations in a signature, not by a run-time test).
 
 `@` dispatches on rank: `A @ B` (2×2), `A @ x` (2×1), `x @ A` (1×2), `x @ y` (1×1 dot product). `matmul` is 2×2 only; `matvec`/`vecmat`/`dot` are the explicit forms.
+
+`diag(v)` places a numeric or Boolean vector on the diagonal of a square matrix, filling the other entries with zero in the input representation or with `false`. `diag(A)` extracts the main diagonal of a matrix as a vector and keeps its element type. `eye(n)` returns an `n` by `n` floating-point identity matrix. Dense constructors check the result size before allocating. `linspace(start, end, n)` returns `n` floating-point samples with the endpoints’ dimension. For finite inputs it includes both endpoints when `n ≥ 2`, keeps only `start` when `n = 1`, and returns an empty tensor when `n ≤ 0`.
 
 `det` accepts only dimensionless matrices; use `det_unit` for dimensioned ones:
 
@@ -462,7 +468,7 @@ nonzeros      : Sparse<F, shape, Scalar<ρ,d>> -> Tensor<1, (Tensor<1, Int>, Sca
 
 **Rank N and contraction.** `contract(A, B, axes_a, axes_b)` is pairwise tensor contraction (`tensordot`): `axes_a`/`axes_b` are **list literals** (so the result rank is static), and the result axes are the free axes of `A` followed by those of `B`. Two sparse operands give `Sparse<Coo, …>`; one sparse and one dense give a dense `Tensor`; contracting all axes gives a scalar; two dense operands are a type error. `map_nonzero(f, A)` calls `f` only on **stored entries**, so `f(0) = 0` is required (entries returning zero are dropped); `nonzeros(A)` returns a list of `(index, value)` tuples.
 
-**Boundary with the kernel.** rssn's `TypeExpr::Sparse` has only a `rank`, so `Sparse<F, shape, τ>` is lowered at the boundary to rank plus a run-time format; `aevia-rssn`'s `Val::Sparse` corresponds one-to-one to rssn's `Value::Sparse`, **without densifying**. rssn's `term_of_value` does not accept `Value::Sparse` into the term graph (`in_term_graph = false` in `manifest.value_kinds`), so a sparse value cannot be fed directly to general rewriting operators; Aevia converts layouts; RSSN owns sparse algorithms and its `faer` sparse-LU backend. User-defined formats wait until rssn opens `Format` (§13.9.5).
+**Boundary with the kernel.** rssn's `TypeExpr::Sparse` has only a `rank`, so `Sparse<F, shape, τ>` is lowered at the boundary to rank plus a run-time format; `aevia-rssn`'s `Val::Sparse` corresponds one-to-one to rssn's `Value::Sparse`, **without densifying**. rssn's `term_of_value` does not accept `Value::Sparse` into the term graph (`in_term_graph = false` in `manifest.value_kinds`), so a sparse value cannot be fed directly to general rewriting operators; Aevia converts layouts; RSSN owns sparse algorithms and its `faer` sparse-LU backend. The sparse formats form a closed set (§13.9.5).
 
 Note: `storage.sparse` enables sparse operations; `gmres_with`/`bicgstab_with` accept floating-point elements only; sparse eigenvalues and SVD are not provided.
 
@@ -565,7 +571,7 @@ cov       : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Scalar<div_rep
 corr      : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Scalar<div_rep(ρ),1>
 skewness  : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,1>
 kurtosis  : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,1>
-histogram : (Tensor<1, Scalar<ρ,d>>, Int) -> { counts: Tensor<1, Int>, edges: Tensor<1, Scalar<ρ,d>> }
+histogram : (Tensor<1, Scalar<ρ,d>>, Int) -> { counts: Tensor<1, Int>, edges: Tensor<1, Float[d]> }
 mode      : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,d>
 ```
 
@@ -1039,8 +1045,7 @@ event time; wave results add `velocities`. Assertions are in `examples/pde_adapt
 ## 8.11 Data
 
 ```
-type Table<ρ>                  # row-polymorphic static schema; ρ is a record type
-type Column
+type Table<ρ>                  # opaque table with a row type parameter
 
 read_csv<ρ>   : String -> IO (Result<Table<ρ>, DataError>)
 read_csv_dyn  : String -> IO (Result<Table<Dynamic>, DataError>)
@@ -1050,12 +1055,12 @@ write_npy     : (String, Tensor<n, Float>) -> IO (Result<(), DataError>)
 read_json     : String -> IO (Result<Json, DataError>)
 write_json    : (String, Json) -> IO (Result<(), DataError>)
 
-column        : (Table<ρ>, String) -> Result<Tensor<1, ρ[name]>, DataError>
+column        : (Table<ρ>, String) -> Result<Tensor<1, a>, DataError>
 column_dyn    : (Table<ρ>, String) -> Result<Tensor<1, Value>, DataError>
 row           : (Table<ρ>, Int) -> Result<ρ, DataError>
-select<σ>     : (Table<ρ>, Tensor<1, String>) -> Table<σ>   # σ ⊆ ρ
+select        : (Table<ρ>, Tensor<1, String>) -> Table<σ>
 filter        : ((ρ -> Bool), Table<ρ>) -> Table<ρ>
-join          : (Table<ρ>, Table<σ>, String) -> Table<ρ + σ>
+join          : (Table<ρ>, Table<σ>, String) -> Table<τ>
 schema        : Table<ρ> -> Tensor<1, ColumnInfo>
 to_table<ρ>   : Tensor<1, ρ> -> Result<Table<ρ>, DataError>
 to_dynamic    : Table<ρ> -> Table<Dynamic>
@@ -1063,13 +1068,13 @@ to_dynamic    : Table<ρ> -> Table<Dynamic>
 type ColumnInfo = { name: String, dtype: String, unit: Option<String> }
 ```
 
-`Table<ρ>` is a **row-polymorphic static schema**: the field names, types and dimensions of `ρ` are known at compile time. `read_csv<ρ>` infers field types from header units; when it cannot, it reports `DataError.Schema` and the user may supply an explicit `ρ`. `read_csv_dyn` returns `Table<Dynamic>` for unknown schemas; `to_table<ρ>` validates and converts at run time.
+`read_csv_dyn` returns `Table<Dynamic>` for files whose columns are determined at run time. For `read_csv`, an explicit type argument or the surrounding expression supplies the row type parameter. Both readers accept `.csv` files with comma separators and `.tsv` files with tab separators. They validate quoting and row widths. `schema(t)` reports the run-time column names, detected cell types and optional units. A header such as `time [s]` records `s` as column metadata. Numeric cells are exposed as dimensionless `Float` values and other cells as `String` values.
 
-The field name of `column` MUST be a **string literal**; the type checker lifts the literal to a type-level label, looks up `ρ[name]` in `ρ` and returns its element type. A missing field is `E0306`; a dimension mismatch is `E0401`. For a non-literal use `column_dyn` (returning `Tensor<1, Value>`), which does not use the static schema. `select`/`filter`/`join` stay row-polymorphic; the result row of `join` is `ρ + σ` (`+` is type-level row union; a conflicting field is `E0208`).
+`column` and `column_dyn` look up a string name at run time and return an error for a missing column. The result element type `a` in `column` comes from the surrounding type context independently of the table's row type. `row` returns a record built from the selected row. `filter` preserves the row type parameter. `select` and `join` determine their result columns at run time. For a join, both tables must contain the key column and their other column names must be distinct. `to_table` constructs a table from a vector of records, and `to_dynamic` describes the same table as `Table<Dynamic>`.
 
-The rank of `read_npy` cannot be inferred statically from the file and MUST be written `read_npy<2>(path)`; omitting it is `E0314`. The type argument currently MUST be a concrete natural number; if the file's actual rank differs, the IO action returns `Err(DataError)` and never hands a tensor of the wrong rank to the program.
+Supply a concrete natural number for the `read_npy` rank, as in `read_npy<2>(path)`. Omitting it is `E0314`. If the file has a different rank, the IO action returns `Err(DataError)`.
 
-CSV headers may carry units: `time [s]`, `velocity [m/s]`. `read_csv<ρ>` parses the header units; `column(t, "time")` is checked at compile time against the field types of `ρ` and validated defensively again at run time. Without header units, columns are dimensionless; an explicit `ρ` can override this, but a run-time validation failure is `DataError.DimensionMismatch`.
+`read_json` accepts `.json` files. For `read_csv`, `read_csv_dyn` and `read_json`, an unsupported extension produces `Err(DataError)` with `E0904` when the IO action runs.
 
 NPY supports NPY 1.0/2.0/3.0, little- and big-endian float32/float64, C and Fortran order (Fortran input is converted to row-major storage; output is little-endian float64, C order); `read_npy<n>` stores and verifies a concrete rank, `write_npy` accepts dimensionless `Float` tensors of any rank; an unresolved generic rank is `E0304`. IO error codes: missing file `E0901`, invalid argument `E0902`, corrupt/truncated/rank mismatch/size overflow `E0903`, unsupported format, dtype or extension `E0904`, failed plot write `E0905`; NPY errors are returned as `Err(DataError)` after the IO action runs.
 
@@ -1079,28 +1084,35 @@ NPY supports NPY 1.0/2.0/3.0, little- and big-endian float32/float64, C and Fort
 type PlotSpec
 type Series
 
-line      : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Series
-line_with : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, PlotOpts) -> Series
-scatter   : same as line (default options)
-scatter_with : same as line_with (with PlotOpts)
-errorbar  : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>,
-             Tensor<1, Scalar<ρ,e>>) -> Series
-errorbar_with : same as errorbar + PlotOpts
-hist      : (Tensor<1, Scalar<ρ,d>>, Int) -> Series
-hist_with : (Tensor<1, Scalar<ρ,d>>, Int, PlotOpts) -> Series
-heatmap   : (Tensor<2, Scalar<ρ,d>>) -> Series
-heatmap_with : (Tensor<2, Scalar<ρ,d>>, PlotOpts) -> Series
-label     : (Series, String) -> Series
-combine   : Tensor<1, Series> -> PlotSpec
-plot      : PlotSpec -> IO Unit
-save      : (String, PlotSpec) -> IO Unit
-
+line          : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Series
+line_with     : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, PlotOpts) -> Series
+scatter       : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Series
+scatter_with  : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, PlotOpts) -> Series
+errorbar      : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<1, Scalar<ρ,e>>) -> Series
+errorbar_with : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<1, Scalar<ρ,e>>, PlotOpts) -> Series
+hist          : (Tensor<1, Scalar<ρ,d>>, Int) -> Series
+hist_with     : (Tensor<1, Scalar<ρ,d>>, Int, PlotOpts) -> Series
+heatmap       : (Tensor<2, Scalar<ρ,d>>) -> Series
+heatmap_with  : (Tensor<2, Scalar<ρ,d>>, PlotOpts) -> Series
+label         : (Series, String) -> Series
+combine       : Tensor<1, Series> -> PlotSpec
+plot          : PlotSpec -> IO Unit
+save          : (String, PlotSpec) -> IO Unit
+plot_save_gif : (String, Tensor<1, PlotSpec>, Int) -> IO Result<Unit, IOError>
 default_plot_opts : PlotOpts
 ```
 
-`PlotOpts` is a full record: `{ label: Option<String>, color: Option<String>, xunit: Option<String>, yunit: Option<String>, xscale: AxisScale, yscale: AxisScale, xlim: Option<(Float, Float)>, ylim: Option<(Float, Float)> }`. `line(x, y)` uses the defaults and generates axis labels automatically from the dimensions of `x` and `y` (`t / s`, `v / (m/s)`); `line_with` takes a full `PlotOpts`; `label(series, "v(t)")` is the shortcut for setting a label. `plot` writes `plot.html` by default; `save` gives the file name.
+`line`, `scatter` and `errorbar` take equal-length vectors whose coordinates can be evaluated as real numbers. A pair containing NaN or infinity is omitted. Lines join consecutive surviving pairs, and scatter draws individual markers. Error bars use nonnegative magnitudes with the dimension of `y`. If an error magnitude is non-finite, the central point is drawn without its whisker.
 
-`plot` and `save` use an HTML renderer with inline `<svg>` and produce the same HTML format; `save` does **not** switch format by extension (writing a `.svg` file still produces an HTML document). A write failure is `E0905`, and `plot`/`save` are fatal IO actions (failure exits with a diagnostic and is not a `Result`).
+`hist(data, bins)` uses a positive number of equal-width bins and requires at least one finite observation. Non-finite observations are skipped. `heatmap` draws a cell per matrix entry with row zero at the top. Non-finite cells are left blank.
+
+`PlotOpts` is a record with `label`, `color`, `xunit` and `yunit` of type `Option<String>`, `xscale` and `yscale` set to `Linear` or `Log`, and `xlim` and `ylim` of type `Option<(Float, Float)>`. Copy `default_plot_opts` with a record update to set these fields. Import `Linear` and `Log` from `FFT` to set the scales explicitly. Colors accept six-digit RGB hex strings and the names `red`, `blue`, `green`, `orange`, `purple` and `black`. The SVG includes the label as a tooltip and captions each axis with its unit. `label(series, text)` overrides the tooltip text.
+
+Series in a frame share axes and must agree on their coordinate dimensions and any specified axis settings. The default is linear scaling in coherent units with automatic limits. Unit overrides name registered units, including valid SI prefixes. Limits are finite increasing pairs in the displayed units. `Log` is base ten, requires positive limits and omits points with non-positive coordinates on that axis.
+
+Both SVG and GIF use an 800 × 400 canvas with a 720 × 340 plotting area. `plot` writes `plot.html` containing inline SVG. `save` writes standalone SVG for a case-insensitive `.svg` extension and HTML with inline SVG for other paths. Invalid plots and failed writes raise `E0905`.
+
+`plot_save_gif` renders a nonempty vector of plot specifications in order and loops the animation continuously. `Plot.plot_save_gif(path, frames, delay_cs)` takes an explicit delay in hundredths of a second and accepts integers from 0 through 65535. The unqualified call `plot_save_gif(path, frames)` uses a delay of 10. Up to 312 frames fit the raster allocation limit. The IO action returns `Ok(())` or `Err(IOError)`. Invalid frames and delays report `E0902` in the error payload.
 
 ## 8.13 Test
 
@@ -1108,11 +1120,15 @@ default_plot_opts : PlotOpts
 assert      : Bool -> IO Unit
 assert_eq   : (Eq a, Show a) => (a, a) -> IO Unit
 approx_eq   : (Scalar<ρ,d>, Scalar<ρ,d>, Scalar<ρ,d>) -> Bool
-forall      : Arbitrary a => (a -> Prop) -> Bool
+forall      : (a -> Prop) -> Bool
 compile_fail: String -> Bool
 ```
 
-`approx_eq(a, b, tol)` requires all three to have the same dimension; `tol` is an absolute tolerance. `forall` generates random samples of an `Arbitrary` type and `decide`s the proposition on each; any `Some(false)` fails, all `Some(true)` passes, and a `None` is `E0804`. `compile_fail` takes a string of source and compiles it in an **isolated** environment (no imports, no calling-module declarations, Prelude only), returning `true` if at least one error results; it does not check the error code — to assert a code, use the doctest `compile_fail EXXXX` marker (§7.5.5/§9.12).
+The arguments to `approx_eq(a, b, tol)` must share a dimension. The tolerance is absolute.
+
+Use `forall` with a unary predicate on a dimensionless `Real`. The samples are `0`, `1`, `-1`, `2`, `-3`, and `1/2`, in that order. If every sample satisfies the predicate, the result is `true`. The first false verdict returns `false`. If there is no false verdict and a verdict is undecidable, the call raises `E0804`. The predicate must return `Prop`, which a `Real` comparison produces. The checker permits a generic parameter type, but the sampler always supplies this same sequence of dimensionless numeric values.
+
+`compile_fail` takes a string of source and compiles it in an **isolated** environment (no imports, no calling-module declarations, Prelude only), returning `true` if at least one error results; it does not check the error code — to assert a code, use the doctest `compile_fail EXXXX` marker (§7.5.5/§9.12).
 
 ## 8.14 Measurement
 
@@ -1265,7 +1281,7 @@ Reachability and limits of the fixed entry points:
 
 - `type_rep<T>()` makes an unforgeable `TypeRep` from a concrete checked type; an unresolved generic cannot be reflected without a run-time type dictionary. `Rssn.typed` performs the dynamic call and checks the result against that witness; a mismatch or insufficient evidence returns `Err(OpError)`, and a successful result is still an opaque `Value` to be validated and converted with `from_value<T>`.
 - `to_callback(f)` checks the concrete function type of a checked source closure in the current evaluator session and builds an opaque `Callback` (aliases and concretised generic functions keep this evidence; wrap built-in functions in a source lambda first). The callback bridge supports concrete numbers, `Bool`, `String`, the sealed host type `NativeAdVar`, and tensors and closed records built recursively from them; same-named source types and other opaque callback types remain rejected. Concrete dimensions, ranks and fully known shapes are checked, and an empty structured tensor needs independent element-type and dimension evidence. Each operator may restrict signatures further; for example the numeric solvers use `Float` scalars and vectors. The call runs synchronously on the original thread and the handle expires when the outer call returns; calls across threads, re-entry in the same scope and callback errors all return errors; an empty callback list is equivalent to a dynamic call.
-- `Rssn.register`/`Rssn.register_plugin` accept a host `Plugin`; Aevia source does not hold such values (run-time `E0302`, with a note pointing to the source mechanism). Source plugins are published by declaration (§13.5.2): `@op`/`@rule` functions are registered at module load, and `load_plugin(path) : String -> IO (Result<Int, String>)` loads a plugin file at run time.
+- The host `Plugin` interface is reserved for RSSN hosts. Calling `Rssn.register` or `Rssn.register_plugin` with Aevia values reports `E0302`. Aevia registers `@op` and `@rule` functions at module load. `load_plugin(path) : String -> IO (Result<Int, String>)` loads a local source file under the conditions in §13.5.2 and §13.5.3.
 - `core.callback` marks the restricted callback bridge as available, and `core.plugin.source` marks source plugins as available. Generated higher-order bindings keep the explicit `(values, callbacks)` dynamic interface; for a single overload with an exact declaration whose callbacks and results can be certified, a typed alias pinned to the signature is also generated, which certifies the concrete callback signature at call time and validates the result against the instantiated type; signatures whose type or dimension cannot be proved offer only the dynamic entry. For example the `num_least_squares` alias of `Rssn_numerical_callback`: parameters and residuals have dimensions `D` and `E`, the residual tolerance uses `E`, the other controls are dimensionless, and the result carries `converged` and `status` (residual/gradient convergence, budget exhausted, stagnation).
 
 `Rssn.dynamic` is a **first-class capability**, not a degraded path: plugin operators, leaf operators and experimental entries all use it. With several registrations rssn chooses at run time by `Exact > Widened > Shaped > Generic > No` and reports `E1002` on ties; an argument accepted by no overload is `OpError::Type` (`check_args`). Each name in the standard set has one registration, so this path does no registration-level scoring, but it **does** validate at the signature level. `Rssn.call_key` does not resolve at all and runs the overload named by name + `signature_hash` directly.
@@ -1363,6 +1379,6 @@ Physics
 
 The standard-library modules live in the `aevia-std` package; the Prelude is imported automatically and the rest on demand with `import`. A module name is its path: `import A.B` resolves `A/B.aev` (§7), `import Math { sqrt }` brings in only `sqrt`, and `open Units.SI` puts the exports of `Units.SI` into the current scope. Local files take precedence over embedded standard-library modules. `Units/*` are documentation modules: unit names are already ambient `Unit[d]` values, and exporting quantity bindings would shadow them and change the semantics of `Tensor / Unit`, so they are not exported (§5.3.4). The `Sde` module re-exports the five entry points of §8.9.1 and declares the option ADTs; `Physics.Ising`/`Physics.Geodesic` provide the typed wrappers of §8.17. Function names, the nominal variant constructors of `Sde` and transparent type aliases (`type X = { … }`, e.g. `Params` of `Physics.Ising`) can all be brought in with `import { X }`/`open`.
 
-`Rssn` is a **generated module**, not a hand-written library: at build time `Rssn.<op>` typed declarations and the `Rssn.dynamic` dynamic entry are generated from the Kernel Manifest (§13.2). The content of `Rssn` varies with the rssn version, and Aevia source hard-codes no operator list. `Sparse` provides the format tags `Csr`/`Csc`/`Coo`/`Block`/`Bcsr` and all the sparse built-ins of §8.4.1 (`nnz`/`to_dense`/`from_dense`/`convert`, sparse `matmul`/`transpose`/`kron`, layout dispatch of `@`, `spsolve`/`cg`); `Layout` remains a set of built-in functions rather than an instantiable type class (§13.9.5); `Device` provides `Cpu`/`Gpu`/`Distributed` and `on`/`to_device` (§13.9.4, `E1001` without `core.gpu`).
+`Rssn` is a **generated module**, not a hand-written library: at build time `Rssn.<op>` typed declarations and the `Rssn.dynamic` dynamic entry are generated from the Kernel Manifest (§13.2). The content of `Rssn` varies with the rssn version, and Aevia source hard-codes no operator list. `Sparse` provides the format tags `Csr`/`Csc`/`Coo`/`Block`/`Bcsr` and the sparse built-ins of §8.4.1. Layout dispatch is described in §13.9.5. `Device` provides `Cpu`/`Gpu`/`Distributed` and `on`/`to_device` (§13.9.4, `E1001` without `core.gpu`).
 
 The next chapter defines the run time: from source to values, from values to rssn terms, from the REPL to the JIT.

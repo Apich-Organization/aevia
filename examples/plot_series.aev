@@ -1,0 +1,29 @@
+## Run: aevia run examples/plot_series.aev
+## Compare a sensor's readings with a model, inspect the residuals, and save
+## each view as a frame of a looping GIF.
+open Units.SI
+import Plot as Plots
+
+let time = [1.0 s, 2.0 s, 3.0 s, 4.0 s]
+let observed = [10.0 cm, 15.0 cm, 19.0 cm, 26.0 cm]
+let fitted = [9.0 cm, 14.0 cm, 20.0 cm, 25.0 cm]
+let uncertainty = [0.5 cm, 1.0 cm, 1.0 cm, 1.5 cm]
+let residuals = observed - fitted
+
+let fit_style = { Plots.default_plot_opts with color = Some("#228855"), label = Some("Model"), xunit = Some("s"), yunit = Some("cm") }
+let sensor_style = { fit_style with color = Some("#2255aa"), label = Some("Sensor ± uncertainty") }
+
+let comparison = Plots.combine([
+    Plots.line_with(time, fitted, fit_style),
+    Plots.errorbar_with(time, observed, uncertainty, sensor_style)
+])
+let distribution = Plots.combine([Plots.hist(residuals, 4)])
+let grid = Plots.combine([Plots.heatmap([[1.0, 2.0], [3.0, 4.0]])])
+
+fn main(): IO Unit = do
+    Plots.save("sensor-comparison.svg", comparison)
+    Plots.save("sensor-residuals.html", distribution)
+    animation <- plot_save_gif("sensor-views.gif", [comparison, distribution, grid], 35)
+    match animation with
+    | Ok(_) -> println("Wrote sensor-comparison.svg, sensor-residuals.html, and sensor-views.gif.")
+    | Err(error) -> println(error)

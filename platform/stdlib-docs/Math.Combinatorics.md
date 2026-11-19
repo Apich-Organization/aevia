@@ -10,7 +10,7 @@ The `Math/Combinatorics` module of §8.20.
 let binomial = binomial
 ```
 
-Binomial coefficient `C(n, k) = n! / (k! (n - k)!)`.
+binomial(n, k) is the number of ways to choose k items from n, as an exact Int.
 
 **Signature:** `binomial : (Int, Int) -> Int`
 
@@ -21,18 +21,21 @@ Binomial coefficient `C(n, k) = n! / (k! (n - k)!)`.
 
 **Dimensions:** the result is dimensionless
 
-**Examples:**
-- `binomial(0, 0)` returns a `Int`
-(recorded kernel calls; the result is shown as its sort)
+It is 0 when k > n.
 
-*Source: rssn operator `combinatorics.binomial`.*
+**Examples:**
+```text
+binomial(5, 2)
+```
+
+*Source: Aevia standard library guide.*
 ## `let permutations`
 
 ```aevia
 let permutations = permutations
 ```
 
-Number of `k`-permutations of `n` items, `n! / (n - k)!`.
+permutations(n) is the number of orderings of n distinct items, n!.
 
 **Signature:** `permutations : Int -> Int`
 
@@ -43,17 +46,9 @@ Number of `k`-permutations of `n` items, `n! / (n - k)!`.
 
 **Dimensions:** the result is dimensionless
 
-Computes the number of permutations `P(n, k) = n! / (n-k)!`.
-
-**Arguments**
-* `n` - The total number of items.
-* `k` - The number of items to choose.
-
-**Returns**
-The number of permutations as an `f64`. Returns `0.0` if `k > n`.
-
 **Examples:**
-- `permutations(10, 3)` returns a `Int`
-(recorded kernel calls; the result is shown as its sort)
+```text
+permutations(4)
+```
 
-*Source: rssn operator `combinatorics.permutations`; rustdoc of `crate::kernels::combinatorics::permutations` (by name).*
+*Source: Aevia standard library guide.*

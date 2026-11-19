@@ -269,7 +269,8 @@ kinematics/
   docs/
 ```
 
-- `src/` 下的 `.aev` 都是模块，`main.aev` 是默认入口。`aevia test` 编译并运行 `tests/`。
+- `src/` 下的 `.aev` 都是模块。默认入口为 `src/main.aev`。独立测试文件可放在 `tests/`，运行时
+  逐个指定路径，例如 `aevia test tests/fall_time.aev`。
 - `aevia run --example name` 在 `examples/<name>.aev` 按名解析（名字不是路径，含路径分隔符被拒绝），找不到时
   列出可用示例；`--example` 与直接给文件互斥。
 - `aevia doc` 生成 Markdown API 文档，默认写入 `docs/`。
@@ -284,7 +285,8 @@ test "fall time from 20 m" =
     approx_eq(fall_time(20.0 m), 2.019 s, 0.001 s)
 ```
 
-- `test` 声明是 `Bool` 表达式；`aevia test` 运行所有测试。`approx_eq(a, b, tol)` 要求 `a`、`b`、`tol` 同量纲。
+- `test` 声明是 `Bool` 表达式。`aevia test [file.aev]` 执行所选文件中的测试声明，省略文件时使用包入口。
+  `approx_eq(a, b, tol)` 要求 `a`、`b`、`tol` 同量纲。
 - 编译期错误测试用 `compile_fail("<source>")`（§8.13）：把源码片段交给编译器并要求**编译失败**；当前只支持
   不带导入的片段。`@compile_fail` 不是属性（未知属性 `E0210`）。属性测试用 `forall`（§8.13）。
 
@@ -298,8 +300,8 @@ test "fall time from 20 m" =
 
 ## 7.6 版本与兼容性
 
-- `edition` 决定语法/语义（目前清单不读取，§7.5.1）；库遵循 SemVer：破坏性变更升 major，新增 API 升 minor，
-  修复升 patch。
+- `edition` 是可选的包元数据。清单读取器保留该字符串，所有包使用本规范定义的语法和语义。
+  库遵循 SemVer，破坏性变更升 major，新增 API 升 minor，修复升 patch。
 - 类型/量纲签名的变更、单位尺度/偏移的变更、实例的增删是破坏性变更；新增单位是 minor。
 
 ## 7.7 模块错误
