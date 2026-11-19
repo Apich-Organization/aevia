@@ -1,12 +1,12 @@
 # Continuous delivery. Triggered manually via workflow_dispatch (immutable
-# releases: no push-tag trigger): builds the `aevia` and `aevia-pkg` binaries
-# across six platforms, creates a draft GitHub release with checksummed archives
-# and the single-file specification, and publishes the registry container image
-# to GHCR. Deploying the image to aevia.apich.org stays a manual operation
+# releases: no push-tag trigger): builds the CLI, language server, and registry client
+# across six platforms, creates a draft GitHub release with checksummed archives,
+# editor packages and the single-file specification, and publishes the registry
+# container image to GHCR. Deploying the image to aevia.apich.org stays a manual operation
 # (platform/docs/DEPLOY.md).
 #
-# The kernel revision is the repository variable RSSN_REF (default `main`);
-# release from a tag of rssn by setting it to that tag.
+# Published artifacts use the RSSN version tag selected by Aevia's Cargo.lock.
+# Dry runs can use a branch or commit with the same RSSN package version.
 
 name: Release
 
@@ -22,39 +22,67 @@ name: Release
         description: "Build the artifacts without creating a release or pushing the image"
         type: boolean
         default: false
+      rssn_ref:
+        description: "RSSN version tag (defaults to the locked version); dry runs also accept a branch or commit"
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_TOOLCHAIN: "1.97"
+  RUST_TOOLCHAIN: "1.100.0"
 
 jobs:
   verify:
-    name: Resolve release version
+    name: Verify release metadata and select RSSN
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
+      rssn_commit: ${{ steps.rssn.outputs.commit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: version
         env:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [ -n "${INPUT_VERSION}" ]; then
-            version="${INPUT_VERSION#v}"
-          else
-            # The workspace version (every crate inherits it). Reading the file
-            # avoids resolving the path dependency on the sibling rssn checkout.
-            version=$(sed -n '/^\[workspace\.package\]/,/^\[/{s/^version = "\(.*\)"$/\1/p}' Cargo.toml)
+          version=$(sed -n '/^\[workspace\.package\]/,/^\[/{s/^version = "\(.*\)"$/\1/p}' Cargo.toml)
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::invalid Cargo.toml release version"
+            exit 1
           fi
-          echo "release version: $version"
-          if [ -z "$version" ]; then echo "::error::no release version found"; exit 1; fi
+          if [ -n "$INPUT_VERSION" ] && [ "${INPUT_VERSION#v}" != "$version" ]; then
+            echo "::error::the requested version must match Cargo.toml ($version)"
+            exit 1
+          fi
+          python3 scripts/extract_changelog.py --required --version "$version" >/dev/null
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           case "$version" in *-*) pre=true ;; *) pre=false ;; esac
           echo "prerelease=${pre}" >> "$GITHUB_OUTPUT"
+      - name: Select the RSSN ref
+        id: kernel-ref
+        env:
+          INPUT_RSSN_REF: ${{ inputs.rssn_ref }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          python3 scripts/release_kernel.py select --ref="$INPUT_RSSN_REF" \
+            --dry-run="$DRY_RUN" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: Apich-Organization/rssn
+          ref: ${{ steps.kernel-ref.outputs.ref }}
+          path: .release-rssn
+      - name: Verify RSSN version and record the kernel commit
+        id: rssn
+        env:
+          SELECTED_RSSN_REF: ${{ steps.kernel-ref.outputs.ref }}
+        run: |
+          python3 scripts/release_kernel.py verify --ref="$SELECTED_RSSN_REF" \
+            .release-rssn >> "$GITHUB_OUTPUT"
 
   binaries:
     name: Binaries (${{ matrix.target }})
@@ -81,17 +109,19 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           path: aevia
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           repository: Apich-Organization/rssn
-          ref: ${{ vars.RSSN_REF || 'main' }}
+          ref: ${{ needs.verify.outputs.rssn_commit }}
           path: rssn
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.rust_target }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
         with:
           key: ${{ matrix.target }}
           workspaces: |
@@ -101,64 +131,126 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y fontconfig libfontconfig1-dev
       - name: Build the language toolchain
-        run: cargo build --release --target "${{ matrix.rust_target }}" -p aevia-cli --features jit
+        run: cargo build --locked --release --target "${{ matrix.rust_target }}" -p aevia-cli -p aevia-lsp --features aevia-cli/jit
       - name: Build the registry client
         working-directory: aevia/platform
-        run: cargo build --release --target "${{ matrix.rust_target }}" -p aevia-pkg
+        run: cargo build --locked --release --target "${{ matrix.rust_target }}" -p aevia-pkg
+      - name: Build the rootless playground worker
+        if: runner.os == 'Linux'
+        working-directory: aevia/platform
+        run: cargo build --locked --release --target "${{ matrix.rust_target }}" -p aevia-registry-server --bin aevia-playground
       - name: Package
         run: |
           name="aevia-${{ needs.verify.outputs.version }}-${{ matrix.target }}"
           mkdir -p "dist/${name}"
           for bin in "target/${{ matrix.rust_target }}/release/aevia" \
                      "target/${{ matrix.rust_target }}/release/aevia.exe" \
+                     "target/${{ matrix.rust_target }}/release/aevia-lsp" \
+                     "target/${{ matrix.rust_target }}/release/aevia-lsp.exe" \
                      "platform/target/${{ matrix.rust_target }}/release/aevia-pkg" \
                      "platform/target/${{ matrix.rust_target }}/release/aevia-pkg.exe"; do
             [ -f "$bin" ] && cp "$bin" "dist/${name}/"
           done
-          cp LICENSE README.md "dist/${name}/"
+          test -f "dist/${name}/aevia" || test -f "dist/${name}/aevia.exe"
+          test -f "dist/${name}/aevia-lsp" || test -f "dist/${name}/aevia-lsp.exe"
+          test -f "dist/${name}/aevia-pkg" || test -f "dist/${name}/aevia-pkg.exe"
+          if [ "$RUNNER_OS" = Linux ]; then
+            cp "platform/target/${{ matrix.rust_target }}/release/aevia-playground" "dist/${name}/"
+          fi
+          printf '%s\n' '${{ needs.verify.outputs.rssn_commit }}' > "dist/${name}/RSSN-COMMIT"
+          git archive --format=tar "$GITHUB_SHA" \
+            LICENSE README.md README.zh-CN.md ARCHITECTURE.md CHANGELOG.md SECURITY.md \
+            Aevia-Language-Specification.md Aevia-Language-Specification.html \
+            Aevia-Language-Specification.en.md Aevia-Language-Specification.en.html \
+            spec examples editors \
+            platform/README.md platform/install.sh platform/install.ps1 \
+            platform/docs platform/infra platform/manuals platform/stdlib-docs |
+            tar -xf - -C "dist/${name}"
           (cd dist && tar -czf "${name}.tar.gz" "${name}")
           (cd dist && (sha256sum "${name}.tar.gz" 2>/dev/null || shasum -a 256 "${name}.tar.gz") > "${name}.tar.gz.sha256")
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: aevia-${{ matrix.target }}
+          if-no-files-found: error
           path: |
             aevia/dist/*.tar.gz
             aevia/dist/*.sha256
 
+  editor-packages:
+    needs: verify
+    uses: ./.github/workflows/editor-packages.yml
+
   github-release:
     name: GitHub release
-    needs: [verify, binaries]
+    needs: [verify, binaries, editor-packages]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist
           merge-multiple: true
       - name: Extract release notes
         run: |
-          python3 scripts/extract_changelog.py \
+          python3 scripts/extract_changelog.py --required \
             --version "${{ needs.verify.outputs.version }}" \
             --output release_notes.md
       - name: Create the draft release
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
         run: |
-          flags=()
-          if [ "${{ needs.verify.outputs.prerelease }}" = "true" ]; then flags+=(--prerelease); fi
-          gh release create "v${{ needs.verify.outputs.version }}" dist/* \
+          tag="v$RELEASE_VERSION"
+          ref="refs/tags/$tag"
+          git check-ref-format "$ref"
+          if [[ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]]; then
+            echo "::error::Release checkout does not match the workflow commit $GITHUB_SHA"
+            exit 1
+          fi
+          remote_refs=$(git ls-remote --tags origin "$ref" "$ref^{}")
+          tag_commit=$(awk -v ref="$ref" '
+            $2 == ref { tag = $1 }
+            $2 == (ref "^{}") { peeled = $1 }
+            END { print peeled ? peeled : tag }
+          ' <<< "$remote_refs")
+          flags=(--target "$GITHUB_SHA")
+          if [[ -n "$tag_commit" ]]; then
+            if [[ "$tag_commit" != "$GITHUB_SHA" ]]; then
+              echo "::error::Tag $tag points to $tag_commit, expected $GITHUB_SHA"
+              exit 1
+            fi
+            flags+=(--verify-tag)
+          fi
+          existing_targets=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
+            jq -r --arg tag "$tag" '.[] | select(.tag_name == $tag) | .target_commitish')
+          if [[ -n "$existing_targets" ]]; then
+            if [[ -z "$tag_commit" ]] && grep -Fqxv "$GITHUB_SHA" <<< "$existing_targets"; then
+              echo "::error::An existing release or draft for $tag has a different or unpinned target"
+            else
+              echo "::error::A release or draft already exists for $tag"
+            fi
+            exit 1
+          fi
+          if [[ "$PRERELEASE" == "true" ]]; then flags+=(--prerelease); fi
+          gh release create "$tag" dist/* \
             Aevia-Language-Specification.md Aevia-Language-Specification.html \
-            --title "aevia ${{ needs.verify.outputs.version }}" \
+            Aevia-Language-Specification.en.md Aevia-Language-Specification.en.html \
+            --title "aevia $RELEASE_VERSION" \
             --draft \
             --notes-file release_notes.md \
             "${flags[@]}"
 
   registry-image:
     name: Registry image (GHCR)
-    needs: verify
+    needs: [verify, binaries, github-release]
+    if: >-
+      ${{ !cancelled() && needs.verify.result == 'success' && needs.binaries.result == 'success' &&
+          (inputs.dry_run || needs.github-release.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
