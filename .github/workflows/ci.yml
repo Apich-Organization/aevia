@@ -19,12 +19,17 @@ name: CI
     branches: [main, v0.1]
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      rssn_commit:
+        type: string
+        required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -49,7 +54,7 @@ jobs:
         with:
           persist-credentials: false
           repository: Apich-Organization/rssn
-          ref: ${{ vars.RSSN_REF || 'v0.3' }}
+          ref: ${{ inputs.rssn_commit || vars.RSSN_REF || 'v0.3' }}
           path: rssn
       - id: pin
         working-directory: rssn
@@ -77,6 +82,9 @@ jobs:
           components: rustfmt
       - run: cargo +nightly fmt --all --check
       - run: cargo +nightly fmt --all --check
+        working-directory: aevia/platform
+      - name: Build platform API documentation
+        run: cargo doc --locked --workspace --all-features --no-deps
         working-directory: aevia/platform
 
   clippy:
@@ -113,7 +121,7 @@ jobs:
 
   test:
     needs: kernel-revision
-    name: test (${{ matrix.os }})
+    name: test (${{ matrix.os }}, ${{ matrix.features }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
@@ -121,7 +129,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - { os: ubuntu-latest, features: default, flags: '' }
+          - { os: windows-latest, features: default, flags: '' }
+          - { os: ubuntu-latest, features: all, flags: '--all-features' }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -147,16 +158,20 @@ jobs:
         env:
           # MSVC otherwise writes a large PDB for every linked test.
           _LINK_: ${{ runner.os == 'Windows' && '/DEBUG:NONE' || '' }}
-        run: cargo test --locked --workspace
+        run: cargo test --locked --workspace ${{ matrix.flags }}
+      - name: Exercise installation and toolchain management
+        if: matrix.features == 'default'
+        shell: bash
+        run: |
+          suffix=""
+          python_cmd=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then suffix=".exe"; python_cmd=python; fi
+          test -f "target/debug/aevia${suffix}" || cargo build --locked -p aevia-cli
+          "$python_cmd" platform/scripts/test_installers.py --aevia "target/debug/aevia${suffix}"
+          "$python_cmd" scripts/test_toolchain.py "target/debug/aevia${suffix}"
       - name: Lint the Windows sampling profiler
         if: runner.os == 'Windows'
         run: cargo clippy --locked -p aevia-prof --all-targets -- -D warnings
-      - name: Exercise optional compiler backends
-        if: runner.os == 'Linux'
-        run: cargo test --locked -p aevia-core -p aevia-rssn --lib --all-features
-      - name: Test JIT from source through execution
-        if: runner.os == 'Linux'
-        run: cargo test --locked -p aevia-core --test jit --all-features
 
   platform:
     needs: kernel-revision
@@ -182,6 +197,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
+      AEVIA_REQUIRE_TEST_FIXTURES: '1'
       AEVIA_TEST_DATABASE_URL: postgres://aevia:aevia@127.0.0.1:5432/aevia
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -215,10 +231,10 @@ jobs:
             --quick-add-key "$fingerprint" ed25519 sign 1d
           printf 'GNUPGHOME=%s\n' "$GNUPGHOME" >> "$GITHUB_ENV"
       - name: Tests (with a database)
-        run: cargo test --locked --workspace
+        run: cargo test --locked --workspace --all-features
         working-directory: aevia/platform
-      - name: The documentation crate builds without the compiler feature
-        run: cargo build --locked -p aevia-registry-docs --no-default-features
+      - name: Test the documentation crate without the compiler feature
+        run: cargo test --locked -p aevia-registry-docs --no-default-features
         working-directory: aevia/platform
 
   contracts:
@@ -277,6 +293,7 @@ jobs:
           cargo build --locked -p aevia-lsp
           node editors/test/lsp-smoke.js target/debug/aevia-lsp
           node editors/test/dap-smoke.js target/debug/aevia
+          node editors/test/dap-smoke.js target/debug/aevia --exception
       - name: Run the playground image with Podman
         shell: bash
         run: |

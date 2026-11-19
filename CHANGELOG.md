@@ -20,6 +20,7 @@ The entries cover the language toolchain, the package registry and their documen
 
 ### Toolchain and registry
 
+- The lint fixer preserves condition evaluation when simplifying identical branches. SARIF reports declare their column coordinate units. Registry HEAD requests no longer increment download counts.
 - The CLI, REPL, language server, formatter and lint tools share the language front end. Compatible editors can inspect live source overlays, run and test files, open a REPL and debug with breakpoints, stepping and variable inspection.
 - Local path dependencies accept `aevia add --as` aliases. The command rejects surplus package arguments before writing the manifest or lockfile.
 - Completion uses the local type of a shadowed name. Signature help keeps the active argument accurate while editing nested calls or string arguments. The draft release workflow includes versioned VS Code and JetBrains extension archives.
@@ -28,6 +29,7 @@ The entries cover the language toolchain, the package registry and their documen
 
 ### Installation and upgrades
 
+- The installer and CLI toolchain manager verify SHA-256 and GitHub release attestations. The latest stable release, dated nightly builds and exact versions install side by side. Activate a version for the language CLI, package client and language server together.
 - Build from source with Rust 1.100 or later and the paired RSSN revision. Release archives contain `aevia`, `aevia-lsp` and `aevia-pkg`. Linux archives also contain the optional playground worker.
 - The Rust embedding API compares `Int` values by numeric value across small and arbitrary-precision representations. `Int::as_i64`, `Int::is_zero` and `Int::is_one` are runtime methods.
 - For an existing registry, review the GitHub account binding migration and keep the database and package archive backups together. [Deployment guide](platform/docs/DEPLOY.md)
@@ -48,6 +50,7 @@ The entries cover the language toolchain, the package registry and their documen
 
 ### 工具链与注册中心
 
+- lint 自动修复在合并相同分支时保留条件求值。SARIF 报告声明源码列坐标单位。注册中心的 HEAD 请求不会增加下载次数。
 - CLI、REPL、语言服务器、格式化和 lint 工具共用语言前端。适配编辑器可检查未保存的源码、运行和测试文件、打开 REPL，并使用断点、单步和变量检查功能。
 - `aevia add --as` 支持为本地路径依赖设置别名。命令在写入清单或锁文件前拒绝多余的包参数。
 - 补全根据局部作用域识别同名绑定。编辑嵌套调用或字符串实参时，签名帮助会跟随当前参数。发布草稿包含带版本号的 VS Code 与 JetBrains 扩展归档。
@@ -56,6 +59,7 @@ The entries cover the language toolchain, the package registry and their documen
 
 ### 安装与升级
 
+- 安装器和 CLI 工具链管理器验证 SHA-256 和 GitHub 发布证明。最新稳定版、每日构建和指定版本可同时安装。切换版本同时影响语言 CLI、包管理命令和语言服务器。
 - 源码构建需要 Rust 1.100 或更新版本，以及配套的 RSSN 提交。发布归档包含 `aevia`、`aevia-lsp` 和 `aevia-pkg`。Linux 归档还包含可选的示例执行工作进程。
 - Rust 嵌入 API 中，`Int` 按数值比较机器整数和任意精度表示。`Int::as_i64`、`Int::is_zero` 和 `Int::is_one` 是运行时方法。
 - 升级现有注册中心前，按步骤审核 GitHub 账户绑定迁移，并配套保留数据库与包归档备份。[部署指南](platform/docs/DEPLOY.zh.md)
