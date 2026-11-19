@@ -9,13 +9,13 @@ RSSN 3.0.0-beta.1, kernel API 2.
 
 | | operators |
 |---|---:|
-| in the manifest | 5133 |
+| in the manifest | 5154 |
 | typed in a domain module (curated `sig`, `Result` channel) | 261 |
 | typed in a domain module from kernel evidence (witnessed overload, `Result` channel) | 446 |
-| dynamic in a domain module (generated, `Result<Value, OpError>`) | 4426 |
+| dynamic in a domain module (generated, `Result<Value, OpError>`) | 4447 |
 | excluded from domain modules (with reason) | 0 |
 | unclassified (must be 0) | 0 |
-| exact-typed in the flat `Rssn.<op>` facade (some overload pinned to a declared/overlay signature) | 1041 |
+| exact-typed in the flat `Rssn.<op>` facade (some overload pinned to a declared/overlay signature) | 1060 |
 | with a same-named chapter-8 standard-library entry | 102 |
 
 Exposure tiers, from best to worst: **typed** (`Rssn_<Domain>.f(x: Int): Result<Int, OpError>`, curated), **witnessed** (the same shape of wrapper, generated from an overload the kernel observed and can replay), **dynamic** (`Rssn_<Domain>.f(a, b): Result<Value, OpError>`), and the always-available escape hatch `Rssn.dynamic("f", [..])`. Nothing in the manifest is unreachable.
@@ -43,11 +43,11 @@ Exposure tiers, from best to worst: **typed** (`Rssn_<Domain>.f(x: Int): Result<
 | `Rssn_DifferentialGeometry` | dynamic-ok | 48 | 0 | 28 | 20 | 0 | geometry |
 | `Rssn_Functional` | dynamic-ok | 32 | 0 | 7 | 25 | 0 | functional |
 | `Rssn_Special` | dynamic-ok | 238 | 0 | 22 | 216 | 0 | numerical_special, special |
-| `Rssn_Statistics` | dynamic-ok | 159 | 0 | 39 | 120 | 0 | numerical_stats, stats |
+| `Rssn_Statistics` | dynamic-ok | 166 | 0 | 39 | 127 | 0 | numerical_stats, stats |
 | `Rssn_Calculus` | dynamic-ok | 45 | 0 | 15 | 30 | 0 | calculus, holonomic, variational, verify |
 | `Rssn_Elementary` | dynamic-ok | 72 | 0 | 12 | 60 | 0 | complex, elementary, radicals |
 | `Rssn_Core` | dynamic-ok | 18 | 0 | 3 | 15 | 0 | cse, kernel, rewriting, units |
-| `Rssn_Numeric` | dynamic-ok | 3466 | 89 | 0 | 3377 | 0 | numeric, numerical_callback, numerical_matrix, numerical_vector |
+| `Rssn_Numeric` | dynamic-ok | 3480 | 89 | 0 | 3391 | 0 | numeric, numerical_callback, numerical_matrix, numerical_vector |
 | `Rssn_LinearAlgebra` | dynamic-ok | 91 | 0 | 62 | 29 | 0 | linalg, sparse_symbolic |
 | `Rssn_Differential` | dynamic-ok | 103 | 0 | 10 | 93 | 0 | ode, pde, sde |
 | `Rssn_Physics` | dynamic-ok | 147 | 0 | 28 | 119 | 0 | physics, physics_quantum |
@@ -78,8 +78,8 @@ Exposure tiers, from best to worst: **typed** (`Rssn_<Domain>.f(x: Int): Result<
 | `numerical_callback` | 144 | 144 | 0 | 0 | 10 | 0 | 0 | 144 | 0 | Numeric |
 | `numerical_matrix` | 414 | 414 | 0 | 0 | 183 | 0 | 0 | 414 | 0 | Numeric |
 | `numerical_special` | 162 | 162 | 0 | 0 | 162 | 0 | 0 | 162 | 0 | Special |
-| `numerical_stats` | 63 | 63 | 0 | 0 | 62 | 0 | 0 | 63 | 0 | Statistics |
-| `numerical_vector` | 2819 | 2819 | 0 | 0 | 548 | 0 | 0 | 2819 | 0 | Numeric |
+| `numerical_stats` | 70 | 70 | 0 | 0 | 69 | 0 | 0 | 70 | 0 | Statistics |
+| `numerical_vector` | 2833 | 2833 | 0 | 0 | 560 | 0 | 0 | 2833 | 0 | Numeric |
 | `ode` | 16 | 0 | 16 | 4 | 0 | 0 | 4 | 12 | 0 | Differential |
 | `optimize` | 16 | 0 | 16 | 13 | 0 | 0 | 3 | 13 | 0 | Solving |
 | `pde` | 84 | 0 | 84 | 6 | 0 | 0 | 6 | 78 | 0 | Differential |

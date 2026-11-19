@@ -282,6 +282,17 @@ pub fn references_json(locations: &[Location]) -> Value {
     Value::Array(locations.iter().map(location_json).collect())
 }
 
+/// Writes symbol occurrences in the focused document as highlight ranges.
+#[must_use]
+pub fn document_highlights_json(ranges: &[Range]) -> Value {
+    Value::Array(
+        ranges
+            .iter()
+            .map(|range| json!({ "range": range_json(*range) }))
+            .collect(),
+    )
+}
+
 /// Writes the `textDocument/prepareRename` result: the range to highlight and
 /// the current name.
 #[must_use]
@@ -560,6 +571,7 @@ pub fn capabilities() -> Value {
         },
         "workspaceSymbolProvider": true,
         "referencesProvider": true,
+        "documentHighlightProvider": true,
         "renameProvider": { "prepareProvider": true },
         "signatureHelpProvider": {
             "triggerCharacters": ["(", ","],
@@ -721,6 +733,7 @@ mod tests {
         assert_eq!(capabilities["typeDefinitionProvider"], true);
         assert_eq!(capabilities["workspaceSymbolProvider"], true);
         assert_eq!(capabilities["referencesProvider"], true);
+        assert_eq!(capabilities["documentHighlightProvider"], true);
         assert_eq!(capabilities["renameProvider"]["prepareProvider"], true);
         assert_eq!(
             capabilities["signatureHelpProvider"]["triggerCharacters"],

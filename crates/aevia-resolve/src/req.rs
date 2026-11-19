@@ -107,17 +107,29 @@ impl Interval {
         &self,
         version: &Version,
     ) -> bool {
-        let above = match &self.lower {
+        self.meets_lower(version) && self.meets_upper(version)
+    }
+
+    pub(crate) fn meets_lower(
+        &self,
+        version: &Version,
+    ) -> bool {
+        match &self.lower {
             | Bound::Unbounded => true,
             | Bound::Included(bound) => !version.cmp_precedence(bound).is_lt(),
             | Bound::Excluded(bound) => version.cmp_precedence(bound).is_gt(),
-        };
-        let below = match &self.upper {
+        }
+    }
+
+    pub(crate) fn meets_upper(
+        &self,
+        version: &Version,
+    ) -> bool {
+        match &self.upper {
             | Bound::Unbounded => true,
             | Bound::Included(bound) => !version.cmp_precedence(bound).is_gt(),
             | Bound::Excluded(bound) => version.cmp_precedence(bound).is_lt(),
-        };
-        above && below
+        }
     }
 
     /// The versions inside both.
@@ -436,18 +448,21 @@ impl VersionReq {
         &self,
         version: &Version,
     ) -> bool {
-        if !self.interval().contains(version) {
-            return false;
-        }
-        if version.is_prerelease() {
-            return self.comparators.iter().any(|comparator| {
+        self.interval().contains(version) && self.permits_prerelease(version)
+    }
+
+    /// Applies the pre-release rule after the version interval has matched.
+    pub(crate) fn permits_prerelease(
+        &self,
+        version: &Version,
+    ) -> bool {
+        !version.is_prerelease()
+            || self.comparators.iter().any(|comparator| {
                 !comparator.pre.is_empty()
                     && comparator.major == version.major
                     && comparator.minor == Some(version.minor)
                     && comparator.patch == Some(version.patch)
-            });
-        }
-        true
+            })
     }
 
     /// Whether two requirements can be satisfied by one version (by interval;

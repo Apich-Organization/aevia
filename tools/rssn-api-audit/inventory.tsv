@@ -596,6 +596,7 @@ crate::kernels::descriptive::mode	declared	num_descriptive_mode		fn mode (values
 crate::kernels::descriptive::mode_exact	declared	num_descriptive_mode_exact		fn mode_exact (values : & [BigRational]) -> Result < BigRational , NumericError >
 crate::kernels::descriptive::quantile	declared	num_descriptive_quantile		fn quantile (values : & [f64] , q : f64 ,) -> Result < f64 , NumericError >
 crate::kernels::descriptive::quantile_exact	declared	num_descriptive_quantile_exact		fn quantile_exact (sorted : & [BigRational] , q : & BigRational ,) -> Result < BigRational , NumericError >
+crate::kernels::descriptive::quantiles	declared	num_descriptive_quantiles		fn quantiles (values : & [f64] , probabilities : & [f64] ,) -> Result < Vec < f64 > , NumericError >
 crate::kernels::descriptive::skewness	declared	num_descriptive_skewness		fn skewness (values : & [f64]) -> Result < f64 , NumericError >
 crate::kernels::descriptive::std_dev	opaque			fn std_dev (values : & [f64] , population : bool ,) -> Result < f64 , NumericError >
 crate::kernels::descriptive::var	opaque			fn var (values : & [f64] , population : bool ,) -> Result < f64 , NumericError >
@@ -621,6 +622,7 @@ crate::kernels::distributions::dirichlet_log_pdf	declared	num_distributions_diri
 crate::kernels::distributions::dirichlet_pdf	declared	num_distributions_dirichlet_pdf		fn dirichlet_pdf (alpha : & [f64] , x : & [f64] ,) -> Result < f64 , DistError >
 crate::kernels::distributions::dirichlet_sample	declared	num_distributions_dirichlet_sample		fn dirichlet_sample (alpha : & [f64] , seed : u64 ,) -> Result < Vec < f64 > , DistError >
 crate::kernels::distributions::multivariate_normal_log_pdf	declared	num_distributions_multivariate_normal_log_pdf,num_multivariate_normal_log_pdf_scaled		fn multivariate_normal_log_pdf (mu : & [f64] , covariance : & Mat , x : & [f64] ,) -> Result < f64 , DistError >
+crate::kernels::distributions::multivariate_normal_log_pdfs	declared	num_distributions_multivariate_normal_log_pdfs		fn multivariate_normal_log_pdfs (mu : & [f64] , covariance : & Mat , points : & Mat ,) -> Result < Vec < f64 > , DistError >
 crate::kernels::distributions::multivariate_normal_pdf	declared	num_distributions_multivariate_normal_pdf		fn multivariate_normal_pdf (mu : & [f64] , covariance : & Mat , x : & [f64] ,) -> Result < f64 , DistError >
 crate::kernels::distributions::multivariate_normal_sample	declared	num_distributions_multivariate_normal_sample		fn multivariate_normal_sample (mu : & [f64] , covariance : & Mat , seed : u64 ,) -> Result < Vec < f64 > , DistError >
 crate::kernels::eigs::arnoldi	declared	num_linear_arnoldi		fn arnoldi < A : Fn (& [f64] , & mut [f64]) > (apply : A , v0 : & [f64] , m : usize ,) -> (Vec < Vec < f64 > > , Mat , f64)
@@ -705,8 +707,12 @@ crate::kernels::fft::rfft	declared	num_fft_rfft		fn rfft (input : & [f64]) -> Ve
 crate::kernels::fft::rfft_axes	declared	num_fft_rfft_axes		fn rfft_axes (input : & [f64] , shape : & [usize] , axes : & [usize] ,) -> Result < (Vec < Complex > , Vec < usize >) , String >
 crate::kernels::fft::rfftfreq	declared	num_fft_rfftfreq		fn rfftfreq (n : usize , d : f64 ,) -> Vec < f64 >
 crate::kernels::fft::shift_permutation	declared	num_fft_shift_permutation		fn shift_permutation (shape : & [usize] , axes : & [usize] , inverse : bool ,) -> Result < Vec < usize > , String >
+crate::kernels::fftconv::OverlapSavePlan::apply	associated-method			fn apply (& self , samples : & [f64] ,) -> Result < Vec < f64 > , FilterError >
+crate::kernels::fftconv::OverlapSavePlan::new	associated-method			fn new (taps : & [f64]) -> Result < Self , FilterError >
+crate::kernels::fftconv::autocorrelate	declared	num_fftconv_autocorrelate		fn autocorrelate (samples : & [f64]) -> Vec < f64 >
 crate::kernels::fftconv::circular_convolve	declared	num_fftconv_circular_convolve		fn circular_convolve (a : & [f64] , b : & [f64] ,) -> Vec < f64 >
 crate::kernels::fftconv::convolve	declared	num_fftconv_convolve		fn convolve (a : & [f64] , b : & [f64] ,) -> Vec < f64 >
+crate::kernels::fftconv::convolve_overlap_save	declared	num_fftconv_convolve_overlap_save		fn convolve_overlap_save (a : & [f64] , taps : & [f64] ,) -> Result < Vec < f64 > , FilterError >
 crate::kernels::fftconv::correlate	declared	num_fftconv_correlate		fn correlate (a : & [f64] , b : & [f64] ,) -> Vec < f64 >
 crate::kernels::fftconv::fft	declared	num_analysis_fftconv_fft		fn fft (x : & [Complex] , inverse : bool ,) -> Vec < Complex >
 crate::kernels::fftconv::poly_mul_i64	declared	num_fftconv_poly_mul_i64		fn poly_mul_i64 (a : & [i64] , b : & [i64] ,) -> Vec < i64 >
@@ -1334,6 +1340,7 @@ crate::kernels::ode_stiff::radau5_fixed_events	callback			fn radau5_fixed_events
 crate::kernels::ode_stiff::radau5_jac	declared	num_analysis_ode_radau_jac		fn radau5_jac < F , J > (f : F , jac : J , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & OdeOptions ,) -> Result < OdeSolution , OdeError > where F : Fn (f64 , & [f64] , & mut [f64]) , J : Fn (f64 , & [f64]) -> Mat ,
 crate::kernels::ode_stiff::radau_fixed	declared	num_analysis_ode_radau_fixed		fn radau_fixed < F : Fn (f64 , & [f64] , & mut [f64]) > (f : F , t0 : f64 , t1 : f64 , y0 : & [f64] , n_steps : usize , stages : usize ,) -> Result < Vec < f64 > , OdeError >
 crate::kernels::ode_stiff::radau_with	declared	num_analysis_ode_radau_with		fn radau_with < F : Fn (f64 , & [f64] , & mut [f64]) > (f : F , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & OdeOptions , ro : & RadauOptions < '_ > ,) -> Result < OdeSolution , OdeError >
+crate::kernels::online_stats::OnlineCovariance::correlation	declared	num_native_online_covariance_correlation		fn correlation (& self) -> Option < Vec < f64 > >
 crate::kernels::online_stats::OnlineCovariance::count	declared	num_native_online_covariance_count		const fn count (& self) -> u64
 crate::kernels::online_stats::OnlineCovariance::dimension	declared	num_native_online_covariance_dimension		const fn dimension (& self) -> usize
 crate::kernels::online_stats::OnlineCovariance::mean	declared	num_native_online_covariance_mean		fn mean (& self) -> Option < & [f64] >
@@ -1341,6 +1348,7 @@ crate::kernels::online_stats::OnlineCovariance::merge	declared	num_native_online
 crate::kernels::online_stats::OnlineCovariance::new	declared	num_native_online_covariance_new		fn new (dimension : usize) -> Result < Self , OnlineStatsError >
 crate::kernels::online_stats::OnlineCovariance::population_covariance	declared	num_native_online_covariance_population_covariance		fn population_covariance (& self) -> Option < Vec < f64 > >
 crate::kernels::online_stats::OnlineCovariance::push	declared	num_native_online_covariance_push		fn push (& mut self , observation : & [f64] ,) -> Result < () , OnlineStatsError >
+crate::kernels::online_stats::OnlineCovariance::push_batch	declared	num_native_online_covariance_push_batch		fn push_batch (& mut self , observations : & [f64] ,) -> Result < () , OnlineStatsError >
 crate::kernels::online_stats::OnlineCovariance::sample_covariance	declared	num_native_online_covariance_sample_covariance		fn sample_covariance (& self) -> Option < Vec < f64 > >
 crate::kernels::optim::augmented_lagrangian	declared	num_native_augmented_lagrangian_scaled		fn augmented_lagrangian < F , H , G > (f : F , eq : H , ineq : G , x0 : & [f64] , tol : f64 , max_outer : usize ,) -> OptResult where F : Fn (& [f64]) -> f64 , H : Fn (& [f64]) -> Vec < f64 > , G : Fn (& [f64]) -> Vec < f64 > ,
 crate::kernels::optim::bfgs	declared	num_bfgs,num_bfgs_scaled		fn bfgs < F : Fn (& [f64]) -> f64 , G : Fn (& [f64]) -> Vec < f64 > > (f : F , grad : Option < & G > , x0 : & [f64] , tol : f64 , max_iter : usize ,) -> OptResult
@@ -1568,23 +1576,29 @@ crate::kernels::real_roots::sturm_sequence	declared	num_native_real_roots_sturm_
 crate::kernels::reuse::PlanCache<K,V>::get_or_insert_with	callback			fn get_or_insert_with (& self , key : K , build : impl FnOnce () -> Arc < V > ,) -> Arc < V >
 crate::kernels::reuse::PlanCache<K,V>::new	generic			const fn new (capacity : usize) -> Self
 crate::kernels::reuse::ScratchPool<T>::checkout	generic			fn checkout (& self) -> Scratch < '_ , T >
+crate::kernels::reuse::ScratchPool<T>::checkout_for	generic			fn checkout_for (& self , minimum : usize ,) -> Scratch < '_ , T >
 crate::kernels::reuse::ScratchPool<T>::new	generic			const fn new (max_idle : usize , max_buffer_bytes : usize ,) -> Self
+crate::kernels::reuse::f64_scratch	opaque			fn f64_scratch (minimum : usize) -> Scratch < 'static , f64 >
 crate::kernels::reuse::fft_plan	opaque			fn fft_plan (length : usize , direction : FftDirection ,) -> Arc < dyn Fft < f64 > >
 crate::kernels::reuse::fft_scratch	opaque			fn fft_scratch () -> Scratch < 'static , Complex64 >
+crate::kernels::reuse::fft_scratch_for	opaque			fn fft_scratch_for (minimum : usize) -> Scratch < 'static , Complex64 >
 crate::kernels::robust::bandwidth_scott	declared	num_robust_bandwidth_scott		fn bandwidth_scott (data : & [f64]) -> f64
 crate::kernels::robust::bandwidth_silverman	declared	num_robust_bandwidth_silverman		fn bandwidth_silverman (data : & [f64]) -> f64
 crate::kernels::robust::biweight_location	declared	num_robust_biweight_location		fn biweight_location (data : & [f64] , c : f64 ,) -> f64
 crate::kernels::robust::bootstrap_ci	declared	num_native_robust_bootstrap_ci		fn bootstrap_ci < S : Fn (& [f64]) -> f64 > (data : & [f64] , statistic : S , resamples : usize , alpha : f64 , seed : u64 ,) -> (f64 , f64)
 crate::kernels::robust::ecdf	declared	num_robust_ecdf		fn ecdf (data : & [f64] , x : f64 ,) -> f64
+crate::kernels::robust::ecdf_batch	declared	num_robust_ecdf_batch		fn ecdf_batch (data : & [f64] , queries : & [f64] ,) -> Vec < f64 >
 crate::kernels::robust::huber_location	declared	num_robust_huber_location		fn huber_location (data : & [f64] , k : f64 ,) -> f64
 crate::kernels::robust::iqr	declared	num_robust_iqr		fn iqr (data : & [f64]) -> f64
 crate::kernels::robust::kde	declared	num_robust_kde		fn kde (data : & [f64] , x : f64 , h : f64 , kernel : Kernel ,) -> f64
 crate::kernels::robust::mad	declared	num_robust_mad		fn mad (data : & [f64] , normal : bool ,) -> f64
 crate::kernels::robust::median	declared	num_robust_median		fn median (data : & [f64]) -> f64
 crate::kernels::robust::quantile	declared	num_robust_quantile		fn quantile (data : & [f64] , p : f64 , kind : u8 ,) -> f64
+crate::kernels::robust::quantiles	declared	num_robust_quantiles		fn quantiles (data : & [f64] , probabilities : & [f64] , kind : u8 ,) -> Vec < f64 >
 crate::kernels::robust::trimmed_mean	declared	num_robust_trimmed_mean		fn trimmed_mean (data : & [f64] , trim : f64 ,) -> f64
 crate::kernels::robust::weighted_ecdf	declared	num_robust_weighted_ecdf		fn weighted_ecdf (data : & [f64] , weights : & [f64] , x : f64 ,) -> f64
 crate::kernels::robust::weighted_quantile	declared	num_robust_weighted_quantile		fn weighted_quantile (data : & [f64] , weights : & [f64] , p : f64 ,) -> f64
+crate::kernels::robust::weighted_quantiles	declared	num_robust_weighted_quantiles		fn weighted_quantiles (data : & [f64] , weights : & [f64] , probabilities : & [f64] ,) -> Vec < f64 >
 crate::kernels::robust::winsorized_mean	declared	num_robust_winsorized_mean		fn winsorized_mean (data : & [f64] , trim : f64 ,) -> f64
 crate::kernels::rootfind::<reexport:289e7bb385459ca3>	unresolved-reexport			least_squares :: LeastSquaresResult
 crate::kernels::rootfind::<reexport:3e9496178c381d24>	unresolved-reexport			least_squares :: LeastSquaresStatus
@@ -1649,6 +1663,7 @@ crate::kernels::sde_ext::sample_poisson_with	declared	num_analysis_sde_sample_po
 crate::kernels::series::evaluate_power_series	declared	num_series_evaluate_power_series		fn evaluate_power_series (coefficients : & [f64] , center : f64 , x : f64 ,) -> f64
 crate::kernels::series::sum_range	declared	num_analysis_series_sum_range_scaled		fn sum_range (term : impl Fn (f64) -> f64 , from : i64 , to : i64 ,) -> f64
 crate::kernels::series::sum_to_infinity	declared	num_analysis_series_sum_infinity_scaled		fn sum_to_infinity (term : impl Fn (f64) -> f64 , from : i64 , tolerance : f64 , max_terms : usize ,) -> SeriesSum
+crate::kernels::signal::<reexport:4719b842c632bad4>	unresolved-reexport			filters :: FilterError
 crate::kernels::signal::<reexport:484d8048a1f26a3c>	unresolved-reexport			framed :: PowerSpectrum
 crate::kernels::signal::<reexport:97ed79976dd6d20d>	unresolved-reexport			framed :: CrossSpectrum
 crate::kernels::signal::<reexport:d42ffc964ae0a904>	unresolved-reexport			framed :: SignalError
@@ -1661,6 +1676,9 @@ crate::kernels::signal::cross_correlation	declared	num_signal_cross_correlation	
 crate::kernels::signal::dct	declared	num_signal_dct		fn dct (x : & [f64]) -> Vec < f64 >
 crate::kernels::signal::dst	declared	num_signal_dst		fn dst (x : & [f64]) -> Vec < f64 >
 crate::kernels::signal::fft	declared	num_analysis_signal_fft		fn fft (input : & mut [Complex < f64 >]) -> Vec < Complex < f64 > >
+crate::kernels::signal::firwin_bandpass	declared	num_signal_firwin_bandpass		fn firwin_bandpass (num_taps : usize , low : f64 , high : f64 , beta : f64 ,) -> Result < Vec < f64 > , FilterError >
+crate::kernels::signal::firwin_lowpass	declared	num_signal_firwin_lowpass		fn firwin_lowpass (num_taps : usize , cutoff : f64 , beta : f64 ,) -> Result < Vec < f64 > , FilterError >
+crate::kernels::signal::frequency_response	declared	num_signal_frequency_response		fn frequency_response (b : & [f64] , a : & [f64] , frequencies : & [f64] ,) -> Result < Vec < Complex64 > , FilterError >
 crate::kernels::signal::hamming_window	declared	num_signal_hamming_window		fn hamming_window (n : usize) -> Vec < f64 >
 crate::kernels::signal::hann_window	declared	num_signal_hann_window		fn hann_window (n : usize) -> Vec < f64 >
 crate::kernels::signal::hilbert	declared	num_signal_hilbert		fn hilbert (samples : & [f64]) -> Result < Vec < f64 > , SignalError >
@@ -1670,8 +1688,10 @@ crate::kernels::signal::ifft	declared	num_analysis_signal_ifft		fn ifft (input :
 crate::kernels::signal::inverse_stft	declared	num_signal_inverse_stft		fn inverse_stft (frames : & [Vec < Complex64 >] , window : & [f64] , hop : usize ,) -> Result < Vec < f64 > , SignalError >
 crate::kernels::signal::kaiser_window	declared	num_signal_kaiser_window		fn kaiser_window (n : usize , beta : f64 ,) -> Vec < f64 >
 crate::kernels::signal::lfilter	declared	num_signal_lfilter		fn lfilter (b : & [f64] , a : & [f64] , x : & [f64] ,) -> Vec < f64 >
+crate::kernels::signal::resample_poly	declared	num_signal_resample_poly		fn resample_poly (samples : & [f64] , up : usize , down : usize ,) -> Result < Vec < f64 > , FilterError >
 crate::kernels::signal::savgol_coeffs	declared	num_signal_savgol_coeffs		fn savgol_coeffs (window_len : usize , poly_order : usize ,) -> Vec < f64 >
 crate::kernels::signal::savgol_filter	declared	num_signal_savgol_filter		fn savgol_filter (x : & [f64] , window_len : usize , poly_order : usize ,) -> Vec < f64 >
+crate::kernels::signal::sos_filter	declared	num_signal_sos_filter		fn sos_filter (samples : & [f64] , sections : & [[f64 ; 6]] ,) -> Result < Vec < f64 > , FilterError >
 crate::kernels::signal::spectrogram	declared	num_signal_spectrogram		fn spectrogram (x : & [f64] , window : & [f64] , hop : usize ,) -> Vec < Vec < f64 > >
 crate::kernels::signal::stft	declared	num_analysis_signal_stft		fn stft (x : & [f64] , window : & [f64] , hop : usize ,) -> Vec < Vec < Complex < f64 > > >
 crate::kernels::signal::upfirdn	declared	num_signal_upfirdn		fn upfirdn (samples : & [f64] , taps : & [f64] , up : usize , down : usize ,) -> Result < Vec < f64 > , SignalError >
@@ -1897,6 +1917,9 @@ crate::kernels::stats::variance	declared	num_variance		fn variance (data : & [f6
 crate::kernels::stats::variance_with_type	declared	num_stats_variance_with_type		fn variance_with_type (data : & [f64] , var_type : VarianceType ,) -> Option < f64 >
 crate::kernels::stats::welch_t_test	declared	num_stats_welch_t_test		fn welch_t_test (sample1 : & [f64] , sample2 : & [f64] ,) -> (f64 , f64)
 crate::kernels::stats::z_scores	declared	num_z_scores		fn z_scores (data : & [f64]) -> Vec < f64 >
+crate::kernels::stats_ext::adjust_p_bh	declared	num_stats_ext_adjust_p_bh		fn adjust_p_bh (probabilities : & [f64]) -> Result < Vec < f64 > , StatsExtError >
+crate::kernels::stats_ext::adjust_p_by	declared	num_stats_ext_adjust_p_by		fn adjust_p_by (probabilities : & [f64]) -> Result < Vec < f64 > , StatsExtError >
+crate::kernels::stats_ext::adjust_p_holm	declared	num_stats_ext_adjust_p_holm		fn adjust_p_holm (probabilities : & [f64]) -> Result < Vec < f64 > , StatsExtError >
 crate::kernels::stats_ext::anova_one_way	declared	num_stats_ext_anova_one_way		fn anova_one_way (groups : & [& [f64]]) -> Result < TestResult , StatsExtError >
 crate::kernels::stats_ext::bootstrap	declared	num_bootstrap		fn bootstrap (samples : & [f64] , n_resamples : usize , statistic : & dyn Fn (& [f64]) -> Result < f64 , StatsExtError > , uniform : & mut dyn FnMut () -> f64 ,) -> Result < BootstrapResult , StatsExtError >
 crate::kernels::stats_ext::chi_squared_goodness_of_fit	declared	num_stats_ext_chi_squared_goodness_of_fit		fn chi_squared_goodness_of_fit (observed : & [f64] , expected : & [f64] ,) -> Result < TestResult , StatsExtError >
@@ -2021,11 +2044,15 @@ crate::kernels::wavelets::idwt	declared	num_analysis_wavelets_idwt		fn idwt (a :
 crate::kernels::wavelets::idwt2	declared	num_analysis_wavelets_idwt2		fn idwt2 (c : & [f64] , rows : usize , cols : usize , w : Wavelet , b : Boundary ,) -> Result < Vec < f64 > , WaveletError >
 crate::kernels::wavelets::idwt_with	declared	num_analysis_wavelets_idwt_with		fn idwt_with (a : & [f64] , d : & [f64] , w : Wavelet , b : Boundary , n : usize ,) -> Result < Vec < f64 > , WaveletError >
 crate::kernels::wavelets::inverse_wavelet_packet	declared	num_wavelets_inverse_wavelet_packet		fn inverse_wavelet_packet (bands : & [Vec < f64 >] , wavelet : Wavelet ,) -> Result < Vec < f64 > , WaveletError >
+crate::kernels::wavelets::iswt	declared	num_wavelets_iswt		fn iswt (bands : & [Vec < f64 >] , wavelet : Wavelet ,) -> Result < Vec < f64 > , WaveletProcessingError >
+crate::kernels::wavelets::swt	declared	num_wavelets_swt		fn swt (samples : & [f64] , wavelet : Wavelet , levels : usize ,) -> Result < Vec < Vec < f64 > > , WaveletProcessingError >
 crate::kernels::wavelets::wavedec	declared	num_analysis_wavelets_wavedec		fn wavedec (x : & [f64] , w : Wavelet , levels : usize ,) -> Result < Vec < Vec < f64 > > , WaveletError >
 crate::kernels::wavelets::wavedec2	declared	num_analysis_wavelets_wavedec2		fn wavedec2 (x : & [f64] , rows : usize , cols : usize , w : Wavelet , levels : usize ,) -> Result < Vec < Vec < f64 > > , WaveletError >
 crate::kernels::wavelets::wavedec2_with	declared	num_analysis_wavelets_wavedec2_with		fn wavedec2_with (x : & [f64] , rows : usize , cols : usize , w : Wavelet , levels : usize , b : Boundary ,) -> Result < Vec < Vec < f64 > > , WaveletError >
 crate::kernels::wavelets::wavedec_with	declared	num_analysis_wavelets_wavedec_with		fn wavedec_with (x : & [f64] , w : Wavelet , levels : usize , b : Boundary ,) -> Result < Vec < Vec < f64 > > , WaveletError >
+crate::kernels::wavelets::wavelet_hard_threshold	declared	num_wavelets_wavelet_hard_threshold		fn wavelet_hard_threshold (samples : & [f64] , threshold : f64 , wavelet : Wavelet , levels : usize , boundary : Boundary ,) -> Result < Vec < f64 > , WaveletProcessingError >
 crate::kernels::wavelets::wavelet_packet	declared	num_wavelets_wavelet_packet		fn wavelet_packet (signal : & [f64] , wavelet : Wavelet , levels : usize ,) -> Result < Vec < Vec < f64 > > , WaveletError >
+crate::kernels::wavelets::wavelet_soft_threshold	declared	num_wavelets_wavelet_soft_threshold		fn wavelet_soft_threshold (samples : & [f64] , threshold : f64 , wavelet : Wavelet , levels : usize , boundary : Boundary ,) -> Result < Vec < f64 > , WaveletProcessingError >
 crate::kernels::wavelets::waverec	declared	num_analysis_wavelets_waverec		fn waverec (coeffs : & [Vec < f64 >] , w : Wavelet ,) -> Result < Vec < f64 > , WaveletError >
 crate::kernels::wavelets::waverec2	declared	num_analysis_wavelets_waverec2		fn waverec2 (coeffs : & [Vec < f64 >] , rows : usize , cols : usize , w : Wavelet ,) -> Result < Vec < f64 > , WaveletError >
 crate::kernels::wavelets::waverec2_with	declared	num_analysis_wavelets_waverec2_with		fn waverec2_with (coeffs : & [Vec < f64 >] , rows : usize , cols : usize , w : Wavelet , b : Boundary ,) -> Result < Vec < f64 > , WaveletError >

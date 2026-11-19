@@ -46,12 +46,15 @@
 //! its open dependents. Rename edits carry open buffer versions and positions
 //! from the same unsaved snapshot. `workspace/symbol` answers from all
 //! open documents' loaded modules, with each declaration's own file and range.
+//! Formatting operates directly on the buffer's syntax.
 //!
 //! # Navigation beyond a single name
 //!
 //! `references`, `prepareRename` and `rename` work over the loaded program (a
 //! declaration and its qualified or `open`ed uses in importers are one symbol),
-//! and `rename` returns a `WorkspaceEdit` with `documentChanges`. `signatureHelp`
+//! and `rename` returns a `WorkspaceEdit` with `documentChanges`.
+//! `documentHighlight` uses the same declaration identity in the focused
+//! document. `signatureHelp`
 //! resolves the call under the cursor — user functions, constructors, prelude
 //! overloads, `Rssn` operator overloads, class methods — and completion offers
 //! a record's fields after `.` and expression-starting keywords. Each of these

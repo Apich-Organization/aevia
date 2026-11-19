@@ -33,6 +33,8 @@ Function evidence records requirements that cannot be executed until a generic a
 
 Lowering builds slot-oriented IR with explicit bindings and closure captures. A tail call replaces the active call through the trampoline. Both the IR evaluator and the typed AST evaluator use the same arithmetic, IO, pattern and kernel operations. Checked programs construct IO actions that the host runs at effect boundaries. Capabilities flow from the caller into source plugins and portable tasks. Mutable host objects and kernel handles belong to a session and thread.
 
+During Boolean constant propagation, conditional arms reuse the incoming slot facts and roll back arm-local writes before the next arm. Statically dead arms and short-circuit operands take no optimization work.
+
 Parallel evaluation uses interpreter replicas, because the regular value graph contains thread-local reference-counted objects. Transferable data has a portable representation. Workers reconstruct closures using the corresponding code identity, captures and supported evidence. Parallel mapping restores input order and reductions use fixed block boundaries. An operation that cannot run with portable values can take its ordinary interpreter path. Opt-in JIT code is restricted to eligible scalar functions with guards. Source closure identity and lexical bindings determine whether a cached native call remains applicable.
 
 ## Entry points for tooling
@@ -47,4 +49,4 @@ Parallel evaluation uses interpreter replicas, because the regular value graph c
 
 The editor analysis tracks edit overlays and positions in the protocol encoding. Source operations such as formatting and documentation derive from the syntax tree. Runtime debugging uses executing frames and spans, while run and test commands launch the toolchain against saved sources. This keeps a stale buffer from silently replacing the file selected for execution. [Debugging tutorial](/book/14-diagnostics-and-debugging?lang=en)
 
-Repeated queries reuse syntax tables attached to the cached program snapshot. Each module's declaration, occurrence and line tables are built when first needed. A change to a loaded input creates a new snapshot with its own tables.
+Repeated queries reuse outlines, semantic tokens and source indexes attached to the cached program snapshot. The first cursor query builds the index it needs for the module's name occurrences, lexical scopes or checked expressions. Outline and navigation ranges share the module's line index. Formatting parses the buffer directly and skips loading and checking its imports. Document highlights use the same declaration identity as references and return only occurrences in the focused buffer. A change to a loaded input creates a new snapshot with its own indexes.

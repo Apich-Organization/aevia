@@ -36,8 +36,10 @@ use pulldown_cmark::Options;
 use pulldown_cmark::Parser;
 use pulldown_cmark::Tag;
 use pulldown_cmark::TagEnd;
+use std::borrow::Cow;
+use std::sync::LazyLock;
 
-use crate::html::escape;
+use crate::html::push_escaped;
 
 /// Renders Markdown to HTML with the registry's conventions.
 ///
@@ -108,19 +110,17 @@ fn adapt<'a>(
             };
             let mut words = info.split([',', ' ', '\t']).filter(|word| !word.is_empty());
             let language = words.next().map_or_else(String::new, language_class);
-            let open = if language.is_empty() {
-                "<pre><code>".to_string()
+            if language.is_empty() {
+                return Event::Html(CowStr::Borrowed("<pre><code>"));
+            }
+            let interactive =
+                manual_links.is_some() && language == "aevia" && words.any(|word| word == "run");
+            let extra = if interactive {
+                " interactive-example"
             } else {
-                let interactive = manual_links.is_some()
-                    && language == "aevia"
-                    && words.any(|word| word == "run");
-                let extra = if interactive {
-                    " interactive-example"
-                } else {
-                    ""
-                };
-                format!("<pre><code class=\"language-{language}{extra}\">")
+                ""
             };
+            let open = format!("<pre><code class=\"language-{language}{extra}\">");
             Event::Html(CowStr::Boxed(open.into_boxed_str()))
         },
         | Event::End(TagEnd::CodeBlock) => Event::Html(CowStr::Borrowed("</code></pre>\n")),
@@ -131,25 +131,25 @@ fn adapt<'a>(
             id,
         }) => {
             let rewritten = match manual_links {
-                | Some(resolve) => resolve(&dest_url),
+                | Some(resolve) => Cow::Owned(resolve(&dest_url)),
                 | None => rewrite_md_link(&dest_url),
             };
             if is_absolute_http(&rewritten) {
                 let mut open = String::from("<a href=\"");
-                open.push_str(&escape(&rewritten));
+                push_escaped(&mut open, &rewritten);
                 open.push('"');
                 if !title.is_empty() {
                     open.push_str(" title=\"");
-                    open.push_str(&escape(&title));
+                    push_escaped(&mut open, &title);
                     open.push('"');
                 }
                 open.push_str(" rel=\"noopener noreferrer\" target=\"_blank\">");
                 Event::Html(CowStr::Boxed(open.into_boxed_str()))
             } else {
-                let dest_url = if rewritten == dest_url.as_ref() {
+                let dest_url = if rewritten.as_ref() == dest_url.as_ref() {
                     dest_url
                 } else {
-                    CowStr::Boxed(rewritten.into_boxed_str())
+                    CowStr::Boxed(rewritten.into_owned().into_boxed_str())
                 };
                 Event::Start(Tag::Link {
                     link_type,
@@ -219,18 +219,18 @@ fn has_scheme(url: &str) -> bool {
     clippy::single_call_fn,
     reason = "package documentation route rewriting is tested independently of HTML emission"
 )]
-fn rewrite_md_link(url: &str) -> String {
+fn rewrite_md_link(url: &str) -> Cow<'_, str> {
     if url.is_empty() || url.starts_with('#') || url.starts_with('/') || has_scheme(url) {
-        return url.to_string();
+        return Cow::Borrowed(url);
     }
     let cut = url.find(['?', '#']).unwrap_or(url.len());
     let (path, rest) = url.split_at(cut);
     if let Some((stem, extension)) = path.rsplit_once('.')
         && extension.eq_ignore_ascii_case("md")
     {
-        format!("{stem}{rest}")
+        Cow::Owned(format!("{stem}{rest}"))
     } else {
-        url.to_string()
+        Cow::Borrowed(url)
     }
 }
 
@@ -245,46 +245,49 @@ fn rewrite_md_link(url: &str) -> String {
     reason = "the independent sanitization policy is shared by all Markdown entry points"
 )]
 fn sanitise(html: &str) -> String {
-    let mut builder = ammonia::Builder::default();
-    builder
-        .add_tags(&[
-            "details",
-            "summary",
-            "kbd",
-            "samp",
-            "var",
-            "figure",
-            "figcaption",
-            "del",
-            "ins",
-            "picture",
-            "source",
-            "abbr",
-            "dl",
-            "dt",
-            "dd",
-            "sup",
-            "sub",
-            "mark",
-        ])
-        .add_tag_attributes(
-            "img",
-            &["src", "alt", "title", "width", "height", "loading"],
-        )
-        .add_tag_attributes("source", &["srcset", "type", "media", "sizes"])
-        .add_tag_attributes("details", &["open"])
-        .add_tag_attributes("abbr", &["title"])
-        // `target` is allowed because `link_rel` above guarantees the
-        // `noopener noreferrer` that makes a new tab safe.
-        .add_tag_attributes("a", &["target"])
-        .add_tag_attributes("code", &["class"])
-        .add_tag_attributes("pre", &["class"])
-        .add_tag_attributes("span", &["class"])
-        .add_tag_attributes("div", &["class"])
-        .add_tag_attributes("th", &["align", "scope", "colspan", "rowspan"])
-        .add_tag_attributes("td", &["align", "colspan", "rowspan"])
-        .link_rel(Some("noopener noreferrer"));
-    builder.clean(html).to_string()
+    static POLICY: LazyLock<ammonia::Builder<'static>> = LazyLock::new(|| {
+        let mut builder = ammonia::Builder::default();
+        builder
+            .add_tags(&[
+                "details",
+                "summary",
+                "kbd",
+                "samp",
+                "var",
+                "figure",
+                "figcaption",
+                "del",
+                "ins",
+                "picture",
+                "source",
+                "abbr",
+                "dl",
+                "dt",
+                "dd",
+                "sup",
+                "sub",
+                "mark",
+            ])
+            .add_tag_attributes(
+                "img",
+                &["src", "alt", "title", "width", "height", "loading"],
+            )
+            .add_tag_attributes("source", &["srcset", "type", "media", "sizes"])
+            .add_tag_attributes("details", &["open"])
+            .add_tag_attributes("abbr", &["title"])
+            // `target` is allowed because `link_rel` above guarantees the
+            // `noopener noreferrer` that makes a new tab safe.
+            .add_tag_attributes("a", &["target"])
+            .add_tag_attributes("code", &["class"])
+            .add_tag_attributes("pre", &["class"])
+            .add_tag_attributes("span", &["class"])
+            .add_tag_attributes("div", &["class"])
+            .add_tag_attributes("th", &["align", "scope", "colspan", "rowspan"])
+            .add_tag_attributes("td", &["align", "colspan", "rowspan"])
+            .link_rel(Some("noopener noreferrer"));
+        builder
+    });
+    POLICY.clean(html).to_string()
 }
 
 #[cfg(test)]

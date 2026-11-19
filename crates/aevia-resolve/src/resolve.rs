@@ -37,7 +37,9 @@
 //!   unsatisfiable pair resolve in a handful of steps, not `2^12`.)
 //! * **Fewest-candidates-first.** The next requirement to satisfy is the one
 //!   with the fewest selectable versions, so dead ends surface early and
-//!   forced choices are made before free ones.
+//!   forced choices are made before free ones. A binary search in the sorted
+//!   catalogue narrows each scan to the requirement's version interval before
+//!   applying pre-release, yank and occupied-slot rules.
 //!
 //! The explanation of a failure is the derivation tree of the failed search:
 //! which requirement could not be met, which candidate versions were tried for
@@ -623,6 +625,22 @@ struct Fail {
 
 type Summaries = Rc<[Rc<Summary>]>;
 
+/// Restricts the ordered catalogue to the requirement's precedence interval,
+/// then applies the pre-release rule to just the versions inside that interval.
+fn matching_summaries<'a>(
+    summaries: &'a [Rc<Summary>],
+    requirement: &'a VersionReq,
+) -> impl DoubleEndedIterator<Item = &'a Rc<Summary>> {
+    let interval = requirement.interval();
+    let first = summaries.partition_point(|summary| !interval.meets_lower(&summary.version));
+    let tail = summaries.get(first..).unwrap_or_default();
+    let count = tail.partition_point(|summary| interval.meets_upper(&summary.version));
+    tail.get(..count)
+        .unwrap_or_default()
+        .iter()
+        .filter(|summary| requirement.permits_prerelease(&summary.version))
+}
+
 enum Availability {
     Free,
     Taken(usize),
@@ -760,23 +778,18 @@ impl Solver<'_> {
 
     fn availability(
         &self,
-        dep: &Dependency,
+        package: &str,
         summary: &Summary,
         slots: Option<&BTreeMap<Series, usize>>,
-    ) -> Option<Availability> {
-        if !dep.req.matches(&summary.version) {
-            return None;
+    ) -> Availability {
+        if summary.yanked && !self.is_locked(package, &summary.version) {
+            return Availability::Yanked;
         }
-        if summary.yanked && !self.is_locked(&dep.package, &summary.version) {
-            return Some(Availability::Yanked);
-        }
-        Some(
-            slots
-                .and_then(|slots| slots.get(&self.slot_key(&summary.version)))
-                .map_or(Availability::Free, |occupant| {
-                    Availability::Taken(*occupant)
-                }),
-        )
+        slots
+            .and_then(|slots| slots.get(&self.slot_key(&summary.version)))
+            .map_or(Availability::Free, |occupant| {
+                Availability::Taken(*occupant)
+            })
     }
 
     #[allow(
@@ -801,10 +814,10 @@ impl Solver<'_> {
             .slots
             .get(&dep.package)
             .filter(|slots| !slots.is_empty());
-        let free = summaries.iter().filter(|summary| {
+        let free = matching_summaries(&summaries, &dep.req).filter(|summary| {
             matches!(
-                self.availability(dep, summary, slots),
-                Some(Availability::Free)
+                self.availability(&dep.package, summary, slots),
+                Availability::Free
             )
         });
         if occupied {
@@ -831,12 +844,11 @@ impl Solver<'_> {
         let mut free = Vec::new();
         let mut taken = Vec::new();
         let mut yanked = Vec::new();
-        for summary in summaries.iter().rev() {
-            match self.availability(dep, summary, slots) {
-                | Some(Availability::Free) => free.push(Rc::clone(summary)),
-                | Some(Availability::Taken(occupant)) => taken.push((Rc::clone(summary), occupant)),
-                | Some(Availability::Yanked) => yanked.push(summary.version.clone()),
-                | None => {},
+        for summary in matching_summaries(&summaries, &dep.req).rev() {
+            match self.availability(&dep.package, summary, slots) {
+                | Availability::Free => free.push(Rc::clone(summary)),
+                | Availability::Taken(occupant) => taken.push((Rc::clone(summary), occupant)),
+                | Availability::Yanked => yanked.push(summary.version.clone()),
             }
         }
         // Newest first within each group, with locked versions tried first.

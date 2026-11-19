@@ -1047,13 +1047,17 @@ pub fn default_jobs() -> usize {
     std::env::var("AEVIA_JOBS")
         .ok()
         .and_then(|text| text.parse().ok())
-        .unwrap_or_else(aevia_rssn::execution::detected_cpu_threads)
+        .unwrap_or_else(aevia_rssn::execution::default_cpu_threads)
         .max(1)
 }
 
 /// Inputs below this size are mapped sequentially: the replica round trip
 /// costs more than it saves.
 const MIN_PARALLEL: usize = 32;
+
+/// Give work stealing room to balance uneven inputs without rebuilding the
+/// portable closure once per element on small maps.
+const MAP_BATCHES_PER_WORKER: usize = 4;
 
 const REDUCE_BLOCK_SIZE: usize = 1024;
 
@@ -1106,7 +1110,10 @@ impl Interp {
             );
         }
         let pool = pool(self.jobs).or_else(|| fallback("the worker pool did not start"))?;
-        let batch_size = inputs.len().div_ceil(64).max(1);
+        let batch_size = inputs.len().div_ceil(
+            pool.current_num_threads()
+                .saturating_mul(MAP_BATCHES_PER_WORKER),
+        );
         let cancellation = self.cancellation_token().map(|token| token.child());
         let capabilities = self.capabilities;
         let results: Option<Vec<Vec<Transfer>>> = pool.install(|| {

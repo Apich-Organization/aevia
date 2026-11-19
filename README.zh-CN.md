@@ -33,6 +33,8 @@ aevia run examples/kinematics.aev
 
 用 `aevia docs --section book --lang zh --open` 打开在线教程，添加 `--download` 获取独立 HTML 的地址。用 `aevia doc --stdlib --lang zh` 生成中文标准库参考。`aevia <command> --help` 说明命令及其选项。
 
+Aevia 自动探测语言并行求值可用的 CPU。`--jobs` 设置单次运行的线程数，`AEVIA_JOBS` 可供当前 shell 会话使用。`RAYON_NUM_THREADS` 控制默认 Rayon 池，未指定 Aevia 线程数时也用作语言工作线程数。 [并行求值与性能测量](platform/manuals/book/zh/12-parallel-and-profiling.md)
+
 文本客户端可从[文档索引](https://aevia.apich.org/llms.txt?lang=zh)读取本地化 Markdown 章节和生成的标准库目录。
 
 ## 使用包

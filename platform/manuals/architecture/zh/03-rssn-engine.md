@@ -20,7 +20,7 @@ RSSN 用等价图联系一个表达式的不同符号形式。数值算法也以
 
 `Rssn_Numeric.coherence` 计算单边 Welch 相干度。`Rssn_Numeric.wavelet_packet` 同时分解小波变换的低频和高频分支，以等宽矩阵返回叶子频带。`Rssn_Numeric.inverse_wavelet_packet` 从该矩阵重建输入。带类型的 `num_signal_*` 算子通过原生数值 ABI 提供解析信号、Hilbert 变换、幅度包络和局部 FFT。
 
-CPU 并行按当前 Rayon 池和工作量阈值调度。全局池自动探测可用 CPU，也可用 `RAYON_NUM_THREADS` 配置。RSSN 在 Aevia 的并行语言工作线程中使用外层线程池。`kernels::reuse` 在保留上限内共享不可变计算计划，并借出独占的临时缓冲区。FFT 按长度和方向复用计划，在运行时选择 CPU 指令。
+CPU 并行按当前 Rayon 池和工作量阈值调度。全局池自动探测可用 CPU，也可用 `RAYON_NUM_THREADS` 配置。Aevia 语言工作线程采用同一个默认线程数，可由 `AEVIA_JOBS` 或 `--jobs` 覆盖。该工作线程上的 RSSN 调用使用外层池。`kernels::reuse` 在保留上限内共享不可变计算计划，并借出独占的临时缓冲区。并发请求共同等待同一个缓存计划完成构建。FFT 按长度和方向索引计划，在运行时探测 CPU 指令。编译后的 CPU 批处理也从该模块借用中间结果所需的 `f64` 缓冲区。
 
 编译求值可以使用指令带，支持标量、批量、自动微分和区间执行。LIR 提供有类型的寄存器、分支、调用和回退出口。启用 JIT 特性时，Cranelift 编译符合条件的工作。可选设备后端提供显式缓冲区与启动模型。要求复现的数值实验应记录精度、归约顺序和所选后端。
 

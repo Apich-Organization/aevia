@@ -406,13 +406,15 @@ storage held by the REPL session.
   `--jobs 1`, or when a worker fails, the primitive falls back to sequential evaluation, and the
   sequential recomputation gives the value or error the program would have given (with
   position and call stack). `AEVIA_PARALLEL_TRACE=1` prints the reason for each fallback.
-- **Determinism.** Chunk boundaries depend only on the input length, not on the thread count.
+- **Determinism.** Maps preserve input order even as the runtime adjusts batch sizes to the worker count.
   `par_reduce(f, zero, xs)` requires `f` to be associative and `zero` an identity; it folds
   fixed chunks of 1024 elements and merges the chunk results in order, so a floating-point
   reduction is **bit-identical** on any number of cores and in the sequential fallback.
-- Primitives: `par_map`, `par_tabulate(n, f)`, `par_reduce`. `--jobs N` (or `AEVIA_JOBS`) sets
-  the worker count, defaulting to the available parallelism; replicas do not nest parallelism.
-  Each worker thread has one kernel `Session`.
+- `par_map`, `par_tabulate(n, f)` and `par_reduce` take their worker count from `--jobs N`, then
+  `AEVIA_JOBS`, then `RAYON_NUM_THREADS` or the CPUs available to the process. Each worker has
+  a kernel `Session`. Nested language primitives run sequentially on a worker. RSSN operations
+  on those workers use the enclosing Rayon pool. On the main interpreter thread, RSSN uses
+  the global Rayon pool, which follows `RAYON_NUM_THREADS` and host CPU detection.
 - **Parallel numeric kernels.** `sparse @ dense` (including `Bcsr`) runs in fixed 256-row blocks,
   each output row accumulated sequentially by one work item, bit-equal to the sequential
   kernel; `sde_ensemble_diag/general` runs through `par_map` replicas, and the member seed

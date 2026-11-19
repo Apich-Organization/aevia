@@ -28,19 +28,19 @@ use std::collections::HashMap;
 
 use crate::Module;
 use crate::markdown::render_markdown;
+use crate::visible_declarations;
 
 /// Renders one module's declarations to HTML (the body of a module page).
 ///
-/// This is the `compiler` path: the declarations come from `aevia-doc`, so the
-/// page shows exactly what `aevia doc` would write, and a file the parser
-/// rejected never reaches this function. With the feature off, [`build`] uses
-/// the degraded scanner instead and there is no `ModuleDoc` to render.
+/// This is the `compiler` path. The page uses `aevia-doc`'s module description
+/// and declaration visibility, with badges for visible private declarations.
+/// With the feature off, [`build`] uses the degraded scanner.
 ///
 /// [`build`]: crate::build
 #[cfg(feature = "compiler")]
 #[must_use]
 pub fn render_module_html(doc: &aevia_doc::ModuleDoc) -> String {
-    render_module(&Module::from_doc(doc))
+    render_module(doc)
 }
 
 /// Escapes text for element content and for a double-quoted attribute value.
@@ -48,19 +48,24 @@ pub fn render_module_html(doc: &aevia_doc::ModuleDoc) -> String {
 /// One function for both because a value that is safe in one context is safe
 /// in the other once quotes and apostrophes are escaped too, and having two
 /// near-identical escapers is how one of them ends up missing a case.
-pub fn escape(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for character in value.chars() {
-        match character {
-            | '&' => out.push_str("&amp;"),
-            | '<' => out.push_str("&lt;"),
-            | '>' => out.push_str("&gt;"),
-            | '"' => out.push_str("&quot;"),
-            | '\'' => out.push_str("&#39;"),
-            | other => out.push(other),
-        }
+pub fn push_escaped(
+    out: &mut String,
+    mut value: &str,
+) {
+    while let Some(index) = value.find(['&', '<', '>', '"', '\'']) {
+        let (plain, suffix) = value.split_at(index);
+        out.push_str(plain);
+        let (character, tail) = suffix.split_at(1);
+        out.push_str(match character {
+            | "&" => "&amp;",
+            | "<" => "&lt;",
+            | ">" => "&gt;",
+            | "\"" => "&quot;",
+            | _ => "&#39;",
+        });
+        value = tail;
     }
-    out
+    out.push_str(value);
 }
 
 /// Renders a module body.
@@ -76,39 +81,51 @@ pub fn render_module(module: &Module) -> String {
     // it does so with the breadcrumb and the declaration counts beside it.
     // Repeating them here would put two `h1`s on one page.
     let mut out = String::new();
-    if module.decls.is_empty() {
+    if let Some(text) = &module.doc {
+        push_prose(&mut out, text);
+    }
+    let mut declarations = visible_declarations(module).peekable();
+    if declarations.peek().is_none() {
         out.push_str("<p class=\"empty\">This module declares nothing.</p>\n");
         return out;
     }
     let mut anchors = Anchors::default();
-    for decl in &module.decls {
+    for decl in declarations {
         let id = anchors.claim(&decl.kind, &decl.name);
         out.push_str("<div class=\"decl\" id=\"");
-        out.push_str(&escape(&id));
+        push_escaped(&mut out, &id);
         out.push_str("\">\n<h2><span class=\"kind\">");
-        out.push_str(&escape(&decl.kind));
+        push_escaped(&mut out, &decl.kind);
         out.push_str("</span> <span class=\"name\">");
-        out.push_str(&escape(&decl.name));
+        push_escaped(&mut out, &decl.name);
         out.push_str("</span>");
         if decl.private {
             out.push_str(" <span class=\"badge private\">private</span>");
         }
         out.push_str("</h2>\n<pre class=\"sig\"><code class=\"language-aevia\">");
-        out.push_str(&escape(&decl.signature));
+        push_escaped(&mut out, &decl.signature);
         out.push_str("</code></pre>\n");
         if let Some(text) = &decl.doc {
-            let body = render_markdown(text);
-            // A `##` comment that holds only whitespace documents nothing; an
-            // empty `<div>` would suggest it did.
-            if !body.trim().is_empty() {
-                out.push_str("<div class=\"doc\">\n");
-                out.push_str(&body);
-                out.push_str("</div>\n");
-            }
+            push_prose(&mut out, text);
         }
         out.push_str("</div>\n");
     }
     out
+}
+
+fn push_prose(
+    out: &mut String,
+    text: &str,
+) {
+    if text.trim().is_empty() {
+        return;
+    }
+    let body = render_markdown(text);
+    if !body.trim().is_empty() {
+        out.push_str("<div class=\"doc\">\n");
+        out.push_str(&body);
+        out.push_str("</div>\n");
+    }
 }
 
 /// The set of anchor ids handed out while rendering one page.
@@ -177,6 +194,7 @@ mod tests {
             signature: signature.to_string(),
             doc: doc.map(str::to_string),
             private,
+            doc_hidden: false,
         }
     }
 
@@ -205,6 +223,7 @@ mod tests {
         let module = Module {
             path: "Kinematics".to_string(),
             file: "src/Kinematics.aev".to_string(),
+            doc: None,
             decls: vec![
                 decl(
                     "fn",
@@ -243,9 +262,20 @@ mod tests {
         let module = Module {
             path: "A".to_string(),
             file: "src/A.aev".to_string(),
+            doc: None,
             decls: vec![decl("fn", "f", "fn f(x: Map<K, V>)", None, false)],
         };
         let html = render_module(&module);
         assert!(html.contains("Map&lt;K, V&gt;"), "{html}");
+    }
+
+    #[test]
+    fn escaping_preserves_unicode_and_all_html_metacharacters() {
+        let mut output = String::from("start: ");
+        push_escaped(&mut output, "λ <π & π> \"中\" '文'");
+        assert_eq!(
+            output,
+            "start: λ &lt;π &amp; π&gt; &quot;中&quot; &#39;文&#39;"
+        );
     }
 }

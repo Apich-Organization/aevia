@@ -3,12 +3,13 @@
 Install `aevia` and `aevia-lsp` on your editor's `PATH`. Use `aevia lsp --stdio`
 in a client that accepts a custom server command if you installed the CLI alone.
 The server supplies diagnostics, hover, navigation, completion, signature help,
-rename, formatting, quick fixes, and semantic highlighting for `.aev` files.
+rename, formatting, quick fixes, semantic highlighting and document-local
+symbol highlights for `.aev` files.
 
 将 `aevia` 和 `aevia-lsp` 安装到编辑器的 `PATH` 中。若只安装了 CLI，可在
 支持自定义服务器命令的客户端中配置 `aevia lsp --stdio`。语言服务器为
 `.aev` 文件提供诊断、悬停提示、符号跳转、补全、签名提示、重命名、格式化、
-快速修复和语义高亮。
+快速修复、语义高亮和文档内的同符号高亮。
 
 | Editor / 编辑器 | Setup / 安装 |
 |---|---|

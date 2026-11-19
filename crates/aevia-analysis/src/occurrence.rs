@@ -16,6 +16,7 @@
 //! asking the checker, and it is deliberately not a second type checker — it
 //! tracks names and spans, nothing else.
 
+use crate::cursor_index::CursorIndex;
 use aevia_syntax::Span;
 use aevia_syntax::ast::BlockStmt;
 use aevia_syntax::ast::Decl;
@@ -32,6 +33,7 @@ use aevia_syntax::ast::Ty;
 use aevia_syntax::ast::TyKind;
 use aevia_syntax::ast::TypeBody;
 use aevia_syntax::token::TokenKind;
+use std::cell::OnceCell;
 
 /// The role a name plays at its span.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,6 +102,8 @@ pub struct Occurrences {
     items: Vec<Occurrence>,
     bindings: Vec<Binding>,
     scope_ranges: Vec<ScopeRange>,
+    names_by_cursor: OnceCell<CursorIndex<usize>>,
+    scopes_by_cursor: OnceCell<CursorIndex<usize>>,
 }
 impl std::ops::Deref for Occurrences {
     type Target = [Occurrence];
@@ -117,16 +121,38 @@ impl<'a> IntoIterator for &'a Occurrences {
     }
 }
 impl Occurrences {
+    /// The innermost occurrence containing `offset`, including its right edge.
+    pub(crate) fn at(
+        &self,
+        offset: u32,
+    ) -> Option<&Occurrence> {
+        let index = self.names_by_cursor.get_or_init(|| {
+            CursorIndex::new(
+                self.items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, occurrence)| (occurrence.span.start, occurrence.span.end, index)),
+            )
+        });
+        self.items.get(index.at(offset)?)
+    }
+
     /// Visible local bindings in nearest-to-farthest order.
     pub(crate) fn local_bindings(
         &self,
         offset: u32,
     ) -> impl Iterator<Item = (&str, Span, bool)> {
-        let mut head = self
-            .scope_ranges
-            .iter()
-            .filter(|scope| scope.start <= offset && offset <= scope.end)
-            .min_by_key(|scope| scope.end.saturating_sub(scope.start))
+        let index = self.scopes_by_cursor.get_or_init(|| {
+            CursorIndex::new(
+                self.scope_ranges
+                    .iter()
+                    .enumerate()
+                    .map(|(index, scope)| (scope.start, scope.end, index)),
+            )
+        });
+        let mut head = index
+            .at(offset)
+            .and_then(|index| self.scope_ranges.get(index))
             .and_then(|scope| scope.head);
         std::iter::from_fn(move || {
             let binding = self.bindings.get(head?)?;
@@ -193,19 +219,9 @@ pub fn collect(
         items: collector.out,
         bindings: collector.bindings,
         scope_ranges: collector.scope_ranges,
+        names_by_cursor: OnceCell::new(),
+        scopes_by_cursor: OnceCell::new(),
     }
-}
-
-/// The innermost occurrence containing `offset`.
-#[must_use]
-pub fn at(
-    occurrences: &[Occurrence],
-    offset: u32,
-) -> Option<&Occurrence> {
-    occurrences
-        .iter()
-        .filter(|occurrence| occurrence.span.start <= offset && offset <= occurrence.span.end)
-        .min_by_key(|occurrence| occurrence.span.end.saturating_sub(occurrence.span.start))
 }
 
 /// The first identifier token named `name` inside `within`. Declaration
@@ -1024,7 +1040,7 @@ mod tests {
         let source = "let f = fn (x: Int) => x + 1\n";
         let found = occurrences(source);
         let offset = u32::try_from(source.rfind('x').expect("x")).expect("offset");
-        let at = at(&found, offset).expect("an occurrence");
+        let at = found.at(offset).expect("an occurrence");
         assert_eq!(at.role, Role::Name("x".to_string()));
         assert_eq!(at.span.start, offset);
     }

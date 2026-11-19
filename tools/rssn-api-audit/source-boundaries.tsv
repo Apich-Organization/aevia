@@ -1,10 +1,15 @@
 # Rust source path	Reason this entry point belongs to the Rust host API.
+crate::kernels::fftconv::OverlapSavePlan::apply	Applies a caller-owned FFT filter plan across inputs. The manifest exposes checked one-shot overlap-save convolution.
+crate::kernels::fftconv::OverlapSavePlan::new	Builds a caller-owned filter spectrum for repeated overlap-save convolution.
 crate::kernels::reuse::PlanCache<K,V>::get_or_insert_with	Shares immutable Rust plans and accepts a caller-owned builder closure.
 crate::kernels::reuse::PlanCache<K,V>::new	Sets the retention limit for a caller-owned Rust plan cache.
 crate::kernels::reuse::ScratchPool<T>::checkout	Returns a Rust lease that borrows the owning scratch pool.
+crate::kernels::reuse::ScratchPool<T>::checkout_for	Selects a Rust scratch lease by minimum allocation capacity.
 crate::kernels::reuse::ScratchPool<T>::new	Configures a Rust allocation pool for a caller-selected element type.
+crate::kernels::reuse::f64_scratch	Returns a Rust lease for temporary floating-point storage.
 crate::kernels::reuse::fft_plan	Returns a shared RustFFT trait object keyed by transform length and direction.
 crate::kernels::reuse::fft_scratch	Returns a Rust lease for temporary complex FFT storage.
+crate::kernels::reuse::fft_scratch_for	Selects a Rust lease for complex FFT scratch by capacity.
 crate::kernels::wavelets::FrftPlan::new	Constructs a caller-owned spectral basis for repeated fractional Fourier transforms.
 crate::kernels::wavelets::FrftPlan::matrix	Reuses a caller-owned spectral basis to construct a fractional Fourier matrix. The numerical manifest also offers a one-shot matrix operator.
 crate::kernels::wavelets::FrftPlan::transform	Applies a caller-owned spectral basis to a complex signal. The numerical manifest also offers a one-shot transform operator.

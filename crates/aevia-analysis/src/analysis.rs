@@ -19,6 +19,7 @@
 //! value from [`crate::types`].
 
 use crate::actions;
+use crate::cursor_index::CursorIndex;
 use crate::diagnostic::Diagnostic;
 use crate::diagnostic::{
     self,
@@ -105,6 +106,9 @@ struct ModuleQueries {
     definitions: OnceCell<HashMap<String, Span>>,
     imports: OnceCell<Vec<ModuleImport>>,
     lines: OnceCell<LineIndex>,
+    expressions: OnceCell<CursorIndex<Span>>,
+    symbols: OnceCell<Vec<Symbol>>,
+    semantic_tokens: OnceCell<Vec<SemanticToken>>,
 }
 
 impl ModuleQueries {
@@ -127,6 +131,21 @@ impl ModuleQueries {
     ) -> &HashMap<String, Span> {
         self.definitions
             .get_or_init(|| module.map_or_else(HashMap::new, |module| declarations(module, text)))
+    }
+
+    fn lines(
+        &self,
+        text: &str,
+    ) -> &LineIndex {
+        self.lines.get_or_init(|| LineIndex::new(text))
+    }
+
+    fn symbols(
+        &self,
+        module: &Module,
+        context: &SymbolContext<'_>,
+    ) -> &[Symbol] {
+        self.symbols.get_or_init(|| context.module_symbols(module))
     }
 }
 
@@ -435,14 +454,9 @@ impl<'a> Analysis<'a> {
         index: usize,
         name: &str,
     ) -> Option<Location> {
-        let program = self.program()?;
-        let module: &LoadedModule = program.modules.get(index)?;
+        let file = self.program()?.modules.get(index)?.file;
         let span = *self.definitions_of(index)?.get(name)?;
-        let file = program.sources.file(module.file)?;
-        Some(Location {
-            document: file.name.clone(),
-            range: range_in_file(&file.text, span),
-        })
+        self.location_in_file(file, span)
     }
 
     /// The location of `span` in `file`, using that file's own text.
@@ -452,9 +466,24 @@ impl<'a> Analysis<'a> {
         span: Span,
     ) -> Option<Location> {
         let source = self.sources().file(file)?;
+        let lines = match &self.source {
+            | _ if file == self.file => Some(self.document.index()),
+            | Source::Program(_, index) => {
+                index.by_file.get(&file).and_then(|index_in_program| {
+                    index
+                        .modules
+                        .get(*index_in_program)
+                        .map(|queries| queries.lines(&source.text))
+                })
+            },
+            | Source::Single(_) => None,
+        };
         Some(Location {
             document: source.name.clone(),
-            range: range_in_file(&source.text, span),
+            range: lines.map_or_else(
+                || range_in_lines(&LineIndex::new(&source.text), &source.text, span),
+                |lines| range_in_lines(lines, &source.text, span),
+            ),
         })
     }
 
@@ -533,7 +562,7 @@ impl<'a> Analysis<'a> {
         &self,
         offset: u32,
     ) -> Option<Hover> {
-        if let Some(occurrence) = occurrence::at(self.occurrences(), offset) {
+        if let Some(occurrence) = self.occurrences().at(offset) {
             if let Some(contents) = self.describe(occurrence) {
                 return Some(Hover {
                     contents,
@@ -718,7 +747,7 @@ impl<'a> Analysis<'a> {
         &self,
         offset: u32,
     ) -> Option<Location> {
-        let occurrence = occurrence::at(self.occurrences(), offset)?;
+        let occurrence = self.occurrences().at(offset)?;
         match &occurrence.role {
             | Role::Qualified(path) => {
                 if path.first().map(String::as_str) == Some("Rssn") {
@@ -761,11 +790,21 @@ impl<'a> Analysis<'a> {
     /// The document's outline.
     #[must_use]
     pub fn symbols(&self) -> Vec<Symbol> {
-        let Some(module) = self.module() else {
-            return Vec::new();
-        };
-        SymbolContext::new(self.document.text(), self.file, self.checked_module())
-            .module_symbols(module)
+        self.outline().to_vec()
+    }
+
+    /// The document's outline, borrowed from its analyzed source snapshot.
+    #[must_use]
+    pub fn outline(&self) -> &[Symbol] {
+        self.module().map_or(&[], |module| {
+            let context = SymbolContext::new(
+                self.document.text(),
+                self.document.index(),
+                self.file,
+                self.checked_module(),
+            );
+            self.queries.symbols(module, &context)
+        })
     }
 
     /// The declarations of every module in the loaded program, for a
@@ -783,27 +822,23 @@ impl<'a> Analysis<'a> {
         let needle = query.trim().to_lowercase();
         let mut symbols = Vec::new();
         match &self.source {
-            | Source::Single(compilation) => {
-                let Some(module) = &compilation.module else {
-                    return symbols;
-                };
-                let context =
-                    SymbolContext::new(self.document.text(), self.file, &compilation.checked);
-                collect_workspace(
-                    &context.module_symbols(module),
-                    self.document.name(),
-                    &needle,
-                    &mut symbols,
-                );
+            | Source::Single(_) => {
+                collect_workspace(self.outline(), self.document.name(), &needle, &mut symbols);
             },
-            | Source::Program(program, _) => {
-                for module in &program.modules {
+            | Source::Program(program, index) => {
+                for (module, queries) in program.modules.iter().zip(&index.modules) {
                     let Some(source) = program.sources.file(module.file) else {
                         continue;
                     };
-                    let context = SymbolContext::new(&source.text, module.file, &module.checked);
+                    let lines = if module.file == self.file {
+                        self.document.index()
+                    } else {
+                        queries.lines(&source.text)
+                    };
+                    let context =
+                        SymbolContext::new(&source.text, lines, module.file, &module.checked);
                     collect_workspace(
-                        &context.module_symbols(&module.module),
+                        queries.symbols(&module.module, &context),
                         &source.name,
                         &needle,
                         &mut symbols,
@@ -820,14 +855,7 @@ impl<'a> Analysis<'a> {
     /// the diagnostics already say why.
     #[must_use]
     pub fn formatting(&self) -> Option<TextEdit> {
-        let formatted = aevia_fmt::format_source(self.document.text()).ok()?;
-        if formatted == self.document.text() {
-            return None;
-        }
-        Some(TextEdit {
-            range: self.document.full_range(),
-            new_text: formatted,
-        })
+        self.document.formatting()
     }
 
     /// The fixes and refactors available at `request`.
@@ -867,12 +895,20 @@ impl<'a> Analysis<'a> {
     /// it.
     #[must_use]
     pub fn semantic_tokens(&self) -> Vec<SemanticToken> {
-        tokens::tokens(
-            self.document,
-            self.file,
-            self.occurrences(),
-            self.checked_module(),
-        )
+        self.highlighted_tokens().to_vec()
+    }
+
+    /// The semantic tokens, borrowed from the analyzed source snapshot.
+    #[must_use]
+    pub fn highlighted_tokens(&self) -> &[SemanticToken] {
+        self.queries.semantic_tokens.get_or_init(|| {
+            tokens::tokens(
+                self.document,
+                self.file,
+                self.occurrences(),
+                self.checked_module(),
+            )
+        })
     }
 
     /// The declaration of the *type* of what the cursor is on (§9.10).
@@ -986,7 +1022,9 @@ impl<'a> Analysis<'a> {
             }
             // A local name can shadow a declaration in the module.
             let declared_span = occurrence::name_span(view.text, decl.span, declared);
-            if occurrence::at(self.occurrences(), callee.span.start)
+            if self
+                .occurrences()
+                .at(callee.span.start)
                 .and_then(|found| found.binding)
                 .is_some_and(|span| span != declared_span)
             {
@@ -1128,9 +1166,37 @@ impl<'a> Analysis<'a> {
     ) -> Vec<Location> {
         let (views, entry) = self.views();
         if let Some(target) = resolve_target(&views, entry, offset) {
-            return collect_references(&views, &target, include_declaration);
+            return collect_references(&views, &target, include_declaration, None);
         }
         field_references(&views, entry, offset).unwrap_or_default()
+    }
+
+    /// The declaration and uses of the cursor's symbol in the current document.
+    ///
+    /// Imported names use the same declaration identity as [`Self::references`].
+    /// The search only visits occurrences in the focused module and returns
+    /// ordered, unique ranges. An unresolved name yields no ranges.
+    #[must_use]
+    pub fn document_highlights(
+        &self,
+        offset: u32,
+    ) -> Vec<Range> {
+        let (views, entry) = self.views();
+        let locations = resolve_target(&views, entry, offset).map_or_else(
+            || field_references(&views, entry, offset).unwrap_or_default(),
+            |target| {
+                collect_references(
+                    &views,
+                    &target,
+                    true,
+                    views.get(entry).map(|view| view.index),
+                )
+            },
+        );
+        locations
+            .into_iter()
+            .map(|location| location.range)
+            .collect()
     }
 
     /// Whether the name at `offset` can be renamed, and the range to preselect.
@@ -1155,7 +1221,7 @@ impl<'a> Analysis<'a> {
             let view = views.get(entry).ok_or_else(|| {
                 RenameError::NotRenamable("the document has no module to rename in".to_string())
             })?;
-            let occurrence = occurrence::at(view.occurrences(), offset).ok_or_else(|| {
+            let occurrence = view.occurrences().at(offset).ok_or_else(|| {
                 RenameError::NotRenamable("there is no name here to rename".to_string())
             })?;
             let Some(name) = occurrence_name(&occurrence.role) else {
@@ -1201,7 +1267,7 @@ impl<'a> Analysis<'a> {
             validate_new_name(&target.name, new_name)?;
             check_physical_rename(&views, &target, new_name)?;
             return Ok(file_edits(
-                collect_references(&views, &target, true),
+                collect_references(&views, &target, true, None),
                 new_name,
             ));
         }
@@ -1279,7 +1345,7 @@ impl<'a> Analysis<'a> {
         &self,
         offset: u32,
     ) -> Option<&aevia_types::Type> {
-        if let Some(occurrence) = occurrence::at(self.occurrences(), offset) {
+        if let Some(occurrence) = self.occurrences().at(offset) {
             if let Some(ty) = self.recorded_type(occurrence.span) {
                 return Some(ty);
             }
@@ -1559,26 +1625,27 @@ impl<'a> Analysis<'a> {
         if text.get(at)?.is_ascii_whitespace() {
             return None;
         }
-        let mut best: Option<(&Span, &aevia_types::Type)> = None;
-        for (span, ty) in &self.checked_module().expr_types {
-            if span.start > offset || offset >= span.end {
-                continue;
-            }
-            let shorter = best.is_none_or(|(best_span, _)| {
-                span.end.saturating_sub(span.start) < best_span.end.saturating_sub(best_span.start)
-            });
-            if shorter {
-                best = Some((span, ty));
-            }
-        }
-        let (span, ty) = best?;
+        let types = &self.checked_module().expr_types;
+        let index = self.queries.expressions.get_or_init(|| {
+            let mut spans = types.keys().copied().collect::<Vec<_>>();
+            // Break equally narrow overlaps by their source order. The map's
+            // traversal order differs across compiler runs.
+            spans.sort_unstable_by_key(|span| (span.start, span.end));
+            CursorIndex::new(
+                spans
+                    .into_iter()
+                    .filter_map(|span| Some((span.start, span.end.checked_sub(1)?, span))),
+            )
+        });
+        let span = index.at(offset)?;
+        let ty = types.get(&span)?;
         // The innermost expression is the one the question is about. If *its*
         // type is not decided, the answer is silence — falling back to an
         // enclosing expression would describe a different piece of source.
         if ty.is_error() || aevia_types::class::has_variables(ty) {
             return None;
         }
-        Some((*span, ty))
+        Some((span, ty))
     }
 
     /// Adds the type this occurrence actually has, when the declaration's
@@ -1694,6 +1761,7 @@ impl<'a> Analysis<'a> {
 /// from disagreeing about a declaration.
 struct SymbolContext<'a> {
     text: &'a str,
+    lines: &'a LineIndex,
     file: FileId,
     checked: &'a CheckedModule,
 }
@@ -1701,10 +1769,16 @@ struct SymbolContext<'a> {
 impl<'a> SymbolContext<'a> {
     const fn new(
         text: &'a str,
+        lines: &'a LineIndex,
         file: FileId,
         checked: &'a CheckedModule,
     ) -> Self {
-        Self { text, file, checked }
+        Self {
+            text,
+            lines,
+            file,
+            checked,
+        }
     }
 
     /// The range of a span in this context's file.
@@ -1715,7 +1789,7 @@ impl<'a> SymbolContext<'a> {
         if span.file != self.file {
             return Range::default();
         }
-        range_in_file(self.text, span)
+        range_in_lines(self.lines, self.text, span)
     }
 
     /// The source text a span covers, when it is in this file.
@@ -1998,14 +2072,6 @@ fn prefixes(
     map
 }
 
-/// The range of `span` in a file whose text is `text`.
-fn range_in_file(
-    text: &str,
-    span: Span,
-) -> Range {
-    range_in_lines(&LineIndex::new(text), text, span)
-}
-
 fn range_in_lines(
     index: &LineIndex,
     text: &str,
@@ -2271,7 +2337,7 @@ impl ModuleView<'_> {
         &self,
         span: Span,
     ) -> Range {
-        let lines = self.queries.lines.get_or_init(|| LineIndex::new(self.text));
+        let lines = self.queries.lines(self.text);
         range_in_lines(lines, self.text, span)
     }
 }
@@ -2443,7 +2509,7 @@ fn resolve_target(
     offset: u32,
 ) -> Option<Target> {
     let view = views.get(entry)?;
-    let occurrence = occurrence::at(view.occurrences(), offset)?;
+    let occurrence = view.occurrences().at(offset)?;
     let name = occurrence_name(&occurrence.role)?.to_string();
     if let Role::Qualified(path) = &occurrence.role
         && path.first().map(String::as_str) == Some("Rssn")
@@ -2633,10 +2699,15 @@ fn collect_references(
     views: &[ModuleView<'_>],
     target: &Target,
     include_declaration: bool,
+    only_module: Option<usize>,
 ) -> Vec<Location> {
     let mut locations: Vec<Location> = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for view in views {
+    let target_key = physical_declaration(views, target.file, target.span);
+    for view in views
+        .iter()
+        .filter(|view| only_module.is_none_or(|index| index == view.index))
+    {
         for occurrence in view.occurrences() {
             let Some(name) = occurrence_name(&occurrence.role) else {
                 continue;
@@ -2644,19 +2715,14 @@ fn collect_references(
             let Some(canonical) = canonical_decl_of(views, view, occurrence) else {
                 continue;
             };
-            if physical_declaration(views, canonical.0, canonical.1)
-                != physical_declaration(views, target.file, target.span)
-            {
+            if physical_declaration(views, canonical.0, canonical.1) != target_key {
                 continue;
             }
             let span = occurrence_edit_span(view.text, occurrence, name);
-            if !include_declaration
-                && physical_declaration(views, view.file, span)
-                    == physical_declaration(views, target.file, target.span)
-            {
+            if !include_declaration && physical_declaration(views, view.file, span) == target_key {
                 continue;
             }
-            if !seen.insert((view.document.to_string(), span.start, span.end)) {
+            if !seen.insert((view.document, span.start, span.end)) {
                 continue;
             }
             locations.push(Location {
@@ -3045,7 +3111,7 @@ fn field_or_refusal(
         | Ok(field) => Ok(field),
         | Err(error) => {
             match views.get(entry) {
-                | Some(view) if occurrence::at(view.occurrences(), offset).is_some() => {
+                | Some(view) if view.occurrences().at(offset).is_some() => {
                     Err(undeclarable_error(view, offset))
                 },
                 | _ => Err(error),
@@ -3066,7 +3132,7 @@ fn undeclarable_error(
     view: &ModuleView<'_>,
     offset: u32,
 ) -> RenameError {
-    let Some(occurrence) = occurrence::at(view.occurrences(), offset) else {
+    let Some(occurrence) = view.occurrences().at(offset) else {
         return RenameError::NotRenamable(
             "there is no declaration here that a rename could change".to_string(),
         );
@@ -3754,7 +3820,7 @@ impl Analysis<'_> {
         let ExprKind::Var(_) = &receiver.kind else {
             return None;
         };
-        let binding = occurrence::at(self.occurrences(), receiver.span.start)?.binding?;
+        let binding = self.occurrences().at(receiver.span.start)?.binding?;
         let annotation = binding_annotation(view.module, binding)?;
         annotation_fields(views, view, annotation)
     }

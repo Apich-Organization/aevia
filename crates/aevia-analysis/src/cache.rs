@@ -233,6 +233,9 @@ impl AnalysisCache {
         if !analysable(path) {
             return None;
         }
+        if overlays.get(path) == Some(source) {
+            return Some(self.program_with_overlays(path, overlays));
+        }
         let mut snapshot = overlays.clone();
         snapshot.insert(path, source);
         Some(self.program_with_overlays(path, &snapshot))

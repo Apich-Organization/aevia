@@ -10492,6 +10492,7 @@ The argument, `arg z`, in `(-π, π]`.
 `bandwidth_scott(sample)`: Scott's rule-of-thumb kernel density bandwidth for `sample`.
 
 Scott's rule bandwidth `1.06 sd n^(-1/5)`.
+Requires at least two finite observations.
 
 ## `numeric.bandwidth_silverman` (Stable)
 
@@ -10503,6 +10504,7 @@ Scott's rule bandwidth `1.06 sd n^(-1/5)`.
 `bandwidth_silverman(sample)`: Silverman's rule-of-thumb kernel density bandwidth for `sample`.
 
 Silverman's rule-of-thumb bandwidth `0.9 min(sd, IQR/1.34) n^(-1/5)`.
+Uses `sd` when `IQR` is zero. Requires at least two finite observations.
 
 ## `discrete.barycentric` (Stable)
 
@@ -27525,9 +27527,8 @@ Native transforms fft; normalized dimensionless arguments unless the declared co
 Computes the Fast Fourier Transform (FFT) of a sequence of complex numbers.
 
 Works at any length and leaves the length unchanged: a power-of-two `n` uses
-the in-place radix-2 kernel, a prime `n` uses Rader's transform, and any
-other `n` uses Bluestein's chirp-z algorithm. Either way the result is the
-exact `n`-point DFT, `O(n log n)`.
+the scalar radix-2 kernel. Other lengths use a shared, runtime-selected
+FFT plan. Both paths compute the unpadded `n`-point DFT.
 
 # Arguments
 * `data` - A mutable `Vec<Complex<f64>>` representing the input sequence.
@@ -27592,8 +27593,8 @@ Computes the Forward FFT for a slice.
 
 **Use this for efficient, parallel chunk processing (e.g., with rayon).**
 Works at any length and operates in place: a power-of-two length uses the
-radix-2 kernel, a prime length Rader's transform, and any other length
-Bluestein's algorithm. Bit-identical to [`fft`].
+scalar radix-2 kernel and other lengths use the shared FFT planner.
+Bit-identical to [`fft`].
 
 # Arguments
 * `data` - A mutable slice of `Complex<f64>` representing the input sequence.
@@ -30168,6 +30169,21 @@ The `q`-quantile of a sorted exact sample, `0 ≤ q ≤ 1`.
 [`NumericError::Empty`] for an empty sample and
 [`NumericError::Domain`] when `q` is outside `[0, 1]`.
 
+## `numerical_vector.num_descriptive_quantiles` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<1, Float>) -> Tensor<1, Float[_]>
+```
+
+Type-7 quantiles of a finite sample, in the supplied probability order.
+
+A single query selects the two adjacent ranks in linear time. Multiple
+queries share one ordered copy of the sample.
+
+# Errors
+Returns [`NumericError::Empty`] for an empty sample and [`NumericError::Domain`]
+for non-finite observations or a probability outside `[0, 1]`.
+
 ## `numerical_vector.num_descriptive_skewness` (Experimental)
 
 ```aevia
@@ -30634,6 +30650,14 @@ One Dirichlet sample from a deterministic seed and positive finite concentration
 Dimensionless multivariate normal log density with a row-major covariance matrix.
 
 Rejects non-finite data, mismatched dimensions and non-positive-definite covariance.
+
+## `numerical_stats.num_distributions_multivariate_normal_log_pdfs` (Experimental)
+
+```aevia
+(Tensor<1, Float>, Tensor<2, Float>, Tensor<2, Float>) -> Tensor<1, Float>
+```
+
+Dimensionless multivariate normal log densities in row-major query order. A single covariance factor is reused by every query.
 
 ## `numerical_stats.num_distributions_multivariate_normal_pdf` (Experimental)
 
@@ -31680,6 +31704,14 @@ The non-negative sample frequencies of a length-`n` real transform, `n/2 + 1` of
 
 Where each element goes under `fftshift` (`inverse = false`) or `ifftshift` of a row-major tensor over `axes`: result element `i` is input element `permutation[i]`.
 
+## `numerical_vector.num_fftconv_autocorrelate` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>) -> Tensor<1, Float[_]>
+```
+
+Linear autocorrelation at nonnegative lags, from zero through `samples.len() - 1`.
+
 ## `numerical_vector.num_fftconv_circular_convolve` (Experimental)
 
 ```aevia
@@ -31695,6 +31727,23 @@ Circular convolution of two real sequences of period `max(a.len(), b.len())`.
 ```
 
 Linear convolution of two real sequences (`len = a.len() + b.len() - 1`).
+
+## `numerical_vector.num_fftconv_convolve_overlap_save` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<1, Float[_]>) -> Tensor<1, Float[_]>
+```
+
+Full linear convolution using block FFTs and a reused filter spectrum.
+
+Uses zero extension and independent overlap-save blocks. The result has
+`a.len() + taps.len() - 1` samples, or zero samples if either input is empty.
+This is especially useful for a recording much longer than its filter. Use
+[`OverlapSavePlan`] when applying the same filter to several recordings.
+
+# Errors
+
+Errors on non-finite inputs or output, or an unallocatable extent.
 
 ## `numerical_vector.num_fftconv_correlate` (Experimental)
 
@@ -53049,6 +53098,17 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Prime numbers strictly below `limit`; negative limits yield an empty list.
 
+## `numerical_vector.num_native_online_covariance_correlation` (Experimental)
+
+```aevia
+(rssn/native/discrete/online-covariance/v1) -> None | Some(Tensor<2, Float>)
+```
+
+Dimensionless Pearson correlation matrix. Returns None for fewer than two observations or any constant column.
+
+Row-major Pearson correlation matrix, or `None` when the sample has
+fewer than two observations or any column has zero variance.
+
 ## `numerical_vector.num_native_online_covariance_count` (Experimental)
 
 ```aevia
@@ -53128,6 +53188,24 @@ Incorporate one observation.
 
 # Errors
 Reports a dimension mismatch, non-finite input, or arithmetic overflow.
+
+## `numerical_vector.num_native_online_covariance_push_batch` (Experimental)
+
+```aevia
+(rssn/native/discrete/online-covariance/v1, Dyn<term>) -> Bool
+```
+
+Atomically incorporate a row-major tensor of observations with the accumulator's coordinate units. Columns must match the accumulator dimension.
+
+Incorporate a flat row-major batch atomically.
+
+Each row contains [`Self::dimension`] values. Large batches use bounded
+shards and combine them in row order, independent of worker count.
+An empty batch leaves the accumulator unchanged.
+
+# Errors
+Returns an error for an incomplete row, non-finite input, count or
+arithmetic overflow, or failure to allocate a shard.
 
 ## `numerical_vector.num_native_online_covariance_sample_covariance` (Experimental)
 
@@ -60939,7 +61017,7 @@ Returns `NaN` for `NaN` or `-∞`, and `±∞` where the value overflows
 (Tensor<1, Float[_]>) -> Float[_]
 ```
 
-Scott's rule bandwidth `1.06 sd n^(-1/5)`.
+Scott's rule bandwidth `1.06 sd n^(-1/5)`. Requires at least two finite observations.
 
 ## `numerical_stats.num_robust_bandwidth_silverman` (Experimental)
 
@@ -60947,7 +61025,7 @@ Scott's rule bandwidth `1.06 sd n^(-1/5)`.
 (Tensor<1, Float[_]>) -> Float[_]
 ```
 
-Silverman's rule-of-thumb bandwidth `0.9 min(sd, IQR/1.34) n^(-1/5)`.
+Silverman's rule-of-thumb bandwidth `0.9 min(sd, IQR/1.34) n^(-1/5)`. Uses `sd` when `IQR` is zero. Requires at least two finite observations.
 
 ## `numerical_stats.num_robust_biweight_location` (Experimental)
 
@@ -60964,6 +61042,18 @@ Tukey biweight location estimator (tuning constant `c`, 4.685 typical).
 ```
 
 Empirical CDF of `data` at `x`.
+
+## `numerical_stats.num_robust_ecdf_batch` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<1, Float[_]>) -> Tensor<1, Float>
+```
+
+Empirical CDF at several query points, in the supplied order.
+
+NaN observations are ignored and NaN queries yield NaN. An empty effective
+sample yields NaN at every query. The ordered sample is prepared once and
+each query uses a binary search.
 
 ## `numerical_stats.num_robust_huber_location` (Experimental)
 
@@ -61013,6 +61103,17 @@ Median of `data` (NaNs ignored).
 
 Sample quantile of `data` at probability `p` using the Hyndman-Fan definition `kind` (1..=9; 7 is the NumPy/R default). NaNs are ignored. Returns NaN for empty data or an invalid `p`/`kind`.
 
+## `numerical_stats.num_robust_quantiles` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<1, Float>, Int) -> Tensor<1, Float[_]>
+```
+
+Hyndman-Fan sample quantiles in query order, using one shared sort.
+
+NaN observations are ignored. An empty sample or invalid definition yields
+NaN at every query. An invalid probability yields NaN at that query.
+
 ## `numerical_stats.num_robust_trimmed_mean` (Experimental)
 
 ```aevia
@@ -61040,6 +61141,17 @@ zero total weight.
 ```
 
 Smallest positive-weight observation whose weighted empirical CDF is at least `p`. At `p = 0` and `p = 1` this gives the minimum and maximum positive-weight observations.
+
+## `numerical_stats.num_robust_weighted_quantiles` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<1, Float>, Tensor<1, Float>) -> Tensor<1, Float[_]>
+```
+
+Weighted empirical quantiles, sharing one sort and cumulative weight scan.
+
+Zero-weight observations are ignored. Invalid weights yield NaN at every
+query and an invalid probability yields NaN at that query.
 
 ## `numerical_stats.num_robust_winsorized_mean` (Experimental)
 
@@ -61414,6 +61526,53 @@ Orthonormal Type-II Discrete Cosine Transform (DCT-II) in `O(n log n)`.
 
 Orthonormal Type-II Discrete Sine Transform (DST-II) in `O(n log n)`.
 
+## `numerical_vector.num_signal_firwin_bandpass` (Experimental)
+
+```aevia
+(Int, Float, Float, Float) -> Tensor<1, Float>
+```
+
+Designs a symmetric band-pass FIR with unit gain at the passband center.
+
+The cutoffs are ordered and normalized to Nyquist, with
+`0 < low < high < 1`. The window is Kaiser, parameterized by `beta`.
+
+# Errors
+
+Errors for invalid parameters or unrepresentable coefficients.
+
+## `numerical_vector.num_signal_firwin_lowpass` (Experimental)
+
+```aevia
+(Int, Float, Float) -> Tensor<1, Float>
+```
+
+Designs a symmetric, unit-DC-gain low-pass FIR using a Kaiser window.
+
+The cutoff is normalized to Nyquist and must lie strictly between zero
+and one. A larger absolute `beta` improves sidelobe attenuation at the
+expense of transition width.
+
+# Errors
+
+Errors for invalid parameters or unrepresentable coefficients.
+
+## `numerical_vector.num_signal_frequency_response` (Experimental)
+
+```aevia
+(Tensor<1, Float>, Tensor<1, Float>, Tensor<1, Float>) -> Tensor<1, Complex>
+```
+
+Evaluates a digital transfer function at frequencies in cycles per sample.
+
+Uses the coefficient convention of [`lfilter`]. Frequencies are periodic
+modulo one, with Nyquist at `0.5`. Returns a complex response per frequency.
+
+# Errors
+
+Errors for empty coefficients, non-finite inputs or a singular or
+unrepresentable response at a requested frequency.
+
 ## `numerical_vector.num_signal_hamming_window` (Experimental)
 
 ```aevia
@@ -61505,6 +61664,25 @@ Either sign of a finite `beta` produces the same coefficients. For
 
 Linear FIR/IIR digital filter (`a[0] * y[n] = sum_k b[k]*x[n-k] - sum_{k>=1} a[k]*y[n-k]`).
 
+## `numerical_vector.num_signal_resample_poly` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Int, Int) -> Tensor<1, Float[_]>
+```
+
+Resamples a real signal by a rational factor using a centered polyphase FIR.
+
+Reduces the factors by their greatest common divisor, then designs a
+Kaiser low-pass filter with 10 taps on each side per rate phase
+(`beta = 5`). The input is zero extended at the boundaries. Output
+time zero aligns with input time zero, and the output contains
+`ceil(samples.len() * up / down)` samples.
+
+# Errors
+
+Errors for a zero factor, non-finite input or output, or unallocatable
+filter or output dimensions.
+
 ## `numerical_vector.num_signal_savgol_coeffs` (Experimental)
 
 ```aevia
@@ -61520,6 +61698,23 @@ Savitzky-Golay smoothing filter coefficients for odd `window_len` and polynomial
 ```
 
 Applies a Savitzky-Golay smoothing filter of odd `window_len` and degree `poly_order` to `x` with clamped boundary padding.
+
+## `numerical_vector.num_signal_sos_filter` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<2, Float>) -> Tensor<1, Float[_]>
+```
+
+Applies a zero-state cascade of second-order digital sections.
+
+Each row of `sections` is `[b0, b1, b2, a0, a1, a2]`. The coefficients
+are normalized by `a0` and evaluated with transposed direct form II.
+An empty cascade is the identity.
+
+# Errors
+
+Errors for a zero leading denominator, non-finite input, or
+unrepresentable state or output.
 
 ## `numerical_vector.num_signal_spectrogram` (Experimental)
 
@@ -62509,6 +62704,37 @@ Computes the sample standard error of the mean (SEM = `std_dev` / sqrt(n)).
 
 Performs a chi-squared goodness-of-fit test. Tests if observed frequencies match expected frequencies. Returns (chi-squared statistic, p-value).
 
+## `numerical_stats.num_stats_ext_adjust_p_bh` (Experimental)
+
+```aevia
+(Tensor<1, Float>) -> Tensor<1, Float>
+```
+
+Benjamini–Hochberg adjusted p-values for false discovery rate control.
+
+The guarantee holds under independence or positive regression dependence
+of the null tests.
+Results retain the original order. An empty input yields an empty vector.
+
+# Errors
+[`StatsExtError::Domain`] if any p-value is outside `[0, 1]` or non-finite.
+
+## `numerical_stats.num_stats_ext_adjust_p_by` (Experimental)
+
+```aevia
+(Tensor<1, Float>) -> Tensor<1, Float>
+```
+
+Benjamini–Yekutieli adjusted p-values for false discovery rate control under arbitrary dependence. Results retain the original order. An empty input yields an empty vector.
+
+## `numerical_stats.num_stats_ext_adjust_p_holm` (Experimental)
+
+```aevia
+(Tensor<1, Float>) -> Tensor<1, Float>
+```
+
+Holm step-down adjusted p-values for family-wise error rate control. Results retain the original order. An empty input yields an empty vector.
+
 ## `numerical_stats.num_stats_ext_anova_one_way` (Experimental)
 
 ```aevia
@@ -63410,6 +63636,56 @@ Reconstructs a signal from the complete leaf level of [`wavelet_packet`].
 [`WaveletError::Shape`] when the number of bands is not a power of two,
 their lengths differ, or they are empty.
 
+## `numerical_vector.num_wavelets_iswt` (Experimental)
+
+```aevia
+(Tensor<2, Float[_]>, String) -> Tensor<1, Float[_]>
+```
+
+Reconstructs a periodic signal from [`swt`] bands.
+
+Uses the dual synthesis filters and averages all decimation phases.
+Input bands must be equal length and in the order returned by [`swt`].
+
+# Errors
+
+Errors for malformed or non-finite bands, unsupported level counts
+or non-finite reconstruction.
+
+## `numerical_vector.num_wavelets_swt` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, String, Int) -> Tensor<2, Float[_]>
+```
+
+Periodic stationary wavelet transform without decimation.
+
+Returns `[approximation_L, detail_L, ..., detail_1]`. Each band has the
+same length as `samples`. The filter-tap spacing doubles each level,
+giving a shift-equivariant decomposition. Odd lengths are supported.
+At least one level is required, and the longest tap spacing must be
+strictly less than the signal length.
+
+# Errors
+
+Errors for an unsupported length or level count or non-finite inputs
+or computed coefficients.
+
+## `numerical_vector.num_wavelets_wavelet_hard_threshold` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Float[_], String, Int, String) -> Tensor<1, Float[_]>
+```
+
+Denoises a signal by zeroing wavelet details below a magnitude threshold.
+
+Uses the same decomposition and threshold units as [`wavelet_soft_threshold`].
+A detail coefficient exactly at the threshold is retained.
+
+# Errors
+
+As [`wavelet_soft_threshold`].
+
 ## `numerical_vector.num_wavelets_wavelet_packet` (Experimental)
 
 ```aevia
@@ -63425,6 +63701,23 @@ child before its high sibling. For example, level two returns `LL`, `LH`,
 # Errors
 [`WaveletError::TooManyLevels`] when the signal is empty or its length is
 incompatible with the requested depth.
+
+## `numerical_vector.num_wavelets_wavelet_soft_threshold` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Float[_], String, Int, String) -> Tensor<1, Float[_]>
+```
+
+Denoises a signal by soft-thresholding its wavelet detail coefficients.
+
+Keeps the coarsest approximation and uses [`wavedec_with`] with the
+chosen wavelet and boundary rule. Detail magnitudes are shrunk toward
+zero by the threshold, in the same units as `samples`.
+
+# Errors
+
+Errors for non-finite data, a negative threshold, an unrepresentable
+signal or unsupported depth or shape.
 
 ## `numerical_stats.num_z_scores` (Experimental)
 

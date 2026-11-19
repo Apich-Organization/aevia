@@ -5879,7 +5879,7 @@
         "(Dyn<term>) -> Dyn<term>"
       ],
       "stability": "Stable",
-      "doc": "`bandwidth_scott(sample)`: Scott's rule-of-thumb kernel density bandwidth for `sample`.\n\nScott's rule bandwidth `1.06 sd n^(-1/5)`.",
+      "doc": "`bandwidth_scott(sample)`: Scott's rule-of-thumb kernel density bandwidth for `sample`.\n\nScott's rule bandwidth `1.06 sd n^(-1/5)`.\nRequires at least two finite observations.",
       "examples": []
     },
     {
@@ -5890,7 +5890,7 @@
         "(Dyn<term>) -> Dyn<term>"
       ],
       "stability": "Stable",
-      "doc": "`bandwidth_silverman(sample)`: Silverman's rule-of-thumb kernel density bandwidth for `sample`.\n\nSilverman's rule-of-thumb bandwidth `0.9 min(sd, IQR/1.34) n^(-1/5)`.",
+      "doc": "`bandwidth_silverman(sample)`: Silverman's rule-of-thumb kernel density bandwidth for `sample`.\n\nSilverman's rule-of-thumb bandwidth `0.9 min(sd, IQR/1.34) n^(-1/5)`.\nUses `sd` when `IQR` is zero. Requires at least two finite observations.",
       "examples": []
     },
     {
@@ -23798,7 +23798,7 @@
         "(Tensor<1, Complex[_]>) -> Tensor<1, Complex[_]>"
       ],
       "stability": "Experimental",
-      "doc": "Native transforms fft; normalized dimensionless arguments unless the declared contract preserves measured signal units. Enum arguments use exact Rust variant names.\n\nComputes the Fast Fourier Transform (FFT) of a sequence of complex numbers.\n\nWorks at any length and leaves the length unchanged: a power-of-two `n` uses\nthe in-place radix-2 kernel, a prime `n` uses Rader's transform, and any\nother `n` uses Bluestein's chirp-z algorithm. Either way the result is the\nexact `n`-point DFT, `O(n log n)`.\n\n# Arguments\n* `data` - A mutable `Vec<Complex<f64>>` representing the input sequence.\n\n# Example\n```rust\nuse num_complex::Complex;\nuse rssn::kernels::transforms::fft;\n\nlet mut data = vec![\n    Complex::new(1.0, 0.0),\n    Complex::new(1.0, 0.0),\n    Complex::new(0.0, 0.0),\n    Complex::new(0.0, 0.0),\n];\n\nfft(&mut data);\n\nassert!((data[0].re - 2.0).abs() < 1e-9);\n```\n\nA length that is not a power of two keeps its length:\n```rust\nuse num_complex::Complex;\nuse rssn::kernels::transforms::fft;\n\nlet mut data = vec![Complex::new(1.0, 0.0); 3];\n\nfft(&mut data);\n\nassert_eq!(data.len(), 3);\n// [3, 0, 0] for a constant signal.\nassert!((data[0].re - 3.0).abs() < 1e-12);\n```",
+      "doc": "Native transforms fft; normalized dimensionless arguments unless the declared contract preserves measured signal units. Enum arguments use exact Rust variant names.\n\nComputes the Fast Fourier Transform (FFT) of a sequence of complex numbers.\n\nWorks at any length and leaves the length unchanged: a power-of-two `n` uses\nthe scalar radix-2 kernel. Other lengths use a shared, runtime-selected\nFFT plan. Both paths compute the unpadded `n`-point DFT.\n\n# Arguments\n* `data` - A mutable `Vec<Complex<f64>>` representing the input sequence.\n\n# Example\n```rust\nuse num_complex::Complex;\nuse rssn::kernels::transforms::fft;\n\nlet mut data = vec![\n    Complex::new(1.0, 0.0),\n    Complex::new(1.0, 0.0),\n    Complex::new(0.0, 0.0),\n    Complex::new(0.0, 0.0),\n];\n\nfft(&mut data);\n\nassert!((data[0].re - 2.0).abs() < 1e-9);\n```\n\nA length that is not a power of two keeps its length:\n```rust\nuse num_complex::Complex;\nuse rssn::kernels::transforms::fft;\n\nlet mut data = vec![Complex::new(1.0, 0.0); 3];\n\nfft(&mut data);\n\nassert_eq!(data.len(), 3);\n// [3, 0, 0] for a constant signal.\nassert!((data[0].re - 3.0).abs() < 1e-12);\n```",
       "examples": []
     },
     {
@@ -23818,7 +23818,7 @@
         "(Tensor<1, Complex[_]>) -> Tensor<1, Complex[_]>"
       ],
       "stability": "Experimental",
-      "doc": "Native transforms fft_slice; normalized dimensionless arguments unless the declared contract preserves measured signal units. Enum arguments use exact Rust variant names.\n\nComputes the Forward FFT for a slice.\n\n**Use this for efficient, parallel chunk processing (e.g., with rayon).**\nWorks at any length and operates in place: a power-of-two length uses the\nradix-2 kernel, a prime length Rader's transform, and any other length\nBluestein's algorithm. Bit-identical to [`fft`].\n\n# Arguments\n* `data` - A mutable slice of `Complex<f64>` representing the input sequence.\n\n# Example\n```rust\nuse num_complex::Complex;\nuse rssn::kernels::transforms::fft_slice;\n\nlet mut data = vec![\n    Complex::new(1.0, 0.0),\n    Complex::new(1.0, 0.0),\n    Complex::new(0.0, 0.0),\n    Complex::new(0.0, 0.0),\n];\n\nfft_slice(&mut data);\n\nassert!((data[0].re - 2.0).abs() < 1e-9);\n```",
+      "doc": "Native transforms fft_slice; normalized dimensionless arguments unless the declared contract preserves measured signal units. Enum arguments use exact Rust variant names.\n\nComputes the Forward FFT for a slice.\n\n**Use this for efficient, parallel chunk processing (e.g., with rayon).**\nWorks at any length and operates in place: a power-of-two length uses the\nscalar radix-2 kernel and other lengths use the shared FFT planner.\nBit-identical to [`fft`].\n\n# Arguments\n* `data` - A mutable slice of `Complex<f64>` representing the input sequence.\n\n# Example\n```rust\nuse num_complex::Complex;\nuse rssn::kernels::transforms::fft_slice;\n\nlet mut data = vec![\n    Complex::new(1.0, 0.0),\n    Complex::new(1.0, 0.0),\n    Complex::new(0.0, 0.0),\n    Complex::new(0.0, 0.0),\n];\n\nfft_slice(&mut data);\n\nassert!((data[0].re - 2.0).abs() < 1e-9);\n```",
       "examples": []
     },
     {
@@ -25872,6 +25872,16 @@
       "examples": []
     },
     {
+      "name": "num_descriptive_quantiles",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Tensor<1, Float[_]>, Tensor<1, Float>) -> Tensor<1, Float[_]>"
+      ],
+      "stability": "Experimental",
+      "doc": "Type-7 quantiles of a finite sample, in the supplied probability order.\n\nA single query selects the two adjacent ranks in linear time. Multiple\nqueries share one ordered copy of the sample.\n\n# Errors\nReturns [`NumericError::Empty`] for an empty sample and [`NumericError::Domain`]\nfor non-finite observations or a probability outside `[0, 1]`.",
+      "examples": []
+    },
+    {
       "name": "num_descriptive_skewness",
       "rule_set": "numerical_vector",
       "signatures": [
@@ -26369,6 +26379,16 @@
       ],
       "stability": "Experimental",
       "doc": "Dimensionless multivariate normal log density with a row-major covariance matrix.\n\nRejects non-finite data, mismatched dimensions and non-positive-definite covariance.",
+      "examples": []
+    },
+    {
+      "name": "num_distributions_multivariate_normal_log_pdfs",
+      "rule_set": "numerical_stats",
+      "signatures": [
+        "(Tensor<1, Float>, Tensor<2, Float>, Tensor<2, Float>) -> Tensor<1, Float>"
+      ],
+      "stability": "Experimental",
+      "doc": "Dimensionless multivariate normal log densities in row-major query order. A single covariance factor is reused by every query.",
       "examples": []
     },
     {
@@ -27152,6 +27172,16 @@
       "examples": []
     },
     {
+      "name": "num_fftconv_autocorrelate",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Tensor<1, Float[_]>) -> Tensor<1, Float[_]>"
+      ],
+      "stability": "Experimental",
+      "doc": "Linear autocorrelation at nonnegative lags, from zero through `samples.len() - 1`.",
+      "examples": []
+    },
+    {
       "name": "num_fftconv_circular_convolve",
       "rule_set": "numerical_vector",
       "signatures": [
@@ -27169,6 +27199,16 @@
       ],
       "stability": "Experimental",
       "doc": "Linear convolution of two real sequences (`len = a.len() + b.len() - 1`).",
+      "examples": []
+    },
+    {
+      "name": "num_fftconv_convolve_overlap_save",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Tensor<1, Float[_]>, Tensor<1, Float[_]>) -> Tensor<1, Float[_]>"
+      ],
+      "stability": "Experimental",
+      "doc": "Full linear convolution using block FFTs and a reused filter spectrum.\n\nUses zero extension and independent overlap-save blocks. The result has\n`a.len() + taps.len() - 1` samples, or zero samples if either input is empty.\nThis is especially useful for a recording much longer than its filter. Use\n[`OverlapSavePlan`] when applying the same filter to several recordings.\n\n# Errors\n\nErrors on non-finite inputs or output, or an unallocatable extent.",
       "examples": []
     },
     {
@@ -45422,6 +45462,16 @@
       "examples": []
     },
     {
+      "name": "num_native_online_covariance_correlation",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(rssn/native/discrete/online-covariance/v1) -> None | Some(Tensor<2, Float>)"
+      ],
+      "stability": "Experimental",
+      "doc": "Dimensionless Pearson correlation matrix. Returns None for fewer than two observations or any constant column.\n\nRow-major Pearson correlation matrix, or `None` when the sample has\nfewer than two observations or any column has zero variance.",
+      "examples": []
+    },
+    {
       "name": "num_native_online_covariance_count",
       "rule_set": "numerical_vector",
       "signatures": [
@@ -45489,6 +45539,16 @@
       ],
       "stability": "Experimental",
       "doc": "Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.\n\nIncorporate one observation.\n\n# Errors\nReports a dimension mismatch, non-finite input, or arithmetic overflow.",
+      "examples": []
+    },
+    {
+      "name": "num_native_online_covariance_push_batch",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(rssn/native/discrete/online-covariance/v1, Dyn<term>) -> Bool"
+      ],
+      "stability": "Experimental",
+      "doc": "Atomically incorporate a row-major tensor of observations with the accumulator's coordinate units. Columns must match the accumulator dimension.\n\nIncorporate a flat row-major batch atomically.\n\nEach row contains [`Self::dimension`] values. Large batches use bounded\nshards and combine them in row order, independent of worker count.\nAn empty batch leaves the accumulator unchanged.\n\n# Errors\nReturns an error for an incomplete row, non-finite input, count or\narithmetic overflow, or failure to allocate a shard.",
       "examples": []
     },
     {
@@ -52738,7 +52798,7 @@
         "(Tensor<1, Float[_]>) -> Float[_]"
       ],
       "stability": "Experimental",
-      "doc": "Scott's rule bandwidth `1.06 sd n^(-1/5)`.",
+      "doc": "Scott's rule bandwidth `1.06 sd n^(-1/5)`. Requires at least two finite observations.",
       "examples": []
     },
     {
@@ -52748,7 +52808,7 @@
         "(Tensor<1, Float[_]>) -> Float[_]"
       ],
       "stability": "Experimental",
-      "doc": "Silverman's rule-of-thumb bandwidth `0.9 min(sd, IQR/1.34) n^(-1/5)`.",
+      "doc": "Silverman's rule-of-thumb bandwidth `0.9 min(sd, IQR/1.34) n^(-1/5)`. Uses `sd` when `IQR` is zero. Requires at least two finite observations.",
       "examples": []
     },
     {
@@ -52769,6 +52829,16 @@
       ],
       "stability": "Experimental",
       "doc": "Empirical CDF of `data` at `x`.",
+      "examples": []
+    },
+    {
+      "name": "num_robust_ecdf_batch",
+      "rule_set": "numerical_stats",
+      "signatures": [
+        "(Tensor<1, Float[_]>, Tensor<1, Float[_]>) -> Tensor<1, Float>"
+      ],
+      "stability": "Experimental",
+      "doc": "Empirical CDF at several query points, in the supplied order.\n\nNaN observations are ignored and NaN queries yield NaN. An empty effective\nsample yields NaN at every query. The ordered sample is prepared once and\neach query uses a binary search.",
       "examples": []
     },
     {
@@ -52832,6 +52902,16 @@
       "examples": []
     },
     {
+      "name": "num_robust_quantiles",
+      "rule_set": "numerical_stats",
+      "signatures": [
+        "(Tensor<1, Float[_]>, Tensor<1, Float>, Int) -> Tensor<1, Float[_]>"
+      ],
+      "stability": "Experimental",
+      "doc": "Hyndman-Fan sample quantiles in query order, using one shared sort.\n\nNaN observations are ignored. An empty sample or invalid definition yields\nNaN at every query. An invalid probability yields NaN at that query.",
+      "examples": []
+    },
+    {
       "name": "num_robust_trimmed_mean",
       "rule_set": "numerical_stats",
       "signatures": [
@@ -52859,6 +52939,16 @@
       ],
       "stability": "Experimental",
       "doc": "Smallest positive-weight observation whose weighted empirical CDF is at least `p`. At `p = 0` and `p = 1` this gives the minimum and maximum positive-weight observations.",
+      "examples": []
+    },
+    {
+      "name": "num_robust_weighted_quantiles",
+      "rule_set": "numerical_stats",
+      "signatures": [
+        "(Tensor<1, Float[_]>, Tensor<1, Float>, Tensor<1, Float>) -> Tensor<1, Float[_]>"
+      ],
+      "stability": "Experimental",
+      "doc": "Weighted empirical quantiles, sharing one sort and cumulative weight scan.\n\nZero-weight observations are ignored. Invalid weights yield NaN at every\nquery and an invalid probability yields NaN at that query.",
       "examples": []
     },
     {
@@ -53112,6 +53202,36 @@
       "examples": []
     },
     {
+      "name": "num_signal_firwin_bandpass",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Int, Float, Float, Float) -> Tensor<1, Float>"
+      ],
+      "stability": "Experimental",
+      "doc": "Designs a symmetric band-pass FIR with unit gain at the passband center.\n\nThe cutoffs are ordered and normalized to Nyquist, with\n`0 < low < high < 1`. The window is Kaiser, parameterized by `beta`.\n\n# Errors\n\nErrors for invalid parameters or unrepresentable coefficients.",
+      "examples": []
+    },
+    {
+      "name": "num_signal_firwin_lowpass",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Int, Float, Float) -> Tensor<1, Float>"
+      ],
+      "stability": "Experimental",
+      "doc": "Designs a symmetric, unit-DC-gain low-pass FIR using a Kaiser window.\n\nThe cutoff is normalized to Nyquist and must lie strictly between zero\nand one. A larger absolute `beta` improves sidelobe attenuation at the\nexpense of transition width.\n\n# Errors\n\nErrors for invalid parameters or unrepresentable coefficients.",
+      "examples": []
+    },
+    {
+      "name": "num_signal_frequency_response",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Tensor<1, Float>, Tensor<1, Float>, Tensor<1, Float>) -> Tensor<1, Complex>"
+      ],
+      "stability": "Experimental",
+      "doc": "Evaluates a digital transfer function at frequencies in cycles per sample.\n\nUses the coefficient convention of [`lfilter`]. Frequencies are periodic\nmodulo one, with Nyquist at `0.5`. Returns a complex response per frequency.\n\n# Errors\n\nErrors for empty coefficients, non-finite inputs or a singular or\nunrepresentable response at a requested frequency.",
+      "examples": []
+    },
+    {
       "name": "num_signal_hamming_window",
       "rule_set": "numerical_vector",
       "signatures": [
@@ -53192,6 +53312,16 @@
       "examples": []
     },
     {
+      "name": "num_signal_resample_poly",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Tensor<1, Float[_]>, Int, Int) -> Tensor<1, Float[_]>"
+      ],
+      "stability": "Experimental",
+      "doc": "Resamples a real signal by a rational factor using a centered polyphase FIR.\n\nReduces the factors by their greatest common divisor, then designs a\nKaiser low-pass filter with 10 taps on each side per rate phase\n(`beta = 5`). The input is zero extended at the boundaries. Output\ntime zero aligns with input time zero, and the output contains\n`ceil(samples.len() * up / down)` samples.\n\n# Errors\n\nErrors for a zero factor, non-finite input or output, or unallocatable\nfilter or output dimensions.",
+      "examples": []
+    },
+    {
       "name": "num_signal_savgol_coeffs",
       "rule_set": "numerical_vector",
       "signatures": [
@@ -53209,6 +53339,16 @@
       ],
       "stability": "Experimental",
       "doc": "Applies a Savitzky-Golay smoothing filter of odd `window_len` and degree `poly_order` to `x` with clamped boundary padding.",
+      "examples": []
+    },
+    {
+      "name": "num_signal_sos_filter",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Tensor<1, Float[_]>, Tensor<2, Float>) -> Tensor<1, Float[_]>"
+      ],
+      "stability": "Experimental",
+      "doc": "Applies a zero-state cascade of second-order digital sections.\n\nEach row of `sections` is `[b0, b1, b2, a0, a1, a2]`. The coefficients\nare normalized by `a0` and evaluated with transposed direct form II.\nAn empty cascade is the identity.\n\n# Errors\n\nErrors for a zero leading denominator, non-finite input, or\nunrepresentable state or output.",
       "examples": []
     },
     {
@@ -54142,6 +54282,36 @@
       "examples": []
     },
     {
+      "name": "num_stats_ext_adjust_p_bh",
+      "rule_set": "numerical_stats",
+      "signatures": [
+        "(Tensor<1, Float>) -> Tensor<1, Float>"
+      ],
+      "stability": "Experimental",
+      "doc": "Benjamini–Hochberg adjusted p-values for false discovery rate control.\n\nThe guarantee holds under independence or positive regression dependence\nof the null tests.\nResults retain the original order. An empty input yields an empty vector.\n\n# Errors\n[`StatsExtError::Domain`] if any p-value is outside `[0, 1]` or non-finite.",
+      "examples": []
+    },
+    {
+      "name": "num_stats_ext_adjust_p_by",
+      "rule_set": "numerical_stats",
+      "signatures": [
+        "(Tensor<1, Float>) -> Tensor<1, Float>"
+      ],
+      "stability": "Experimental",
+      "doc": "Benjamini–Yekutieli adjusted p-values for false discovery rate control under arbitrary dependence. Results retain the original order. An empty input yields an empty vector.",
+      "examples": []
+    },
+    {
+      "name": "num_stats_ext_adjust_p_holm",
+      "rule_set": "numerical_stats",
+      "signatures": [
+        "(Tensor<1, Float>) -> Tensor<1, Float>"
+      ],
+      "stability": "Experimental",
+      "doc": "Holm step-down adjusted p-values for family-wise error rate control. Results retain the original order. An empty input yields an empty vector.",
+      "examples": []
+    },
+    {
       "name": "num_stats_ext_anova_one_way",
       "rule_set": "numerical_stats",
       "signatures": [
@@ -54902,6 +55072,36 @@
       "examples": []
     },
     {
+      "name": "num_wavelets_iswt",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Tensor<2, Float[_]>, String) -> Tensor<1, Float[_]>"
+      ],
+      "stability": "Experimental",
+      "doc": "Reconstructs a periodic signal from [`swt`] bands.\n\nUses the dual synthesis filters and averages all decimation phases.\nInput bands must be equal length and in the order returned by [`swt`].\n\n# Errors\n\nErrors for malformed or non-finite bands, unsupported level counts\nor non-finite reconstruction.",
+      "examples": []
+    },
+    {
+      "name": "num_wavelets_swt",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Tensor<1, Float[_]>, String, Int) -> Tensor<2, Float[_]>"
+      ],
+      "stability": "Experimental",
+      "doc": "Periodic stationary wavelet transform without decimation.\n\nReturns `[approximation_L, detail_L, ..., detail_1]`. Each band has the\nsame length as `samples`. The filter-tap spacing doubles each level,\ngiving a shift-equivariant decomposition. Odd lengths are supported.\nAt least one level is required, and the longest tap spacing must be\nstrictly less than the signal length.\n\n# Errors\n\nErrors for an unsupported length or level count or non-finite inputs\nor computed coefficients.",
+      "examples": []
+    },
+    {
+      "name": "num_wavelets_wavelet_hard_threshold",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Tensor<1, Float[_]>, Float[_], String, Int, String) -> Tensor<1, Float[_]>"
+      ],
+      "stability": "Experimental",
+      "doc": "Denoises a signal by zeroing wavelet details below a magnitude threshold.\n\nUses the same decomposition and threshold units as [`wavelet_soft_threshold`].\nA detail coefficient exactly at the threshold is retained.\n\n# Errors\n\nAs [`wavelet_soft_threshold`].",
+      "examples": []
+    },
+    {
       "name": "num_wavelets_wavelet_packet",
       "rule_set": "numerical_vector",
       "signatures": [
@@ -54909,6 +55109,16 @@
       ],
       "stability": "Experimental",
       "doc": "Decomposes both the low and high branches of a periodic wavelet transform.\n\nReturns `2^levels` equally sized leaf bands in tree order, with each low\nchild before its high sibling. For example, level two returns `LL`, `LH`,\n`HL`, `HH`. Level zero returns one band containing the input.\n\n# Errors\n[`WaveletError::TooManyLevels`] when the signal is empty or its length is\nincompatible with the requested depth.",
+      "examples": []
+    },
+    {
+      "name": "num_wavelets_wavelet_soft_threshold",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Tensor<1, Float[_]>, Float[_], String, Int, String) -> Tensor<1, Float[_]>"
+      ],
+      "stability": "Experimental",
+      "doc": "Denoises a signal by soft-thresholding its wavelet detail coefficients.\n\nKeeps the coarsest approximation and uses [`wavedec_with`] with the\nchosen wavelet and boundary rule. Detail magnitudes are shrunk toward\nzero by the threshold, in the same units as `samples`.\n\n# Errors\n\nErrors for non-finite data, a negative threshold, an unrepresentable\nsignal or unsupported depth or shape.",
       "examples": []
     },
     {

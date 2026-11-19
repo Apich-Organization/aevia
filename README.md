@@ -33,6 +33,8 @@ The model compares an exact expression for fall time with its floating-point app
 
 Use `aevia docs --section book --open` to open the hosted manual, or add `--download` to resolve the standalone HTML. `aevia <command> --help` describes a command and its options.
 
+Aevia detects the available CPUs for parallel language evaluation. Use `--jobs` for one invocation or `AEVIA_JOBS` for a shell session. `RAYON_NUM_THREADS` controls the default Rayon pool and also supplies the language worker count when Aevia has no override. [Parallel evaluation and profiling](platform/manuals/book/en/12-parallel-and-profiling.md)
+
 For text clients, the [documentation index](https://aevia.apich.org/llms.txt) links to localized Markdown chapters and the generated standard-library catalog.
 
 ## Work with packages

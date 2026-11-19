@@ -5423,10 +5423,12 @@ RSSN 拥有数值算法，包括精确整数/有理数、复数、张量收缩�
 - **保证：并行从不改变值。** 值不能跨线程（符号项可能持有本线程会话句柄、kernel 句柄、IO 动作、带激活期泛型
   证据的闭包）、没有副本工厂、`--jobs 1`，或工作线程失败时，原语回退为顺序求值，顺序重算给出程序本来会给出的
   值或错误（含位置与调用栈）；`AEVIA_PARALLEL_TRACE=1` 打印回退原因。
-- **确定性。** 分块边界只取决于输入长度，不取决于线程数。`par_reduce(f, zero, xs)` 要求 `f` 结合且 `zero` 为单位元，
+- **确定性。** 映射批大小随工作线程数调整，结果保留输入顺序。`par_reduce(f, zero, xs)` 要求 `f` 结合且 `zero` 为单位元，
   按固定 1024 元素块折叠再顺序合并，浮点归约在任何核数及顺序回退中**逐位相同**。
-- 原语：`par_map`、`par_tabulate(n, f)`、`par_reduce`。`--jobs N`（或 `AEVIA_JOBS`）设定线程数，默认取可用并行度；
-  副本不再嵌套并行。每个工作线程一个 kernel `Session`。
+- `par_map`、`par_tabulate(n, f)`、`par_reduce` 的工作线程数依次取自 `--jobs N`、`AEVIA_JOBS`、
+  `RAYON_NUM_THREADS` 或当前进程可用的 CPU 数。每个工作线程有一个内核 `Session`。嵌套调用语言并行原语时在
+  当前工作线程顺序执行，该线程上的 RSSN 算子使用外层 Rayon 池。主解释器线程上的 RSSN 使用全局 Rayon 池，
+  由 `RAYON_NUM_THREADS` 和主机 CPU 探测决定大小。
 - **数值内核的并行。** `sparse @ dense`（含 `Bcsr`）按固定 256 行块并行，每个输出行由一个工作项顺序累加，逐位等于
   顺序内核；`sde_ensemble_diag/general` 经 `par_map` 副本执行，成员种子 `ensemble_seed(seed, i)` 只依赖 `(seed, i)`。
   有意不并行：ODE/SDE 单条路径的时间步、Krylov 迭代、`tabulate`。含闭包字段的值（`ode_solve` 的 `at`）不可跨线程，

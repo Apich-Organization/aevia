@@ -8,6 +8,7 @@
 use crate::position::LineIndex;
 use crate::position::Position;
 use crate::position::Range;
+use crate::types::TextEdit;
 
 /// One edit to a document.
 ///
@@ -190,6 +191,22 @@ impl Document {
     #[must_use]
     pub fn full_range(&self) -> Range {
         Range::new(Position::origin(), self.position(u32::MAX))
+    }
+
+    /// A whole-document replacement when the formatter changes the text.
+    ///
+    /// Formatting is syntactic. It can be requested without loading imports
+    /// or type-checking the document. A parse error yields no edit.
+    #[must_use]
+    pub fn formatting(&self) -> Option<TextEdit> {
+        let formatted = aevia_fmt::format_source(self.text()).ok()?;
+        if formatted == self.text() {
+            return None;
+        }
+        Some(TextEdit {
+            range: self.full_range(),
+            new_text: formatted,
+        })
     }
 
     /// Replaces the document's text and bumps the revision to `version`.

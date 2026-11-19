@@ -29,6 +29,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::mpsc::Sender;
 
 /// What the caller should do after a message.
@@ -85,6 +86,7 @@ const DOCUMENT_REQUESTS: &[&str] = &[
     "textDocument/semanticTokens/full",
     "textDocument/typeDefinition",
     "textDocument/references",
+    "textDocument/documentHighlight",
     "textDocument/prepareRename",
     "textDocument/rename",
     "textDocument/signatureHelp",
@@ -96,14 +98,21 @@ pub struct Server {
     documents: DocumentStore,
     state: State,
     out: Sender<Value>,
-    /// Loaded programs by entry path. A `file:` document asked about twice in a
-    /// row reuses its program instead of re-reading and re-checking the import
-    /// graph; a changed file invalidates it (see [`AnalysisCache`]).
+    /// Loaded programs by entry path. A hit validates observed inputs and
+    /// reuses the checked graph and its query tables (see [`AnalysisCache`]).
     cache: RefCell<AnalysisCache>,
+    /// The latest physical buffers in document order. URI aliases are resolved
+    /// again before reuse so retargeted symlinks still follow the filesystem.
+    overlays: RefCell<Option<OverlaySnapshot>>,
     /// Import candidates as well as read files, retained even after an LRU
     /// program eviction so an edit refreshes all affected open documents.
     dependencies: RefCell<BTreeMap<String, Vec<(PathBuf, PathBuf)>>>,
     commands: Vec<command::Task>,
+}
+
+struct OverlaySnapshot {
+    paths: Vec<PathBuf>,
+    sources: Rc<SourceOverlays>,
 }
 
 impl Server {
@@ -115,6 +124,7 @@ impl Server {
             state: State::Uninitialized,
             out,
             cache: RefCell::new(AnalysisCache::new()),
+            overlays: RefCell::new(None),
             dependencies: RefCell::new(BTreeMap::new()),
             commands: Vec::new(),
         }
@@ -276,7 +286,11 @@ impl Server {
             // "nothing", which is what every client expects after a close.
             return Ok(Value::Null);
         };
-        let analysis = self.analysis_for(document, &self.overlays());
+        if method == "textDocument/formatting" {
+            return Ok(document.formatting().map_or(Value::Null, |edit| {
+                Value::Array(vec![crate::protocol::text_edit_json(&edit)])
+            }));
+        }
         let offset = || -> Result<u32, RpcError> {
             let position = params
                 .get("position")
@@ -286,6 +300,7 @@ impl Server {
                 RpcError::new(INVALID_PARAMS, "the position is outside the document")
             })
         };
+        let analysis = self.analysis_for(document, &self.overlays());
         Ok(match method {
             | "textDocument/hover" => {
                 analysis
@@ -306,7 +321,7 @@ impl Server {
                     crate::protocol::location_json(&location)
                 })
             },
-            | "textDocument/documentSymbol" => crate::protocol::symbols_json(&analysis.symbols()),
+            | "textDocument/documentSymbol" => crate::protocol::symbols_json(analysis.outline()),
             | "textDocument/codeAction" => document_code_actions(&analysis, uri, params)?,
             | "textDocument/codeLens" => {
                 if crate::protocol::path_from_uri(uri).is_some() {
@@ -316,7 +331,7 @@ impl Server {
                 }
             },
             | "textDocument/semanticTokens/full" => {
-                crate::protocol::semantic_tokens_json(&analysis.semantic_tokens())
+                crate::protocol::semantic_tokens_json(analysis.highlighted_tokens())
             },
             | "textDocument/signatureHelp" => {
                 analysis
@@ -334,6 +349,9 @@ impl Server {
                 crate::protocol::references_json(
                     &analysis.references(offset()?, include_declaration),
                 )
+            },
+            | "textDocument/documentHighlight" => {
+                crate::protocol::document_highlights_json(&analysis.document_highlights(offset()?))
             },
             | "textDocument/prepareRename" => {
                 match analysis.prepare_rename(offset()?) {
@@ -353,11 +371,7 @@ impl Server {
                     | Err(error) => return Err(RpcError::new(REQUEST_FAILED, error.message())),
                 }
             },
-            | _ => {
-                analysis.formatting().map_or(Value::Null, |edit| {
-                    Value::Array(vec![crate::protocol::text_edit_json(&edit)])
-                })
-            },
+            | _ => Value::Null,
         })
     }
 
@@ -432,6 +446,7 @@ impl Server {
             return;
         };
         self.documents.open(Document::new(uri, version, text));
+        self.overlays.get_mut().take();
         self.publish_affected([uri]);
     }
 
@@ -483,6 +498,7 @@ impl Server {
         if doc.apply_batch(&edits, version).is_err() {
             return;
         }
+        self.overlays.get_mut().take();
         self.publish_affected([uri.as_str()]);
     }
 
@@ -498,6 +514,7 @@ impl Server {
             return;
         }
         self.dependencies.borrow_mut().remove(uri);
+        self.overlays.get_mut().take();
         // Clearing the diagnostics is part of closing: a client that keeps
         // them shows errors for a file it no longer has.
         self.notify(
@@ -865,14 +882,36 @@ impl Server {
         }
     }
 
-    fn overlays(&self) -> SourceOverlays {
-        let mut overlays = SourceOverlays::new();
-        for open in self.documents.iter() {
-            if let Some(path) = crate::protocol::path_from_uri(open.name()) {
-                overlays.insert(&path, open.text());
-            }
+    fn overlays(&self) -> Rc<SourceOverlays> {
+        let buffers = self
+            .documents
+            .iter()
+            .filter_map(|document| {
+                let path = crate::protocol::path_from_uri(document.name())?;
+                Some((canonical_path(&path), document.text()))
+            })
+            .collect::<Vec<_>>();
+        let mut cached = self.overlays.borrow_mut();
+        if let Some(snapshot) = cached.as_ref()
+            && snapshot
+                .paths
+                .iter()
+                .eq(buffers.iter().map(|(path, _)| path))
+        {
+            return Rc::clone(&snapshot.sources);
         }
-        overlays
+        let mut overlays = SourceOverlays::new();
+        let mut paths = Vec::with_capacity(buffers.len());
+        for (path, text) in buffers {
+            overlays.insert(&path, text);
+            paths.push(path);
+        }
+        let sources = Rc::new(overlays);
+        *cached = Some(OverlaySnapshot {
+            paths,
+            sources: Rc::clone(&sources),
+        });
+        sources
     }
 }
 

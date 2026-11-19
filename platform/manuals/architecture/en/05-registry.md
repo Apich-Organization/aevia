@@ -1,6 +1,6 @@
 # Package registry and documentation
 
-The Axum server serves an API for clients and HTML for browsers. PostgreSQL stores the catalogue, identities and append-only transparency records. A separate archive store holds package contents identified by version and checksum. Leptos builds HTML from view models and the language docs renderer turns public source comments into Markdown and sanitized HTML.
+The Axum server serves an API for clients and HTML for browsers. PostgreSQL stores the catalogue, identities and append-only transparency records. A separate archive store holds package contents identified by version and checksum. Leptos builds HTML from view models, and the documentation renderer turns package README files and source comments into sanitized HTML.
 
 ## The publication transaction
 
@@ -15,7 +15,7 @@ name + version + SHA-256 → challenge → canonical statement ← signing key
 
 The authorization checks the signing key, publisher and package owner, including explicitly authorized organization ownership. Archive structure and size are checked before source parsing. The database transaction commits the version, relations and transparency entry only after archive storage succeeds. A transaction failure can leave an unreferenced digest, which a retry with identical bytes can reuse. A consumed challenge cannot be replayed. Downloads serve the recorded checksum and implement conditional requests and HEAD. Counts are batched separately from package publication.
 
-The documentation worker claims pending versions within a database transaction. It verifies the durable archive, extracts public declarations and sanitizes rendered Markdown in a bounded blocking task. The generated pages and build result commit together. An error is recorded for the affected version and other jobs can proceed. An interrupted database transaction releases its pending claim.
+The documentation worker claims pending versions within a database transaction. It verifies the durable archive and renders the compiler's module descriptions and visible declarations in a bounded blocking task. Declarations marked `@hidden` or `@doc(hidden)` are omitted from the HTML and its counts. Visible private declarations carry a badge. The renderer applies one shared sanitization policy to package Markdown. The generated pages and build result commit together. An error is recorded for the affected version and other jobs can proceed. An interrupted database transaction releases its pending claim.
 
 ## Public reading and private execution
 

@@ -5127,8 +5127,8 @@ Physics
 <li><strong>无共享副本（replica）设计。</strong> 解释器建立在 <code>Rc</code> 上，把运行时改成 <code>Arc</code> 会让每个程序为少数并行程序付费。 因此每个工作线程持有一个<strong>副本</strong>：宿主安装的 <code>Replica</code> 工厂在该线程上从同一份源码再构建一次解释器（每线程 一次，之后复用）。线程之间交换<strong>可移植值</strong>（<code>Portable</code>）：带量纲与显示单位的数、字符串、张量、记录、变体、 构造器，以及可重建的 Core IR 闭包。工作线程保留构造器特化、变体类型和张量元素类型，包括空张量的类型。</li>
 <li><strong>闭包按代码身份 + 捕获数据跨线程。</strong> lambda 是“函数的源码位置 + 捕获值”；位置以<strong>模块身份</strong>（逻辑源码路径 + 所属包）加字节偏移表示（<code>FileId</code> 按加载分配，不可跨线程），副本里由同名模块解析回同一函数。 显式特化的泛型闭包携带已选择的类型和分派依据，接收方根据其模块接口校验。</li>
 <li><strong>保证：并行从不改变值。</strong> 值不能跨线程（符号项可能持有本线程会话句柄、kernel 句柄、IO 动作、带激活期泛型 证据的闭包）、没有副本工厂、<code>--jobs 1</code>，或工作线程失败时，原语回退为顺序求值，顺序重算给出程序本来会给出的 值或错误（含位置与调用栈）；<code>AEVIA_PARALLEL_TRACE=1</code> 打印回退原因。</li>
-<li><strong>确定性。</strong> 分块边界只取决于输入长度，不取决于线程数。<code>par_reduce(f, zero, xs)</code> 要求 <code>f</code> 结合且 <code>zero</code> 为单位元， 按固定 1024 元素块折叠再顺序合并，浮点归约在任何核数及顺序回退中<strong>逐位相同</strong>。</li>
-<li>原语：<code>par_map</code>、<code>par_tabulate(n, f)</code>、<code>par_reduce</code>。<code>--jobs N</code>（或 <code>AEVIA_JOBS</code>）设定线程数，默认取可用并行度； 副本不再嵌套并行。每个工作线程一个 kernel <code>Session</code>。</li>
+<li><strong>确定性。</strong> 映射批大小随工作线程数调整，结果保留输入顺序。<code>par_reduce(f, zero, xs)</code> 要求 <code>f</code> 结合且 <code>zero</code> 为单位元， 按固定 1024 元素块折叠再顺序合并，浮点归约在任何核数及顺序回退中<strong>逐位相同</strong>。</li>
+<li><code>par_map</code>、<code>par_tabulate(n, f)</code>、<code>par_reduce</code> 的工作线程数依次取自 <code>--jobs N</code>、<code>AEVIA_JOBS</code>、 <code>RAYON_NUM_THREADS</code> 或当前进程可用的 CPU 数。每个工作线程有一个内核 <code>Session</code>。嵌套调用语言并行原语时在 当前工作线程顺序执行，该线程上的 RSSN 算子使用外层 Rayon 池。主解释器线程上的 RSSN 使用全局 Rayon 池， 由 <code>RAYON_NUM_THREADS</code> 和主机 CPU 探测决定大小。</li>
 <li><strong>数值内核的并行。</strong> <code>sparse @ dense</code>（含 <code>Bcsr</code>）按固定 256 行块并行，每个输出行由一个工作项顺序累加，逐位等于 顺序内核；<code>sde_ensemble_diag/general</code> 经 <code>par_map</code> 副本执行，成员种子 <code>ensemble_seed(seed, i)</code> 只依赖 <code>(seed, i)</code>。 有意不并行：ODE/SDE 单条路径的时间步、Krylov 迭代、<code>tabulate</code>。含闭包字段的值（<code>ode_solve</code> 的 <code>at</code>）不可跨线程， 回退顺序。</li>
 </ul>
 <h3 id="09-runtime--973-并发任务">9.7.3 并发任务</h3>

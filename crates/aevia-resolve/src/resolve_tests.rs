@@ -68,6 +68,39 @@ fn the_highest_compatible_version_wins() {
 }
 
 #[test]
+fn catalogue_bounds_keep_precedence_ties_and_apply_the_prerelease_gate() {
+    let mut index = MemoryIndex::new();
+    for release in [
+        "0.9.9",
+        "1.0.0-beta.1",
+        "1.0.0-beta.2",
+        "1.0.0",
+        "1.0.0+first",
+        "1.0.0+second",
+        "1.0.1-beta.1",
+        "1.1.0",
+        "2.0.0",
+    ] {
+        index.add("o/foo", release, &[]);
+    }
+    let pre = run(&index, &[("o/foo", ">=1.0.0-beta.2, <1.0.0")]).expect("pre-release");
+    assert_eq!(chosen(&pre, "o/foo"), ["1.0.0-beta.2"]);
+
+    let release = run(&index, &[("o/foo", ">=1.0.0-beta.1, <1.1.0")]).expect("release");
+    assert_eq!(chosen(&release, "o/foo"), ["1.0.0+second"]);
+
+    let mut options = Options::default();
+    options
+        .locked
+        .insert("o/foo".to_owned(), BTreeSet::from([v("1.0.0+first")]));
+    let locked = resolve(&[root(&[("o/foo", "=1.0.0")])], &index, &options).expect("lock");
+    assert_eq!(chosen(&locked, "o/foo"), ["1.0.0+first"]);
+
+    let empty = run(&index, &[("o/foo", ">2.0.0, <1.0.0")]);
+    assert!(matches!(empty, Err(ResolveError::Unsatisfiable(_))));
+}
+
+#[test]
 fn an_empty_root_resolves_to_nothing() {
     let resolution = run(&MemoryIndex::new(), &[]).expect("resolves");
     assert!(resolution.packages.is_empty() && resolution.edges.is_empty());

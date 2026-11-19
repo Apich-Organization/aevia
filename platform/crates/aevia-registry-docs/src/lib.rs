@@ -60,6 +60,9 @@ use std::collections::BTreeMap;
 use aevia_registry_core::Error;
 use aevia_registry_core::Result;
 
+#[cfg(feature = "compiler")]
+use aevia_doc::ModuleDoc as Module;
+
 pub use markdown::render_manual_markdown;
 pub use markdown::render_markdown;
 
@@ -87,7 +90,7 @@ pub struct BuiltPage {
     pub title: String,
     /// The page body, ready to be placed inside the site's layout.
     pub html: String,
-    /// How many declarations the page lists.
+    /// How many visible declarations the page lists.
     pub decls: usize,
     /// How many of them have no `##` doc comment.
     pub undocumented: usize,
@@ -109,7 +112,7 @@ pub struct BuiltDocs {
     /// order entries happen to appear in the tarball — two packs of the same
     /// tree must produce the same pages.
     pub pages: Vec<BuiltPage>,
-    /// Declarations across every module.
+    /// Visible declarations across every module.
     pub total_decls: usize,
     /// Declarations without a `##` comment, across every module.
     pub undocumented: usize,
@@ -129,6 +132,8 @@ pub struct BuiltDocs {
 /// trade. Two files that declare the same module path are a conflict, not a
 /// merge — merging would interleave two source files into one page and make
 /// every anchor ambiguous — so the second is skipped with a warning as well.
+/// The compiler's module description and documentation visibility attributes
+/// control the module page. Visible private declarations carry a private badge.
 ///
 /// # Errors
 ///
@@ -164,7 +169,7 @@ pub fn build(
             continue;
         };
         sources = sources.saturating_add(1);
-        match module_from_source(contents, name, &stem) {
+        match module_from_source(contents, name, stem) {
             | Ok(module) => {
                 if modules.contains_key(&module.path) {
                     tracing::warn!(
@@ -213,12 +218,13 @@ pub fn build(
     let mut total_decls = 0usize;
     let mut undocumented = 0usize;
     for module in modules.into_values() {
-        let decls = module.decls.len();
-        let missing = module
-            .decls
-            .iter()
-            .filter(|decl| decl.doc.is_none())
-            .count();
+        let (decls, missing) =
+            visible_declarations(&module).fold((0usize, 0usize), |(decls, missing), decl| {
+                (
+                    decls.saturating_add(1),
+                    missing.saturating_add(usize::from(decl.doc.is_none())),
+                )
+            });
         total_decls = total_decls.saturating_add(decls);
         undocumented = undocumented.saturating_add(missing);
         pages.push(BuiltPage {
@@ -227,7 +233,7 @@ pub fn build(
             html: html::render_module(&module),
             decls,
             undocumented: missing,
-            source_file: module.file.clone(),
+            source_file: module.file,
         });
     }
     Ok(BuiltDocs {
@@ -237,7 +243,11 @@ pub fn build(
     })
 }
 
-/// One documented declaration, independent of which path produced it.
+#[cfg(feature = "compiler")]
+use aevia_doc::DeclDoc as Decl;
+
+/// One documented declaration in the fallback scanner.
+#[cfg(not(feature = "compiler"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Decl {
     /// `fn`, `let`, `type`, `unit`, …
@@ -250,41 +260,27 @@ pub(crate) struct Decl {
     pub doc: Option<String>,
     /// Whether the declaration is not exported.
     pub private: bool,
+    /// The fallback scanner does not recognize documentation attributes.
+    pub doc_hidden: bool,
 }
 
-/// One documented module, independent of which path produced it.
+/// One documented module in the fallback scanner.
+#[cfg(not(feature = "compiler"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Module {
     /// The module path, `Kinematics` or `Thermo.IdealGas`.
     pub path: String,
     /// The tarball entry the module came from.
     pub file: String,
+    /// The documentation comment above the module header.
+    pub doc: Option<String>,
     /// The declarations, in source order.
     pub decls: Vec<Decl>,
 }
 
-#[cfg(feature = "compiler")]
-impl Module {
-    /// Copies an `aevia-doc` module into the shape this crate renders.
-    fn from_doc(doc: &aevia_doc::ModuleDoc) -> Self {
-        Self {
-            path: doc.path.clone(),
-            file: doc.file.clone(),
-            decls: doc
-                .decls
-                .iter()
-                .map(|decl| {
-                    Decl {
-                        kind: decl.kind.clone(),
-                        name: decl.name.clone(),
-                        signature: decl.signature.clone(),
-                        doc: decl.doc.clone(),
-                        private: decl.private,
-                    }
-                })
-                .collect(),
-        }
-    }
+/// The declarations that contribute to both the page and its counts.
+fn visible_declarations(module: &Module) -> impl Iterator<Item = &Decl> {
+    module.decls.iter().filter(|decl| !decl.doc_hidden)
 }
 
 /// Documents one file with the compiler.
@@ -298,7 +294,7 @@ fn module_from_source(
     file: &str,
     fallback_name: &str,
 ) -> std::result::Result<Module, String> {
-    aevia_doc::module_doc(source, file, fallback_name).map(|doc| Module::from_doc(&doc))
+    aevia_doc::module_doc(source, file, fallback_name)
 }
 
 /// Documents one file with the degraded scanner.
@@ -326,13 +322,10 @@ fn module_from_source(
     clippy::single_call_fn,
     reason = "the documented source path policy is independent of rendering"
 )]
-fn source_stem(name: &str) -> Option<String> {
-    let mut parts = name.split('/');
-    if parts.next()? != "src" {
-        return None;
-    }
+fn source_stem(name: &str) -> Option<&str> {
+    let name = name.strip_prefix("src/")?;
     let (stem, extension) = name.rsplit('/').next()?.rsplit_once('.')?;
-    (!stem.is_empty() && extension.eq_ignore_ascii_case("aev")).then(|| stem.to_owned())
+    (!stem.is_empty() && extension.eq_ignore_ascii_case("aev")).then_some(stem)
 }
 
 /// The README of a package, preferring the shallowest one.
@@ -500,6 +493,37 @@ mod tests {
         assert_eq!(thermo.decls, 1);
         assert_eq!(thermo.undocumented, 0);
         assert!(thermo.html.contains("The gas constant."), "{}", thermo.html);
+    }
+
+    #[test]
+    fn the_module_summary_has_its_own_prose_block() {
+        let files = vec![(
+            "src/Main.aev".to_owned(),
+            "## Module overview for **Main**.\nmodule Main\n\n## Entry point.\nfn main(): Int = 0\n".to_owned(),
+        )];
+        let built = build(&files, "demo").expect("docs");
+        let page = page(&built, "Main");
+        let overview = page.html.find("overview for <strong>Main</strong>");
+        let entry = page.html.find("id=\"fn-main\"");
+        assert!(overview.is_some() && overview < entry, "{}", page.html);
+        assert!(page.html.contains("<p>Entry point.</p>"), "{}", page.html);
+        assert_eq!(page.html.matches("Module overview").count(), 1);
+        assert_eq!((page.decls, page.undocumented), (1, 0));
+    }
+
+    #[cfg(feature = "compiler")]
+    #[test]
+    fn hidden_declarations_do_not_render_or_contribute_to_counts() {
+        let source = "module Main\n\n@doc(hidden)\nfn hidden_impl(): Int = 1\n\n## Visible private helper.\nprivate fn helper(): Int = 2\n";
+        let files = vec![("src/Main.aev".to_owned(), source.to_owned())];
+        let built = build(&files, "demo").expect("docs");
+        let page = page(&built, "Main");
+        assert_eq!((page.decls, page.undocumented), (1, 0));
+        assert_eq!((built.total_decls, built.undocumented), (1, 0));
+        assert!(!page.html.contains("hidden_impl"), "{}", page.html);
+        assert!(page.html.contains("badge private"), "{}", page.html);
+        let doc = aevia_doc::module_doc(source, "src/Main.aev", "Main").expect("parsed");
+        assert_eq!(render_module_html(&doc), page.html);
     }
 
     // Skipping a broken file is the compiler path's behaviour: the degraded

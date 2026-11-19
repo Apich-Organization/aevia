@@ -919,6 +919,58 @@ fn references_rename_and_its_edits_cross_files() {
 }
 
 #[test]
+fn document_highlights_follow_symbol_identity_in_the_open_buffer() {
+    let (_package, uri, _a_uri) = imported_package("document-highlights");
+    let source = "module B\nimport A\nlet first = A.sqrt(1.0 m)\nlet second = A.sqrt(2.0 m)\nfn local(sqrt: Int): Int = sqrt\n";
+    let (_exit, replies) = run_json(vec![
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+        serde_json::json!({
+            "jsonrpc":"2.0","method":"textDocument/didOpen",
+            "params":{"textDocument":{"uri":uri,"version":1,"text":source}}
+        }),
+        serde_json::json!({
+            "jsonrpc":"2.0","id":2,"method":"textDocument/documentHighlight",
+            "params":{"textDocument":{"uri":uri},"position":{"line":2,"character":16}}
+        }),
+        serde_json::json!({
+            "jsonrpc":"2.0","id":3,"method":"textDocument/documentHighlight",
+            "params":{"textDocument":{"uri":uri},"position":{"line":4,"character":29}}
+        }),
+        serde_json::json!({
+            "jsonrpc":"2.0","id":4,"method":"textDocument/documentHighlight",
+            "params":{"textDocument":{"uri":uri},"position":{"line":2,"character":22}}
+        }),
+        serde_json::json!({"jsonrpc":"2.0","id":5,"method":"shutdown","params":null}),
+        serde_json::json!({"jsonrpc":"2.0","method":"exit"}),
+    ]);
+    assert_eq!(
+        reply(&replies, 1)["result"]["capabilities"]["documentHighlightProvider"],
+        true
+    );
+    let imports = &reply(&replies, 2)["result"];
+    assert_eq!(imports.as_array().map(Vec::len), Some(2), "{replies:#?}");
+    assert_eq!(
+        imports[0]["range"],
+        serde_json::json!({
+            "start": {"line": 2, "character": 14},
+            "end": {"line": 2, "character": 18}
+        })
+    );
+    assert_eq!(imports[1]["range"]["start"]["line"], 3);
+    let locals = &reply(&replies, 3)["result"];
+    assert_eq!(locals.as_array().map(Vec::len), Some(2), "{replies:#?}");
+    assert_eq!(
+        locals[0]["range"]["start"],
+        serde_json::json!({"line":4,"character":9})
+    );
+    assert_eq!(
+        locals[1]["range"]["start"],
+        serde_json::json!({"line":4,"character":27})
+    );
+    assert_eq!(reply(&replies, 4)["result"], serde_json::json!([]));
+}
+
+#[test]
 fn rename_refusals_are_errors_with_reasons() {
     let package = TempPackage::new("rename-refusals");
     let a_source = "module A\n\nfn sqrt(x: Real[L]): Real[L] = x\nfn magnitude(): Int = 1\n";
@@ -1438,6 +1490,36 @@ fn retargeted_symlink_dependencies_refresh_when_the_new_target_changes() {
             .is_empty(),
         "{changed:#?}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_cached_open_overlay_follows_an_alias_when_it_is_retargeted() {
+    let package = TempPackage::new("retargeted-overlay");
+    let one = package.write("src/One.aev", "module A\nfn value(): Int = 1\n");
+    let two = package.write("src/Two.aev", "module A\nfn value(): Bool = true\n");
+    let alias = package.path("src/A.aev");
+    std::os::unix::fs::symlink(&one, &alias).unwrap();
+    let source = "import A\nlet got = A.value()\n";
+    let uri = aevia_lsp::protocol::uri_from_path(&package.write("src/B.aev", source));
+    let alias_uri = aevia_lsp::protocol::uri_from_path(&alias);
+    let (out, messages) = std::sync::mpsc::channel();
+    let mut server = aevia_lsp::Server::new(out);
+    server.handle(serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}));
+    server.handle(serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":alias_uri,"version":1,"text":"module A\nfn value(): Float = 1.0\n"}}}));
+    server.handle(serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri,"version":1,"text":source}}}));
+    let hover = |id| serde_json::json!({"jsonrpc":"2.0","id":id,"method":"textDocument/hover","params":{"textDocument":{"uri":uri},"position":{"line":1,"character":13}}});
+    server.handle(hover(2));
+    std::fs::remove_file(&alias).unwrap();
+    std::os::unix::fs::symlink(&two, &alias).unwrap();
+    server.handle(hover(3));
+    let replies: Vec<_> = messages.try_iter().collect();
+    for id in [2, 3] {
+        assert!(
+            reply(&replies, id)["result"].to_string().contains("Float"),
+            "{replies:#?}"
+        );
+    }
 }
 
 #[cfg(unix)]

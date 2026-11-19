@@ -18,6 +18,8 @@ fn main(): IO Unit = do
 
 Run this file locally with `aevia --jobs 1 run candidates.aev` and again with `--jobs 4`. Compare the values at each index. The map preserves input order. For reductions, pay attention to regrouping and use a combination operation suited to the method.
 
+`--jobs` sets the language worker count for this invocation. Without it, Aevia uses `AEVIA_JOBS`, then `RAYON_NUM_THREADS` or the CPUs available to the process. This example is small enough to run on the calling thread at either setting. To request one worker for language evaluation and RSSN's global CPU pool, run with `RAYON_NUM_THREADS=1` and `--jobs 1`.
+
 ## Measure the right part
 
 Separate file and terminal work from the part you want to measure. Use a fixed fixture, a warm-up, repeat runs, and common settings for threads and optimization. Verify the result on each configuration before comparing time. `aevia bench --help` describes the tool's benchmark declarations and baseline format.

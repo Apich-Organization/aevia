@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 const GLOBAL: &str = "Global options (before or after the command; program arguments follow --):
   --release          Enable optimized execution while retaining runtime checks
-  --jobs N           Parallel evaluation workers (default: available CPUs / AEVIA_JOBS)
+  --jobs N           Parallel evaluation workers (AEVIA_JOBS, RAYON_NUM_THREADS, or available CPUs)
   --max-stack MiB    Interpreter stack size (default: 1024 MiB)
   --budget STEPS     Limit tail calls and IO execution steps (E0805 on exhaustion)
   --caps LIST        Allow only fs,net,env,rand,gpu; --caps= grants none

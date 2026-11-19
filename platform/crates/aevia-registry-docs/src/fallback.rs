@@ -41,6 +41,7 @@ pub fn scan(
     fallback_name: &str,
 ) -> Module {
     let mut path = None;
+    let mut doc = None;
     let mut decls = Vec::new();
     let mut pending: Vec<String> = Vec::new();
     for line in source.lines() {
@@ -56,6 +57,9 @@ pub fn scan(
         if let Some(declared) = module_decl(line) {
             if path.is_none() {
                 path = Some(declared);
+                if decls.is_empty() && !pending.is_empty() {
+                    doc = Some(pending.join("\n"));
+                }
             }
             pending.clear();
             continue;
@@ -71,6 +75,7 @@ pub fn scan(
     Module {
         path: path.unwrap_or_else(|| fallback_name.to_string()),
         file: file.to_string(),
+        doc,
         decls,
     }
 }
@@ -115,6 +120,7 @@ fn declaration(line: &str) -> Option<Decl> {
         signature: signature(rest),
         doc: None,
         private,
+        doc_hidden: false,
     })
 }
 

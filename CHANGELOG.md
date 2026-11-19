@@ -22,6 +22,8 @@ The entries cover the language toolchain, the package registry and their documen
 
 ### Toolchain and registry
 
+- The language server reuses line indexes, document outlines and semantic tokens, and adds document highlights based on declaration identity. Formatting edits are computed directly from the open text.
+- Package resolution searches the sorted version catalogue by constraint interval. Registry documentation reuses its HTML sanitization policy and renders compiler module summaries and visibility directly from the extracted module.
 - The lint fixer preserves condition evaluation when simplifying identical branches. SARIF reports declare their column coordinate units. Registry HEAD requests no longer increment download counts.
 - The CLI, REPL, language server, formatter and lint tools share the language front end. Compatible editors can inspect live source overlays, run and test files, open a REPL and debug with breakpoints, stepping and variable inspection.
 - Local path dependencies accept `aevia add --as` aliases. The command rejects surplus package arguments before writing the manifest or lockfile.
@@ -54,6 +56,8 @@ The entries cover the language toolchain, the package registry and their documen
 
 ### 工具链与注册中心
 
+- 语言服务器复用行索引、文档大纲与语义标记，并按声明标识提供文档内高亮。格式化直接处理打开的文本。
+- 包解析器在有序版本目录中二分定位约束区间。注册中心文档复用 HTML 清理策略，并直接采用编译器提取的模块摘要与可见性标记。
 - lint 自动修复在合并相同分支时保留条件求值。SARIF 报告声明源码列坐标单位。注册中心的 HEAD 请求不会增加下载次数。
 - CLI、REPL、语言服务器、格式化和 lint 工具共用语言前端。适配编辑器可检查未保存的源码、运行和测试文件、打开 REPL，并使用断点、单步和变量检查功能。
 - `aevia add --as` 支持为本地路径依赖设置别名。命令在写入清单或锁文件前拒绝多余的包参数。

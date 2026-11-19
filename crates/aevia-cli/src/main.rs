@@ -93,7 +93,7 @@ struct Options {
     /// `--release`: optimize Core IR control flow before execution.
     release: bool,
     /// `--jobs N`: worker threads for parallel evaluation (§9.7); the default
-    /// is the machine's available parallelism (or `AEVIA_JOBS`).
+    /// uses `AEVIA_JOBS`, then `RAYON_NUM_THREADS` or available CPUs.
     jobs: Option<usize>,
     /// `--locked`: the lock file must already match the package tree.
     locked: bool,
