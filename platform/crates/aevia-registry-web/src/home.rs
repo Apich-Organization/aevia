@@ -14,6 +14,8 @@ use leptos::prelude::AnyView;
 use leptos::prelude::*;
 
 use crate::Msg;
+use crate::cli::INSTALL_PREREQUISITES;
+use crate::cli::installer_commands;
 use crate::crates::card_in;
 use crate::layout;
 use crate::thousands;
@@ -97,9 +99,7 @@ pub fn home(
     let versions = thousands(stats.versions);
     let downloads = thousands(stats.downloads);
     let publishers = thousands(stats.publishers);
-    let base = base_url.trim_end_matches('/');
-    let sh_install = format!("curl -fsSL {base}/install.sh | sh");
-    let ps_install = format!("irm {base}/install.ps1 | iex");
+    let [sh_install, ps_install] = installer_commands(base_url);
 
     layout::page(
         lang,
@@ -110,6 +110,7 @@ pub fn home(
             <section class="hero">
                 <h1>{HEADLINE.of(lang)}</h1>
                 <p class="lede">{LEDE.of(lang)}</p>
+                <p>{INSTALL_PREREQUISITES.of(lang)}</p>
                 <div class="install-stack">
                     <div class="install">
                         <span class="install-tag">{INSTALL_UNIX.of(lang)}</span>
@@ -214,13 +215,14 @@ mod tests {
     fn the_front_page_shows_the_install_line_and_the_counts() {
         let html = home(Lang::En, &stats(), &[], "https://aevia.apich.org", None);
         assert!(
-            html.contains("curl -fsSL https://aevia.apich.org/install.sh | sh"),
+            html.contains("curl -fsSL 'https://aevia.apich.org/install.sh' | sh"),
             "the Unix install one-liner is present"
         );
         assert!(
-            html.contains("irm https://aevia.apich.org/install.ps1 | iex"),
+            html.contains("irm 'https://aevia.apich.org/install.ps1'"),
             "the PowerShell install one-liner is present"
         );
+        assert!(html.contains("gh auth login"));
         assert!(
             html.contains("aevia add &lt;owner&gt;/&lt;name&gt;"),
             "the install line is present and escaped"

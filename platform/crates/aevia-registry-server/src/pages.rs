@@ -282,7 +282,11 @@ pub async fn cli(
     Language(lang): Language,
     headers: HeaderMap,
 ) -> Html<String> {
-    Html(web::cli_page(lang, state.viewer(&headers).await.as_ref()))
+    Html(web::cli_page(
+        lang,
+        &state.config.base_url,
+        state.viewer(&headers).await.as_ref(),
+    ))
 }
 
 /// `GET /users/{handle}`

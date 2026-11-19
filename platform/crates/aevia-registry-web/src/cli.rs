@@ -21,11 +21,18 @@ const LEDE: Msg = Msg::new(
      aevia 会转发给它。",
 );
 const INSTALL: Msg = Msg::new("Install", "安装");
-const INSTALL_BODY: Msg = Msg::new(
-    "Build both binaries from the repository and keep them side by side; aevia finds \
-     aevia-pkg beside itself, on PATH, or at $AEVIA_PKG.",
-    "从仓库构建两个可执行文件并放在一起；aevia 会在自身旁边、PATH 或 $AEVIA_PKG 中找到 \
-     aevia-pkg。",
+/// Bootstrap prerequisites shared by the landing page and CLI guide.
+pub const INSTALL_PREREQUISITES: Msg = Msg::new(
+    "Install GitHub CLI and run gh auth login. The installer verifies the SHA-256 checksum and GitHub release attestation.",
+    "请先安装 GitHub CLI 并运行 gh auth login。安装程序会校验 SHA-256 校验和及 GitHub 发布证明。",
+);
+const CHANNELS: Msg = Msg::new(
+    "These commands install the latest stable version. To install a daily build, add -s -- --channel nightly after sh on Unix, or -Channel nightly on Windows. Use --version or -Version to pin a published tag, including a beta or a dated nightly.",
+    "以下命令安装最新稳定版。在 Unix 上可在 sh 后加 -s -- --channel nightly 安装每日构建，在 Windows 上使用 -Channel nightly。用 --version 或 -Version 可指定已发布的标签，包括测试版或带日期的每日构建。",
+);
+const TOOLCHAINS: Msg = Msg::new(
+    "After installation, use aevia toolchain --help to install, switch or update toolchains.",
+    "安装后可用 aevia toolchain --help 查看安装、切换或更新工具链的命令。",
 );
 const FIRST_PUBLISH: Msg = Msg::new("Publish a package", "发布一个包");
 const FIRST_PUBLISH_BODY: Msg = Msg::new(
@@ -49,6 +56,17 @@ const MAP: Msg = Msg::new("Site ↔ command", "站点 ↔ 命令");
 const COMMAND: Msg = Msg::new("command", "命令");
 const WHAT: Msg = Msg::new("what it does", "作用");
 const SEE: Msg = Msg::new("on the site", "站点对应页面");
+
+/// Copyable install commands for POSIX shells and PowerShell.
+pub fn installer_commands(base_url: &str) -> [String; 2] {
+    let base = base_url.trim_end_matches('/');
+    let sh_base = base.replace('\'', "'\\''");
+    let powershell_base = base.replace('\'', "''");
+    [
+        format!("curl -fsSL '{sh_base}/install.sh' | sh"),
+        format!("& ([scriptblock]::Create((irm '{powershell_base}/install.ps1')))"),
+    ]
+}
 
 /// One row of the map: a command, what it does, and where the site shows it.
 struct Row {
@@ -162,8 +180,10 @@ const ROWS: [Row; 13] = [
 #[must_use]
 pub fn cli_page(
     lang: Lang,
+    base_url: &str,
     viewer: Option<&Viewer>,
 ) -> String {
+    let [unix_install, windows_install] = installer_commands(base_url);
     let rows: Vec<AnyView> = ROWS
         .iter()
         .map(|row| {
@@ -189,8 +209,11 @@ pub fn cli_page(
             </section>
             <section class="prose">
                 <h2>{INSTALL.of(lang)}</h2>
-                <p>{INSTALL_BODY.of(lang)}</p>
-                <pre><code>"cargo build --release -p aevia-cli\ncargo build --release --manifest-path platform/Cargo.toml -p aevia-pkg"</code></pre>
+                <p>{INSTALL_PREREQUISITES.of(lang)}</p>
+                <pre><code>{unix_install}</code></pre>
+                <pre><code>{windows_install}</code></pre>
+                <p>{CHANNELS.of(lang)}</p>
+                <p>{TOOLCHAINS.of(lang)}</p>
                 <h2>{FIRST_PUBLISH.of(lang)}</h2>
                 <p>{FIRST_PUBLISH_BODY.of(lang)}</p>
                 <pre><code>"aevia login\naevia publish --dry-run\naevia publish"</code></pre>
@@ -219,12 +242,13 @@ mod tests {
 
     #[test]
     fn the_guide_names_the_commands_in_both_languages() {
-        let en = cli_page(Lang::En, None);
+        let en = cli_page(Lang::En, "https://aevia.apich.org", None);
         assert!(en.contains("aevia publish [--dry-run]"));
         assert!(en.contains("aevia docs owner/name [--open]"));
         assert!(en.contains("aria-current=\"page\""), "the nav marks /cli");
-        let zh = cli_page(Lang::Zh, None);
+        let zh = cli_page(Lang::Zh, "https://aevia.apich.org", None);
         assert!(zh.contains("站点 ↔ 命令"));
+        assert!(zh.contains("GitHub 发布证明"));
         assert!(
             zh.contains("aevia publish [--dry-run]"),
             "commands are not translated"

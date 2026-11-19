@@ -45,19 +45,34 @@ aevia test
 
 The manifest `aevia.toml` defines the entry and dependencies. Consult the [package guide](platform/manuals/book/en/10-modules-and-packages.md) for local dependencies, the lockfile, documentation and publication. The client [aevia-pkg](platform/README.md) provides registry access and signed publishing.
 
-## Install the beta
+## Install a toolchain
 
-Once `v0.1.0-beta.1` is public, download the archive for your operating system and CPU from [GitHub Releases](https://github.com/Apich-Organization/aevia/releases). Verify it with the accompanying `.sha256` file, then extract it and add the directory containing `aevia` to your PATH. The archive also contains `aevia-lsp`, `aevia-pkg`, the language specification, and the examples.
+Install [GitHub CLI](https://cli.github.com/) with `gh release verify-asset` support and sign in with `gh auth login`. The installers verify the SHA-256 checksum and the GitHub release attestation before installing `aevia`, `aevia-lsp`, and `aevia-pkg`. They add the toolchain to PATH and set up shell completions.
 
-To install from a source checkout using the release installers, pass the beta version explicitly. The default release lookup selects stable releases.
+The default is the latest stable release. To install `v0.1.0-beta.1` once it is published, specify the version explicitly.
 
 ```console
-sh platform/install.sh --version 0.1.0-beta.1
+curl -fsSL https://aevia.apich.org/install.sh | sh -s -- --version 0.1.0-beta.1
 ```
 
 ```powershell
-./platform/install.ps1 -Version 0.1.0-beta.1
+& ([scriptblock]::Create((irm 'https://aevia.apich.org/install.ps1'))) -Version 0.1.0-beta.1
 ```
+
+For the latest daily build, use `--channel nightly` on macOS and Linux or `-Channel nightly` on Windows. Use `--version nightly-YYYY-MM-DD` or `-Version nightly-YYYY-MM-DD` to pin a specific daily build. The same options work with [the Unix installer](platform/install.sh) and [the PowerShell installer](platform/install.ps1) in a source checkout.
+
+Once installed, manage toolchains from the terminal.
+
+```console
+aevia toolchain install nightly --no-activate
+aevia toolchain list
+aevia toolchain run nightly-YYYY-MM-DD --version
+aevia toolchain update stable
+```
+
+Replace the date with an installed nightly shown by `list`. Use `aevia toolchain use VERSION` to activate an installed version, or `aevia toolchain update` to follow the active stable or nightly channel. An exact-version pin stays on that version until you switch.
+
+To install manually, find the archive for your operating system and CPU on [GitHub Releases](https://github.com/Apich-Organization/aevia/releases). Compare its SHA-256 against the corresponding `.sha256` and verify the publication with `gh release verify-asset TAG ARCHIVE --repo Apich-Organization/aevia`. Extract it and add the directory containing the binaries to PATH. The archive also includes the specification and examples.
 
 ## Build from source
 

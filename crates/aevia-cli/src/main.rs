@@ -58,6 +58,7 @@ mod repl_doc;
 mod repl_input;
 mod repl_interrupt;
 mod repl_source;
+mod toolchain;
 mod tooling;
 
 use aevia_core::Interp;
@@ -222,8 +223,16 @@ impl Options {
 }
 
 fn main() -> ExitCode {
+    if let Some(status) = toolchain::launch() {
+        return status;
+    }
     let raw: Vec<String> = std::env::args().skip(1).collect();
     terminal::configure(terminal::from_args(&raw));
+    if let Some((command, args)) = raw.split_first()
+        && command == "toolchain"
+    {
+        return toolchain::run(args);
+    }
     let (options, args) = match Options::parse(&raw) {
         | Ok(parsed) => parsed,
         | Err(message) => {
@@ -446,7 +455,9 @@ const ZSH_COMPLETIONS: &str = "#compdef aevia\n\
              \x20       'clean:Remove generated build products'\n\
              \x20       'lsp:Start the language server'\n\
              \x20       'debug:Start the source debug adapter'\n\
-             \x20       'completions:Generate shell completions'\n\
+             \x20       'completions:Generate shell completions'
+\
+             \x20       'toolchain:Manage installed Aevia versions'\n\
              \x20       'init:Create a package'\n\
              \x20       'add:Add a dependency'\n\
              \x20       'update:Update lock file'\n\
@@ -477,7 +488,7 @@ fn completions_command(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     };
     let shell = shell.to_ascii_lowercase();
-    let commands = "run check lint watch test repl fmt doc bench clean lsp debug completions init add update fetch tree rssn pkg publish docs login search info yank verify help";
+    let commands = "run check lint watch test repl fmt doc bench clean lsp debug completions toolchain init add update fetch tree rssn pkg publish docs login search info yank verify help";
     let script = match shell.as_str() {
         | "bash" => {
             format!(

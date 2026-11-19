@@ -45,19 +45,34 @@ aevia test
 
 清单 `aevia.toml` 定义入口与依赖。[包指南](platform/manuals/book/zh/10-modules-and-packages.md)说明本地依赖、锁文件、文档和发布。[aevia-pkg](platform/README.md) 提供注册表访问和签名发布。
 
-## 安装 beta 版
+## 安装工具链
 
-`v0.1.0-beta.1` 公开发布后，从 [GitHub 发布页](https://github.com/Apich-Organization/aevia/releases) 下载与操作系统和处理器架构对应的归档。用同名 `.sha256` 文件校验归档，解压后将 `aevia` 所在目录加入 `PATH`。归档同时包含 `aevia-lsp`、`aevia-pkg`、语言规范和示例。
+安装支持 `gh release verify-asset` 的 [GitHub CLI](https://cli.github.com/)，并运行 `gh auth login` 登录。安装脚本先验证 SHA-256 校验和及 GitHub 发布证明，再安装 `aevia`、`aevia-lsp` 和 `aevia-pkg`。脚本会配置 PATH 和 shell 命令补全。
 
-在源码检出目录中运行安装脚本时，请显式指定 beta 版本。脚本默认查询稳定版。
+脚本默认安装最新稳定版。等 `v0.1.0-beta.1` 发布后，可显式指定该版本进行安装。
 
 ```console
-sh platform/install.sh --version 0.1.0-beta.1
+curl -fsSL https://aevia.apich.org/install.sh | sh -s -- --version 0.1.0-beta.1
 ```
 
 ```powershell
-./platform/install.ps1 -Version 0.1.0-beta.1
+& ([scriptblock]::Create((irm 'https://aevia.apich.org/install.ps1'))) -Version 0.1.0-beta.1
 ```
+
+在 macOS 和 Linux 上使用 `--channel nightly`，在 Windows 上使用 `-Channel nightly`，即可安装最新每日构建。使用 `--version nightly-YYYY-MM-DD` 或 `-Version nightly-YYYY-MM-DD` 可以固定到特定日期的构建。同样的选项适用于源码目录中的 [Unix 安装脚本](platform/install.sh)和 [PowerShell 安装脚本](platform/install.ps1)。
+
+首次安装后，可在终端直接管理工具链。
+
+```console
+aevia toolchain install nightly --no-activate
+aevia toolchain list
+aevia toolchain run nightly-YYYY-MM-DD --version
+aevia toolchain update stable
+```
+
+用 `list` 显示的每日构建日期替换示例中的日期。运行 `aevia toolchain use VERSION` 可切换到已安装的版本。运行 `aevia toolchain update` 可跟进当前的稳定版或每日构建频道。固定到特定版本后，该版本会保持启用，直至主动切换。
+
+如需手动安装，从 [GitHub 发布页](https://github.com/Apich-Organization/aevia/releases) 下载与操作系统及处理器架构对应的归档。用同名 `.sha256` 文件比对校验和，并运行 `gh release verify-asset TAG ARCHIVE --repo Apich-Organization/aevia` 核验发布证明。解压后，将可执行文件所在目录加入 PATH。归档还包含语言规范和示例。
 
 ## 从源码构建
 
