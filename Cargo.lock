@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "aevia-analysis"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "aevia-core",
  "aevia-fmt",
@@ -23,7 +23,7 @@ dependencies = [
 
 [[package]]
 name = "aevia-cli"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "aevia-core",
  "aevia-dim",
@@ -49,7 +49,7 @@ dependencies = [
 
 [[package]]
 name = "aevia-core"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "aevia-dim",
  "aevia-ir",
@@ -72,7 +72,7 @@ dependencies = [
 
 [[package]]
 name = "aevia-dim"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "bincode-next",
  "indexmap",
@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "aevia-doc"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "aevia-fmt",
  "aevia-syntax",
@@ -95,7 +95,7 @@ dependencies = [
 
 [[package]]
 name = "aevia-fmt"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "aevia-dim",
  "aevia-syntax",
@@ -105,7 +105,7 @@ dependencies = [
 
 [[package]]
 name = "aevia-ir"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "aevia-dim",
  "aevia-syntax",
@@ -117,7 +117,7 @@ dependencies = [
 
 [[package]]
 name = "aevia-lint"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "aevia-core",
  "aevia-dim",
@@ -130,7 +130,7 @@ dependencies = [
 
 [[package]]
 name = "aevia-lsp"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "aevia-analysis",
  "serde_json",
@@ -138,18 +138,18 @@ dependencies = [
 
 [[package]]
 name = "aevia-prof"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "aevia-resolve"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 
 [[package]]
 name = "aevia-rssn"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "aevia-core",
  "aevia-dim",
@@ -167,7 +167,7 @@ dependencies = [
 
 [[package]]
 name = "aevia-std"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "aevia-core",
  "aevia-rssn",
@@ -182,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "aevia-stdlib-gen"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "aevia-rssn",
  "aevia-stdlib-model",
@@ -190,11 +190,11 @@ dependencies = [
 
 [[package]]
 name = "aevia-stdlib-model"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 
 [[package]]
 name = "aevia-syntax"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "aevia-dim",
  "bincode-next",
@@ -211,7 +211,7 @@ dependencies = [
 
 [[package]]
 name = "aevia-types"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "aevia-dim",
  "aevia-rssn",
@@ -2235,7 +2235,7 @@ checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
 name = "rssn"
-version = "3.0.0-rc.1"
+version = "3.0.0-beta.1"
 dependencies = [
  "argmin",
  "argmin-math",
@@ -2270,7 +2270,7 @@ dependencies = [
 
 [[package]]
 name = "rssn-api-audit"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "quote",
  "rssn",
@@ -2280,7 +2280,7 @@ dependencies = [
 
 [[package]]
 name = "rssn-api-model"
-version = "3.0.0-rc.1"
+version = "3.0.0-beta.1"
 dependencies = [
  "quote",
  "syn 2.0.119",

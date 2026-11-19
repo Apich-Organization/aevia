@@ -1,6 +1,6 @@
 # Generated from the RSSN kernel manifest.
 # Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
-# RSSN 3.0.0-rc.1, API 2
+# RSSN 3.0.0-beta.1, API 2
 ## Physical constants in geometrized units of general relativity: c = G = 1; mass and time are lengths.
 ##
 ## Use `module Example with units geometrized` to apply the same convention

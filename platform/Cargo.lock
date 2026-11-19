@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "aevia-dim"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "bincode-next",
  "indexmap",
@@ -68,7 +68,7 @@ dependencies = [
 
 [[package]]
 name = "aevia-doc"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "aevia-fmt",
  "aevia-syntax",
@@ -78,7 +78,7 @@ dependencies = [
 
 [[package]]
 name = "aevia-fmt"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "aevia-dim",
  "aevia-syntax",
@@ -183,11 +183,11 @@ dependencies = [
 
 [[package]]
 name = "aevia-resolve"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 
 [[package]]
 name = "aevia-syntax"
-version = "0.1.0-rc.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "aevia-dim",
  "bincode-next",

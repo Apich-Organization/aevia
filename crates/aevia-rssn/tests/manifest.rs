@@ -12,7 +12,7 @@ use aevia_rssn::registry;
 use aevia_rssn::unit_table;
 
 /// §5.3.3's common non-SI units that the kernel registry lacked until
-/// `rssn 3.0.0-rc.1`. They are asserted directly — not excused — because a
+/// `rssn 3.0.0-beta.1`. They are asserted directly — not excused — because a
 /// unit the design standard declares is part of the language surface: if one
 /// silently stopped resolving, that is a regression, not a manifest fact.
 const SPEC_NON_SI: [(&str, &str, &str); 7] = [
