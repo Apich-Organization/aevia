@@ -71,7 +71,7 @@ pub fn stdlib_index(
         .modules
         .iter()
         .map(|module| {
-            let href = format!("/stdlib/{}", module.slug);
+            let href = format!("/stdlib/{}?lang={}", module.slug, lang.code());
             let name = module.name.clone();
             let summary = module.summary.clone().unwrap_or_default();
             let count = thousands(i64::try_from(module.items.len()).unwrap_or(0));
@@ -97,7 +97,7 @@ pub fn stdlib_index(
                 <p>{LEDE.of(lang)}</p>
                 <p class="small muted">
                     {version}
-                    {if !book.version.is_empty() { " · " } else { "" }}
+                    {if book.version.is_empty() { "" } else { " · " }}
                     {format!("{module_count} {} · {item_count} {}", MODULES.of(lang), ITEMS_COLUMN.of(lang))}
                 </p>
             </section>
@@ -129,7 +129,7 @@ pub fn stdlib_module(
         .iter()
         .map(|entry| {
             let current = (entry.slug == current_slug).then_some("page");
-            let href = format!("/stdlib/{}", entry.slug);
+            let href = format!("/stdlib/{}?lang={}", entry.slug, lang.code());
             view! {
                 <li>
                     <a href=href aria-current=current>{entry.name.clone()}</a>
@@ -139,10 +139,14 @@ pub fn stdlib_module(
         })
         .collect();
 
-    let summary_view = module.summary.as_ref().map(|summary| {
-        let text = summary.clone();
-        view! { <p class="lede">{text}</p> }.into_any()
-    });
+    let summary_view = module
+        .summary
+        .as_ref()
+        .filter(|_| module.html.is_empty())
+        .map(|summary| {
+            let text = summary.clone();
+            view! { <p class="lede">{text}</p> }.into_any()
+        });
 
     let prose_view = (!module.html.is_empty()).then(|| {
         let html = module.html.clone();
@@ -173,7 +177,7 @@ pub fn stdlib_module(
         view! {
             <div class="docs-layout">
                 <aside class="docs-side">
-                    <p><a href="/stdlib">{ALL_MODULES.of(lang)}</a></p>
+                    <p><a href=format!("/stdlib?lang={}", lang.code())>{ALL_MODULES.of(lang)}</a></p>
                     <h2>{MODULES.of(lang)}</h2>
                     <ul>{sidebar_links}</ul>
                 </aside>
@@ -190,6 +194,10 @@ pub fn stdlib_module(
     )
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "each standard-library item groups its signature, documentation and examples"
+)]
 fn render_item(
     lang: Lang,
     item: &StdlibItem,

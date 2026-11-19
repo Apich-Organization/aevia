@@ -12,19 +12,17 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.100"
 license = "Apache-2.0"
 repository = "https://github.com/Apich-Organization/aevia"
-authors = ["The Aevia contributors"]
 
 [workspace.dependencies]
 # The compiler crates, used read-only for documentation rendering. They are
-# path dependencies into the language repository next door: `aevia-doc` needs
+# path dependencies into the parent workspace. `aevia-doc` needs
 # only the lexer/parser/formatter, never the RSSN kernel, so the registry does
 # not pay for a 3-million-line build to render a page.
 aevia-doc = { path = "../crates/aevia-doc" }
 aevia-syntax = { path = "../crates/aevia-syntax" }
-aevia-fmt = { path = "../crates/aevia-fmt" }
 # Versions, requirements, the resolver and the sparse-index reader: pure, no
 # dependencies, shared with the toolchain so both agree on what `^1.2` means.
 aevia-resolve = { path = "../crates/aevia-resolve" }
@@ -52,13 +50,34 @@ serde_json = "1"
 sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "json", "migrate", "macros"] }
 tar = "0.4"
-thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "timeout", "set-header", "compression-gzip", "fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url = "2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unreachable_code = "deny"
+improper_ctypes_definitions = "deny"
+future_incompatible = { level = "deny", priority = -1 }
+nonstandard_style = { level = "deny", priority = -1 }
+rust_2018_idioms = { level = "deny", priority = -1 }
+missing_docs = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+missing_safety_doc = "deny"
+same_item_push = "deny"
+implicit_clone = "deny"
+undocumented_unsafe_blocks = "deny"
+unnecessary_safety_comment = "deny"
 
 [profile.release]
 opt-level = 3

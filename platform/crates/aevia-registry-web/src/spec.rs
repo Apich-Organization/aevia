@@ -421,6 +421,10 @@ fn toc_block(
 }
 
 /// The previous/next pair at the foot of a chapter.
+#[allow(
+    clippy::single_call_fn,
+    reason = "previous and next chapter links use distinct relation and presentation"
+)]
 fn chapter_nav(
     lang: Lang,
     previous: Option<(String, String)>,
@@ -459,6 +463,10 @@ fn chapter_nav(
 /// in the store; the English index page is the reverse. `primary_title` picks
 /// the one that matches the interface language, falling back to whatever the
 /// chapter has.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the current chapter chooses its localized full title"
+)]
 fn primary_title(
     chapter: &SpecChapter,
     lang: Lang,
@@ -473,6 +481,10 @@ fn primary_title(
 ///
 /// A template with a prefix would render "第 04", which is not Chinese; the
 /// unit belongs after the number, so the two languages need their own shape.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the chapter label needs a language-specific number position"
+)]
 fn chapter_label(
     lang: Lang,
     number: &str,

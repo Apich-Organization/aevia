@@ -36,6 +36,18 @@
 //! documented as degraded, and its pages may differ from the compiler's.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unreachable
+    )
+)]
 
 mod html;
 mod markdown;
@@ -48,6 +60,7 @@ use std::collections::BTreeMap;
 use aevia_registry_core::Error;
 use aevia_registry_core::Result;
 
+pub use markdown::render_manual_markdown;
 pub use markdown::render_markdown;
 
 #[cfg(feature = "compiler")]
@@ -150,7 +163,7 @@ pub fn build(
         let Some(stem) = source_stem(name) else {
             continue;
         };
-        sources += 1;
+        sources = sources.saturating_add(1);
         match module_from_source(contents, name, &stem) {
             | Ok(module) => {
                 if modules.contains_key(&module.path) {
@@ -183,7 +196,7 @@ pub fn build(
         return Err(Error::new(E_DOCS, message));
     }
 
-    let mut pages = Vec::with_capacity(modules.len() + 1);
+    let mut pages = Vec::with_capacity(modules.len().saturating_add(1));
     let (source_file, index_html) = match find_readme(files) {
         | Some((name, text)) => (name.clone(), render_markdown(text)),
         | None => (String::new(), render_markdown(NO_README)),
@@ -206,8 +219,8 @@ pub fn build(
             .iter()
             .filter(|decl| decl.doc.is_none())
             .count();
-        total_decls += decls;
-        undocumented += missing;
+        total_decls = total_decls.saturating_add(decls);
+        undocumented = undocumented.saturating_add(missing);
         pages.push(BuiltPage {
             path: module.path.clone(),
             title: module.path.clone(),
@@ -276,6 +289,10 @@ impl Module {
 
 /// Documents one file with the compiler.
 #[cfg(feature = "compiler")]
+#[allow(
+    clippy::single_call_fn,
+    reason = "the compiler and fallback share this per-file documentation interface"
+)]
 fn module_from_source(
     source: &str,
     file: &str,
@@ -286,6 +303,11 @@ fn module_from_source(
 
 /// Documents one file with the degraded scanner.
 #[cfg(not(feature = "compiler"))]
+#[allow(
+    clippy::single_call_fn,
+    clippy::unnecessary_wraps,
+    reason = "the fallback shares the compiler's per-file documentation interface"
+)]
 fn module_from_source(
     source: &str,
     file: &str,
@@ -300,20 +322,17 @@ fn module_from_source(
 /// documented under that path, and a file that declares nothing takes its own
 /// name. That is the same rule `aevia doc` applies, so the Markdown and the HTML
 /// of one package name their pages identically.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the documented source path policy is independent of rendering"
+)]
 fn source_stem(name: &str) -> Option<String> {
     let mut parts = name.split('/');
     if parts.next()? != "src" {
         return None;
     }
-    let base = name.rsplit('/').next()?;
-    if !base.to_ascii_lowercase().ends_with(".aev") {
-        return None;
-    }
-    let stem = &base[..base.len() - ".aev".len()];
-    if stem.is_empty() {
-        return None;
-    }
-    Some(stem.to_string())
+    let (stem, extension) = name.rsplit('/').next()?.rsplit_once('.')?;
+    (!stem.is_empty() && extension.eq_ignore_ascii_case("aev")).then(|| stem.to_owned())
 }
 
 /// The README of a package, preferring the shallowest one.
@@ -321,6 +340,10 @@ fn source_stem(name: &str) -> Option<String> {
 /// `README.md` is matched case-insensitively because a package packed on
 /// Windows may spell it `Readme.MD`, and the file is the author's README
 /// whichever way it is cased.
+#[allow(
+    clippy::single_call_fn,
+    reason = "README discovery applies its own case-insensitive basename and nesting policy"
+)]
 fn find_readme(files: &[(String, String)]) -> Option<&(String, String)> {
     files
         .iter()

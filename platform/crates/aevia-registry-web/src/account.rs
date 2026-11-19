@@ -83,6 +83,7 @@ const CANCEL: Msg = Msg::new("cancel", "取消");
 /// The revoke control is a form per key rather than a single form with a
 /// select: revocation is destructive and should take one deliberate click on
 /// the row that names the key, not a choice made in a dropdown.
+#[must_use]
 pub fn account(
     lang: Lang,
     page: &AccountPage,
@@ -256,6 +257,7 @@ pub fn account(
 /// The confirmation is a POST carrying the same code the page was opened with,
 /// so that approving a device is an explicit action by the signed-in viewer and
 /// not a side effect of following a link someone else sent them.
+#[must_use]
 pub fn activate(
     lang: Lang,
     user_code: &str,

@@ -52,6 +52,7 @@ const DATE_COLUMN: Msg = Msg::new("date", "日期");
 /// `head_seq` and `head_hash` are passed separately from the entries because
 /// the head is what a reader compares against a pinned value; it must be shown
 /// even when the page below it fails to list anything.
+#[must_use]
 pub fn log_page(
     lang: Lang,
     entries: &[LogEntryView],
@@ -112,7 +113,7 @@ pub fn log_page(
                 </div>
                 <div>
                     <dt>{HEAD_HASH.of(lang)}</dt>
-                    <dd>{head.clone()}</dd>
+                    <dd>{head}</dd>
                 </div>
             </dl>
             <table>

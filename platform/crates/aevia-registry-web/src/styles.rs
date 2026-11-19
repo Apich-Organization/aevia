@@ -840,16 +840,11 @@ tbody th {
 /* Documentation */
 
 .meter {
-  height: 6px;
-  background: var(--code-bg);
-  border: 1px solid var(--line);
-  margin: 6px 0 4px;
-}
-
-.meter span {
   display: block;
-  height: 100%;
-  background: var(--accent);
+  width: 100%;
+  height: 6px;
+  accent-color: var(--accent);
+  margin: 6px 0 4px;
 }
 
 .docs-layout {
@@ -1722,9 +1717,70 @@ a.provider:hover {
   margin: 12px 0 6px;
 }
 
+.manual-index {
+  max-width: 72ch;
+  margin: 0 auto;
+}
+
+.manual-toc li {
+  margin-block: 0.4rem;
+}
+
+.manual-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-block: 1.5rem;
+}
+
+.manual-local-toc ul {
+  list-style: none;
+  padding-inline-start: 0;
+}
+
+.manual-toc-level-3 { margin-inline-start: 1rem; }
+.manual-toc-level-4 { margin-inline-start: 2rem; }
+
+.spec-nav a[aria-current="page"] {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.playground {
+  margin-block: 1.25rem;
+}
+
+.playground textarea {
+  display: block;
+  width: 100%;
+  min-height: 10em;
+  padding: 0.8rem;
+  resize: vertical;
+  font-family: var(--mono);
+  tab-size: 4;
+}
+
+.playground button {
+  margin-top: 0.5rem;
+}
+
+.playground output {
+  display: block;
+  margin-top: 0.5rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+}
+
+@media print {
+  .topbar, .footer, .skip { display: none; }
+  .manual-combined { max-width: none; }
+  .manual-combined pre { white-space: pre-wrap; }
+}
+
 "#;
 
-/// The script served inline at the end of every page.
+/// The script served as a separate asset.
 ///
 /// It does two things and nothing else: copy an install line to the clipboard,
 /// and filter the crate table while the reader types. Both are enhancements —
@@ -1770,6 +1826,65 @@ pub const APP_JS: &str = r#"(function () {
       flash(button, "press ctrl+c");
     }
   });
+
+  var playground = document.querySelector("[data-playground]");
+  if (playground) {
+    playground.querySelectorAll("pre > code.interactive-example").forEach(function (code) {
+      var box = document.createElement("div");
+      box.className = "playground";
+      var editor = document.createElement("textarea");
+      editor.setAttribute("aria-label", playground.dataset.label);
+      editor.setAttribute("spellcheck", "false");
+      editor.value = code.textContent;
+      editor.rows = Math.min(28, Math.max(6, editor.value.split("\n").length));
+      var button = document.createElement("button");
+      button.className = "btn";
+      button.type = "button";
+      button.textContent = playground.dataset.run;
+      var output = document.createElement("output");
+      output.setAttribute("aria-live", "polite");
+      box.append(editor, button, output);
+      code.parentElement.replaceWith(box);
+
+      button.addEventListener("click", async function () {
+        var source = editor.value;
+        if (!source.trim() || new TextEncoder().encode(source).length > 16384) {
+          output.textContent = playground.dataset.input;
+          return;
+        }
+        button.disabled = true;
+        output.textContent = playground.dataset.running;
+        try {
+          var reply = await fetch(playground.dataset.playground, {
+            method: "POST",
+            credentials: "omit",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({source: source})
+          });
+          if (!reply.ok) {
+            output.textContent = reply.status === 429 ? playground.dataset.busy
+              : reply.status === 413 || reply.status === 400 ? playground.dataset.input
+              : playground.dataset.unavailable;
+            return;
+          }
+          var result = await reply.json();
+          var messages = [result.stdout, result.stderr];
+          if (result.status === "timeout") {
+            messages.push(playground.dataset.timeout);
+          } else if (result.status === "output_limit") {
+            messages.push(playground.dataset.limit);
+          } else if (result.status !== "success") {
+            messages.push(playground.dataset.failed);
+          }
+          output.textContent = messages.filter(Boolean).join("\n") || playground.dataset.empty;
+        } catch (_) {
+          output.textContent = playground.dataset.unavailable;
+        } finally {
+          button.disabled = false;
+        }
+      });
+    });
+  }
 
   var input = document.querySelector("[data-filter]");
   var table = input ? document.querySelector(input.getAttribute("data-filter")) : null;

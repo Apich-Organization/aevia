@@ -57,15 +57,29 @@ struct Row {
     site: &'static str,
 }
 
-const ROWS: [Row; 12] = [
+const ROWS: [Row; 13] = [
     Row {
         command: "aevia login",
-        what: Msg::new("bind a signing key to your account in a browser", "在浏览器中把签名密钥绑定到账户"),
+        what: Msg::new(
+            "bind a signing key to your account in a browser",
+            "在浏览器中把签名密钥绑定到账户",
+        ),
         site: "/account",
     },
     Row {
         command: "aevia publish [--dry-run]",
-        what: Msg::new("check, format-check, sign and upload", "检查、格式检查、签名并上传"),
+        what: Msg::new(
+            "check, format-check, sign and upload",
+            "检查、格式检查、签名并上传",
+        ),
+        site: "/crates",
+    },
+    Row {
+        command: "aevia publish --owner laboratory",
+        what: Msg::new(
+            "publish under an enabled GitHub organisation",
+            "以已获授权的 GitHub 组织身份发布",
+        ),
         site: "/crates",
     },
     Row {
@@ -75,7 +89,10 @@ const ROWS: [Row; 12] = [
     },
     Row {
         command: "aevia search units",
-        what: Msg::new("search names, descriptions and keywords", "按名称、描述和关键词搜索"),
+        what: Msg::new(
+            "search names, descriptions and keywords",
+            "按名称、描述和关键词搜索",
+        ),
         site: "/crates",
     },
     Row {
@@ -85,42 +102,64 @@ const ROWS: [Row; 12] = [
     },
     Row {
         command: "aevia add owner/name@^1.2",
-        what: Msg::new("add a dependency, re-resolve, vendor", "添加依赖、重新解析并下载"),
+        what: Msg::new(
+            "add a dependency, re-resolve, vendor",
+            "添加依赖、重新解析并下载",
+        ),
         site: "/crates",
     },
     Row {
         command: "aevia update [owner/name]",
-        what: Msg::new("move to the newest compatible versions", "升级到最新的兼容版本"),
+        what: Msg::new(
+            "move to the newest compatible versions",
+            "升级到最新的兼容版本",
+        ),
         site: "/log",
     },
     Row {
         command: "aevia fetch",
-        what: Msg::new("download and verify what aevia.lock names", "下载并校验 aevia.lock 中的包"),
+        what: Msg::new(
+            "download and verify what aevia.lock names",
+            "下载并校验 aevia.lock 中的包",
+        ),
         site: "/crates",
     },
     Row {
         command: "aevia tree",
-        what: Msg::new("print path and registry dependencies", "打印路径依赖与注册中心依赖"),
+        what: Msg::new(
+            "print path and registry dependencies",
+            "打印路径依赖与注册中心依赖",
+        ),
         site: "/crates",
     },
     Row {
         command: "aevia verify owner/name@1.2.0",
-        what: Msg::new("check a download against its signature", "按签名校验一次下载"),
+        what: Msg::new(
+            "check a download against its signature",
+            "按签名校验一次下载",
+        ),
         site: "/log",
     },
     Row {
         command: "aevia docs owner/name [--open]",
-        what: Msg::new("print or open a package's documentation", "打印或打开包的文档"),
+        what: Msg::new(
+            "print or open a package's documentation",
+            "打印或打开包的文档",
+        ),
         site: "/docs",
     },
     Row {
         command: "aevia doc --open",
-        what: Msg::new("build this package's docs locally", "在本地构建当前包的文档"),
+        what: Msg::new(
+            "build this package's docs locally",
+            "在本地构建当前包的文档",
+        ),
         site: "/docs",
     },
 ];
 
 /// Renders `/cli`.
+#[must_use]
 pub fn cli_page(
     lang: Lang,
     viewer: Option<&Viewer>,
@@ -186,6 +225,9 @@ mod tests {
         assert!(en.contains("aria-current=\"page\""), "the nav marks /cli");
         let zh = cli_page(Lang::Zh, None);
         assert!(zh.contains("站点 ↔ 命令"));
-        assert!(zh.contains("aevia publish [--dry-run]"), "commands are not translated");
+        assert!(
+            zh.contains("aevia publish [--dry-run]"),
+            "commands are not translated"
+        );
     }
 }

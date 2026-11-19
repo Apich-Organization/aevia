@@ -3,6 +3,7 @@
 #
 #   ./deploy.sh build            build the registry image for this host
 #   ./deploy.sh up               start db + registry + caddy
+#   ./deploy.sh stop registry    pause publication while restoring or backing up
 #   ./deploy.sh down             stop everything (volumes are kept)
 #   ./deploy.sh logs [service]   follow logs
 #   ./deploy.sh ps               show container status
@@ -23,12 +24,10 @@ BACKUP_DIR="$INFRA_DIR/backups"
 LANG_CRATES=$(CDPATH= cd -- "$REPO_DIR/../crates" 2>/dev/null && pwd || true)
 
 IMAGE_REGISTRY="localhost/aevia/registry:0.1.0"
-RUST_VERSION="1.97"
+RUST_VERSION="1.100"
 
 COMPOSE_BIN=""
 COMPOSE_SUB=""
-RUNTIME=""
-BUILDER=""
 
 die() {
 	printf 'deploy.sh: %s\n' "$*" >&2
@@ -44,9 +43,9 @@ run() {
 
 compose() {
 	if [ -n "$COMPOSE_SUB" ]; then
-		"$COMPOSE_BIN" "$COMPOSE_SUB" --file "$COMPOSE_FILE" "$@"
+		"$COMPOSE_BIN" "$COMPOSE_SUB" --project-name aevia --env-file "$ENV_FILE" --file "$COMPOSE_FILE" "$@"
 	else
-		"$COMPOSE_BIN" --file "$COMPOSE_FILE" "$@"
+		"$COMPOSE_BIN" --project-name aevia --env-file "$ENV_FILE" --file "$COMPOSE_FILE" "$@"
 	fi
 }
 
@@ -55,9 +54,7 @@ require_env() {
 		die "$ENV_FILE is missing. Run: cp .env.example .env, then fill it in."
 	fi
 
-	# The session secret signs every session cookie, so a placeholder value is a
-	# forged login waiting to happen. Check the contract here rather than letting
-	# the binary fail after the containers are already up.
+	# Refuse the example credentials before starting any container.
 	secret=$(sed -n 's/^AEVIA_SESSION_SECRET=//p' "$ENV_FILE" | tr -d '\r' | head -n 1)
 	case $secret in
 		*[!0-9a-f]*) die "AEVIA_SESSION_SECRET must be lowercase hex. Generate one with: openssl rand -hex 32" ;;
@@ -70,93 +67,33 @@ require_env() {
 			die "AEVIA_SESSION_SECRET is still the .env.example placeholder. Generate one with: openssl rand -hex 32"
 			;;
 	esac
-}
-
-# First implementation that actually works wins, preferring Podman (the
-# production runtime): `podman compose` is a shim that exists even when no
-# provider is installed, hence the `version` probe.
-# Set AEVIA_CONTAINER_ENGINE=podman|docker to force a specific engine.
-try_detect_compose() {
-	if [ -n "$COMPOSE_BIN" ]; then
-		return 0
+	if grep -q 'change-me-to-a-long-random-string' "$ENV_FILE"; then
+		die "replace the database password placeholder in $ENV_FILE"
 	fi
-	pref=${AEVIA_CONTAINER_ENGINE:-podman}
-	if [ "$pref" = "podman" ]; then
-		if command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then
-			COMPOSE_BIN=podman
-			COMPOSE_SUB=compose
-			RUNTIME=podman
-		elif command -v podman-compose >/dev/null 2>&1; then
-			COMPOSE_BIN=podman-compose
-			COMPOSE_SUB=""
-			RUNTIME=podman
-		elif [ -z "${AEVIA_CONTAINER_ENGINE:-}" ] && command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-			COMPOSE_BIN=docker
-			COMPOSE_SUB=compose
-			RUNTIME=docker
-		else
-			return 1
-		fi
-	elif [ "$pref" = "docker" ]; then
-		if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-			COMPOSE_BIN=docker
-			COMPOSE_SUB=compose
-			RUNTIME=docker
-		else
-			return 1
-		fi
-	else
-		die "unknown AEVIA_CONTAINER_ENGINE='$pref' (expected podman or docker)"
-	fi
-	printf 'using: %s %s\n' "$COMPOSE_BIN" "$COMPOSE_SUB" >&2
-	return 0
 }
 
 detect_compose() {
-	try_detect_compose || die "no compose implementation found (tried: podman compose, podman-compose, docker compose)"
-}
-
-detect_builder() {
-	if [ -n "$BUILDER" ]; then
-		return 0
-	fi
-	if [ -n "${AEVIA_CONTAINER_ENGINE:-}" ]; then
-		command -v "$AEVIA_CONTAINER_ENGINE" >/dev/null 2>&1 || die "$AEVIA_CONTAINER_ENGINE not found"
-		BUILDER=$AEVIA_CONTAINER_ENGINE
-		return 0
-	fi
-	# Keep the builder aligned with whichever compose runtime `up` will use
-	# so images are not built into Podman and then looked up in Docker.
-	if try_detect_compose 2>/dev/null; then
-		BUILDER=$RUNTIME
-		return 0
-	fi
-	if command -v podman >/dev/null 2>&1; then
-		BUILDER=podman
-	elif command -v docker >/dev/null 2>&1; then
-		BUILDER=docker
+	[ -z "$COMPOSE_BIN" ] || return 0
+	if command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then
+		COMPOSE_BIN=podman
+		COMPOSE_SUB=compose
+	elif command -v podman-compose >/dev/null 2>&1; then
+		COMPOSE_BIN=podman-compose
 	else
-		die "neither podman nor docker found"
+		die "no Podman Compose provider found"
 	fi
 }
 
-# Name of the archive volume. Compose prefixes it with the project name
-# (aevia_aevia-data), Quadlet uses the bare name, and both must work here.
 archive_volume() {
-	vols=$("$RUNTIME" volume ls --format '{{.Name}}')
-	for v in $vols; do
-		case $v in
-			aevia-data | *_aevia-data) printf '%s\n' "$v" ;;
-		esac
-	done | head -n 1
+	podman volume exists aevia_aevia-data || die "Compose archive volume is missing; run 'up' first"
+	printf '%s\n' aevia_aevia-data
 }
 
 cmd_build() {
-	require_env
-	detect_builder
+	command -v podman >/dev/null 2>&1 || die "podman is required to build the images"
 
 	if [ -z "$LANG_CRATES" ]; then
-		die "the language repository is not checked out next to this one: expected $REPO_DIR/../crates (needed by aevia-registry-docs)"
+		die "the language source directory is missing: expected $REPO_DIR/../crates (needed by aevia-registry-docs)"
 	fi
 
 	# The image resolves the language crates' inherited fields from a checked-in
@@ -182,7 +119,7 @@ cmd_build() {
 	fi
 
 	set -- "$@" "$REPO_DIR"
-	run "$BUILDER" "$@"
+	run podman "$@"
 }
 
 cmd_up() {
@@ -212,10 +149,14 @@ cmd_backup() {
 	require_env
 	detect_compose
 
+	umask 077
 	mkdir -p "$BACKUP_DIR"
 	stamp=$(date -u +%Y%m%dT%H%M%SZ)
-	sql="$BACKUP_DIR/aevia-db-$stamp.sql"
-	tarball="$BACKUP_DIR/aevia-data-$stamp.tar.gz"
+	staging=$(mktemp -d "$BACKUP_DIR/.backup-$stamp.XXXXXX")
+	trap 'rm -rf -- "$staging"' EXIT
+	trap 'exit 1' INT HUP TERM
+	sql="$staging/aevia-db-$stamp.sql"
+	tarball="$staging/aevia-data-$stamp.tar.gz"
 
 	# Dump to a file first, not into a pipe: POSIX sh has no pipefail, so a
 	# failing pg_dump inside `pg_dump | gzip` would still leave a valid, empty
@@ -231,17 +172,17 @@ cmd_backup() {
 	run gzip -9 "$sql"
 
 	vol=$(archive_volume)
-	if [ -z "$vol" ]; then
-		die "archive volume not found; has 'up' been run?"
-	fi
 
 	# A throwaway container is the only way to read a volume that no host path
 	# points at. --user 0:0 because the archives are owned by uid 10001.
 	printf '+ tar volume %s > %s\n' "$vol" "$tarball" >&2
-	"$RUNTIME" run --rm --user 0:0 --volume "$vol:/data:ro" \
-		"$IMAGE_REGISTRY" tar -czf - -C /data . >"$tarball"
+	podman run --rm --network=none --user 0:0 --volume "$vol:/data:ro" \
+		--entrypoint /usr/bin/tar "$IMAGE_REGISTRY" \
+		--exclude='*.partial' -czf - -C /data . >"$tarball"
 
-	printf 'backup written:\n  %s\n  %s\n' "$sql.gz" "$tarball" >&2
+	mv -- "$sql.gz" "$tarball" "$BACKUP_DIR/"
+
+	printf 'backup written:\n  %s\n  %s\n' "$BACKUP_DIR/${sql##*/}.gz" "$BACKUP_DIR/${tarball##*/}" >&2
 }
 
 cmd_restore() {
@@ -251,6 +192,8 @@ cmd_restore() {
 	[ "$#" -eq 1 ] || die "usage: deploy.sh restore <backup.sql.gz|backup.tar.gz>"
 	file=$1
 	[ -f "$file" ] || die "$file does not exist"
+	running=$(compose ps --quiet --status running registry)
+	[ -z "$running" ] || die "stop the registry with 'stop registry' before restoring"
 
 	if [ "${AEVIA_RESTORE_YES:-}" != "1" ]; then
 		printf 'This overwrites the live database and/or archives. Type "yes" to continue: ' >&2
@@ -260,16 +203,17 @@ cmd_restore() {
 
 	case $file in
 		*.sql.gz)
+			gzip -t -- "$file"
 			printf '+ psql < %s\n' "$file" >&2
 			gunzip -c "$file" | compose exec -T db sh -c \
-				'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+				'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" --single-transaction --file=-'
 			;;
 		*.tar.gz)
 			vol=$(archive_volume)
-			[ -n "$vol" ] || die "archive volume not found; has 'up' been run?"
+			gzip -t -- "$file"
 			printf '+ untar %s > volume %s\n' "$file" "$vol" >&2
-			"$RUNTIME" run --rm -i --user 0:0 --volume "$vol:/data" \
-				"$IMAGE_REGISTRY" tar -xzf - -C /data <"$file"
+			podman run --rm -i --network=none --user 0:0 --volume "$vol:/data" \
+				--entrypoint /usr/bin/tar "$IMAGE_REGISTRY" -xzf - -C /data <"$file"
 			;;
 		*)
 			die "unknown backup format: $file (expected .sql.gz or .tar.gz)"
@@ -280,7 +224,6 @@ cmd_restore() {
 cmd_upgrade() {
 	require_env
 	detect_compose
-	detect_builder
 
 	# Caddy and the base images float on their major version, so pull them.
 	# PostgreSQL is *not* upgraded in place: a major-version bump needs a
@@ -298,6 +241,7 @@ usage() {
 case ${1:-} in
 	build) shift; cmd_build "$@" ;;
 	up) shift; cmd_up "$@" ;;
+	stop) shift; detect_compose; run compose stop "$@" ;;
 	down) shift; cmd_down "$@" ;;
 	logs) shift; cmd_logs "$@" ;;
 	ps) shift; cmd_ps "$@" ;;

@@ -22,5 +22,5 @@ aevia-syntax = { workspace = true, optional = true }
 pulldown-cmark.workspace = true
 tracing.workspace = true
 
-[lints.rust]
-unsafe_code = "forbid"
+[lints]
+workspace = true

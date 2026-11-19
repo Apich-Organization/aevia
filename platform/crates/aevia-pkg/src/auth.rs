@@ -35,6 +35,10 @@ const FALLBACK_LIFETIME_SECONDS: i64 = 900;
 /// A usage error for `--key` together with `--ssh`, a key that cannot be used,
 /// a device flow the publisher denies or lets expire, or a config file that
 /// cannot be written.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the login command owns the authorization flow and its polling deadline"
+)]
 pub async fn login(
     app: &App,
     key: Option<&str>,
@@ -61,9 +65,7 @@ pub async fn login(
     }
 
     let armored = keys::public_key(&local)?;
-    let label = label
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("aevia-pkg on {}", hostname()));
+    let label = label.map_or_else(|| format!("aevia-pkg on {}", hostname()), str::to_string);
     let start = app
         .client
         .device_start(local.kind.as_str(), &armored, &label)
@@ -85,11 +87,14 @@ pub async fn login(
         eprintln!("aevia-pkg: waiting for approval…");
     }
 
-    let deadline = chrono::DateTime::parse_from_rfc3339(&start.expires_at)
-        .map(|expires| expires.with_timezone(&chrono::Utc))
-        .unwrap_or_else(|_| {
-            chrono::Utc::now() + chrono::Duration::seconds(FALLBACK_LIFETIME_SECONDS)
-        });
+    let deadline = chrono::DateTime::parse_from_rfc3339(&start.expires_at).map_or_else(
+        |_| {
+            let now = chrono::Utc::now();
+            now.checked_add_signed(chrono::Duration::seconds(FALLBACK_LIFETIME_SECONDS))
+                .unwrap_or(now)
+        },
+        |expires| expires.with_timezone(&chrono::Utc),
+    );
 
     let publisher = loop {
         if chrono::Utc::now() >= deadline {
@@ -139,6 +144,10 @@ pub async fn login(
 }
 
 /// The machine's name, for a default key label.
+#[allow(
+    clippy::single_call_fn,
+    reason = "device labels account for platform-specific hostname discovery"
+)]
 fn hostname() -> String {
     ["COMPUTERNAME", "HOSTNAME", "HOST"]
         .iter()

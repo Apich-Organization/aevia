@@ -8,8 +8,10 @@
 //! touching a template.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use axum::Form;
+use axum::extract::OriginalUri;
 use axum::extract::Path;
 use axum::extract::Query;
 use axum::extract::State;
@@ -23,6 +25,7 @@ use axum::response::Response;
 use chrono::Utc;
 use serde::Deserialize;
 
+use aevia_registry_core::Lang;
 use aevia_registry_core::PackageId;
 use aevia_registry_core::vm::AccountPage;
 use aevia_registry_core::vm::CrateCard;
@@ -34,7 +37,6 @@ use aevia_registry_core::vm::DocModulePage;
 use aevia_registry_core::vm::DocsIndexPage;
 use aevia_registry_core::vm::KeyView;
 use aevia_registry_core::vm::LogEntryView;
-use aevia_registry_core::vm::ModuleLink;
 use aevia_registry_core::vm::OwnerView;
 use aevia_registry_core::vm::UserPage;
 use aevia_registry_core::vm::VersionView;
@@ -64,7 +66,9 @@ pub fn urlencode(value: &str) -> String {
             | b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 out.push(char::from(byte));
             },
-            | _ => out.push_str(&format!("%{byte:02X}")),
+            | _ => {
+                let _ = write!(out, "%{byte:02X}");
+            },
         }
     }
     out
@@ -80,13 +84,13 @@ pub async fn home(
     Language(lang): Language,
     headers: HeaderMap,
 ) -> PageResult<Html<String>> {
-    let stats = repo::stats(&state.pool).await?;
+    let catalog = repo::stats(&state.pool).await?;
     let (recent, _) = repo::list_packages(&state.pool, "", "recent", 6, 0).await?;
     let cards = cards_of(&recent);
     let viewer = state.viewer(&headers).await;
     Ok(Html(web::home(
         lang,
-        &stats,
+        &catalog,
         &cards,
         &state.config.base_url,
         viewer.as_ref(),
@@ -122,8 +126,14 @@ pub async fn crates(
         | _ => "recent".to_string(),
     };
     let page = query.page.unwrap_or(1).max(1);
-    let (items, total) =
-        repo::list_packages(&state.pool, &search, &sort, PER_PAGE, (page - 1) * PER_PAGE).await?;
+    let (items, total) = repo::list_packages(
+        &state.pool,
+        &search,
+        &sort,
+        PER_PAGE,
+        page.saturating_sub(1).saturating_mul(PER_PAGE),
+    )
+    .await?;
     let list = CrateList {
         total,
         page,
@@ -207,9 +217,13 @@ pub(crate) async fn build_crate_page(
     };
     let downloads = repo::package_downloads(&state.pool, package.id).await?;
     let viewer = state.current(headers).await;
-    let can_manage = viewer
-        .as_ref()
-        .is_some_and(|(_, publisher)| publisher.id == package.owner_id);
+    let can_manage = match viewer.as_ref() {
+        | Some((_, publisher)) => {
+            repo::resolve_publishing_owner(&state.pool, publisher.id, &owner_row.handle).await?
+                == Some(package.owner_id)
+        },
+        | None => false,
+    };
     let dependencies: Vec<DependencyView> =
         aevia_registry_core::index::deps_from_json(&selected.dependencies)
             .into_iter()
@@ -329,6 +343,7 @@ pub async fn docs_landing(
 pub async fn docs_latest(
     State(state): State<AppState>,
     Path((owner, name)): Path<(String, String)>,
+    OriginalUri(uri): OriginalUri,
 ) -> PageResult<Response> {
     let id = PackageId::new(&owner, &name)?;
     let Some((package, _)) =
@@ -344,7 +359,12 @@ pub async fn docs_latest(
             "{id} has no built documentation yet."
         )));
     };
-    Ok(Redirect::to(&format!("/docs/{id}/{version}")).into_response())
+    let mut destination = format!("/docs/{id}/{version}");
+    if let Some(language) = uri.query().and_then(crate::http::query_language) {
+        destination.push_str("?lang=");
+        destination.push_str(language.code());
+    }
+    Ok(Redirect::to(&destination).into_response())
 }
 
 /// `GET /docs/{owner}/{name}/{version}`
@@ -357,31 +377,25 @@ pub async fn docs_index(
     Language(lang): Language,
     Path((owner, name, version)): Path<(String, String, String)>,
     headers: HeaderMap,
-) -> PageResult<Html<String>> {
+) -> PageResult<Response> {
     let (id, package, row) = resolve_version(&state, &owner, &name, &version).await?;
-    let pages = repo::docs_pages(&state.pool, row.id).await?;
-    let index = pages.iter().find(|page| page.path.is_empty());
-    let modules: Vec<ModuleLink> = pages
-        .iter()
-        .filter(|page| !page.path.is_empty())
-        .map(|page| {
-            ModuleLink {
-                path: page.path.clone(),
-                decls: usize::try_from(page.decls).unwrap_or(0),
-                undocumented: usize::try_from(page.undocumented).unwrap_or(0),
-            }
-        })
-        .collect();
+    if let Some(status) = docs_build_status(&id, &row, lang) {
+        return Ok(status);
+    }
+    let (modules, index, other_versions) = tokio::try_join!(
+        repo::docs_outline(&state.pool, row.id),
+        repo::docs_page(&state.pool, row.id, ""),
+        repo::versions_with_docs(&state.pool, package.id),
+    )?;
     let total_decls: usize = modules.iter().map(|module| module.decls).sum();
     let undocumented: usize = modules.iter().map(|module| module.undocumented).sum();
-    let other_versions = repo::versions_with_docs(&state.pool, package.id).await?;
     let page = DocsIndexPage {
         id,
         version: row.version.clone(),
         modules,
         total_decls,
         undocumented,
-        readme_html: index.map(|page| page.html.clone()),
+        readme_html: index.map(|page| page.html),
         generated_at: row.docs_generated_at.unwrap_or(row.created_at).to_rfc3339(),
         other_versions,
     };
@@ -389,7 +403,8 @@ pub async fn docs_index(
         lang,
         &page,
         state.viewer(&headers).await.as_ref(),
-    )))
+    ))
+    .into_response())
 }
 
 /// `GET /docs/{owner}/{name}/{version}/{module}`
@@ -402,25 +417,20 @@ pub async fn docs_module(
     Language(lang): Language,
     Path((owner, name, version, module)): Path<(String, String, String, String)>,
     headers: HeaderMap,
-) -> PageResult<Html<String>> {
+) -> PageResult<Response> {
     let (id, _package, row) = resolve_version(&state, &owner, &name, &version).await?;
-    let pages = repo::docs_pages(&state.pool, row.id).await?;
-    let Some(page) = pages.iter().find(|page| page.path == module) else {
+    if let Some(status) = docs_build_status(&id, &row, lang) {
+        return Ok(status);
+    }
+    let (modules, page) = tokio::try_join!(
+        repo::docs_outline(&state.pool, row.id),
+        repo::docs_page(&state.pool, row.id, &module),
+    )?;
+    let Some(page) = page else {
         return Err(PageError::not_found(format!(
             "{id} {version} has no module `{module}`."
         )));
     };
-    let modules: Vec<ModuleLink> = pages
-        .iter()
-        .filter(|page| !page.path.is_empty())
-        .map(|page| {
-            ModuleLink {
-                path: page.path.clone(),
-                decls: usize::try_from(page.decls).unwrap_or(0),
-                undocumented: usize::try_from(page.undocumented).unwrap_or(0),
-            }
-        })
-        .collect();
     let model = DocModulePage {
         id,
         version: row.version.clone(),
@@ -435,7 +445,48 @@ pub async fn docs_module(
         lang,
         &model,
         state.viewer(&headers).await.as_ref(),
-    )))
+    ))
+    .into_response())
+}
+
+fn docs_build_status(
+    id: &PackageId,
+    row: &Version,
+    lang: Lang,
+) -> Option<Response> {
+    let (status, message) = match (row.docs_status.as_str(), lang) {
+        | ("built", _) => return None,
+        | ("pending", Lang::En) => {
+            (
+                StatusCode::ACCEPTED,
+                "Documentation is queued. Refresh this page shortly.",
+            )
+        },
+        | ("pending", Lang::Zh) => (StatusCode::ACCEPTED, "文档正在排队生成，请稍后刷新。"),
+        | ("failed", Lang::En) => {
+            (
+                StatusCode::NOT_FOUND,
+                "Documentation could not be built for this release.",
+            )
+        },
+        | ("failed", Lang::Zh) => (StatusCode::NOT_FOUND, "此版本的文档生成失败。"),
+        | (_, Lang::En) => {
+            (
+                StatusCode::NOT_FOUND,
+                "This release has no hosted documentation.",
+            )
+        },
+        | (_, Lang::Zh) => (StatusCode::NOT_FOUND, "此版本没有托管文档。"),
+    };
+    let html = web::docs_build_status(lang, id, &row.version, message);
+    let mut response = (status, Html(html)).into_response();
+    if status == StatusCode::ACCEPTED {
+        response.headers_mut().insert(
+            header::RETRY_AFTER,
+            axum::http::HeaderValue::from_static("3"),
+        );
+    }
+    Some(response)
 }
 
 async fn resolve_version(
@@ -599,14 +650,20 @@ pub async fn logout(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> PageResult<Response> {
-    if let Some(id) = crate::http::cookie(&headers, crate::http::SESSION_COOKIE) {
+    if let Some(id) = state.session_key(&headers) {
         repo::delete_session(&state.pool, &id).await?;
     }
     let mut response = Redirect::to("/").into_response();
-    response.headers_mut().insert(
+    response.headers_mut().append(
         crate::http::set_cookie_header(),
-        crate::http::clear_session_cookie(),
+        crate::http::clear_session_cookie(false),
     );
+    if crate::http::is_secure(&state.config.base_url) {
+        response.headers_mut().append(
+            crate::http::set_cookie_header(),
+            crate::http::clear_session_cookie(true),
+        );
+    }
     Ok(response)
 }
 
@@ -623,9 +680,10 @@ pub async fn log(
     let entries = repo::log_entries(&state.pool, 0, LOG_PAGE).await?;
     let head = repo::log_head(&state.pool).await?;
     let views: Vec<LogEntryView> = entries.iter().map(log_view).collect();
-    let (seq, hash) = head.as_ref().map_or((0, "0".repeat(64)), |entry| {
-        (entry.seq, entry.entry_hash.clone())
-    });
+    let (seq, hash) = head.as_ref().map_or_else(
+        || (0, "0".repeat(64)),
+        |entry| (entry.seq, entry.entry_hash.clone()),
+    );
     Ok(Html(web::log_page(
         lang,
         &views,
@@ -716,7 +774,7 @@ pub async fn stdlib_index(
 ) -> PageResult<Html<String>> {
     let stdlib = state.stdlib_docs.read().await.clone();
     Ok(Html(web::stdlib_index(
-        stdlib.book(),
+        stdlib.book_for(lang),
         lang,
         state.viewer(&headers).await.as_ref(),
     )))
@@ -734,12 +792,12 @@ pub async fn stdlib_module(
     headers: HeaderMap,
 ) -> PageResult<Html<String>> {
     let stdlib = state.stdlib_docs.read().await.clone();
-    let book = stdlib.book();
+    let book = stdlib.book_for(lang);
     let Some(found) = book.module(&module) else {
-        return Err(
-            PageError::not_found(format!("The standard library has no module `{module}`."))
-                .in_lang(lang),
-        );
+        return Err(PageError::not_found(format!(
+            "The standard library has no module `{module}`."
+        ))
+        .in_lang(lang));
     };
     Ok(Html(web::stdlib_module(
         book,
@@ -786,34 +844,6 @@ pub async fn install_ps1(State(state): State<AppState>) -> impl IntoResponse {
     )
 }
 
-/// `POST /internal/reload` — triggers an immediate reload of `spec` and `stdlib` docs.
-pub async fn internal_reload(State(state): State<AppState>) -> Response {
-    match tokio::try_join!(state.reload_spec(), state.reload_stdlib_docs()) {
-        | Ok((spec_chapters, stdlib_modules)) => {
-            (
-                StatusCode::OK,
-                axum::Json(serde_json::json!({
-                    "reloaded": true,
-                    "spec_chapters": spec_chapters,
-                    "stdlib_modules": stdlib_modules,
-                })),
-            )
-                .into_response()
-        },
-        | Err(error) => {
-            tracing::warn!(error = %error.render(), "internal reload failed");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(serde_json::json!({
-                    "reloaded": false,
-                    "error": error.render(),
-                })),
-            )
-                .into_response()
-        },
-    }
-}
-
 /// `GET /lang/{code}` — remembers a language and returns to the page.
 ///
 /// A GET, not a POST: choosing a language is not a state change anyone needs to
@@ -830,10 +860,15 @@ pub async fn set_language(
         .get(axum::http::header::REFERER)
         .and_then(|value| value.to_str().ok())
         .and_then(|referer| url::Url::parse(referer).ok())
+        .filter(|url| url.origin().ascii_serialization() == state.config.base_url)
         .map(|url| {
-            match url.query() {
-                | Some(query) => format!("{}?{query}", url.path()),
-                | None => url.path().to_string(),
+            let query = url::form_urlencoded::Serializer::new(String::new())
+                .extend_pairs(url.query_pairs().filter(|(key, _)| key != "lang"))
+                .finish();
+            if query.is_empty() {
+                url.path().to_owned()
+            } else {
+                format!("{}?{query}", url.path())
             }
         })
         .filter(|path| path.starts_with('/') && !path.starts_with("//"))
@@ -895,11 +930,11 @@ pub async fn healthz(State(state): State<AppState>) -> Response {
                 .into_response()
         },
         | Err(error) => {
+            tracing::warn!(%error, "health check cannot reach PostgreSQL");
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 axum::Json(serde_json::json!({
                     "status": "degraded",
-                    "error": error.to_string(),
                 })),
             )
                 .into_response()
@@ -952,6 +987,10 @@ fn version_view(row: &Version) -> VersionView {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "a transparency entry maps to the public view model at this boundary"
+)]
 fn log_view(entry: &aevia_registry_db::models::LogEntry) -> LogEntryView {
     LogEntryView {
         seq: entry.seq,

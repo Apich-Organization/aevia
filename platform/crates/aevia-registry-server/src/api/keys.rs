@@ -1,7 +1,7 @@
 //! Key lookup, so a client can check a binding before it signs.
 //!
 //! The fingerprint travels as a query parameter rather than a path segment.
-//! An OpenPGP fingerprint is hexadecimal and would be safe in a path, but an SSH
+//! An `OpenPGP` fingerprint is hexadecimal and would be safe in a path, but an SSH
 //! fingerprint is `SHA256:<base64>`, and base64 contains `/` — which a proxy may
 //! decode, merge with the path, and route to something else entirely. A query
 //! parameter has no such ambiguity.
@@ -111,8 +111,7 @@ pub async fn public_key(
         | _ => vec!["openpgp", "ssh"],
     };
     for kind in kinds {
-        if let Some(key) =
-            repo::signing_key_by_fingerprint(&state.pool, kind, &query.fingerprint).await?
+        if let Some(key) = repo::recorded_signing_key(&state.pool, kind, &query.fingerprint).await?
         {
             return Ok((
                 StatusCode::OK,

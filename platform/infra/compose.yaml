@@ -1,8 +1,6 @@
 # Aevia registry — single-host deployment.
 #
-# Works with `podman compose` (Podman 5+, compose provider installed),
-# `podman-compose`, and `docker compose`. No `version:` key: it is obsolete in
-# Compose v2 and rejected by podman-compose.
+# Use `podman compose` with a Compose provider or `podman-compose`.
 #
 #   ./deploy.sh up
 #
@@ -29,9 +27,10 @@ services:
         POSTGRES_IMAGE: docker.io/library/postgres:18-trixie
     image: localhost/aevia/postgres:18-trixie
     restart: unless-stopped
-    env_file:
-      - .env
     environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
       # Pinned here as well as in the image so an operator reading compose.yaml
       # sees the path that the volume below mounts.
       PGDATA: /var/lib/postgresql/data
@@ -49,15 +48,16 @@ services:
       start_period: 30s
     logging: *logging
     mem_limit: 1g
+    networks:
+      - storage
 
   registry:
     build:
       context: ..
       dockerfile: infra/Containerfile.server
       args:
-        RUST_VERSION: "1.97"
-      # The language crates live in a sibling checkout, outside the main
-      # context. See the header of infra/Containerfile.server.
+        RUST_VERSION: "1.100"
+      # The language crates are in the parent workspace.
       additional_contexts:
         lang: ../../crates
     image: localhost/aevia/registry:0.1.0
@@ -67,28 +67,43 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "4", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     volumes:
       # `:U` makes podman chown the volume to the container uid (10001) on first
-      # use. Without it a rootless volume is owned by the mapped root user and
-      # the non-root process cannot create its archive directories. Docker
-      # ignores the flag and uses the ownership baked into the image.
+      # use. The registry runs as that non-root UID.
       - aevia-data:/var/lib/aevia/packages:U
-      # The language specification, mounted read-only from the sibling
-      # checkout. `/spec` renders whatever is in this directory, so updating the
-      # document is a `git pull` plus a restart — no image rebuild.
-      - ../../spec:/spec:ro
+      - ../../spec:/spec:ro,z
+      - ../stdlib-docs:/stdlib-docs:ro,z
+      - ../manuals:/manuals:ro,z
     ports:
       # Loopback only. Caddy is the only thing that speaks to the outside world;
       # the plaintext listener must not be reachable from the LAN.
       - "127.0.0.1:8080:8080"
     logging: *logging
     mem_limit: 2g
+    pids_limit: 128
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - edge
+      - storage
 
   caddy:
     # Official image; the binary is a static Go build, so its Debian base is
     # irrelevant to the registry's glibc requirements.
     image: docker.io/library/caddy:2
     restart: unless-stopped
+    environment:
+      AEVIA_DOMAIN: ${AEVIA_DOMAIN:-aevia.apich.org}
+      AEVIA_ACME_EMAIL: ${AEVIA_ACME_EMAIL:-ops@apich.org}
     ports:
       - "80:80"        # ACME HTTP-01 challenge and the HTTP->HTTPS redirect
       - "443:443"      # HTTPS
@@ -101,6 +116,13 @@ services:
       - registry
     logging: *logging
     mem_limit: 256m
+    networks:
+      - edge
+
+networks:
+  edge: {}
+  storage:
+    internal: true
 
 volumes:
   aevia-db:

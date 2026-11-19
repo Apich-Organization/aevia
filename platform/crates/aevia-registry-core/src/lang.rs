@@ -32,7 +32,7 @@ pub enum Lang {
 impl Lang {
     /// The two-letter code used in URLs and cookies.
     #[must_use]
-    pub fn code(self) -> &'static str {
+    pub const fn code(self) -> &'static str {
         match self {
             | Self::En => "en",
             | Self::Zh => "zh",
@@ -41,7 +41,7 @@ impl Lang {
 
     /// The language's own name, for the switcher.
     #[must_use]
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             | Self::En => "English",
             | Self::Zh => "中文",
@@ -50,7 +50,7 @@ impl Lang {
 
     /// The other language, for the switcher's target.
     #[must_use]
-    pub fn other(self) -> Self {
+    pub const fn other(self) -> Self {
         match self {
             | Self::En => Self::Zh,
             | Self::Zh => Self::En,
@@ -72,27 +72,33 @@ impl Lang {
 
     /// Picks a language from an `Accept-Language` header.
     ///
-    /// The header is a weighted list; the first supported entry wins, and
-    /// English is the fallback because the site's code and API are English.
+    /// Prefers the highest positive weight. Ties keep the client's original
+    /// ordering.
     #[must_use]
     pub fn from_accept_language(header: &str) -> Option<Self> {
-        let mut candidates: Vec<(f32, Self)> = Vec::new();
+        let mut best = None;
         for part in header.split(',') {
-            let mut pieces = part.split(';');
-            let code = pieces.next()?.trim();
-            let weight = pieces
-                .next()
-                .and_then(|piece| piece.trim().strip_prefix("q="))
-                .and_then(|value| value.parse::<f32>().ok())
-                .unwrap_or(1.0);
-            if let Some(lang) = Self::parse(code) {
-                candidates.push((weight, lang));
+            let (code, weight) = match part.split_once(';') {
+                | Some((code, parameter)) => {
+                    let Some(weight) = parameter
+                        .trim()
+                        .strip_prefix("q=")
+                        .and_then(|value| value.parse::<f32>().ok())
+                        .filter(|weight| *weight > 0.0 && *weight <= 1.0)
+                    else {
+                        continue;
+                    };
+                    (code, weight)
+                },
+                | None => (part, 1.0),
+            };
+            if let Some(lang) = Self::parse(code)
+                && best.is_none_or(|(previous, _)| weight > previous)
+            {
+                best = Some((weight, lang));
             }
         }
-        candidates
-            .into_iter()
-            .max_by(|left, right| left.0.total_cmp(&right.0))
-            .map(|(_, lang)| lang)
+        best.map(|(_, lang)| lang)
     }
 }
 
@@ -132,6 +138,8 @@ mod tests {
         );
         assert_eq!(Lang::from_accept_language("en-US,en;q=0.9"), Some(Lang::En));
         assert_eq!(Lang::from_accept_language("de-DE"), None);
+        assert_eq!(Lang::from_accept_language("zh;q=0,en;q=NaN"), None);
+        assert_eq!(Lang::from_accept_language("zh,en"), Some(Lang::Zh));
     }
 
     #[test]

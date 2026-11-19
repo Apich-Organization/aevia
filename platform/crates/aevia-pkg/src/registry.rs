@@ -26,6 +26,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -68,6 +69,10 @@ impl Cache {
     /// Opens the cache at `explicit`, else `$AEVIA_REGISTRY_DIR`, else
     /// `.aevia/registry` next to the package found from `start`.
     #[must_use]
+    #[allow(
+        clippy::single_call_fn,
+        reason = "cache location follows explicit, environment and workspace precedence"
+    )]
     pub fn locate(
         explicit: Option<&Path>,
         start: &Path,
@@ -90,12 +95,6 @@ impl Cache {
         }
     }
 
-    /// A cache rooted exactly at `root`.
-    #[must_use]
-    pub fn at(root: PathBuf) -> Self {
-        Self { root }
-    }
-
     /// The cache root.
     #[must_use]
     pub fn root(&self) -> &Path {
@@ -107,10 +106,7 @@ impl Cache {
         base: &str,
         id: &PackageId,
     ) -> PathBuf {
-        self.root
-            .join(base)
-            .join(id.owner())
-            .join(id.name_key())
+        self.root.join(base).join(id.owner()).join(id.name_key())
     }
 
     /// Where the index text of a package is kept.
@@ -182,6 +178,10 @@ impl Cache {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "index replacement must expose old or complete new contents to readers"
+)]
 fn write_atomically(
     path: &Path,
     bytes: &[u8],
@@ -208,6 +208,10 @@ pub struct CacheIndex<'a> {
 impl<'a> CacheIndex<'a> {
     /// A fresh view of the cache.
     #[must_use]
+    #[allow(
+        clippy::single_call_fn,
+        reason = "each resolver iteration opens a fresh view of the local index"
+    )]
     pub fn new(cache: &'a Cache) -> Self {
         Self {
             cache,
@@ -236,10 +240,7 @@ impl Index for CacheIndex<'_> {
                 .parse::<PackageId>()
                 .map_err(|_| IndexError::missing(package))?;
             let text = self.cache.read_index(&id).ok_or_else(|| {
-                IndexError::unavailable(
-                    package,
-                    format!("the index of `{package}` is not cached"),
-                )
+                IndexError::unavailable(package, format!("the index of `{package}` is not cached"))
             })?;
             self.loaded
                 .borrow_mut()
@@ -268,7 +269,9 @@ pub async fn fetch_index(
     let text = app.client.index_text(id.owner(), id.name()).await?;
     // Parse before storing, so a damaged response never replaces a good file.
     aevia_resolve::sparse::parse_text(&text).map_err(|error| {
-        CliError::new(format!("the registry's index of `{id}` is damaged: {error}"))
+        CliError::new(format!(
+            "the registry's index of `{id}` is damaged: {error}"
+        ))
     })?;
     cache.write_index(id, &text)
 }
@@ -325,39 +328,49 @@ pub async fn resolve_closure(
                     let mut records = BTreeMap::new();
                     for chosen in &resolution.packages {
                         if let Some(record) = index.record(&chosen.package, &chosen.version) {
-                            records.insert(format!("{} {}", chosen.package, chosen.version), record);
+                            records
+                                .insert(format!("{} {}", chosen.package, chosen.version), record);
                         }
                     }
                     return Ok((resolution, records));
                 }
+                reserve_index_fetches(&mut fetches, stale.len())?;
                 for package in stale {
                     let id: PackageId = package.parse().map_err(CliError::from)?;
                     fetch_index(app, plan.cache, &id).await?;
-                    fetches += 1;
                 }
             },
             | Err(ResolveError::Index(error)) if error.kind == IndexErrorKind::Unavailable => {
                 if plan.offline {
-                    return Err(CliError::new(format!(
-                        "{} (offline)",
-                        error.message
-                    ))
-                    .with_next_step("run the command again without `--offline`"));
+                    return Err(CliError::new(format!("{} (offline)", error.message))
+                        .with_next_step("run the command again without `--offline`"));
                 }
-                fetches += 1;
-                if fetches > MAX_FETCHES {
-                    return Err(CliError::new(format!(
-                        "the requirements reach more than {MAX_FETCHES} packages"
-                    )));
-                }
+                reserve_index_fetches(&mut fetches, 1)?;
                 let id: PackageId = error.package.parse().map_err(CliError::from)?;
                 fetch_index(app, plan.cache, &id).await?;
+                refreshed.insert(error.package);
             },
             | Err(other) => {
                 return Err(CliError::new(format!("E0606: {other}")));
             },
         }
     }
+}
+
+fn reserve_index_fetches(
+    requested: &mut usize,
+    additional: usize,
+) -> Result<(), CliError> {
+    let Some(total) = requested
+        .checked_add(additional)
+        .filter(|total| *total <= MAX_FETCHES)
+    else {
+        return Err(CliError::new(format!(
+            "resolving the requirements needs more than {MAX_FETCHES} index requests"
+        )));
+    };
+    *requested = total;
+    Ok(())
 }
 
 /// The dependencies of `./aevia.toml` that name registry packages.
@@ -373,11 +386,7 @@ fn manifest_dependencies(manifest: &PackageManifest) -> Result<Vec<Dependency>, 
         .map(|(label, package, req)| {
             let req = VersionReq::parse(&req)
                 .map_err(|error| CliError::new(format!("dependency `{label}`: {error}")))?;
-            Ok(Dependency {
-                label,
-                package,
-                req,
-            })
+            Ok(Dependency { label, package, req })
         })
         .collect()
 }
@@ -448,14 +457,7 @@ pub async fn vendor_version(
     force: bool,
 ) -> Result<bool, CliError> {
     let dest = cache.source_dir(id, version);
-    if !force
-        && let Ok(marker) = std::fs::read_to_string(dest.join(MARKER))
-        && marker
-            .lines()
-            .next()
-            .is_some_and(|first| first.trim().eq_ignore_ascii_case(expected))
-        && dest.join("aevia.toml").is_file()
-    {
+    if !force && cached_source(&dest, expected) {
         return Ok(false);
     }
     let verified = fetch::verify(app, id, version).await?;
@@ -466,17 +468,62 @@ pub async fn vendor_version(
         ))
         .with_next_step("the registry changed a published version; do not use it"));
     }
-    if dest.exists() {
-        std::fs::remove_dir_all(&dest).map_err(|error| {
+    let parent = dest
+        .parent()
+        .ok_or_else(|| CliError::new("the registry cache has no package parent"))?;
+    std::fs::create_dir_all(parent).map_err(|error| {
+        CliError::new(format!(
+            "cannot create the package cache `{}`: {error}",
+            parent.display()
+        ))
+    })?;
+    let staging = tempfile::Builder::new()
+        .prefix(".stage-")
+        .tempdir_in(parent)
+        .map_err(|error| CliError::new(format!("cannot stage the package: {error}")))?;
+    let source = staging.path().join("source");
+    let written = tarball::unpack(&verified.bytes, &source).map_err(CliError::from)?;
+    std::fs::write(
+        source.join(MARKER),
+        format!(
+            "{}\n{} {}\n",
+            verified.checksum, verified.id, verified.version
+        ),
+    )
+    .map_err(|error| CliError::new(format!("cannot record the checksum: {error}")))?;
+    let writer = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(parent.join(".vendor.lock"))
+        .map_err(|error| CliError::new(format!("cannot open the package cache lock: {error}")))?;
+    writer
+        .lock()
+        .map_err(|error| CliError::new(format!("cannot lock the package cache: {error}")))?;
+    if !force && cached_source(&dest, expected) {
+        return Ok(false);
+    }
+    let previous = staging.path().join("previous");
+    let have_previous = dest.exists();
+    if have_previous {
+        std::fs::rename(&dest, &previous).map_err(|error| {
             CliError::new(format!("cannot replace `{}`: {error}", dest.display()))
         })?;
     }
-    let written = tarball::unpack(&verified.bytes, &dest).map_err(CliError::from)?;
-    std::fs::write(
-        dest.join(MARKER),
-        format!("{}\n{} {}\n", verified.checksum, verified.id, verified.version),
-    )
-    .map_err(|error| CliError::new(format!("cannot record the checksum: {error}")))?;
+    if let Err(error) = std::fs::rename(&source, &dest) {
+        if have_previous && let Err(restore) = std::fs::rename(&previous, &dest) {
+            let preserved = staging.keep();
+            return Err(CliError::new(format!(
+                "cannot install `{}`: {error}. Previous files remain in `{}`: {restore}",
+                dest.display(),
+                preserved.display()
+            )));
+        }
+        return Err(CliError::new(format!(
+            "cannot install `{}`: {error}",
+            dest.display()
+        )));
+    }
     if !app.quiet {
         println!(
             "vendored {} {} ({} files, {}), signed by {} {}",
@@ -491,6 +538,23 @@ pub async fn vendor_version(
     Ok(true)
 }
 
+fn cached_source(
+    dest: &Path,
+    expected: &str,
+) -> bool {
+    dest.join("aevia.toml").is_file()
+        && std::fs::read_to_string(dest.join(MARKER)).is_ok_and(|marker| {
+            marker
+                .lines()
+                .next()
+                .is_some_and(|first| first.trim().eq_ignore_ascii_case(expected))
+        })
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "vendoring verifies each locked package and reports download counts"
+)]
 async fn vendor_resolution(
     app: &App,
     cache: &Cache,
@@ -498,20 +562,32 @@ async fn vendor_resolution(
     records: &BTreeMap<String, aevia_resolve::SparseRecord>,
     force: bool,
 ) -> Result<usize, CliError> {
-    let mut count = 0;
+    let mut count = 0usize;
     for chosen in &resolution.packages {
         let id: PackageId = chosen.package.parse().map_err(CliError::from)?;
         let expected = records
             .get(&chosen.to_string())
-            .map(|record| record.checksum.clone())
-            .unwrap_or_default();
-        if vendor_version(app, cache, &id, &chosen.version.to_string(), &expected, force).await? {
-            count += 1;
+            .map_or_default(|record| record.checksum.clone());
+        if vendor_version(
+            app,
+            cache,
+            &id,
+            &chosen.version.to_string(),
+            &expected,
+            force,
+        )
+        .await?
+        {
+            count = count.saturating_add(1);
         }
     }
     Ok(count)
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "resolution output must remain consistent between CLI entry points"
+)]
 fn print_resolution(
     resolution: &Resolution,
     records: &BTreeMap<String, aevia_resolve::SparseRecord>,
@@ -535,8 +611,7 @@ fn print_resolution(
     for chosen in &resolution.packages {
         let checksum = records
             .get(&chosen.to_string())
-            .map(|record| record.checksum.as_str())
-            .unwrap_or("?");
+            .map_or("?", |record| record.checksum.as_str());
         println!("{} {}  {checksum}", chosen.package, chosen.version);
     }
 }
@@ -548,6 +623,10 @@ fn print_resolution(
 /// # Errors
 ///
 /// The first download that fails.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the index command owns its offline cache and raw output behavior"
+)]
 pub async fn index_command(
     app: &App,
     cache: &Cache,
@@ -570,6 +649,10 @@ pub async fn index_command(
 /// # Errors
 ///
 /// An unsatisfiable requirement, or a download that does not verify.
+#[allow(
+    clippy::single_call_fn,
+    reason = "adding a dependency resolves, vendors and updates the applicable manifests"
+)]
 pub async fn add(
     app: &App,
     cache: &Cache,
@@ -577,9 +660,7 @@ pub async fn add(
     alias: Option<&str>,
 ) -> Result<(), CliError> {
     let (id, requested) = package::parse_requirement_target(target)?;
-    let label = alias
-        .map(str::to_string)
-        .unwrap_or_else(|| package::import_root(id.name()));
+    let label = alias.map_or_else(|| package::import_root(id.name()), str::to_string);
     let key = id.key();
     let plan = Plan {
         cache,
@@ -634,14 +715,17 @@ pub async fn add(
 /// # Errors
 ///
 /// A missing lock, or a download that does not verify.
+#[allow(
+    clippy::single_call_fn,
+    reason = "vendor has an independent command contract for targets and lockfiles"
+)]
 pub async fn vendor(
     app: &App,
     cache: &Cache,
     targets: &[String],
     force: bool,
 ) -> Result<(), CliError> {
-    let mut wanted: BTreeSet<(String, String, String)> = BTreeSet::new();
-    if targets.is_empty() {
+    let wanted = if targets.is_empty() {
         let root = package::find_root(&here()?).ok_or_else(|| {
             CliError::new("no `aevia.toml` in the current directory or any parent")
                 .with_next_step("run inside a package, or name `owner/name@version` targets")
@@ -651,21 +735,24 @@ pub async fn vendor(
             CliError::new(format!("cannot read `{}`: {error}", lock.display()))
                 .with_next_step("run `aevia update` to write it")
         })?;
-        wanted = lock_registry_entries(&text);
+        lock_registry_entries(&text)
     } else {
-        for target in targets {
-            let (id, version) = package::parse_target(target)?;
-            let version = version.ok_or_else(|| {
-                CliError::usage(format!("`{target}` names no version; write `{id}@1.2.3`"))
-            })?;
-            wanted.insert((id.key(), version, String::new()));
-        }
-    }
-    let mut vendored = 0;
+        targets
+            .iter()
+            .map(|target| {
+                let (id, version) = package::parse_target(target)?;
+                let version = version.ok_or_else(|| {
+                    CliError::usage(format!("`{target}` names no version; write `{id}@1.2.3`"))
+                })?;
+                Ok((id.key(), version, String::new()))
+            })
+            .collect::<Result<_, CliError>>()?
+    };
+    let mut vendored = 0usize;
     for (name, version, checksum) in &wanted {
         let id: PackageId = name.parse().map_err(CliError::from)?;
         if vendor_version(app, cache, &id, version, checksum, force).await? {
-            vendored += 1;
+            vendored = vendored.saturating_add(1);
         }
         // The index too, so the toolchain can resolve offline afterwards.
         if cache.read_index(&id).is_none() && !app.offline {
@@ -688,6 +775,10 @@ pub async fn vendor(
 /// # Errors
 ///
 /// A download failure.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the update command refreshes and compares available versions"
+)]
 pub async fn update(
     app: &App,
     cache: &Cache,
@@ -707,15 +798,22 @@ pub async fn update(
     }
     let versions_of = |text: Option<String>| -> BTreeSet<String> {
         text.and_then(|text| aevia_resolve::sparse::parse_text(&text).ok())
-            .map(|records| {
+            .map_or_default(|records| {
                 records
                     .into_iter()
                     .map(|record| {
-                        format!("{}{}", record.version, if record.yanked { " (yanked)" } else { "" })
+                        format!(
+                            "{}{}",
+                            record.version,
+                            if record.yanked {
+                                " (yanked)"
+                            } else {
+                                ""
+                            }
+                        )
                     })
                     .collect()
             })
-            .unwrap_or_default()
     };
     for id in ids {
         let before = versions_of(cache.read_index(&id));
@@ -727,7 +825,11 @@ pub async fn update(
         } else {
             println!(
                 "{id}: {}",
-                added.iter().map(|v| format!("+{v}")).collect::<Vec<_>>().join(" ")
+                added
+                    .iter()
+                    .map(|v| format!("+{v}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
             );
         }
     }
@@ -744,6 +846,10 @@ fn load_package(start: &Path) -> Result<(PathBuf, PackageManifest), CliError> {
 /// # Errors
 ///
 /// An unsatisfiable manifest.
+#[allow(
+    clippy::single_call_fn,
+    reason = "dependency tree generation resolves the package before choosing an output format"
+)]
 pub async fn tree(
     app: &App,
     cache: &Cache,
@@ -757,13 +863,20 @@ pub async fn tree(
         locked: locked_hints(&root.join("aevia.lock")),
     };
     let (resolution, _) = resolve_closure(app, &plan, dependencies).await?;
-    print!("{}", render_tree(&manifest.name, &manifest.version, &resolution));
+    print!(
+        "{}",
+        render_tree(&manifest.name, &manifest.version, &resolution)
+    );
     Ok(())
 }
 
 /// Renders a resolution as a tree under the root package; a package reached
 /// twice is expanded once and marked `(*)` afterwards.
 #[must_use]
+#[allow(
+    clippy::single_call_fn,
+    reason = "dependency tree rendering handles ordering and repeated edges separately"
+)]
 pub fn render_tree(
     name: &str,
     version: &str,
@@ -779,18 +892,27 @@ pub fn render_tree(
         let mut edges = resolution.edges_from(node);
         edges.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| a.to.cmp(&b.to)));
         for (position, edge) in edges.iter().enumerate() {
-            let last = position + 1 == edges.len();
+            let last = position == edges.len().saturating_sub(1);
             let target = Node::Package(edge.to.clone());
             let has_children = !resolution.edges_from(&target).is_empty();
             let repeated = !seen.insert(edge.to.to_string());
-            out.push_str(&format!(
-                "{prefix}{}{} {} {}{}\n",
-                if last { "└── " } else { "├── " },
+            let _ = writeln!(
+                out,
+                "{prefix}{}{} {} {}{}",
+                if last {
+                    "└── "
+                } else {
+                    "├── "
+                },
                 edge.label,
                 edge.to.package,
                 edge.to.version,
-                if repeated && has_children { " (*)" } else { "" }
-            ));
+                if repeated && has_children {
+                    " (*)"
+                } else {
+                    ""
+                }
+            );
             if !repeated {
                 let next = format!("{prefix}{}", if last { "    " } else { "│   " });
                 walk(resolution, &target, &next, seen, out);
@@ -815,6 +937,10 @@ pub fn render_tree(
 /// # Errors
 ///
 /// An unsatisfiable manifest, or (with `--check`) a lock that has drifted.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the lock command supports both reporting and checking a resolution"
+)]
 pub async fn lock(
     app: &App,
     cache: &Cache,
@@ -845,8 +971,7 @@ pub async fn lock(
                 chosen.version.to_string(),
                 records
                     .get(&chosen.to_string())
-                    .map(|record| record.checksum.clone())
-                    .unwrap_or_default(),
+                    .map_or_default(|record| record.checksum.clone()),
             )
         })
         .collect();
@@ -857,7 +982,10 @@ pub async fn lock(
     let held = lock_registry_entries(&text);
     let problems = lock_drift(&expected, &held);
     if problems.is_empty() {
-        println!("aevia.lock matches the registry ({} package(s))", expected.len());
+        println!(
+            "aevia.lock matches the registry ({} package(s))",
+            expected.len()
+        );
         Ok(())
     } else {
         Err(CliError::new(format!(
@@ -870,6 +998,10 @@ pub async fn lock(
 
 /// Differences between the packages a resolution wants and the lock's.
 #[must_use]
+#[allow(
+    clippy::single_call_fn,
+    reason = "lock comparison reports additions, removals and checksum changes independently"
+)]
 pub fn lock_drift(
     expected: &BTreeSet<(String, String, String)>,
     held: &BTreeSet<(String, String, String)>,
@@ -890,10 +1022,7 @@ pub fn lock_drift(
         }
     }
     for (name, version, _) in held {
-        if !expected
-            .iter()
-            .any(|(n, v, _)| n == name && v == version)
-        {
+        if !expected.iter().any(|(n, v, _)| n == name && v == version) {
             problems.push(format!("in the lock but not required: {name} {version}"));
         }
     }
@@ -905,6 +1034,15 @@ mod tests {
     use super::*;
 
     const LOCK: &str = "version = 1\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\nimport = \"App\"\nsource = \"root\"\n\n[[package]]\nname = \"apich/plot\"\nversion = \"2.1.0\"\nimport = \"Plot\"\nsource = \"registry+aevia\"\nchecksum = \"sha256:aa\"\n\n[[package]]\nname = \"dep\"\nversion = \"0.2.0\"\nimport = \"Dep\"\nsource = \"path+../dep\"\nhash = \"fnv1a64:00\"\n\n[[package]]\nname = \"apich/units\"\nversion = \"1.2.0\"\nimport = \"Units\"\nsource = \"registry+aevia\"\nchecksum = \"sha256:bb\"\n";
+
+    #[test]
+    fn index_refresh_batches_obey_the_same_fetch_budget() {
+        let mut requested = 0;
+        assert!(reserve_index_fetches(&mut requested, MAX_FETCHES).is_ok());
+        assert!(reserve_index_fetches(&mut requested, 1).is_err());
+        assert!(reserve_index_fetches(&mut requested, usize::MAX).is_err());
+        assert_eq!(requested, MAX_FETCHES);
+    }
 
     #[test]
     fn only_registry_entries_are_read_from_a_lock() {
@@ -944,9 +1082,21 @@ mod tests {
             "sha256:aa".to_string(),
         ));
         let problems = lock_drift(&expected, &held);
-        assert!(problems.iter().any(|p| p.contains("missing from the lock: apich/units 1.3.0")));
-        assert!(problems.iter().any(|p| p.contains("apich/plot 2.1.0") && p.contains("sha256:zz")));
-        assert!(problems.iter().any(|p| p.contains("not required: apich/units 1.2.0")));
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("missing from the lock: apich/units 1.3.0"))
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("apich/plot 2.1.0") && p.contains("sha256:zz"))
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("not required: apich/units 1.2.0"))
+        );
     }
 
     fn line(
@@ -964,22 +1114,33 @@ mod tests {
     fn a_cache_index_resolves_offline_and_reports_what_it_lacks() {
         let dir = std::env::temp_dir().join(format!("aevia-pkg-cache-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let cache = Cache::at(dir.clone());
+        let cache = Cache { root: dir.clone() };
         let plot: PackageId = "apich/plot".parse().unwrap();
         let units: PackageId = "apich/units".parse().unwrap();
         cache
             .write_index(
                 &plot,
-                &(line("apich/plot", "1.0.0", "{\"package\":\"apich/units\",\"req\":\"^1\"}")
-                    + &line("apich/plot", "1.1.0", "{\"package\":\"apich/units\",\"req\":\"^1.2\"}")),
+                &(line(
+                    "apich/plot",
+                    "1.0.0",
+                    "{\"package\":\"apich/units\",\"req\":\"^1\"}",
+                ) + &line(
+                    "apich/plot",
+                    "1.1.0",
+                    "{\"package\":\"apich/units\",\"req\":\"^1.2\"}",
+                )),
             )
             .unwrap();
         let roots = [Root {
             id: "this package".to_string(),
-            dependencies: vec![Dependency::new("apich/plot", VersionReq::parse("^1").unwrap())],
+            dependencies: vec![Dependency::new(
+                "apich/plot",
+                VersionReq::parse("^1").unwrap(),
+            )],
         }];
         let index = CacheIndex::new(&cache);
-        let error = aevia_resolve::resolve(&roots, &index, &Options::default()).expect_err("units missing");
+        let error =
+            aevia_resolve::resolve(&roots, &index, &Options::default()).expect_err("units missing");
         assert_eq!(error.unavailable_package(), Some("apich/units"));
         cache
             .write_index(
@@ -988,7 +1149,8 @@ mod tests {
             )
             .unwrap();
         let index = CacheIndex::new(&cache);
-        let resolution = aevia_resolve::resolve(&roots, &index, &Options::default()).expect("resolves");
+        let resolution =
+            aevia_resolve::resolve(&roots, &index, &Options::default()).expect("resolves");
         let tree = render_tree("app", "0.1.0", &resolution);
         assert!(tree.contains("apich/plot apich/plot 1.1.0"), "{tree}");
         assert!(tree.contains("Units apich/units 1.2.0"), "{tree}");

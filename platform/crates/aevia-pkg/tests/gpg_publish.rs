@@ -11,10 +11,10 @@
 //! without GnuPG cannot exercise the OpenPGP path, and failing there would
 //! report a missing tool as a broken client.
 //!
-//! The full publish test is `#[ignore]`d by default. It needs to generate a
-//! key, run `gpg` several times and serve three HTTP requests, which is slower
-//! and more environment-dependent than a unit test should be. Run it with
-//! `cargo test -p aevia-pkg -- --ignored`.
+//! The publish test generates a temporary key and serves the package API on
+//! loopback. It needs no live registry or persistent account.
+
+#![allow(clippy::expect_used, clippy::unwrap_used)] // Fixture setup fails the current test.
 
 use std::io::Read;
 use std::io::Write;
@@ -211,7 +211,6 @@ fn key_list_reads_a_real_gpg_home() {
 }
 
 #[test]
-#[ignore = "needs gpg and a stub registry; run with --ignored"]
 fn a_signed_publish_reaches_the_registry() {
     if !gpg_available() {
         eprintln!("skipping: gpg is not installed");
@@ -255,7 +254,11 @@ fn a_signed_publish_reaches_the_registry() {
         .output()
         .expect("the binary runs");
     let dry_stdout = String::from_utf8_lossy(&dry.stdout).to_string();
-    assert!(dry.status.success(), "{dry_stdout}");
+    assert!(
+        dry.status.success(),
+        "{dry_stdout}\n{}",
+        String::from_utf8_lossy(&dry.stderr)
+    );
     assert!(dry_stdout.contains("aevia-publish-v1"), "{dry_stdout}");
     assert!(dry_stdout.contains("dry run"), "{dry_stdout}");
     assert!(
@@ -412,7 +415,14 @@ fn respond(
         );
     }
     if path.ends_with("/publish") {
-        let checksum = json_string(body, "checksum").unwrap_or_default();
+        let checksum = json_string(body, "statement")
+            .and_then(|statement| {
+                statement
+                    .lines()
+                    .find_map(|line| line.strip_prefix("checksum: "))
+                    .map(str::to_owned)
+            })
+            .unwrap_or_default();
         return (
             "201 Created",
             format!(
@@ -423,7 +433,7 @@ fn respond(
             ),
         );
     }
-    if path.starts_with("/api/v1/keys/") {
+    if path.starts_with("/api/v1/keys?") {
         return (
             "200 OK",
             "{\"registered\":true,\"publisher\":{\"handle\":\"apich\",\"kind\":\"github\"}}"

@@ -49,6 +49,8 @@ const MAX_KEYWORDS: usize = 5;
 /// The flags `aevia-pkg publish` accepts.
 #[derive(Clone, Debug, Default)]
 pub struct Options<'a> {
+    /// The verified personal or organisation namespace for the release.
+    pub owner: Option<&'a str>,
     /// `--key`: the fingerprint to sign with, overriding the config.
     pub key: Option<&'a str>,
     /// `--description`: one sentence, overriding `aevia-pkg.toml`.
@@ -72,6 +74,10 @@ pub struct Options<'a> {
 /// A refusal (dirty tree, name mismatch, unregistered key), a packing failure,
 /// a challenge that does not match, a signing failure, or the server's own
 /// error.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the publish command sequences package inspection, signing and upload"
+)]
 pub async fn run(
     app: &App,
     options: &Options<'_>,
@@ -140,7 +146,8 @@ pub async fn run(
         .with_next_step("run `aevia-pkg login` again to re-bind the key"));
     };
 
-    let id = PackageId::new(&publisher.handle, &package.manifest.name).map_err(CliError::from)?;
+    let owner = options.owner.unwrap_or(&publisher.handle);
+    let id = PackageId::new(owner, &package.manifest.name).map_err(CliError::from)?;
     let version = package.manifest.version.clone();
     if !package::valid_version(&version) {
         return Err(CliError::new(format!(
@@ -306,6 +313,10 @@ pub async fn run(
 ///
 /// `E_STATEMENT` when the text does not parse, names another package or
 /// version, covers another digest, or has already expired.
+#[allow(
+    clippy::single_call_fn,
+    reason = "a publish statement is checked independently before agreeing to sign it"
+)]
 pub fn check_statement(
     text: &str,
     expected_name: &PackageId,
@@ -361,6 +372,10 @@ pub fn check_statement(
 ///
 /// `E_STATEMENT` when the text does not parse, names another package, version
 /// or direction, or has expired.
+#[allow(
+    clippy::single_call_fn,
+    reason = "yank and restore statements must reflect the requested version and state"
+)]
 pub fn check_yank_statement(
     text: &str,
     expected_name: &PackageId,
@@ -414,6 +429,10 @@ pub fn check_yank_statement(
 ///
 /// A malformed target, an unregistered key, a mismatched statement, a signing
 /// failure, or the server's own error.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the signed yank command has its own confirmation and state transition"
+)]
 pub async fn yank(
     app: &App,
     spec: &str,
@@ -486,6 +505,10 @@ pub async fn yank(
 }
 
 /// Normalises `--keyword` values the way the registry stores them.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keyword normalization governs ordering, deduplication, and filtering"
+)]
 fn normalize_keywords(keywords: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for keyword in keywords {

@@ -11,6 +11,7 @@
 //! and one with three hundred.
 
 use aevia_registry_core::Lang;
+use aevia_registry_core::PackageId;
 use aevia_registry_core::vm::CrateCard;
 use aevia_registry_core::vm::DocModulePage;
 use aevia_registry_core::vm::DocsIndexPage;
@@ -66,11 +67,39 @@ const PACKAGE_PAGE: Msg = Msg::new("package page", "包页面");
 const PACKAGE_INDEX: Msg = Msg::new("← package index", "← 包索引");
 const DOC_INDEX: Msg = Msg::new("documentation index", "文档索引");
 
+/// The state of a release whose documentation pages are unavailable.
+#[must_use]
+pub fn docs_build_status(
+    lang: Lang,
+    id: &PackageId,
+    version: &str,
+    message: &str,
+) -> String {
+    let title = format!("{id} {version}");
+    layout::page(
+        lang,
+        &title,
+        "/docs",
+        None,
+        view! {
+            <article class="manual-index">
+                <h1>{title.clone()}</h1>
+                <p>{message.to_string()}</p>
+                <p><a href=format!("/crates/{id}/{version}")>{PACKAGE_PAGE.of(lang)}</a></p>
+            </article>
+        },
+    )
+}
+
 /// The coverage sentence.
 ///
 /// The counts are interpolated, so the two languages cannot share one template:
 /// Chinese puts the total first and parenthesises the percentage with a
 /// full-width bracket.
+#[allow(
+    clippy::single_call_fn,
+    reason = "documentation coverage uses different word order in English and Chinese"
+)]
 fn coverage(
     lang: Lang,
     documented: usize,
@@ -84,6 +113,10 @@ fn coverage(
 }
 
 /// The source line above a module's declarations.
+#[allow(
+    clippy::single_call_fn,
+    reason = "module source summaries use a separate localized format"
+)]
 fn module_source(
     lang: Lang,
     source_file: &str,
@@ -102,6 +135,7 @@ fn module_source(
 ///
 /// The search box posts to the same page as a GET form so that a shared link
 /// carries the query; there is no separate results route to keep in sync.
+#[must_use]
 pub fn docs_landing(
     lang: Lang,
     crates: &[CrateCard],
@@ -154,6 +188,7 @@ pub fn docs_landing(
 /// The coverage bar is placed above the module table because the table is
 /// where a reader decides what to read next, and whether the package is
 /// documented at all changes how they read it.
+#[must_use]
 pub fn docs_index(
     lang: Lang,
     page: &DocsIndexPage,
@@ -261,16 +296,12 @@ pub fn docs_index(
                     </p>
                 </header>
                 <p>{coverage}</p>
-                <div
+                <progress
                     class="meter"
-                    role="progressbar"
-                    aria-valuenow=percent
-                    aria-valuemin="0"
-                    aria-valuemax="100"
+                    value=percent
+                    max="100"
                     aria-label=COVERAGE_LABEL.of(lang)
-                >
-                    <span style=format!("width: {percent}%")></span>
-                </div>
+                ></progress>
                 <section>
                     <h2>{MODULES.of(lang)}</h2>
                     {module_table}
@@ -290,6 +321,7 @@ pub fn docs_index(
 /// The sidebar lists every module rather than only siblings: a reader arriving
 /// from a search result needs to see the shape of the package, not just where
 /// they landed.
+#[must_use]
 pub fn docs_module(
     lang: Lang,
     page: &DocModulePage,
@@ -334,7 +366,7 @@ pub fn docs_module(
                 </aside>
                 <div class="docs-main">
                     <header class="doc-head">
-                        <h1>{module.clone()}</h1>
+                        <h1>{module}</h1>
                         <p>{header}</p>
                         <p>
                             <a href=format!("/crates/{id}")>{PACKAGE_PAGE.of(lang)}</a>
@@ -384,7 +416,8 @@ mod tests {
         assert!(html.contains("10 of 12 declarations documented (83%)"));
         assert!(html.contains("/docs/apich/units-extra/1.2.0/Kinematics"));
         assert!(html.contains("Thermo.IdealGas"));
-        assert!(html.contains("width: 83%"));
+        assert!(html.contains("<progress"));
+        assert!(html.contains("value=\"83\""));
     }
 
     #[test]

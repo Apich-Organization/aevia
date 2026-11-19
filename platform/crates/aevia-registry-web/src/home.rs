@@ -79,6 +79,7 @@ const DOCS_BODY: Msg = Msg::new(
 /// `recent` is truncated to six here rather than by the caller: the front page
 /// is the only consumer that wants a fixed count, and keeping the cut next to
 /// the grid means the grid and the count cannot drift apart.
+#[must_use]
 pub fn home(
     lang: Lang,
     stats: &SiteStats,

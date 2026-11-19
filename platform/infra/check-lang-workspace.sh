@@ -56,6 +56,15 @@ for field in version edition rust-version license repository; do
     fi
 done
 
+# 3. Language crates inherit the compiler/lint policy in both workspaces.
+lint_tables() {
+    awk '/^\[/ { active = ($0 ~ /^\[workspace\.lints\./) } active && NF { print }' "$1"
+}
+if [ "$(lint_tables "$root")" != "$(lint_tables "$mirror")" ]; then
+    echo "DRIFT for workspace lints: update $mirror from $root" >&2
+    status=1
+fi
+
 if [ "$status" -eq 0 ]; then
     echo "check-lang-workspace: $mirror matches $root"
 fi

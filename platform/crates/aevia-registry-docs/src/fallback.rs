@@ -31,7 +31,11 @@ use crate::Decl;
 use crate::Module;
 
 /// Scans one file for doc comments and declarations.
-pub(crate) fn scan(
+#[allow(
+    clippy::single_call_fn,
+    reason = "the fallback scanner implements the per-file documentation interface"
+)]
+pub fn scan(
     source: &str,
     file: &str,
     fallback_name: &str,
@@ -72,6 +76,10 @@ pub(crate) fn scan(
 }
 
 /// The module path of a `module A.B` line.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the fallback scanner recognizes module headers separately from declarations"
+)]
 fn module_decl(line: &str) -> Option<String> {
     let rest = line.strip_prefix("module ")?;
     let name = rest.split_whitespace().next()?;
@@ -83,6 +91,10 @@ fn module_decl(line: &str) -> Option<String> {
 }
 
 /// One declaration, if the line starts with a declaration keyword.
+#[allow(
+    clippy::single_call_fn,
+    reason = "fallback declaration recognition is separate from comment and module tracking"
+)]
 fn declaration(line: &str) -> Option<Decl> {
     // An indented line is inside a body, not at the module's surface.
     if line.starts_with(char::is_whitespace) {
@@ -107,6 +119,10 @@ fn declaration(line: &str) -> Option<Decl> {
 }
 
 /// Splits the keyword from the rest of a declaration line.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the fallback declaration keywords have a distinct lexical table"
+)]
 fn split_keyword(line: &str) -> Option<(&'static str, &str)> {
     const KEYWORDS: [(&str, &str); 9] = [
         ("let rec ", "let"),
@@ -128,6 +144,10 @@ fn split_keyword(line: &str) -> Option<(&'static str, &str)> {
 }
 
 /// The declared name, as far as a line scanner can tell.
+#[allow(
+    clippy::single_call_fn,
+    reason = "binding patterns and derive clauses have different name extraction rules"
+)]
 fn declaration_name(
     kind: &str,
     body: &str,
@@ -158,6 +178,10 @@ fn declaration_name(
 }
 
 /// The signature, cut where the body begins.
+#[allow(
+    clippy::single_call_fn,
+    reason = "signature extraction tracks nesting and quoted strings independently"
+)]
 fn signature(line: &str) -> String {
     let mut depth = 0i32;
     let mut in_string = false;
@@ -173,8 +197,8 @@ fn signature(line: &str) -> String {
         }
         match character {
             | '"' => in_string = true,
-            | '(' | '[' | '{' => depth += 1,
-            | ')' | ']' | '}' => depth -= 1,
+            | '(' | '[' | '{' => depth = depth.saturating_add(1),
+            | ')' | ']' | '}' => depth = depth.saturating_sub(1),
             | '=' if depth == 0
                 && !matches!(
                     previous,
@@ -188,7 +212,7 @@ fn signature(line: &str) -> String {
         }
         previous = character;
     }
-    line[..cut].trim_end().to_string()
+    line.get(..cut).unwrap_or(line).trim_end().to_string()
 }
 
 #[cfg(all(test, not(feature = "compiler")))]

@@ -163,7 +163,7 @@ pub fn normalize_owner(owner: &str) -> String {
 /// Whether `owner` is a GitHub login or an ORCID iD.
 #[must_use]
 pub fn valid_owner(owner: &str) -> bool {
-    valid_github_login(owner) || valid_orcid(owner)
+    valid_github_login(owner) || looks_like_orcid(owner)
 }
 
 /// `0000-0002-1825-0097`, with the check character `X` in either case.
@@ -208,12 +208,15 @@ pub fn orcid_checksum_ok(text: &str) -> bool {
     // The first eighteen characters are the fifteen digits of the iD body and
     // the three dashes between them; the nineteenth is the check character,
     // which may be `X` for ten and so is not a digit.
+    let Some((body, digit)) = text.split_at_checked(18) else {
+        return false;
+    };
     let mut total = 0u32;
-    for character in text[..18].chars().filter(char::is_ascii_digit) {
-        total = (total + character.to_digit(10).unwrap_or(0)) * 2;
+    for digit in body.chars().filter_map(|character| character.to_digit(10)) {
+        total = total.saturating_add(digit).saturating_mul(2) % 11;
     }
-    let expected = (12 - total % 11) % 11;
-    let actual = match text.chars().nth(18) {
+    let expected = 12u32.saturating_sub(total) % 11;
+    let actual = match digit.chars().next() {
         | Some('X' | 'x') => 10,
         | Some(character) => character.to_digit(10).unwrap_or(u32::MAX),
         | None => return false,
@@ -221,17 +224,15 @@ pub fn orcid_checksum_ok(text: &str) -> bool {
     actual == expected
 }
 
-fn valid_orcid(text: &str) -> bool {
-    looks_like_orcid(text)
-}
-
-fn valid_github_login(text: &str) -> bool {
+/// Whether a login has the registry's supported GitHub namespace syntax.
+#[must_use]
+pub fn valid_github_login(text: &str) -> bool {
     let length = text.len();
     if length == 0 || length > 39 {
         return false;
     }
     let bytes = text.as_bytes();
-    if bytes[0] == b'-' || bytes[length - 1] == b'-' {
+    if bytes.first() == Some(&b'-') || bytes.last() == Some(&b'-') {
         return false;
     }
     let mut previous_dash = false;

@@ -47,6 +47,7 @@ const NOTE_TAIL: Msg = Msg::new(
 /// `github` and `orcid` say which providers this deployment has configured; a
 /// provider that is not configured is shown as unavailable rather than hidden,
 /// so an operator can see at a glance what is missing.
+#[must_use]
 pub fn login(
     lang: Lang,
     viewer: Option<&Viewer>,

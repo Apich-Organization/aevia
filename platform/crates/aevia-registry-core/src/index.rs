@@ -80,15 +80,12 @@ impl IndexDependency {
 /// than breaking the page.
 #[must_use]
 pub fn deps_from_json(value: &serde_json::Value) -> Vec<IndexDependency> {
-    value
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| serde_json::from_value::<IndexDependency>(item.clone()).ok())
-                .collect()
-        })
-        .unwrap_or_default()
+    value.as_array().map_or_default(|items| {
+        items
+            .iter()
+            .filter_map(|item| serde_json::from_value::<IndexDependency>(item.clone()).ok())
+            .collect()
+    })
 }
 
 /// A strong validator for an index body: clients may send it back as
@@ -97,7 +94,7 @@ pub fn deps_from_json(value: &serde_json::Value) -> Vec<IndexDependency> {
 pub fn etag(body: &str) -> String {
     use sha2::Digest as _;
     let digest = sha2::Sha256::digest(body.as_bytes());
-    format!("\"{}\"", hex::encode(&digest[..12]))
+    format!("\"{}\"", hex::encode(digest.get(..12).unwrap_or(&digest)))
 }
 
 /// The signature that authorised a version.

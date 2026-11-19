@@ -16,6 +16,18 @@
 //! process.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unreachable
+    )
+)]
 
 pub mod models;
 pub mod repo;
@@ -77,6 +89,10 @@ pub async fn migrate(pool: &PgPool) -> Result<(), Error> {
 /// already published, that key is already bound), so it gets its own code
 /// instead of being flattened into "database error".
 #[must_use]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "the public error adapter accepts ownership directly from Result::map_err"
+)]
 pub fn sql_error(
     context: &str,
     error: sqlx::Error,

@@ -15,17 +15,42 @@
 //! build the state, bind, serve, and stop on a signal. Everything else is in
 //! this crate, so the binary and the tests exercise the same code.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unreachable,
+        clippy::unwrap_used
+    )
+)]
+
 pub mod api;
 pub mod auth;
 pub mod config;
+pub mod docs_queue;
+mod download_counts;
 pub mod error;
 pub mod http;
+mod limits;
+pub mod manual;
 pub mod pages;
+pub mod playground;
+mod reload;
+pub mod sandbox;
 pub mod seo;
 pub mod spec;
 pub mod state;
 pub mod stdlib;
 pub mod storage;
+
+pub use download_counts::spawn as spawn_download_counts;
+pub use reload::spawn_reloader;
 
 use std::time::Duration;
 
@@ -43,6 +68,8 @@ use axum::routing::post;
 use tower_http::compression::CompressionLayer;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
+
+use aevia_registry_core::vm::ManualKind;
 
 use crate::state::AppState;
 
@@ -79,11 +106,13 @@ pub fn router(state: AppState) -> Router {
         .route("/spec", get(pages::spec_index))
         .route("/spec/all", get(pages::spec_all))
         .route("/spec/{slug}", get(pages::spec_chapter))
+        .nest("/book", manual::router(ManualKind::Book))
+        .nest("/architecture", manual::router(ManualKind::Architecture))
+        .merge(playground::router())
         .route("/stdlib", get(pages::stdlib_index))
         .route("/stdlib/{module}", get(pages::stdlib_module))
         .route("/install.sh", get(pages::install_sh))
         .route("/install.ps1", get(pages::install_ps1))
-        .route("/internal/reload", post(pages::internal_reload))
         .route("/lang/{code}", get(pages::set_language))
         .route(
             "/activate",
@@ -104,7 +133,19 @@ pub fn router(state: AppState) -> Router {
             StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(120),
         ))
-        .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            http::site_policy,
+        ))
+        .layer(
+            TraceLayer::new_for_http().make_span_with(|request: &axum::extract::Request| {
+                let route = request
+                    .extensions()
+                    .get::<axum::extract::MatchedPath>()
+                    .map_or("<unmatched>", axum::extract::MatchedPath::as_str);
+                tracing::debug_span!("request", method = %request.method(), route)
+            }),
+        )
         .with_state(state)
 }
 
@@ -124,6 +165,10 @@ pub struct YankForm {
 /// credential", and it is narrow: a yank is reversible, it cannot introduce new
 /// bytes, and it still requires the session of the account that owns the
 /// package. Publishing — the action that adds code — never takes this path.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the browser independently negotiates authentication and localized errors"
+)]
 async fn yank_from_browser(
     State(state): State<AppState>,
     axum::extract::Path((owner, name)): axum::extract::Path<(String, String)>,
@@ -151,44 +196,43 @@ async fn yank_from_browser(
         },
         | Err(error) => return error::PageError::from(error).into_response(),
     };
-    if package.owner_id != publisher.id {
-        return error::PageError::forbidden("Only the package's owner can yank a version.")
-            .into_response();
-    }
-    let yanked = form.yanked.is_some();
-    match aevia_registry_db::repo::set_yanked(&state.pool, package.id, &form.version, yanked).await
+    match aevia_registry_db::repo::resolve_publishing_owner(
+        &state.pool,
+        publisher.id,
+        requested.owner(),
+    )
+    .await
     {
-        | Ok(Some(_)) => {
-            let _ = aevia_registry_db::repo::touch_package(&state.pool, package.id).await;
-            let verb = if yanked {
-                "yanked"
-            } else {
-                "restored"
-            };
-            let _ = aevia_registry_db::repo::append_log(
-                &state.pool,
-                "yank",
-                &format!("{} {verb} {requested} {}", publisher.handle, form.version),
-                serde_json::json!({
-                    "name": requested.to_string(),
-                    "version": form.version,
-                    "yanked": yanked,
-                    "publisher": publisher.handle,
-                    "via": "browser",
-                }),
-            )
-            .await;
-            axum::response::Redirect::to(&format!("/crates/{requested}")).into_response()
+        | Ok(Some(owner_id)) if owner_id == package.owner_id => {},
+        | Ok(_) => {
+            return error::PageError::forbidden("Only the package's owner can yank a version.")
+                .into_response();
         },
-        | Ok(None) => {
-            error::PageError::not_found(format!("{requested} has no version {}.", form.version))
-                .into_response()
+        | Err(error) => return error::PageError::from(error).into_response(),
+    }
+    match api::yank::transition(
+        &state,
+        api::yank::YankChange {
+            package_id: package.id,
+            name: &requested,
+            version: &form.version,
+            yanked: form.yanked.is_some(),
+            publisher: &publisher.handle,
+            fingerprint: None,
         },
-        | Err(error) => error::PageError::from(error).into_response(),
+    )
+    .await
+    {
+        | Ok(()) => axum::response::Redirect::to(&format!("/crates/{requested}")).into_response(),
+        | Err(error) => error::PageError::from(error.error).into_response(),
     }
 }
 
 /// The 404 page.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the site fallback keeps language and viewer context"
+)]
 async fn not_found(
     uri: Uri,
     State(state): State<AppState>,
@@ -203,101 +247,4 @@ async fn not_found(
         viewer.as_ref(),
     );
     (StatusCode::NOT_FOUND, Html(html)).into_response()
-}
-
-/// Spawns a background task that polls `AEVIA_SPEC_DIR` and
-/// `AEVIA_STDLIB_DOCS_DIR` every 2 seconds and hot-reloads them on change.
-pub fn spawn_reloader(state: AppState) {
-    tokio::spawn(async move {
-        let mut spec_fp = dir_fingerprint(&state.config.spec_dir, true);
-        let mut stdlib_fp = dir_fingerprint(&state.config.stdlib_docs_dir, false);
-
-        let mut interval = tokio::time::interval(Duration::from_secs(2));
-        // Consume the immediate first tick.
-        interval.tick().await;
-
-        loop {
-            interval.tick().await;
-
-            let next_spec_fp = dir_fingerprint(&state.config.spec_dir, true);
-            if next_spec_fp != spec_fp {
-                spec_fp = next_spec_fp;
-                match state.reload_spec().await {
-                    | Ok(chapters) => {
-                        tracing::info!(chapters, "hot-reloaded language specification");
-                    },
-                    | Err(error) => {
-                        tracing::warn!(error = %error.render(), "failed to hot-reload specification");
-                    },
-                }
-            }
-
-            let next_stdlib_fp = dir_fingerprint(&state.config.stdlib_docs_dir, false);
-            if next_stdlib_fp != stdlib_fp {
-                stdlib_fp = next_stdlib_fp;
-                match state.reload_stdlib_docs().await {
-                    | Ok(modules) => {
-                        tracing::info!(modules, "hot-reloaded stdlib documentation");
-                    },
-                    | Err(error) => {
-                        tracing::warn!(error = %error.render(), "failed to hot-reload stdlib docs");
-                    },
-                }
-            }
-        }
-    });
-}
-
-fn dir_fingerprint(
-    path: &std::path::Path,
-    include_en: bool,
-) -> Vec<(String, u64, u128)> {
-    let mut entries = Vec::new();
-    collect_file_stats(path, "", &mut entries);
-    if include_en {
-        collect_file_stats(&path.join("en"), "en/", &mut entries);
-    }
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
-    entries
-}
-
-fn collect_file_stats(
-    path: &std::path::Path,
-    prefix: &str,
-    out: &mut Vec<(String, u64, u128)>,
-) {
-    if path.is_file() {
-        if let Ok(meta) = std::fs::metadata(path) {
-            let mtime = meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map_or(0, |d| d.as_nanos());
-            out.push((path.to_string_lossy().into_owned(), meta.len(), mtime));
-        }
-        return;
-    }
-    let Ok(read_dir) = std::fs::read_dir(path) else {
-        return;
-    };
-    for entry in read_dir.flatten() {
-        let entry_path = entry.path();
-        if !entry_path.is_file() {
-            continue;
-        }
-        let ext = entry_path.extension().and_then(|e| e.to_str());
-        if !matches!(ext, Some("md" | "json")) {
-            continue;
-        }
-        let Ok(meta) = entry.metadata() else {
-            continue;
-        };
-        let mtime = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |d| d.as_nanos());
-        let name = entry.file_name().to_string_lossy().into_owned();
-        out.push((format!("{prefix}{name}"), meta.len(), mtime));
-    }
 }

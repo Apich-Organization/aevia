@@ -5,12 +5,15 @@
 //! wants to verify a download needs nothing else: no token, no second request
 //! to a different host.
 
+use axum::body::Bytes;
 use axum::extract::Path;
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::http::header;
 use axum::response::IntoResponse;
 use axum::response::Response;
+use tokio::sync::OwnedSemaphorePermit;
 
 use aevia_registry_core::PackageId;
 use aevia_registry_db::repo;
@@ -28,34 +31,51 @@ use crate::state::AppState;
 pub async fn archive(
     State(state): State<AppState>,
     Path((owner, name, version)): Path<(String, String, String)>,
+    headers: HeaderMap,
 ) -> ApiResult<Response> {
+    const CACHE: &str = "public, max-age=31536000, immutable";
+
     let (id, row) = resolve(&state, &owner, &name, &version).await?;
-    let bytes = state.storage.read(&id, &row.version)?;
-    // The catalogue's checksum is what the index, the signature and the lock
-    // files of every consumer name. Serving bytes that hash to something else
-    // would hand a client an archive its own verification must reject; saying
-    // so here turns silent storage corruption into an operator-visible error.
-    let actual = aevia_registry_core::tarball::checksum(&bytes);
-    if !actual.eq_ignore_ascii_case(&row.checksum) {
-        return Err(ApiError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "E_INTEGRITY",
-            format!(
-                "the stored archive of {id} {} hashes to {actual}, but the catalogue (and the \
-                 signature) say {}; storage and catalogue have diverged",
-                row.version, row.checksum
-            ),
-        ));
+    let etag = format!("\"{}\"", row.checksum);
+    if headers.get_all(header::IF_NONE_MATCH).iter().any(|header| {
+        header.to_str().is_ok_and(|value| {
+            value.split(',').map(str::trim).any(|candidate| {
+                candidate == "*" || candidate.strip_prefix("W/").unwrap_or(candidate) == etag
+            })
+        })
+    }) {
+        return Ok((
+            StatusCode::NOT_MODIFIED,
+            [
+                (header::ETAG, etag),
+                (header::CACHE_CONTROL, CACHE.to_string()),
+            ],
+        )
+            .into_response());
     }
-    // Counting is best-effort: a download that succeeded must not fail because
-    // the counter could not be bumped.
-    let pool = state.pool.clone();
-    let version_id = row.id;
-    tokio::spawn(async move {
-        if let Err(error) = repo::increment_downloads(&pool, version_id).await {
-            tracing::warn!(%error, "cannot count a download");
-        }
-    });
+    let slot = state
+        .download_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "E_DOWNLOAD_BUSY",
+                "The registry is serving other archives. Try again shortly.",
+            )
+        })?;
+    let storage = state.storage.clone();
+    let version = row.version.clone();
+    let checksum = row.checksum.clone();
+    let name = id.clone();
+    let bytes = tokio::task::spawn_blocking(move || {
+        storage
+            .read(&name, &version, &checksum)
+            .map(|bytes| Bytes::from_owner(ArchiveBody { bytes, _slot: slot }))
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("the archive read task failed: {error}")))??;
+    state.download_counts.record(row.id);
     Ok((
         StatusCode::OK,
         [
@@ -68,11 +88,8 @@ pub async fn archive(
                     row.version
                 ),
             ),
-            (header::ETAG, format!("\"{}\"", row.checksum)),
-            (
-                header::CACHE_CONTROL,
-                "public, max-age=31536000, immutable".to_string(),
-            ),
+            (header::ETAG, etag),
+            (header::CACHE_CONTROL, CACHE.to_string()),
             (
                 header::HeaderName::from_static("x-aevia-checksum"),
                 row.checksum.clone(),
@@ -85,6 +102,18 @@ pub async fn archive(
         bytes,
     )
         .into_response())
+}
+
+struct ArchiveBody {
+    bytes: Vec<u8>,
+    // Also limits memory held by an archive still being sent to a slow client.
+    _slot: OwnedSemaphorePermit,
+}
+
+impl AsRef<[u8]> for ArchiveBody {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes
+    }
 }
 
 /// `GET /api/v1/download/{owner}/{name}/{version}/signature`

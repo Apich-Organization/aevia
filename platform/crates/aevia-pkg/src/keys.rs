@@ -3,7 +3,7 @@
 //! # The client never holds a private key
 //!
 //! `aevia-pkg` shells out to the tools that already own the key — `gpg` for
-//! OpenPGP, `ssh-keygen` for SSH — instead of linking an OpenPGP or Ed25519
+//! `OpenPGP`, `ssh-keygen` for SSH — instead of linking an `OpenPGP` or Ed25519
 //! implementation. That is deliberate:
 //!
 //! * the private key stays where it belongs, behind `gpg-agent` or
@@ -43,7 +43,7 @@ use crate::error::CliError;
 /// Where a key's secret half lives.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KeyOrigin {
-    /// GnuPG holds it; signing names it by fingerprint.
+    /// `GnuPG` holds it; signing names it by fingerprint.
     Gpg,
     /// A file pair on disk, `id_ed25519` and `id_ed25519.pub`.
     Ssh {
@@ -57,11 +57,11 @@ pub enum KeyOrigin {
 /// A secret key this machine can sign with.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalKey {
-    /// OpenPGP or SSH.
+    /// `OpenPGP` or SSH.
     pub kind: KeyKind,
     /// The fingerprint, spelled the way its own tool spells it.
     pub fingerprint: String,
-    /// A human label: the OpenPGP user id, or the SSH key's comment.
+    /// A human label: the `OpenPGP` user id, or the SSH key's comment.
     pub identity: String,
     /// Where the secret half lives.
     pub origin: KeyOrigin,
@@ -91,7 +91,7 @@ impl LocalKey {
 
     /// The reason the key cannot be used, when it cannot.
     #[must_use]
-    pub fn unsupported_reason(&self) -> Option<&'static str> {
+    pub const fn unsupported_reason(&self) -> Option<&'static str> {
         if self.supported {
             None
         } else {
@@ -100,7 +100,7 @@ impl LocalKey {
     }
 }
 
-/// Every secret key this machine holds, OpenPGP first.
+/// Every secret key this machine holds, `OpenPGP` first.
 ///
 /// A missing `gpg` is not fatal here: a publisher who only uses SSH keys should
 /// still get a list. The warning goes to stderr so `--json` output stays clean.
@@ -113,7 +113,8 @@ pub fn discover(extra_ssh: Option<&Path>) -> Result<Vec<LocalKey>, CliError> {
     match gpg_keys() {
         | Ok(mut openpgp) => keys.append(&mut openpgp),
         | Err(error) => {
-            if !is_missing_tool(&error) {
+            if error.exit != crate::error::Exit::Usage || !error.message.starts_with("cannot run `")
+            {
                 return Err(error);
             }
             eprintln!("aevia-pkg: {}", error.message);
@@ -123,11 +124,15 @@ pub fn discover(extra_ssh: Option<&Path>) -> Result<Vec<LocalKey>, CliError> {
     Ok(keys)
 }
 
-/// The OpenPGP secret keys `gpg` reports.
+/// The `OpenPGP` secret keys `gpg` reports.
 ///
 /// # Errors
 ///
 /// A usage error when `gpg` is not installed, `E_KEY` when it fails.
+#[allow(
+    clippy::single_call_fn,
+    reason = "OpenPGP discovery owns the command invocation and error mapping"
+)]
 pub fn gpg_keys() -> Result<Vec<LocalKey>, CliError> {
     let output = Command::new("gpg")
         .args(["--batch", "--with-colons", "--list-secret-keys"])
@@ -151,6 +156,10 @@ pub fn gpg_keys() -> Result<Vec<LocalKey>, CliError> {
 /// primary is skipped: it cannot sign, and offering it would only produce a
 /// failure one step later.
 #[must_use]
+#[allow(
+    clippy::single_call_fn,
+    reason = "GnuPG colon records are parsed independently of invoking the tool"
+)]
 pub fn parse_gpg_colons(stdout: &str) -> Vec<LocalKey> {
     let mut keys: Vec<LocalKey> = Vec::new();
     let mut pending_primary = false;
@@ -224,6 +233,10 @@ pub fn parse_gpg_colons(stdout: &str) -> Vec<LocalKey> {
 ///
 /// `E_KEY` when `extra` names something that is not a key, or when a public key
 /// file cannot be read or parsed.
+#[allow(
+    clippy::single_call_fn,
+    reason = "SSH discovery checks configured and default private key paths together"
+)]
 pub fn ssh_keys(extra: Option<&Path>) -> Result<Vec<LocalKey>, CliError> {
     let mut out = Vec::new();
     if let Some(dir) = ssh_dir()
@@ -269,6 +282,10 @@ pub fn ssh_keys(extra: Option<&Path>) -> Result<Vec<LocalKey>, CliError> {
 ///
 /// `E_KEY` when `path` names neither a public key nor a private key whose
 /// public half can be derived.
+#[allow(
+    clippy::single_call_fn,
+    reason = "reading one SSH key validates the public half and associates its private path"
+)]
 pub fn ssh_key_at(path: &Path) -> Result<LocalKey, CliError> {
     ssh_key_from(path)?.ok_or_else(|| {
         CliError::new(format!("`{}` is not an SSH key", path.display()))
@@ -345,6 +362,10 @@ fn ssh_key_from(path: &Path) -> Result<Option<LocalKey>, CliError> {
 }
 
 /// `~/.ssh`, or nothing when there is no home directory.
+#[allow(
+    clippy::single_call_fn,
+    reason = "default SSH discovery handles platform-specific home directory configuration"
+)]
 fn ssh_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
     if home.is_empty() {
@@ -354,7 +375,7 @@ fn ssh_dir() -> Option<PathBuf> {
 }
 
 /// Emits a policy warning on `stderr` when using a non-OpenPGP key (such as an
-/// SSH key), recommending OpenPGP (GPG) and hardware-backed keys.
+/// SSH key), recommending `OpenPGP` (GPG) and hardware-backed keys.
 pub fn warn_key_preference(
     kind: KeyKind,
     quiet: bool,
@@ -377,10 +398,10 @@ pub fn warn_key_preference(
 /// Picks the key a command should use.
 ///
 /// The order is explicit flag, then the config's default, then automatic
-/// selection preferring OpenPGP (GPG) keys over SSH keys. If a single usable
-/// OpenPGP key exists on the machine, it is chosen automatically even when SSH
-/// keys are present; if multiple OpenPGP keys (or multiple SSH keys with no
-/// OpenPGP key) exist, the client asks rather than guessing.
+/// selection preferring `OpenPGP` (GPG) keys over SSH keys. If a single usable
+/// `OpenPGP` key exists on the machine, it is chosen automatically even when SSH
+/// keys are present; if multiple `OpenPGP` keys (or multiple SSH keys with no
+/// `OpenPGP` key) exist, the client asks rather than guessing.
 ///
 /// # Errors
 ///
@@ -442,15 +463,14 @@ fn ambiguous_keys_error(candidates: &[&LocalKey]) -> CliError {
         message.push_str("\n  ");
         message.push_str(&key.label());
     }
-    CliError::usage(message).with_next_step(
-        "or run `aevia-pkg login --key FINGERPRINT` to make it the default",
-    )
+    CliError::usage(message)
+        .with_next_step("or run `aevia-pkg login --key FINGERPRINT` to make it the default")
 }
 
 /// Finds a key by fingerprint, full or trailing key id.
 ///
 /// A trailing match is allowed only for eight or more hexadecimal characters,
-/// which is GnuPG's own rule for a key id: it is what people read off a
+/// which is `GnuPG`'s own rule for a key id: it is what people read off a
 /// signature and type, and eight hex digits are still 32 bits of the full
 /// fingerprint rather than an arbitrary prefix.
 #[must_use]
@@ -463,6 +483,10 @@ pub fn find<'a>(
         .find(|key| same_fingerprint(&key.fingerprint, wanted))
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "SSH and OpenPGP fingerprint matching use distinct exact and suffix rules"
+)]
 fn same_fingerprint(
     known: &str,
     wanted: &str,
@@ -475,8 +499,10 @@ fn same_fingerprint(
     hexadecimal(known)
         && hexadecimal(wanted)
         && known
-            .to_ascii_uppercase()
-            .ends_with(&wanted.to_ascii_uppercase())
+            .len()
+            .checked_sub(wanted.len())
+            .and_then(|start| known.get(start..))
+            .is_some_and(|suffix| suffix.eq_ignore_ascii_case(wanted))
 }
 
 /// Signs `statement` and returns an ASCII-armoured detached signature.
@@ -504,6 +530,10 @@ pub fn sign(
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "OpenPGP signing uses a distinct child process and armor format"
+)]
 fn sign_openpgp(
     fingerprint: &str,
     statement: &str,
@@ -553,20 +583,30 @@ fn sign_openpgp(
     Ok(signature)
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "SSH signing associates the same temporary statement with both tool outputs"
+)]
 fn sign_ssh(
     private_path: &Path,
     statement: &str,
 ) -> Result<String, CliError> {
-    // `ssh-keygen -Y sign` takes a file and writes `<file>.sig`; there is no
-    // stdin/stdout mode. The temporary file holds only the statement, which is
-    // public anyway — it is the server's own text — so nothing secret touches
-    // the disk.
-    let file = TempFile::new("statement")?;
-    std::fs::write(file.path(), statement).map_err(|error| {
-        CliError::new(format!("cannot write `{}`: {error}", file.path().display()))
-    })?;
-    let signature_path = PathBuf::from(format!("{}.sig", file.path().display()));
-    let _signature = TempFile::claim(signature_path.clone());
+    // The directory keeps both signing files together and removes them on return.
+    let mut directory = tempfile::Builder::new();
+    directory.prefix("aevia-pkg-sign-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        directory.permissions(std::fs::Permissions::from_mode(0o700));
+    }
+    let temp = directory
+        .tempdir()
+        .map_err(|error| CliError::new(format!("cannot create a signing directory: {error}")))?;
+    let file = temp.path().join("statement");
+    std::fs::write(&file, statement)
+        .map_err(|error| CliError::new(format!("cannot write `{}`: {error}", file.display())))?;
+    let signature_path = file.with_extension("sig");
     let output = Command::new("ssh-keygen")
         .arg("-Y")
         .arg("sign")
@@ -574,7 +614,7 @@ fn sign_ssh(
         .arg(private_path)
         .arg("-n")
         .arg(SSH_NAMESPACE)
-        .arg(file.path())
+        .arg(&file)
         .stdin(Stdio::null())
         .output()
         .map_err(|error| missing_tool("ssh-keygen", &error))?;
@@ -682,10 +722,6 @@ fn missing_tool(
     CliError::usage(format!("cannot run `{tool}`: {error}")).with_next_step(next_step)
 }
 
-fn is_missing_tool(error: &CliError) -> bool {
-    error.exit == crate::error::Exit::Usage && error.message.starts_with("cannot run `")
-}
-
 fn first_line(text: &str) -> String {
     text.lines()
         .map(str::trim)
@@ -698,63 +734,29 @@ fn first_line(text: &str) -> String {
 ///
 /// A user id may contain `:`, which would otherwise split a record in two and
 /// shift every field after it.
+#[allow(
+    clippy::single_call_fn,
+    reason = "GnuPG field escapes follow the colon record wire format"
+)]
 fn unescape_colons(value: &str) -> String {
-    let characters: Vec<char> = value.chars().collect();
+    let mut characters = value.chars();
     let mut out = String::with_capacity(value.len());
-    let mut index = 0;
-    while index < characters.len() {
-        if characters.get(index) == Some(&'\\') && characters.get(index + 1) == Some(&'x') {
-            let hex: String = characters
-                .get(index + 2..index + 4)
-                .map(|digits| digits.iter().collect())
-                .unwrap_or_default();
-            if hex.len() == 2
-                && let Ok(byte) = u8::from_str_radix(&hex, 16)
+    while let Some(character) = characters.next() {
+        if character == '\\' {
+            let mut suffix = characters.clone();
+            if suffix.next() == Some('x')
+                && let Some(high) = suffix.next().and_then(|digit| digit.to_digit(16))
+                && let Some(low) = suffix.next().and_then(|digit| digit.to_digit(16))
+                && let Ok(byte) = u8::try_from((high << 4) | low)
             {
                 out.push(char::from(byte));
-                index += 4;
+                characters = suffix;
                 continue;
             }
         }
-        if let Some(character) = characters.get(index) {
-            out.push(*character);
-        }
-        index += 1;
+        out.push(character);
     }
     out
-}
-
-/// A file that deletes itself, so a failed signing leaves no statement behind.
-struct TempFile {
-    path: PathBuf,
-}
-
-impl TempFile {
-    fn new(kind: &str) -> Result<Self, CliError> {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_nanos())
-            .unwrap_or(0);
-        let path = std::env::temp_dir().join(format!(
-            "aevia-pkg-{}-{nanos}-{kind}.txt",
-            std::process::id()
-        ));
-        Ok(Self { path })
-    }
-
-    fn claim(path: PathBuf) -> Self {
-        Self { path }
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for TempFile {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
 }
 
 #[cfg(test)]
@@ -800,6 +802,28 @@ fpr:::::::::BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB:
     fn garbage_in_gpg_output_is_ignored_rather_than_panicking() {
         assert!(parse_gpg_colons("").is_empty());
         assert!(parse_gpg_colons("fpr\n\n:::\n").is_empty());
+    }
+
+    #[test]
+    fn ssh_signing_preserves_the_statement() {
+        if !ssh_keygen_available() {
+            eprintln!("skipping: ssh-keygen is unavailable");
+            return;
+        }
+        let temporary = tempfile::tempdir().expect("key directory");
+        let private = temporary.path().join("test key");
+        let status = Command::new("ssh-keygen")
+            .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+            .arg(&private)
+            .status()
+            .expect("generate key");
+        assert!(status.success());
+        let public = std::fs::read_to_string(private.with_extension("pub")).expect("public key");
+        let signer = SignerKey::detect(&public).expect("read key");
+        let statement = "the exact statement\n";
+        let signature = sign_ssh(&private, statement).expect("sign statement");
+        aevia_registry_core::signature::verify_detached(&signer, &signature, statement.as_bytes())
+            .expect("verify exact statement");
     }
 
     fn key(fingerprint: &str) -> LocalKey {

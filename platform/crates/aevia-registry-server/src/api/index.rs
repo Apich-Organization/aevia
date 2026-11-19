@@ -116,7 +116,10 @@ pub async fn package_index(
     Ok((
         StatusCode::OK,
         [
-            (header::CONTENT_TYPE, "text/plain; charset=utf-8".to_string()),
+            (
+                header::CONTENT_TYPE,
+                "text/plain; charset=utf-8".to_string(),
+            ),
             // Revalidate on every use: the body is cheap to build and a yank
             // must reach a client at its next resolution, not a minute later.
             (header::CACHE_CONTROL, "public, no-cache".to_string()),

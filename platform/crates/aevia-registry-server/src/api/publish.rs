@@ -7,13 +7,17 @@
 //! with the statement. A publish that fails any of those leaves no trace except
 //! a spent nonce, which is exactly what a replay attempt should cost.
 
+use std::sync::Arc;
+
 use axum::Json;
+use axum::body::Bytes;
 use axum::extract::Multipart;
 use axum::extract::State;
 use axum::http::StatusCode;
 use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
+use tokio::sync::OwnedSemaphorePermit;
 
 use aevia_registry_core::PackageId;
 use aevia_registry_core::manifest::PackageManifest;
@@ -82,7 +86,9 @@ pub async fn challenge(
     check_version(&request.version)?;
     check_checksum(&request.checksum)?;
     let nonce = http::random_hex(16);
-    let expires = Utc::now().timestamp() + STATEMENT_LIFETIME_SECONDS;
+    let expires = Utc::now()
+        .timestamp()
+        .saturating_add(STATEMENT_LIFETIME_SECONDS);
     let statement = PublishStatement::new(
         id,
         request.version,
@@ -163,6 +169,10 @@ fn validate_optional_url(
         .transpose()
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "publication metadata reconciles the manifest and the signed statement"
+)]
 fn resolve_publish_metadata(
     envelope: &Envelope,
     manifest: &PackageManifest,
@@ -203,7 +213,9 @@ fn resolve_publish_metadata(
     {
         return Err(ApiError::bad_request(
             "E_MANIFEST",
-            format!("`[package] license-file` names `{rel}`, which is missing or empty in the archive"),
+            format!(
+                "`[package] license-file` names `{rel}`, which is missing or empty in the archive"
+            ),
         ));
     }
     validate_required_publish_metadata(
@@ -299,7 +311,7 @@ pub struct PublishResponse {
     pub docs_url: Option<String>,
     /// The log entry this publish created.
     pub log: LogRef,
-    /// Policy recommendations (for example preferring OpenPGP + hardware keys
+    /// Policy recommendations (for example preferring `OpenPGP` + hardware keys
     /// when publishing with an SSH key).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
@@ -324,13 +336,26 @@ pub async fn publish(
     State(state): State<AppState>,
     mut multipart: Multipart,
 ) -> ApiResult<(StatusCode, Json<PublishResponse>)> {
+    let slot = Arc::new(
+        state
+            .publish_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| {
+                ApiError::new(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "E_PUBLISH_BUSY",
+                    "The registry is processing other releases. Try again shortly.",
+                )
+            })?,
+    );
     let mut envelope: Option<Envelope> = None;
-    let mut archive: Option<Vec<u8>> = None;
+    let mut archive: Option<Bytes> = None;
     while let Some(field) = multipart.next_field().await.map_err(|error| {
         ApiError::bad_request("E_MULTIPART", format!("malformed upload: {error}"))
     })? {
         match field.name() {
-            | Some("envelope") => {
+            | Some("envelope") if envelope.is_none() => {
                 let text = field.text().await.map_err(|error| {
                     ApiError::bad_request(
                         "E_MULTIPART",
@@ -341,14 +366,27 @@ pub async fn publish(
                     ApiError::bad_request("E_JSON", format!("the envelope is not JSON: {error}"))
                 })?);
             },
-            | Some("package") => {
+            | Some("package") if archive.is_none() => {
                 let bytes = field.bytes().await.map_err(|error| {
                     ApiError::bad_request(
                         "E_MULTIPART",
                         format!("cannot read the archive: {error}"),
                     )
                 })?;
-                archive = Some(bytes.to_vec());
+                if bytes.len() as u64 > tarball::MAX_ARCHIVE_BYTES {
+                    return Err(ApiError::new(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        "E_TARBALL",
+                        "A package archive can be at most 16 MiB",
+                    ));
+                }
+                archive = Some(bytes);
+            },
+            | Some("envelope" | "package") => {
+                return Err(ApiError::bad_request(
+                    "E_MULTIPART",
+                    "An upload part was repeated",
+                ));
             },
             | _ => {},
         }
@@ -386,7 +424,8 @@ pub async fn publish(
     let key_kind = authorised.key_kind.clone();
 
     // The archive must be the one that was signed.
-    let checksum = tarball::checksum(&archive);
+    let bytes = archive.clone();
+    let checksum = publication_task(&slot, move || tarball::checksum(&bytes)).await?;
     if !checksum.eq_ignore_ascii_case(&statement.checksum) {
         return Err(ApiError::bad_request(
             "E_TARBALL",
@@ -413,7 +452,8 @@ pub async fn publish(
     };
 
     // The archive must be a package, and it must be *this* package.
-    let files = tarball::text_files(&archive).map_err(ApiError::from_core)?;
+    let bytes = archive.clone();
+    let files = publication_task(&slot, move || tarball::text_files(&bytes)).await??;
     let manifest_text = files
         .iter()
         .find(|(name, _)| name == "aevia.toml")
@@ -460,6 +500,7 @@ pub async fn publish(
         .and_then(|(_, text)| RegistryMeta::parse(text, "aevia-pkg.toml").ok())
         .unwrap_or_default();
     let meta = resolve_publish_metadata(&envelope, &manifest, &declared, &files)?;
+    drop(files);
 
     // The catalogue rows, the archive file and the log entry in one
     // transaction: either the version exists everywhere (row, dependency rows,
@@ -474,16 +515,12 @@ pub async fn publish(
         ))
     })?;
     let package =
-        match repo::package_by_identity(&state.pool, owner_id, &statement.name.name_key()).await? {
-            | Some(package) => package,
-            | None => {
-                repo::create_package(&state.pool, owner_id, statement.name.name()).await?
-            },
-        };
+        repo::publication_package(&mut transaction, owner_id, statement.name.name()).await?;
+    let package_name = PackageId::new(statement.name.owner(), &package.name)?;
     let dependencies = serde_json::to_value(manifest.index_dependencies()).map_err(|error| {
         ApiError::internal(format!("cannot serialise the dependency list: {error}"))
     })?;
-    let version = repo::insert_version_in(
+    repo::insert_version_in(
         &mut transaction,
         &NewVersion {
             package_id: package.id,
@@ -513,6 +550,7 @@ pub async fn publish(
             fingerprint: &fingerprint,
             signature: &envelope.signature,
             statement: &envelope.statement,
+            build_docs: state.config.docs_enabled,
         },
     )
     .await
@@ -546,9 +584,9 @@ pub async fn publish(
     .await?;
     repo::touch_package(&mut *transaction, package.id).await?;
 
-    state
-        .storage
-        .write(&statement.name, &statement.version, &archive)?;
+    let storage = state.storage.clone();
+    let digest = checksum.clone();
+    publication_task(&slot, move || storage.write(&digest, &archive)).await??;
 
     let entry = repo::append_log_in(
         &mut transaction,
@@ -574,15 +612,10 @@ pub async fn publish(
         ))
     })?;
 
-    // Documentation, off the request path.
-    if state.config.docs_enabled {
-        spawn_docs_build(&state, version.id, statement.name.clone(), files);
-    } else {
-        repo::set_docs_status(&state.pool, version.id, "skipped", None).await?;
-    }
-
+    drop(slot);
     let docs_url = if state.config.docs_enabled {
-        Some(format!("/docs/{}/{}", statement.name, statement.version))
+        state.docs_wake.notify_one();
+        Some(format!("/docs/{package_name}/{}", statement.version))
     } else {
         None
     };
@@ -596,7 +629,7 @@ pub async fn publish(
     Ok((
         StatusCode::CREATED,
         Json(PublishResponse {
-            name: statement.name.to_string(),
+            name: package_name.to_string(),
             version: statement.version,
             checksum,
             docs_url,
@@ -609,70 +642,20 @@ pub async fn publish(
     ))
 }
 
-/// Builds documentation in the background.
-///
-/// `spawn_blocking` because the compiler is synchronous and CPU-bound; a
-/// registry that rendered docs on the request thread would make a publish wait
-/// for a full parse of the package.
-fn spawn_docs_build(
-    state: &AppState,
-    version_id: i64,
-    name: PackageId,
-    files: Vec<(String, String)>,
-) {
-    let pool = state.pool.clone();
-    let package = name.to_string();
-    tokio::spawn(async move {
-        let built =
-            tokio::task::spawn_blocking(move || aevia_registry_docs::build(&files, &package)).await;
-        match built {
-            | Ok(Ok(docs)) => {
-                let pages: Vec<aevia_registry_db::models::DocsPage> = docs
-                    .pages
-                    .iter()
-                    .map(|page| {
-                        aevia_registry_db::models::DocsPage {
-                            version_id,
-                            path: page.path.clone(),
-                            title: page.title.clone(),
-                            html: page.html.clone(),
-                            decls: i32::try_from(page.decls).unwrap_or(i32::MAX),
-                            undocumented: i32::try_from(page.undocumented).unwrap_or(i32::MAX),
-                            source_file: page.source_file.clone(),
-                        }
-                    })
-                    .collect();
-                if let Err(error) = repo::replace_docs(&pool, version_id, &pages).await {
-                    tracing::error!(%error, version_id, "cannot store the documentation");
-                    let _ =
-                        repo::set_docs_status(&pool, version_id, "failed", Some(&error.message))
-                            .await;
-                    return;
-                }
-                if let Err(error) = repo::set_docs_status(&pool, version_id, "built", None).await {
-                    tracing::error!(%error, version_id, "cannot record the documentation state");
-                }
-            },
-            | Ok(Err(error)) => {
-                tracing::warn!(%error, version_id, "documentation failed to build");
-                let _ =
-                    repo::set_docs_status(&pool, version_id, "failed", Some(&error.message)).await;
-            },
-            | Err(error) => {
-                tracing::error!(%error, version_id, "the documentation task panicked");
-                let _ = repo::set_docs_status(
-                    &pool,
-                    version_id,
-                    "failed",
-                    Some("the documentation task did not finish"),
-                )
-                .await;
-            },
-        }
-    });
+async fn publication_task<T: Send + 'static>(
+    slot: &Arc<OwnedSemaphorePermit>,
+    operation: impl FnOnce() -> T + Send + 'static,
+) -> ApiResult<T> {
+    let slot = slot.clone();
+    tokio::task::spawn_blocking(move || {
+        let _slot = slot;
+        operation()
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("a publication background task failed: {error}")))
 }
 
-fn check_version(version: &str) -> ApiResult<()> {
+pub(crate) fn check_version(version: &str) -> ApiResult<()> {
     let parsed = aevia_resolve::Version::parse(version).map_err(|error| {
         ApiError::bad_request(
             "E_VERSION",
@@ -750,6 +733,10 @@ pub fn dependency_problem(
 }
 
 /// Refuses a manifest whose dependencies cannot be resolved.
+#[allow(
+    clippy::single_call_fn,
+    reason = "publication checks dependency identity against the catalog before opening a transaction"
+)]
 async fn check_dependencies(
     state: &AppState,
     manifest: &PackageManifest,
@@ -772,17 +759,17 @@ async fn check_dependencies(
             )
         })?;
         let req = aevia_resolve::VersionReq::parse(&dependency.req).map_err(|error| {
-            ApiError::bad_request(
-                "E_DEPENDENCY",
-                format!("dependency `{id}`: {error}"),
-            )
+            ApiError::bad_request("E_DEPENDENCY", format!("dependency `{id}`: {error}"))
         })?;
         let Some((package, _)) =
             repo::package_by_handle(&state.pool, id.owner(), &id.name_key()).await?
         else {
             return Err(ApiError::bad_request(
                 "E_DEPENDENCY",
-                format!("`{id}` is not a package on this registry, so `{}` cannot resolve", dependency.label()),
+                format!(
+                    "`{id}` is not a package on this registry, so `{}` cannot resolve",
+                    dependency.label()
+                ),
             ));
         };
         let versions: Vec<(String, bool)> = repo::versions(&state.pool, package.id)
@@ -797,6 +784,10 @@ async fn check_dependencies(
     Ok(())
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "the signed checksum has an independent canonical wire format"
+)]
 fn check_checksum(checksum: &str) -> ApiResult<()> {
     let valid = checksum.strip_prefix("sha256:").is_some_and(|hex_part| {
         hex_part.len() == 64
@@ -839,7 +830,10 @@ mod tests {
     fn a_requirement_nothing_satisfies_is_explained_with_what_exists() {
         let all = versions(&[("1.0.0", false), ("1.2.0", false)]);
         let problem = dependency_problem("o/a", &req("^3"), &all).expect("unresolvable");
-        assert!(problem.contains("`o/a`") && problem.contains("^3"), "{problem}");
+        assert!(
+            problem.contains("`o/a`") && problem.contains("^3"),
+            "{problem}"
+        );
         assert!(problem.contains("available: 1.0.0, 1.2.0"), "{problem}");
     }
 
@@ -850,7 +844,10 @@ mod tests {
         assert!(problem.contains("yanked"), "{problem}");
         let none = versions(&[("1.0.0", true)]);
         let problem = dependency_problem("o/a", &req("*"), &none).expect("unresolvable");
-        assert!(problem.contains("no version that is not yanked"), "{problem}");
+        assert!(
+            problem.contains("no version that is not yanked"),
+            "{problem}"
+        );
     }
 
     #[test]

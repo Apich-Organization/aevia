@@ -16,14 +16,26 @@ pub struct Publisher {
     pub id: i64,
     /// `github`, `orcid` or `github-org`.
     pub kind: String,
-    /// The normalised handle.
+    /// The permanent Aevia namespace.
     pub handle: String,
+    /// The stable GitHub account ID, once independently verified.
+    pub github_id: Option<i64>,
     /// The name the provider shows.
     pub display_name: Option<String>,
     /// The avatar the provider shows.
     pub avatar_url: Option<String>,
     /// When the account first signed in.
     pub created_at: DateTime<Utc>,
+}
+
+/// An organisation whose installation and active membership were verified.
+pub struct GithubOrganisation {
+    /// Stable GitHub organisation account ID.
+    pub github_id: i64,
+    /// Current login, used to claim a namespace for a new registry identity.
+    pub login: String,
+    /// The avatar reported by GitHub.
+    pub avatar_url: Option<String>,
 }
 
 /// A public key bound to a publisher.
@@ -307,4 +319,21 @@ pub struct NewVersion<'a> {
     pub signature: &'a str,
     /// The statement.
     pub statement: &'a str,
+    /// Whether a documentation job should be queued for this version.
+    pub build_docs: bool,
+}
+
+/// The information needed to rebuild documentation from an immutable archive.
+#[derive(sqlx::FromRow)]
+pub struct DocsJob {
+    /// Registry version identifier.
+    pub version_id: i64,
+    /// Published version string.
+    pub version: String,
+    /// The signed archive digest.
+    pub checksum: String,
+    /// Package owner path segment.
+    pub owner: String,
+    /// Canonical package name.
+    pub name: String,
 }

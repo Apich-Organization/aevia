@@ -23,13 +23,10 @@
 //! `gpg` on `PATH` and a `GNUPGHOME` keyring holding a secret key; it skips with
 //! a message when either is missing.
 //!
-//! # Why the tests do not run in parallel
-//!
-//! Each test starts from `DROP SCHEMA public CASCADE; CREATE SCHEMA public;` so
-//! that a row left behind by one test cannot make another pass or fail. That
-//! reset is global state: two tests doing it at once would delete each other's
-//! tables. [`SCHEMA_LOCK`] serialises them, so the default thread count is
-//! safe — `--test-threads=1` is simply uncontended.
+//! Each test creates an isolated schema. The supplied database user must be
+//! able to create and drop its test schemas.
+
+#![allow(clippy::expect_used, clippy::unwrap_used)] // Fixture setup fails the current test.
 
 use std::io::Write as _;
 use std::process::Command;
@@ -43,11 +40,14 @@ use axum::http::HeaderMap;
 use axum::http::Request;
 use axum::http::StatusCode;
 use axum::http::header;
+use sqlx::Connection as _;
 use sqlx::PgPool;
+use sqlx::postgres::PgConnection;
 use sqlx::postgres::PgPoolOptions;
 use tower::ServiceExt as _;
 
 use aevia_registry::config::Config;
+use aevia_registry::manual::ManualStore;
 use aevia_registry::router;
 use aevia_registry::spec::SpecStore;
 use aevia_registry::state::AppState;
@@ -56,9 +56,8 @@ use aevia_registry::storage::Storage;
 use aevia_registry_core::manifest::PackageManifest;
 use aevia_registry_core::signature::SignerKey;
 use aevia_registry_core::tarball;
-
-/// Serialises the per-test schema reset; see the module comment.
-static SCHEMA_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+use aevia_registry_db::models::GithubOrganisation;
+use aevia_registry_db::repo;
 
 /// The application under test, plus what it needs to stay alive.
 struct TestApp {
@@ -70,14 +69,68 @@ struct TestApp {
     _storage: tempfile::TempDir,
     /// The (empty) specification directory.
     _spec: tempfile::TempDir,
-    /// Held for the test's lifetime so no other test resets the schema.
-    _schema: tokio::sync::MutexGuard<'static, ()>,
+    /// These directories outlive both the snapshot and reload tests.
+    _stdlib_and_manuals: tempfile::TempDir,
+    docs_worker: Option<tokio::task::JoinHandle<()>>,
+    /// Removes only the test's own schema.
+    _schema: TestSchema,
+}
+
+impl Drop for TestApp {
+    fn drop(&mut self) {
+        if let Some(worker) = &self.docs_worker {
+            worker.abort();
+        }
+    }
+}
+
+struct TestSchema {
+    url: String,
+    name: String,
+}
+
+impl Drop for TestSchema {
+    fn drop(&mut self) {
+        // Tests use independent Tokio runtimes. Await the cleanup on a
+        // dedicated thread so it survives shutdown of the test runtime.
+        let url = self.url.clone();
+        let name = self.name.clone();
+        let result = std::thread::spawn(
+            move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?
+                    .block_on(async move {
+                        let mut connection = PgConnection::connect(&url).await?;
+                        sqlx::query(
+                            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+                         WHERE application_name = $1 AND pid <> pg_backend_pid()",
+                        )
+                        .bind(&name)
+                        .execute(&mut connection)
+                        .await?;
+                        sqlx::query(&format!("DROP SCHEMA {name} CASCADE"))
+                            .execute(&mut connection)
+                            .await?;
+                        Ok(())
+                    })
+            },
+        )
+        .join();
+        if !matches!(result, Ok(Ok(()))) {
+            eprintln!("could not remove test schema {}", self.name);
+        }
+    }
 }
 
 /// Builds the application against a fresh schema and a fresh directory.
 ///
 /// Returns `None` — after saying so — when `AEVIA_TEST_DATABASE_URL` is unset.
 async fn start() -> Option<TestApp> {
+    start_with_docs(false).await
+}
+
+async fn start_with_docs(docs_enabled: bool) -> Option<TestApp> {
     let url = match std::env::var("AEVIA_TEST_DATABASE_URL") {
         | Ok(value) if !value.trim().is_empty() => value.trim().to_string(),
         | _ => {
@@ -91,27 +144,34 @@ async fn start() -> Option<TestApp> {
             return None;
         },
     };
-    // An async mutex: the guard has to live across the `.await` below, and a
-    // `std::sync::MutexGuard` held across an await point can deadlock.
-    let _schema = SCHEMA_LOCK.lock().await;
-
+    let name = format!("aevia_it_{}", aevia_registry::http::random_hex(12));
+    let mut admin = PgConnection::connect(&url)
+        .await
+        .expect("connect to AEVIA_TEST_DATABASE_URL");
+    sqlx::query(&format!("CREATE SCHEMA {name}"))
+        .execute(&mut admin)
+        .await
+        .expect("create isolated test schema");
+    admin.close().await.expect("close schema connection");
+    let schema = TestSchema {
+        url: url.clone(),
+        name: name.clone(),
+    };
     let pool = PgPoolOptions::new()
         .max_connections(4)
+        .after_connect(move |connection, _| {
+            let search_path = name.clone();
+            Box::pin(async move {
+                sqlx::query("SELECT set_config('search_path', $1, false), set_config('application_name', $1, false)")
+                    .bind(search_path)
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
         .connect(&url)
         .await
         .expect("connect to AEVIA_TEST_DATABASE_URL");
-
-    // A fresh schema, not a truncated one: the migrations create the tables, so
-    // dropping the schema also drops `_sqlx_migrations` and they run again. A
-    // test that forgot to clean up cannot leak a row into the next one.
-    sqlx::query("DROP SCHEMA IF EXISTS public CASCADE")
-        .execute(&pool)
-        .await
-        .expect("drop the schema");
-    sqlx::query("CREATE SCHEMA public")
-        .execute(&pool)
-        .await
-        .expect("create the schema");
     aevia_registry_db::migrate(&pool)
         .await
         .expect("apply the migrations");
@@ -119,6 +179,17 @@ async fn start() -> Option<TestApp> {
     let storage = tempfile::tempdir().expect("a temporary storage directory");
     let spec_dir = tempfile::tempdir().expect("a temporary specification directory");
     let stdlib_dir = tempfile::tempdir().expect("a temporary stdlib docs directory");
+    for (lang, text) in [
+        (
+            "en",
+            "# Test chapter\n\n## Start\n\nWrite your first program.\n",
+        ),
+        ("zh", "# 测试章节\n\n## 开始\n\n编写第一个程序。\n"),
+    ] {
+        let directory = stdlib_dir.path().join("manuals/book").join(lang);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("01-start.md"), text).unwrap();
+    }
     let config = Config {
         bind: "127.0.0.1:0".parse().expect("a socket address"),
         base_url: "http://127.0.0.1:8080".to_string(),
@@ -126,12 +197,14 @@ async fn start() -> Option<TestApp> {
         storage_dir: storage.path().to_path_buf(),
         spec_dir: spec_dir.path().to_path_buf(),
         stdlib_docs_dir: stdlib_dir.path().to_path_buf(),
+        manuals_dir: stdlib_dir.path().join("manuals"),
+        playground: None,
         install_dir: std::path::PathBuf::from("."),
         // A fixed secret: the tests do not restart, and a random one would make
         // a failure impossible to reproduce from the log.
         session_secret: vec![0x5a; 32],
         registry_name: "aevia".to_string(),
-        docs_enabled: false,
+        docs_enabled,
         trust_proxy: false,
         github: None,
         orcid: None,
@@ -140,13 +213,24 @@ async fn start() -> Option<TestApp> {
     let spec = Arc::new(SpecStore::load(spec_dir.path()).expect("load the specification"));
     let stdlib_docs =
         Arc::new(StdlibDocStore::load(stdlib_dir.path()).expect("load the stdlib docs"));
-    let state = AppState::new(pool.clone(), Arc::new(config), store, spec, stdlib_docs);
+    let manuals = ManualStore::load(&config.manuals_dir, &config.base_url).unwrap();
+    let state = AppState::new(
+        pool.clone(),
+        Arc::new(config),
+        store,
+        spec,
+        stdlib_docs,
+        Arc::new(manuals),
+    );
+    let docs_worker = aevia_registry::docs_queue::spawn(state.clone());
     Some(TestApp {
         app: router(state),
         pool,
         _storage: storage,
         _spec: spec_dir,
-        _schema,
+        _stdlib_and_manuals: stdlib_dir,
+        docs_worker,
+        _schema: schema,
     })
 }
 
@@ -285,6 +369,10 @@ impl Signer {
                 home,
             });
         }
+        assert!(
+            std::env::var_os("GNUPGHOME").is_none(),
+            "GNUPGHOME is configured, but GnuPG could not list and export a test signing key"
+        );
         eprintln!(
             "skipping the signed publish: set GNUPGHOME to a keyring holding a secret key; \
              create one with `export GNUPGHOME=/tmp/aevia-tests-gpg; mkdir -p $GNUPGHOME; \
@@ -332,6 +420,309 @@ impl Signer {
         );
         String::from_utf8(output.stdout).expect("gpg prints an armoured signature")
     }
+}
+
+#[tokio::test]
+async fn github_identity_rename_keeps_the_publisher_package_and_signing_key() {
+    let Some(app) = start().await else {
+        return;
+    };
+    let user = repo::upsert_github_user(&app.pool, 101, "catalogue-owner", Some("Before"), None)
+        .await
+        .unwrap()
+        .unwrap();
+    let other = repo::upsert_github_user(&app.pool, 102, "taken-namespace", None, None)
+        .await
+        .unwrap()
+        .unwrap();
+    let package = repo::create_package(&app.pool, user.id, "example")
+        .await
+        .unwrap();
+    let key = repo::add_signing_key(
+        &app.pool,
+        user.id,
+        "ssh",
+        "SHA256:fixture",
+        "public-key-fixture",
+        None,
+    )
+    .await
+    .unwrap();
+
+    let renamed = repo::upsert_github_user(&app.pool, 101, "taken-namespace", Some("After"), None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(renamed.id, user.id);
+    assert_eq!(renamed.handle, "catalogue-owner");
+    assert_eq!(renamed.github_id, Some(101));
+    assert_eq!(renamed.display_name.as_deref(), Some("After"));
+    assert_eq!(
+        repo::package_by_handle(&app.pool, "catalogue-owner", "example")
+            .await
+            .unwrap()
+            .unwrap()
+            .0
+            .id,
+        package.id,
+    );
+    assert_eq!(
+        repo::signing_key_by_fingerprint(&app.pool, "ssh", &key.fingerprint)
+            .await
+            .unwrap()
+            .unwrap()
+            .publisher_id,
+        user.id,
+    );
+    assert_eq!(
+        repo::resolve_publishing_owner(&app.pool, user.id, "catalogue-owner")
+            .await
+            .unwrap(),
+        Some(user.id)
+    );
+    assert_eq!(
+        repo::resolve_publishing_owner(&app.pool, user.id, "taken-namespace")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        repo::resolve_publishing_owner(&app.pool, other.id, "taken-namespace")
+            .await
+            .unwrap(),
+        Some(other.id)
+    );
+    assert!(
+        repo::upsert_github_user(&app.pool, 103, "catalogue-owner", None, None)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn github_identity_legacy_rows_require_review_before_browser_binding() {
+    let Some(app) = start().await else {
+        return;
+    };
+    let legacy_user: i64 = sqlx::query_scalar(
+        "INSERT INTO publishers (kind, handle) VALUES ('github', 'legacy-user') RETURNING id",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    let legacy_org: i64 = sqlx::query_scalar(
+        "INSERT INTO publishers (kind, handle) VALUES ('github-org', 'legacy-lab') RETURNING id",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert!(
+        repo::upsert_github_user(&app.pool, 201, "legacy-user", None, None)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        repo::begin_membership_refresh(&app.pool, legacy_user)
+            .await
+            .unwrap_err()
+            .code,
+        "E_FORBIDDEN"
+    );
+    repo::create_session(
+        &app.pool,
+        "legacy-browser-session",
+        legacy_user,
+        chrono::Utc::now() + chrono::Duration::days(1),
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        repo::session_publisher(&app.pool, "legacy-browser-session")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        repo::resolve_publishing_owner(&app.pool, legacy_user, "legacy-user")
+            .await
+            .unwrap(),
+        Some(legacy_user)
+    );
+
+    let actor = repo::upsert_github_user(&app.pool, 202, "verified-member", None, None)
+        .await
+        .unwrap()
+        .unwrap();
+    let legacy_org_claim = GithubOrganisation {
+        github_id: 220,
+        login: "legacy-lab".into(),
+        avatar_url: None,
+    };
+    let generation = repo::begin_membership_refresh(&app.pool, actor.id)
+        .await
+        .unwrap();
+    repo::finish_membership_refresh(&app.pool, actor.id, generation, &[legacy_org_claim])
+        .await
+        .unwrap();
+    assert_eq!(
+        repo::resolve_publishing_owner(&app.pool, actor.id, "legacy-lab")
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(
+        repo::publisher(&app.pool, legacy_org)
+            .await
+            .unwrap()
+            .unwrap()
+            .github_id
+            .is_none()
+    );
+
+    // Reviewed bindings are written by row ID and checked provider ID.
+    sqlx::query("UPDATE publishers SET github_id = $2 WHERE id = $1 AND github_id IS NULL")
+        .bind(legacy_user)
+        .bind(201_i64)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let restored = repo::upsert_github_user(&app.pool, 201, "renamed-user", None, None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(restored.id, legacy_user);
+    assert_eq!(restored.handle, "legacy-user");
+}
+
+#[tokio::test]
+async fn github_identity_membership_keeps_org_ownership_and_expires_stale_grants() {
+    let Some(app) = start().await else {
+        return;
+    };
+    let user = repo::upsert_github_user(&app.pool, 301, "active-member", None, None)
+        .await
+        .unwrap()
+        .unwrap();
+    let observation = |github_id, login: &str| {
+        GithubOrganisation {
+            github_id,
+            login: login.to_string(),
+            avatar_url: None,
+        }
+    };
+    let first = repo::begin_membership_refresh(&app.pool, user.id)
+        .await
+        .unwrap();
+    repo::finish_membership_refresh(
+        &app.pool,
+        user.id,
+        first,
+        &[observation(330, "original-lab")],
+    )
+    .await
+    .unwrap();
+    let org_id = repo::resolve_publishing_owner(&app.pool, user.id, "original-lab")
+        .await
+        .unwrap()
+        .unwrap();
+    let package = repo::create_package(&app.pool, org_id, "example")
+        .await
+        .unwrap();
+
+    let obsolete = repo::begin_membership_refresh(&app.pool, user.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        repo::resolve_publishing_owner(&app.pool, user.id, "original-lab")
+            .await
+            .unwrap(),
+        None
+    );
+    let current = repo::begin_membership_refresh(&app.pool, user.id)
+        .await
+        .unwrap();
+    repo::finish_membership_refresh(
+        &app.pool,
+        user.id,
+        obsolete,
+        &[observation(330, "original-lab")],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        repo::resolve_publishing_owner(&app.pool, user.id, "original-lab")
+            .await
+            .unwrap(),
+        None
+    );
+    repo::finish_membership_refresh(
+        &app.pool,
+        user.id,
+        current,
+        &[observation(330, "renamed-lab")],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        repo::resolve_publishing_owner(&app.pool, user.id, "original-lab")
+            .await
+            .unwrap(),
+        Some(org_id)
+    );
+    assert_eq!(
+        repo::resolve_publishing_owner(&app.pool, user.id, "renamed-lab")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        repo::package_by_handle(&app.pool, "original-lab", "example")
+            .await
+            .unwrap()
+            .unwrap()
+            .0
+            .id,
+        package.id,
+    );
+
+    sqlx::query("UPDATE org_members SET checked_at = now() - interval '2 days'")
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        repo::resolve_publishing_owner(&app.pool, user.id, "original-lab")
+            .await
+            .unwrap(),
+        None
+    );
+    let current = repo::begin_membership_refresh(&app.pool, user.id)
+        .await
+        .unwrap();
+    repo::finish_membership_refresh(
+        &app.pool,
+        user.id,
+        current,
+        &[observation(331, "original-lab")],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        repo::resolve_publishing_owner(&app.pool, user.id, "original-lab")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        repo::publisher(&app.pool, org_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .github_id,
+        Some(330)
+    );
 }
 
 /// The `GNUPGHOME` spellings worth trying, in order.
@@ -785,6 +1176,58 @@ async fn the_machine_pages_and_the_cli_guide_are_served() {
 }
 
 #[tokio::test]
+async fn manuals_serve_localized_chapters_and_a_standalone_download() {
+    let Some(app) = start().await else {
+        return;
+    };
+    let (status, _, contents) = get(&app.app, "/book?lang=zh").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(String::from_utf8_lossy(&contents).contains("测试章节"));
+
+    let (_, headers, chapter) = get(&app.app, "/book/01-start?lang=zh").await;
+    assert_eq!(headers[header::CONTENT_LANGUAGE], "zh");
+    assert!(
+        !headers[header::CONTENT_SECURITY_POLICY]
+            .to_str()
+            .unwrap()
+            .contains("unsafe-inline")
+    );
+    assert!(String::from_utf8_lossy(&chapter).contains("编写第一个程序"));
+    assert!(String::from_utf8_lossy(&chapter).contains("/static/app.js"));
+
+    let (status, headers, offline) = get(&app.app, "/book/download?lang=en").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers[header::CONTENT_DISPOSITION],
+        "attachment; filename=\"aevia-book-en.html\""
+    );
+    let offline = String::from_utf8_lossy(&offline);
+    assert!(offline.contains("section-01-start-start"));
+    assert!(offline.contains("<style>"));
+    assert!(!offline.contains("/static/app.js"));
+
+    let (status, _, _) = post_json(
+        &app.app,
+        "/api/v1/playground/run",
+        "{\"source\":\"let x = 1\"}",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+
+    let (status, _, _) = send(
+        &app.app,
+        Request::builder()
+            .method("POST")
+            .uri("/logout")
+            .header(header::ORIGIN, "https://other.example")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn publish_enforces_required_metadata_and_accepts_license_file() {
     let Some(app) = start().await else {
         return;
@@ -815,7 +1258,8 @@ async fn publish_enforces_required_metadata_and_accepts_license_file() {
     })
     .to_string();
     let (content_type, body) = multipart(&envelope, &archive);
-    let (status, _, answer) = post_multipart(&app.app, "/api/v1/publish", &content_type, body).await;
+    let (status, _, answer) =
+        post_multipart(&app.app, "/api/v1/publish", &content_type, body).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(error_code(&answer), "E_MANIFEST");
 
@@ -837,8 +1281,7 @@ async fn publish_enforces_required_metadata_and_accepts_license_file() {
     let archive = tarball::pack_dir(dir.path(), &manifest).expect("packs");
     let checksum = tarball::checksum(&archive);
 
-    let (status, body) =
-        challenge(&app.app, "tester/with_license_file", "0.1.0", &checksum).await;
+    let (status, body) = challenge(&app.app, "tester/with_license_file", "0.1.0", &checksum).await;
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     let issued: serde_json::Value = serde_json::from_slice(&body).expect("challenge");
     let statement = issued["statement"].as_str().expect("statement").to_string();
@@ -849,7 +1292,8 @@ async fn publish_enforces_required_metadata_and_accepts_license_file() {
     })
     .to_string();
     let (content_type, body) = multipart(&envelope, &archive);
-    let (status, _, answer) = post_multipart(&app.app, "/api/v1/publish", &content_type, body).await;
+    let (status, _, answer) =
+        post_multipart(&app.app, "/api/v1/publish", &content_type, body).await;
     assert_eq!(
         status,
         StatusCode::CREATED,
@@ -860,7 +1304,7 @@ async fn publish_enforces_required_metadata_and_accepts_license_file() {
 
 #[tokio::test]
 async fn ssh_keys_register_publish_yank_and_emit_pgp_warnings() {
-    let Some(app) = start().await else {
+    let Some(app) = start_with_docs(true).await else {
         return;
     };
 
@@ -876,7 +1320,12 @@ async fn ssh_keys_register_publish_yank_and_emit_pgp_warnings() {
         .to_string(),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
     assert_eq!(error_code(&body), "E_KEY");
 
     // Generate a real temporary ssh-ed25519 keypair with `ssh-keygen`.
@@ -925,7 +1374,10 @@ async fn ssh_keys_register_publish_yank_and_emit_pgp_warnings() {
 
     // Seed the publisher and SSH signing key directly (mirroring browser approval).
     let parsed_key = SignerKey::detect(&pub_key).expect("ssh pubkey parses");
-    assert_eq!(parsed_key.kind, aevia_registry_core::signature::KeyKind::Ssh);
+    assert_eq!(
+        parsed_key.kind,
+        aevia_registry_core::signature::KeyKind::Ssh
+    );
     let fingerprint = parsed_key.fingerprint().expect("ssh fingerprint");
     let publisher_id: i64 = sqlx::query_scalar(
         "INSERT INTO publishers (kind, handle, display_name)
@@ -977,7 +1429,8 @@ async fn ssh_keys_register_publish_yank_and_emit_pgp_warnings() {
     })
     .to_string();
     let (content_type, body) = multipart(&envelope, &archive);
-    let (status, _, answer) = post_multipart(&app.app, "/api/v1/publish", &content_type, body).await;
+    let (status, _, answer) =
+        post_multipart(&app.app, "/api/v1/publish", &content_type, body).await;
     assert_eq!(
         status,
         StatusCode::CREATED,
@@ -985,6 +1438,49 @@ async fn ssh_keys_register_publish_yank_and_emit_pgp_warnings() {
         String::from_utf8_lossy(&answer)
     );
     let published: serde_json::Value = serde_json::from_slice(&answer).expect("publish JSON");
+    let docs_url = published["docs_url"]
+        .as_str()
+        .expect("the release has a docs URL");
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let (status, _, body) = get(&app.app, docs_url).await;
+            if status == StatusCode::OK {
+                assert!(String::from_utf8_lossy(&body).contains("ssh_demo"));
+                break;
+            }
+            assert_eq!(
+                status,
+                StatusCode::ACCEPTED,
+                "{}",
+                String::from_utf8_lossy(&body)
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the documentation worker completes the pending job");
+    let (status, headers, _) = get_with_cookie(
+        &app.app,
+        "/docs/sshuser/ssh_demo?lang=zh&unrelated=ignored",
+        "aevia_lang=en",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let localized = format!("{docs_url}?lang=zh");
+    assert_eq!(
+        headers
+            .get(header::LOCATION)
+            .and_then(|value| value.to_str().ok()),
+        Some(localized.as_str())
+    );
+    let (status, headers, _) = get_with_cookie(&app.app, &localized, "aevia_lang=en").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers
+            .get(header::CONTENT_LANGUAGE)
+            .and_then(|value| value.to_str().ok()),
+        Some("zh")
+    );
     let publish_warnings = published["warnings"].as_array().expect("publish warnings");
     assert!(
         publish_warnings
@@ -1018,7 +1514,10 @@ async fn ssh_keys_register_publish_yank_and_emit_pgp_warnings() {
     .await;
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     let issued: serde_json::Value = serde_json::from_slice(&body).expect("yank challenge");
-    let statement = issued["statement"].as_str().expect("yank statement").to_string();
+    let statement = issued["statement"]
+        .as_str()
+        .expect("yank statement")
+        .to_string();
     let (status, _, body) = post_json(
         &app.app,
         "/api/v1/yank",

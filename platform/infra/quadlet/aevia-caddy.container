@@ -1,7 +1,7 @@
 [Unit]
 Description=Aevia TLS edge (Caddy)
-Requires=aevia-registry.container aevia.network
-After=aevia-registry.container aevia.network
+Wants=aevia-registry.service
+After=aevia-registry.service
 
 [Container]
 ContainerName=aevia-caddy
@@ -11,6 +11,7 @@ Image=docker.io/library/caddy:2
 # and ACME issues; picking them up unattended is worth more than the churn.
 AutoUpdate=registry
 Network=aevia.network
+EnvironmentFile=-%h/.config/aevia/caddy.env
 
 PublishPort=80:80
 PublishPort=443:443

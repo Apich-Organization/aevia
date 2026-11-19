@@ -26,6 +26,7 @@ const DOWNLOADS: Msg = Msg::new("downloads", "下载");
 const VERIFY_AT: Msg = Msg::new("verify this identity at", "在此核实身份：");
 
 /// Renders `/users/{handle}`.
+#[must_use]
 pub fn user_page(
     lang: Lang,
     page: &UserPage,
@@ -38,8 +39,16 @@ pub fn user_page(
         .clone()
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| handle.clone());
-    let profile = page.owner.profile_url();
-    let profile_label = profile.clone();
+    let provider_profile = page.owner.orcid_profile_url().map(|url| {
+        let label = url.clone();
+        view! {
+            <p class="muted">
+                {VERIFY_AT.of(lang)}
+                " "
+                <a href=url rel="noreferrer">{label}</a>
+            </p>
+        }
+    });
     let joined = date_only(&page.joined_at).to_string();
     let joined_at = page.joined_at.clone();
     let downloads = thousands(page.downloads);
@@ -80,11 +89,7 @@ pub fn user_page(
                     " · "
                     {format!("{downloads} {}", DOWNLOADS.of(lang))}
                 </p>
-                <p class="muted">
-                    {VERIFY_AT.of(lang)}
-                    " "
-                    <a href=profile rel="noreferrer">{profile_label}</a>
-                </p>
+                {provider_profile}
             </section>
             <section>
                 <h2>{PACKAGES.of(lang)}</h2>
@@ -125,10 +130,22 @@ mod tests {
     fn a_profile_lists_the_packages_and_escapes_the_name() {
         let html = user_page(Lang::En, &page(), None);
         assert!(html.contains("apich/"), "owner prefix of the card");
-        assert!(html.contains("Apich &lt;Org&gt;"), "display name is escaped");
+        assert!(
+            html.contains("Apich &lt;Org&gt;"),
+            "display name is escaped"
+        );
         assert!(html.contains("4,096"), "downloads grouped");
         assert!(html.contains("2026-10-01"), "join date");
-        assert!(html.contains("https://github.com/apich"), "verification link");
+        assert!(!html.contains("https://github.com/apich"));
+    }
+
+    #[test]
+    fn the_orcid_profile_links_to_the_durable_identifier() {
+        let mut researcher = page();
+        researcher.owner.kind = "orcid".to_string();
+        researcher.owner.handle = "0000-0002-1825-0097".to_string();
+        let html = user_page(Lang::En, &researcher, None);
+        assert!(html.contains("https://orcid.org/0000-0002-1825-0097"));
     }
 
     #[test]

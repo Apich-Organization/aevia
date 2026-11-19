@@ -59,15 +59,19 @@ impl CrateList {
     /// The last page number.
     #[must_use]
     pub fn last_page(&self) -> i64 {
-        if self.per_page <= 0 {
+        if self.per_page <= 0 || self.total <= 0 {
             return 1;
         }
-        ((self.total + self.per_page - 1) / self.per_page).max(1)
+        self.total
+            .saturating_sub(1)
+            .checked_div(self.per_page)
+            .unwrap_or(0)
+            .saturating_add(1)
     }
 
     /// Whether a previous page exists.
     #[must_use]
-    pub fn has_previous(&self) -> bool {
+    pub const fn has_previous(&self) -> bool {
         self.page > 1
     }
 
@@ -112,9 +116,9 @@ impl VersionView {
 /// A publisher identity.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct OwnerView {
-    /// `github` or `orcid`.
+    /// `github`, `github-org` or `orcid`.
     pub kind: String,
-    /// The GitHub login or ORCID iD.
+    /// The permanent Aevia namespace.
     pub handle: String,
     /// The name the provider shows.
     pub display_name: Option<String>,
@@ -123,13 +127,16 @@ pub struct OwnerView {
 }
 
 impl OwnerView {
-    /// Where the identity can be checked.
+    /// The registry profile for this namespace.
     #[must_use]
     pub fn profile_url(&self) -> String {
-        match self.kind.as_str() {
-            | "orcid" => format!("https://orcid.org/{}", self.handle),
-            | _ => format!("https://github.com/{}", self.handle),
-        }
+        format!("/users/{}", self.handle)
+    }
+
+    /// The provider profile when the namespace is itself a durable ORCID iD.
+    #[must_use]
+    pub fn orcid_profile_url(&self) -> Option<String> {
+        (self.kind == "orcid").then(|| format!("https://orcid.org/{}", self.handle))
     }
 
     /// The provider's name, capitalised.
@@ -279,7 +286,11 @@ impl DocsIndexPage {
             return 100;
         }
         let documented = self.total_decls.saturating_sub(self.undocumented);
-        u32::try_from(documented * 100 / self.total_decls).unwrap_or(0)
+        let ratio = (documented as u128)
+            .saturating_mul(100)
+            .checked_div(self.total_decls as u128)
+            .unwrap_or(100);
+        u32::try_from(ratio).unwrap_or(0)
     }
 }
 
@@ -465,7 +476,7 @@ impl SpecBook {
             .chapters
             .iter()
             .position(|chapter| chapter.slug == slug)?;
-        self.chapters.get(index + 1)
+        self.chapters.get(index.saturating_add(1))
     }
 
     /// Total words across every chapter.
@@ -473,6 +484,55 @@ impl SpecBook {
     pub fn words(&self) -> usize {
         self.chapters.iter().map(|chapter| chapter.words).sum()
     }
+}
+
+/// One of the platform's repository-authored manuals.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManualKind {
+    /// The Aevia language tutorial.
+    Book,
+    /// Aevia, RSSN and platform architecture.
+    Architecture,
+}
+
+impl ManualKind {
+    /// The section's URL.
+    #[must_use]
+    pub const fn route(self) -> &'static str {
+        match self {
+            | Self::Book => "/book",
+            | Self::Architecture => "/architecture",
+        }
+    }
+
+    /// The section title in the selected language.
+    #[must_use]
+    pub const fn title(
+        self,
+        lang: crate::Lang,
+    ) -> &'static str {
+        match (self, lang) {
+            | (Self::Book, crate::Lang::En) => "The Aevia Book",
+            | (Self::Book, crate::Lang::Zh) => "Aevia 教程",
+            | (Self::Architecture, crate::Lang::En) => "Architecture",
+            | (Self::Architecture, crate::Lang::Zh) => "架构",
+        }
+    }
+}
+
+/// One rendered chapter of a manual.
+#[derive(Clone, Debug)]
+pub struct ManualChapter {
+    /// Its filename stem and URL segment.
+    pub slug: String,
+    /// Its localized title.
+    pub title: String,
+    /// The chapter body for its own route.
+    pub html: String,
+    /// Headings on the chapter page.
+    pub toc: Vec<SpecHeading>,
+    /// The same body with chapter-scoped anchors for the single-page edition.
+    pub combined_html: String,
 }
 
 /// One documented item (function, operator, type, unit, etc.) in a stdlib module.
@@ -555,19 +615,23 @@ impl StdlibBook {
 
 /// Formats a byte count the way a person reads it.
 #[must_use]
+#[allow(
+    clippy::arithmetic_side_effects,
+    clippy::cast_precision_loss,
+    reason = "byte counts are displayed rounded to one decimal after division by a power of two"
+)]
 pub fn human_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
     let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
+    for unit in ["KiB", "MiB", "GiB"] {
         value /= 1024.0;
-        unit += 1;
+        if value < 1024.0 {
+            return format!("{value:.1} {unit}");
+        }
     }
-    if unit == 0 {
-        format!("{bytes} B")
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
+    format!("{:.1} TiB", value / 1024.0)
 }
 
 #[cfg(test)]
@@ -588,6 +652,12 @@ mod tests {
         let last = CrateList { page: 3, ..list };
         assert!(!last.has_next());
         assert!(last.has_previous());
+        let huge = CrateList {
+            total: i64::MAX,
+            per_page: i64::MAX,
+            ..CrateList::default()
+        };
+        assert_eq!(huge.last_page(), 1);
     }
 
     #[test]
@@ -621,17 +691,27 @@ mod tests {
             other_versions: Vec::new(),
         };
         assert_eq!(page.documented_percent(), 70);
+        let huge = DocsIndexPage {
+            total_decls: usize::MAX,
+            undocumented: 0,
+            ..page
+        };
+        assert_eq!(huge.documented_percent(), 100);
     }
 
     #[test]
-    fn identities_link_to_their_provider() {
+    fn publisher_profiles_use_registry_namespaces_and_durable_orcid_links() {
         let owner = OwnerView {
             kind: "orcid".to_string(),
             handle: "0000-0002-1825-0097".to_string(),
             display_name: None,
             avatar_url: None,
         };
-        assert_eq!(owner.profile_url(), "https://orcid.org/0000-0002-1825-0097");
+        assert_eq!(owner.profile_url(), "/users/0000-0002-1825-0097");
+        assert_eq!(
+            owner.orcid_profile_url().as_deref(),
+            Some("https://orcid.org/0000-0002-1825-0097")
+        );
         assert_eq!(owner.provider(), "ORCID");
     }
 }

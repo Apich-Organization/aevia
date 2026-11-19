@@ -48,7 +48,7 @@ pub fn render_module_html(doc: &aevia_doc::ModuleDoc) -> String {
 /// One function for both because a value that is safe in one context is safe
 /// in the other once quotes and apostrophes are escaped too, and having two
 /// near-identical escapers is how one of them ends up missing a case.
-pub(crate) fn escape(value: &str) -> String {
+pub fn escape(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for character in value.chars() {
         match character {
@@ -64,7 +64,14 @@ pub(crate) fn escape(value: &str) -> String {
 }
 
 /// Renders a module body.
-pub(crate) fn render_module(module: &Module) -> String {
+#[cfg_attr(
+    not(feature = "compiler"),
+    allow(
+        clippy::single_call_fn,
+        reason = "fallback modules use the same renderer as compiler modules"
+    )
+)]
+pub fn render_module(module: &Module) -> String {
     // The page chrome already states the module path and its source file, and
     // it does so with the breadcrumb and the declaration counts beside it.
     // Repeating them here would put two `h1`s on one page.
@@ -123,7 +130,7 @@ impl Anchors {
             base = "decl".to_string();
         }
         let count = self.claimed.entry(base.clone()).or_insert(0);
-        *count += 1;
+        *count = count.saturating_add(1);
         if *count == 1 {
             base
         } else {

@@ -19,11 +19,11 @@
 # host that is a native build; on x86_64 use `--platform linux/arm64` with qemu
 # binfmt installed (see docs/DEPLOY.md). Nothing here hard-codes a target triple.
 
-ARG RUST_VERSION=1.97
+ARG RUST_VERSION=1.100
 
 # --- builder ---------------------------------------------------------------
-# docker.io/library/rust:1.97-slim-trixie is the pinned toolchain (workspace
-# rust-version = 1.97) on Debian 13. It ships gcc and libc6-dev, which the
+# The Rust image and workspace use the same toolchain on Debian 13.
+# The image ships gcc and libc6-dev, which the
 # `ring` assembly needs.
 FROM docker.io/library/rust:${RUST_VERSION}-slim-trixie AS builder
 
@@ -64,14 +64,14 @@ COPY infra/lang-workspace.toml /build/Cargo.toml
 # layer keyed only by Cargo.toml/Cargo.lock, and real source edits never
 # invalidate it.
 RUN set -eux; \
-    for c in aevia-registry-core aevia-registry-db aevia-registry-docs aevia-registry-web; do \
-        mkdir -p "crates/$c/src"; : > "crates/$c/src/lib.rs"; \
+    for c in aevia-registry-core aevia-registry-db aevia-registry-docs aevia-registry-web aevia-registry-server; do \
+        mkdir -p "crates/$c/src"; echo '//! Dependency build stub.' > "crates/$c/src/lib.rs"; \
     done; \
     for c in aevia-registry-server aevia-pkg; do \
-        mkdir -p "crates/$c/src"; echo 'fn main() {}' > "crates/$c/src/main.rs"; \
+        mkdir -p "crates/$c/src"; printf '%s\n' '//! Dependency build stub.' 'fn main() {}' > "crates/$c/src/main.rs"; \
     done; \
     for c in aevia-doc aevia-syntax aevia-fmt aevia-dim aevia-resolve; do \
-        mkdir -p "/build/crates/$c/src"; : > "/build/crates/$c/src/lib.rs"; \
+        mkdir -p "/build/crates/$c/src"; echo '//! Dependency build stub.' > "/build/crates/$c/src/lib.rs"; \
     done
 
 # --locked keeps the build honest: the committed Cargo.lock is the dependency
@@ -80,11 +80,12 @@ RUN set -eux; \
 ARG CARGO_LOCKED=--locked
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
-    cargo build --release -p aevia-registry-server ${CARGO_LOCKED}
+    cargo build --release -p aevia-registry-server --bin aevia-registry ${CARGO_LOCKED}
 
 # Layer 3 — real sources. Everything above is cached; only the workspace crates
 # are recompiled here.
 COPY crates ./crates
+COPY install.sh install.ps1 ./
 COPY --from=lang aevia-doc     /build/crates/aevia-doc
 COPY --from=lang aevia-syntax  /build/crates/aevia-syntax
 COPY --from=lang aevia-fmt     /build/crates/aevia-fmt
@@ -92,7 +93,8 @@ COPY --from=lang aevia-dim     /build/crates/aevia-dim
 COPY --from=lang aevia-resolve /build/crates/aevia-resolve
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
-    cargo build --release -p aevia-registry-server ${CARGO_LOCKED} && \
+    find crates /build/crates -type f -name '*.rs' -exec touch {} + && \
+    cargo build --release -p aevia-registry-server --bin aevia-registry ${CARGO_LOCKED} && \
     install -D -m 0755 target/release/aevia-registry /out/aevia-registry && \
     strip --strip-all /out/aevia-registry
 
@@ -142,6 +144,9 @@ EXPOSE 8080
 # overridable at run time; see .env.example for the full contract.
 ENV AEVIA_BIND=0.0.0.0:8080 \
     AEVIA_STORAGE_DIR=/var/lib/aevia/packages \
+    AEVIA_SPEC_DIR=/spec \
+    AEVIA_STDLIB_DOCS_DIR=/stdlib-docs \
+    AEVIA_MANUALS_DIR=/manuals \
     RUST_LOG=aevia_registry=info,tower_http=warn
 
 # /healthz answers 200 only when the database answers, so --fail is the whole

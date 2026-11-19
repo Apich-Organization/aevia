@@ -1,12 +1,14 @@
 [Unit]
 Description=Aevia package registry
-Requires=aevia-db.container aevia-data.volume aevia.network
-After=aevia-db.container aevia-data.volume aevia.network
+Wants=aevia-db.service
+After=aevia-db.service
 
 [Container]
 ContainerName=aevia-registry
 Image=localhost/aevia/registry:0.1.0
 Network=aevia.network
+Network=aevia-storage.network
+NetworkAlias=registry
 
 # Loopback only: Caddy is the only process that speaks to the outside world.
 PublishPort=127.0.0.1:8080:8080
@@ -16,10 +18,21 @@ PublishPort=127.0.0.1:8080:8080
 Volume=aevia-data.volume:/var/lib/aevia/packages:U
 # The language specification, read-only. Adjust the host path to where the
 # language repository is checked out; `/spec` renders what it finds there.
-Volume=%h/aevia/spec:/spec:ro
+Volume=%h/aevia/spec:/spec:ro,z
+Volume=%h/aevia/platform/stdlib-docs:/stdlib-docs:ro,z
+Volume=%h/aevia/platform/manuals:/manuals:ro,z
+ReadOnly=true
+DropCapability=ALL
+NoNewPrivileges=true
+PodmanArgs=--pids-limit=128 --memory=2g
 
 EnvironmentFile=%h/.config/aevia/aevia.env
 LogDriver=journald
+HealthCmd=curl --fail --silent --show-error --max-time 4 http://127.0.0.1:8080/healthz
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=20s
 
 
 # Deliberately no AutoUpdate=: this image is built on the host by deploy.sh, so
@@ -27,6 +40,7 @@ LogDriver=journald
 
 [Service]
 Restart=always
+RestartSec=5s
 # Covers the sqlx migrations that run before the listener binds.
 TimeoutStartSec=300
 

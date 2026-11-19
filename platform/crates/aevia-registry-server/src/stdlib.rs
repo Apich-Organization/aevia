@@ -5,11 +5,14 @@
 //! Like [`crate::spec::SpecStore`], a missing directory is not a crash — `/stdlib`
 //! explains how to mount one — and the store is hot-reloaded when files change.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::path::PathBuf;
 
 use aevia_registry_core::Error;
+use aevia_registry_core::Lang;
 use aevia_registry_core::vm::StdlibBook;
+use aevia_registry_core::vm::StdlibItem;
 use aevia_registry_core::vm::StdlibModule;
 
 /// `E_STDLIB`: the stdlib docs directory exists but cannot be read or parsed.
@@ -19,6 +22,7 @@ pub const E_STDLIB: &str = "E_STDLIB";
 #[derive(Clone, Debug)]
 pub struct StdlibDocStore {
     book: StdlibBook,
+    chinese: Option<StdlibBook>,
     directory: PathBuf,
 }
 
@@ -29,45 +33,49 @@ impl StdlibDocStore {
     ///
     /// `E_STDLIB` when the path exists but cannot be read or parsed.
     pub fn load(directory: &Path) -> Result<Self, Error> {
-        if directory.is_file() {
-            let book = load_json_file(directory)?;
-            return Ok(Self {
-                book,
-                directory: directory.to_path_buf(),
-            });
-        }
-
-        if !directory.is_dir() {
+        let (mut book, mut chinese) = if directory.is_file() {
+            load_json_file(directory)?
+        } else if directory.is_dir() {
+            let json_path = directory.join("stdlib-docs.json");
+            if json_path.is_file() {
+                load_json_file(&json_path)?
+            } else {
+                (load_markdown_dir(directory)?, None)
+            }
+        } else {
             tracing::warn!(
                 path = %directory.display(),
                 "no stdlib docs directory; /stdlib will explain how to mount one"
             );
             return Ok(Self {
                 book: StdlibBook::default(),
+                chinese: None,
                 directory: directory.to_path_buf(),
             });
-        }
-
-        let json_path = directory.join("stdlib-docs.json");
-        let mut book = if json_path.is_file() {
-            load_json_file(&json_path)?
-        } else {
-            load_markdown_dir(directory)?
         };
-
-        for module in &mut book.modules {
-            if module.slug.is_empty() {
-                module.slug.clone_from(&module.name);
+        let slugs = render_book(&mut book)?;
+        if let Some(chinese) = &mut chinese {
+            if render_book(chinese)? != slugs {
+                return Err(Error::new(
+                    E_STDLIB,
+                    "Chinese and English stdlib module identifiers differ",
+                ));
             }
-            if module.name.is_empty() {
-                module.name.clone_from(&module.slug);
-            }
-            for item in &mut module.items {
-                if item.doc_html.is_empty()
-                    && let Some(doc) = item.doc.as_deref()
-                    && !doc.trim().is_empty()
-                {
-                    item.doc_html = aevia_registry_docs::render_markdown(doc);
+            for module in &book.modules {
+                let translated = chinese.module(&module.slug).ok_or_else(|| {
+                    Error::new(
+                        E_STDLIB,
+                        format!("missing Chinese module `{}`", module.slug),
+                    )
+                })?;
+                if declarations(module) != declarations(translated) {
+                    return Err(Error::new(
+                        E_STDLIB,
+                        format!(
+                            "Chinese and English declarations differ in `{}`",
+                            module.slug
+                        ),
+                    ));
                 }
             }
         }
@@ -80,19 +88,32 @@ impl StdlibDocStore {
 
         Ok(Self {
             book,
+            chinese,
             directory: directory.to_path_buf(),
         })
     }
 
-    /// The rendered stdlib book.
+    /// The rendered default edition.
     #[must_use]
-    pub fn book(&self) -> &StdlibBook {
+    pub const fn book(&self) -> &StdlibBook {
         &self.book
+    }
+
+    /// Selects the matching edition when the loaded bundle provides it.
+    #[must_use]
+    pub fn book_for(
+        &self,
+        lang: Lang,
+    ) -> &StdlibBook {
+        match lang {
+            | Lang::En => self.book(),
+            | Lang::Zh => self.chinese.as_ref().unwrap_or_else(|| self.book()),
+        }
     }
 
     /// Whether any modules were loaded.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.book.modules.is_empty()
     }
 
@@ -103,15 +124,135 @@ impl StdlibDocStore {
     }
 }
 
-fn load_json_file(path: &Path) -> Result<StdlibBook, Error> {
+fn declarations(module: &StdlibModule) -> BTreeSet<(&str, &str, &str)> {
+    module
+        .items
+        .iter()
+        .map(|item| {
+            (
+                item.kind.as_str(),
+                item.name.as_str(),
+                item.signature.as_str(),
+            )
+        })
+        .collect()
+}
+
+fn render_book(book: &mut StdlibBook) -> Result<BTreeSet<String>, Error> {
+    let mut slugs = BTreeSet::new();
+    for module in &mut book.modules {
+        if module.slug.is_empty() {
+            module.slug.clone_from(&module.name);
+        }
+        if module.name.is_empty() {
+            module.name.clone_from(&module.slug);
+        }
+        if module.slug.is_empty()
+            || !module.slug.split('.').all(|part| {
+                !part.is_empty()
+                    && part
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-'))
+            })
+            || !slugs.insert(module.slug.to_ascii_lowercase())
+        {
+            return Err(Error::new(
+                E_STDLIB,
+                format!("invalid or duplicate module slug `{}`", module.slug),
+            ));
+        }
+        for item in &mut module.items {
+            if item.doc_html.is_empty()
+                && let Some(doc) = item.doc.as_deref()
+                && !doc.trim().is_empty()
+            {
+                item.doc_html = aevia_registry_docs::render_markdown(doc);
+            }
+        }
+    }
+
+    Ok(slugs)
+}
+
+#[derive(serde::Deserialize)]
+struct GeneratedBook {
+    modules: Vec<GeneratedModule>,
+    #[serde(default)]
+    zh_modules: Vec<GeneratedModule>,
+}
+
+#[derive(serde::Deserialize)]
+struct LegacyBook {
+    #[serde(default)]
+    version: String,
+    modules: Vec<StdlibModule>,
+}
+
+#[derive(serde::Deserialize)]
+struct GeneratedModule {
+    path: String,
+    doc: Option<String>,
+    decls: Vec<GeneratedItem>,
+}
+
+#[derive(serde::Deserialize)]
+struct GeneratedItem {
+    #[serde(flatten)]
+    item: StdlibItem,
+    #[serde(default)]
+    private: bool,
+    #[serde(default)]
+    doc_hidden: bool,
+}
+
+impl From<GeneratedModule> for StdlibModule {
+    fn from(module: GeneratedModule) -> Self {
+        let doc = module.doc.as_deref().unwrap_or_default();
+        Self {
+            name: module.path.clone(),
+            slug: module.path,
+            summary: first_paragraph(doc),
+            html: aevia_registry_docs::render_markdown(doc),
+            items: module
+                .decls
+                .into_iter()
+                .filter(|decl| !decl.private && !decl.doc_hidden)
+                .map(|decl| decl.item)
+                .collect(),
+        }
+    }
+}
+
+fn load_json_file(path: &Path) -> Result<(StdlibBook, Option<StdlibBook>), Error> {
     let raw = std::fs::read_to_string(path).map_err(|error| {
         Error::new(
             E_STDLIB,
             format!("cannot read `{}`: {error}", path.display()),
         )
     })?;
-    if let Ok(book) = serde_json::from_str::<StdlibBook>(&raw) {
-        return Ok(book);
+    if let Ok(book) = serde_json::from_str::<GeneratedBook>(&raw) {
+        let convert = |modules: Vec<GeneratedModule>| {
+            StdlibBook {
+                version: String::new(),
+                modules: modules.into_iter().map(StdlibModule::from).collect(),
+            }
+        };
+        let chinese = (!book.zh_modules.is_empty()).then(|| convert(book.zh_modules));
+        return Ok((convert(book.modules), chinese));
+    }
+    if let Ok(book) = serde_json::from_str::<LegacyBook>(&raw)
+        && book
+            .modules
+            .iter()
+            .all(|m| !m.name.is_empty() || !m.slug.is_empty())
+    {
+        return Ok((
+            StdlibBook {
+                version: book.version,
+                modules: book.modules,
+            },
+            None,
+        ));
     }
     let modules = serde_json::from_str::<Vec<StdlibModule>>(&raw).map_err(|error| {
         Error::new(
@@ -119,12 +260,19 @@ fn load_json_file(path: &Path) -> Result<StdlibBook, Error> {
             format!("cannot parse `{}`: {error}", path.display()),
         )
     })?;
-    Ok(StdlibBook {
-        version: String::new(),
-        modules,
-    })
+    Ok((
+        StdlibBook {
+            version: String::new(),
+            modules,
+        },
+        None,
+    ))
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "the Markdown fallback is an independent documentation input format"
+)]
 fn load_markdown_dir(directory: &Path) -> Result<StdlibBook, Error> {
     let entries = std::fs::read_dir(directory).map_err(|error| {
         Error::new(
@@ -142,7 +290,13 @@ fn load_markdown_dir(directory: &Path) -> Result<StdlibBook, Error> {
             )
         })?;
         let path = entry.path();
-        if path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("md") {
+        if path.is_file()
+            && path.extension().and_then(|ext| ext.to_str()) == Some("md")
+            && !matches!(
+                path.file_stem().and_then(|stem| stem.to_str()),
+                Some("index" | "stdlib")
+            )
+        {
             files.push(path);
         }
     }
@@ -181,6 +335,10 @@ fn load_markdown_dir(directory: &Path) -> Result<StdlibBook, Error> {
     })
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "the Markdown fallback extracts the canonical module title"
+)]
 fn first_heading(text: &str) -> Option<String> {
     text.lines().find_map(|line| {
         line.strip_prefix("# ")
@@ -188,6 +346,10 @@ fn first_heading(text: &str) -> Option<String> {
     })
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "the Markdown fallback removes the title rendered by the layout"
+)]
 fn strip_first_heading(text: &str) -> String {
     let mut lines = text.lines();
     let mut found = false;
@@ -252,9 +414,60 @@ mod tests {
         let store = StdlibDocStore::load(tmp.path()).expect("load json");
         assert_eq!(store.book().version, "0.1.0");
         assert_eq!(store.book().modules.len(), 1);
-        let prelude = store.book().module("prelude").expect("case-insensitive lookup");
+        let prelude = store
+            .book()
+            .module("prelude")
+            .expect("case-insensitive lookup");
         assert_eq!(prelude.items.len(), 1);
         assert!(prelude.items[0].doc_html.contains("<code>sqrt(x)</code>"));
+    }
+
+    #[test]
+    fn loads_cli_bundle_from_file_or_directory() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("stdlib-docs.json");
+        std::fs::write(
+            &path,
+            r#"{
+            "modules": [{"path":"Math.Special", "file":"stdlib/Math/Special.aev",
+                "doc":"Special functions.", "decls":[
+                    {"name":"erf", "kind":"let", "signature":"erf: Float -> Float",
+                     "doc":"The `error` function.", "private":false, "doc_hidden":false},
+                    {"name":"internal", "private":true}
+                ]}], "operators":[],
+            "zh_modules": [{"path":"Math.Special", "doc":"特殊函数。", "decls":[
+                {"name":"erf", "kind":"let", "signature":"erf: Float -> Float", "doc":"误差函数。"}
+            ]}]
+        }"#,
+        )
+        .expect("write bundle");
+        for location in [tmp.path(), path.as_path()] {
+            let store = StdlibDocStore::load(location).expect("load generated bundle");
+            let module = store.book().module("Math.Special").expect("module path");
+            assert_eq!(module.items.len(), 1);
+            assert!(module.items[0].doc_html.contains("<code>error</code>"));
+            let localized = store
+                .book_for(Lang::Zh)
+                .module("Math.Special")
+                .expect("localized path");
+            assert!(localized.items[0].doc_html.contains("误差函数"));
+        }
+    }
+
+    #[test]
+    fn rejects_incomplete_translated_bundle() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("stdlib-docs.json");
+        std::fs::write(
+            &path,
+            r#"{
+            "modules": [{"path":"Prelude", "doc":"Core functions.", "decls":[{"name":"print"}]}],
+            "zh_modules": [{"path":"Prelude", "doc":"基础函数。", "decls":[]}]
+        }"#,
+        )
+        .expect("write bundle");
+        let error = StdlibDocStore::load(&path).expect_err("English and Chinese must agree");
+        assert!(error.render().contains("declarations differ in `Prelude`"));
     }
 
     #[test]
@@ -270,7 +483,10 @@ mod tests {
         assert_eq!(store.book().modules.len(), 1);
         let linalg = store.book().module("Linalg").expect("Linalg module");
         assert_eq!(linalg.name, "Linear Algebra");
-        assert_eq!(linalg.summary.as_deref(), Some("Matrix and vector operations."));
+        assert_eq!(
+            linalg.summary.as_deref(),
+            Some("Matrix and vector operations.")
+        );
         assert!(linalg.html.contains("<code>det</code>"));
     }
 }

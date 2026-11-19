@@ -20,6 +20,7 @@
 //! `AEVIA_PKG_HOME` overrides the directory, which is how the tests exercise
 //! the file without touching a developer's real `~/.aevia`.
 
+use std::fmt::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -72,13 +73,17 @@ impl Config {
     /// neither `openpgp` nor `ssh`. An unknown key is refused rather than
     /// ignored: a publisher who wrote `default-key` (hyphen) would otherwise
     /// silently get the old key and publish under the wrong identity.
+    #[allow(
+        clippy::single_call_fn,
+        reason = "configuration grammar is tested independently of filesystem loading"
+    )]
     pub fn parse(
         text: &str,
         origin: &str,
     ) -> Result<Self, CliError> {
         let mut config = Self::default();
         for (index, raw) in text.lines().enumerate() {
-            let number = index + 1;
+            let number = index.saturating_add(1);
             let line = raw.trim_end_matches('\r').trim();
             if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
                 continue;
@@ -91,13 +96,17 @@ impl Config {
                 ));
             };
             let key = key.trim();
-            let value = unquote(value.trim())
+            let value = value
+                .trim()
+                .strip_prefix('"')
+                .and_then(|quoted| quoted.strip_suffix('"'))
+                .filter(|inner| !inner.contains('"'))
                 .ok_or_else(|| fail(origin, number, format!("`{key}` expects a quoted string")))?;
             match key {
                 | "registry" => config.registry = Some(value.trim_end_matches('/').to_string()),
-                | "default_key" => config.default_key = Some(value),
+                | "default_key" => config.default_key = Some(value.to_owned()),
                 | "default_key_kind" => {
-                    let kind = KeyKind::parse(&value).ok_or_else(|| {
+                    let kind = KeyKind::parse(value).ok_or_else(|| {
                         fail(
                             origin,
                             number,
@@ -128,15 +137,16 @@ impl Config {
         out.push_str("# aevia-pkg — written by `aevia-pkg login`.\n");
         out.push_str("# Holds no secrets: a fingerprint is public, and the private key stays\n");
         out.push_str("# in gpg-agent or ssh-agent.\n");
-        out.push_str(&format!(
-            "registry = \"{}\"\n",
+        let _ = writeln!(
+            out,
+            "registry = \"{}\"",
             self.registry.as_deref().unwrap_or(DEFAULT_REGISTRY)
-        ));
+        );
         if let Some(fingerprint) = &self.default_key {
-            out.push_str(&format!("default_key = \"{fingerprint}\"\n"));
+            let _ = writeln!(out, "default_key = \"{fingerprint}\"");
         }
         if let Some(kind) = self.default_key_kind {
-            out.push_str(&format!("default_key_kind = \"{}\"\n", kind.as_str()));
+            let _ = writeln!(out, "default_key_kind = \"{}\"", kind.as_str());
         }
         out
     }
@@ -146,6 +156,10 @@ impl Config {
     /// # Errors
     ///
     /// `E_CONFIG` when the file exists but does not parse, or cannot be read.
+    #[allow(
+        clippy::single_call_fn,
+        reason = "file loading distinguishes a missing configuration from a malformed one"
+    )]
     pub fn load(home: &Path) -> Result<Self, CliError> {
         let path = home.join("config.toml");
         match std::fs::read_to_string(&path) {
@@ -216,6 +230,10 @@ impl Config {
 ///
 /// `E_CONFIG` when neither the override nor a home directory is known, which
 /// happens in a bare container with no `HOME` and no `USERPROFILE`.
+#[allow(
+    clippy::single_call_fn,
+    reason = "environment discovery is separate from resolving overrides and defaults"
+)]
 pub fn home() -> Result<PathBuf, CliError> {
     home_from(
         std::env::var_os(HOME_ENV),
@@ -228,6 +246,10 @@ pub fn home() -> Result<PathBuf, CliError> {
 /// # Errors
 ///
 /// `E_CONFIG` when there is nothing to build a path from.
+#[allow(
+    clippy::single_call_fn,
+    reason = "environment precedence is testable without mutating process-wide variables"
+)]
 pub fn home_from(
     override_dir: Option<std::ffi::OsString>,
     home_dir: Option<std::ffi::OsString>,
@@ -241,14 +263,6 @@ pub fn home_from(
         ));
     };
     Ok(PathBuf::from(home_dir).join(".aevia"))
-}
-
-fn unquote(value: &str) -> Option<String> {
-    let inner = value.strip_prefix('"')?.strip_suffix('"')?;
-    if inner.contains('"') {
-        return None;
-    }
-    Some(inner.to_string())
 }
 
 fn fail(

@@ -17,12 +17,24 @@
 //!   SHA-256.
 //! * [`statement`] — the canonical text a publisher signs. There is no API
 //!   token anywhere: the signature *is* the credential.
-//! * [`signature`] — OpenPGP (recommended) and SSH signature verification.
+//! * [`signature`] — `OpenPGP` (recommended) and SSH signature verification.
 //! * [`index`] — the sparse-index record clients resolve versions from.
 //! * [`vm`] — the view models the server hands to the Leptos pages.
 //! * [`lang`] — the two languages the site is written in.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unreachable
+    )
+)]
 
 pub mod error;
 pub mod index;

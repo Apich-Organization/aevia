@@ -10,6 +10,7 @@ use axum::http::StatusCode;
 use axum::http::header;
 use axum::response::IntoResponse;
 use axum::response::Response;
+use std::fmt::Write as _;
 
 use aevia_registry_core::PackageId;
 use aevia_registry_db::repo;
@@ -57,27 +58,43 @@ pub async fn sitemap(State(state): State<AppState>) -> PageResult<Response> {
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n",
     );
-    for path in ["/", "/crates", "/docs", "/stdlib", "/cli", "/spec", "/log"] {
-        xml.push_str(&format!("  <url><loc>{}{path}</loc></url>\n", xml_escape(&base)));
+    for path in [
+        "/",
+        "/crates",
+        "/docs",
+        "/stdlib",
+        "/cli",
+        "/spec",
+        "/book",
+        "/architecture",
+        "/log",
+    ] {
+        let _ = writeln!(xml, "  <url><loc>{}{path}</loc></url>", xml_escape(&base));
     }
     for package in &packages {
         let id = format!("{}/{}", package.owner_handle, package.name);
-        xml.push_str(&format!(
-            "  <url><loc>{}/crates/{}</loc><lastmod>{}</lastmod></url>\n",
+        let _ = writeln!(
+            xml,
+            "  <url><loc>{}/crates/{}</loc><lastmod>{}</lastmod></url>",
             xml_escape(&base),
             xml_escape(&id),
-            package.updated_at.format("%Y-%m-%d"),
-        ));
+            package.updated_at.format("%Y-%m-%d")
+        );
         if package.has_docs {
-            xml.push_str(&format!(
-                "  <url><loc>{}/docs/{}</loc></url>\n",
+            let _ = writeln!(
+                xml,
+                "  <url><loc>{}/docs/{}</loc></url>",
                 xml_escape(&base),
                 xml_escape(&id)
-            ));
+            );
         }
     }
     xml.push_str("</urlset>\n");
-    Ok(([(header::CONTENT_TYPE, "application/xml; charset=utf-8")], xml).into_response())
+    Ok((
+        [(header::CONTENT_TYPE, "application/xml; charset=utf-8")],
+        xml,
+    )
+        .into_response())
 }
 
 /// `GET /feed.xml` — an Atom feed of the newest releases.
@@ -88,9 +105,10 @@ pub async fn sitemap(State(state): State<AppState>) -> PageResult<Response> {
 pub async fn feed(State(state): State<AppState>) -> PageResult<Response> {
     let base = state.config.base_url.trim_end_matches('/').to_string();
     let releases = repo::recent_releases(&state.pool, 50).await?;
-    let updated = releases
-        .first()
-        .map_or_else(|| "1970-01-01T00:00:00Z".to_string(), |release| release.created_at.to_rfc3339());
+    let updated = releases.first().map_or_else(
+        || "1970-01-01T00:00:00Z".to_string(),
+        |release| release.created_at.to_rfc3339(),
+    );
     let mut xml = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <feed xmlns=\"http://www.w3.org/2005/Atom\">\n\
@@ -104,18 +122,23 @@ pub async fn feed(State(state): State<AppState>) -> PageResult<Response> {
     for release in &releases {
         let id = format!("{}/{}", release.owner_handle, release.name);
         let url = format!("{base}/crates/{id}/{}", release.version);
-        xml.push_str(&format!(
+        let _ = write!(
+            xml,
             "  <entry>\n    <title>{title}</title>\n    <id>{url}</id>\n    \
              <link href=\"{url}\"/>\n    <updated>{when}</updated>\n    \
              <summary>{summary}</summary>\n  </entry>\n",
             title = xml_escape(&format!("{id} {}", release.version)),
             url = xml_escape(&url),
             when = release.created_at.to_rfc3339(),
-            summary = xml_escape(release.description.as_deref().unwrap_or("")),
-        ));
+            summary = xml_escape(release.description.as_deref().unwrap_or(""))
+        );
     }
     xml.push_str("</feed>\n");
-    Ok(([(header::CONTENT_TYPE, "application/atom+xml; charset=utf-8")], xml).into_response())
+    Ok((
+        [(header::CONTENT_TYPE, "application/atom+xml; charset=utf-8")],
+        xml,
+    )
+        .into_response())
 }
 
 /// A flat two-part badge.
@@ -129,7 +152,7 @@ pub fn badge_svg(
     value: &str,
     colour: &str,
 ) -> String {
-    let width = |text: &str| u32::try_from(text.chars().count()).unwrap_or(0) * 7 + 12;
+    let width = |text: &str| text.chars().count().saturating_mul(7).saturating_add(12);
     let (left, right) = (width(label), width(value));
     let label = xml_escape(label);
     let value = xml_escape(value);
@@ -139,9 +162,9 @@ pub fn badge_svg(
          <rect x=\"{left}\" width=\"{right}\" height=\"20\" fill=\"{colour}\"/>\
          <g fill=\"#fff\" font-family=\"Verdana,sans-serif\" font-size=\"11\" text-anchor=\"middle\">\
          <text x=\"{lx}\" y=\"14\">{label}</text><text x=\"{rx}\" y=\"14\">{value}</text></g></svg>",
-        total = left + right,
+        total = left.saturating_add(right),
         lx = left / 2,
-        rx = left + right / 2,
+        rx = left.saturating_add(right / 2),
     )
 }
 

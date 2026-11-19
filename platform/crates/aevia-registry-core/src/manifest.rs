@@ -57,11 +57,7 @@ impl ManifestDependency {
         let package = self.package.clone()?;
         let req = self.req.clone()?;
         let import = (self.import != default_import(&package)).then(|| self.import.clone());
-        Some(crate::index::IndexDependency {
-            package,
-            req,
-            import,
-        })
+        Some(crate::index::IndexDependency { package, req, import })
     }
 }
 
@@ -128,7 +124,7 @@ impl PackageManifest {
         let mut categories = Vec::new();
         let mut dependencies = Vec::new();
         for (index, raw) in text.lines().enumerate() {
-            let number = index + 1;
+            let number = index.saturating_add(1);
             let line = strip_comment(raw.trim_end_matches('\r')).trim();
             if line.is_empty() {
                 continue;
@@ -334,7 +330,11 @@ impl PackageManifest {
                 E_MANIFEST,
                 format!(
                     "{listed} {} only a `path`, which does not exist for anyone who downloads                      this package; give each a registry version, as in `Name = {{ path =                      \"../name\", package = \"owner/name\", version = \"^1.0\" }}`",
-                    if path_only.len() == 1 { "names" } else { "name" }
+                    if path_only.len() == 1 {
+                        "names"
+                    } else {
+                        "name"
+                    }
                 ),
             ));
         }
@@ -345,10 +345,7 @@ impl PackageManifest {
                 .iter()
                 .any(|dependency| dependency.package.as_deref() == Some(own.as_str()))
         {
-            return Err(Error::new(
-                E_MANIFEST,
-                format!("`{own}` depends on itself"),
-            ));
+            return Err(Error::new(E_MANIFEST, format!("`{own}` depends on itself")));
         }
         Ok(())
     }
@@ -425,7 +422,7 @@ impl RegistryMeta {
     ) -> Result<Self> {
         let mut meta = Self::default();
         for (index, raw) in text.lines().enumerate() {
-            let number = index + 1;
+            let number = index.saturating_add(1);
             let line = raw.trim_end_matches('\r').trim();
             if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
                 continue;
@@ -588,14 +585,19 @@ pub fn truncate_words(
         return text.to_string();
     }
     let mut out = String::new();
+    let mut length = 0usize;
     for word in text.split_whitespace() {
-        if out.chars().count() + word.chars().count() + 1 > limit {
+        let next_length = length
+            .saturating_add(word.chars().count())
+            .saturating_add(usize::from(!out.is_empty()));
+        if next_length > limit {
             break;
         }
         if !out.is_empty() {
             out.push(' ');
         }
         out.push_str(word);
+        length = next_length;
     }
     if out.is_empty() {
         text.chars().take(limit).collect()
@@ -681,6 +683,10 @@ pub fn detect_license(dir: &Path) -> Option<String> {
     Some(found.to_string())
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "license recognition follows its own text-matching policy"
+)]
 fn spdx_identifier(text: &str) -> Option<String> {
     for line in text.lines() {
         let trimmed = line.trim().trim_start_matches(['/', '*', '#', ' ']);
@@ -716,6 +722,10 @@ pub fn git_remote(dir: &Path) -> Option<String> {
     None
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "remote URLs normalize clone syntax for repository metadata"
+)]
 fn normalize_remote(url: &str) -> String {
     let url = url.trim();
     // `git@github.com:owner/repo.git` → `https://github.com/owner/repo`
@@ -741,11 +751,7 @@ fn fail(
 }
 
 fn parse_string(value: &str) -> Option<String> {
-    let bytes = value.as_bytes();
-    if bytes.len() < 2 || bytes[0] != b'"' || bytes[bytes.len() - 1] != b'"' {
-        return None;
-    }
-    let inner = &value[1..value.len() - 1];
+    let inner = value.strip_prefix('"')?.strip_suffix('"')?;
     if inner.contains('"') {
         return None;
     }
@@ -805,7 +811,10 @@ pub fn normalize_tag_list(
     if out.len() > max {
         return Err(Error::new(
             E_MANIFEST,
-            format!("`[package] {field}` allows at most {max} items (got {})", out.len()),
+            format!(
+                "`[package] {field}` allows at most {max} items (got {})",
+                out.len()
+            ),
         ));
     }
     Ok(out)
@@ -917,6 +926,10 @@ pub fn validate_required_publish_metadata(
 }
 
 /// Cuts a trailing `# comment` that is not inside a quoted string.
+#[allow(
+    clippy::single_call_fn,
+    reason = "comment recognition observes the manifest string quoting policy"
+)]
 fn strip_comment(line: &str) -> &str {
     let mut quoted = false;
     for (position, character) in line.char_indices() {
@@ -938,8 +951,8 @@ fn split_fields(inner: &str) -> Option<Vec<&str>> {
         match character {
             | '"' => quoted = !quoted,
             | ',' if !quoted => {
-                fields.push(&inner[start..position]);
-                start = position + 1;
+                fields.push(inner.get(start..position)?);
+                start = position.saturating_add(1);
             },
             | _ => {},
         }
@@ -947,13 +960,17 @@ fn split_fields(inner: &str) -> Option<Vec<&str>> {
     if quoted {
         return None;
     }
-    fields.push(&inner[start..]);
+    fields.push(inner.get(start..)?);
     Some(fields)
 }
 
 /// Parses the value of one `[dependencies]` entry, exactly as the toolchain
 /// does (`aevia_core::manifest`): a version requirement string, or an inline
 /// table with `path`, `package` and `version`.
+#[allow(
+    clippy::single_call_fn,
+    reason = "dependency tables have a separate grammar and conflict diagnostics"
+)]
 fn parse_dependency(
     key: &str,
     value: &str,
@@ -976,9 +993,8 @@ fn parse_dependency(
             })
     };
     if value.starts_with('"') {
-        let text = parse_string(value).ok_or_else(|| {
-            fail(origin, number, "a version requirement is one quoted string")
-        })?;
+        let text = parse_string(value)
+            .ok_or_else(|| fail(origin, number, "a version requirement is one quoted string"))?;
         return Ok(ManifestDependency {
             import: key.to_string(),
             path: None,
@@ -986,7 +1002,10 @@ fn parse_dependency(
             req: Some(requirement(&text)?),
         });
     }
-    let Some(inner) = value.strip_prefix('{').and_then(|rest| rest.strip_suffix('}')) else {
+    let Some(inner) = value
+        .strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'))
+    else {
         return Err(fail(
             origin,
             number,
@@ -997,7 +1016,11 @@ fn parse_dependency(
         ));
     };
     let Some(fields) = split_fields(inner) else {
-        return Err(fail(origin, number, "an unterminated string in the inline table"));
+        return Err(fail(
+            origin,
+            number,
+            "an unterminated string in the inline table",
+        ));
     };
     let mut path = None;
     let mut package = None;
@@ -1085,10 +1108,20 @@ fn parse_dependency(
                 "`package` needs a `version` as well; without one this is a path dependency",
             ))
         },
-        | (None, None, None) => Err(fail(origin, number, "a dependency needs a `path` or a `version`")),
+        | (None, None, None) => {
+            Err(fail(
+                origin,
+                number,
+                "a dependency needs a `path` or a `version`",
+            ))
+        },
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "a manifest module path validates each identifier independently"
+)]
 fn is_module_segment(text: &str) -> bool {
     let mut characters = text.chars();
     match characters.next() {
@@ -1256,7 +1289,10 @@ mod tests {
         // only when it is not the package's default.
         let index = by_import("Plot").to_index().expect("registry");
         assert_eq!(index.package, "apich/plot");
-        assert_eq!(index.import, None, "Plot is the default import of apich/plot");
+        assert_eq!(
+            index.import, None,
+            "Plot is the default import of apich/plot"
+        );
         let index = by_import("Units").to_index().expect("registry");
         assert_eq!(index.import, None, "Units is aevia/units' default import");
         assert!(by_import("Local").to_index().is_none());
@@ -1272,7 +1308,8 @@ mod tests {
         assert_eq!(error.code, E_MANIFEST);
         assert!(error.message.contains("`Local`"), "{}", error.message);
         assert!(!error.message.contains("`Dev`"), "{}", error.message);
-        let text = with_dependencies("Units = \"^1\"\nDev = { path = \"../dev\", version = \"1\" }\n");
+        let text =
+            with_dependencies("Units = \"^1\"\nDev = { path = \"../dev\", version = \"1\" }\n");
         PackageManifest::parse(&text, "aevia.toml")
             .expect("parses")
             .check_publishable()
@@ -1283,7 +1320,9 @@ mod tests {
     fn a_package_may_not_depend_on_itself() {
         let text = "[package]\nname = \"a\"\nversion = \"1.0.0\"\n[dependencies]\nA = { package = \"o/a\", version = \"1\" }\n";
         let manifest = PackageManifest::parse(text, "aevia.toml").expect("parses");
-        let error = manifest.check_publishable_as("o/a").expect_err("self dependency");
+        let error = manifest
+            .check_publishable_as("o/a")
+            .expect_err("self dependency");
         assert!(error.message.contains("itself"), "{}", error.message);
         manifest
             .check_publishable_as("o/other")
@@ -1296,7 +1335,10 @@ mod tests {
             ("A = { git = \"x\" }\n", "not supported"),
             ("A = \"nonsense\"\n", "is not a number"),
             ("A = { package = \"apich/a\" }\n", "needs a `version`"),
-            ("A = { package = \"nope\", version = \"1\" }\n", "owner/name"),
+            (
+                "A = { package = \"nope\", version = \"1\" }\n",
+                "owner/name",
+            ),
             ("A = 7\n", "expected a version requirement"),
             ("A = \"^1\"\nA = \"^2\"\n", "declared twice"),
         ] {
@@ -1309,11 +1351,9 @@ mod tests {
 
     #[test]
     fn a_pre_release_version_is_a_version() {
-        let manifest = PackageManifest::parse(
-            "[package]\nname = \"a\"\nversion = \"1.0.0-rc.1\"\n",
-            "m",
-        )
-        .expect("parses");
+        let manifest =
+            PackageManifest::parse("[package]\nname = \"a\"\nversion = \"1.0.0-rc.1\"\n", "m")
+                .expect("parses");
         assert_eq!(manifest.version, "1.0.0-rc.1");
     }
 
@@ -1351,7 +1391,10 @@ categories = [\"science\", \"mathematics\"]
         assert_eq!(parsed.license.as_deref(), Some("MIT"));
         assert_eq!(parsed.license_file.as_deref(), Some("COPYING.custom"));
         assert_eq!(parsed.readme.as_deref(), Some("docs/README.md"));
-        assert_eq!(parsed.repository.as_deref(), Some("https://github.com/apich/a"));
+        assert_eq!(
+            parsed.repository.as_deref(),
+            Some("https://github.com/apich/a")
+        );
         assert_eq!(parsed.homepage.as_deref(), Some("https://aevia.org/a"));
         assert_eq!(
             parsed.documentation.as_deref(),
@@ -1456,6 +1499,7 @@ categories = [\"science\", \"mathematics\"]
         let cut = truncate_words(text.trim(), 20);
         assert!(cut.chars().count() <= 21, "{cut}");
         assert!(cut.ends_with('…'));
+        assert_eq!(truncate_words("  数据科学 全文", 4), "数据科学…");
     }
 
     #[test]

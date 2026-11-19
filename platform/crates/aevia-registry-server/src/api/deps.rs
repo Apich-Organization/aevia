@@ -118,7 +118,7 @@ pub struct ResolveResponse {
 }
 
 /// Where records come from.
-pub trait RecordSource {
+pub trait RecordSource: Sync {
     /// All records of `package` (`owner/name`), or `None` when it does not
     /// exist.
     ///
@@ -212,7 +212,7 @@ pub async fn resolve_request(
         dependencies,
     }];
     let mut index = LoadedIndex::default();
-    let mut loaded = 0;
+    let mut loaded = 0usize;
     loop {
         match aevia_resolve::resolve(&roots, &index, &options) {
             | Ok(resolution) => {
@@ -225,7 +225,7 @@ pub async fn resolve_request(
                             ResolvedPackage {
                                 package: chosen.package.clone(),
                                 version: chosen.version.to_string(),
-                                checksum: record.map(|r| r.checksum.clone()).unwrap_or_default(),
+                                checksum: record.map_or_default(|r| r.checksum.clone()),
                                 yanked: record.is_some_and(|r| r.yanked),
                             }
                         })
@@ -244,7 +244,7 @@ pub async fn resolve_request(
                 });
             },
             | Err(ResolveError::Index(error)) if error.kind == IndexErrorKind::Unavailable => {
-                loaded += 1;
+                loaded = loaded.saturating_add(1);
                 if loaded > MAX_LOADED {
                     return Err(ApiError::new(
                         StatusCode::UNPROCESSABLE_ENTITY,
@@ -304,7 +304,10 @@ impl RecordSource for Catalogue<'_> {
         aevia_resolve::sparse::parse_text(&text)
             .map(Some)
             .map_err(|error| {
-                aevia_registry_core::Error::new("E_JSON", format!("a stored record is damaged: {error}"))
+                aevia_registry_core::Error::new(
+                    "E_JSON",
+                    format!("a stored record is damaged: {error}"),
+                )
             })
     }
 }
@@ -477,9 +480,23 @@ mod tests {
             .iter()
             .map(|p| format!("{} {}", p.package, p.version))
             .collect();
-        assert_eq!(chosen, ["o/plot 1.1.0", "o/units 1.2.0"], "yanked 1.3.0 is skipped");
-        assert!(response.packages.iter().all(|p| p.checksum.starts_with("sha256:")));
-        assert!(response.edges.iter().any(|e| e.from == "request" && e.import == "Plot"));
+        assert_eq!(
+            chosen,
+            ["o/plot 1.1.0", "o/units 1.2.0"],
+            "yanked 1.3.0 is skipped"
+        );
+        assert!(
+            response
+                .packages
+                .iter()
+                .all(|p| p.checksum.starts_with("sha256:"))
+        );
+        assert!(
+            response
+                .edges
+                .iter()
+                .any(|e| e.from == "request" && e.import == "Plot")
+        );
         // Each package was loaded once, however many rounds it took.
         let asked = source.asked.lock().expect("lock");
         assert_eq!(asked.len(), 2, "{asked:?}");
@@ -507,7 +524,11 @@ mod tests {
             .expect_err("unknown");
         assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(error.error.code, "E_RESOLVE");
-        assert!(error.error.message.contains("not in the index"), "{}", error.error.message);
+        assert!(
+            error.error.message.contains("not in the index"),
+            "{}",
+            error.error.message
+        );
     }
 
     #[tokio::test]
@@ -515,15 +536,24 @@ mod tests {
         let source = catalogue();
         let mut asked = request(&[("o/plot", "^1"), ("o/units", "^2")]);
         asked.unify = Some("package".to_string());
-        let error = resolve_request(&source, &asked).await.expect_err("conflict");
+        let error = resolve_request(&source, &asked)
+            .await
+            .expect_err("conflict");
         assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY);
-        assert!(error.error.message.contains("o/units"), "{}", error.error.message);
+        assert!(
+            error.error.message.contains("o/units"),
+            "{}",
+            error.error.message
+        );
         // The default rule lets both majors coexist.
         let ok = resolve_request(&source, &request(&[("o/plot", "^1"), ("o/units", "^2")]))
             .await
             .expect("series");
         assert_eq!(
-            ok.packages.iter().filter(|p| p.package == "o/units").count(),
+            ok.packages
+                .iter()
+                .filter(|p| p.package == "o/units")
+                .count(),
             2
         );
     }
@@ -542,7 +572,10 @@ mod tests {
         let mut asked = request(&[("o/plot", "^1")]);
         asked.unify = Some("both".to_string());
         assert_eq!(
-            resolve_request(&source, &asked).await.expect_err("bad").status,
+            resolve_request(&source, &asked)
+                .await
+                .expect_err("bad")
+                .status,
             StatusCode::BAD_REQUEST
         );
     }

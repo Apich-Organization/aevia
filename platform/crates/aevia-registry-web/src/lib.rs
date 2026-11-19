@@ -26,6 +26,18 @@
 //! renderer (`readme_html` and the documentation `html` field).
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unreachable
+    )
+)]
 
 mod account;
 mod cli;
@@ -36,6 +48,7 @@ mod home;
 mod layout;
 mod log;
 mod login;
+mod manual;
 mod spec;
 mod stdlib;
 mod styles;
@@ -46,6 +59,7 @@ pub use account::activate;
 pub use cli::cli_page;
 pub use crates::crate_list;
 pub use crates::crate_page;
+pub use docs::docs_build_status;
 pub use docs::docs_index;
 pub use docs::docs_landing;
 pub use docs::docs_module;
@@ -53,6 +67,10 @@ pub use error::error_page;
 pub use home::home;
 pub use log::log_page;
 pub use login::login;
+pub use manual::manual_all;
+pub use manual::manual_chapter;
+pub use manual::manual_download;
+pub use manual::manual_index;
 pub use spec::spec_all;
 pub use spec::spec_index;
 pub use spec::spec_page;
@@ -65,6 +83,7 @@ pub use user::user_page;
 use aevia_registry_core::Lang;
 use leptos::prelude::Owner;
 use leptos::prelude::RenderHtml;
+use std::fmt::Write as _;
 
 /// One string, in both languages.
 ///
@@ -73,6 +92,7 @@ use leptos::prelude::RenderHtml;
 /// file to find the label they are looking at, and a deleted section should
 /// take its strings with it. `of` is the only way to read one, so a page cannot
 /// accidentally render the wrong language.
+#[derive(Clone, Copy)]
 pub(crate) struct Msg {
     en: &'static str,
     zh: &'static str,
@@ -88,7 +108,7 @@ impl Msg {
     }
 
     /// The string in `lang`.
-    pub(crate) fn of(
+    pub(crate) const fn of(
         &self,
         lang: Lang,
     ) -> &'static str {
@@ -100,7 +120,7 @@ impl Msg {
 }
 
 /// The `lang` attribute for the document element.
-pub(crate) fn lang_attr(lang: Lang) -> &'static str {
+pub(crate) const fn lang_attr(lang: Lang) -> &'static str {
     match lang {
         | Lang::En => "en",
         | Lang::Zh => "zh-CN",
@@ -123,7 +143,7 @@ where
 
 /// Truncates a hash or fingerprint to a length a table column can hold.
 ///
-/// Full OpenPGP fingerprints are 40 hexadecimal characters; a table that shows
+/// Full `OpenPGP` fingerprints are 40 hexadecimal characters; a table that shows
 /// them all forces every other column to wrap. The prefix is enough to match a
 /// key against `gpg --list-keys`, and the full value is shown on the detail
 /// panel of the package page.
@@ -146,12 +166,17 @@ pub(crate) fn shorten(
 /// reader cannot group digits by eye at a glance.
 pub(crate) fn thousands(value: i64) -> String {
     let digits = value.unsigned_abs().to_string();
-    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3 + 1);
+    let mut grouped = String::with_capacity(
+        digits
+            .len()
+            .saturating_add(digits.len() / 3)
+            .saturating_add(1),
+    );
     if value < 0 {
         grouped.push('-');
     }
     for (index, character) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+        if index > 0 && digits.len().saturating_sub(index).is_multiple_of(3) {
             grouped.push(',');
         }
         grouped.push(character);
@@ -182,7 +207,9 @@ pub(crate) fn query_param(value: &str) -> String {
                 encoded.push(char::from(byte));
             },
             | b' ' => encoded.push('+'),
-            | _ => encoded.push_str(&format!("%{byte:02X}")),
+            | _ => {
+                let _ = write!(encoded, "%{byte:02X}");
+            },
         }
     }
     encoded

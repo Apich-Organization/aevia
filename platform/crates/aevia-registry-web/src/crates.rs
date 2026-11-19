@@ -82,7 +82,10 @@ const SECTIONS: Msg = Msg::new("Sections", "分区");
 const NO_VERSIONS: Msg = Msg::new("No versions have been published.", "尚未发布任何版本。");
 const NO_DEPENDENCIES: Msg = Msg::new("No dependencies.", "无依赖。");
 const DEPENDENTS: Msg = Msg::new("used by", "被依赖");
-const NO_DEPENDENTS: Msg = Msg::new("No published package depends on this one.", "尚无已发布的包依赖此包。");
+const NO_DEPENDENTS: Msg = Msg::new(
+    "No published package depends on this one.",
+    "尚无已发布的包依赖此包。",
+);
 const DOWNLOAD: Msg = Msg::new("download", "下载");
 const NOT_STATED: Msg = Msg::new("not stated", "未声明");
 const KEYWORDS: Msg = Msg::new("keywords", "关键词");
@@ -126,7 +129,7 @@ const SORTS: [(&str, Msg); 4] = [
 /// parameter rather than something the card infers from its context.
 ///
 /// This entry point renders English. The front page and the docs landing page
-pub(crate) fn card_in(
+pub fn card_in(
     lang: Lang,
     item: &CrateCard,
     href: &str,
@@ -168,6 +171,7 @@ pub(crate) fn card_in(
 /// The search box and the sort tabs are ordinary links and a GET form, so the
 /// page is fully usable with scripting off; the inline script only filters the
 /// rows already on the page while the reader types.
+#[must_use]
 pub fn crate_list(
     lang: Lang,
     list: &CrateList,
@@ -286,11 +290,15 @@ pub fn crate_list(
                 <a href=format!("/crates?q={query}&sort={sort}&page={page}")>{NEXT.of(lang)}</a>
             }
         });
-        let last = list.last_page();
+        let page_count = list.last_page();
+        #[allow(
+            clippy::literal_string_with_formatting_args,
+            reason = "localized templates use named placeholders in different orders"
+        )]
         let position = PAGE_OF
             .of(lang)
             .replace("{page}", &list.page.to_string())
-            .replace("{last}", &last.to_string());
+            .replace("{last}", &page_count.to_string());
         view! {
             <nav class="pager" aria-label=PAGINATION.of(lang)>
                 {previous}
@@ -334,6 +342,7 @@ pub fn crate_list(
 /// routes: a version table, a dependency list and a README are all short enough
 /// that a reader scrolls, and a scroll keeps the install line and the sidebar
 /// in view while they compare versions.
+#[must_use]
 pub fn crate_page(
     lang: Lang,
     page: &CratePage,
@@ -826,10 +835,19 @@ mod tests {
         assert!(html.contains("Kinematics"), "dependencies are listed");
         assert!(html.contains("apich/kinematics"), "the package is named");
         assert!(html.contains("/crates/apich/kinematics"), "and linked");
-        assert!(html.contains("apich/plot"), "reverse dependencies are listed");
+        assert!(
+            html.contains("apich/plot"),
+            "reverse dependencies are listed"
+        );
         assert!(html.contains("Apich Authors"), "authors are shown");
-        assert!(html.contains("https://aevia.org/units-extra"), "homepage is shown");
-        assert!(html.contains("https://docs.aevia.org/units-extra"), "docs link is shown");
+        assert!(
+            html.contains("https://aevia.org/units-extra"),
+            "homepage is shown"
+        );
+        assert!(
+            html.contains("https://docs.aevia.org/units-extra"),
+            "docs link is shown"
+        );
         assert!(html.contains("science"), "categories are shown");
         assert!(html.contains("yank"), "a manager sees the yank control");
     }

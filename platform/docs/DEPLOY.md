@@ -1,373 +1,127 @@
-# Deploying the Aevia registry
+# Deploy the Aevia platform
 
-The service is a single binary, `aevia-registry`, that serves the public site, the
-JSON API under `/api/v1`, the sparse index, package downloads and `/healthz`. It
-needs PostgreSQL and a writable directory for package archives, and nothing else:
-the schema is applied by the binary itself at start-up through sqlx migrations,
-so there is no SQL to run, no migration file to mount and no database init script
-to maintain.
+[简体中文](DEPLOY.zh.md)
 
-Deployment is three containers — `db`, `registry`, `caddy` — on one host.
+The registry needs PostgreSQL 18, durable package storage, and network access to any identity providers you enable. The registry applies its database migrations before accepting requests. A typical deployment uses rootless Podman and Caddy on an x86-64 or ARM64 Linux host. [System design](../manuals/architecture/en/05-registry.md) · [Operations design](../manuals/architecture/en/06-operations.md)
 
-```
-internet ──► caddy :443 ──► registry :8080 ──► db :5432
-             TLS, gzip/zstd     loopback only    private network
-             CSP, 24 MB cap     uid 10001         uid 999
-```
+## Start the registry
 
----
-
-## 1. Prerequisites
-
-| Requirement | Why |
-| --- | --- |
-| Podman 5.0+ (or Docker 24+ with Compose v2) | Compose provider, `:U` volume ownership, Quadlet |
-| aarch64 Linux, or x86_64 with qemu user emulation | the deployment target is ARM; see §2 |
-| A DNS `A`/`AAAA` record for `aevia.apich.org` → this host | Caddy's ACME challenge cannot pass otherwise |
-| Ports 80 and 443 reachable from the internet | HTTP-01 validation and HTTPS |
-| ~2 GB RAM for the registry container, ~1 GB for PostgreSQL | Leptos SSR + rustls; see `mem_limit` in `compose.yaml` |
-
-**On an aarch64 host** (the production case) nothing extra is needed: the image is
-built natively.
-
-**On x86_64** you can still build and run the arm64 image through emulation:
-
-```sh
-# one-off, needs root; registers the binfmt handlers on a Podman host
-sudo podman run --privileged --rm docker.io/tonistiigi/binfmt --install arm64
-
-podman build --platform linux/arm64 \
-    --build-context lang=../crates \
-    -f infra/Containerfile.server .
-```
-
-Emulated builds of this workspace take a long time (the dependency graph includes
-`ring`, `leptos` and `sqlx`). Build on the ARM host, or in CI with native ARM
-runners.
-
-### The build context has a second half
-
-The workspace depends on `../crates/aevia-doc`, `../crates/aevia-syntax`, and
-`../crates/aevia-resolve` — the *language* repository, checked out next to this
-one. A path outside the build context cannot be `COPY`ed, so the image build
-takes a second, read-only build context named `lang`:
-
-```sh
-podman build -f infra/Containerfile.server \
-    --build-context lang=../crates \
-    -t localhost/aevia/registry:0.1.0 .
-```
-
-`deploy.sh build` and `compose.yaml` (`additional_contexts`) pass it for you.
-`infra/lang-workspace.toml` reproduces the two tables those crates inherit from
-the language workspace root; if the language repository adds a
-`.workspace = true` dependency to `aevia-doc`, `aevia-syntax`, `aevia-fmt`,
-`aevia-dim` or `aevia-resolve`, add the key there too.
-
----
-
-## 2. First deployment
+From the Aevia checkout, prepare the configuration and build the image. A Podman Compose provider is required. The host must allow the rootless edge process to listen on TCP ports 80 and 443, and on UDP 443 if you want HTTP/3. Point the public DNS name to the edge before enabling automatic TLS.
 
 ```sh
 cd platform/infra
-
-# 1. Configuration
+umask 077
 cp .env.example .env
-chmod 600 .env
-$EDITOR .env                     # see §3 for the two required secrets
-
-# 2. Build the registry image (native on ARM)
+openssl rand -hex 32   # AEVIA_SESSION_SECRET
+openssl rand -hex 24   # POSTGRES_PASSWORD and the password in DATABASE_URL
+${EDITOR:-vi} .env
 ./deploy.sh build
-
-# 3. Start everything; `up` waits for the database to be healthy first
 ./deploy.sh up
-
-# 4. Watch it come up — the first start runs the migrations
 ./deploy.sh logs registry
 ```
 
-The first `up` does, in order: creates the compose network and the two volumes,
-starts PostgreSQL and waits for `pg_isready`, builds the postgres image if it is
-not present, starts the registry (which applies migrations and then binds
-`0.0.0.0:8080`), then starts Caddy, which requests a certificate for
-`aevia.apich.org` on first request.
+Set `AEVIA_DOMAIN` to the public DNS name and `AEVIA_BASE_URL` to the matching HTTPS origin. Set `AEVIA_ACME_EMAIL` to a monitored address. Keep `db` as the database hostname in Compose. The registry’s internal listener is also available at `127.0.0.1:8080` on the host.
 
-Verify:
+Caddy is the only public listener. It manages TLS, sets HSTS and compresses responses. The registry applies browser security policies directly. Caddy replaces `X-Forwarded-For` before forwarding to the private service for rate limiting. Keep `AEVIA_TRUST_PROXY=true` only when requests go through a proxy you control that replaces this header. Use the [Quadlet units](../infra/quadlet/README.md) when systemd should manage the containers directly.
 
 ```sh
-curl -fsS https://aevia.apich.org/healthz        # {"status":"ok"}
-curl -fsSI https://aevia.apich.org/ | head -20   # HSTS, CSP, no Server header
+curl -fsS https://aevia.apich.org/healthz
+curl -fsSI https://aevia.apich.org/book
 ./deploy.sh ps
 ```
 
-`/healthz` returns 200 only when the database answers. It is not a liveness
-probe for the process — a 503 there means "up but degraded", and the container
-healthcheck will start failing after three 30 s intervals.
+`/healthz` reports whether PostgreSQL can answer. The registry reports HTTP 503 while the database is unavailable. `./deploy.sh logs db` and `./deploy.sh logs registry` show the underlying errors.
 
----
+## Configure sign-in
 
-## 3. Secrets
+Enable GitHub, ORCID or both. Readers can browse without an identity provider. Publishers need an account and a bound signing key.
 
-Only two values have to be generated; everything else has a safe default.
+- Register a GitHub App with the callback `AEVIA_BASE_URL/auth/github/callback`. Copy its client ID and client secret into `AEVIA_GITHUB_CLIENT_ID` and `AEVIA_GITHUB_CLIENT_SECRET`. Organization publishing requires active membership and access to the corresponding App installation. Grant the App read access to organization membership.
+- Register an ORCID OAuth client with the callback `AEVIA_BASE_URL/auth/orcid/callback` and set `AEVIA_ORCID_CLIENT_ID` and `AEVIA_ORCID_CLIENT_SECRET`. For an ORCID sandbox client, use `AEVIA_ORCID_BASE=https://sandbox.orcid.org`. The registry requests `/authenticate`.
 
-```sh
-# 32 random bytes, hex-encoded → 64 characters. Signs session cookies.
-openssl rand -hex 32
+Provider secrets and the session key live in the registry environment. Rotate `AEVIA_SESSION_SECRET` to invalidate sessions issued with that key. To change the PostgreSQL password after initialization, update the database role and the application connection string together. Editing the initialization environment alone leaves the stored password in place.
 
-# The database password, used twice: in POSTGRES_PASSWORD and inside DATABASE_URL.
-openssl rand -base64 24 | tr -d '/+=' | cut -c1-32
+### Bind legacy GitHub accounts during upgrade
+
+Migration `0006_github_identity` preserves publisher row IDs, Aevia namespaces, signing keys and package ownership. It ends existing GitHub browser sessions and discards handle-based organisation grants. The upgraded registry requires a separately verified numeric GitHub ID to sign in to an existing GitHub publisher row. A GitHub rename keeps the original Aevia namespace, including when someone else later uses that GitHub login.
+
+Stop all old registry instances before upgrading. Start the upgraded server with GitHub sign-in disabled while reviewing existing bindings. For each user or organisation, verify the GitHub numeric ID against trusted historical account or installation evidence. For a user, confirmation should also include proof of possession of a previously trusted release-signing key or an established maintainer contact. Review that publisher’s existing signing keys and investigate unexpected bindings. A current GitHub login alone cannot establish ownership of the old namespace. [GitHub account ID lookup](https://docs.github.com/en/rest/users/users#get-a-user-using-their-id)
+
+Bind only reviewed records in PostgreSQL. In `psql`, set `registry_id`, `registry_kind` (`github` or `github-org`), `registry_handle`, and `verified_github_id` to the reviewed values with `\set` before entering this transaction.
+
+```sql
+BEGIN;
+UPDATE publishers
+SET github_id = :'verified_github_id'::bigint
+WHERE id = :'registry_id'::bigint
+  AND kind = :'registry_kind'
+  AND kind IN ('github', 'github-org')
+  AND handle = :'registry_handle'
+  AND github_id IS NULL
+RETURNING id, kind, handle, github_id;
 ```
 
-Put the first into `AEVIA_SESSION_SECRET` and the second into both
-`POSTGRES_PASSWORD` and the password part of `DATABASE_URL`. The two must match
-or the registry will fail to connect on first start.
+Confirm the result contains exactly the expected row. Then delete any browser sessions for that publisher and commit. Roll back if the row differs, the update affects zero rows, or PostgreSQL reports a duplicate provider ID. Keep unresolved mappings disabled for browser sign-in and escalate conflicts for review. When sign-in is enabled again, GitHub members sign in to obtain fresh organisation grants.
 
-Rotating `AEVIA_SESSION_SECRET` invalidates every session cookie; users are
-logged out but nothing else breaks.
-
-`POSTGRES_PASSWORD` is only read when the data directory is empty — the
-entrypoint creates the role once. Changing it later does not change the
-database role; do that with `ALTER ROLE` through `deploy.sh` + `psql`.
-
-`.env` is git-ignored, excluded from the build context by `.dockerignore`, and
-never copied into an image.
-
----
-
-## 4. GitHub App and ORCID
-
-Both integrations are optional. Leave the variables empty and the corresponding
-"sign in with…" buttons are not offered; publishing then relies on the token
-flow only.
-
-### GitHub App
-
-1. <https://github.com/settings/apps/new> (personal) or the organisation's
-   *Settings → Developer settings → GitHub Apps → New GitHub App*.
-2. **Homepage URL**: `https://aevia.apich.org`
-3. **Callback URL**: `https://aevia.apich.org/auth/github/callback`
-4. **User authorisation → Request user authorization (OAuth) during
-   installation**: enabled — the registry needs a user token to know *who* is
-   publishing.
-5. **Permissions** — repository: *Contents: read* is enough; the registry never
-   writes to GitHub. Organisation: *Members: read*.
-6. Copy the **Client ID** and **Client secret** into `AEVIA_GITHUB_CLIENT_ID` /
-   `AEVIA_GITHUB_CLIENT_SECRET`. Nothing else is needed: no App ID and no
-   private key.
-
-Organisation membership is read from the signed-in user's own installation
-list (`GET /user/installations`) during the callback. The registry therefore
-never holds a key that can act as the App, and an operator never has to mount a
-PEM. The App must be *installed* on an organisation for its members to publish
-under that organisation's scope; installing it grants the registry nothing
-beyond the ability to see that the installation exists.
-
-No scopes are requested in the OAuth flow beyond the App's own permissions —
-GitHub ignores `scope` for Apps, and requesting repository scopes would make the
-consent screen ask for far more than publishing needs.
-
-### ORCID
-
-1. <https://orcid.org/developer-tools> → *Register for the free ORCID public API*
-   (or the sandbox at <https://sandbox.orcid.org/developer-tools> first).
-2. **Redirect URI**: `https://aevia.apich.org/auth/orcid/callback`
-3. Copy the client ID and secret into `AEVIA_ORCID_CLIENT_ID` /
-   `AEVIA_ORCID_CLIENT_SECRET`.
-4. Keep `AEVIA_ORCID_BASE=https://orcid.org` in production; use
-   `https://sandbox.orcid.org` while testing, together with sandbox credentials.
-
-The flow requests the `/authenticate` scope only: the registry needs the ORCID
-iD to attribute a package, not the researcher's employment or publication record.
-
-Both callback URLs are absolute and derived from `AEVIA_BASE_URL`; if you run
-under a different hostname, change it there *and* in both provider consoles.
-
----
-
-## 5. Where the data lives
-
-Four paths, in two places.
-
-| Path | Kind | Contents | Backed up by |
-| --- | --- | --- | --- |
-| `/var/lib/postgresql/data` | volume `aevia-db` | the whole database: users, packages, index metadata | `deploy.sh backup` (pg_dump) |
-| `/var/lib/aevia/packages` | volume `aevia-data` | every published `.aevia` tarball, by content hash | `deploy.sh backup` (tar) |
-| `/data` | volume `caddy-data` | TLS certificates, ACME account key | no — re-issued automatically |
-| `infra/backups/` | host directory | the `.sql.gz` and `.tar.gz` produced by `backup` | copy off-host |
-
-The first two are the service. They must be backed up together: a database row
-points at a tarball, and a tarball without its row is unreachable.
-
-`infra/backups/` is git-ignored and excluded from the build context. It is *not*
-a backup on its own — it lives on the same disk as the volumes. Copy it
-elsewhere (restic, `rsync`, object storage) on a schedule.
-
-### The specification
-
-`/spec` serves the language's design standard, which is **not** part of this
-repository and **not** baked into the image. `compose.yaml` mounts the sibling
-checkout read-only:
-
-```yaml
-- ../../spec:/spec:ro
+```sql
+DELETE FROM sessions WHERE publisher_id = :'registry_id'::bigint;
+COMMIT;
 ```
 
-That is `../spec` relative to the language repository root, i.e. the directory
-holding `00-overview.md` … `appendix-c-changelog.md`. The server reads it once at
-start-up and holds the rendered pages in memory, so **updating the document is a
-`git pull` in the language checkout plus `./deploy.sh restart`** — no rebuild.
+## Publish documentation updates
 
-If the mount is missing the site still starts: `/spec` then says, in both
-languages, that the specification is not mounted and names `AEVIA_SPEC_DIR`.
-Nothing else on the site depends on it.
+Compose and Quadlet mount these directories read-only. The registry polls for changes and refreshes each complete render while serving the previous snapshot during loading. Deploy a bilingual edit together and replace individual files atomically.
 
----
-
-## 6. Backup and restore
-
-```sh
-./deploy.sh backup
-# backups/aevia-db-20261108T101500Z.sql.gz
-# backups/aevia-data-20261108T101500Z.tar.gz
-```
-
-`backup` runs `pg_dump --no-owner --clean --if-exists` inside the `db` container
-and tars the archive volume from a throwaway container. It refuses to write an
-empty dump. Both files are timestamped in UTC and are consistent with each other
-only if nothing was published between the two steps — for a strict point-in-time
-pair, stop the registry for the duration (`./deploy.sh down` / `up`), or accept
-that a package published in between simply is not in the dump.
-
-Restore:
-
-```sh
-./deploy.sh down
-./deploy.sh up                       # let the migrations create an empty schema
-./deploy.sh restore backups/aevia-db-20261108T101500Z.sql.gz
-./deploy.sh restore backups/aevia-data-20261108T101500Z.tar.gz
-```
-
-`restore` prompts before overwriting; set `AEVIA_RESTORE_YES=1` for unattended
-runs. The SQL dump is applied with `ON_ERROR_STOP=1`, so a partial restore fails
-loudly rather than silently half-applying. Restoring into a database that already
-has data is allowed — the dump is `--clean`, so it drops and recreates the
-objects — but it will destroy anything published since the dump.
-
-Test a restore into a scratch host at least once before you need it.
-
----
-
-## 7. Upgrades
-
-```sh
-git pull
-./deploy.sh upgrade
-```
-
-`upgrade` pulls the floating images (Caddy), rebuilds `localhost/aevia/registry`,
-and recreates the stack. The database is untouched; migrations run at start-up
-and are additive by construction.
-
-**PostgreSQL major versions are not upgraded in place.** Moving from 18 to 19
-means: `deploy.sh backup`, bump the `POSTGRES_IMAGE` build arg and the `image:`
-tag in `compose.yaml`, start a fresh `aevia-db` volume, and
-`deploy.sh restore` the dump. `pg_upgrade` inside the container is possible but
-not wired up here.
-
-Rollback: `git checkout <previous commit> && ./deploy.sh upgrade`. Schema
-migrations are forward-only; if a release added one, rolling the binary back
-leaves the newer schema in place, which older binaries tolerate only if the
-migration was additive.
-
----
-
-## 8. Logs and health
-
-| What | Compose | Quadlet |
+| Source under the Aevia checkout | Mount | Site |
 | --- | --- | --- |
-| registry | `./deploy.sh logs registry` | `journalctl --user -u aevia-registry -f` |
-| database | `./deploy.sh logs db` | `journalctl --user -u aevia-db -f` |
-| Caddy (JSON access log) | `./deploy.sh logs caddy` | `journalctl --user -u aevia-caddy -f` |
+| `spec/` | `/spec` | `/spec` |
+| `platform/stdlib-docs/` | `/stdlib-docs` | `/stdlib` |
+| `platform/manuals/book/{en,zh}/` | `/manuals/book/{en,zh}` | `/book` |
+| `platform/manuals/architecture/{en,zh}/` | `/manuals/architecture/{en,zh}` | `/architecture` |
 
-Container logs are capped at 10 MB × 5 files per service (`logging.options` in
-`compose.yaml`) or go to journald under Quadlet, so a log flood cannot fill the
-disk. `RUST_LOG` defaults to `aevia_registry=info,tower_http=warn`; set it to
-`aevia_registry=debug` in `.env` and restart for more detail.
+Both manual editions use matching chapter filenames, each with an H1 title and a chapter body. `/book/download` and `/architecture/download` provide standalone HTML in the requested language. Compiler-rendered documentation for published packages is stored in PostgreSQL and built from the signed archive. `AEVIA_DOCS_ENABLED=false` skips package documentation for new releases.
 
-Health:
+## Enable book execution
+
+Run `aevia-playground` on a dedicated Linux host or dedicated rootless Podman account with cgroup v2 and a subordinate UID/GID range. Build or install the Linux `aevia` executable for that host architecture. From the checkout root, build the worker and a local image containing the matching CLI.
 
 ```sh
-curl -fsS https://aevia.apich.org/healthz      # through Caddy — the check that matters
-./deploy.sh ps                                 # STATUS column, compose
-podman inspect --format '{{.State.Health.Status}}' aevia-registry   # Quadlet
+cargo build --locked --release --manifest-path platform/Cargo.toml \
+    -p aevia-registry-server --bin aevia-playground
+sh platform/infra/build-playground.sh target/release/aevia localhost/aevia/playground:release
 ```
 
----
+Install `platform/target/release/aevia-playground` at `~/.local/bin/aevia-playground` for the worker account. Set these values in `~/.config/aevia/playground.env`, mode `0600`.
 
-## 9. Troubleshooting
+```dotenv
+AEVIA_PLAYGROUND_BIND=127.0.0.1:9081
+AEVIA_PLAYGROUND_IMAGE=localhost/aevia/playground:release
+AEVIA_PLAYGROUND_TOKEN=<output of openssl rand -hex 32>
+```
 
-| Symptom | Cause | Fix |
-| --- | --- | --- |
-| `registry` restarts every few seconds | `DATABASE_URL` wrong, or the password does not match `POSTGRES_PASSWORD` | `./deploy.sh logs registry`; the first lines name the connection error |
-| `registry` restarts, log says `AEVIA_SESSION_SECRET must be 64 hex characters` | secret missing, or generated with `openssl rand -hex 16` | regenerate with `openssl rand -hex 32` |
-| `pg_isready` failing, db healthy-looking | the role/database were created from an older `.env` and `POSTGRES_PASSWORD` was changed afterwards | the entrypoint only creates them on an empty volume; `ALTER ROLE aevia PASSWORD '…'` or recreate the volume |
-| `pg_isready` failing after a host reboot | the volume was created by root and is not writable by uid 999 | `podman volume inspect aevia-db`, then recreate with `:U` |
-| `Permission denied` on `/var/lib/aevia/packages`, rootless Podman | the named volume is owned by the mapped root user, not by the image's uid 10001 | add `:U` to the volume mount (already there in `compose.yaml`/Quadlet); `podman volume rm` and let it be recreated if it was made without it |
-| `Permission denied` on a *bind* mount instead of a volume | the host directory is owned by another uid | `podman unshare chown -R 10001:10001 <dir>` |
-| Caddy: `obtaining certificate: ... challenge failed` | DNS does not point here yet, or port 80 is blocked | `dig +short aevia.apich.org`; check the firewall; retry with `podman restart aevia-caddy` |
-| Caddy: `too many certificates already issued` | Let's Encrypt rate limit hit while iterating | use the staging CA: add `acme_ca https://acme-staging-v02.api.letsencrypt.org/directory` to the global block temporarily |
-| Browser: `ERR_SSL_PROTOCOL_ERROR` | something else owns 443 | `ss -ltnp '( sport = :443 )'` |
-| `413` on publish | upload over 24 MB | the limit is in `Caddyfile` (`request_body`); raise it there, not in the app |
-| Every client IP is `127.0.0.1` | `AEVIA_TRUST_PROXY=false`, or Caddy is bypassed | set it to `true`; check `X-Forwarded-For` reaches the app |
-| Build fails: `failed to load manifest for dependency aevia-doc` | the `lang` build context was not passed | `--build-context lang=../crates`, or use `./deploy.sh build` |
-| Build fails: `the lock file ... needs to be updated` | `Cargo.lock` is stale relative to a manifest | `cargo update --workspace` in `platform/` and commit, or `--build-arg CARGO_LOCKED=` |
+Install [`aevia-playground.service`](../infra/playground/aevia-playground.service) in the account’s `~/.config/systemd/user/` and start it.
 
----
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now aevia-playground.service
+journalctl --user -u aevia-playground.service -f
+```
 
-## 10. Why Debian 13 and not Alpine
+Set `AEVIA_PLAYGROUND_TOKEN` to the same key in the registry environment. If the registry also runs directly on that host, set `AEVIA_PLAYGROUND_URL=http://127.0.0.1:9081/run`. For a registry in a container or on another host, forward the worker’s loopback listener through an access-restricted TLS proxy reachable to the registry and set `AEVIA_PLAYGROUND_URL=https://worker.example.org/run`. The worker needs the runtime image in its own Podman storage. If using Caddy on the worker host, set its public TLS name and the registry’s source network in the provided proxy configuration. [Worker proxy example](../infra/playground/Caddyfile.example) The registry needs neither the image nor access to the worker’s Podman socket, archive storage or database.
 
-The binary is compiled against glibc. Alpine uses musl, and the two are not
-interchangeable at run time: a glibc-linked executable does not start on musl at
-all, and the `*-unknown-linux-musl` target is a *different* build, not a smaller
-one. Producing one would mean a second toolchain, a second `Cargo.lock`
-resolution (musl forces `ring`'s assembly path and changes `sqlx`'s DNS
-behaviour), and a binary that is only ever tested in the environment nobody
-develops in.
+A fenced `aevia,run` example in a book chapter becomes editable when a worker is configured. An execution accepts one Aevia source file and has a 16 KiB input cap, 16 KiB per output stream, a seven-second worker deadline, and fixed Podman CPU, memory and process limits. The runtime has no external network access and starts with an empty Aevia capability set. Each run uses a fresh container and temporary working directory. Leave both registry playground variables empty to serve the static tutorial.
 
-The development machines are Windows x86_64 and the deployment host is aarch64
-Linux, so the image is already the one place where "it works on my machine" can
-hide. Keeping the same C library as the CI runner removes one variable from that
-list. `debian:trixie-slim` is ~30 MB compressed — the difference to Alpine's
-~3 MB is not worth a second, differently-linked build of the service.
+## Back up, restore, and upgrade
 
-Debian 13 specifically, not 12: trixie is the current stable, `postgres:18-trixie`
-is built on it, and the `libssl3t64` transition means a bookworm image and a
-trixie package would disagree about the time64 ABI. One distro release across
-builder and runtime avoids that class of problem entirely.
+Use `./deploy.sh stop registry` for a backup with a stable catalogue and archive tree. Run `./deploy.sh backup` with PostgreSQL running. Copy the two timestamp-matched files from `backups/` off the host. The database alone cannot reconstruct published archives.
 
-The image does not ship `libssl` at all: the binary uses rustls (`ring` in
-`Cargo.lock`, no `openssl-sys`), so there is no system TLS library to keep in
-step with the host.
+Restore into a matching deployment with the registry stopped and PostgreSQL running. Restore the matching SQL and archive pair, then start the registry. The SQL restore replaces catalogue objects in one transaction. Keep a copy of the current data before restoring. `./deploy.sh restore` requires confirmation, or `AEVIA_RESTORE_YES=1` for an unattended restore.
 
----
+```sh
+./deploy.sh stop registry
+./deploy.sh restore backups/aevia-db-20261118T120000Z.sql.gz
+./deploy.sh restore backups/aevia-data-20261118T120000Z.tar.gz
+./deploy.sh up
+```
 
-## 11. Why the database is a container and not a host service
-
-The database is the one piece of state the service cannot reconstruct. Running it
-in a container makes three things explicit that a host `apt install postgresql`
-leaves implicit:
-
-- **The version is pinned in git.** `postgres:18-trixie` in `compose.yaml` is the
-  same on every host. A host service is whatever `apt` resolved that week, which
-  is how staging and production end up on different majors.
-- **The data directory has one documented location.** `/var/lib/postgresql/data`
-  in a named volume, not `/var/lib/postgresql/18/main` or `/var/lib/pgsql/data`
-  depending on the distribution.
-- **The network boundary is explicit.** The container publishes no ports; the
-  registry reaches it by service name over a private bridge. A host service
-  listens on `localhost:5432` by default and is one careless `listen_addresses`
-  away from being public.
-
-The cost is real: `pg_upgrade` is now a dump/restore (§7), and `pg_dump` has to
-run through `podman exec`. Both are documented above, and both are cheaper than
-debugging a production database whose configuration nobody recorded.
+Pull a tested source revision and use `./deploy.sh upgrade` to rebuild the registry image and recreate the containers. Migrations run at startup. Before deploying a schema-changing upgrade, take a fresh backup and rehearse restoration on a separate host. For a PostgreSQL major-version upgrade, create a new database volume and restore from a dump rather than reusing the old data directory.

@@ -2,7 +2,7 @@
 # Aevia toolchain installer for macOS and Linux.
 # Usage:
 #   curl -fsSL https://aevia.apich.org/install.sh | sh
-#   curl -fsSL https://aevia.apich.org/install.sh | sh -s -- --version 0.1.0
+#   sh platform/install.sh --version 0.1.0-beta.1  # after the beta is published
 
 set -eu
 
@@ -13,14 +13,14 @@ VERSION=""
 
 usage() {
     cat <<'EOF'
-Install the Aevia toolchain (aevia, aevia-lsp).
+Install the Aevia toolchain (aevia, aevia-lsp, aevia-pkg).
 
 Usage:
   install.sh [--version <version>] [--help]
 
 Options:
-  --version <ver>   Install a specific release version (e.g. 0.1.0 or v0.1.0).
-                    Defaults to the latest GitHub release.
+  --version <ver>   Install a specific published version, including a prerelease.
+                    Omit this option to install the latest stable GitHub release.
   -h, --help        Show this help message.
 
 Environment:
@@ -93,6 +93,23 @@ fetch_stdout() {
     fi
 }
 
+verify_archive() {
+    checksum_path="${archive_path}.sha256"
+    fetch "${archive_url}.sha256" "$checksum_path" || err "missing release checksum for ${archive_name}"
+    expected="$(LC_ALL=C awk -v name="$archive_name" '
+        { sub(/\r$/, "") }
+        NR == 1 && NF == 2 && length($1) == 64 && $1 ~ /^[0-9a-fA-F]+$/ &&
+            ($2 == name || $2 == "*" name) { digest = tolower($1) }
+        END { if (NR != 1 || !digest) exit 1; print digest }
+    ' "$checksum_path")" || err "invalid release checksum for ${archive_name}"
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual="$(sha256sum < "$archive_path")" || err "cannot hash ${archive_name}"
+    else
+        actual="$(shasum -a 256 < "$archive_path")" || err "cannot hash ${archive_name}"
+    fi
+    [ "${actual%% *}" = "$expected" ] || err "SHA-256 mismatch for ${archive_name}"
+}
+
 detect_target() {
     os="$(uname -s)"
     arch="$(uname -m)"
@@ -122,10 +139,11 @@ resolve_tag() {
     fi
 
     api_url="https://api.github.com/repos/${REPO}/releases/latest"
-    json="$(fetch_stdout "$api_url")" || err "failed to query latest release from ${api_url}"
+    json="$(fetch_stdout "$api_url")" ||
+        err "failed to query the latest stable release from ${api_url}; use --version for a published prerelease"
     tag="$(printf '%s' "$json" | tr '\n' ' ' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
     if [ -z "$tag" ]; then
-        err "could not determine latest release tag from GitHub API"
+        err "could not determine the latest stable release tag; use --version for a published prerelease"
     fi
     printf '%s' "$tag"
 }
@@ -197,47 +215,66 @@ install_completions() {
 main() {
     need_cmd tar
     need_cmd uname
+    if ! command -v sha256sum >/dev/null 2>&1; then
+        need_cmd shasum
+    fi
 
     target="$(detect_target)"
     tag="$(resolve_tag)"
     ver="${tag#v}"
+    case "$ver" in
+        ''|*[!A-Za-z0-9._+-]*) err "invalid release version: $tag" ;;
+    esac
 
     tmp_dir="$(mktemp -d 2>/dev/null || mktemp -d -t aevia-install)"
     trap 'rm -rf "$tmp_dir"' EXIT INT TERM
 
+    release_url="https://github.com/${REPO}/releases/download/${tag}"
     archive_name="aevia-${ver}-${target}.tar.gz"
-    archive_url="https://github.com/${REPO}/releases/download/${tag}/${archive_name}"
+    archive_url="${release_url}/${archive_name}"
     archive_path="${tmp_dir}/aevia.tar.gz"
 
     say "Downloading Aevia ${tag} (${target})..."
     if ! fetch "$archive_url" "$archive_path" 2>/dev/null; then
         # Fallback for macos-arm64 release asset naming if macos-aarch64 is absent.
         if [ "$target" = "macos-aarch64" ]; then
-            fallback_url="https://github.com/${REPO}/releases/download/${tag}/aevia-${ver}-macos-arm64.tar.gz"
-            fetch "$fallback_url" "$archive_path" || err "failed to download release archive from ${archive_url}"
+            archive_name="aevia-${ver}-macos-arm64.tar.gz"
+            archive_url="${release_url}/${archive_name}"
+            fetch "$archive_url" "$archive_path" || err "failed to download release archive from ${archive_url}"
         else
             err "failed to download release archive from ${archive_url}"
         fi
     fi
+    verify_archive
 
     extract_dir="${tmp_dir}/extract"
     mkdir -p "$extract_dir"
-    tar -xzf "$archive_path" -C "$extract_dir"
+    tar -xzf "$archive_path" -C "$extract_dir" || err "failed to extract ${archive_name}"
 
-    mkdir -p "$BIN_DIR"
-    installed=0
+    source_dir="${extract_dir}/${archive_name%.tar.gz}"
+    if [ -e "$source_dir" ] || [ -L "$source_dir" ]; then
+        [ -d "$source_dir" ] && [ ! -L "$source_dir" ] || err "invalid archive directory: ${archive_name}"
+    else
+        # Older assets may place the toolchain directly at the archive root.
+        source_dir="$extract_dir"
+    fi
+    [ -f "${source_dir}/aevia" ] || err "missing aevia executable in ${archive_name}"
     for bin_name in aevia aevia-lsp aevia-pkg; do
-        found="$(find "$extract_dir" -type f -name "$bin_name" | head -n 1 || true)"
-        if [ -n "$found" ]; then
-            cp "$found" "${BIN_DIR}/${bin_name}"
-            chmod +x "${BIN_DIR}/${bin_name}"
-            installed=$((installed + 1))
+        source_path="${source_dir}/${bin_name}"
+        if [ -e "$source_path" ] || [ -L "$source_path" ]; then
+            [ -f "$source_path" ] && [ ! -L "$source_path" ] && [ -s "$source_path" ] ||
+                err "invalid ${bin_name} executable in ${archive_name}"
         fi
     done
 
-    if [ "$installed" -eq 0 ]; then
-        err "no aevia binaries found in downloaded archive"
-    fi
+    mkdir -p "$BIN_DIR"
+    for bin_name in aevia aevia-lsp aevia-pkg; do
+        source_path="${source_dir}/${bin_name}"
+        if [ -f "$source_path" ]; then
+            cp "$source_path" "${BIN_DIR}/${bin_name}"
+            chmod +x "${BIN_DIR}/${bin_name}"
+        fi
+    done
 
     configure_path
     install_completions
