@@ -122,6 +122,104 @@ fn a_call_takes_atoms_and_keeps_its_site() {
 }
 
 #[test]
+fn runtime_type_evidence_preserves_function_values_and_literal_representation() {
+    use aevia_ir::lower::LoweredDecl;
+    use aevia_ir::lower::lower_decl_with_runtime_evidence;
+    use aevia_ir::lower::lower_module_with_runtime_evidence;
+    use aevia_syntax::ast::DeclKind;
+    use aevia_syntax::ast::ExprKind;
+    use aevia_syntax::ast::NumberLit;
+    use aevia_types::Type;
+    use aevia_types::ty::Rep;
+    use std::collections::HashMap;
+
+    let source = "let values = (given, Pack.Member, 4, 2.5, 7, 8.5, 9)\n";
+    let mut sources = aevia_syntax::SourceMap::new();
+    let file = sources.add("evidence.aev", source);
+    let tokens = aevia_syntax::lex(file, source).unwrap();
+    let (module, parse) = aevia_syntax::parse_module(file, source, &tokens);
+    assert!(!parse.has_errors(), "{:?}", parse.items);
+    let decl = &module.decls[0];
+    let DeclKind::Let { value, .. } = &decl.kind else {
+        panic!("expected a value declaration");
+    };
+    let ExprKind::Tuple(items) = &value.kind else {
+        panic!("expected a tuple");
+    };
+    let [local, qualified, int, decimal, concrete, dynamic, _] = items.as_slice() else {
+        panic!("expected seven input expressions");
+    };
+    let function = Type::Fn(Vec::new(), Box::new(Type::Unit));
+    let types = HashMap::from([
+        (local.span, function.clone()),
+        (qualified.span, function),
+        (int.span, Type::Var(0)),
+        (decimal.span, Type::Var(1)),
+        (concrete.span, Type::Var(2)),
+        (dynamic.span, Type::Bool),
+    ]);
+    let reps = HashMap::from([(concrete.span, Rep::Float), (dynamic.span, Rep::Var(0))]);
+    let lowered = lower_module_with_runtime_evidence(
+        &module,
+        &[],
+        &[],
+        &reps,
+        &HashMap::new(),
+        &HashMap::new(),
+        &types,
+        &HashMap::new(),
+    );
+    let Some(LoweredDecl::Let(incremental)) = lower_decl_with_runtime_evidence(
+        decl,
+        &[],
+        &[],
+        &reps,
+        &HashMap::new(),
+        &HashMap::new(),
+        &types,
+        &HashMap::new(),
+    ) else {
+        panic!("expected incremental let IR");
+    };
+
+    for block in [&lowered.lets[0].block, &incremental.block] {
+        let [
+            Stmt::Let(local_ir),
+            Stmt::Let(qualified_ir),
+            Stmt::Let(int_ir),
+            Stmt::Let(decimal_ir),
+            Stmt::Let(dynamic_ir),
+            Stmt::Let(tuple_ir),
+        ] = block.stmts.as_slice()
+        else {
+            panic!("unexpected evidence statements: {:?}", block.stmts);
+        };
+        assert_eq!(local_ir.span, local.span);
+        assert_eq!(qualified_ir.span, qualified.span);
+        assert_eq!(int_ir.span, int.span);
+        assert_eq!(decimal_ir.span, decimal.span);
+        assert_eq!(dynamic_ir.span, dynamic.span);
+        assert!(matches!(&local_ir.rhs, Rhs::Atom(Atom::Global(name)) if name == "given"));
+        assert!(
+            matches!(&qualified_ir.rhs, Rhs::Atom(Atom::Global(name)) if name == "Pack.Member")
+        );
+        assert!(matches!(
+            &int_ir.rhs,
+            Rhs::NumericLiteral(NumberLit::Int(_))
+        ));
+        assert!(
+            matches!(&decimal_ir.rhs, Rhs::NumericLiteral(NumberLit::Decimal(text)) if text == "2.5")
+        );
+        assert!(
+            matches!(&dynamic_ir.rhs, Rhs::NumericLiteral(NumberLit::Decimal(text)) if text == "8.5")
+        );
+        assert!(matches!(&tuple_ir.rhs, Rhs::Tuple(args)
+            if matches!(args.as_slice(), [.., Atom::Float(7.0), Atom::Local(slot), Atom::Int(value)]
+                if *slot == dynamic_ir.slot && *value == 9.into())));
+    }
+}
+
+#[test]
 fn captures_are_ordered_by_first_use() {
     // `b + x + a` mentions `b` first and `a` last, so the environment is
     // [b, a] — deterministic, and independent of how many times each is used.

@@ -126,11 +126,11 @@ impl BooleanFacts {
     }
 }
 
-fn optimize_block(
-    block: &mut Block,
+fn optimize_stmts(
+    stmts: &mut [Stmt],
     known: &mut BooleanFacts,
 ) {
-    for statement in &mut block.stmts {
+    for statement in stmts {
         match statement {
             | Stmt::Let(binding) => {
                 rhs(&mut binding.rhs, &known.values);
@@ -152,50 +152,62 @@ fn optimize_block(
             },
         }
     }
-    match &mut block.tail {
-        | Tail::If {
-            cond,
-            then_block,
-            else_block,
-            ..
-        } => {
-            if let Some(value) = boolean(cond, &known.values) {
-                *cond = Atom::Bool(value);
-                // Only the selected arm can execute. It occupies the parent
-                // block's tail, so its facts have no later sibling to restore.
-                let selected = if value {
-                    then_block
+}
+
+fn optimize_block(
+    block: &mut Block,
+    known: &mut BooleanFacts,
+) {
+    optimize_stmts(&mut block.stmts, known);
+    loop {
+        match &mut block.tail {
+            | Tail::If {
+                cond,
+                then_block,
+                else_block,
+                ..
+            } => {
+                if let Some(value) = boolean(cond, &known.values) {
+                    *cond = Atom::Bool(value);
+                    // A selected tail has no sibling that needs these facts.
+                    // Append its statements before descending so each is
+                    // moved into the enclosing block only once.
+                    let selected = if value {
+                        then_block
+                    } else {
+                        else_block
+                    };
+                    if let Some(selected) = Rc::get_mut(selected) {
+                        optimize_stmts(&mut selected.stmts, known);
+                        block.stmts.append(&mut selected.stmts);
+                        block.tail = std::mem::replace(
+                            &mut selected.tail,
+                            Tail::Return {
+                                atom: Atom::Unit,
+                                span: aevia_syntax::Span::default(),
+                            },
+                        );
+                        continue;
+                    }
                 } else {
-                    else_block
-                };
-                if let Some(selected) = Rc::get_mut(selected) {
-                    optimize_block(selected, known);
-                    block.stmts.append(&mut selected.stmts);
-                    block.tail = std::mem::replace(
-                        &mut selected.tail,
-                        Tail::Return {
-                            atom: Atom::Unit,
-                            span: aevia_syntax::Span::default(),
-                        },
-                    );
-                }
-            } else {
-                for child in [then_block, else_block] {
-                    if let Some(child) = Rc::get_mut(child) {
-                        known.optimize_arm(child);
+                    for child in [then_block, else_block] {
+                        if let Some(child) = Rc::get_mut(child) {
+                            known.optimize_arm(child);
+                        }
                     }
                 }
-            }
-        },
-        | Tail::Match { arms, .. } => {
-            for arm in arms {
-                if let Some(guard) = &mut arm.guard {
-                    self::block(guard);
+            },
+            | Tail::Match { arms, .. } => {
+                for arm in arms {
+                    if let Some(guard) = &mut arm.guard {
+                        self::block(guard);
+                    }
+                    self::block(&mut arm.body);
                 }
-                self::block(&mut arm.body);
-            }
-        },
-        | Tail::Return { .. } | Tail::Call(_) => {},
+            },
+            | Tail::Return { .. } | Tail::Call(_) => {},
+        }
+        break;
     }
 }
 
@@ -228,7 +240,8 @@ fn rhs(
             }
         },
         | Rhs::AndOr { op, left, right } => {
-            if let Some(value) = boolean(left, known) {
+            let known_left = boolean(left, known);
+            if let Some(value) = known_left {
                 if matches!((*op, value), (BinOp::And, false) | (BinOp::Or, true)) {
                     *rhs = Rhs::Atom(Atom::Bool(value));
                     return;
@@ -236,6 +249,18 @@ fn rhs(
                 *left = Atom::Bool(value);
             }
             block(right);
+            // A required operand that only returns a Boolean has no slot
+            // writes or other actions to preserve.
+            if known_left.is_some()
+                && matches!(*op, BinOp::And | BinOp::Or)
+                && right.stmts.is_empty()
+                && let Tail::Return {
+                    atom: Atom::Bool(value),
+                    ..
+                } = &right.tail
+            {
+                *rhs = Rhs::Atom(Atom::Bool(*value));
+            }
         },
         | Rhs::Block(inner) => block(inner),
         | Rhs::Closure(inner) | Rhs::RecClosure { function: inner, .. } => function(inner),
@@ -335,6 +360,72 @@ mod tests {
     }
 
     #[test]
+    fn a_required_boolean_return_folds_without_mutating_shared_blocks() {
+        for (op, left) in [(BinOp::And, true), (BinOp::Or, false)] {
+            for value in [false, true] {
+                let shared = returning(Atom::Bool(value));
+                let mut expression = Rhs::AndOr {
+                    op,
+                    left: Atom::Bool(left),
+                    right: Rc::clone(&shared),
+                };
+                rhs(&mut expression, &HashMap::new());
+                assert!(matches!(expression, Rhs::Atom(Atom::Bool(result)) if result == value));
+                assert!(
+                    matches!(shared.tail, Tail::Return { atom: Atom::Bool(result), .. } if result == value)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_required_operand_folds_after_its_pure_tail_is_simplified() {
+        let mut expression = Rhs::AndOr {
+            op: BinOp::Or,
+            left: Atom::Local(3),
+            right: Rc::new(Block {
+                stmts: Vec::new(),
+                tail: conditional(
+                    Atom::Bool(true),
+                    returning(Atom::Bool(false)),
+                    returning(Atom::Global("discarded".into())),
+                ),
+            }),
+        };
+        rhs(&mut expression, &HashMap::from([(3, false)]));
+        assert!(matches!(expression, Rhs::Atom(Atom::Bool(false))));
+    }
+
+    #[test]
+    fn required_operand_checks_and_slot_writes_are_preserved() {
+        let span = Span::default();
+        let writes_slot = Rc::new(Block {
+            stmts: vec![Stmt::Let(crate::Let {
+                slot: 0,
+                rhs: Rhs::Atom(Atom::Bool(true)),
+                span,
+            })],
+            tail: Tail::Return {
+                atom: Atom::Bool(true),
+                span,
+            },
+        });
+        for (op, right) in [
+            (BinOp::And, writes_slot),
+            (BinOp::And, returning(Atom::Str("non-Boolean".into()))),
+            (BinOp::Add, returning(Atom::Bool(true))),
+        ] {
+            let mut expression = Rhs::AndOr {
+                op,
+                left: Atom::Bool(true),
+                right,
+            };
+            rhs(&mut expression, &HashMap::new());
+            assert!(matches!(expression, Rhs::AndOr { .. }));
+        }
+    }
+
+    #[test]
     fn effects_of_assignments_and_pattern_binds_stay_in_their_branch() {
         let span = Span::default();
         let select_slot = || {
@@ -390,5 +481,87 @@ mod tests {
         assert!(
             matches!(&else_block.tail, Tail::Return { atom: Atom::Str(text), .. } if text == "true arm")
         );
+    }
+
+    #[test]
+    fn long_known_tail_chains_keep_statement_order_and_spans() {
+        let steps = 20_000_u32;
+        let end = Span {
+            file: 1,
+            start: steps,
+            end: steps + 1,
+        };
+        let mut body = Rc::new(Block {
+            stmts: Vec::new(),
+            tail: Tail::Return {
+                atom: Atom::Global("result".into()),
+                span: end,
+            },
+        });
+        for slot in (0..steps).rev() {
+            let span = Span {
+                file: 1,
+                start: slot,
+                end: slot + 1,
+            };
+            let rhs = if slot == 0 {
+                Rhs::Atom(Atom::Bool(true))
+            } else {
+                Rhs::Unary {
+                    op: UnOp::Not,
+                    operand: Atom::Local(slot - 1),
+                }
+            };
+            let dead = returning(Atom::Global("dead".into()));
+            let (yes, no) = if slot.is_multiple_of(2) {
+                (body, dead)
+            } else {
+                (dead, body)
+            };
+            body = Rc::new(Block {
+                stmts: vec![Stmt::Let(crate::Let { slot, rhs, span })],
+                tail: conditional(Atom::Local(slot), yes, no),
+            });
+        }
+
+        block(&mut body);
+        assert_eq!(body.stmts.len(), steps as usize);
+        for (slot, statement) in (0..steps).zip(&body.stmts) {
+            assert!(matches!(statement, Stmt::Let(binding)
+                if binding.slot == slot && binding.span.start == slot
+                    && matches!(binding.rhs, Rhs::Atom(Atom::Bool(value))
+                        if value == slot.is_multiple_of(2))));
+        }
+        assert!(
+            matches!(&body.tail, Tail::Return { atom: Atom::Global(name), span }
+            if name == "result" && *span == end)
+        );
+    }
+
+    #[test]
+    fn known_tail_chain_stops_at_a_shared_branch() {
+        let shared = Rc::new(Block {
+            stmts: Vec::new(),
+            tail: conditional(
+                Atom::Bool(true),
+                returning(Atom::Unit),
+                returning(Atom::Bool(false)),
+            ),
+        });
+        let selected = Rc::new(Block {
+            stmts: Vec::new(),
+            tail: conditional(Atom::Bool(true), Rc::clone(&shared), returning(Atom::Unit)),
+        });
+        let mut body = Rc::new(Block {
+            stmts: Vec::new(),
+            tail: conditional(Atom::Bool(true), selected, returning(Atom::Unit)),
+        });
+
+        block(&mut body);
+        let Tail::If { then_block, .. } = &body.tail else {
+            panic!("a shared block must remain intact");
+        };
+        assert!(Rc::ptr_eq(then_block, &shared));
+        assert!(matches!(shared.tail, Tail::If { .. }));
     }
 }

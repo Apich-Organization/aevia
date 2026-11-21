@@ -414,7 +414,7 @@ struct Builder {
 }
 
 /// The lowering state: a stack of functions, innermost last.
-struct Lowerer<'a, Literals, Methods, Constructors, Constants> {
+struct Lowerer<'a, Literals, Methods, Constructors, Types, Constants> {
     /// Spans at which the checker pinned a `Rssn.<op>` overload.
     rssn: HashSet<Span>,
     /// Spans at which the checker resolved a class method, with the record.
@@ -425,17 +425,18 @@ struct Lowerer<'a, Literals, Methods, Constructors, Constants> {
     constant_regions: &'a HashMap<Span, Rep, Constants>,
     method_refs: &'a HashMap<Span, ClassMethodRef, Methods>,
     constructor_refs: &'a HashMap<Span, (aevia_types::adt::AdtId, usize), Constructors>,
-    function_values: HashSet<Span>,
-    dynamic_types: HashSet<Span>,
+    /// Checked types are queried only where lowering needs runtime evidence.
+    expr_types: &'a HashMap<Span, aevia_types::Type, Types>,
     fns: Vec<FnState>,
 }
 
-impl<'a, Literals, Methods, Constructors, Constants>
-    Lowerer<'a, Literals, Methods, Constructors, Constants>
+impl<'a, Literals, Methods, Constructors, Types, Constants>
+    Lowerer<'a, Literals, Methods, Constructors, Types, Constants>
 where
     Literals: BuildHasher,
     Methods: BuildHasher,
     Constructors: BuildHasher,
+    Types: BuildHasher,
     Constants: BuildHasher,
 {
     fn new(
@@ -444,7 +445,7 @@ where
         literal_reps: &'a HashMap<Span, Rep, Literals>,
         method_refs: &'a HashMap<Span, ClassMethodRef, Methods>,
         constructor_refs: &'a HashMap<Span, (aevia_types::adt::AdtId, usize), Constructors>,
-        expr_types: &HashMap<Span, aevia_types::Type, impl BuildHasher>,
+        expr_types: &'a HashMap<Span, aevia_types::Type, Types>,
         constant_regions: &'a HashMap<Span, Rep, Constants>,
     ) -> Self {
         let rssn = rssn_calls.iter().map(|call| call.span).collect();
@@ -455,16 +456,6 @@ where
                 .or_default()
                 .push(use_site.clone());
         }
-        let mut function_values = HashSet::new();
-        let mut dynamic_types = HashSet::new();
-        for (&span, ty) in expr_types {
-            if matches!(ty, aevia_types::Type::Fn(..)) {
-                function_values.insert(span);
-            }
-            if aevia_types::class::has_variables(ty) {
-                dynamic_types.insert(span);
-            }
-        }
         Self {
             rssn,
             dictionaries: table,
@@ -472,8 +463,7 @@ where
             constant_regions,
             method_refs,
             constructor_refs,
-            function_values,
-            dynamic_types,
+            expr_types,
             fns: Vec::new(),
         }
     }
@@ -484,6 +474,26 @@ where
         span: Span,
     ) -> Option<Rep> {
         self.literal_reps.get(&span).copied()
+    }
+
+    fn requires_dynamic_literal(
+        &self,
+        span: Span,
+        rep: Option<Rep>,
+    ) -> bool {
+        matches!(rep, Some(Rep::Var(_)))
+            || (rep.is_none()
+                && self
+                    .expr_types
+                    .get(&span)
+                    .is_some_and(aevia_types::class::has_variables))
+    }
+
+    fn has_function_type(
+        &self,
+        span: Span,
+    ) -> bool {
+        matches!(self.expr_types.get(&span), Some(aevia_types::Type::Fn(..)))
     }
 
     // ----- slots, scopes and captures -------------------------------------
@@ -960,17 +970,15 @@ where
             // runtime's. A literal in a `Float` context is an f64 atom; one in a
             // `Real` context is exact; `Int` stays exact and integral.
             | ExprKind::Int(value) => {
-                if matches!(self.literal_rep(expr.span), Some(Rep::Var(_)))
-                    || (self.literal_rep(expr.span).is_none()
-                        && self.dynamic_types.contains(&expr.span))
-                {
+                let rep = self.literal_rep(expr.span);
+                if self.requires_dynamic_literal(expr.span, rep) {
                     return self.emit(
                         builder,
                         Rhs::NumericLiteral(aevia_syntax::ast::NumberLit::Int(value.clone())),
                         expr.span,
                     );
                 }
-                match self.literal_rep(expr.span) {
+                match rep {
                     | Some(Rep::Float) => {
                         Atom::Float(num_traits::ToPrimitive::to_f64(value).unwrap_or(f64::NAN))
                     },
@@ -987,17 +995,15 @@ where
                 }
             },
             | ExprKind::Float(text) => {
-                if matches!(self.literal_rep(expr.span), Some(Rep::Var(_)))
-                    || (self.literal_rep(expr.span).is_none()
-                        && self.dynamic_types.contains(&expr.span))
-                {
+                let rep = self.literal_rep(expr.span);
+                if self.requires_dynamic_literal(expr.span, rep) {
                     return self.emit(
                         builder,
                         Rhs::NumericLiteral(aevia_syntax::ast::NumberLit::Decimal(text.clone())),
                         expr.span,
                     );
                 }
-                match self.literal_rep(expr.span) {
+                match rep {
                     | Some(Rep::Real) => {
                         Atom::Exact(aevia_dim::parse_decimal(text).unwrap_or_else(|| {
                             num_rational::BigRational::from_integer(num_bigint::BigInt::from(0))
@@ -1062,7 +1068,7 @@ where
                 } else {
                     let atom = self.resolve(name);
                     if self.constructor_refs.contains_key(&expr.span)
-                        || self.function_values.contains(&expr.span)
+                        || self.has_function_type(expr.span)
                     {
                         self.emit(builder, Rhs::Atom(atom), expr.span)
                     } else {
@@ -1099,7 +1105,7 @@ where
                 } else {
                     let atom = Atom::Global(path.join("."));
                     if self.constructor_refs.contains_key(&expr.span)
-                        || self.function_values.contains(&expr.span)
+                        || self.has_function_type(expr.span)
                     {
                         self.emit(builder, Rhs::Atom(atom), expr.span)
                     } else {
