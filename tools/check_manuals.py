@@ -2,6 +2,7 @@
 """Check bilingual manuals and registry API examples and run book programs."""
 
 import argparse
+import json
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
@@ -20,9 +21,12 @@ DRAFT_MARKER = re.compile(
 )
 CHAPTER_LINK = re.compile(r"\]\(\.?/?([0-9]{2}-[a-z0-9-]+)\.md(?:#[^ )]+)?\)")
 API_ROUTE = re.compile(r"`((?:(?:GET|POST) )?/[^`\s]+)`")
+JSON_FENCE = re.compile(r"^```json\n(.*?)^```$", re.M | re.S)
 API_WIRE_EXAMPLE = re.compile(
     r"^```(?:json\n|\n(?=aevia-(?:publish|yank)-v\d+\n))(.*?)^```$", re.M | re.S
 )
+NUMERICAL_OPERATOR = re.compile(r"`(num_[a-z0-9_]+)`")
+NUMERICAL_LITERAL = re.compile(r'"(num_[a-z0-9_]+)"')
 
 
 def verify_finished_prose(path: Path, text: str) -> None:
@@ -123,11 +127,94 @@ def verify_registry_api(directory: Path) -> None:
     print(f"checked {len(en_routes)} bilingual registry API routes and {len(examples)} wire examples")
 
 
+def verify_lsp_capabilities(aevia: Path | None) -> None:
+    paths = (ROOT / "spec/en/09-runtime.md", ROOT / "spec/09-runtime.md")
+    examples = []
+    for path in paths:
+        blocks = JSON_FENCE.findall(path.read_text(encoding="utf-8"))
+        candidates = [block for block in blocks if '"semanticTokensProvider"' in block]
+        if len(candidates) != 1:
+            raise ValueError(f"{path}: expected one LSP capabilities example")
+        examples.append(json.loads(candidates[0]))
+    if examples[0] != examples[1]:
+        raise ValueError("LSP capabilities examples differ between translations")
+    if aevia:
+        request = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                              "params": {"capabilities": {}}}).encode("utf-8")
+        frame = f"Content-Length: {len(request)}\r\n\r\n".encode("ascii") + request
+        run = subprocess.run([str(aevia.resolve()), "lsp", "--stdio"], input=frame,
+                             capture_output=True, timeout=30, cwd=ROOT)
+        header, _, body = run.stdout.partition(b"\r\n\r\n")
+        length = re.search(rb"^Content-Length: ([0-9]+)\r?$", header, re.M | re.I)
+        if run.returncode or length is None or int(length[1]) != len(body):
+            raise ValueError(f"invalid response to LSP initialize request: {run.stderr!r}")
+        result = json.loads(body).get("result", {}).get("capabilities")
+        if result != examples[0]:
+            raise ValueError("the bilingual LSP capabilities examples differ from the server response")
+    print("checked the bilingual LSP capabilities examples")
+
+
+def verify_stdlib_tree(modules: list[dict]) -> None:
+    prefixes = {}
+    for module in modules:
+        components = module["path"].split(".")
+        for depth, name in enumerate(components):
+            prefixes.setdefault(tuple(components[:depth + 1]), f'{"  " * depth}{name}')
+    expected = "\n".join(prefixes.values())
+    tree = re.compile(r"^## 8\.20 [^\n]+\n\n```\n(.*?)\n```$", re.M | re.S)
+    for path in (ROOT / "spec/en/08-stdlib.md", ROOT / "spec/08-stdlib.md"):
+        match = tree.search(path.read_text(encoding="utf-8"))
+        if match is None or match[1] != expected:
+            raise ValueError(f"The module tree in {path} must match the generated embedded library reference.")
+    print(f"checked the bilingual tree of {len(modules)} embedded library modules")
+
+
+def verify_numerical_guides(operators: set[str]) -> None:
+    guides = (ROOT / "examples/NUMERICAL_GUIDE.md", ROOT / "examples/NUMERICAL_GUIDE.zh-CN.md")
+    english, chinese = (
+        set(NUMERICAL_OPERATOR.findall(path.read_text(encoding="utf-8"))) for path in guides
+    )
+    if english != chinese:
+        raise ValueError(f"numerical guide operators differ: English only {sorted(english - chinese)}, "
+                         f"Chinese only {sorted(chinese - english)}")
+    missing = english - operators
+    if missing:
+        raise ValueError(f"numerical guides name operators absent from the generated reference: {sorted(missing)}")
+    print(f"checked {len(english)} bilingual numerical guide operator names")
+
+
+def verify_documented_operators(operators: set[str], paths: list[Path]) -> None:
+    seen: set[str] = set()
+    for path in paths:
+        for line, text in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            names = NUMERICAL_LITERAL.findall(text)
+            if path.suffix == ".md":
+                names.extend(NUMERICAL_OPERATOR.findall(text))
+            for name in names:
+                # Generated higher-order facades use the kernel name plus _typed.
+                if name not in operators and name.removesuffix("_typed") not in operators:
+                    raise ValueError(f"{path}:{line} names unknown numerical operator {name}")
+                seen.add(name)
+    print(f"checked {len(seen)} numerical operator references across {len(paths)} documentation and example sources")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--aevia", type=Path, help="path to a built aevia executable")
     args = parser.parse_args()
     verify_registry_api(REGISTRY_DOCS)
+    verify_lsp_capabilities(args.aevia)
+    reference = ROOT / "platform/stdlib-docs/stdlib-docs.json"
+    documented = json.loads(reference.read_text(encoding="utf-8"))
+    verify_stdlib_tree(documented["modules"])
+    operators = {operator["name"] for operator in documented["operators"]}
+    verify_numerical_guides(operators)
+    sources = list(ROOT.glob("README*.md"))
+    sources += [ROOT / "ARCHITECTURE.md", ROOT / "CHANGELOG.md"]
+    for directory in ["examples", "spec", "platform/docs", "platform/manuals"]:
+        sources.extend((ROOT / directory).rglob("*.md"))
+    sources.extend((ROOT / "examples").rglob("*.aev"))
+    verify_documented_operators(operators, sorted(sources))
     for path in sorted((ROOT / "spec").rglob("*.md")) + sorted(REGISTRY_DOCS.glob("*.md")):
         verify_finished_prose(path, path.read_text(encoding="utf-8"))
     total = 0

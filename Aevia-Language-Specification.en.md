@@ -4516,6 +4516,7 @@ mean      : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>
 median    : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,d>
 centroid  : Tensor<1, Point[d]> -> Point[d]
 quantile  : (Tensor<1, Scalar<ρ,d>>, Scalar<ρ,1>) -> Scalar<ρ,d>
+quantiles : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,1>>) -> Tensor<1, Scalar<div_rep(ρ),d>>
 var       : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d^2>
 var       : (Tensor<n, Scalar<ρ,d>>, Bool) -> Scalar<div_rep(ρ),d^2>   # population
 std       : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>
@@ -4526,6 +4527,8 @@ kurtosis  : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,1>
 histogram : (Tensor<1, Scalar<ρ,d>>, Int) -> { counts: Tensor<1, Int>, edges: Tensor<1, Float[d]> }
 mode      : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,d>
 ```
+
+`quantiles(xs, qs)` computes Hyndman–Fan type-7 quantiles in a batch. Every query in `qs` must be dimensionless and lie in `[0, 1]`. The result keeps the sample dimension, query order, and repeated queries. The batch shares one ordered sample. Exact inputs use rational interpolation. An empty query vector returns an empty result for a nonempty, finite sample.
 
 ### 8.7.1 Distributions
 
@@ -4567,16 +4570,22 @@ type Geometric       = { p: Real[1] }
 
 ```
 
-These declarations are the source of the `Stats.Distributions` module (after `open Stats.Distributions`, `Normal({ mu = 1.7 m, sigma = 0.1 m })` is a `Distribution<L>` value). `pdf`, `cdf`, `sample` and `sample_n` are **built-in overloads** over this closed ADT:
+These declarations are the source of the `Stats.Distributions` module (after `open Stats.Distributions`, `Normal({ mu = 1.7 m, sigma = 0.1 m })` is a `Distribution<L>` value). The distribution operations are **built-in overloads** over this closed ADT:
 
 ```
-pdf      : (Distribution<d>, Real[d]) -> Real[1/d]
-cdf      : (Distribution<d>, Real[d]) -> Real[1]
-sample   : Distribution<d> -> IO Real[d]
-sample_n : (Distribution<d>, Int, Option<Int>) -> Tensor<1, Real[d]>
+pdf       : (Distribution<d>, Real[d]) -> Real[1/d]
+cdf       : (Distribution<d>, Real[d]) -> Real[1]
+cdf_batch : (Distribution<d>, Tensor<1, Real[d]>) -> Tensor<1, Real[1]>
+dist_quantile : (Distribution<d>, Real[1]) -> Real[d]
+sample    : Distribution<d> -> IO Real[d]
+sample_n  : (Distribution<d>, Int, Option<Int>) -> Tensor<1, Real[d]>
 ```
 
-The dimension of `pdf` for `Normal<L>` is `1/L`; `cdf` is dimensionless; `sample` returns `Real[L]`. `Weibull` uses its `scale` dimension and `Cauchy` its `loc`/`scale` dimension; `LogNormal` parameters describe the dimensionless logarithm; `NegativeBinomial` and `Geometric` count failures before successes, with support `0, 1, ...`. All fifteen constructors share the same `pdf`, `cdf`, `sample` and `sample_n` built-ins.
+The dimension of `pdf` for `Normal<L>` is `1/L`; `cdf` is dimensionless; `sample` returns `Real[L]`. `Weibull` uses its `scale` dimension and `Cauchy` its `loc`/`scale` dimension; `LogNormal` parameters describe the dimensionless logarithm; `NegativeBinomial` and `Geometric` count failures before successes, with support `0, 1, ...`. All fifteen constructors support these operations.
+
+`cdf_batch(dist, xs)` evaluates the same cumulative probability as `cdf` at each point. The result keeps the order and repetitions in `xs`. The points must have the distribution's dimension. A valid distribution and an empty point vector give an empty result. Invalid parameters or a NaN point raise a domain error.
+
+`dist_quantile(dist, p)` returns the quantile at probability `p` in the distribution's dimension. For a discrete distribution and `0 < p < 1`, it returns the smallest support point whose cumulative probability reaches `p`. The probabilities `0` and `1` return the lower and upper support endpoints, which can be infinite. The probability is dimensionless and must be in `[0, 1]`. Invalid distribution parameters, out-of-range probabilities, and NaN probabilities raise `E0806`.
 
 **User-defined distributions are not a language extension point.** Multi-parameter classes were removed (§3.8.1), and the map "distribution parameters → dimension" needs a type function (like `RateOf`), which is a separate design. User-defined distributions lie outside the extension boundary of §12.8.13; the standard library may add built-in constructors for new distribution families, but that is a closed library set, not a language extension point.
 
@@ -4619,6 +4628,8 @@ rfftfreq : (Int, Float[T]) -> Tensor<1, Float[1/T]>             # n/2 + 1 non-ne
 interp1  : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Scalar<ρ,d>) -> Scalar<ρ,e>
 interp2  : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<2, Scalar<ρ,f>>,
             Scalar<ρ,d>, Scalar<ρ,e>) -> Scalar<ρ,f>
+interp2Batch : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<2, Scalar<ρ,f>>,
+                Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Tensor<1, Float[f]>
 spline   : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Scalar<ρ,d>) -> Scalar<ρ,e>
 polyfit  : (Tensor<1, Scalar<ρ,1>>, Tensor<1, Scalar<ρ,e>>, Int) -> Tensor<1, Scalar<ρ,e>>
 polyval  : (Tensor<1, Scalar<ρ,e>>, Scalar<ρ,1>) -> Scalar<ρ,e>
@@ -4641,6 +4652,15 @@ type AxisScale = | Linear | Log
 ```
 
 `polyfit` requires a dimensionless independent variable; for a dimensioned one, divide by a unit first (`x/u`); the coefficients keep the dimension of `y`. This is a dimension-system constraint on the API: the coefficient `a_i` of a polynomial has dimension `e/d^i`, different for each power, and cannot sit in a homogeneous tensor.
+
+`interp2` and `interp2Batch` use strictly increasing axes and clamp finite queries to
+the grid edges. Store the sample at `(xs[i], ys[j])` in `table[j][i]`.
+`interp2Batch(xs, ys, table, query_xs, query_ys)` prepares the grid once. The query
+tensors must have equal lengths and match their respective axis dimensions. The
+result has one Float per coordinate pair, in input order and with the table's
+dimension. Two empty query tensors return an empty result. An empty axis, a grid
+shape mismatch, or unequal query lengths give `E0802`. An axis with one knot or
+non-increasing knots, or any non-finite input, gives `E0806`.
 
 ## 8.9 ODE
 
@@ -4962,6 +4982,8 @@ solve_advection : AdvectionSpec -> Result<Tensor<1, Field>, PdeError>
 
 `Field` is `{ grid: Grid, values: Tensor<n, Float[d]> }`. The dimensions of coefficients and boundary conditions are annotated field by field in the `Spec` records; the solver checks at run time that the grid and coefficient dimensions agree. The full typing rules of PDEs are in the `Pde` module documentation; PDE specifications are not part of the core type system.
 
+The short 2D `solve_heat` reads `nx * ny` samples from `initial` in row-major order and holds its four initial edges fixed. It returns `steps + 1` snapshots, including the initial field and the final step. The optional `method` defaults to `"explicit"`, which requires a diffusion number `alpha * dt / h^2` of at most `1/4`. Set `method = "adi"` for alternating-direction implicit stepping at finite diffusion numbers beyond the explicit limit. The implicit step requires finite nonnegative diffusivity and a finite positive time step. Unknown methods and invalid implicit parameters return `Err(PdeError)`.
+
 ### 8.10.1 Temporal adaptivity through the manifest
 
 `Rssn_numerical_callback.num_pde_*_adaptive` compares a full step with two half steps on a fixed spatial discretization.
@@ -5128,11 +5150,22 @@ primes      : Int -> Tensor<1, Int>
 binomial    : (Int, Int) -> Int
 permutations: Int -> Int
 gcd lcm     : (Int, Int) -> Int
+mod_pow     : (Int, Int, Int) -> Int
 polygon_area: Tensor<2, Real[L]> -> Real[L^2]
 distance    : (Tensor<1, Real[L]>, Tensor<1, Real[L]>) -> Real[L]
+tetrahedron_volume : Tensor<[4, 3], Real[d]> -> Real[d^3]
 ```
 
-These modules map directly onto rssn's rule sets; the full list is in `aevia doc Math.NumberTheory`.
+`mod_pow(base, exponent, modulus)` computes the exact residue in `[0, modulus)`
+without expanding the full power. It accepts arbitrary-size integers, including
+negative bases. Exponent zero yields `1 mod modulus`. A negative exponent or a
+nonpositive modulus raises domain error `E0806`.
+
+`polygon_area` takes vertices in boundary order, with two coordinates of the same dimension per row. It returns a nonnegative area in the square of that dimension. A valid matrix of zero, one, or two rows gives zero. A different column count raises shape error `E0802`.
+
+`tetrahedron_volume` takes four rows of three coordinates in a common dimension `d`. It returns the nonnegative volume in `d^3`, independent of vertex order. Coplanar or repeated vertices give zero. A wrong shape raises a shape error. Non-finite coordinates or a non-finite computed volume raise a domain error.
+
+Run `aevia doc Math.NumberTheory` for the module's operators.
 
 ## 8.17 Physics / Simulate
 
@@ -5233,6 +5266,7 @@ Reachability and limits of the fixed entry points:
 
 - `type_rep<T>()` makes an unforgeable `TypeRep` from a concrete checked type; an unresolved generic cannot be reflected without a run-time type dictionary. `Rssn.typed` performs the dynamic call and checks the result against that witness; a mismatch or insufficient evidence returns `Err(OpError)`, and a successful result is still an opaque `Value` to be validated and converted with `from_value<T>`.
 - `to_callback(f)` checks the concrete function type of a checked source closure in the current evaluator session and builds an opaque `Callback` (aliases and concretised generic functions keep this evidence; wrap built-in functions in a source lambda first). The callback bridge supports concrete numbers, `Bool`, `String`, the sealed host type `NativeAdVar`, and tensors and closed records built recursively from them; same-named source types and other opaque callback types remain rejected. Concrete dimensions, ranks and fully known shapes are checked, and an empty structured tensor needs independent element-type and dimension evidence. Each operator may restrict signatures further; for example the numeric solvers use `Float` scalars and vectors. The call runs synchronously on the original thread and the handle expires when the outer call returns; calls across threads, re-entry in the same scope and callback errors all return errors; an empty callback list is equivalent to a dynamic call.
+  In `Rssn.call_ho` and `Rssn.call_ho_key`, supply ordinary values and callbacks in their respective order in the manifest signature. The bridge combines both lists at the declared parameter positions.
 - The host `Plugin` interface is reserved for RSSN hosts. Calling `Rssn.register` or `Rssn.register_plugin` with Aevia values reports `E0302`. Aevia registers `@op` and `@rule` functions at module load. `load_plugin(path) : String -> IO (Result<Int, String>)` loads a local source file under the conditions in §13.5.2 and §13.5.3.
 - `core.callback` marks the restricted callback bridge as available, and `core.plugin.source` marks source plugins as available. Generated higher-order bindings keep the explicit `(values, callbacks)` dynamic interface; for a single overload with an exact declaration whose callbacks and results can be certified, a typed alias pinned to the signature is also generated, which certifies the concrete callback signature at call time and validates the result against the instantiated type; signatures whose type or dimension cannot be proved offer only the dynamic entry. For example the `num_least_squares` alias of `Rssn_numerical_callback`: parameters and residuals have dimensions `D` and `E`, the residual tolerance uses `E`, the other controls are dimensionless, and the result carries `converged` and `status` (residual/gradient convergence, budget exhausted, stagnation).
 
@@ -5296,6 +5330,9 @@ Units
   Astronomy
   CGS
   Natural
+  Planck
+  Atomic
+  Geometrized
   Constants
 Tensor
 LinearAlgebra
@@ -5318,15 +5355,10 @@ Data
 Plot
 Test
 Measurement
-Rssn
-  Dynamic
-  Plugin
 Device
 Physics
   Ising
   Geodesic
-  Schrodinger
-  ...
 ```
 
 The standard-library modules live in the `aevia-std` package; the Prelude is imported automatically and the rest on demand with `import`. A module name is its path: `import A.B` resolves `A/B.aev` (§7), `import Math { sqrt }` brings in only `sqrt`, and `open Units.SI` puts the exports of `Units.SI` into the current scope. Local files take precedence over embedded standard-library modules. `Units/*` are documentation modules: unit names are already ambient `Unit[d]` values, and exporting quantity bindings would shadow them and change the semantics of `Tensor / Unit`, so they are not exported (§5.3.4). The `Sde` module re-exports the five entry points of §8.9.1 and declares the option ADTs; `Physics.Ising`/`Physics.Geodesic` provide the typed wrappers of §8.17. Function names, the nominal variant constructors of `Sde` and transparent type aliases (`type X = { … }`, e.g. `Params` of `Physics.Ising`) can all be brought in with `import { X }`/`open`.
@@ -5729,8 +5761,10 @@ storage held by the REPL session.
   thread count changes no result**.
 - **Shared-nothing replica design.** The interpreter is built on `Rc`, and converting the
   runtime to `Arc` would make every program pay for the few parallel ones. So each worker
-  thread holds a **replica**: a host-installed `Replica` factory rebuilds the interpreter from
-  the same source on that thread (once per thread, then reused). Threads exchange **portable
+  thread holds a **replica**: a host-installed `Replica` factory initializes an interpreter
+  from the same checked program revision on that thread (once per thread, then reused).
+  The CLI and the library runner share the immutable checked revision for the duration of
+  the run. Threads exchange **portable
   values** (`Portable`): numbers with dimension and display unit, strings, tensors, records,
   variants, constructors and reconstructible Core IR closures. Workers preserve constructor
   specializations, variant types and tensor element types, including the types of empty tensors.
@@ -5750,10 +5784,12 @@ storage held by the REPL session.
   `par_reduce(f, zero, xs)` requires `f` to be associative and `zero` an identity; it folds
   fixed chunks of 1024 elements and merges the chunk results in order, so a floating-point
   reduction is **bit-identical** on any number of cores and in the sequential fallback.
-- `par_map`, `par_tabulate(n, f)` and `par_reduce` take their worker count from `--jobs N`, then
-  `AEVIA_JOBS`, then `RAYON_NUM_THREADS` or the CPUs available to the process. Each worker has
-  a kernel `Session`. Nested language primitives run sequentially on a worker. RSSN operations
-  on those workers use the enclosing Rayon pool. On the main interpreter thread, RSSN uses
+- `par_map`, `par_tabulate(n, f)` and `par_reduce` take their worker limit from `--jobs N`, then
+  `AEVIA_JOBS`, then `RAYON_NUM_THREADS` or the CPUs available to the process. The pool grows
+  with the number of independent map elements or reduction blocks, up to that limit. Each
+  worker has a kernel `Session`. Nested language primitives run sequentially on a worker.
+  RSSN operations and independent row updates in sufficiently large exact factorizations can
+  share the enclosing Rayon pool. On the main interpreter thread, RSSN uses
   the global Rayon pool, which follows `RAYON_NUM_THREADS` and host CPU detection.
 - **Parallel numeric kernels.** `sparse @ dense` (including `Bcsr`) runs in fixed 256-row blocks,
   each output row accumulated sequentially by one work item, bit-equal to the sequential
@@ -5772,7 +5808,8 @@ pure  : a -> IO a
 
 - `spawn(f)` runs `f()` on a worker thread and returns a `Task`; `await(t)` waits and fetches
   the result. The task receives only capabilities active when it was submitted and allowed by the
-  worker's policy. Awaiting a task that was canceled before its worker started reports `E0812`.
+  worker's policy. `await` reports `E0812` when the task was canceled before it started or
+  observed cancellation while packing its return value for delivery.
 - **A task's console output is buffered and written at `await`, in await order**, so program
   output is deterministic however tasks interleave; other effects such as files happen directly
   on the task's thread.
@@ -5918,13 +5955,15 @@ aevia clean [--registry]                           remove `.aevia/` (`.aevia/reg
 aevia lsp [--stdio]                                language server (§9.10)
 aevia debug [--stdio]                             source debug adapter for editors
 aevia rssn [--audit] [--emit [--out DIR] [--namespaces]]   audit a Kernel Manifest / generate the Rssn module (chapter 13)
+aevia rssn --describe OPERATOR                     show the live manifest documentation, overloads, and Aevia bindings
 aevia login                                        bind a signing key to your registry account (browser)
 aevia publish [--owner HANDLE] [--no-verify] [--dry-run] [options…]  check, sign and upload this package
 aevia search <query>      aevia info <owner/name>  search the registry / show a package page
 aevia yank <owner/name@version> [--undo]           withdraw or restore a version
 aevia verify <owner/name@version>                  check a download against its signature
 aevia docs [owner/name[@version]] [--lang en|zh] [--open]
-aevia docs --section book|architecture|spec|stdlib [--lang en|zh] [--open] [--download]
+aevia docs --section book|architecture|spec|stdlib [--lang en|zh] [--open]
+aevia docs --section book|architecture --download [--lang en|zh] [--open]
 aevia pkg <command>                                every registry-client command (`key`, `status`, `lock`, …), forwarded to aevia-pkg
 aevia --version
 ```
@@ -6021,14 +6060,17 @@ affected open importers are republished. The exact capabilities `initialize` ret
   "positionEncoding": "utf-16",
   "textDocumentSync": { "openClose": true, "change": 2, "save": true },
   "hoverProvider": true,
-  "completionProvider": { "resolveProvider": false },
+  "completionProvider": { "resolveProvider": false, "triggerCharacters": ["."] },
   "definitionProvider": true,
   "typeDefinitionProvider": true,
   "documentSymbolProvider": true,
   "documentFormattingProvider": true,
   "codeActionProvider": true,
+  "codeLensProvider": { "resolveProvider": false },
+  "executeCommandProvider": { "commands": ["aevia.runFile", "aevia.testFile"] },
   "workspaceSymbolProvider": true,
   "referencesProvider": true,
+  "documentHighlightProvider": true,
   "renameProvider": { "prepareProvider": true },
   "signatureHelpProvider": {
     "triggerCharacters": ["(", ","],
@@ -6040,7 +6082,7 @@ affected open importers are republished. The exact capabilities `initialize` ret
       "tokenModifiers": []
     },
     "full": true,
-    "range": false
+    "range": true
   },
   "experimental": {
     "multiModuleAnalysis": {
@@ -6071,10 +6113,18 @@ modules it imports, its import bindings, its module identity and the check optio
 `CheckCache` stores `CheckedModule` and diagnostics keyed by a structural fingerprint of these
 inputs: a module whose inputs are all unchanged is not re-checked, and because the fingerprint
 includes the imported checked interfaces, **an edit that does not change an interface does not
-re-check its importers** (early cutoff). `FileId` is a position in the `SourceMap` and is the
+re-check its importers** (early cutoff). The loader fingerprints each interface once and
+combines the fingerprints of the visible transitive imports when checking a consumer.
+`FileId` is a position in the `SourceMap` and is the
 same on every load while the import graph is unchanged; a cache entry is reused only under the
 same `FileId`, so every span in a reused interface points into the text it was checked
 against.
+
+Disk entries and imported sources reuse their parsed syntax and syntax diagnostics when
+their source text and `FileId` match. Each load resolves imports against its current
+package roots and overlays, and retains the syntax and checks of the current
+module graph. The editor carries that compiler cache forward for each retained
+entry while its package resolution context remains equal.
 
 `aevia watch <file> [--once|--runs N]` checks repeatedly with one session cache and reports
 "how many checked, how many reused" each round. The standard library and unchanged package
@@ -6140,7 +6190,8 @@ cache for `check` and `run`. The four-revision retention applies per module name
   `import`/`open` lines are copied, imports resolve against the declaring file's package and
   adjacent directories, and the module's own declarations do not enter the snippet implicitly;
   snippets use in-memory source and write no temporary file; a failing dependency or inherited
-  import does not satisfy an expected compile failure. `--locked` checks the package of each
+  import does not satisfy an expected compile failure. Snippets in the same file share package
+  resolution and reuse checked imports when their compiler inputs match. `--locked` checks the package of each
   checked document, not the caller's working directory. Any failure exits 1; no checkable block,
   or an empty result after filtering, also exits 1. The extractor is `aevia-doc::doctest`.
 - Compile-failure tests: `compile_fail("<source>") : String -> Bool` compiles a fragment in an
@@ -6480,8 +6531,9 @@ A `Term<'s>` is borrowed only during a `compute` call and converted to a `u32` i
 
 Aevia's `Device` values identify a requested execution location. `device_of(tensor)`
 returns its location. `to_device(tensor, device)` and `on(device, thunk)` are IO
-actions. CPU execution is supported. An unsupported GPU or distributed request reports
-`E1001` with capability `core.gpu` or `core.distributed` (§13.9.4).
+actions. Both currently support `Cpu`. A `Gpu` or `Distributed` placement reports
+`E1001` with capability `core.gpu` or `core.distributed`, respectively (§13.9.4),
+even when the RSSN host device registry exposes a GPU.
 
 RSSN's device layer exposes buffers, a numerical kernel IR, CPU reference and parallel
 executors, and a WGSL backend behind `gpu-wgpu`. Embedding hosts can use it for batch
@@ -7252,7 +7304,7 @@ Rssn.Units           : Tensor<1, String>     # unit names; values are in the gen
 - `Rssn.call` is an alias of `Rssn.dynamic` and looks up only by short name/alias; an ambiguous short name is `E1002`.
 - `Rssn.call_key` "runs without resolving": it takes a name + `signature_hash` (32 hex characters), which together are the writable form of an `OpKey`; all zeros means the operator has no declared overload. A key that does not match the current manifest is `E1005` (regenerate the module); an argument that departs from the pinned signature on the kernel side is `UnknownOp`, which becomes an error value at the Aevia boundary.
 - `Rssn.resolve_overload` exposes the run-time selection for caching and diagnostics: on success it returns `"rule_set.name@signature_hash"`; both a tie and "no signature accepts" are `OpError::Ambiguous`. `Rssn.overloads` returns the rendered signature of every overload.
-- Arguments are injected with `to_value(x)` and results converted back to a static type with `from_value(v)`. Operators without signatures, plugin operators and experimental entries use `dynamic`; the standard set currently has no `None`, so on it `dynamic` is only the plugin channel.
+- Wrap arguments with `to_value(x)` and recover a static result with `from_value<T>(v)`. `Rssn.dynamic` supports standard and plugin operators, including entries without a generated typed wrapper. For a graph result with a derived signature, a `Same(index)` dimension rule supplies dimensionless evidence when the designated argument is known to be dimensionless. A typed conversion checks that evidence together with the result representation and shape.
 - `type_rep<T>()` keeps the concrete type resolved by the checker; it is an opaque value that an ordinary record cannot forge. After the dynamic call, `Rssn.typed` checks representation, shape and dimensions against that witness; a mismatch or missing evidence returns `Err(OpError)`. A successful result is still a `Value`, validated and converted through `from_value<T>`; a generic not made concrete by a run-time type dictionary cannot produce a `TypeRep`.
 - Higher-order operators use `Rssn.call_ho(name, args, fns)`; `to_callback` builds an opaque callback from a checked source closure, with the limits of §8.19. A callback runs synchronously on the original thread and expires when the outer call ends; calls across threads and re-entry in the same scope are rejected, and callback errors come back through `OpError`; an empty list is just a dynamic call.
 - Aevia publishes source extensions through `@op`, `@rule` and `load_plugin` (§13.5.2). `Rssn.register` and `Rssn.register_plugin` name the host-only `Plugin` boundary and report `E0302` for Aevia values. `core.plugin.source` marks support for source extensions. `core.callback` marks support for the restricted callback bridge.
@@ -7314,6 +7366,8 @@ In the standard set each name has one registration, but **each registration has 
 Aevia's own static resolution rule (isomorphic to rssn's lattice, for Aevia's own overloads and plugins):
 
 1. filter by arity; 2. classify each argument and take the weakest; 3. a unique highest score is selected; 4. a tie at the top is `E1002`; 5. no match → try `Dynamic`; still failing → `E1003`.
+
+A direct Aevia call to a built-in fixed-zero-argument operator with exactly a derived scalar result and a derived term contract pins the term key when the kernel declares the result dimensionless or dimensionally polymorphic. The call has type `Dyn<Real>`. For example, `Rssn.oo()` yields symbolic infinity and `Rssn.pi()` yields symbolic π. Physical constants with custom dimensions are available through `Rssn.dynamic` and the typed `Units.Constants` module. Use `Rssn.overloads` to inspect both signatures and `Rssn.call_key` to execute either key. `Rssn.resolve_overload` scores the two original zero-argument signatures as a tie.
 
 Three run-time entry points:
 
@@ -8153,9 +8207,10 @@ message is whatever the built-in states.
 | `W0708` | comparing an expression to itself (`aevia lint`) |
 | `W0709` | redundant `if` expression (`aevia lint`) |
 | `W0710` | module is imported more than once (`aevia lint`) |
+| `W0711` | `if` condition is a Boolean literal, opt-in (`aevia lint`) |
 
 Note: `W0203` is reserved (the language has no `return` or `break`, so the syntax cannot represent an
-unreachable statement), and `W0501` is reserved. `W0102` and `W0701`–`W0710` are
+unreachable statement), and `W0501` is reserved. `W0102` and `W0701`–`W0711` are
 emitted by `aevia lint`; compiler lints and extra lints share `[lints]` in
 `aevia.toml`, `-A/-W/-D/-F`, and `@allow/@warn/@deny/@forbid`.
 

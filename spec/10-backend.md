@@ -348,9 +348,9 @@ pub fn kernel() -> Rc<Kernel>;   // 当前线程的会话，首次使用时创�
 ### 10.6.5 设备与数据并行执行
 
 Aevia 的 `Device` 值标识请求的执行位置。`device_of(tensor)` 返回张量所在位置。
-`to_device(tensor, device)` 和 `on(device, thunk)` 是 IO 动作。默认支持 CPU 执行。
-请求不可用的 GPU 或分布式设备时，报 `E1001`，其能力名分别为 `core.gpu` 或
-`core.distributed`（§13.9.4）。
+`to_device(tensor, device)` 和 `on(device, thunk)` 是 IO 动作，目前均支持 `Cpu`。
+请求 `Gpu` 或 `Distributed` 放置时，即便 RSSN 宿主设备注册表已发现 GPU，
+仍分别以能力名 `core.gpu` 或 `core.distributed` 报 `E1001`（§13.9.4）。
 
 RSSN 设备层提供缓冲区、数值内核 IR、CPU 参考及并行执行器，以及通过 `gpu-wgpu`
 启用的 WGSL 后端。嵌入宿主可用它批量求值、执行数组运算与固定步长集合仿真。

@@ -27,3 +27,6 @@ target
 
 editors/zed/grammars/
 editors/jetbrains/.intellijPlatform/localPlatformArtifacts/
+
+# Python verification tools
+__pycache__/

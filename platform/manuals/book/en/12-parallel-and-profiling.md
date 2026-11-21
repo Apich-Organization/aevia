@@ -18,13 +18,32 @@ fn main(): IO Unit = do
 
 Run this file locally with `aevia --jobs 1 run candidates.aev` and again with `--jobs 4`. Compare the values at each index. The map preserves input order. For reductions, pay attention to regrouping and use a combination operation suited to the method.
 
-`--jobs` sets the language worker count for this invocation. Without it, Aevia uses `AEVIA_JOBS`, then `RAYON_NUM_THREADS` or the CPUs available to the process. This example is small enough to run on the calling thread at either setting. To request one worker for language evaluation and RSSN's global CPU pool, run with `RAYON_NUM_THREADS=1` and `--jobs 1`.
+`--jobs` sets the language worker limit for this invocation. Without it, Aevia uses `AEVIA_JOBS`, then `RAYON_NUM_THREADS` or the CPUs available to the process. The pool grows up to that limit as the work grows. This example runs on the calling thread at either setting. To use a single thread for language evaluation and RSSN's global CPU pool, run with `RAYON_NUM_THREADS=1` and `--jobs 1`.
+
+`par_tabulate(n, f)` calls a pure function on the indices `0` through `n - 1` and returns the results in that order. For large inputs, workers generate indices in batches. Small workloads and functions that cannot be passed to workers are evaluated locally.
+
+Large dense exact matrices can also use this worker budget in `det`, `inv`, and `linsolve`. Each pivot is processed in order, and workers update independent rows. These operations return deterministic exact results.
+
+Reading a large Fortran-order NPY array can use the active RSSN CPU pool for the row-major conversion, including arrays with three or more varying axes. Measure the conversion separately from disk reads when comparing worker counts.
 
 ## Measure the right part
 
 Separate file and terminal work from the part you want to measure. Use a fixed fixture, a warm-up, repeat runs, and common settings for threads and optimization. Verify the result on each configuration before comparing time. `aevia bench --help` describes the tool's benchmark declarations and baseline format.
 
 An optimized build of the toolchain and the CLI option `--release` address different stages. Build settings affect the interpreter executable. The CLI option enables optimizations for the checked program. Report both, along with enabled backend features, when sharing measurements.
+
+## Sample a program on Windows
+
+The `aevia-prof` development tool samples a child process on x86-64 Windows without elevation. Build the executable with the `profiling` profile to include its debug symbols. In PowerShell, run the sampler from the repository root.
+
+```powershell
+cargo build --profile profiling -p aevia-cli
+$env:AEVIA_PROF_FOLDED = "candidates.folded"
+cargo run -p aevia-prof --release -- target\profiling\aevia.exe run candidates.aev
+Remove-Item Env:AEVIA_PROF_FOLDED
+```
+
+The stderr summary reports self samples at the leaf and inclusive samples along the stack, counting each function at most once per sample. Set `AEVIA_PROF_TOP` to change the number of summary rows and `AEVIA_PROF_INTERVAL_US` to change the sampling interval. The folded export uses the same busy samples and records normalized symbol names without summary truncation, in caller-to-leaf order. Give each export a new path. The profiler preserves the child's output and exit status, and reports an export error on stderr.
 
 ## Explore further
 

@@ -17,6 +17,8 @@ The authorization checks the signing key, publisher and package owner, including
 
 The documentation worker claims pending versions within a database transaction. It verifies the durable archive and renders the compiler's module descriptions and visible declarations in a bounded blocking task. Declarations marked `@hidden` or `@doc(hidden)` are omitted from the HTML and its counts. Visible private declarations carry a badge. The renderer applies one shared sanitization policy to package Markdown. The generated pages and build result commit together. An error is recorded for the affected version and other jobs can proceed. An interrupted database transaction releases its pending claim.
 
+Simple Markdown paragraphs render directly from escaped text and inline formatting events. Content with links, tables or raw HTML goes through the full renderer and sanitizer. Builds without the compiler renderer recognize the common single-line declaration visibility attributes.
+
 ## Public reading and private execution
 
 The first-party Markdown representations and the JSON standard-library catalog come from the same validated snapshots as the public HTML. Readers can discover them through `/llms.txt` or HTML response links. The sitemap lists published chapters and translations. Package data has independent JSON search, resolution and index routes. These endpoints publish data and require no execution permissions.

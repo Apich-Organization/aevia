@@ -389,8 +389,10 @@ storage held by the REPL session.
   thread count changes no result**.
 - **Shared-nothing replica design.** The interpreter is built on `Rc`, and converting the
   runtime to `Arc` would make every program pay for the few parallel ones. So each worker
-  thread holds a **replica**: a host-installed `Replica` factory rebuilds the interpreter from
-  the same source on that thread (once per thread, then reused). Threads exchange **portable
+  thread holds a **replica**: a host-installed `Replica` factory initializes an interpreter
+  from the same checked program revision on that thread (once per thread, then reused).
+  The CLI and the library runner share the immutable checked revision for the duration of
+  the run. Threads exchange **portable
   values** (`Portable`): numbers with dimension and display unit, strings, tensors, records,
   variants, constructors and reconstructible Core IR closures. Workers preserve constructor
   specializations, variant types and tensor element types, including the types of empty tensors.
@@ -410,10 +412,12 @@ storage held by the REPL session.
   `par_reduce(f, zero, xs)` requires `f` to be associative and `zero` an identity; it folds
   fixed chunks of 1024 elements and merges the chunk results in order, so a floating-point
   reduction is **bit-identical** on any number of cores and in the sequential fallback.
-- `par_map`, `par_tabulate(n, f)` and `par_reduce` take their worker count from `--jobs N`, then
-  `AEVIA_JOBS`, then `RAYON_NUM_THREADS` or the CPUs available to the process. Each worker has
-  a kernel `Session`. Nested language primitives run sequentially on a worker. RSSN operations
-  on those workers use the enclosing Rayon pool. On the main interpreter thread, RSSN uses
+- `par_map`, `par_tabulate(n, f)` and `par_reduce` take their worker limit from `--jobs N`, then
+  `AEVIA_JOBS`, then `RAYON_NUM_THREADS` or the CPUs available to the process. The pool grows
+  with the number of independent map elements or reduction blocks, up to that limit. Each
+  worker has a kernel `Session`. Nested language primitives run sequentially on a worker.
+  RSSN operations and independent row updates in sufficiently large exact factorizations can
+  share the enclosing Rayon pool. On the main interpreter thread, RSSN uses
   the global Rayon pool, which follows `RAYON_NUM_THREADS` and host CPU detection.
 - **Parallel numeric kernels.** `sparse @ dense` (including `Bcsr`) runs in fixed 256-row blocks,
   each output row accumulated sequentially by one work item, bit-equal to the sequential
@@ -432,7 +436,8 @@ pure  : a -> IO a
 
 - `spawn(f)` runs `f()` on a worker thread and returns a `Task`; `await(t)` waits and fetches
   the result. The task receives only capabilities active when it was submitted and allowed by the
-  worker's policy. Awaiting a task that was canceled before its worker started reports `E0812`.
+  worker's policy. `await` reports `E0812` when the task was canceled before it started or
+  observed cancellation while packing its return value for delivery.
 - **A task's console output is buffered and written at `await`, in await order**, so program
   output is deterministic however tasks interleave; other effects such as files happen directly
   on the task's thread.
@@ -578,13 +583,15 @@ aevia clean [--registry]                           remove `.aevia/` (`.aevia/reg
 aevia lsp [--stdio]                                language server (§9.10)
 aevia debug [--stdio]                             source debug adapter for editors
 aevia rssn [--audit] [--emit [--out DIR] [--namespaces]]   audit a Kernel Manifest / generate the Rssn module (chapter 13)
+aevia rssn --describe OPERATOR                     show the live manifest documentation, overloads, and Aevia bindings
 aevia login                                        bind a signing key to your registry account (browser)
 aevia publish [--owner HANDLE] [--no-verify] [--dry-run] [options…]  check, sign and upload this package
 aevia search <query>      aevia info <owner/name>  search the registry / show a package page
 aevia yank <owner/name@version> [--undo]           withdraw or restore a version
 aevia verify <owner/name@version>                  check a download against its signature
 aevia docs [owner/name[@version]] [--lang en|zh] [--open]
-aevia docs --section book|architecture|spec|stdlib [--lang en|zh] [--open] [--download]
+aevia docs --section book|architecture|spec|stdlib [--lang en|zh] [--open]
+aevia docs --section book|architecture --download [--lang en|zh] [--open]
 aevia pkg <command>                                every registry-client command (`key`, `status`, `lock`, …), forwarded to aevia-pkg
 aevia --version
 ```
@@ -681,14 +688,17 @@ affected open importers are republished. The exact capabilities `initialize` ret
   "positionEncoding": "utf-16",
   "textDocumentSync": { "openClose": true, "change": 2, "save": true },
   "hoverProvider": true,
-  "completionProvider": { "resolveProvider": false },
+  "completionProvider": { "resolveProvider": false, "triggerCharacters": ["."] },
   "definitionProvider": true,
   "typeDefinitionProvider": true,
   "documentSymbolProvider": true,
   "documentFormattingProvider": true,
   "codeActionProvider": true,
+  "codeLensProvider": { "resolveProvider": false },
+  "executeCommandProvider": { "commands": ["aevia.runFile", "aevia.testFile"] },
   "workspaceSymbolProvider": true,
   "referencesProvider": true,
+  "documentHighlightProvider": true,
   "renameProvider": { "prepareProvider": true },
   "signatureHelpProvider": {
     "triggerCharacters": ["(", ","],
@@ -700,7 +710,7 @@ affected open importers are republished. The exact capabilities `initialize` ret
       "tokenModifiers": []
     },
     "full": true,
-    "range": false
+    "range": true
   },
   "experimental": {
     "multiModuleAnalysis": {
@@ -731,10 +741,18 @@ modules it imports, its import bindings, its module identity and the check optio
 `CheckCache` stores `CheckedModule` and diagnostics keyed by a structural fingerprint of these
 inputs: a module whose inputs are all unchanged is not re-checked, and because the fingerprint
 includes the imported checked interfaces, **an edit that does not change an interface does not
-re-check its importers** (early cutoff). `FileId` is a position in the `SourceMap` and is the
+re-check its importers** (early cutoff). The loader fingerprints each interface once and
+combines the fingerprints of the visible transitive imports when checking a consumer.
+`FileId` is a position in the `SourceMap` and is the
 same on every load while the import graph is unchanged; a cache entry is reused only under the
 same `FileId`, so every span in a reused interface points into the text it was checked
 against.
+
+Disk entries and imported sources reuse their parsed syntax and syntax diagnostics when
+their source text and `FileId` match. Each load resolves imports against its current
+package roots and overlays, and retains the syntax and checks of the current
+module graph. The editor carries that compiler cache forward for each retained
+entry while its package resolution context remains equal.
 
 `aevia watch <file> [--once|--runs N]` checks repeatedly with one session cache and reports
 "how many checked, how many reused" each round. The standard library and unchanged package
@@ -800,7 +818,8 @@ cache for `check` and `run`. The four-revision retention applies per module name
   `import`/`open` lines are copied, imports resolve against the declaring file's package and
   adjacent directories, and the module's own declarations do not enter the snippet implicitly;
   snippets use in-memory source and write no temporary file; a failing dependency or inherited
-  import does not satisfy an expected compile failure. `--locked` checks the package of each
+  import does not satisfy an expected compile failure. Snippets in the same file share package
+  resolution and reuse checked imports when their compiler inputs match. `--locked` checks the package of each
   checked document, not the caller's working directory. Any failure exits 1; no checkable block,
   or an empty result after filtering, also exits 1. The extractor is `aevia-doc::doctest`.
 - Compile-failure tests: `compile_fail("<source>") : String -> Bool` compiles a fragment in an

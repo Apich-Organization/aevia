@@ -6,6 +6,8 @@ RSSN associates symbolic variants of an expression in an equivalence graph. Nume
 
 A session owns its term arena, rules and units. Hash consing gives equal nodes the same identity within a store. Rewriting unions classes, updates analysis facts and rebuilds affected parent relationships. Extraction walks the classes reachable from the requested term and chooses a result under the active cost model. Shape, sort and dimension evidence travel with the operation where the graph has enough information to derive them.
 
+Standard sessions share the installed rules and the immutable manifest for the current process-wide unit table. With a session-local unit, the modifying session copies its template and rebuilds its own manifest. Aevia indexes operator names and aliases into one array of canonical manifest entries.
+
 `Session::compute` prepares a private computation graph from the installed template, runs the reduction, and imports the answer. `compute_all` snapshots its cache inputs at entry. Workers prepare and run requests on independent graphs in batches sized by the active Rayon pool. The owning thread imports answers in input order. Cache identity includes the request and result-relevant configuration. Registration changes invalidate cached results tied to the old environment.
 
 ## Scheduling rules and kernels
@@ -18,9 +20,17 @@ Budget and cancellation are distinct. Budget limits the work of a request. A can
 
 Typed kernels cover dense and sparse linear algebra, quadrature, ODE/SDE/PDE integration, statistics, FFT and simulation. Direct algorithms own their validation and result types. Their term rules and typed ABI adapters translate arguments and outcomes at the boundary.
 
+Native handles retain objects in the RSSN session under a shared memory limit. Mutable objects reserve capacity for future operations. Immutable AMG hierarchies, CSR and BSR matrices, and prepared Schur solvers charge their own allocated storage under individual size limits.
+
+Optional lists of native handles accept an empty `Tensor<1, Value>`. Every element of a nonempty list must be a live handle of the declared kind.
+
+Prepared plans retain the data shared by a family of calls. A wave plan keeps its grid and phases, a Levin plan keeps its quadrature nodes and weights, and a residual estimator keeps its finite-element geometry. Each call can supply a new wavefunction, amplitude or state. The manifest declares the operator and its user-facing argument contract. The adapter checks the shape and dimensions of sampled vectors before converting them to coherent values, or uses the explicit references of a normalized model.
+
 `Rssn_Numeric.coherence` computes one-sided Welch coherence. `Rssn_Numeric.wavelet_packet` decomposes both branches of the wavelet transform and returns an equal-width matrix of leaf bands. `Rssn_Numeric.inverse_wavelet_packet` reconstructs the input from those bands. The typed `num_signal_*` operators expose the analytic signal, Hilbert transform, amplitude envelope and zoom FFT through the native numerical ABI.
 
-CPU parallelism uses the active Rayon pool and workload thresholds. The global pool detects available CPUs and respects `RAYON_NUM_THREADS`. Aevia language workers start from the same default count and accept `AEVIA_JOBS` or `--jobs` overrides. RSSN calls on those workers use the enclosing pool. `kernels::reuse` stores shared immutable plans and leases exclusive scratch buffers under retention limits. Concurrent callers share construction of the same cached plan. FFT routines key plans by length and direction and detect CPU instructions at run time. Compiled CPU batches borrow intermediate `f64` buffers from the same reuse module.
+CPU parallelism uses the active Rayon pool and workload thresholds. The global pool detects available CPUs and respects `RAYON_NUM_THREADS`. Aevia language workers start from the same default count and accept `AEVIA_JOBS` or `--jobs` overrides. Aevia reuses its worker pool when its thread count covers the work and stays within the caller's limit. RSSN calls on those workers use the enclosing pool. `kernels::reuse` stores shared immutable plans and leases exclusive scratch buffers under retention limits. Concurrent callers share construction of the same cached plan. FFT routines key plans by length and direction and detect CPU instructions at run time. Compiled CPU batches borrow intermediate `f64` buffers from the same reuse module.
+
+Large optimized dense products use the active pool with row-major views of the input and output buffers. Large Welch computations partition complete frames into fixed blocks and then combine their partial spectra in order.
 
 Compiled evaluation can use a tape with scalar, batched, automatic-differentiation or interval execution. LIR provides typed registers, branches, calls and a fallback exit. Cranelift compiles eligible work behind the JIT feature. The optional device backend adds an explicit buffer and launch model. Numeric algorithms that need reproducibility should treat precision, reduction order and backend choice as part of the experiment.
 

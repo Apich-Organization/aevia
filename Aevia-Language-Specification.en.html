@@ -4056,6 +4056,7 @@ linsolve     : (Tensor&lt;2, Scalar&lt;ρ,d&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,e
 median    : Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt; -&gt; Scalar&lt;ρ,d&gt;
 centroid  : Tensor&lt;1, Point[d]&gt; -&gt; Point[d]
 quantile  : (Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt;, Scalar&lt;ρ,1&gt;) -&gt; Scalar&lt;ρ,d&gt;
+quantiles : (Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,1&gt;&gt;) -&gt; Tensor&lt;1, Scalar&lt;div_rep(ρ),d&gt;&gt;
 var       : Tensor&lt;n, Scalar&lt;ρ,d&gt;&gt; -&gt; Scalar&lt;div_rep(ρ),d^2&gt;
 var       : (Tensor&lt;n, Scalar&lt;ρ,d&gt;&gt;, Bool) -&gt; Scalar&lt;div_rep(ρ),d^2&gt;   # population
 std       : Tensor&lt;n, Scalar&lt;ρ,d&gt;&gt; -&gt; Scalar&lt;div_rep(ρ),d&gt;
@@ -4065,6 +4066,7 @@ skewness  : Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt; -&gt; Scalar&lt;ρ,1&gt;
 kurtosis  : Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt; -&gt; Scalar&lt;ρ,1&gt;
 histogram : (Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt;, Int) -&gt; { counts: Tensor&lt;1, Int&gt;, edges: Tensor&lt;1, Float[d]&gt; }
 mode      : Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt; -&gt; Scalar&lt;ρ,d&gt;</code></pre>
+<p><code>quantiles(xs, qs)</code> computes Hyndman–Fan type-7 quantiles in a batch. Every query in <code>qs</code> must be dimensionless and lie in <code>[0, 1]</code>. The result keeps the sample dimension, query order, and repeated queries. The batch shares one ordered sample. Exact inputs use rational interpolation. An empty query vector returns an empty result for a nonempty, finite sample.</p>
 <h3 id="08-stdlib--871-distributions">8.7.1 Distributions</h3>
 <p>Distributions are <strong>nominal types</strong>, not a multi-parameter type class (the language has no multi-parameter classes, §3.8.1):</p>
 <pre class="code"><code>type Distribution&lt;d&gt; =
@@ -4100,12 +4102,16 @@ type F               = { df1: Real[1], df2: Real[1] }
 type NegativeBinomial = { r: Real[1], p: Real[1] }
 type Geometric       = { p: Real[1] }
 </code></pre>
-<p>These declarations are the source of the <code>Stats.Distributions</code> module (after <code>open Stats.Distributions</code>, <code>Normal({ mu = 1.7 m, sigma = 0.1 m })</code> is a <code>Distribution&lt;L&gt;</code> value). <code>pdf</code>, <code>cdf</code>, <code>sample</code> and <code>sample_n</code> are <strong>built-in overloads</strong> over this closed ADT:</p>
-<pre class="code"><code>pdf      : (Distribution&lt;d&gt;, Real[d]) -&gt; Real[1/d]
-cdf      : (Distribution&lt;d&gt;, Real[d]) -&gt; Real[1]
-sample   : Distribution&lt;d&gt; -&gt; IO Real[d]
-sample_n : (Distribution&lt;d&gt;, Int, Option&lt;Int&gt;) -&gt; Tensor&lt;1, Real[d]&gt;</code></pre>
-<p>The dimension of <code>pdf</code> for <code>Normal&lt;L&gt;</code> is <code>1/L</code>; <code>cdf</code> is dimensionless; <code>sample</code> returns <code>Real[L]</code>. <code>Weibull</code> uses its <code>scale</code> dimension and <code>Cauchy</code> its <code>loc</code>/<code>scale</code> dimension; <code>LogNormal</code> parameters describe the dimensionless logarithm; <code>NegativeBinomial</code> and <code>Geometric</code> count failures before successes, with support <code>0, 1, ...</code>. All fifteen constructors share the same <code>pdf</code>, <code>cdf</code>, <code>sample</code> and <code>sample_n</code> built-ins.</p>
+<p>These declarations are the source of the <code>Stats.Distributions</code> module (after <code>open Stats.Distributions</code>, <code>Normal({ mu = 1.7 m, sigma = 0.1 m })</code> is a <code>Distribution&lt;L&gt;</code> value). The distribution operations are <strong>built-in overloads</strong> over this closed ADT:</p>
+<pre class="code"><code>pdf       : (Distribution&lt;d&gt;, Real[d]) -&gt; Real[1/d]
+cdf       : (Distribution&lt;d&gt;, Real[d]) -&gt; Real[1]
+cdf_batch : (Distribution&lt;d&gt;, Tensor&lt;1, Real[d]&gt;) -&gt; Tensor&lt;1, Real[1]&gt;
+dist_quantile : (Distribution&lt;d&gt;, Real[1]) -&gt; Real[d]
+sample    : Distribution&lt;d&gt; -&gt; IO Real[d]
+sample_n  : (Distribution&lt;d&gt;, Int, Option&lt;Int&gt;) -&gt; Tensor&lt;1, Real[d]&gt;</code></pre>
+<p>The dimension of <code>pdf</code> for <code>Normal&lt;L&gt;</code> is <code>1/L</code>; <code>cdf</code> is dimensionless; <code>sample</code> returns <code>Real[L]</code>. <code>Weibull</code> uses its <code>scale</code> dimension and <code>Cauchy</code> its <code>loc</code>/<code>scale</code> dimension; <code>LogNormal</code> parameters describe the dimensionless logarithm; <code>NegativeBinomial</code> and <code>Geometric</code> count failures before successes, with support <code>0, 1, ...</code>. All fifteen constructors support these operations.</p>
+<p><code>cdf_batch(dist, xs)</code> evaluates the same cumulative probability as <code>cdf</code> at each point. The result keeps the order and repetitions in <code>xs</code>. The points must have the distribution's dimension. A valid distribution and an empty point vector give an empty result. Invalid parameters or a NaN point raise a domain error.</p>
+<p><code>dist_quantile(dist, p)</code> returns the quantile at probability <code>p</code> in the distribution's dimension. For a discrete distribution and <code>0 &lt; p &lt; 1</code>, it returns the smallest support point whose cumulative probability reaches <code>p</code>. The probabilities <code>0</code> and <code>1</code> return the lower and upper support endpoints, which can be infinite. The probability is dimensionless and must be in <code>[0, 1]</code>. Invalid distribution parameters, out-of-range probabilities, and NaN probabilities raise <code>E0806</code>.</p>
 <p><strong>User-defined distributions are not a language extension point.</strong> Multi-parameter classes were removed (§3.8.1), and the map "distribution parameters → dimension" needs a type function (like <code>RateOf</code>), which is a separate design. User-defined distributions lie outside the extension boundary of §12.8.13; the standard library may add built-in constructors for new distribution families, but that is a closed library set, not a language extension point.</p>
 <h2 id="08-stdlib--88-fft--interpolate">8.8 FFT / Interpolate</h2>
 <pre class="code"><code>fft      : Tensor&lt;1, X[d]&gt; -&gt; Tensor&lt;1, Complex[d]&gt;       # unnormalised; X ∈ {Complex, Float, Int}
@@ -4144,6 +4150,8 @@ rfftfreq : (Int, Float[T]) -&gt; Tensor&lt;1, Float[1/T]&gt;             # n/2 +
 interp1  : (Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,e&gt;&gt;, Scalar&lt;ρ,d&gt;) -&gt; Scalar&lt;ρ,e&gt;
 interp2  : (Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,e&gt;&gt;, Tensor&lt;2, Scalar&lt;ρ,f&gt;&gt;,
             Scalar&lt;ρ,d&gt;, Scalar&lt;ρ,e&gt;) -&gt; Scalar&lt;ρ,f&gt;
+interp2Batch : (Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,e&gt;&gt;, Tensor&lt;2, Scalar&lt;ρ,f&gt;&gt;,
+                Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,e&gt;&gt;) -&gt; Tensor&lt;1, Float[f]&gt;
 spline   : (Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,e&gt;&gt;, Scalar&lt;ρ,d&gt;) -&gt; Scalar&lt;ρ,e&gt;
 polyfit  : (Tensor&lt;1, Scalar&lt;ρ,1&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,e&gt;&gt;, Int) -&gt; Tensor&lt;1, Scalar&lt;ρ,e&gt;&gt;
 polyval  : (Tensor&lt;1, Scalar&lt;ρ,e&gt;&gt;, Scalar&lt;ρ,1&gt;) -&gt; Scalar&lt;ρ,e&gt;
@@ -4160,6 +4168,7 @@ chebyshev_fit : (Tensor&lt;1, Scalar&lt;ρ,1&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,
 <pre class="code"><code>type Norm = | Backward | Forward | Unitary
 type AxisScale = | Linear | Log</code></pre>
 <p><code>polyfit</code> requires a dimensionless independent variable; for a dimensioned one, divide by a unit first (<code>x/u</code>); the coefficients keep the dimension of <code>y</code>. This is a dimension-system constraint on the API: the coefficient <code>a_i</code> of a polynomial has dimension <code>e/d^i</code>, different for each power, and cannot sit in a homogeneous tensor.</p>
+<p><code>interp2</code> and <code>interp2Batch</code> use strictly increasing axes and clamp finite queries to the grid edges. Store the sample at <code>(xs[i], ys[j])</code> in <code>table[j][i]</code>. <code>interp2Batch(xs, ys, table, query_xs, query_ys)</code> prepares the grid once. The query tensors must have equal lengths and match their respective axis dimensions. The result has one Float per coordinate pair, in input order and with the table's dimension. Two empty query tensors return an empty result. An empty axis, a grid shape mismatch, or unequal query lengths give <code>E0802</code>. An axis with one knot or non-increasing knots, or any non-finite input, gives <code>E0806</code>.</p>
 <h2 id="08-stdlib--89-ode">8.9 ODE</h2>
 <pre class="code"><code>type OdeMethod =
     | Rk4 | Dopri5 | Radau | Bdf | Rosenbrock23 | AutoSwitch
@@ -4451,6 +4460,7 @@ solve_heat    : HeatSpec -&gt; Result&lt;Tensor&lt;1, Field&gt;, PdeError&gt;
 solve_wave    : WaveSpec -&gt; Result&lt;Tensor&lt;1, Field&gt;, PdeError&gt;
 solve_advection : AdvectionSpec -&gt; Result&lt;Tensor&lt;1, Field&gt;, PdeError&gt;</code></pre>
 <p><code>Field</code> is <code>{ grid: Grid, values: Tensor&lt;n, Float[d]&gt; }</code>. The dimensions of coefficients and boundary conditions are annotated field by field in the <code>Spec</code> records; the solver checks at run time that the grid and coefficient dimensions agree. The full typing rules of PDEs are in the <code>Pde</code> module documentation; PDE specifications are not part of the core type system.</p>
+<p>The short 2D <code>solve_heat</code> reads <code>nx * ny</code> samples from <code>initial</code> in row-major order and holds its four initial edges fixed. It returns <code>steps + 1</code> snapshots, including the initial field and the final step. The optional <code>method</code> defaults to <code>"explicit"</code>, which requires a diffusion number <code>alpha * dt / h^2</code> of at most <code>1/4</code>. Set <code>method = "adi"</code> for alternating-direction implicit stepping at finite diffusion numbers beyond the explicit limit. The implicit step requires finite nonnegative diffusivity and a finite positive time step. Unknown methods and invalid implicit parameters return <code>Err(PdeError)</code>.</p>
 <h3 id="08-stdlib--8101-temporal-adaptivity-through-the-manifest">8.10.1 Temporal adaptivity through the manifest</h3>
 <p><code>Rssn_numerical_callback.num_pde_*_adaptive</code> compares a full step with two half steps on a fixed spatial discretization. Accepted states use the selected method's half steps without substitution or Richardson extrapolation. Error scaling uses positive field-unit absolute accuracy and dimensionless relative accuracy. Rejected trials are discarded. Without a terminal event, integration reaches the exact endpoint. Initial/minimum/maximum steps and accepted/rejected-step, step-kernel and serial callback budgets are explicit; exhaustion or failure at the minimum step is an error.</p>
 <table>
@@ -4605,9 +4615,14 @@ primes      : Int -&gt; Tensor&lt;1, Int&gt;
 binomial    : (Int, Int) -&gt; Int
 permutations: Int -&gt; Int
 gcd lcm     : (Int, Int) -&gt; Int
+mod_pow     : (Int, Int, Int) -&gt; Int
 polygon_area: Tensor&lt;2, Real[L]&gt; -&gt; Real[L^2]
-distance    : (Tensor&lt;1, Real[L]&gt;, Tensor&lt;1, Real[L]&gt;) -&gt; Real[L]</code></pre>
-<p>These modules map directly onto rssn's rule sets; the full list is in <code>aevia doc Math.NumberTheory</code>.</p>
+distance    : (Tensor&lt;1, Real[L]&gt;, Tensor&lt;1, Real[L]&gt;) -&gt; Real[L]
+tetrahedron_volume : Tensor&lt;[4, 3], Real[d]&gt; -&gt; Real[d^3]</code></pre>
+<p><code>mod_pow(base, exponent, modulus)</code> computes the exact residue in <code>[0, modulus)</code> without expanding the full power. It accepts arbitrary-size integers, including negative bases. Exponent zero yields <code>1 mod modulus</code>. A negative exponent or a nonpositive modulus raises domain error <code>E0806</code>.</p>
+<p><code>polygon_area</code> takes vertices in boundary order, with two coordinates of the same dimension per row. It returns a nonnegative area in the square of that dimension. A valid matrix of zero, one, or two rows gives zero. A different column count raises shape error <code>E0802</code>.</p>
+<p><code>tetrahedron_volume</code> takes four rows of three coordinates in a common dimension <code>d</code>. It returns the nonnegative volume in <code>d^3</code>, independent of vertex order. Coplanar or repeated vertices give zero. A wrong shape raises a shape error. Non-finite coordinates or a non-finite computed volume raise a domain error.</p>
+<p>Run <code>aevia doc Math.NumberTheory</code> for the module's operators.</p>
 <h2 id="08-stdlib--817-physics--simulate">8.17 Physics / Simulate</h2>
 <pre class="code"><code>simulate : (String, Json) -&gt; Result&lt;Json, SimError&gt;
 
@@ -4699,7 +4714,7 @@ Rssn.register_plugin : Plugin -&gt; Result&lt;PluginId, PluginError&gt;   # alia
 <p>Reachability and limits of the fixed entry points:</p>
 <ul>
 <li><code>type_rep&lt;T&gt;()</code> makes an unforgeable <code>TypeRep</code> from a concrete checked type; an unresolved generic cannot be reflected without a run-time type dictionary. <code>Rssn.typed</code> performs the dynamic call and checks the result against that witness; a mismatch or insufficient evidence returns <code>Err(OpError)</code>, and a successful result is still an opaque <code>Value</code> to be validated and converted with <code>from_value&lt;T&gt;</code>.</li>
-<li><code>to_callback(f)</code> checks the concrete function type of a checked source closure in the current evaluator session and builds an opaque <code>Callback</code> (aliases and concretised generic functions keep this evidence; wrap built-in functions in a source lambda first). The callback bridge supports concrete numbers, <code>Bool</code>, <code>String</code>, the sealed host type <code>NativeAdVar</code>, and tensors and closed records built recursively from them; same-named source types and other opaque callback types remain rejected. Concrete dimensions, ranks and fully known shapes are checked, and an empty structured tensor needs independent element-type and dimension evidence. Each operator may restrict signatures further; for example the numeric solvers use <code>Float</code> scalars and vectors. The call runs synchronously on the original thread and the handle expires when the outer call returns; calls across threads, re-entry in the same scope and callback errors all return errors; an empty callback list is equivalent to a dynamic call.</li>
+<li><code>to_callback(f)</code> checks the concrete function type of a checked source closure in the current evaluator session and builds an opaque <code>Callback</code> (aliases and concretised generic functions keep this evidence; wrap built-in functions in a source lambda first). The callback bridge supports concrete numbers, <code>Bool</code>, <code>String</code>, the sealed host type <code>NativeAdVar</code>, and tensors and closed records built recursively from them; same-named source types and other opaque callback types remain rejected. Concrete dimensions, ranks and fully known shapes are checked, and an empty structured tensor needs independent element-type and dimension evidence. Each operator may restrict signatures further; for example the numeric solvers use <code>Float</code> scalars and vectors. The call runs synchronously on the original thread and the handle expires when the outer call returns; calls across threads, re-entry in the same scope and callback errors all return errors; an empty callback list is equivalent to a dynamic call. In <code>Rssn.call_ho</code> and <code>Rssn.call_ho_key</code>, supply ordinary values and callbacks in their respective order in the manifest signature. The bridge combines both lists at the declared parameter positions.</li>
 <li>The host <code>Plugin</code> interface is reserved for RSSN hosts. Calling <code>Rssn.register</code> or <code>Rssn.register_plugin</code> with Aevia values reports <code>E0302</code>. Aevia registers <code>@op</code> and <code>@rule</code> functions at module load. <code>load_plugin(path) : String -&gt; IO (Result&lt;Int, String&gt;)</code> loads a local source file under the conditions in §13.5.2 and §13.5.3.</li>
 <li><code>core.callback</code> marks the restricted callback bridge as available, and <code>core.plugin.source</code> marks source plugins as available. Generated higher-order bindings keep the explicit <code>(values, callbacks)</code> dynamic interface; for a single overload with an exact declaration whose callbacks and results can be certified, a typed alias pinned to the signature is also generated, which certifies the concrete callback signature at call time and validates the result against the instantiated type; signatures whose type or dimension cannot be proved offer only the dynamic entry. For example the <code>num_least_squares</code> alias of <code>Rssn_numerical_callback</code>: parameters and residuals have dimensions <code>D</code> and <code>E</code>, the residual tolerance uses <code>E</code>, the other controls are dimensionless, and the result carries <code>converged</code> and <code>status</code> (residual/gradient convergence, budget exhausted, stagnation).</li>
 </ul>
@@ -4807,6 +4822,9 @@ Units
   Astronomy
   CGS
   Natural
+  Planck
+  Atomic
+  Geometrized
   Constants
 Tensor
 LinearAlgebra
@@ -4829,15 +4847,10 @@ Data
 Plot
 Test
 Measurement
-Rssn
-  Dynamic
-  Plugin
 Device
 Physics
   Ising
-  Geodesic
-  Schrodinger
-  ...</code></pre>
+  Geodesic</code></pre>
 <p>The standard-library modules live in the <code>aevia-std</code> package; the Prelude is imported automatically and the rest on demand with <code>import</code>. A module name is its path: <code>import A.B</code> resolves <code>A/B.aev</code> (§7), <code>import Math { sqrt }</code> brings in only <code>sqrt</code>, and <code>open Units.SI</code> puts the exports of <code>Units.SI</code> into the current scope. Local files take precedence over embedded standard-library modules. <code>Units/*</code> are documentation modules: unit names are already ambient <code>Unit[d]</code> values, and exporting quantity bindings would shadow them and change the semantics of <code>Tensor / Unit</code>, so they are not exported (§5.3.4). The <code>Sde</code> module re-exports the five entry points of §8.9.1 and declares the option ADTs; <code>Physics.Ising</code>/<code>Physics.Geodesic</code> provide the typed wrappers of §8.17. Function names, the nominal variant constructors of <code>Sde</code> and transparent type aliases (<code>type X = { … }</code>, e.g. <code>Params</code> of <code>Physics.Ising</code>) can all be brought in with <code>import { X }</code>/<code>open</code>.</p>
 <p><code>Rssn</code> is a <strong>generated module</strong>, not a hand-written library: at build time <code>Rssn.&lt;op&gt;</code> typed declarations and the <code>Rssn.dynamic</code> dynamic entry are generated from the Kernel Manifest (§13.2). The content of <code>Rssn</code> varies with the rssn version, and Aevia source hard-codes no operator list. <code>Sparse</code> provides the format tags <code>Csr</code>/<code>Csc</code>/<code>Coo</code>/<code>Block</code>/<code>Bcsr</code> and the sparse built-ins of §8.4.1. Layout dispatch is described in §13.9.5. <code>Device</code> provides <code>Cpu</code>/<code>Gpu</code>/<code>Distributed</code> and <code>on</code>/<code>to_device</code> (§13.9.4, <code>E1001</code> without <code>core.gpu</code>).</p>
 <p>The next chapter defines the run time: from source to values, from values to rssn terms, from the REPL to the JIT.</p>
@@ -5126,11 +5139,11 @@ Physics
 <h3 id="09-runtime--972-parallel-evaluation-shared-nothing-replicas">9.7.2 Parallel evaluation: shared-nothing replicas</h3>
 <ul>
 <li>Pure functions may run in parallel; the result order of <code>par_map(f, xs)</code> is fixed and <strong>the thread count changes no result</strong>.</li>
-<li><strong>Shared-nothing replica design.</strong> The interpreter is built on <code>Rc</code>, and converting the runtime to <code>Arc</code> would make every program pay for the few parallel ones. So each worker thread holds a <strong>replica</strong>: a host-installed <code>Replica</code> factory rebuilds the interpreter from the same source on that thread (once per thread, then reused). Threads exchange <strong>portable values</strong> (<code>Portable</code>): numbers with dimension and display unit, strings, tensors, records, variants, constructors and reconstructible Core IR closures. Workers preserve constructor specializations, variant types and tensor element types, including the types of empty tensors.</li>
+<li><strong>Shared-nothing replica design.</strong> The interpreter is built on <code>Rc</code>, and converting the runtime to <code>Arc</code> would make every program pay for the few parallel ones. So each worker thread holds a <strong>replica</strong>: a host-installed <code>Replica</code> factory initializes an interpreter from the same checked program revision on that thread (once per thread, then reused). The CLI and the library runner share the immutable checked revision for the duration of the run. Threads exchange <strong>portable values</strong> (<code>Portable</code>): numbers with dimension and display unit, strings, tensors, records, variants, constructors and reconstructible Core IR closures. Workers preserve constructor specializations, variant types and tensor element types, including the types of empty tensors.</li>
 <li><strong>Closures cross threads as code identity plus captured data.</strong> A lambda is "the function's source position plus its captured values"; the position is a <strong>module identity</strong> (logical source path + owning package) plus a byte offset (<code>FileId</code> is assigned per load and does not cross threads), and the replica resolves it back to the same function through the same-named module. Explicitly specialized generic closures carry their selected types and dispatch evidence, which the receiving replica checks against its module interface.</li>
 <li><strong>Guarantee: parallelism never changes a value.</strong> When a value cannot cross threads (a symbolic term may hold a handle of the thread's session, a kernel handle, an IO action, a closure with activation-time generic evidence), when there is no replica factory, under <code>--jobs 1</code>, or when a worker fails, the primitive falls back to sequential evaluation, and the sequential recomputation gives the value or error the program would have given (with position and call stack). <code>AEVIA_PARALLEL_TRACE=1</code> prints the reason for each fallback.</li>
 <li><strong>Determinism.</strong> Maps preserve input order even as the runtime adjusts batch sizes to the worker count. <code>par_reduce(f, zero, xs)</code> requires <code>f</code> to be associative and <code>zero</code> an identity; it folds fixed chunks of 1024 elements and merges the chunk results in order, so a floating-point reduction is <strong>bit-identical</strong> on any number of cores and in the sequential fallback.</li>
-<li><code>par_map</code>, <code>par_tabulate(n, f)</code> and <code>par_reduce</code> take their worker count from <code>--jobs N</code>, then <code>AEVIA_JOBS</code>, then <code>RAYON_NUM_THREADS</code> or the CPUs available to the process. Each worker has a kernel <code>Session</code>. Nested language primitives run sequentially on a worker. RSSN operations on those workers use the enclosing Rayon pool. On the main interpreter thread, RSSN uses the global Rayon pool, which follows <code>RAYON_NUM_THREADS</code> and host CPU detection.</li>
+<li><code>par_map</code>, <code>par_tabulate(n, f)</code> and <code>par_reduce</code> take their worker limit from <code>--jobs N</code>, then <code>AEVIA_JOBS</code>, then <code>RAYON_NUM_THREADS</code> or the CPUs available to the process. The pool grows with the number of independent map elements or reduction blocks, up to that limit. Each worker has a kernel <code>Session</code>. Nested language primitives run sequentially on a worker. RSSN operations and independent row updates in sufficiently large exact factorizations can share the enclosing Rayon pool. On the main interpreter thread, RSSN uses the global Rayon pool, which follows <code>RAYON_NUM_THREADS</code> and host CPU detection.</li>
 <li><strong>Parallel numeric kernels.</strong> <code>sparse @ dense</code> (including <code>Bcsr</code>) runs in fixed 256-row blocks, each output row accumulated sequentially by one work item, bit-equal to the sequential kernel; <code>sde_ensemble_diag/general</code> runs through <code>par_map</code> replicas, and the member seed <code>ensemble_seed(seed, i)</code> depends only on <code>(seed, i)</code>. Deliberately not parallel: the time steps of a single ODE/SDE path, Krylov iterations and <code>tabulate</code>. A value with a closure field (the <code>at</code> of <code>ode_solve</code>) cannot cross threads and falls back to sequential.</li>
 </ul>
 <h3 id="09-runtime--973-concurrent-tasks">9.7.3 Concurrent tasks</h3>
@@ -5138,7 +5151,7 @@ Physics
 await : Task a -&gt; IO a
 pure  : a -&gt; IO a</code></pre>
 <ul>
-<li><code>spawn(f)</code> runs <code>f()</code> on a worker thread and returns a <code>Task</code>; <code>await(t)</code> waits and fetches the result. The task receives only capabilities active when it was submitted and allowed by the worker's policy. Awaiting a task that was canceled before its worker started reports <code>E0812</code>.</li>
+<li><code>spawn(f)</code> runs <code>f()</code> on a worker thread and returns a <code>Task</code>; <code>await(t)</code> waits and fetches the result. The task receives only capabilities active when it was submitted and allowed by the worker's policy. <code>await</code> reports <code>E0812</code> when the task was canceled before it started or observed cancellation while packing its return value for delivery.</li>
 <li><strong>A task's console output is buffered and written at <code>await</code>, in await order</strong>, so program output is deterministic however tasks interleave; other effects such as files happen directly on the task's thread.</li>
 <li>If the thunk cannot cross threads the task runs on this thread at <code>spawn</code> (also buffered), so <code>spawn</code> is always available. A run-time error on a worker is reported at <code>await</code> (not re-run); a task result MUST be portable data, otherwise <code>await</code> reports <code>E0811</code>; a task can be awaited only once (the second <code>await</code> is <code>E0811</code>).</li>
 <li><code>do</code> itself still runs sequentially; concurrency appears only explicitly through tasks.</li>
@@ -5278,13 +5291,15 @@ aevia clean [--registry]                           remove `.aevia/` (`.aevia/reg
 aevia lsp [--stdio]                                language server (§9.10)
 aevia debug [--stdio]                             source debug adapter for editors
 aevia rssn [--audit] [--emit [--out DIR] [--namespaces]]   audit a Kernel Manifest / generate the Rssn module (chapter 13)
+aevia rssn --describe OPERATOR                     show the live manifest documentation, overloads, and Aevia bindings
 aevia login                                        bind a signing key to your registry account (browser)
 aevia publish [--owner HANDLE] [--no-verify] [--dry-run] [options…]  check, sign and upload this package
 aevia search &lt;query&gt;      aevia info &lt;owner/name&gt;  search the registry / show a package page
 aevia yank &lt;owner/name@version&gt; [--undo]           withdraw or restore a version
 aevia verify &lt;owner/name@version&gt;                  check a download against its signature
 aevia docs [owner/name[@version]] [--lang en|zh] [--open]
-aevia docs --section book|architecture|spec|stdlib [--lang en|zh] [--open] [--download]
+aevia docs --section book|architecture|spec|stdlib [--lang en|zh] [--open]
+aevia docs --section book|architecture --download [--lang en|zh] [--open]
 aevia pkg &lt;command&gt;                                every registry-client command (`key`, `status`, `lock`, …), forwarded to aevia-pkg
 aevia --version</code></pre>
 <p>Use <code>aevia --help</code>, <code>aevia COMMAND --help</code>, or <code>aevia help COMMAND</code> for usage, options, examples, and exit status. Help does not load or modify a package.</p>
@@ -5358,14 +5373,17 @@ aevia --version</code></pre>
   &quot;positionEncoding&quot;: &quot;utf-16&quot;,
   &quot;textDocumentSync&quot;: { &quot;openClose&quot;: true, &quot;change&quot;: 2, &quot;save&quot;: true },
   &quot;hoverProvider&quot;: true,
-  &quot;completionProvider&quot;: { &quot;resolveProvider&quot;: false },
+  &quot;completionProvider&quot;: { &quot;resolveProvider&quot;: false, &quot;triggerCharacters&quot;: [&quot;.&quot;] },
   &quot;definitionProvider&quot;: true,
   &quot;typeDefinitionProvider&quot;: true,
   &quot;documentSymbolProvider&quot;: true,
   &quot;documentFormattingProvider&quot;: true,
   &quot;codeActionProvider&quot;: true,
+  &quot;codeLensProvider&quot;: { &quot;resolveProvider&quot;: false },
+  &quot;executeCommandProvider&quot;: { &quot;commands&quot;: [&quot;aevia.runFile&quot;, &quot;aevia.testFile&quot;] },
   &quot;workspaceSymbolProvider&quot;: true,
   &quot;referencesProvider&quot;: true,
+  &quot;documentHighlightProvider&quot;: true,
   &quot;renameProvider&quot;: { &quot;prepareProvider&quot;: true },
   &quot;signatureHelpProvider&quot;: {
     &quot;triggerCharacters&quot;: [&quot;(&quot;, &quot;,&quot;],
@@ -5377,7 +5395,7 @@ aevia --version</code></pre>
       &quot;tokenModifiers&quot;: []
     },
     &quot;full&quot;: true,
-    &quot;range&quot;: false
+    &quot;range&quot;: true
   },
   &quot;experimental&quot;: {
     &quot;multiModuleAnalysis&quot;: {
@@ -5396,7 +5414,8 @@ aevia --version</code></pre>
 <li>The package graph is topologically sorted; the lock file makes builds reproducible (§7.5.2); build artefacts live in <code>.aevia/</code> and are not committed; the central registry is the default source (protocol: §13.7), and <code>add</code>/<code>publish</code>/<code>yank</code> use the same protocol.</li>
 </ul>
 <h3 id="09-runtime--9111-in-process-incremental-checking">9.11.1 In-process incremental checking</h3>
-<p>Checking a module is a function of its source text, <code>FileId</code>, the <strong>checked interfaces</strong> of the modules it imports, its import bindings, its module identity and the check options. <code>CheckCache</code> stores <code>CheckedModule</code> and diagnostics keyed by a structural fingerprint of these inputs: a module whose inputs are all unchanged is not re-checked, and because the fingerprint includes the imported checked interfaces, <strong>an edit that does not change an interface does not re-check its importers</strong> (early cutoff). <code>FileId</code> is a position in the <code>SourceMap</code> and is the same on every load while the import graph is unchanged; a cache entry is reused only under the same <code>FileId</code>, so every span in a reused interface points into the text it was checked against.</p>
+<p>Checking a module is a function of its source text, <code>FileId</code>, the <strong>checked interfaces</strong> of the modules it imports, its import bindings, its module identity and the check options. <code>CheckCache</code> stores <code>CheckedModule</code> and diagnostics keyed by a structural fingerprint of these inputs: a module whose inputs are all unchanged is not re-checked, and because the fingerprint includes the imported checked interfaces, <strong>an edit that does not change an interface does not re-check its importers</strong> (early cutoff). The loader fingerprints each interface once and combines the fingerprints of the visible transitive imports when checking a consumer. <code>FileId</code> is a position in the <code>SourceMap</code> and is the same on every load while the import graph is unchanged; a cache entry is reused only under the same <code>FileId</code>, so every span in a reused interface points into the text it was checked against.</p>
+<p>Disk entries and imported sources reuse their parsed syntax and syntax diagnostics when their source text and <code>FileId</code> match. Each load resolves imports against its current package roots and overlays, and retains the syntax and checks of the current module graph. The editor carries that compiler cache forward for each retained entry while its package resolution context remains equal.</p>
 <p><code>aevia watch &lt;file&gt; [--once|--runs N]</code> checks repeatedly with one session cache and reports "how many checked, how many reused" each round. The standard library and unchanged package modules are checked once per session; while waiting it watches every input the load observed (files read, and import candidates that did not exist then but would change resolution if they appeared).</p>
 <h3 id="09-runtime--9112-cross-process-whole-program-cache">9.11.2 Cross-process whole-program cache</h3>
 <p><code>aevia check &lt;file&gt;</code> records, in <code>.aevia/cache/</code> beside the entry, every input the load observed (files read with their text hashes, import candidates that did not exist), the compiler identity (the executable with its size and modification time), the rendering style and the result. A later <code>check</code> whose inputs all still match replays the output and exit code directly; any change (an edit, a new module that would be imported, a rebuilt compiler, a different colour style) is a miss.</p>
@@ -5411,7 +5430,7 @@ aevia --version</code></pre>
 <h2 id="09-runtime--912-tests-and-benchmarks">9.12 Tests and benchmarks</h2>
 <ul>
 <li>Unit tests: <code>test</code> declarations, <code>aevia test [--filter PAT]</code>. Use <code>forall</code> to test propositions over fixed numeric samples (§8.13).</li>
-<li>Doctests: <code>aevia test --doc [FILE…/DIRS…]</code> extracts every fenced block tagged <code>aevia</code> from <code>##</code> comments and compiles each. The first line of a block may be <code>compile_fail</code> (compilation must fail) or <code>compile_fail EXXXX</code> (it must fail and include that code); without a marker the block must compile. Each snippet is its own synthetic module: the declaring module's <code>import</code>/<code>open</code> lines are copied, imports resolve against the declaring file's package and adjacent directories, and the module's own declarations do not enter the snippet implicitly; snippets use in-memory source and write no temporary file; a failing dependency or inherited import does not satisfy an expected compile failure. <code>--locked</code> checks the package of each checked document, not the caller's working directory. Any failure exits 1; no checkable block, or an empty result after filtering, also exits 1. The extractor is <code>aevia-doc::doctest</code>.</li>
+<li>Doctests: <code>aevia test --doc [FILE…/DIRS…]</code> extracts every fenced block tagged <code>aevia</code> from <code>##</code> comments and compiles each. The first line of a block may be <code>compile_fail</code> (compilation must fail) or <code>compile_fail EXXXX</code> (it must fail and include that code); without a marker the block must compile. Each snippet is its own synthetic module: the declaring module's <code>import</code>/<code>open</code> lines are copied, imports resolve against the declaring file's package and adjacent directories, and the module's own declarations do not enter the snippet implicitly; snippets use in-memory source and write no temporary file; a failing dependency or inherited import does not satisfy an expected compile failure. Snippets in the same file share package resolution and reuse checked imports when their compiler inputs match. <code>--locked</code> checks the package of each checked document, not the caller's working directory. Any failure exits 1; no checkable block, or an empty result after filtering, also exits 1. The extractor is <code>aevia-doc::doctest</code>.</li>
 <li>Compile-failure tests: <code>compile_fail("&lt;source&gt;") : String -&gt; Bool</code> compiles a fragment in an isolated environment (no imports, the Prelude only) and is <code>true</code> when it yields at least one error; it does <strong>not</strong> check the error code, which the doctest marker <code>compile_fail EXXXX</code> asserts.</li>
 <li>Golden tests: snapshots of REPL output and error messages.</li>
 <li>Benchmarks: <code>bench</code> declarations; each reports the median, mean and 95% confidence interval of N iterations (default N=100; <code>--iterations</code>/<code>--warmup</code>). <code>--save-baseline FILE</code> writes JSON (<code>format=1</code>, <code>tool</code>/<code>version</code>, <code>profile=debug|release</code>, <code>optimized_ir=true|false</code>, <code>iterations</code>, <code>warmup</code>, and per item <code>median_ns</code>/<code>mean_ns</code>/<code>ci_ns</code>); <code>--compare-baseline FILE --threshold RATIO</code> (default 0.05, may be written <code>5%</code>) compares medians and, above the threshold, reports <code>REGRESSION</code> and exits 1; a profile mismatch exits 2; a workload present on one side only is reported but not counted as a regression. Protocol: compare only release builds, on the same machine, with the same <code>--release</code> IR optimization setting, median of N. Baselines without <code>optimized_ir</code> predate this option and count as unoptimized.</li>
@@ -5830,7 +5849,7 @@ pub fn kernel() -&gt; Rc&lt;Kernel&gt;;   // this thread&#39;s session, created 
 <h3 id="10-backend--1064-jit">10.6.4 JIT</h3>
 <p><code>Term::compile</code> compiles a closed <code>Float</code> expression into a function; Aevia's hot functions take this path. <code>TieredBackend</code> interprets first and compiles in the background; if the JIT fails it falls back to the interpreter with no change of semantics. The default build has <code>features.jit = false</code>, and <code>@jit</code> MUST read <code>Features</code>, otherwise it reports <code>E1001("core.jit")</code>.</p>
 <h3 id="10-backend--1065-devices-and-data-parallel-execution">10.6.5 Devices and data-parallel execution</h3>
-<p>Aevia's <code>Device</code> values identify a requested execution location. <code>device_of(tensor)</code> returns its location. <code>to_device(tensor, device)</code> and <code>on(device, thunk)</code> are IO actions. CPU execution is supported. An unsupported GPU or distributed request reports <code>E1001</code> with capability <code>core.gpu</code> or <code>core.distributed</code> (§13.9.4).</p>
+<p>Aevia's <code>Device</code> values identify a requested execution location. <code>device_of(tensor)</code> returns its location. <code>to_device(tensor, device)</code> and <code>on(device, thunk)</code> are IO actions. Both currently support <code>Cpu</code>. A <code>Gpu</code> or <code>Distributed</code> placement reports <code>E1001</code> with capability <code>core.gpu</code> or <code>core.distributed</code>, respectively (§13.9.4), even when the RSSN host device registry exposes a GPU.</p>
 <p>RSSN's device layer exposes buffers, a numerical kernel IR, CPU reference and parallel executors, and a WGSL backend behind <code>gpu-wgpu</code>. Embedding hosts can use it for batch evaluation, array operations, and fixed-step ensembles. The Aevia interpreter's CPU batch path accepts the pure scalar subset described in §9.6.1. Device enumeration, launch fusion and explicit GPU buffer transfers are RSSN host APIs.</p>
 <p>The RSSN GPU backend represents its emulated F64 buffers as two F32 parts. Programs requiring IEEE F64 results use the CPU backend. A host controls transfers and checks device capabilities before loading a kernel.</p>
 <h2 id="10-backend--107-error-mapping">10.7 Error mapping</h2>
@@ -6720,7 +6739,7 @@ Rssn.Units           : Tensor&lt;<span class="n">1</span>, String&gt;     <span 
 <li><code>Rssn.call</code> is an alias of <code>Rssn.dynamic</code> and looks up only by short name/alias; an ambiguous short name is <code>E1002</code>.</li>
 <li><code>Rssn.call_key</code> "runs without resolving": it takes a name + <code>signature_hash</code> (32 hex characters), which together are the writable form of an <code>OpKey</code>; all zeros means the operator has no declared overload. A key that does not match the current manifest is <code>E1005</code> (regenerate the module); an argument that departs from the pinned signature on the kernel side is <code>UnknownOp</code>, which becomes an error value at the Aevia boundary.</li>
 <li><code>Rssn.resolve_overload</code> exposes the run-time selection for caching and diagnostics: on success it returns <code>"rule_set.name@signature_hash"</code>; both a tie and "no signature accepts" are <code>OpError::Ambiguous</code>. <code>Rssn.overloads</code> returns the rendered signature of every overload.</li>
-<li>Arguments are injected with <code>to_value(x)</code> and results converted back to a static type with <code>from_value(v)</code>. Operators without signatures, plugin operators and experimental entries use <code>dynamic</code>; the standard set currently has no <code>None</code>, so on it <code>dynamic</code> is only the plugin channel.</li>
+<li>Wrap arguments with <code>to_value(x)</code> and recover a static result with <code>from_value&lt;T&gt;(v)</code>. <code>Rssn.dynamic</code> supports standard and plugin operators, including entries without a generated typed wrapper. For a graph result with a derived signature, a <code>Same(index)</code> dimension rule supplies dimensionless evidence when the designated argument is known to be dimensionless. A typed conversion checks that evidence together with the result representation and shape.</li>
 <li><code>type_rep&lt;T&gt;()</code> keeps the concrete type resolved by the checker; it is an opaque value that an ordinary record cannot forge. After the dynamic call, <code>Rssn.typed</code> checks representation, shape and dimensions against that witness; a mismatch or missing evidence returns <code>Err(OpError)</code>. A successful result is still a <code>Value</code>, validated and converted through <code>from_value&lt;T&gt;</code>; a generic not made concrete by a run-time type dictionary cannot produce a <code>TypeRep</code>.</li>
 <li>Higher-order operators use <code>Rssn.call_ho(name, args, fns)</code>; <code>to_callback</code> builds an opaque callback from a checked source closure, with the limits of §8.19. A callback runs synchronously on the original thread and expires when the outer call ends; calls across threads and re-entry in the same scope are rejected, and callback errors come back through <code>OpError</code>; an empty list is just a dynamic call.</li>
 <li>Aevia publishes source extensions through <code>@op</code>, <code>@rule</code> and <code>load_plugin</code> (§13.5.2). <code>Rssn.register</code> and <code>Rssn.register_plugin</code> name the host-only <code>Plugin</code> boundary and report <code>E0302</code> for Aevia values. <code>core.plugin.source</code> marks support for source extensions. <code>core.callback</code> marks support for the restricted callback bridge.</li>
@@ -6771,6 +6790,7 @@ best_types   : (Tensor&lt;<span class="n">1</span>, Signature&gt;, Tensor&lt;<sp
 <ol type="1">
 <li>filter by arity; 2. classify each argument and take the weakest; 3. a unique highest score is selected; 4. a tie at the top is <code>E1002</code>; 5. no match → try <code>Dynamic</code>; still failing → <code>E1003</code>.</li>
 </ol>
+<p>A direct Aevia call to a built-in fixed-zero-argument operator with exactly a derived scalar result and a derived term contract pins the term key when the kernel declares the result dimensionless or dimensionally polymorphic. The call has type <code>Dyn&lt;Real&gt;</code>. For example, <code>Rssn.oo()</code> yields symbolic infinity and <code>Rssn.pi()</code> yields symbolic π. Physical constants with custom dimensions are available through <code>Rssn.dynamic</code> and the typed <code>Units.Constants</code> module. Use <code>Rssn.overloads</code> to inspect both signatures and <code>Rssn.call_key</code> to execute either key. <code>Rssn.resolve_overload</code> scores the two original zero-argument signatures as a tie.</p>
 <p>Three run-time entry points:</p>
 <ul>
 <li><code>Session::call_key(&amp;OpKey, …)</code> <strong>does not re-resolve</strong>: it finds the registration by <code>rule_set</code> + <code>signature_hash</code>, pins the overload, and requires the arguments to be accepted by the pinned signature (<code>overload::score(pinned, args).is_some()</code>), otherwise <code>UnknownOp</code>.</li>
@@ -8000,9 +8020,13 @@ DEDENT         ::= produced by the layout algorithm</code></pre>
 <td><code>W0710</code></td>
 <td>module is imported more than once (<code>aevia lint</code>)</td>
 </tr>
+<tr>
+<td><code>W0711</code></td>
+<td><code>if</code> condition is a Boolean literal, opt-in (<code>aevia lint</code>)</td>
+</tr>
 </tbody>
 </table>
-<p>Note: <code>W0203</code> is reserved (the language has no <code>return</code> or <code>break</code>, so the syntax cannot represent an unreachable statement), and <code>W0501</code> is reserved. <code>W0102</code> and <code>W0701</code>–<code>W0710</code> are emitted by <code>aevia lint</code>; compiler lints and extra lints share <code>[lints]</code> in <code>aevia.toml</code>, <code>-A/-W/-D/-F</code>, and <code>@allow/@warn/@deny/@forbid</code>.</p>
+<p>Note: <code>W0203</code> is reserved (the language has no <code>return</code> or <code>break</code>, so the syntax cannot represent an unreachable statement), and <code>W0501</code> is reserved. <code>W0102</code> and <code>W0701</code>–<code>W0711</code> are emitted by <code>aevia lint</code>; compiler lints and extra lints share <code>[lints]</code> in <code>aevia.toml</code>, <code>-A/-W/-D/-F</code>, and <code>@allow/@warn/@deny/@forbid</code>.</p>
 <h2 id="appendix-b-diagnostics--b13-writing-messages">B.13 Writing messages</h2>
 <ol type="1">
 <li><strong>Speak plainly.</strong> <code>expected Real[L], found Real[T]</code> beats <code>type unification failed</code>.</li>

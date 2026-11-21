@@ -202,9 +202,10 @@ error[E0401]: dimension mismatch
 | `W0708` | 将表达式与其自身进行比较（`aevia lint`） |
 | `W0709` | 冗余的 `if` 表达式（`aevia lint`） |
 | `W0710` | 重复导入同一模块（`aevia lint`） |
+| `W0711` | `if` 条件是布尔字面量，按需启用（`aevia lint`） |
 
 注：`W0203` 为保留码（语言没有 `return`/`break`，语法无法表示不可达语句）；`W0501` 为保留码。
-`W0102` 与 `W0701`–`W0710` 由 `aevia lint` 发射；编译器警告与 lint 检查共同遵循
+`W0102` 与 `W0701`–`W0711` 由 `aevia lint` 发射；编译器警告与 lint 检查共同遵循
 `aevia.toml [lints]`、`-A/-W/-D/-F` 与 `@allow/@warn/@deny/@forbid`。
 
 ## B.13 消息写作规范

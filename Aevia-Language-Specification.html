@@ -4053,6 +4053,7 @@ linsolve     : (Tensor&lt;2, Scalar&lt;ρ,d&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,e
 median    : Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt; -&gt; Scalar&lt;ρ,d&gt;
 centroid  : Tensor&lt;1, Point[d]&gt; -&gt; Point[d]
 quantile  : (Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt;, Scalar&lt;ρ,1&gt;) -&gt; Scalar&lt;ρ,d&gt;
+quantiles : (Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,1&gt;&gt;) -&gt; Tensor&lt;1, Scalar&lt;div_rep(ρ),d&gt;&gt;
 var       : Tensor&lt;n, Scalar&lt;ρ,d&gt;&gt; -&gt; Scalar&lt;div_rep(ρ),d^2&gt;
 var       : (Tensor&lt;n, Scalar&lt;ρ,d&gt;&gt;, Bool) -&gt; Scalar&lt;div_rep(ρ),d^2&gt;   # population
 std       : Tensor&lt;n, Scalar&lt;ρ,d&gt;&gt; -&gt; Scalar&lt;div_rep(ρ),d&gt;
@@ -4062,6 +4063,7 @@ skewness  : Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt; -&gt; Scalar&lt;ρ,1&gt;
 kurtosis  : Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt; -&gt; Scalar&lt;ρ,1&gt;
 histogram : (Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt;, Int) -&gt; { counts: Tensor&lt;1, Int&gt;, edges: Tensor&lt;1, Float[d]&gt; }
 mode      : Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt; -&gt; Scalar&lt;ρ,d&gt;</code></pre>
+<p><code>quantiles(xs, qs)</code> 批量计算 Hyndman–Fan 第 7 型分位数。查询向量 <code>qs</code> 的元素必须无量纲，且均位于 <code>[0, 1]</code>。结果沿用样本量纲，保留查询顺序和重复项。批量查询共用一次样本排序。精确输入使用有理数插值。样本非空且各元素有限时，空查询向量得到空结果。</p>
 <h3 id="08-stdlib--871-分布">8.7.1 分布</h3>
 <p>分布是<strong>名义类型</strong>，不是多参数类型类（多参数类不在语言中，§3.8.1）：</p>
 <pre class="code"><code>type Distribution&lt;d&gt; =
@@ -4097,12 +4099,16 @@ type F               = { df1: Real[1], df2: Real[1] }
 type NegativeBinomial = { r: Real[1], p: Real[1] }
 type Geometric       = { p: Real[1] }
 </code></pre>
-<p>这些声明是 <code>Stats.Distributions</code> 模块的源码（<code>open Stats.Distributions</code> 后 <code>Normal({ mu = 1.7 m, sigma = 0.1 m })</code> 是一个 <code>Distribution&lt;L&gt;</code> 值）。 <code>pdf</code>、<code>cdf</code>、<code>sample</code>、<code>sample_n</code> 是对这个封闭 ADT 的<strong>内建重载</strong>：</p>
-<pre class="code"><code>pdf      : (Distribution&lt;d&gt;, Real[d]) -&gt; Real[1/d]
-cdf      : (Distribution&lt;d&gt;, Real[d]) -&gt; Real[1]
-sample   : Distribution&lt;d&gt; -&gt; IO Real[d]
-sample_n : (Distribution&lt;d&gt;, Int, Option&lt;Int&gt;) -&gt; Tensor&lt;1, Real[d]&gt;</code></pre>
-<p><code>Normal&lt;L&gt;</code> 的 <code>pdf</code> 量纲是 <code>1/L</code>；<code>cdf</code> 无量纲；<code>sample</code> 返回 <code>Real[L]</code>。<code>Weibull</code> 取其 <code>scale</code> 的量纲，<code>Cauchy</code> 取 <code>loc</code>/<code>scale</code> 的量纲；<code>LogNormal</code> 的参数描述无量纲的对数； <code>NegativeBinomial</code> 与 <code>Geometric</code> 数成功前的失败次数，支撑集为 <code>0, 1, ...</code>。十五个构造器共用同一组 <code>pdf</code>、<code>cdf</code>、<code>sample</code>、<code>sample_n</code> 内建。</p>
+<p>这些声明是 <code>Stats.Distributions</code> 模块的源码（<code>open Stats.Distributions</code> 后 <code>Normal({ mu = 1.7 m, sigma = 0.1 m })</code> 是一个 <code>Distribution&lt;L&gt;</code> 值）。 分布运算是对这个封闭 ADT 的<strong>内建重载</strong>：</p>
+<pre class="code"><code>pdf       : (Distribution&lt;d&gt;, Real[d]) -&gt; Real[1/d]
+cdf       : (Distribution&lt;d&gt;, Real[d]) -&gt; Real[1]
+cdf_batch : (Distribution&lt;d&gt;, Tensor&lt;1, Real[d]&gt;) -&gt; Tensor&lt;1, Real[1]&gt;
+dist_quantile : (Distribution&lt;d&gt;, Real[1]) -&gt; Real[d]
+sample    : Distribution&lt;d&gt; -&gt; IO Real[d]
+sample_n  : (Distribution&lt;d&gt;, Int, Option&lt;Int&gt;) -&gt; Tensor&lt;1, Real[d]&gt;</code></pre>
+<p><code>Normal&lt;L&gt;</code> 的 <code>pdf</code> 量纲是 <code>1/L</code>；<code>cdf</code> 无量纲；<code>sample</code> 返回 <code>Real[L]</code>。<code>Weibull</code> 取其 <code>scale</code> 的量纲，<code>Cauchy</code> 取 <code>loc</code>/<code>scale</code> 的量纲；<code>LogNormal</code> 的参数描述无量纲的对数； <code>NegativeBinomial</code> 与 <code>Geometric</code> 数成功前的失败次数，支撑集为 <code>0, 1, ...</code>。十五个构造器均支持上述运算。</p>
+<p><code>cdf_batch(dist, xs)</code> 对每个查询点计算与 <code>cdf</code> 相同的累积概率，保留 <code>xs</code> 的顺序和重复项。查询点必须具有分布的量纲。分布参数有效时，空查询向量返回空结果。无效的分布参数或 NaN 查询点会引发定义域错误。</p>
+<p><code>dist_quantile(dist, p)</code> 返回分布在概率 <code>p</code> 下的分位数，结果量纲与分布相同。离散分布在 <code>0 &lt; p &lt; 1</code> 时返回累积概率至少为 <code>p</code> 的最小支撑点。<code>p = 0</code> 和 <code>p = 1</code> 返回支撑集的下端和上端，端点可以是无穷。<code>p</code> 必须无量纲且在 <code>[0, 1]</code> 内。无效的分布参数、越界概率或 NaN 概率会报告 <code>E0806</code>。</p>
 <p><strong>用户自定义分布不是语言扩展点。</strong> 多参数类已被移除（§3.8.1），而“分布参数 → 量纲”的映射需要类型函数（类似 <code>RateOf</code>），那是另一个设计。用户自定义分布在 §12.8.13 的扩展边界之外； 标准库可以为新的分布形态增加内建构造器，但那是库的封闭集合，不是语言扩展点。</p>
 <h2 id="08-stdlib--88-fft--interpolate">8.8 FFT / Interpolate</h2>
 <pre class="code"><code>fft      : Tensor&lt;1, X[d]&gt; -&gt; Tensor&lt;1, Complex[d]&gt;       # 无归一化；X ∈ {Complex, Float, Int}
@@ -4141,6 +4147,8 @@ rfftfreq : (Int, Float[T]) -&gt; Tensor&lt;1, Float[1/T]&gt;             # n/2 +
 interp1  : (Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,e&gt;&gt;, Scalar&lt;ρ,d&gt;) -&gt; Scalar&lt;ρ,e&gt;
 interp2  : (Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,e&gt;&gt;, Tensor&lt;2, Scalar&lt;ρ,f&gt;&gt;,
             Scalar&lt;ρ,d&gt;, Scalar&lt;ρ,e&gt;) -&gt; Scalar&lt;ρ,f&gt;
+interp2Batch : (Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,e&gt;&gt;, Tensor&lt;2, Scalar&lt;ρ,f&gt;&gt;,
+                Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,e&gt;&gt;) -&gt; Tensor&lt;1, Float[f]&gt;
 spline   : (Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,e&gt;&gt;, Scalar&lt;ρ,d&gt;) -&gt; Scalar&lt;ρ,e&gt;
 polyfit  : (Tensor&lt;1, Scalar&lt;ρ,1&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,e&gt;&gt;, Int) -&gt; Tensor&lt;1, Scalar&lt;ρ,e&gt;&gt;
 polyval  : (Tensor&lt;1, Scalar&lt;ρ,e&gt;&gt;, Scalar&lt;ρ,1&gt;) -&gt; Scalar&lt;ρ,e&gt;
@@ -4157,6 +4165,7 @@ chebyshev_fit : (Tensor&lt;1, Scalar&lt;ρ,1&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,
 <pre class="code"><code>type Norm = | Backward | Forward | Unitary
 type AxisScale = | Linear | Log</code></pre>
 <p><code>polyfit</code> 要求自变量无量纲；带量纲时先除以单位 <code>x/u</code>，系数保持 <code>y</code> 的 量纲。这是量纲系统对 API 的约束：多项式系数 <code>a_i</code> 的量纲是 <code>e/d^i</code>， 不同次幂不同，无法放进同质张量。</p>
+<p><code>interp2</code> 和 <code>interp2Batch</code> 使用严格递增的坐标轴，并把有限的越界坐标限制到网格边界。 <code>table[j][i]</code> 存储 <code>(xs[i], ys[j])</code> 处的采样值。 <code>interp2Batch(xs, ys, table, query_xs, query_ys)</code> 只预处理一次网格。 两个查询张量必须等长，并分别具有对应坐标轴的量纲。返回的 Float 张量保持查询顺序， 每个坐标对对应一个元素，量纲与采样表相同。两个空查询张量返回空张量。 坐标轴为空、采样表形状不符或查询长度不等时报 <code>E0802</code>。 坐标轴仅有一个节点或节点未严格递增，以及任何输入非有限时报 <code>E0806</code>。</p>
 <h2 id="08-stdlib--89-ode">8.9 ODE</h2>
 <pre class="code"><code>type OdeMethod =
     | Rk4 | Dopri5 | Radau | Bdf | Rosenbrock23 | AutoSwitch
@@ -4449,6 +4458,7 @@ solve_heat    : HeatSpec -&gt; Result&lt;Tensor&lt;1, Field&gt;, PdeError&gt;
 solve_wave    : WaveSpec -&gt; Result&lt;Tensor&lt;1, Field&gt;, PdeError&gt;
 solve_advection : AdvectionSpec -&gt; Result&lt;Tensor&lt;1, Field&gt;, PdeError&gt;</code></pre>
 <p><code>Field</code> 是 <code>{ grid: Grid, values: Tensor&lt;n, Float[d]&gt; }</code>。系数和边界条件的 量纲在 <code>Spec</code> 记录中逐字段标注；求解器在运行时检查网格与系数量纲一致。 PDE 的完整类型规则见 <code>Pde</code> 模块文档；当前不把 PDE 规格放进核心类型系统。</p>
+<p>简式二维 <code>solve_heat</code> 从 <code>initial</code> 按行读取 <code>nx * ny</code> 个样本，固定初始场的四边，并返回包含初始时刻和末步的 <code>steps + 1</code> 个快照。<code>method</code> 省略时采用 <code>"explicit"</code>，扩散数 <code>alpha * dt / h^2</code> 不得超过 <code>1/4</code>。设为 <code>"adi"</code> 时选用交替方向隐式法，允许超过显式限制的有限扩散数。隐式步要求扩散率非负、步长为正且二者有限。未知方法或无效隐式参数返回 <code>Err(PdeError)</code>。</p>
 <h3 id="08-stdlib--8101-清单接口的时间自适应">8.10.1 清单接口的时间自适应</h3>
 <p><code>Rssn_numerical_callback.num_pde_*_adaptive</code> 在固定空间离散上比较一整步与两半步，接受所选方法的两半步； 不替换积分器，不做 Richardson 外推。误差用场量纲的正绝对容差和无量纲相对容差缩放；拒绝的试探丢弃。 无终止事件时必须到达精确终点。初始/最小/最大步长、接受/拒绝步预算、单步内核调用与串行回调预算显式给出； 预算耗尽或最小步仍不达标即失败。</p>
 <table>
@@ -4603,9 +4613,14 @@ primes      : Int -&gt; Tensor&lt;1, Int&gt;
 binomial    : (Int, Int) -&gt; Int
 permutations: Int -&gt; Int
 gcd lcm     : (Int, Int) -&gt; Int
+mod_pow     : (Int, Int, Int) -&gt; Int
 polygon_area: Tensor&lt;2, Real[L]&gt; -&gt; Real[L^2]
-distance    : (Tensor&lt;1, Real[L]&gt;, Tensor&lt;1, Real[L]&gt;) -&gt; Real[L]</code></pre>
-<p>这些模块直接映射 rssn 的规则集；完整列表见 <code>aevia doc Math.NumberTheory</code>。</p>
+distance    : (Tensor&lt;1, Real[L]&gt;, Tensor&lt;1, Real[L]&gt;) -&gt; Real[L]
+tetrahedron_volume : Tensor&lt;[4, 3], Real[d]&gt; -&gt; Real[d^3]</code></pre>
+<p><code>mod_pow(base, exponent, modulus)</code> 直接计算 <code>[0, modulus)</code> 内的精确余数，无需展开整个幂。 三个参数都支持任意精度整数，底数可以为负。指数为零时返回 <code>1 mod modulus</code>。 指数为负或模数非正时报告定义域错误 <code>E0806</code>。</p>
+<p><code>polygon_area</code> 接收按边界顺序排列的顶点，每行包含两个相同量纲的坐标。结果非负，量纲为坐标量纲的平方。零至两行的有效矩阵返回零。其他列数报告形状错误 <code>E0802</code>。</p>
+<p><code>tetrahedron_volume</code> 接收四行三列的坐标矩阵，所有坐标具有相同量纲 <code>d</code>。体积非负，量纲为 <code>d^3</code>，与顶点顺序无关。共面或重复顶点的体积为零。形状不符时报告形状错误，坐标或计算所得体积非有限时报告定义域错误。</p>
+<p>运行 <code>aevia doc Math.NumberTheory</code> 查看模块算子。</p>
 <h2 id="08-stdlib--817-physics--simulate">8.17 Physics / Simulate</h2>
 <pre class="code"><code>simulate : (String, Json) -&gt; Result&lt;Json, SimError&gt;
 
@@ -4697,7 +4712,7 @@ Rssn.register_plugin : Plugin -&gt; Result&lt;PluginId, PluginError&gt;   # alia
 <p>固定入口的可达性与限制：</p>
 <ul>
 <li><code>type_rep&lt;T&gt;()</code> 从具体的检查后类型生成不可伪造的 <code>TypeRep</code>；未解析的泛型不能在没有运行时类型字典时反射。<code>Rssn.typed</code> 执行动态调用并用该见证检查返回值；不匹配或证据不足返回 <code>Err(OpError)</code>， 成功结果仍为不透明 <code>Value</code>，需用 <code>from_value&lt;T&gt;</code> 验证并转换。</li>
-<li><code>to_callback(f)</code> 对当前 evaluator 会话中已检查的源码闭包验证具体函数类型，构造不透明的 <code>Callback</code>（别名和已具体化的泛型函数保留此证据；内建函数先包装在源码 lambda 中）。回调桥支持具体数值、 <code>Bool</code>、<code>String</code>、密封宿主类型 <code>NativeAdVar</code> 及由它们递归组成的张量和闭合记录；源码同名类型及其他不透明回调类型仍拒绝。具体量纲、秩和完整已知形状都会校验，空结构张量需要独立的元素类型及量纲证据。各算子可进一步限制签名，例如当前数值求解器使用 <code>Float</code> 标量与向量。 调用在原线程同步执行，句柄在外层调用返回后失效；跨线程、同一作用域重入及回调错误均返回错误；空回调列表等价于动态调用。</li>
+<li><code>to_callback(f)</code> 对当前 evaluator 会话中已检查的源码闭包验证具体函数类型，构造不透明的 <code>Callback</code>（别名和已具体化的泛型函数保留此证据；内建函数先包装在源码 lambda 中）。回调桥支持具体数值、 <code>Bool</code>、<code>String</code>、密封宿主类型 <code>NativeAdVar</code> 及由它们递归组成的张量和闭合记录；源码同名类型及其他不透明回调类型仍拒绝。具体量纲、秩和完整已知形状都会校验，空结构张量需要独立的元素类型及量纲证据。各算子可进一步限制签名，例如当前数值求解器使用 <code>Float</code> 标量与向量。 调用在原线程同步执行，句柄在外层调用返回后失效；跨线程、同一作用域重入及回调错误均返回错误；空回调列表等价于动态调用。 在 <code>Rssn.call_ho</code> 和 <code>Rssn.call_ho_key</code> 中，普通值和回调分别按各自在 manifest 签名中的顺序传入。桥接层按签名将两组参数合并。</li>
 <li><code>Plugin</code> 接口供 RSSN 宿主使用。用 Aevia 值调用 <code>Rssn.register</code> 或 <code>Rssn.register_plugin</code> 时报告 <code>E0302</code>。Aevia 在模块加载时注册 <code>@op</code> 和 <code>@rule</code> 函数。<code>load_plugin(path) : String -&gt; IO (Result&lt;Int, String&gt;)</code> 按 §13.5.2 和 §13.5.3 的条件加载本地源码文件。</li>
 <li><code>core.callback</code> 标记受限回调桥可用，<code>core.plugin.source</code> 标记源码插件可用。生成的高阶绑定保留显式 <code>(values, callbacks)</code> 动态接口；对声明精确、回调和结果结构均可认证的单重载，另生成钉住签名的 typed 别名，在调用时认证回调的具体签名并按实例化结果类型验证返回值；无法证明类型或维度的签名只提供动态入口。例如 <code>Rssn_numerical_callback</code> 的 <code>num_least_squares</code> 别名：参数与残差分别具有量纲 <code>D</code>、<code>E</code>， 残差容差用 <code>E</code>，其余控制量无量纲，结果带 <code>converged</code> 与 <code>status</code>（残差/梯度收敛、预算耗尽、停滞）。</li>
 </ul>
@@ -4805,6 +4820,9 @@ Units
   Astronomy
   CGS
   Natural
+  Planck
+  Atomic
+  Geometrized
   Constants
 Tensor
 LinearAlgebra
@@ -4827,15 +4845,10 @@ Data
 Plot
 Test
 Measurement
-Rssn
-  Dynamic
-  Plugin
 Device
 Physics
   Ising
-  Geodesic
-  Schrodinger
-  ...</code></pre>
+  Geodesic</code></pre>
 <p>标准库的模块在 <code>aevia-std</code> 包中；Prelude 自动导入，其他按需 <code>import</code>。 模块名就是路径：<code>import A.B</code> 解析 <code>A/B.aev</code>（§7），<code>import Math { sqrt }</code> 只引入 <code>sqrt</code>，<code>open Units.SI</code> 把 <code>Units.SI</code> 的导出名放进当前作用域。本地文件优先于嵌入标准库模块。 <code>Units/*</code> 是文档性模块：单位名本来就是 ambient 的 <code>Unit[d]</code> 值，导出数量绑定会遮蔽它们并改变 <code>Tensor / Unit</code> 的语义，因此不导出（§5.3.4）。<code>Sde</code> 模块再导出 §8.9.1 的五个入口并声明选项 ADT；<code>Physics.Ising</code>/<code>Physics.Geodesic</code> 提供 §8.17 的类型化包装器。函数名、<code>Sde</code> 的名义变体构造器与透明类型别名（<code>type X = { … }</code>，如 <code>Physics.Ising</code> 的 <code>Params</code>） 都可经 <code>import { X }</code>/<code>open</code> 引入。</p>
 <p><code>Rssn</code> 是<strong>生成的模块</strong>，不是手写库：构建时从 Kernel Manifest 生成 <code>Rssn.&lt;op&gt;</code> 类型化声明和 <code>Rssn.dynamic</code> 动态入口（§13.2）。<code>Rssn</code> 的 内容随 RSSN 版本变化，Aevia 源码不硬编码算子清单。<code>Sparse</code> 提供 <code>Csr</code>/<code>Csc</code>/<code>Coo</code>/<code>Block</code>/<code>Bcsr</code> 格式标签与 §8.4.1 的稀疏内建函数。布局分派见 §13.9.5。 <code>Device</code> 提供 <code>Cpu</code>/<code>Gpu</code>/<code>Distributed</code> 与 <code>on</code>/<code>to_device</code>（§13.9.4，无 <code>core.gpu</code> 时 <code>E1001</code>）。</p>
 <p>下一章定义运行时：从源码到值，从值到 rssn 项，从 REPL 到 JIT。</p>
@@ -5124,11 +5137,11 @@ Physics
 <h3 id="09-runtime--972-并行求值无共享副本">9.7.2 并行求值：无共享副本</h3>
 <ul>
 <li>纯函数可并行；<code>par_map(f, xs)</code> 的结果顺序确定，<strong>线程数不改变任何结果</strong>。</li>
-<li><strong>无共享副本（replica）设计。</strong> 解释器建立在 <code>Rc</code> 上，把运行时改成 <code>Arc</code> 会让每个程序为少数并行程序付费。 因此每个工作线程持有一个<strong>副本</strong>：宿主安装的 <code>Replica</code> 工厂在该线程上从同一份源码再构建一次解释器（每线程 一次，之后复用）。线程之间交换<strong>可移植值</strong>（<code>Portable</code>）：带量纲与显示单位的数、字符串、张量、记录、变体、 构造器，以及可重建的 Core IR 闭包。工作线程保留构造器特化、变体类型和张量元素类型，包括空张量的类型。</li>
+<li><strong>无共享副本（replica）设计。</strong> 解释器建立在 <code>Rc</code> 上，把运行时改成 <code>Arc</code> 会让每个程序为少数并行程序付费。 因此每个工作线程持有一个<strong>副本</strong>：宿主安装的 <code>Replica</code> 工厂在该线程根据同一份已检查的程序版本初始化解释器（每线程 一次，之后复用）。命令行和库运行入口在一次运行期间共享这份不可变的程序版本。线程之间交换<strong>可移植值</strong>（<code>Portable</code>）：带量纲与显示单位的数、字符串、张量、记录、变体、 构造器，以及可重建的 Core IR 闭包。工作线程保留构造器特化、变体类型和张量元素类型，包括空张量的类型。</li>
 <li><strong>闭包按代码身份 + 捕获数据跨线程。</strong> lambda 是“函数的源码位置 + 捕获值”；位置以<strong>模块身份</strong>（逻辑源码路径 + 所属包）加字节偏移表示（<code>FileId</code> 按加载分配，不可跨线程），副本里由同名模块解析回同一函数。 显式特化的泛型闭包携带已选择的类型和分派依据，接收方根据其模块接口校验。</li>
 <li><strong>保证：并行从不改变值。</strong> 值不能跨线程（符号项可能持有本线程会话句柄、kernel 句柄、IO 动作、带激活期泛型 证据的闭包）、没有副本工厂、<code>--jobs 1</code>，或工作线程失败时，原语回退为顺序求值，顺序重算给出程序本来会给出的 值或错误（含位置与调用栈）；<code>AEVIA_PARALLEL_TRACE=1</code> 打印回退原因。</li>
 <li><strong>确定性。</strong> 映射批大小随工作线程数调整，结果保留输入顺序。<code>par_reduce(f, zero, xs)</code> 要求 <code>f</code> 结合且 <code>zero</code> 为单位元， 按固定 1024 元素块折叠再顺序合并，浮点归约在任何核数及顺序回退中<strong>逐位相同</strong>。</li>
-<li><code>par_map</code>、<code>par_tabulate(n, f)</code>、<code>par_reduce</code> 的工作线程数依次取自 <code>--jobs N</code>、<code>AEVIA_JOBS</code>、 <code>RAYON_NUM_THREADS</code> 或当前进程可用的 CPU 数。每个工作线程有一个内核 <code>Session</code>。嵌套调用语言并行原语时在 当前工作线程顺序执行，该线程上的 RSSN 算子使用外层 Rayon 池。主解释器线程上的 RSSN 使用全局 Rayon 池， 由 <code>RAYON_NUM_THREADS</code> 和主机 CPU 探测决定大小。</li>
+<li><code>par_map</code>、<code>par_tabulate(n, f)</code>、<code>par_reduce</code> 的工作线程上限依次取自 <code>--jobs N</code>、<code>AEVIA_JOBS</code>、 <code>RAYON_NUM_THREADS</code> 或当前进程可用的 CPU 数。线程池按独立映射元素或归约块的数量扩充，直到上限。每个工作线程有一个内核 <code>Session</code>。嵌套调用语言并行原语时在 当前工作线程顺序执行。该线程上的 RSSN 算子与规模足够大的精确分解中的独立消元行更新可使用外层 Rayon 池。 主解释器线程上的 RSSN 使用全局 Rayon 池， 由 <code>RAYON_NUM_THREADS</code> 和主机 CPU 探测决定大小。</li>
 <li><strong>数值内核的并行。</strong> <code>sparse @ dense</code>（含 <code>Bcsr</code>）按固定 256 行块并行，每个输出行由一个工作项顺序累加，逐位等于 顺序内核；<code>sde_ensemble_diag/general</code> 经 <code>par_map</code> 副本执行，成员种子 <code>ensemble_seed(seed, i)</code> 只依赖 <code>(seed, i)</code>。 有意不并行：ODE/SDE 单条路径的时间步、Krylov 迭代、<code>tabulate</code>。含闭包字段的值（<code>ode_solve</code> 的 <code>at</code>）不可跨线程， 回退顺序。</li>
 </ul>
 <h3 id="09-runtime--973-并发任务">9.7.3 并发任务</h3>
@@ -5136,7 +5149,7 @@ Physics
 await : Task a -&gt; IO a
 pure  : a -&gt; IO a</code></pre>
 <ul>
-<li><code>spawn(f)</code> 在工作线程上运行 <code>f()</code>，返回 <code>Task</code>；<code>await(t)</code> 等待并取结果。任务只拥有提交时已启用且工作线程策略允许的权限。 在工作线程启动前取消的任务，之后在 <code>await</code> 处报告 <code>E0812</code>。</li>
+<li><code>spawn(f)</code> 在工作线程上运行 <code>f()</code>，返回 <code>Task</code>；<code>await(t)</code> 等待并取结果。任务只拥有提交时已启用且工作线程策略允许的权限。 若工作线程启动前已取消，或在打包待传回的任务结果时检查到取消，<code>await</code> 报告 <code>E0812</code>。</li>
 <li><strong>任务的控制台输出被缓冲，在 <code>await</code> 时按 await 顺序写出</strong>，所以程序输出确定；文件等其他效应在任务线程上直接 发生。</li>
 <li>thunk 不能跨线程时任务在 <code>spawn</code> 时于本线程执行（同样缓冲），<code>spawn</code> 总是可用。工作线程上的运行期错误在 <code>await</code> 处报告（不重跑）；任务结果须是可移植数据，否则 <code>await</code> 报 <code>E0811</code>；一个任务只能 <code>await</code> 一次 （第二次 <code>E0811</code>）。</li>
 <li><code>do</code> 本身仍顺序执行；并发只经由任务显式出现。</li>
@@ -5275,13 +5288,15 @@ aevia clean [--registry]                           删除 `.aevia/`（`.aevia/re
 aevia lsp [--stdio]                                语言服务器（§9.10）
 aevia debug [--stdio]                             为编辑器提供源码调试适配器
 aevia rssn [--audit] [--emit [--out DIR] [--namespaces]]   审计 Kernel Manifest / 生成 Rssn 模块（第 13 章）
+aevia rssn --describe OPERATOR                     查看当前清单的算子文档、重载和 Aevia 绑定
 aevia login                                        用浏览器把签名密钥绑定到 registry 账户
 aevia publish [--owner HANDLE] [--no-verify] [--dry-run] [选项…]  检查、签名并上传本包
 aevia search &lt;query&gt;      aevia info &lt;owner/name&gt;  搜索 registry / 显示包页面
 aevia yank &lt;owner/name@version&gt; [--undo]           撤回或恢复一个版本
 aevia verify &lt;owner/name@version&gt;                  对照签名校验下载的版本
 aevia docs [owner/name[@version]] [--lang en|zh] [--open]
-aevia docs --section book|architecture|spec|stdlib [--lang en|zh] [--open] [--download]
+aevia docs --section book|architecture|spec|stdlib [--lang en|zh] [--open]
+aevia docs --section book|architecture --download [--lang en|zh] [--open]
 aevia pkg &lt;command&gt;                                注册表客户端的全部命令（`key`、`status`、`lock`、…），转发给 aevia-pkg
 aevia --version</code></pre>
 <p>可用 <code>aevia --help</code>、<code>aevia COMMAND --help</code> 或 <code>aevia help COMMAND</code> 查看用法、选项与示例； 帮助不会加载或修改包。</p>
@@ -5355,14 +5370,17 @@ aevia --version</code></pre>
   &quot;positionEncoding&quot;: &quot;utf-16&quot;,
   &quot;textDocumentSync&quot;: { &quot;openClose&quot;: true, &quot;change&quot;: 2, &quot;save&quot;: true },
   &quot;hoverProvider&quot;: true,
-  &quot;completionProvider&quot;: { &quot;resolveProvider&quot;: false },
+  &quot;completionProvider&quot;: { &quot;resolveProvider&quot;: false, &quot;triggerCharacters&quot;: [&quot;.&quot;] },
   &quot;definitionProvider&quot;: true,
   &quot;typeDefinitionProvider&quot;: true,
   &quot;documentSymbolProvider&quot;: true,
   &quot;documentFormattingProvider&quot;: true,
   &quot;codeActionProvider&quot;: true,
+  &quot;codeLensProvider&quot;: { &quot;resolveProvider&quot;: false },
+  &quot;executeCommandProvider&quot;: { &quot;commands&quot;: [&quot;aevia.runFile&quot;, &quot;aevia.testFile&quot;] },
   &quot;workspaceSymbolProvider&quot;: true,
   &quot;referencesProvider&quot;: true,
+  &quot;documentHighlightProvider&quot;: true,
   &quot;renameProvider&quot;: { &quot;prepareProvider&quot;: true },
   &quot;signatureHelpProvider&quot;: {
     &quot;triggerCharacters&quot;: [&quot;(&quot;, &quot;,&quot;],
@@ -5374,7 +5392,7 @@ aevia --version</code></pre>
       &quot;tokenModifiers&quot;: []
     },
     &quot;full&quot;: true,
-    &quot;range&quot;: false
+    &quot;range&quot;: true
   },
   &quot;experimental&quot;: {
     &quot;multiModuleAnalysis&quot;: {
@@ -5393,7 +5411,8 @@ aevia --version</code></pre>
 <li>包图拓扑排序；锁文件保证可复现（§7.5.2）；构建产物在 <code>.aevia/</code>，不提交；中心 registry 是默认源（协议见 §13.7）， <code>add</code>/<code>publish</code>/<code>yank</code> 走同一协议。</li>
 </ul>
 <h3 id="09-runtime--9111-进程内增量检查">9.11.1 进程内增量检查</h3>
-<p>检查一个模块是它的源码文本、<code>FileId</code>、所导入模块的<strong>已检查接口</strong>、导入绑定、模块身份与检查选项的函数。<code>CheckCache</code> 以 这些输入的结构化指纹为键保存 <code>CheckedModule</code> 与诊断：输入全同的模块不再检查；因为指纹含导入的已检查接口，<strong>不改变接口 的编辑不会重查导入它的模块</strong>（early cutoff）。<code>FileId</code> 是 <code>SourceMap</code> 中的位置，导入图不变时每次加载相同；缓存项只在同一 <code>FileId</code> 下复用，所以复用接口中的 span 都指向被检查时的文本。</p>
+<p>检查一个模块是它的源码文本、<code>FileId</code>、所导入模块的<strong>已检查接口</strong>、导入绑定、模块身份与检查选项的函数。<code>CheckCache</code> 以 这些输入的结构化指纹为键保存 <code>CheckedModule</code> 与诊断：输入全同的模块不再检查；因为指纹含导入的已检查接口，<strong>不改变接口 的编辑不会重查导入它的模块</strong>（early cutoff）。加载器每次只计算一次接口指纹，检查使用方时组合其可见传递导入的接口指纹。 <code>FileId</code> 是 <code>SourceMap</code> 中的位置，导入图不变时每次加载相同；缓存项只在同一 <code>FileId</code> 下复用，所以复用接口中的 span 都指向被检查时的文本。</p>
+<p>磁盘入口及导入源码在文本和 <code>FileId</code> 相同的情况下复用解析语法与语法诊断。每次加载根据当前包根和源码覆盖层解析导入，并保留当前模块图的语法及检查缓存。编辑器在包解析上下文相同时，为保留的每个入口沿用相应的编译器缓存。</p>
 <p><code>aevia watch &lt;file&gt; [--once|--runs N]</code> 用同一会话缓存反复检查，每轮报告“检查了几个、复用了几个”。标准库与未改动的包模块 每会话只检查一次；等待期间监视加载观察到的全部输入（读过的文件，以及当时不存在、出现后会改变解析的导入候选）。</p>
 <h3 id="09-runtime--9112-跨进程整程序缓存">9.11.2 跨进程整程序缓存</h3>
 <p><code>aevia check &lt;file&gt;</code> 在入口旁的 <code>.aevia/cache/</code> 记录本次加载观察到的每个输入（读过的文件及其文本哈希、当时不存在的 导入候选）、编译器身份（可执行文件及其大小/修改时间）、渲染样式与结果。之后的 <code>check</code> 若全部输入仍匹配，就直接重放输出 与退出码；任一变化（编辑、新建了会被导入的模块、重建编译器、换颜色样式）都是未命中。</p>
@@ -5408,7 +5427,7 @@ aevia --version</code></pre>
 <h2 id="09-runtime--912-测试与基准">9.12 测试与基准</h2>
 <ul>
 <li>单元测试：<code>test</code> 声明；<code>aevia test [--filter PAT]</code>。用 <code>forall</code> 在固定数值样本上检验命题（§8.13）。</li>
-<li>Doctest：<code>aevia test --doc [FILE…/DIRS…]</code> 抽取 <code>##</code> 注释中所有标 <code>aevia</code> 的围栏块并逐个编译。块首行可写 <code>compile_fail</code>（要求编译失败）或 <code>compile_fail EXXXX</code>（要求失败且含该代码）；不写标记要求编译通过。每个片段是独立合成 模块：声明模块的 <code>import</code>/<code>open</code> 行被复制，导入按声明文件的包与相邻目录解析，模块自身声明不隐式进入片段；片段使用内存 源码，不写临时文件；依赖或继承导入失败不满足预期编译失败。<code>--locked</code> 检查每个被检查文档所属包而非调用者工作目录。 任何失败退出码为 1；没有可检查的块或过滤后为空也退出 1。抽取器在 <code>aevia-doc::doctest</code>。</li>
+<li>Doctest：<code>aevia test --doc [FILE…/DIRS…]</code> 抽取 <code>##</code> 注释中所有标 <code>aevia</code> 的围栏块并逐个编译。块首行可写 <code>compile_fail</code>（要求编译失败）或 <code>compile_fail EXXXX</code>（要求失败且含该代码）；不写标记要求编译通过。每个片段是独立合成 模块：声明模块的 <code>import</code>/<code>open</code> 行被复制，导入按声明文件的包与相邻目录解析，模块自身声明不隐式进入片段；片段使用内存 源码，不写临时文件；依赖或继承导入失败不满足预期编译失败。同一文件的片段共享包解析结果，编译输入相同的导入模块复用类型检查结果。 <code>--locked</code> 检查每个被检查文档所属包而非调用者工作目录。 任何失败退出码为 1；没有可检查的块或过滤后为空也退出 1。抽取器在 <code>aevia-doc::doctest</code>。</li>
 <li>编译失败测试：<code>compile_fail("&lt;source&gt;") : String -&gt; Bool</code> 在隔离环境（无导入、仅 Prelude）编译片段，至少一个错误时为 <code>true</code>；它<strong>不</strong>检查错误码，错误码由 doctest 的 <code>compile_fail EXXXX</code> 断言。</li>
 <li>黄金测试：REPL 输出/错误信息快照。</li>
 <li>基准：<code>bench</code> 声明；每项报告 N 次迭代的中位数、均值与 95% 置信区间（默认 N=100，<code>--iterations</code>/<code>--warmup</code>）。 <code>--save-baseline FILE</code> 写 JSON（<code>format=1</code>、<code>tool</code>/<code>version</code>、<code>profile=debug|release</code>、<code>optimized_ir=true|false</code>、<code>iterations</code>、<code>warmup</code>、每项 <code>median_ns</code>/<code>mean_ns</code>/<code>ci_ns</code>）；<code>--compare-baseline FILE --threshold RATIO</code>（默认 0.05，可写 <code>5%</code>）按中位数比较， 超出阈值报 <code>REGRESSION</code> 并退出 1；profile 不一致退出 2；只在一侧出现的 workload 被报告但不计为回归。协议：只比较 release 构建、同机、相同的 <code>--release</code> IR 优化设置、median of N。旧基线若没有 <code>optimized_ir</code> 字段，视为未优化。</li>
@@ -5827,7 +5846,7 @@ pub fn kernel() -&gt; Rc&lt;Kernel&gt;;   // 当前线程的会话，首次使�
 <h3 id="10-backend--1064-jit">10.6.4 JIT</h3>
 <p><code>Term::compile</code> 把闭式 <code>Float</code> 表达式编译成函数；Aevia 的热点函数走这条路径。<code>TieredBackend</code> 先解释、后台编译；JIT 失败回退 解释器，不改变语义。默认构建 <code>features.jit = false</code>，<code>@jit</code> 必须读 <code>Features</code>，否则报 <code>E1001("core.jit")</code>。</p>
 <h3 id="10-backend--1065-设备与数据并行执行">10.6.5 设备与数据并行执行</h3>
-<p>Aevia 的 <code>Device</code> 值标识请求的执行位置。<code>device_of(tensor)</code> 返回张量所在位置。 <code>to_device(tensor, device)</code> 和 <code>on(device, thunk)</code> 是 IO 动作。默认支持 CPU 执行。 请求不可用的 GPU 或分布式设备时，报 <code>E1001</code>，其能力名分别为 <code>core.gpu</code> 或 <code>core.distributed</code>（§13.9.4）。</p>
+<p>Aevia 的 <code>Device</code> 值标识请求的执行位置。<code>device_of(tensor)</code> 返回张量所在位置。 <code>to_device(tensor, device)</code> 和 <code>on(device, thunk)</code> 是 IO 动作，目前均支持 <code>Cpu</code>。 请求 <code>Gpu</code> 或 <code>Distributed</code> 放置时，即便 RSSN 宿主设备注册表已发现 GPU， 仍分别以能力名 <code>core.gpu</code> 或 <code>core.distributed</code> 报 <code>E1001</code>（§13.9.4）。</p>
 <p>RSSN 设备层提供缓冲区、数值内核 IR、CPU 参考及并行执行器，以及通过 <code>gpu-wgpu</code> 启用的 WGSL 后端。嵌入宿主可用它批量求值、执行数组运算与固定步长集合仿真。 Aevia 解释器的 CPU 批量路径接受 §9.6.1 所述纯标量子集。设备枚举、启动融合和显式 GPU 缓冲区传输由 RSSN 宿主 API 提供。</p>
 <p>RSSN GPU 后端用两个 F32 分量模拟 F64 缓冲区。要求 IEEE F64 结果的程序使用 CPU 后端。宿主负责传输，并在装入内核前检查设备能力。</p>
 <h2 id="10-backend--107-错误映射">10.7 错误映射</h2>
@@ -6717,7 +6736,7 @@ Rssn.Units           : Tensor&lt;<span class="n">1</span>, String&gt;     <span 
 <li><code>Rssn.call</code> 是 <code>Rssn.dynamic</code> 的别名，只按短名/别名查找；短名歧义报 <code>E1002</code>。</li>
 <li><code>Rssn.call_key</code> “不解析、直接执行”：收 name + <code>signature_hash</code>（32 hex 字符），合起来是 <code>OpKey</code> 的可写形式；全零表示该算子没有声明重载。key 与当前 manifest 不符报 <code>E1005</code>（提示重新生成模块）；kernel 侧参数偏离钉住签名时报 <code>UnknownOp</code>，在 Aevia 边界变成错误值。</li>
 <li><code>Rssn.resolve_overload</code> 暴露运行时选择结果，供缓存/诊断用：成功返回 <code>"rule_set.name@signature_hash"</code>；并列与“没有签名接受”都报 <code>OpError::Ambiguous</code>。<code>Rssn.overloads</code> 返回每条 overload 的渲染签名。</li>
-<li>参数用 <code>to_value(x)</code> 注入，返回值用 <code>from_value(v)</code> 转回静态类型。无签名的算子、插件算子、实验性入口走 <code>dynamic</code>；标准集当前没有 <code>None</code>，所以 <code>dynamic</code> 在标准集上只是插件通道。</li>
+<li>用 <code>to_value(x)</code> 包装参数，再用 <code>from_value&lt;T&gt;(v)</code> 恢复静态类型。<code>Rssn.dynamic</code> 支持标准算子和插件算子，包括未生成类型化包装的入口。若图后端结果使用推导签名，且 <code>Same(index)</code> 指定的参数已知为无量纲，适配器可据此认定结果无量纲。类型化转换同时检查该证据与结果的表示和形状。</li>
 <li><code>type_rep&lt;T&gt;()</code> 保存检查器解析出的具体类型；它是不透明值，普通记录不能伪造。<code>Rssn.typed</code> 执行动态调用后按该见证检查表示、形状及量纲；不匹配或缺少证据返回 <code>Err(OpError)</code>。 成功结果仍是 <code>Value</code>，经 <code>from_value&lt;T&gt;</code> 验证并转换；未经运行时类型字典具体化的泛型不能生成 <code>TypeRep</code>。</li>
 <li>高阶算子用 <code>Rssn.call_ho(name, args, fns)</code>；<code>to_callback</code> 从已检查源码闭包生成不透明回调，限制见 §8.19。回调在原线程同步执行，外层调用结束即失效； 跨线程调用和同作用域重入被拒绝，回调错误经 <code>OpError</code> 传回；空列表就是一次动态调用。</li>
 <li>Aevia 通过 <code>@op</code>、<code>@rule</code> 和 <code>load_plugin</code> 发布源码扩展（§13.5.2）。<code>Rssn.register</code> 与 <code>Rssn.register_plugin</code> 对应仅供宿主使用的 <code>Plugin</code> 接口，传入 Aevia 值时报 <code>E0302</code>。<code>core.plugin.source</code> 表示支持源码扩展，<code>core.callback</code> 表示受限回调桥可用。</li>
@@ -6768,6 +6787,7 @@ best_types   : (Tensor&lt;<span class="n">1</span>, Signature&gt;, Tensor&lt;<sp
 <ol type="1">
 <li>按 arity 过滤；2. 逐参数分类，取最弱；3. 分数最高且唯一 → 选中；4. 并列最高 → <code>E1002</code>；5. 没有匹配 → 尝试 <code>Dynamic</code>；仍失败 → <code>E1003</code>。</li>
 </ol>
+<p>内置固定零参数算子若仅有派生的标量结果和派生的项约定，且内核声明结果无量纲或具有量纲多态性，Aevia 直接调用会固定使用项签名的键，调用类型为 <code>Dyn&lt;Real&gt;</code>。例如，<code>Rssn.oo()</code> 返回符号无穷，<code>Rssn.pi()</code> 返回符号 π。采用自定义量纲规则的物理常量可通过 <code>Rssn.dynamic</code> 或带类型的 <code>Units.Constants</code> 模块访问。用 <code>Rssn.overloads</code> 查看两个签名，也可用 <code>Rssn.call_key</code> 调用任一个键。<code>Rssn.resolve_overload</code> 对两个原始零参数签名的评分相同，报告并列。</p>
 <p>运行时三条入口：</p>
 <ul>
 <li><code>Session::call_key(&amp;OpKey, …)</code> <strong>不重新解析</strong>，按 <code>rule_set</code> + <code>signature_hash</code> 找注册，钉死重载，并要求参数能被钉住签名接受（<code>overload::score(pinned, args).is_some()</code>），否则 <code>UnknownOp</code>。</li>
@@ -7997,9 +8017,13 @@ DEDENT         ::= 由布局算法产生</code></pre>
 <td><code>W0710</code></td>
 <td>重复导入同一模块（<code>aevia lint</code>）</td>
 </tr>
+<tr>
+<td><code>W0711</code></td>
+<td><code>if</code> 条件是布尔字面量，按需启用（<code>aevia lint</code>）</td>
+</tr>
 </tbody>
 </table>
-<p>注：<code>W0203</code> 为保留码（语言没有 <code>return</code>/<code>break</code>，语法无法表示不可达语句）；<code>W0501</code> 为保留码。 <code>W0102</code> 与 <code>W0701</code>–<code>W0710</code> 由 <code>aevia lint</code> 发射；编译器警告与 lint 检查共同遵循 <code>aevia.toml [lints]</code>、<code>-A/-W/-D/-F</code> 与 <code>@allow/@warn/@deny/@forbid</code>。</p>
+<p>注：<code>W0203</code> 为保留码（语言没有 <code>return</code>/<code>break</code>，语法无法表示不可达语句）；<code>W0501</code> 为保留码。 <code>W0102</code> 与 <code>W0701</code>–<code>W0711</code> 由 <code>aevia lint</code> 发射；编译器警告与 lint 检查共同遵循 <code>aevia.toml [lints]</code>、<code>-A/-W/-D/-F</code> 与 <code>@allow/@warn/@deny/@forbid</code>。</p>
 <h2 id="appendix-b-diagnostics--b13-消息写作规范">B.13 消息写作规范</h2>
 <ol type="1">
 <li><strong>说人话。</strong> <code>expected Real[L], found Real[T]</code> 好于 <code>type unification failed</code>。</li>

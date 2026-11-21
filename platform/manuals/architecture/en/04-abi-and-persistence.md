@@ -8,6 +8,12 @@ An operator can be selected by name or by an `OpKey` that pins its signature. Ge
 
 Dimensional rules express relationships between the arguments and the result. Strict checks reject inconsistent dimensions. Advisory checks retain an answer and attach a diagnostic. A callback is scoped to the calling host and carries its checked signature. Callback errors should survive the boundary with their messages intact.
 
+For a graph-backed operator with a derived signature, the bridge consults the manifest and the witnesses from the call. A `Same(index)` rule can establish a dimensionless graph result when the designated input has dimensionless evidence. Native signatures can supply dimensioned result evidence directly. Both paths validate that evidence when converting to a static type.
+
+A pinned native call can borrow a large contiguous `Float` tensor from the interpreter and construct the RSSN tensor directly. Borrowed inputs use the same dimension witness, capability checks and pinned overload as other inputs.
+
+An exact native `Option` tensor carries its declared element schema even when empty. Populated tensors also carry each observed tag and its payload evidence. Both the generated binding and `from_value` use that evidence to check the requested type.
+
 ## Binary and text formats
 
 RSSN uses native bincode-next encoding for its binary manifest and compute records. The binary layout of existing public records is checked against the previous Serde encoder. JSON remains the self-describing text form. The deterministic CBOR interface retains the Serde data model and field names. C stores term handles as integers and returns allocated text or byte buffers through explicit ownership functions.
@@ -42,7 +48,9 @@ A manifest hash identifies one installation of rule sets and operator tables. It
 
 ## A cache hit step by step
 
-The driver hashes the source, resolved import bindings, capabilities and compiler identity, together with the digest of each dependency interface in the closure. The `.aevi` envelope carries a format version, key, length and body checksum. Native bincode-next encoding checks the body schema. Nominal declarations are stored with symbolic keys and are interned in the receiving process before the decoder resolves references. An entry with a truncated body or incompatible schema becomes a cache miss. A changed implementation can leave its public interface digest intact, allowing consumers to keep their checked results.
+The driver hashes the source, resolved import bindings, capabilities and compiler identity, together with the digest of each dependency interface in the closure. The `.aevi` envelope carries a format version, key, length and body checksum. Native bincode-next encoding checks the body schema. The decoder maps the symbolic keys of nominal declarations to process-local IDs before it resolves references. An entry with a truncated body or incompatible schema becomes a cache miss. A changed implementation can leave its public interface digest intact, allowing consumers to keep their checked results.
+
+The nominal registry reuses the earliest finalized declaration with the same defining module, name and schema. A large registry remembers interface lookup candidates by module and name. Repeated lookups for opaque host types can share a read lock.
 
 ## Source map
 

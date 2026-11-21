@@ -166,7 +166,7 @@ Rssn.Units           : Tensor<1, String>     # 单位名；单位值在生成的
   `E1005`（提示重新生成模块）；kernel 侧参数偏离钉住签名时报 `UnknownOp`，在 Aevia 边界变成错误值。
 - `Rssn.resolve_overload` 暴露运行时选择结果，供缓存/诊断用：成功返回 `"rule_set.name@signature_hash"`；并列与“没有签名接受”都报 `OpError::Ambiguous`。`Rssn.overloads` 返回每条
   overload 的渲染签名。
-- 参数用 `to_value(x)` 注入，返回值用 `from_value(v)` 转回静态类型。无签名的算子、插件算子、实验性入口走 `dynamic`；标准集当前没有 `None`，所以 `dynamic` 在标准集上只是插件通道。
+- 用 `to_value(x)` 包装参数，再用 `from_value<T>(v)` 恢复静态类型。`Rssn.dynamic` 支持标准算子和插件算子，包括未生成类型化包装的入口。若图后端结果使用推导签名，且 `Same(index)` 指定的参数已知为无量纲，适配器可据此认定结果无量纲。类型化转换同时检查该证据与结果的表示和形状。
 - `type_rep<T>()` 保存检查器解析出的具体类型；它是不透明值，普通记录不能伪造。`Rssn.typed` 执行动态调用后按该见证检查表示、形状及量纲；不匹配或缺少证据返回 `Err(OpError)`。
   成功结果仍是 `Value`，经 `from_value<T>` 验证并转换；未经运行时类型字典具体化的泛型不能生成 `TypeRep`。
 - 高阶算子用 `Rssn.call_ho(name, args, fns)`；`to_callback` 从已检查源码闭包生成不透明回调，限制见 §8.19。回调在原线程同步执行，外层调用结束即失效；
@@ -232,6 +232,8 @@ type Best    = | None | Unique(Int) | Ambiguous(Tensor<1, Int>)
 Aevia 自己的静态解析规则（与 rssn 的格同构，供 Aevia 自己的重载/插件使用）：
 
 1. 按 arity 过滤；2. 逐参数分类，取最弱；3. 分数最高且唯一 → 选中；4. 并列最高 → `E1002`；5. 没有匹配 → 尝试 `Dynamic`；仍失败 → `E1003`。
+
+内置固定零参数算子若仅有派生的标量结果和派生的项约定，且内核声明结果无量纲或具有量纲多态性，Aevia 直接调用会固定使用项签名的键，调用类型为 `Dyn<Real>`。例如，`Rssn.oo()` 返回符号无穷，`Rssn.pi()` 返回符号 π。采用自定义量纲规则的物理常量可通过 `Rssn.dynamic` 或带类型的 `Units.Constants` 模块访问。用 `Rssn.overloads` 查看两个签名，也可用 `Rssn.call_key` 调用任一个键。`Rssn.resolve_overload` 对两个原始零参数签名的评分相同，报告并列。
 
 运行时三条入口：
 

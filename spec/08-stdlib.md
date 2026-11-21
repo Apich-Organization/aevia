@@ -684,6 +684,7 @@ mean      : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>
 median    : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,d>
 centroid  : Tensor<1, Point[d]> -> Point[d]
 quantile  : (Tensor<1, Scalar<ρ,d>>, Scalar<ρ,1>) -> Scalar<ρ,d>
+quantiles : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,1>>) -> Tensor<1, Scalar<div_rep(ρ),d>>
 var       : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d^2>
 var       : (Tensor<n, Scalar<ρ,d>>, Bool) -> Scalar<div_rep(ρ),d^2>   # population
 std       : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>
@@ -694,6 +695,8 @@ kurtosis  : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,1>
 histogram : (Tensor<1, Scalar<ρ,d>>, Int) -> { counts: Tensor<1, Int>, edges: Tensor<1, Float[d]> }
 mode      : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,d>
 ```
+
+`quantiles(xs, qs)` 批量计算 Hyndman–Fan 第 7 型分位数。查询向量 `qs` 的元素必须无量纲，且均位于 `[0, 1]`。结果沿用样本量纲，保留查询顺序和重复项。批量查询共用一次样本排序。精确输入使用有理数插值。样本非空且各元素有限时，空查询向量得到空结果。
 
 ### 8.7.1 分布
 
@@ -737,17 +740,23 @@ type Geometric       = { p: Real[1] }
 
 这些声明是 `Stats.Distributions` 模块的源码（`open Stats.Distributions` 后
 `Normal({ mu = 1.7 m, sigma = 0.1 m })` 是一个 `Distribution<L>` 值）。
-`pdf`、`cdf`、`sample`、`sample_n` 是对这个封闭 ADT 的**内建重载**：
+分布运算是对这个封闭 ADT 的**内建重载**：
 
 ```
-pdf      : (Distribution<d>, Real[d]) -> Real[1/d]
-cdf      : (Distribution<d>, Real[d]) -> Real[1]
-sample   : Distribution<d> -> IO Real[d]
-sample_n : (Distribution<d>, Int, Option<Int>) -> Tensor<1, Real[d]>
+pdf       : (Distribution<d>, Real[d]) -> Real[1/d]
+cdf       : (Distribution<d>, Real[d]) -> Real[1]
+cdf_batch : (Distribution<d>, Tensor<1, Real[d]>) -> Tensor<1, Real[1]>
+dist_quantile : (Distribution<d>, Real[1]) -> Real[d]
+sample    : Distribution<d> -> IO Real[d]
+sample_n  : (Distribution<d>, Int, Option<Int>) -> Tensor<1, Real[d]>
 ```
 
 `Normal<L>` 的 `pdf` 量纲是 `1/L`；`cdf` 无量纲；`sample` 返回 `Real[L]`。`Weibull` 取其 `scale` 的量纲，`Cauchy` 取 `loc`/`scale` 的量纲；`LogNormal` 的参数描述无量纲的对数；
-`NegativeBinomial` 与 `Geometric` 数成功前的失败次数，支撑集为 `0, 1, ...`。十五个构造器共用同一组 `pdf`、`cdf`、`sample`、`sample_n` 内建。
+`NegativeBinomial` 与 `Geometric` 数成功前的失败次数，支撑集为 `0, 1, ...`。十五个构造器均支持上述运算。
+
+`cdf_batch(dist, xs)` 对每个查询点计算与 `cdf` 相同的累积概率，保留 `xs` 的顺序和重复项。查询点必须具有分布的量纲。分布参数有效时，空查询向量返回空结果。无效的分布参数或 NaN 查询点会引发定义域错误。
+
+`dist_quantile(dist, p)` 返回分布在概率 `p` 下的分位数，结果量纲与分布相同。离散分布在 `0 < p < 1` 时返回累积概率至少为 `p` 的最小支撑点。`p = 0` 和 `p = 1` 返回支撑集的下端和上端，端点可以是无穷。`p` 必须无量纲且在 `[0, 1]` 内。无效的分布参数、越界概率或 NaN 概率会报告 `E0806`。
 
 **用户自定义分布不是语言扩展点。** 多参数类已被移除（§3.8.1），而“分布参数 → 量纲”的映射需要类型函数（类似 `RateOf`），那是另一个设计。用户自定义分布在 §12.8.13 的扩展边界之外；
 标准库可以为新的分布形态增加内建构造器，但那是库的封闭集合，不是语言扩展点。
@@ -791,6 +800,8 @@ rfftfreq : (Int, Float[T]) -> Tensor<1, Float[1/T]>             # n/2 + 1 个非
 interp1  : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Scalar<ρ,d>) -> Scalar<ρ,e>
 interp2  : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<2, Scalar<ρ,f>>,
             Scalar<ρ,d>, Scalar<ρ,e>) -> Scalar<ρ,f>
+interp2Batch : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<2, Scalar<ρ,f>>,
+                Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Tensor<1, Float[f]>
 spline   : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Scalar<ρ,d>) -> Scalar<ρ,e>
 polyfit  : (Tensor<1, Scalar<ρ,1>>, Tensor<1, Scalar<ρ,e>>, Int) -> Tensor<1, Scalar<ρ,e>>
 polyval  : (Tensor<1, Scalar<ρ,e>>, Scalar<ρ,1>) -> Scalar<ρ,e>
@@ -819,6 +830,14 @@ type AxisScale = | Linear | Log
 `polyfit` 要求自变量无量纲；带量纲时先除以单位 `x/u`，系数保持 `y` 的
 量纲。这是量纲系统对 API 的约束：多项式系数 `a_i` 的量纲是 `e/d^i`，
 不同次幂不同，无法放进同质张量。
+
+`interp2` 和 `interp2Batch` 使用严格递增的坐标轴，并把有限的越界坐标限制到网格边界。
+`table[j][i]` 存储 `(xs[i], ys[j])` 处的采样值。
+`interp2Batch(xs, ys, table, query_xs, query_ys)` 只预处理一次网格。
+两个查询张量必须等长，并分别具有对应坐标轴的量纲。返回的 Float 张量保持查询顺序，
+每个坐标对对应一个元素，量纲与采样表相同。两个空查询张量返回空张量。
+坐标轴为空、采样表形状不符或查询长度不等时报 `E0802`。
+坐标轴仅有一个节点或节点未严格递增，以及任何输入非有限时报 `E0806`。
 
 ## 8.9 ODE
 
@@ -1216,6 +1235,8 @@ solve_advection : AdvectionSpec -> Result<Tensor<1, Field>, PdeError>
 量纲在 `Spec` 记录中逐字段标注；求解器在运行时检查网格与系数量纲一致。
 PDE 的完整类型规则见 `Pde` 模块文档；当前不把 PDE 规格放进核心类型系统。
 
+简式二维 `solve_heat` 从 `initial` 按行读取 `nx * ny` 个样本，固定初始场的四边，并返回包含初始时刻和末步的 `steps + 1` 个快照。`method` 省略时采用 `"explicit"`，扩散数 `alpha * dt / h^2` 不得超过 `1/4`。设为 `"adi"` 时选用交替方向隐式法，允许超过显式限制的有限扩散数。隐式步要求扩散率非负、步长为正且二者有限。未知方法或无效隐式参数返回 `Err(PdeError)`。
+
 ### 8.10.1 清单接口的时间自适应
 
 `Rssn_numerical_callback.num_pde_*_adaptive` 在固定空间离散上比较一整步与两半步，接受所选方法的两半步；
@@ -1391,11 +1412,21 @@ primes      : Int -> Tensor<1, Int>
 binomial    : (Int, Int) -> Int
 permutations: Int -> Int
 gcd lcm     : (Int, Int) -> Int
+mod_pow     : (Int, Int, Int) -> Int
 polygon_area: Tensor<2, Real[L]> -> Real[L^2]
 distance    : (Tensor<1, Real[L]>, Tensor<1, Real[L]>) -> Real[L]
+tetrahedron_volume : Tensor<[4, 3], Real[d]> -> Real[d^3]
 ```
 
-这些模块直接映射 rssn 的规则集；完整列表见 `aevia doc Math.NumberTheory`。
+`mod_pow(base, exponent, modulus)` 直接计算 `[0, modulus)` 内的精确余数，无需展开整个幂。
+三个参数都支持任意精度整数，底数可以为负。指数为零时返回 `1 mod modulus`。
+指数为负或模数非正时报告定义域错误 `E0806`。
+
+`polygon_area` 接收按边界顺序排列的顶点，每行包含两个相同量纲的坐标。结果非负，量纲为坐标量纲的平方。零至两行的有效矩阵返回零。其他列数报告形状错误 `E0802`。
+
+`tetrahedron_volume` 接收四行三列的坐标矩阵，所有坐标具有相同量纲 `d`。体积非负，量纲为 `d^3`，与顶点顺序无关。共面或重复顶点的体积为零。形状不符时报告形状错误，坐标或计算所得体积非有限时报告定义域错误。
+
+运行 `aevia doc Math.NumberTheory` 查看模块算子。
 
 ## 8.17 Physics / Simulate
 
@@ -1516,6 +1547,7 @@ Rssn.register_plugin : Plugin -> Result<PluginId, PluginError>   # alias
 - `to_callback(f)` 对当前 evaluator 会话中已检查的源码闭包验证具体函数类型，构造不透明的 `Callback`（别名和已具体化的泛型函数保留此证据；内建函数先包装在源码 lambda 中）。回调桥支持具体数值、
   `Bool`、`String`、密封宿主类型 `NativeAdVar` 及由它们递归组成的张量和闭合记录；源码同名类型及其他不透明回调类型仍拒绝。具体量纲、秩和完整已知形状都会校验，空结构张量需要独立的元素类型及量纲证据。各算子可进一步限制签名，例如当前数值求解器使用 `Float` 标量与向量。
   调用在原线程同步执行，句柄在外层调用返回后失效；跨线程、同一作用域重入及回调错误均返回错误；空回调列表等价于动态调用。
+  在 `Rssn.call_ho` 和 `Rssn.call_ho_key` 中，普通值和回调分别按各自在 manifest 签名中的顺序传入。桥接层按签名将两组参数合并。
 - `Plugin` 接口供 RSSN 宿主使用。用 Aevia 值调用 `Rssn.register` 或 `Rssn.register_plugin` 时报告 `E0302`。Aevia 在模块加载时注册 `@op` 和 `@rule` 函数。`load_plugin(path) : String -> IO (Result<Int, String>)` 按 §13.5.2 和 §13.5.3 的条件加载本地源码文件。
 - `core.callback` 标记受限回调桥可用，`core.plugin.source` 标记源码插件可用。生成的高阶绑定保留显式 `(values, callbacks)` 动态接口；对声明精确、回调和结果结构均可认证的单重载，另生成钉住签名的 typed
   别名，在调用时认证回调的具体签名并按实例化结果类型验证返回值；无法证明类型或维度的签名只提供动态入口。例如 `Rssn_numerical_callback` 的 `num_least_squares` 别名：参数与残差分别具有量纲 `D`、`E`，
@@ -1597,6 +1629,9 @@ Units
   Astronomy
   CGS
   Natural
+  Planck
+  Atomic
+  Geometrized
   Constants
 Tensor
 LinearAlgebra
@@ -1619,15 +1654,10 @@ Data
 Plot
 Test
 Measurement
-Rssn
-  Dynamic
-  Plugin
 Device
 Physics
   Ising
   Geodesic
-  Schrodinger
-  ...
 ```
 
 标准库的模块在 `aevia-std` 包中；Prelude 自动导入，其他按需 `import`。

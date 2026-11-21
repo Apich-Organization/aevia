@@ -297,8 +297,8 @@ RSSN 拥有数值算法，包括精确整数/有理数、复数、张量收缩�
 
 - 纯函数可并行；`par_map(f, xs)` 的结果顺序确定，**线程数不改变任何结果**。
 - **无共享副本（replica）设计。** 解释器建立在 `Rc` 上，把运行时改成 `Arc` 会让每个程序为少数并行程序付费。
-  因此每个工作线程持有一个**副本**：宿主安装的 `Replica` 工厂在该线程上从同一份源码再构建一次解释器（每线程
-  一次，之后复用）。线程之间交换**可移植值**（`Portable`）：带量纲与显示单位的数、字符串、张量、记录、变体、
+  因此每个工作线程持有一个**副本**：宿主安装的 `Replica` 工厂在该线程根据同一份已检查的程序版本初始化解释器（每线程
+  一次，之后复用）。命令行和库运行入口在一次运行期间共享这份不可变的程序版本。线程之间交换**可移植值**（`Portable`）：带量纲与显示单位的数、字符串、张量、记录、变体、
   构造器，以及可重建的 Core IR 闭包。工作线程保留构造器特化、变体类型和张量元素类型，包括空张量的类型。
 - **闭包按代码身份 + 捕获数据跨线程。** lambda 是“函数的源码位置 + 捕获值”；位置以**模块身份**（逻辑源码路径 +
   所属包）加字节偏移表示（`FileId` 按加载分配，不可跨线程），副本里由同名模块解析回同一函数。
@@ -308,9 +308,10 @@ RSSN 拥有数值算法，包括精确整数/有理数、复数、张量收缩�
   值或错误（含位置与调用栈）；`AEVIA_PARALLEL_TRACE=1` 打印回退原因。
 - **确定性。** 映射批大小随工作线程数调整，结果保留输入顺序。`par_reduce(f, zero, xs)` 要求 `f` 结合且 `zero` 为单位元，
   按固定 1024 元素块折叠再顺序合并，浮点归约在任何核数及顺序回退中**逐位相同**。
-- `par_map`、`par_tabulate(n, f)`、`par_reduce` 的工作线程数依次取自 `--jobs N`、`AEVIA_JOBS`、
-  `RAYON_NUM_THREADS` 或当前进程可用的 CPU 数。每个工作线程有一个内核 `Session`。嵌套调用语言并行原语时在
-  当前工作线程顺序执行，该线程上的 RSSN 算子使用外层 Rayon 池。主解释器线程上的 RSSN 使用全局 Rayon 池，
+- `par_map`、`par_tabulate(n, f)`、`par_reduce` 的工作线程上限依次取自 `--jobs N`、`AEVIA_JOBS`、
+  `RAYON_NUM_THREADS` 或当前进程可用的 CPU 数。线程池按独立映射元素或归约块的数量扩充，直到上限。每个工作线程有一个内核 `Session`。嵌套调用语言并行原语时在
+  当前工作线程顺序执行。该线程上的 RSSN 算子与规模足够大的精确分解中的独立消元行更新可使用外层 Rayon 池。
+  主解释器线程上的 RSSN 使用全局 Rayon 池，
   由 `RAYON_NUM_THREADS` 和主机 CPU 探测决定大小。
 - **数值内核的并行。** `sparse @ dense`（含 `Bcsr`）按固定 256 行块并行，每个输出行由一个工作项顺序累加，逐位等于
   顺序内核；`sde_ensemble_diag/general` 经 `par_map` 副本执行，成员种子 `ensemble_seed(seed, i)` 只依赖 `(seed, i)`。
@@ -326,7 +327,7 @@ pure  : a -> IO a
 ```
 
 - `spawn(f)` 在工作线程上运行 `f()`，返回 `Task`；`await(t)` 等待并取结果。任务只拥有提交时已启用且工作线程策略允许的权限。
-  在工作线程启动前取消的任务，之后在 `await` 处报告 `E0812`。
+  若工作线程启动前已取消，或在打包待传回的任务结果时检查到取消，`await` 报告 `E0812`。
 - **任务的控制台输出被缓冲，在 `await` 时按 await 顺序写出**，所以程序输出确定；文件等其他效应在任务线程上直接
   发生。
 - thunk 不能跨线程时任务在 `spawn` 时于本线程执行（同样缓冲），`spawn` 总是可用。工作线程上的运行期错误在
@@ -433,13 +434,15 @@ aevia clean [--registry]                           删除 `.aevia/`（`.aevia/re
 aevia lsp [--stdio]                                语言服务器（§9.10）
 aevia debug [--stdio]                             为编辑器提供源码调试适配器
 aevia rssn [--audit] [--emit [--out DIR] [--namespaces]]   审计 Kernel Manifest / 生成 Rssn 模块（第 13 章）
+aevia rssn --describe OPERATOR                     查看当前清单的算子文档、重载和 Aevia 绑定
 aevia login                                        用浏览器把签名密钥绑定到 registry 账户
 aevia publish [--owner HANDLE] [--no-verify] [--dry-run] [选项…]  检查、签名并上传本包
 aevia search <query>      aevia info <owner/name>  搜索 registry / 显示包页面
 aevia yank <owner/name@version> [--undo]           撤回或恢复一个版本
 aevia verify <owner/name@version>                  对照签名校验下载的版本
 aevia docs [owner/name[@version]] [--lang en|zh] [--open]
-aevia docs --section book|architecture|spec|stdlib [--lang en|zh] [--open] [--download]
+aevia docs --section book|architecture|spec|stdlib [--lang en|zh] [--open]
+aevia docs --section book|architecture --download [--lang en|zh] [--open]
 aevia pkg <command>                                注册表客户端的全部命令（`key`、`status`、`lock`、…），转发给 aevia-pkg
 aevia --version
 ```
@@ -513,14 +516,17 @@ LSP 复用 `aevia-syntax`/`aevia-types`，不启动运行时。文件已保存�
   "positionEncoding": "utf-16",
   "textDocumentSync": { "openClose": true, "change": 2, "save": true },
   "hoverProvider": true,
-  "completionProvider": { "resolveProvider": false },
+  "completionProvider": { "resolveProvider": false, "triggerCharacters": ["."] },
   "definitionProvider": true,
   "typeDefinitionProvider": true,
   "documentSymbolProvider": true,
   "documentFormattingProvider": true,
   "codeActionProvider": true,
+  "codeLensProvider": { "resolveProvider": false },
+  "executeCommandProvider": { "commands": ["aevia.runFile", "aevia.testFile"] },
   "workspaceSymbolProvider": true,
   "referencesProvider": true,
+  "documentHighlightProvider": true,
   "renameProvider": { "prepareProvider": true },
   "signatureHelpProvider": {
     "triggerCharacters": ["(", ","],
@@ -532,7 +538,7 @@ LSP 复用 `aevia-syntax`/`aevia-types`，不启动运行时。文件已保存�
       "tokenModifiers": []
     },
     "full": true,
-    "range": false
+    "range": true
   },
   "experimental": {
     "multiModuleAnalysis": {
@@ -558,8 +564,11 @@ LSP 复用 `aevia-syntax`/`aevia-types`，不启动运行时。文件已保存�
 
 检查一个模块是它的源码文本、`FileId`、所导入模块的**已检查接口**、导入绑定、模块身份与检查选项的函数。`CheckCache` 以
 这些输入的结构化指纹为键保存 `CheckedModule` 与诊断：输入全同的模块不再检查；因为指纹含导入的已检查接口，**不改变接口
-的编辑不会重查导入它的模块**（early cutoff）。`FileId` 是 `SourceMap` 中的位置，导入图不变时每次加载相同；缓存项只在同一
+的编辑不会重查导入它的模块**（early cutoff）。加载器每次只计算一次接口指纹，检查使用方时组合其可见传递导入的接口指纹。
+`FileId` 是 `SourceMap` 中的位置，导入图不变时每次加载相同；缓存项只在同一
 `FileId` 下复用，所以复用接口中的 span 都指向被检查时的文本。
+
+磁盘入口及导入源码在文本和 `FileId` 相同的情况下复用解析语法与语法诊断。每次加载根据当前包根和源码覆盖层解析导入，并保留当前模块图的语法及检查缓存。编辑器在包解析上下文相同时，为保留的每个入口沿用相应的编译器缓存。
 
 `aevia watch <file> [--once|--runs N]` 用同一会话缓存反复检查，每轮报告“检查了几个、复用了几个”。标准库与未改动的包模块
 每会话只检查一次；等待期间监视加载观察到的全部输入（读过的文件，以及当时不存在、出现后会改变解析的导入候选）。
@@ -598,7 +607,8 @@ CLI 的 `check` 和 `run` 使用此缓存，按模块名保留至多四个修订
 - Doctest：`aevia test --doc [FILE…/DIRS…]` 抽取 `##` 注释中所有标 `aevia` 的围栏块并逐个编译。块首行可写
   `compile_fail`（要求编译失败）或 `compile_fail EXXXX`（要求失败且含该代码）；不写标记要求编译通过。每个片段是独立合成
   模块：声明模块的 `import`/`open` 行被复制，导入按声明文件的包与相邻目录解析，模块自身声明不隐式进入片段；片段使用内存
-  源码，不写临时文件；依赖或继承导入失败不满足预期编译失败。`--locked` 检查每个被检查文档所属包而非调用者工作目录。
+  源码，不写临时文件；依赖或继承导入失败不满足预期编译失败。同一文件的片段共享包解析结果，编译输入相同的导入模块复用类型检查结果。
+  `--locked` 检查每个被检查文档所属包而非调用者工作目录。
   任何失败退出码为 1；没有可检查的块或过滤后为空也退出 1。抽取器在 `aevia-doc::doctest`。
 - 编译失败测试：`compile_fail("<source>") : String -> Bool` 在隔离环境（无导入、仅 Prelude）编译片段，至少一个错误时为
   `true`；它**不**检查错误码，错误码由 doctest 的 `compile_fail EXXXX` 断言。

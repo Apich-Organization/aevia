@@ -210,9 +210,10 @@ message is whatever the built-in states.
 | `W0708` | comparing an expression to itself (`aevia lint`) |
 | `W0709` | redundant `if` expression (`aevia lint`) |
 | `W0710` | module is imported more than once (`aevia lint`) |
+| `W0711` | `if` condition is a Boolean literal, opt-in (`aevia lint`) |
 
 Note: `W0203` is reserved (the language has no `return` or `break`, so the syntax cannot represent an
-unreachable statement), and `W0501` is reserved. `W0102` and `W0701`–`W0710` are
+unreachable statement), and `W0501` is reserved. `W0102` and `W0701`–`W0711` are
 emitted by `aevia lint`; compiler lints and extra lints share `[lints]` in
 `aevia.toml`, `-A/-W/-D/-F`, and `@allow/@warn/@deny/@forbid`.
 

@@ -268,8 +268,9 @@ A `Term<'s>` is borrowed only during a `compute` call and converted to a `u32` i
 
 Aevia's `Device` values identify a requested execution location. `device_of(tensor)`
 returns its location. `to_device(tensor, device)` and `on(device, thunk)` are IO
-actions. CPU execution is supported. An unsupported GPU or distributed request reports
-`E1001` with capability `core.gpu` or `core.distributed` (§13.9.4).
+actions. Both currently support `Cpu`. A `Gpu` or `Distributed` placement reports
+`E1001` with capability `core.gpu` or `core.distributed`, respectively (§13.9.4),
+even when the RSSN host device registry exposes a GPU.
 
 RSSN's device layer exposes buffers, a numerical kernel IR, CPU reference and parallel
 executors, and a WGSL backend behind `gpu-wgpu`. Embedding hosts can use it for batch

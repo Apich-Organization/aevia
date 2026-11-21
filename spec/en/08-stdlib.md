@@ -564,6 +564,7 @@ mean      : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>
 median    : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,d>
 centroid  : Tensor<1, Point[d]> -> Point[d]
 quantile  : (Tensor<1, Scalar<ρ,d>>, Scalar<ρ,1>) -> Scalar<ρ,d>
+quantiles : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,1>>) -> Tensor<1, Scalar<div_rep(ρ),d>>
 var       : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d^2>
 var       : (Tensor<n, Scalar<ρ,d>>, Bool) -> Scalar<div_rep(ρ),d^2>   # population
 std       : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>
@@ -574,6 +575,8 @@ kurtosis  : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,1>
 histogram : (Tensor<1, Scalar<ρ,d>>, Int) -> { counts: Tensor<1, Int>, edges: Tensor<1, Float[d]> }
 mode      : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,d>
 ```
+
+`quantiles(xs, qs)` computes Hyndman–Fan type-7 quantiles in a batch. Every query in `qs` must be dimensionless and lie in `[0, 1]`. The result keeps the sample dimension, query order, and repeated queries. The batch shares one ordered sample. Exact inputs use rational interpolation. An empty query vector returns an empty result for a nonempty, finite sample.
 
 ### 8.7.1 Distributions
 
@@ -615,16 +618,22 @@ type Geometric       = { p: Real[1] }
 
 ```
 
-These declarations are the source of the `Stats.Distributions` module (after `open Stats.Distributions`, `Normal({ mu = 1.7 m, sigma = 0.1 m })` is a `Distribution<L>` value). `pdf`, `cdf`, `sample` and `sample_n` are **built-in overloads** over this closed ADT:
+These declarations are the source of the `Stats.Distributions` module (after `open Stats.Distributions`, `Normal({ mu = 1.7 m, sigma = 0.1 m })` is a `Distribution<L>` value). The distribution operations are **built-in overloads** over this closed ADT:
 
 ```
-pdf      : (Distribution<d>, Real[d]) -> Real[1/d]
-cdf      : (Distribution<d>, Real[d]) -> Real[1]
-sample   : Distribution<d> -> IO Real[d]
-sample_n : (Distribution<d>, Int, Option<Int>) -> Tensor<1, Real[d]>
+pdf       : (Distribution<d>, Real[d]) -> Real[1/d]
+cdf       : (Distribution<d>, Real[d]) -> Real[1]
+cdf_batch : (Distribution<d>, Tensor<1, Real[d]>) -> Tensor<1, Real[1]>
+dist_quantile : (Distribution<d>, Real[1]) -> Real[d]
+sample    : Distribution<d> -> IO Real[d]
+sample_n  : (Distribution<d>, Int, Option<Int>) -> Tensor<1, Real[d]>
 ```
 
-The dimension of `pdf` for `Normal<L>` is `1/L`; `cdf` is dimensionless; `sample` returns `Real[L]`. `Weibull` uses its `scale` dimension and `Cauchy` its `loc`/`scale` dimension; `LogNormal` parameters describe the dimensionless logarithm; `NegativeBinomial` and `Geometric` count failures before successes, with support `0, 1, ...`. All fifteen constructors share the same `pdf`, `cdf`, `sample` and `sample_n` built-ins.
+The dimension of `pdf` for `Normal<L>` is `1/L`; `cdf` is dimensionless; `sample` returns `Real[L]`. `Weibull` uses its `scale` dimension and `Cauchy` its `loc`/`scale` dimension; `LogNormal` parameters describe the dimensionless logarithm; `NegativeBinomial` and `Geometric` count failures before successes, with support `0, 1, ...`. All fifteen constructors support these operations.
+
+`cdf_batch(dist, xs)` evaluates the same cumulative probability as `cdf` at each point. The result keeps the order and repetitions in `xs`. The points must have the distribution's dimension. A valid distribution and an empty point vector give an empty result. Invalid parameters or a NaN point raise a domain error.
+
+`dist_quantile(dist, p)` returns the quantile at probability `p` in the distribution's dimension. For a discrete distribution and `0 < p < 1`, it returns the smallest support point whose cumulative probability reaches `p`. The probabilities `0` and `1` return the lower and upper support endpoints, which can be infinite. The probability is dimensionless and must be in `[0, 1]`. Invalid distribution parameters, out-of-range probabilities, and NaN probabilities raise `E0806`.
 
 **User-defined distributions are not a language extension point.** Multi-parameter classes were removed (§3.8.1), and the map "distribution parameters → dimension" needs a type function (like `RateOf`), which is a separate design. User-defined distributions lie outside the extension boundary of §12.8.13; the standard library may add built-in constructors for new distribution families, but that is a closed library set, not a language extension point.
 
@@ -667,6 +676,8 @@ rfftfreq : (Int, Float[T]) -> Tensor<1, Float[1/T]>             # n/2 + 1 non-ne
 interp1  : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Scalar<ρ,d>) -> Scalar<ρ,e>
 interp2  : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<2, Scalar<ρ,f>>,
             Scalar<ρ,d>, Scalar<ρ,e>) -> Scalar<ρ,f>
+interp2Batch : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<2, Scalar<ρ,f>>,
+                Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Tensor<1, Float[f]>
 spline   : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Scalar<ρ,d>) -> Scalar<ρ,e>
 polyfit  : (Tensor<1, Scalar<ρ,1>>, Tensor<1, Scalar<ρ,e>>, Int) -> Tensor<1, Scalar<ρ,e>>
 polyval  : (Tensor<1, Scalar<ρ,e>>, Scalar<ρ,1>) -> Scalar<ρ,e>
@@ -689,6 +700,15 @@ type AxisScale = | Linear | Log
 ```
 
 `polyfit` requires a dimensionless independent variable; for a dimensioned one, divide by a unit first (`x/u`); the coefficients keep the dimension of `y`. This is a dimension-system constraint on the API: the coefficient `a_i` of a polynomial has dimension `e/d^i`, different for each power, and cannot sit in a homogeneous tensor.
+
+`interp2` and `interp2Batch` use strictly increasing axes and clamp finite queries to
+the grid edges. Store the sample at `(xs[i], ys[j])` in `table[j][i]`.
+`interp2Batch(xs, ys, table, query_xs, query_ys)` prepares the grid once. The query
+tensors must have equal lengths and match their respective axis dimensions. The
+result has one Float per coordinate pair, in input order and with the table's
+dimension. Two empty query tensors return an empty result. An empty axis, a grid
+shape mismatch, or unequal query lengths give `E0802`. An axis with one knot or
+non-increasing knots, or any non-finite input, gives `E0806`.
 
 ## 8.9 ODE
 
@@ -1010,6 +1030,8 @@ solve_advection : AdvectionSpec -> Result<Tensor<1, Field>, PdeError>
 
 `Field` is `{ grid: Grid, values: Tensor<n, Float[d]> }`. The dimensions of coefficients and boundary conditions are annotated field by field in the `Spec` records; the solver checks at run time that the grid and coefficient dimensions agree. The full typing rules of PDEs are in the `Pde` module documentation; PDE specifications are not part of the core type system.
 
+The short 2D `solve_heat` reads `nx * ny` samples from `initial` in row-major order and holds its four initial edges fixed. It returns `steps + 1` snapshots, including the initial field and the final step. The optional `method` defaults to `"explicit"`, which requires a diffusion number `alpha * dt / h^2` of at most `1/4`. Set `method = "adi"` for alternating-direction implicit stepping at finite diffusion numbers beyond the explicit limit. The implicit step requires finite nonnegative diffusivity and a finite positive time step. Unknown methods and invalid implicit parameters return `Err(PdeError)`.
+
 ### 8.10.1 Temporal adaptivity through the manifest
 
 `Rssn_numerical_callback.num_pde_*_adaptive` compares a full step with two half steps on a fixed spatial discretization.
@@ -1176,11 +1198,22 @@ primes      : Int -> Tensor<1, Int>
 binomial    : (Int, Int) -> Int
 permutations: Int -> Int
 gcd lcm     : (Int, Int) -> Int
+mod_pow     : (Int, Int, Int) -> Int
 polygon_area: Tensor<2, Real[L]> -> Real[L^2]
 distance    : (Tensor<1, Real[L]>, Tensor<1, Real[L]>) -> Real[L]
+tetrahedron_volume : Tensor<[4, 3], Real[d]> -> Real[d^3]
 ```
 
-These modules map directly onto rssn's rule sets; the full list is in `aevia doc Math.NumberTheory`.
+`mod_pow(base, exponent, modulus)` computes the exact residue in `[0, modulus)`
+without expanding the full power. It accepts arbitrary-size integers, including
+negative bases. Exponent zero yields `1 mod modulus`. A negative exponent or a
+nonpositive modulus raises domain error `E0806`.
+
+`polygon_area` takes vertices in boundary order, with two coordinates of the same dimension per row. It returns a nonnegative area in the square of that dimension. A valid matrix of zero, one, or two rows gives zero. A different column count raises shape error `E0802`.
+
+`tetrahedron_volume` takes four rows of three coordinates in a common dimension `d`. It returns the nonnegative volume in `d^3`, independent of vertex order. Coplanar or repeated vertices give zero. A wrong shape raises a shape error. Non-finite coordinates or a non-finite computed volume raise a domain error.
+
+Run `aevia doc Math.NumberTheory` for the module's operators.
 
 ## 8.17 Physics / Simulate
 
@@ -1281,6 +1314,7 @@ Reachability and limits of the fixed entry points:
 
 - `type_rep<T>()` makes an unforgeable `TypeRep` from a concrete checked type; an unresolved generic cannot be reflected without a run-time type dictionary. `Rssn.typed` performs the dynamic call and checks the result against that witness; a mismatch or insufficient evidence returns `Err(OpError)`, and a successful result is still an opaque `Value` to be validated and converted with `from_value<T>`.
 - `to_callback(f)` checks the concrete function type of a checked source closure in the current evaluator session and builds an opaque `Callback` (aliases and concretised generic functions keep this evidence; wrap built-in functions in a source lambda first). The callback bridge supports concrete numbers, `Bool`, `String`, the sealed host type `NativeAdVar`, and tensors and closed records built recursively from them; same-named source types and other opaque callback types remain rejected. Concrete dimensions, ranks and fully known shapes are checked, and an empty structured tensor needs independent element-type and dimension evidence. Each operator may restrict signatures further; for example the numeric solvers use `Float` scalars and vectors. The call runs synchronously on the original thread and the handle expires when the outer call returns; calls across threads, re-entry in the same scope and callback errors all return errors; an empty callback list is equivalent to a dynamic call.
+  In `Rssn.call_ho` and `Rssn.call_ho_key`, supply ordinary values and callbacks in their respective order in the manifest signature. The bridge combines both lists at the declared parameter positions.
 - The host `Plugin` interface is reserved for RSSN hosts. Calling `Rssn.register` or `Rssn.register_plugin` with Aevia values reports `E0302`. Aevia registers `@op` and `@rule` functions at module load. `load_plugin(path) : String -> IO (Result<Int, String>)` loads a local source file under the conditions in §13.5.2 and §13.5.3.
 - `core.callback` marks the restricted callback bridge as available, and `core.plugin.source` marks source plugins as available. Generated higher-order bindings keep the explicit `(values, callbacks)` dynamic interface; for a single overload with an exact declaration whose callbacks and results can be certified, a typed alias pinned to the signature is also generated, which certifies the concrete callback signature at call time and validates the result against the instantiated type; signatures whose type or dimension cannot be proved offer only the dynamic entry. For example the `num_least_squares` alias of `Rssn_numerical_callback`: parameters and residuals have dimensions `D` and `E`, the residual tolerance uses `E`, the other controls are dimensionless, and the result carries `converged` and `status` (residual/gradient convergence, budget exhausted, stagnation).
 
@@ -1344,6 +1378,9 @@ Units
   Astronomy
   CGS
   Natural
+  Planck
+  Atomic
+  Geometrized
   Constants
 Tensor
 LinearAlgebra
@@ -1366,15 +1403,10 @@ Data
 Plot
 Test
 Measurement
-Rssn
-  Dynamic
-  Plugin
 Device
 Physics
   Ising
   Geodesic
-  Schrodinger
-  ...
 ```
 
 The standard-library modules live in the `aevia-std` package; the Prelude is imported automatically and the rest on demand with `import`. A module name is its path: `import A.B` resolves `A/B.aev` (§7), `import Math { sqrt }` brings in only `sqrt`, and `open Units.SI` puts the exports of `Units.SI` into the current scope. Local files take precedence over embedded standard-library modules. `Units/*` are documentation modules: unit names are already ambient `Unit[d]` values, and exporting quantity bindings would shadow them and change the semantics of `Tensor / Unit`, so they are not exported (§5.3.4). The `Sde` module re-exports the five entry points of §8.9.1 and declares the option ADTs; `Physics.Ising`/`Physics.Geodesic` provide the typed wrappers of §8.17. Function names, the nominal variant constructors of `Sde` and transparent type aliases (`type X = { … }`, e.g. `Params` of `Physics.Ising`) can all be brought in with `import { X }`/`open`.

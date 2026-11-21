@@ -65,7 +65,7 @@ curl -fsSL https://aevia.apich.org/install.sh | sh -s -- --version 0.1.0-beta.1
 
 在 macOS 和 Linux 上使用 `--channel nightly`，在 Windows 上使用 `-Channel nightly`，即可安装最新每日构建。使用 `--version nightly-YYYY-MM-DD` 或 `-Version nightly-YYYY-MM-DD` 可以固定到特定日期的构建。同样的选项适用于源码目录中的 [Unix 安装脚本](platform/install.sh)和 [PowerShell 安装脚本](platform/install.ps1)。
 
-首次安装后，可在终端直接管理工具链。
+首次安装后，使用 `aevia toolchain COMMAND` 管理工具链。使用 `aevia toolchain run VERSION` 时，将语言选项和参数写在 `VERSION` 后，交给该版本的 Aevia。
 
 ```console
 aevia toolchain install nightly --no-activate
