@@ -1,27 +1,13 @@
-//! The language specification, served from the repository that owns it.
+//! The pages for the Aevia language specification.
 //!
-//! # Why the site renders the chapters instead of a bundled edition
+//! The registry server loads the chapter Markdown from the language
+//! repository and supplies a rendered snapshot to these page functions.
+//! The combined page assembles those same chapters in order.
 //!
-//! The language repository already ships `Aevia-Language-Specification.md`, a
-//! single file stitched together by `tools/bundle_spec.py`. Serving *that* would
-//! mean the site shows whatever the last person remembered to regenerate. This
-//! module reads `spec/*.md` itself, in the same order the bundler uses, so the
-//! site and the repository cannot disagree — and the single-page view is
-//! produced here rather than checked in.
-//!
-//! # Why the interface is bilingual but the text is not
-//!
-//! The normative chapters are written in Chinese; the index and the ecosystem
-//! are English. Translating 480 KB of normative text is a job for a translator
-//! with review, not for a build step, and a machine translation of a language
-//! specification is worse than none — a reader cannot tell which sentences are
-//! load-bearing. So the arrangement is explicit rather than hidden:
-//!
-//! * every label, heading and navigation element is bilingual;
-//! * every chapter carries an English title and, where one has been written, an
-//!   English abstract, so an English reader can find and understand the shape of
-//!   a chapter before reading the normative text;
-//! * the Chinese text is presented as the normative one, labelled as such.
+//! The Chinese edition is normative. The English edition is a reference.
+//! Pages in English use the translated body and headings when available.
+//! A chapter without a translated body can show its English abstract
+//! alongside the Chinese text.
 
 use aevia_registry_core::Lang;
 use aevia_registry_core::vm::SpecBook;
@@ -169,10 +155,9 @@ pub fn spec_index(
     )
 }
 
-/// Renders `/spec/{slug}`.
+/// Renders a chapter that the caller resolved for `/spec/{slug}`.
 ///
-/// Returns `None` when the chapter does not exist, so the caller can serve its
-/// own 404 rather than an empty page.
+/// The caller handles a missing chapter before invoking this renderer.
 #[must_use]
 pub fn spec_page(
     book: &SpecBook,

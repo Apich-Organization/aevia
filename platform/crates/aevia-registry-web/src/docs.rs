@@ -1,10 +1,9 @@
 //! The three documentation pages.
 //!
-//! Documentation on this registry is not written twice. The compiler renders
-//! `##` comments from the modules it type-checks at publish time, and these
-//! pages only present that output: a landing page that explains the rule, an
-//! index per package version that shows what is covered, and one page per
-//! module with the rendered declarations.
+//! The documentation builder extracts `##` comments from the published
+//! modules. These pages present its output in a landing page, a version index
+//! with coverage counts, and a page for each module. The version and module
+//! views borrow rendered HTML from their view models for synchronous SSR.
 //!
 //! The coverage numbers are stated as counts as well as a percentage, because a
 //! percentage hides the difference between a package with three declarations
@@ -16,6 +15,7 @@ use aevia_registry_core::vm::CrateCard;
 use aevia_registry_core::vm::DocModulePage;
 use aevia_registry_core::vm::DocsIndexPage;
 use aevia_registry_core::vm::Viewer;
+use leptos::either::Either;
 use leptos::prelude::AnyView;
 use leptos::prelude::*;
 
@@ -83,8 +83,8 @@ pub fn docs_build_status(
         None,
         view! {
             <article class="manual-index">
-                <h1>{title.clone()}</h1>
-                <p>{message.to_string()}</p>
+                <h1>{title.as_str()}</h1>
+                <p>{message}</p>
                 <p><a href=format!("/crates/{id}/{version}")>{PACKAGE_PAGE.of(lang)}</a></p>
             </article>
         },
@@ -196,8 +196,8 @@ pub fn docs_index(
 ) -> String {
     let id = page.id.to_path();
     let owner = format!("{}/", page.id.owner());
-    let name = page.id.name().to_string();
-    let version = page.version.clone();
+    let name = page.id.name();
+    let version = page.version.as_str();
     let percent = page.documented_percent();
     let documented = page.total_decls.saturating_sub(page.undocumented);
     let coverage = coverage(lang, documented, page.total_decls, percent);
@@ -205,34 +205,31 @@ pub fn docs_index(
         | Lang::En => format!("{id} {version} docs"),
         | Lang::Zh => format!("{id} {version} 文档"),
     };
-    let generated_at = page.generated_at.clone();
-    let generated = crate::date_only(&page.generated_at).to_string();
-
-    let rows: Vec<AnyView> = page
-        .modules
-        .iter()
-        .map(|module| {
-            let path = module.path.clone();
-            let href = format!("/docs/{id}/{version}/{path}");
-            view! {
-                <tr>
-                    <th scope="row">
-                        <a href=href>
-                            <code>{path}</code>
-                        </a>
-                    </th>
-                    <td class="num">{module.decls}</td>
-                    <td class="num">{module.undocumented}</td>
-                </tr>
-            }
-            .into_any()
-        })
-        .collect();
+    let generated_at = page.generated_at.as_str();
+    let generated = crate::date_only(generated_at);
 
     let module_table = if page.modules.is_empty() {
-        view! { <p class="muted">{NO_MODULES.of(lang)}</p> }.into_any()
+        Either::Left(view! { <p class="muted">{NO_MODULES.of(lang)}</p> })
     } else {
-        view! {
+        let rows: Vec<_> = page
+            .modules
+            .iter()
+            .map(|module| {
+                let path = module.path.as_str();
+                view! {
+                    <tr>
+                        <th scope="row">
+                            <a href=format!("/docs/{id}/{version}/{path}")>
+                                <code>{path}</code>
+                            </a>
+                        </th>
+                        <td class="num">{module.decls}</td>
+                        <td class="num">{module.undocumented}</td>
+                    </tr>
+                }
+            })
+            .collect();
+        Either::Right(view! {
             <table>
                 <thead>
                     <tr>
@@ -243,33 +240,31 @@ pub fn docs_index(
                 </thead>
                 <tbody>{rows}</tbody>
             </table>
-        }
-        .into_any()
+        })
     };
 
-    let readme = match &page.readme_html {
-        | Some(html) => {
-            view! {
+    let readme = page.readme_html.as_deref().map_or_else(
+        // The empty erased view supplies the existing SSR placeholder.
+        || Either::Right(().into_any()),
+        |html| {
+            Either::Left(view! {
                 <section>
                     <h2>{README.of(lang)}</h2>
-                    <div class="readme" inner_html=html.clone()></div>
+                    <div class="readme" inner_html=html></div>
                 </section>
-            }
-            .into_any()
+            })
         },
-        | None => ().into_any(),
-    };
+    );
 
-    let other_versions: Vec<AnyView> = page
+    let other_versions: Vec<_> = page
         .other_versions
         .iter()
         .map(|other| {
             view! {
                 <li>
-                    <a href=format!("/docs/{id}/{other}")>{other.clone()}</a>
+                    <a href=format!("/docs/{id}/{other}")>{other.as_str()}</a>
                 </li>
             }
-            .into_any()
         })
         .collect();
 
@@ -328,25 +323,22 @@ pub fn docs_module(
     viewer: Option<&Viewer>,
 ) -> String {
     let id = page.id.to_path();
-    let version = page.version.clone();
-    let module = page.module.clone();
-    let undocumented = page.undocumented;
-    let decls = page.decls;
-    let source_file = page.source_file.clone();
-    let header = module_source(lang, &source_file, decls, undocumented);
+    let version = page.version.as_str();
+    let module = page.module.as_str();
+    let header = module_source(lang, &page.source_file, page.decls, page.undocumented);
+    let docs_path = format!("/docs/{id}/{version}");
 
-    let modules: Vec<AnyView> = page
+    let modules: Vec<_> = page
         .modules
         .iter()
         .map(|entry| {
-            let current = (entry.path == module).then_some("page");
-            let href = format!("/docs/{id}/{version}/{}", entry.path);
+            let path = entry.path.as_str();
+            let current = (path == module).then_some("page");
             view! {
                 <li>
-                    <a href=href aria-current=current>{entry.path.clone()}</a>
+                    <a href=format!("{docs_path}/{path}") aria-current=current>{path}</a>
                 </li>
             }
-            .into_any()
         })
         .collect();
 
@@ -361,7 +353,7 @@ pub fn docs_module(
                     <h2>{MODULES.of(lang)}</h2>
                     <ul>{modules}</ul>
                     <p class="small">
-                        <a href=format!("/docs/{id}/{version}")>{PACKAGE_INDEX.of(lang)}</a>
+                        <a href=docs_path.as_str()>{PACKAGE_INDEX.of(lang)}</a>
                     </p>
                 </aside>
                 <div class="docs-main">
@@ -371,10 +363,10 @@ pub fn docs_module(
                         <p>
                             <a href=format!("/crates/{id}")>{PACKAGE_PAGE.of(lang)}</a>
                             " · "
-                            <a href=format!("/docs/{id}/{version}")>{DOC_INDEX.of(lang)}</a>
+                            <a href=docs_path.as_str()>{DOC_INDEX.of(lang)}</a>
                         </p>
                     </header>
-                    <div class="doc-body" inner_html=page.html.clone()></div>
+                    <div class="doc-body" inner_html=page.html.as_str()></div>
                 </div>
             </div>
         },
@@ -418,6 +410,22 @@ mod tests {
         assert!(html.contains("Thermo.IdealGas"));
         assert!(html.contains("<progress"));
         assert!(html.contains("value=\"83\""));
+        assert!(html.contains("<div class=\"readme\"><p>Units.</p></div>"));
+    }
+
+    #[test]
+    fn empty_documentation_omits_the_module_table_and_readme() {
+        let mut page = index();
+        page.modules.clear();
+        page.total_decls = 0;
+        page.undocumented = 0;
+        page.readme_html = None;
+        let html = docs_index(Lang::Zh, &page, None);
+        assert!(html.contains("<html lang=\"zh-CN\">"));
+        assert!(html.contains("该版本没有模块文档。"));
+        assert!(html.contains("value=\"100\""));
+        assert!(!html.contains("<table>"));
+        assert!(!html.contains("class=\"readme\""));
     }
 
     #[test]
@@ -428,15 +436,19 @@ mod tests {
             module: "Kinematics".to_string(),
             html: "<h2>fall_time</h2>".to_string(),
             modules: index().modules,
-            source_file: "src/kinematics.aev".to_string(),
+            source_file: "src/force & motion.aev".to_string(),
             decls: 8,
             undocumented: 2,
         };
         let html = docs_module(Lang::En, &page, None);
-        assert!(html.contains("src/kinematics.aev · 8 declarations · 2 undocumented"));
+        assert!(html.contains("src/force &amp; motion.aev · 8 declarations · 2 undocumented"));
         assert!(html.contains("aria-current=\"page\">Kinematics</a>"));
+        assert_eq!(
+            html.matches("aria-current=\"page\">Kinematics</a>").count(),
+            1
+        );
         assert!(
-            html.contains("<h2>fall_time</h2>"),
+            html.contains("<div class=\"doc-body\"><h2>fall_time</h2></div>"),
             "raw documentation HTML"
         );
     }

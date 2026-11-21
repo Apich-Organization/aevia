@@ -9,6 +9,7 @@ use aevia_registry_core::vm::StdlibBook;
 use aevia_registry_core::vm::StdlibItem;
 use aevia_registry_core::vm::StdlibModule;
 use aevia_registry_core::vm::Viewer;
+use leptos::either::Either;
 use leptos::prelude::AnyView;
 use leptos::prelude::IntoAny;
 use leptos::prelude::*;
@@ -123,51 +124,46 @@ pub fn stdlib_module(
     lang: Lang,
     viewer: Option<&Viewer>,
 ) -> String {
-    let current_slug = module.slug.clone();
-    let sidebar_links: Vec<AnyView> = book
+    let sidebar_links: Vec<_> = book
         .modules
         .iter()
         .map(|entry| {
-            let current = (entry.slug == current_slug).then_some("page");
+            let current = (entry.slug == module.slug).then_some("page");
             let href = format!("/stdlib/{}?lang={}", entry.slug, lang.code());
             view! {
                 <li>
-                    <a href=href aria-current=current>{entry.name.clone()}</a>
+                    <a href=href aria-current=current>{entry.name.as_str()}</a>
                 </li>
             }
-            .into_any()
         })
         .collect();
 
     let summary_view = module
         .summary
-        .as_ref()
+        .as_deref()
         .filter(|_| module.html.is_empty())
-        .map(|summary| {
-            let text = summary.clone();
-            view! { <p class="lede">{text}</p> }.into_any()
-        });
+        .map(|summary| view! { <p class="lede">{summary}</p> });
 
     let prose_view = (!module.html.is_empty()).then(|| {
-        let html = module.html.clone();
-        view! { <div class="markdown" inner_html=html></div> }.into_any()
+        view! { <div class="markdown" inner_html=module.html.as_str()></div> }
     });
 
-    let items_view = if module.items.is_empty() && module.html.is_empty() {
-        view! { <p class="muted">{NO_ITEMS.of(lang)}</p> }.into_any()
-    } else if module.items.is_empty() {
-        view! { <div></div> }.into_any()
+    let items_view = if module.items.is_empty() {
+        Either::Left(if module.html.is_empty() {
+            Either::Left(view! { <p class="muted">{NO_ITEMS.of(lang)}</p> })
+        } else {
+            Either::Right(view! { <div></div> })
+        })
     } else {
-        let cards: Vec<AnyView> = module
+        let cards: Vec<_> = module
             .items
             .iter()
             .map(|item| render_item(lang, item))
             .collect();
-        view! { <div class="stdlib-items">{cards}</div> }.into_any()
+        Either::Right(view! { <div class="stdlib-items">{cards}</div> })
     };
 
     let page_title = format!("{} · {}", module.name, TITLE.of(lang));
-    let module_name = module.name.clone();
 
     layout::page(
         lang,
@@ -183,7 +179,7 @@ pub fn stdlib_module(
                 </aside>
                 <article class="docs-body">
                     <header class="page-head">
-                        <h1>{module_name}</h1>
+                        <h1>{module.name.as_str()}</h1>
                         {summary_view}
                     </header>
                     {prose_view}
@@ -201,28 +197,22 @@ pub fn stdlib_module(
 fn render_item(
     lang: Lang,
     item: &StdlibItem,
-) -> AnyView {
+) -> impl RenderHtml {
     let kind = (!item.kind.is_empty()).then(|| {
-        let kind = item.kind.clone();
-        view! { <span class="stdlib-kind">{kind}</span> }.into_any()
+        view! { <span class="stdlib-kind">{item.kind.as_str()}</span> }
     });
-    let name = item.name.clone();
+    let name = item.name.as_str();
     let sig = (!item.signature.is_empty()).then(|| {
-        let sig = item.signature.clone();
-        view! { <pre class="stdlib-sig"><code>{sig}</code></pre> }.into_any()
+        view! { <pre class="stdlib-sig"><code>{item.signature.as_str()}</code></pre> }
     });
     let doc = (!item.doc_html.is_empty()).then(|| {
-        let html = item.doc_html.clone();
-        view! { <div class="markdown" inner_html=html></div> }.into_any()
+        view! { <div class="markdown" inner_html=item.doc_html.as_str()></div> }
     });
     let examples = (!item.examples.is_empty()).then(|| {
-        let blocks: Vec<AnyView> = item
+        let blocks: Vec<_> = item
             .examples
             .iter()
-            .map(|ex| {
-                let code = ex.clone();
-                view! { <pre class="code"><code>{code}</code></pre> }.into_any()
-            })
+            .map(|ex| view! { <pre class="code"><code>{ex.as_str()}</code></pre> })
             .collect();
         view! {
             <div class="stdlib-examples">
@@ -230,11 +220,10 @@ fn render_item(
                 {blocks}
             </div>
         }
-        .into_any()
     });
 
     view! {
-        <section class="stdlib-item" id=item.name.clone()>
+        <section class="stdlib-item" id=name>
             <div class="stdlib-item-head">
                 {kind}
                 <h3>{name}</h3>
@@ -244,7 +233,6 @@ fn render_item(
             {examples}
         </section>
     }
-    .into_any()
 }
 
 #[cfg(test)]
@@ -288,5 +276,58 @@ mod tests {
         assert!(mod_html.contains("fn sqrt(x: Real[D]): Real[D^(1/2)]"));
         assert!(mod_html.contains("Square root with half-dimension."));
         assert!(mod_html.contains("sqrt(4 m^2) == 2 m"));
+    }
+
+    #[test]
+    fn stdlib_module_escapes_text_and_preserves_rendered_prose_in_both_languages() {
+        let mut book = sample_book();
+        let first = &mut book.modules[0];
+        first.name = "Core & units".to_string();
+        first.html = "<p>Module <em>prose</em></p>".to_string();
+        first.items[0].name = "less< & \"".to_string();
+        first.items[0].signature = "x < 2 & true".to_string();
+        first.items[0].doc_html = "<p>Item <em>prose</em></p>".to_string();
+        first.items[0].examples = vec!["x < 3 && true".to_string()];
+        book.modules.push(StdlibModule {
+            name: "Later module".to_string(),
+            slug: "Later".to_string(),
+            ..Default::default()
+        });
+        for (lang, examples) in [(Lang::En, "examples"), (Lang::Zh, "示例")] {
+            let html = stdlib_module(&book, &book.modules[0], lang, None);
+            let current = format!(
+                "href=\"/stdlib/Prelude?lang={}\" aria-current=\"page\"",
+                lang.code()
+            );
+            let later = format!("href=\"/stdlib/Later?lang={}\"", lang.code());
+            assert!(html.find(&current).unwrap() < html.find(&later).unwrap());
+            assert!(html.contains("Core &amp; units"));
+            assert!(html.contains("id=\"less&lt; &amp; &quot;\""));
+            assert!(html.contains("x &lt; 2 &amp; true"));
+            assert!(html.contains("x &lt; 3 &amp;&amp; true"));
+            assert!(html.contains(&format!("<h4>{examples}</h4>")));
+            assert!(html.contains("<p>Module <em>prose</em></p>"));
+            assert!(html.contains("<p>Item <em>prose</em></p>"));
+            assert!(!html.contains("Core functions and operators."));
+        }
+    }
+
+    #[test]
+    fn empty_standalone_module_uses_the_summary_and_empty_notice() {
+        let mut module = StdlibModule {
+            name: "Empty module".to_string(),
+            slug: "Empty".to_string(),
+            summary: Some("Summary & details.".to_string()),
+            ..Default::default()
+        };
+        let book = StdlibBook::default();
+        let summary = stdlib_module(&book, &module, Lang::En, None);
+        assert!(summary.contains("Summary &amp; details."));
+        assert!(summary.contains(NO_ITEMS.of(Lang::En)));
+        module.html = "<p>Overview only.</p>".to_string();
+        let prose = stdlib_module(&book, &module, Lang::Zh, None);
+        assert!(prose.contains("<p>Overview only.</p>"));
+        assert!(!prose.contains(NO_ITEMS.of(Lang::Zh)));
+        assert!(!prose.contains("Summary &amp; details."));
     }
 }
