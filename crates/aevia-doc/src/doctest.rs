@@ -2,12 +2,10 @@
 //!
 //! §7.5.5 attaches Markdown to the next declaration and promises that a fenced
 //! block labelled `aevia` is compile-checked (doctests). This module does the
-//! extraction half: it reads the lexer's
-//! [`DocComment`][aevia_syntax::token::DocComment] spans (never the
-//! declarations' `doc` strings, because those are per-line `trim`med and would
-//! lose the indentation of a block body), reconstructs each comment run with
-//! its indentation, and returns one [`Doctest`] per backtick or tilde fence
-//! labelled `aevia`.
+//! extraction half reads the lexer's
+//! [`DocComment`][aevia_syntax::token::DocComment] spans to preserve the body
+//! of each backtick or tilde fence labelled `aevia`. The returned line range
+//! can map diagnostics from the snippet back to the documentation source.
 //!
 //! A block may declare that it is *expected* to fail: a first content line of
 //! `compile_fail` or `compile_fail E0401` (optionally written as a comment,
@@ -21,6 +19,8 @@
 use aevia_syntax::ast::DeclKind;
 use aevia_syntax::lex;
 use aevia_syntax::parse_module;
+use aevia_syntax::token::DocComment;
+use std::ops::RangeInclusive;
 
 /// What a doctest promises about its snippet.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,6 +50,15 @@ pub struct Doctest {
     pub imports: Vec<String>,
 }
 
+/// A doctest paired with the source coordinates of its snippet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocatedDoctest {
+    /// The extracted doctest and its declaring module context.
+    pub doctest: Doctest,
+    /// Inclusive, 1-based lines of the code in the original source file.
+    pub snippet_lines: RangeInclusive<u32>,
+}
+
 /// Extracts every fenced `aevia` block from the `##` comments of one file.
 ///
 /// # Errors
@@ -61,10 +70,35 @@ pub fn extract(
     source: &str,
     file: &str,
 ) -> Result<Vec<Doctest>, String> {
-    let lexed = lex(0, source).map_err(|diagnostics| super::first_error(source, &diagnostics))?;
+    Ok(extract_with_locations(source, file)?
+        .into_iter()
+        .map(|located| located.doctest)
+        .collect())
+}
+
+/// Extracts doctests and the original source lines covered by each snippet.
+///
+/// Each line of the snippet corresponds to one line of `snippet_lines`, in
+/// order. The range excludes the fences, the expectation marker, and blank
+/// lines trimmed from either end. Line endings in snippets are normalized to
+/// LF.
+///
+/// # Errors
+/// Returns the same extraction errors as [`extract`].
+pub fn extract_with_locations(
+    source: &str,
+    file: &str,
+) -> Result<Vec<LocatedDoctest>, String> {
+    let mut lexed =
+        lex(0, source).map_err(|diagnostics| super::first_error(source, &diagnostics))?;
+    let comments = std::mem::take(&mut lexed.docs);
     let (module, diagnostics) = parse_module(0, source, &lexed);
     if diagnostics.has_errors() {
         return Err(super::first_error(source, &diagnostics));
+    }
+    let snippets = scan_comments(source, &comments)?;
+    if snippets.is_empty() {
+        return Ok(Vec::new());
     }
     let module_name = module.name.as_ref().map_or_else(
         || {
@@ -88,169 +122,229 @@ pub fn extract(
         .map(str::to_owned)
         .collect();
 
-    let mut doctests = Vec::new();
-    for run in doc_runs(source, &lexed.docs) {
-        scan_run(&run, &module_name, file, &imports, &mut doctests)?;
-    }
-    Ok(doctests)
+    Ok(snippets
+        .into_iter()
+        .map(|snippet| {
+            LocatedDoctest {
+                doctest: Doctest {
+                    file: file.to_owned(),
+                    module: module_name.clone(),
+                    line: snippet.opening_line,
+                    snippet: snippet.text,
+                    expected: snippet.expected,
+                    imports: imports.clone(),
+                },
+                snippet_lines: snippet.lines,
+            }
+        })
+        .collect())
 }
 
-/// One reconstructed line of a documentation comment.
-struct DocLine {
-    /// 1-based line in the file.
-    number: u32,
-    /// The comment body, with `##` and at most one following space removed.
+struct Snippet {
+    opening_line: u32,
+    lines: RangeInclusive<u32>,
+    expected: Expected,
     text: String,
 }
 
-/// A contiguous group of `##` comments that reads as one Markdown block.
-type DocRun = Vec<DocLine>;
-
-/// Rebuilds the source of every documentation-comment run.
-///
-/// The lexer trims each `##` line, so the spans are the only way back to the
-/// original indentation — which a fenced code block needs.
 #[cfg_attr(
     not(test),
-    expect(
+    allow(
         clippy::single_call_fn,
-        reason = "source span reconstruction precedes Markdown scanning"
+        reason = "scans Markdown fences independently of the parsed module context"
     )
 )]
-fn doc_runs(
+fn scan_comments(
     source: &str,
-    docs: &[aevia_syntax::token::DocComment],
-) -> Vec<DocRun> {
-    let mut runs: Vec<DocRun> = Vec::new();
-    let mut previous_end: Option<usize> = None;
-    let mut line_breaks = source
-        .match_indices(['\r', '\n'])
-        .filter(|(offset, terminator)| {
-            *terminator == "\n"
-                || !source
-                    .get(*offset..)
-                    .is_some_and(|tail| tail.starts_with("\r\n"))
-        })
-        .map(|(offset, _)| offset)
-        .peekable();
+    comments: &[DocComment],
+) -> Result<Vec<Snippet>, String> {
+    let mut snippets = Vec::new();
+    let mut open: Option<Block<'_>> = None;
+    let mut previous_end = 0;
     let mut number = 1u32;
-    for comment in docs {
+    for comment in comments {
         let start = usize::try_from(comment.span.start).unwrap_or(usize::MAX);
         let end = usize::try_from(comment.span.end).unwrap_or(usize::MAX);
-        let Some(raw) = source.get(start..end) else {
+        let (Some(raw), Some(gap)) = (source.get(start..end), source.get(previous_end..start))
+        else {
             continue;
         };
-        let trimmed = raw.trim_start();
-        let body = trimmed.strip_prefix("##").unwrap_or(trimmed);
-        let text = body.strip_prefix(' ').unwrap_or(body).trim_end().to_owned();
-        while line_breaks.next_if(|offset| *offset < start).is_some() {
-            number = number.saturating_add(1);
-        }
-        let contiguous = previous_end.is_some_and(|previous| {
-            source
-                .get(previous..start)
-                .is_some_and(|between| between.trim().is_empty())
-        });
-        if contiguous {
-            if let Some(run) = runs.last_mut() {
-                run.push(DocLine { number, text });
+        let breaks = line_breaks(gap);
+        number = number.saturating_add(breaks);
+        previous_end = end;
+        let text = super::comment_body(raw);
+        let marker = fence(text);
+        if let Some(block) = &mut open {
+            if !gap.trim().is_empty() {
+                return Err(block.unclosed());
             }
-        } else {
-            runs.push(vec![DocLine { number, text }]);
+            if marker.is_some_and(|end| block.fence.closes(&end)) {
+                if let Some(block) = open.take()
+                    && let Some(snippet) = block.finish()?
+                {
+                    snippets.push(snippet);
+                }
+            } else if block.fence.info.eq_ignore_ascii_case("aevia") {
+                block.push(text, number, breaks)?;
+            }
+        } else if let Some(fence) = marker {
+            open = Some(Block {
+                fence,
+                opening_line: number,
+                opening_text: text.trim_start(),
+                expectation: None,
+                first_line: None,
+                last_content: (number, 0),
+                text: String::new(),
+            });
         }
-        previous_end = Some(end);
     }
-    runs
+    if let Some(block) = open {
+        return Err(block.unclosed());
+    }
+    Ok(snippets)
 }
 
-/// Walks one doc run and appends the doctests it contains.
-#[cfg_attr(
-    not(test),
-    expect(
-        clippy::single_call_fn,
-        reason = "Markdown scanning operates on the reconstructed comment lines"
-    )
+#[allow(
+    clippy::single_call_fn,
+    reason = "counts physical lines for source mapping"
 )]
-fn scan_run(
-    run: &[DocLine],
-    module_name: &str,
-    file: &str,
-    imports: &[String],
-    doctests: &mut Vec<Doctest>,
-) -> Result<(), String> {
-    let mut lines = run.iter();
-    while let Some(open) = lines.next() {
-        let Some((marker, width, info)) = fence(&open.text) else {
-            continue;
-        };
-        let runnable = info.eq_ignore_ascii_case("aevia");
-        let mut body = Vec::new();
-        let mut closed = false;
-        for line in lines.by_ref() {
-            if fence(&line.text).is_some_and(|(end, length, info)| {
-                marker == end && length >= width && info.is_empty()
-            }) {
-                closed = true;
-                break;
-            }
-            if runnable {
-                body.push(line.text.as_str());
-            }
+fn line_breaks(text: &str) -> u32 {
+    let mut count = 0u32;
+    let mut previous_cr = false;
+    for byte in text.bytes() {
+        if byte == b'\r' || (byte == b'\n' && !previous_cr) {
+            count = count.saturating_add(1);
         }
-        if !closed {
-            return Err(format!(
-                "line {}: unclosed {} block; add the closing fence",
-                open.number,
-                open.text.trim_start(),
-            ));
-        }
-        if runnable {
-            while body.last().is_some_and(|line| line.trim().is_empty()) {
-                body.pop();
-            }
-            let mut body = body
-                .into_iter()
-                .skip_while(|line| line.trim().is_empty())
-                .peekable();
-            let (expected, marker) = parse_marker(body.peek().copied())
-                .map_err(|message| format!("line {}: {message}", open.number))?;
-            if marker {
-                body.next();
-            }
-            let snippet = body
-                .skip_while(|line| line.trim().is_empty())
-                .collect::<Vec<_>>()
-                .join("\n");
-            if !snippet.is_empty() {
-                doctests.push(Doctest {
-                    file: file.to_string(),
-                    module: module_name.to_string(),
-                    line: open.number,
-                    snippet,
-                    expected,
-                    imports: imports.to_vec(),
-                });
-            }
-        }
+        previous_cr = byte == b'\r';
     }
-    Ok(())
+    count
 }
 
-fn fence(line: &str) -> Option<(char, usize, &str)> {
-    let line = line.trim_start();
-    let marker = line.chars().next()?;
+struct Block<'a> {
+    fence: Fence<'a>,
+    opening_line: u32,
+    opening_text: &'a str,
+    expectation: Option<(Expected, u32)>,
+    first_line: Option<u32>,
+    last_content: (u32, usize),
+    text: String,
+}
+
+impl Block<'_> {
+    #[allow(clippy::single_call_fn, reason = "assembles one runnable block")]
+    fn push(
+        &mut self,
+        text: &str,
+        number: u32,
+        breaks: u32,
+    ) -> Result<(), String> {
+        let blank = text.trim().is_empty();
+        if self.first_line.is_none() {
+            if blank {
+                return Ok(());
+            }
+            if self.expectation.is_none()
+                && let Some(expected) =
+                    parse_marker(text).map_err(|message| format!("line {number}: {message}"))?
+            {
+                self.expectation = Some((expected, number));
+                return Ok(());
+            }
+            self.first_line = Some(number);
+        } else if let Ok(breaks) = usize::try_from(breaks) {
+            self.text.extend(std::iter::repeat_n('\n', breaks));
+        }
+        let indent = text
+            .bytes()
+            .take(self.fence.indent)
+            .take_while(|byte| *byte == b' ')
+            .count();
+        self.text.push_str(text.get(indent..).unwrap_or(text));
+        if !blank {
+            self.last_content = (number, self.text.len());
+        }
+        Ok(())
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "validates and finishes one fenced block"
+    )]
+    fn finish(mut self) -> Result<Option<Snippet>, String> {
+        let Some(first) = self.first_line else {
+            return match self.expectation {
+                | Some((_, line)) => {
+                    Err(format!(
+                        "line {line}: compile_fail marker requires a snippet"
+                    ))
+                },
+                | None => Ok(None),
+            };
+        };
+        let (last, end) = self.last_content;
+        self.text.truncate(end);
+        Ok(Some(Snippet {
+            opening_line: self.opening_line,
+            lines: first..=last,
+            expected: self
+                .expectation
+                .map_or(Expected::Compiles, |(expected, _)| expected),
+            text: self.text,
+        }))
+    }
+
+    fn unclosed(&self) -> String {
+        format!(
+            "line {}: unclosed {} block; add the closing fence",
+            self.opening_line, self.opening_text
+        )
+    }
+}
+
+struct Fence<'a> {
+    marker: char,
+    width: usize,
+    info: &'a str,
+    indent: usize,
+}
+
+impl Fence<'_> {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "keeps the closing delimiter rules with fence metadata"
+    )]
+    const fn closes(
+        &self,
+        end: &Fence<'_>,
+    ) -> bool {
+        self.marker == end.marker && self.width <= end.width && end.info.is_empty()
+    }
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "recognizes Markdown delimiters in the source stream"
+)]
+fn fence(line: &str) -> Option<Fence<'_>> {
+    let trimmed = line.trim_start();
+    let marker = trimmed.chars().next()?;
     if !matches!(marker, '`' | '~') {
         return None;
     }
-    let rest = line.trim_start_matches(marker);
-    let width = line.len().checked_sub(rest.len())?;
-    (width >= 3).then_some((marker, width, rest.trim()))
+    let rest = trimmed.trim_start_matches(marker);
+    let width = trimmed.len().checked_sub(rest.len())?;
+    (width >= 3).then(|| {
+        Fence {
+            marker,
+            width,
+            info: rest.trim(),
+            indent: line.bytes().take_while(|byte| *byte == b' ').count(),
+        }
+    })
 }
 
-/// Reads a `compile_fail` marker from the first content line.
-///
-/// Returns the expectation and whether the line was a marker (and therefore
-/// must not be compiled).
+/// Reads an optional `compile_fail` expectation from the first content line.
 #[cfg_attr(
     not(test),
     expect(
@@ -258,22 +352,19 @@ fn fence(line: &str) -> Option<(char, usize, &str)> {
         reason = "compile-fail markers have a separate grammar from Markdown fences"
     )
 )]
-fn parse_marker(first: Option<&str>) -> Result<(Expected, bool), String> {
-    let Some(first) = first else {
-        return Ok((Expected::Compiles, false));
-    };
+fn parse_marker(first: &str) -> Result<Option<Expected>, String> {
     let trimmed = first.trim();
     let bare = trimmed.strip_prefix('#').unwrap_or(trimmed).trim_start();
     let Some(rest) = bare.strip_prefix("compile_fail") else {
-        return Ok((Expected::Compiles, false));
+        return Ok(None);
     };
     // `compile_failure` is a comment, not a marker.
     if rest.starts_with(|character: char| character.is_alphanumeric() || character == '_') {
-        return Ok((Expected::Compiles, false));
+        return Ok(None);
     }
     let rest = rest.trim();
     if rest.is_empty() {
-        return Ok((Expected::Fails, true));
+        return Ok(Some(Expected::Fails));
     }
     let mut parts = rest.splitn(2, char::is_whitespace);
     let code = parts.next().unwrap_or_default();
@@ -289,7 +380,7 @@ fn parse_marker(first: Option<&str>) -> Result<(Expected, bool), String> {
             "unexpected text after the compile_fail code: `{tail}`"
         ));
     }
-    Ok((Expected::FailsWith(code.to_string()), true))
+    Ok(Some(Expected::FailsWith(code.to_string())))
 }
 
 #[cfg(test)]
@@ -358,12 +449,76 @@ mod tests {
     #[test]
     fn a_bad_marker_is_refused_with_its_line() {
         let error = extract(
-            "## ```aevia\n## compile_fail NOPE\n## let x = 1\n## ```\nfn f(): Int = 1\n",
+            "## ```aevia\r\n##\r## compile_fail NOPE\n## let x = 1\r\n## ```\nfn f(): Int = 1\n",
             "a.aev",
         )
         .expect_err("refuses");
-        assert!(error.contains("invalid compile_fail code"), "{error}");
-        assert!(error.contains("line"), "{error}");
+        assert!(
+            error.starts_with("line 3: invalid compile_fail code"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_compile_failure_requires_a_snippet() {
+        let source = "## ```aevia\n##\n## # compile_fail E0401\n##\n## ```\nlet author = 1\n";
+        let error = extract(source, "empty.aev").unwrap_err();
+        assert_eq!(error, "line 3: compile_fail marker requires a snippet");
+    }
+
+    #[test]
+    fn located_snippets_retain_every_physical_body_line_and_literal_spaces() {
+        let source = concat!(
+            "module Mixed\r\n",
+            "## ```aevia\r",
+            "##\r\n",
+            "## # compile_fail E0401\n",
+            "\r",
+            "## let message = \"\"\"\r\n",
+            "##   one  \r",
+            "\n\n",
+            "##   \n",
+            "##   two\r\n",
+            "## \"\"\"\n",
+            "##\r",
+            "## ```\r\n",
+            "let author = 1\n",
+        );
+        let locations = extract_with_locations(source, "mixed.aev").unwrap();
+        let [located] = locations.as_slice() else {
+            panic!("one snippet")
+        };
+        assert_eq!(located.doctest.line, 2);
+        assert_eq!(located.snippet_lines, 6..=11);
+        assert_eq!(
+            located.doctest.expected,
+            Expected::FailsWith("E0401".into())
+        );
+        assert_eq!(
+            located.doctest.snippet,
+            "let message = \"\"\"\n  one  \n\n  \n  two\n\"\"\""
+        );
+    }
+
+    #[test]
+    fn nested_fences_remove_their_base_indentation() {
+        let found = extract_ok(concat!(
+            "## - Example:\n",
+            "##   ```aevia\n",
+            "##   fn twice(x: Int): Int =\n",
+            "##       x + x\n",
+            "##   ```\n",
+            "let author = 1\n",
+        ));
+        assert_eq!(found[0].line, 2);
+        assert_eq!(found[0].snippet, "fn twice(x: Int): Int =\n    x + x");
+    }
+
+    #[test]
+    fn a_fence_cannot_continue_past_a_declaration() {
+        let source = "## ```aevia\n## let x = 1\nlet a = 1\n## ```\nlet b = 2\n";
+        let error = extract(source, "split.aev").unwrap_err();
+        assert!(error.starts_with("line 1: unclosed"), "{error}");
     }
 
     #[test]

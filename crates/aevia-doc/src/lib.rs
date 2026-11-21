@@ -35,6 +35,9 @@ use aevia_syntax::ast::Ty;
 use aevia_syntax::ast::TypeParam;
 use aevia_syntax::lex;
 use aevia_syntax::parse_module;
+use aevia_syntax::token::DocComment;
+use aevia_syntax::token::Keyword;
+use aevia_syntax::token::TokenKind;
 use std::fmt::Write as _;
 
 /// One documented declaration.
@@ -46,7 +49,7 @@ pub struct DeclDoc {
     pub name: String,
     /// The signature, as the author wrote it.
     pub signature: String,
-    /// The `##` text, verbatim.
+    /// The text of the attached `##` comments.
     pub doc: Option<String>,
     /// Whether the declaration is not exported.
     pub private: bool,
@@ -63,8 +66,8 @@ pub struct ModuleDoc {
     pub file: String,
     /// The module's own description: the `##` block above the `module` line.
     ///
-    /// The parser attaches that block to the first declaration; it is lifted
-    /// out here so it describes the module and not one function.
+    /// Comments before the module declaration describe the module. Comments
+    /// after it describe the declarations that follow.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<String>,
     /// The documented declarations, in source order.
@@ -116,7 +119,10 @@ pub fn module_doc(
     file: &str,
     fallback_name: &str,
 ) -> Result<ModuleDoc, String> {
-    let lexed = lex(0, source).map_err(|diagnostics| first_error(source, &diagnostics))?;
+    let mut lexed = lex(0, source).map_err(|diagnostics| first_error(source, &diagnostics))?;
+    // The parser normally attaches all preceding comments to the first
+    // declaration. Separate the module header by span before assigning them.
+    let comments = std::mem::take(&mut lexed.docs);
     let (module, diagnostics) = parse_module(0, source, &lexed);
     if diagnostics.has_errors() {
         return Err(first_error(source, &diagnostics));
@@ -125,24 +131,39 @@ pub fn module_doc(
         .name
         .as_ref()
         .map_or_else(|| fallback_name.to_string(), |name| name.join("."));
-    let header = module_header(source);
+    let header_end = module.name.as_ref().and_then(|_| {
+        lexed
+            .tokens
+            .iter()
+            .find(|token| matches!(token.kind, TokenKind::Keyword(Keyword::Module)))
+            .map(|token| token.span.start)
+    });
+    let header_count = header_end.map_or(0, |end| {
+        comments.partition_point(|comment| comment.span.end <= end)
+    });
+    let (header_comments, declaration_comments) = comments.split_at(header_count);
+    let header = module_header(source, header_comments);
+    let mut comments = declaration_comments.iter().peekable();
     let mut decls = Vec::new();
     for decl in &module.decls {
         // An `import` has no documentation to write, and a `test` is not part
         // of the API surface — `aevia test` is where tests are listed.
-        if matches!(decl.kind, DeclKind::Import { .. } | DeclKind::Test { .. }) {
+        let ignored = matches!(decl.kind, DeclKind::Import { .. } | DeclKind::Test { .. });
+        let mut doc: Option<String> = None;
+        while let Some(comment) = comments.next_if(|comment| comment.span.end <= decl.span.start) {
+            if !ignored {
+                if let Some(text) = &mut doc {
+                    text.push('\n');
+                    text.push_str(&comment.text);
+                } else {
+                    doc = Some(comment.text.clone());
+                }
+            }
+        }
+        if ignored {
             continue;
         }
         let (kind, name, signature) = signature(decl);
-        let mut doc = decl.doc.clone();
-        // The first declaration inherits the module header; take it back.
-        if decls.is_empty()
-            && let (Some(header), Some(text)) = (&header, &doc)
-            && let Some(rest) = text.strip_prefix(header.as_str())
-        {
-            let rest = rest.trim();
-            doc = (!rest.is_empty()).then(|| rest.to_owned());
-        }
         decls.push(DeclDoc {
             kind,
             name,
@@ -165,26 +186,30 @@ pub fn module_doc(
     clippy::single_call_fn,
     reason = "module-level comment association is separate from declaration collection"
 )]
-fn module_header(source: &str) -> Option<String> {
-    let mut lines = Vec::new();
-    for raw in source.split(['\r', '\n']) {
-        let line = raw.trim();
-        if let Some(rest) = line.strip_prefix("##") {
-            lines.push(rest.strip_prefix(' ').unwrap_or(rest).trim_end().to_owned());
-        } else if line.starts_with('#') || line.is_empty() {
-            // A plain comment or a blank line does not end the header.
-        } else if line.starts_with("module ") {
-            break;
-        } else {
-            return None;
-        }
+fn module_header(
+    source: &str,
+    comments: &[DocComment],
+) -> Option<String> {
+    let mut lines = comments.iter().filter_map(|comment| {
+        let start = usize::try_from(comment.span.start).ok()?;
+        let end = usize::try_from(comment.span.end).ok()?;
+        source
+            .get(start..end)
+            .map(|raw| comment_body(raw).trim_end())
+    });
+    let mut text = lines.next()?.to_owned();
+    for line in lines {
+        text.push('\n');
+        text.push_str(line);
     }
-    let text = lines.join(
-        "
-",
-    );
     let text = text.trim();
     (!text.is_empty()).then(|| text.to_owned())
+}
+
+/// The original Markdown text following the lexer-identified `##` marker.
+fn comment_body(raw: &str) -> &str {
+    let body = raw.strip_prefix("##").unwrap_or(raw);
+    body.strip_prefix(' ').unwrap_or(body)
 }
 
 fn first_error(
@@ -636,6 +661,41 @@ private fn hidden(): Int = 1
         assert_eq!(page.matches("The `Geo` module.").count(), 1, "{page}");
         let head = page.split("## `fn sq`").next().unwrap();
         assert!(head.contains("The `Geo` module."), "{page}");
+    }
+
+    #[test]
+    fn files_without_a_module_header_keep_documentation_on_the_declaration() {
+        let source = "## A single named example.\r\nlet example = 1\r\n";
+        let doc = module_doc(source, "example.aev", "Fallback").unwrap();
+        assert_eq!(doc.path, "Fallback");
+        assert_eq!(doc.doc, None);
+        assert_eq!(doc.decls[0].doc.as_deref(), Some("A single named example."));
+
+        let doc = module_doc("## An unattached note.\n", "empty.aev", "Fallback").unwrap();
+        assert_eq!(doc.doc, None);
+        assert!(doc.decls.is_empty());
+    }
+
+    #[test]
+    fn module_headers_follow_lexed_comments_and_support_private_modules() {
+        for declaration in ["private module Geometry", "@private\rmodule Geometry"] {
+            let source = format!(
+                "#-\r## This is inside a block comment.\r-#\r## Geometry\r{declaration}\r\
+                 import Math\r## Geometry samples.\rlet examples = 1\r"
+            );
+            let doc = module_doc(&source, "geometry.aev", "Fallback").unwrap();
+            assert_eq!(doc.path, "Geometry");
+            assert_eq!(doc.doc.as_deref(), Some("Geometry"));
+            assert_eq!(doc.decls[0].doc.as_deref(), Some("Geometry samples."));
+        }
+    }
+
+    #[test]
+    fn comments_after_a_module_header_keep_a_matching_prefix() {
+        let source = "## Area\nmodule Geometry\nimport Math\n## Area calculations.\nlet area = 1\n";
+        let doc = module_doc(source, "geometry.aev", "Fallback").unwrap();
+        assert_eq!(doc.doc.as_deref(), Some("Area"));
+        assert_eq!(doc.decls[0].doc.as_deref(), Some("Area calculations."));
     }
 
     #[test]
