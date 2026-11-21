@@ -5,8 +5,8 @@
 //! be shortened until it passes, which is exactly the failure mode the
 //! coverage test exists to prevent.
 //!
-//! The extraction is deliberately literal. Inside a fenced block, a line whose
-//! head is one or more identifiers followed by `:` declares those identifiers.
+//! Inside a bare, `aevia`, or `text` fence, a line whose head is one or more
+//! identifiers followed by `:` declares those identifiers.
 //! Everything else is skipped: `type`/`class`/`fn`/`module` heads, lines that
 //! begin with an operator (`(&&)`, `|`) or a continuation arrow, and record
 //! bodies (the lines between `{` and `}` that a `type … = {` opens). A record
@@ -20,7 +20,9 @@
 //! tree of §8.20 is generated from that attribution, so a module's export list
 //! cannot silently drift from the section it claims to re-export.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 
 /// A type name a section declares, with the parameters the specification
 /// writes (`type Table<ρ>` → name `Table`, params `["ρ"]`).
@@ -67,79 +69,7 @@ pub fn names(source: &str) -> Vec<String> {
 /// fragments.
 #[must_use]
 pub fn sections(source: &str) -> Vec<Section> {
-    let mut out: Vec<Section> = Vec::new();
-    // A declaration before any heading materialises the default section.
-    let mut current: Option<Section> = None;
-    let mut in_fence = false;
-    let mut depth = 0usize;
-    for raw in source.lines() {
-        if in_fence {
-            if raw.trim_start().starts_with("```") {
-                in_fence = false;
-                depth = 0;
-                continue;
-            }
-        } else {
-            if raw.trim_start().starts_with("```") {
-                in_fence = true;
-                depth = 0;
-                continue;
-            }
-            // A heading is prose, not part of a signature block.
-            if let Some((number, title)) = chapter8_heading(raw) {
-                out.extend(current.replace(Section {
-                    number,
-                    title,
-                    ..Section::default()
-                }));
-            }
-            continue;
-        }
-        // A `#` starts a comment in the specification's signatures.
-        let line = raw.split_once('#').map_or(raw, |(before, _)| before);
-        let nested = depth != 0;
-        depth = brace_depth(line, depth);
-        if nested {
-            continue;
-        }
-        let trimmed = line.trim_start();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let head_word = trimmed.split_whitespace().next().unwrap_or("");
-        if matches!(
-            head_word,
-            "type" | "class" | "fn" | "module" | "instance" | "import" | "let"
-        ) {
-            if head_word == "type"
-                && let Some(declared) = declared_type(trimmed)
-            {
-                current
-                    .get_or_insert_with(Section::default)
-                    .types
-                    .push(declared);
-            }
-            continue;
-        }
-        let Some(declared) = declared_names(trimmed) else {
-            continue;
-        };
-        current
-            .get_or_insert_with(Section::default)
-            .names
-            .extend(declared);
-    }
-    out.extend(current);
-    out
-}
-
-fn brace_depth(
-    line: &str,
-    depth: usize,
-) -> usize {
-    depth
-        .saturating_add(line.matches('{').count())
-        .saturating_sub(line.matches('}').count())
+    read_chapter(source, false).sections
 }
 
 /// The signature text the specification gives each name, `name -> [signature]`.
@@ -149,64 +79,282 @@ fn brace_depth(
 /// continuation lines is joined with single spaces; `#` comments are dropped.
 #[must_use]
 pub fn signatures(source: &str) -> BTreeMap<String, Vec<String>> {
-    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut in_fence = false;
-    let mut depth = 0usize;
-    let mut current: Option<(Vec<String>, String)> = None;
-    let mut flush = |current: &mut Option<(Vec<String>, String)>| {
-        if let Some((names, text)) = current.take() {
-            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-            for name in names {
-                let entry = out.entry(name).or_default();
-                if !entry.contains(&text) {
-                    entry.push(text.clone());
-                }
+    read_chapter(source, true).details.signatures
+}
+
+/// A chapter's declaration index and the source used for its generated modules.
+pub(crate) struct Chapter<'a> {
+    /// Numbered sections in document order, plus any unnumbered fragment.
+    pub(crate) sections: Vec<Section>,
+    details: Details<'a>,
+}
+
+impl Chapter<'_> {
+    /// Distinct signatures in their order of appearance.
+    pub(crate) fn signatures(
+        &self,
+        name: &str,
+    ) -> &[String] {
+        self.details.signatures.get(name).map_or(&[], Vec::as_slice)
+    }
+
+    /// Formats the unique constructible declaration in its authoritative section.
+    pub(crate) fn type_source(
+        &self,
+        section: &str,
+        name: &str,
+    ) -> Result<String, String> {
+        let source = self
+            .details
+            .types
+            .get(section)
+            .and_then(|types| types.get(name))
+            .ok_or_else(|| format!("missing type `{name}` in section {section}"))?;
+        if source.duplicate {
+            return Err(format!("duplicate type `{name}` in section {section}"));
+        }
+        Ok(render_type_lines(&source.lines))
+    }
+}
+
+struct TypeSource<'a> {
+    lines: Vec<&'a str>,
+    duplicate: bool,
+}
+
+#[derive(Default)]
+struct Details<'a> {
+    signatures: BTreeMap<String, Vec<String>>,
+    types: BTreeMap<&'a str, BTreeMap<&'a str, TypeSource<'a>>>,
+    signature: Option<(Vec<String>, String)>,
+    definition: Option<(&'a str, Vec<&'a str>)>,
+}
+
+impl<'a> Details<'a> {
+    fn finish_signature(&mut self) {
+        let Some((names, text)) = self.signature.take() else {
+            return;
+        };
+        let mut normalized = String::with_capacity(text.len());
+        for word in text.split_whitespace() {
+            if !normalized.is_empty() {
+                normalized.push(' ');
             }
+            normalized.push_str(word);
         }
-    };
-    for raw in source.lines() {
-        if raw.trim_start().starts_with("```") {
-            flush(&mut current);
-            in_fence = !in_fence;
-            depth = 0;
-            continue;
-        }
-        if !in_fence {
-            continue;
-        }
-        let line = raw.split_once('#').map_or(raw, |(before, _)| before);
-        let nested = depth != 0;
-        depth = brace_depth(line, depth);
-        if nested {
-            continue;
-        }
-        if line.trim().is_empty() {
-            continue;
-        }
-        if line.starts_with(char::is_whitespace) {
-            if let Some((_, text)) = &mut current {
-                text.push(' ');
-                text.push_str(line.trim());
+        for name in names {
+            let entry = self.signatures.entry(name).or_default();
+            if !entry.contains(&normalized) {
+                entry.push(normalized.clone());
             }
-            continue;
-        }
-        flush(&mut current);
-        let trimmed = line.trim_start();
-        let head_word = trimmed.split_whitespace().next().unwrap_or("");
-        if matches!(
-            head_word,
-            "type" | "class" | "fn" | "module" | "instance" | "import" | "let"
-        ) {
-            continue;
-        }
-        if let Some(names) = declared_names(trimmed)
-            && let Some((_, signature)) = trimmed.split_once(':')
-        {
-            current = Some((names, signature.trim().to_owned()));
         }
     }
-    flush(&mut current);
+
+    fn finish_type(
+        &mut self,
+        section: &'a str,
+    ) {
+        let Some((name, lines)) = self.definition.take() else {
+            return;
+        };
+        match self.types.entry(section).or_default().entry(name) {
+            | Entry::Vacant(entry) => {
+                entry.insert(TypeSource {
+                    lines,
+                    duplicate: false,
+                });
+            },
+            | Entry::Occupied(mut entry) => entry.get_mut().duplicate = true,
+        }
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "constructible declarations have different continuation syntax from signatures"
+    )]
+    fn type_line(
+        &mut self,
+        section: &'a str,
+        line: &'a str,
+        nested: bool,
+    ) {
+        if nested {
+            if let Some((_, lines)) = &mut self.definition {
+                lines.push(line);
+            }
+        } else if let Some((name, _)) = type_head(line) {
+            self.finish_type(section);
+            self.definition = Some((name, vec![line]));
+        } else if line.is_empty() || (!line.starts_with(char::is_whitespace) && line != "}") {
+            self.finish_type(section);
+        } else if let Some((_, lines)) = &mut self.definition {
+            lines.push(line);
+        }
+    }
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "renders constructible definitions on demand in canonical declaration format"
+)]
+fn render_type_lines(lines: &[&str]) -> String {
+    let mut out = String::new();
+    for (index, line) in lines.iter().enumerate() {
+        if index != 0 && line.trim_start().starts_with("| ") {
+            for variant in line.trim().trim_start_matches("| ").split(" | ") {
+                out.push_str("\n    | ");
+                out.push_str(variant);
+            }
+        } else {
+            if index != 0 {
+                out.push('\n');
+            }
+            out.push_str(line);
+        }
+    }
     out
+}
+
+struct Fence {
+    delimiter: u8,
+    width: usize,
+    declarations: bool,
+}
+
+impl Fence {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "keeps the opening and closing delimiter rules together"
+    )]
+    fn opens(line: &str) -> Option<Self> {
+        let line = line.trim_start();
+        let delimiter = line.bytes().next()?;
+        if !matches!(delimiter, b'`' | b'~') {
+            return None;
+        }
+        let width = line.bytes().take_while(|&byte| byte == delimiter).count();
+        let language = line.get(width..)?.split_whitespace().next().unwrap_or("");
+        (width >= 3).then_some(Self {
+            delimiter,
+            width,
+            declarations: matches!(language, "" | "aevia" | "text"),
+        })
+    }
+
+    fn closes(
+        &self,
+        line: &str,
+    ) -> bool {
+        let line = line.trim_start();
+        let width = line
+            .bytes()
+            .take_while(|&byte| byte == self.delimiter)
+            .count();
+        width >= self.width && line.get(width..).is_some_and(|tail| tail.trim().is_empty())
+    }
+}
+
+/// Reads section titles, value declarations, and the optional details from one
+/// stream of chapter-8 source lines.
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeps the fence, section, and declaration transitions together"
+)]
+pub(crate) fn read_chapter(
+    source: &str,
+    with_details: bool,
+) -> Chapter<'_> {
+    let mut sections = Vec::new();
+    let mut details = Details::default();
+    let mut section_number = "";
+    let mut current: Option<Section> = None;
+    let mut fence: Option<Fence> = None;
+    let mut depth = 0usize;
+    for raw in source.lines() {
+        if let Some(open) = &fence {
+            if open.closes(raw) {
+                fence = None;
+                depth = 0;
+                if with_details {
+                    details.finish_signature();
+                    details.finish_type(section_number);
+                }
+                continue;
+            }
+            if !open.declarations {
+                continue;
+            }
+        } else {
+            fence = Fence::opens(raw);
+            if fence.is_none()
+                && let Some((number, title)) = chapter8_heading(raw)
+            {
+                section_number = number;
+                sections.extend(current.replace(Section {
+                    number: number.to_owned(),
+                    title: title.to_owned(),
+                    ..Section::default()
+                }));
+            }
+            continue;
+        }
+
+        let line = raw
+            .split_once('#')
+            .map_or(raw, |(before, _)| before)
+            .trim_end();
+        let nested = depth != 0;
+        if with_details {
+            details.type_line(section_number, line, nested);
+        }
+        depth = depth
+            .saturating_add(line.matches('{').count())
+            .saturating_sub(line.matches('}').count());
+        let trimmed = line.trim_start();
+        if nested || trimmed.is_empty() {
+            continue;
+        }
+
+        let indented = trimmed.len() < line.len();
+        if with_details {
+            if indented {
+                if let Some((_, signature)) = &mut details.signature {
+                    signature.push(' ');
+                    signature.push_str(trimmed);
+                }
+            } else {
+                details.finish_signature();
+            }
+        }
+        let head = trimmed.split_whitespace().next().unwrap_or("");
+        if matches!(
+            head,
+            "type" | "class" | "fn" | "module" | "instance" | "import" | "let"
+        ) {
+            if head == "type"
+                && let Some(declared) = declared_type(trimmed)
+            {
+                current
+                    .get_or_insert_with(Section::default)
+                    .types
+                    .push(declared);
+            }
+        } else if let Some((declared, signature)) = declared_names(trimmed) {
+            if !indented && with_details {
+                details.signature = Some((declared.clone(), signature.trim().to_owned()));
+            }
+            current
+                .get_or_insert_with(Section::default)
+                .names
+                .extend(declared);
+        }
+    }
+    if with_details {
+        details.finish_signature();
+        details.finish_type(section_number);
+    }
+    sections.extend(current);
+    Chapter { sections, details }
 }
 
 /// The number and title of a `## 8.x …` or `### 8.x.y …` heading.
@@ -214,7 +362,7 @@ pub fn signatures(source: &str) -> BTreeMap<String, Vec<String>> {
     clippy::single_call_fn,
     reason = "isolates the numbered heading grammar"
 )]
-fn chapter8_heading(line: &str) -> Option<(String, String)> {
+fn chapter8_heading(line: &str) -> Option<(&str, &str)> {
     let rest = line
         .strip_prefix("### ")
         .or_else(|| line.strip_prefix("## "))?;
@@ -228,7 +376,7 @@ fn chapter8_heading(line: &str) -> Option<(String, String)> {
     {
         return None;
     }
-    Some((number.to_string(), title.trim().to_string()))
+    Some((number, title.trim()))
 }
 
 /// The type declaration a `type Name<params> …` line declares.
@@ -237,15 +385,7 @@ fn chapter8_heading(line: &str) -> Option<(String, String)> {
     reason = "isolates the declaration head grammar"
 )]
 fn declared_type(line: &str) -> Option<TypeName> {
-    let rest = line.strip_prefix("type ")?;
-    let rest = rest.trim_start();
-    let name_end = rest
-        .find(|ch: char| ch == '<' || ch == '=' || ch.is_whitespace())
-        .unwrap_or(rest.len());
-    let (name, suffix) = rest.split_at_checked(name_end)?;
-    if !is_identifier(name) {
-        return None;
-    }
+    let (name, suffix) = type_head(line)?;
     let params = if let Some(tail) = suffix.strip_prefix('<') {
         let (params, _) = tail.split_once('>')?;
         params
@@ -262,9 +402,22 @@ fn declared_type(line: &str) -> Option<TypeName> {
     })
 }
 
+fn type_head(line: &str) -> Option<(&str, &str)> {
+    let rest = line.strip_prefix("type ")?.trim_start();
+    let name_end = rest
+        .find(|ch: char| ch == '<' || ch == '=' || ch.is_whitespace())
+        .unwrap_or(rest.len());
+    let (name, suffix) = rest.split_at_checked(name_end)?;
+    is_identifier(name).then_some((name, suffix))
+}
+
 /// The identifiers a `name … : type` line declares, if it declares any.
-fn declared_names(line: &str) -> Option<Vec<String>> {
-    let (head, _) = line.split_once(':')?;
+#[allow(
+    clippy::single_call_fn,
+    reason = "isolates the declaration head grammar from the chapter traversal"
+)]
+fn declared_names(line: &str) -> Option<(Vec<String>, &str)> {
+    let (head, signature) = line.split_once(':')?;
     let head = head.trim();
     if head.is_empty() {
         return None;
@@ -272,12 +425,19 @@ fn declared_names(line: &str) -> Option<Vec<String>> {
     // A type definition or a type function (`RateOf<s> = …`) is not a library
     // name. A signature never contains `=`, but it does contain `=>` for a
     // class constraint, so only a bare `=` counts.
-    if line.replace("=>", "").contains('=') {
+    if line
+        .match_indices('=')
+        .any(|(at, _)| !line.get(at..).is_some_and(|tail| tail.starts_with("=>")))
+    {
         return None;
     }
     // Drop type arguments and an empty parameter list: `from_dense<F>` declares
     // `from_dense`, and `type_rep<a>()` declares `type_rep`.
-    let head = strip_type_arguments(head).replace("()", "");
+    let head = if head.contains(['<', '>', '(']) {
+        Cow::Owned(strip_type_arguments(head).replace("()", ""))
+    } else {
+        Cow::Borrowed(head)
+    };
     let mut names = Vec::new();
     for word in head.split_whitespace() {
         if !is_identifier(word) {
@@ -288,7 +448,7 @@ fn declared_names(line: &str) -> Option<Vec<String>> {
     if names.is_empty() {
         None
     } else {
-        Some(names)
+        Some((names, signature))
     }
 }
 
@@ -375,6 +535,42 @@ sqrt     : Scalar<ρ,d> -> Scalar<ρ,d^(1/2)>
     fn ignores_text_outside_fences() {
         let source = "prose: not a signature\n```\npi : Real[1]\n```\nmore: prose\n";
         assert_eq!(names(source), vec!["pi"]);
+    }
+
+    #[test]
+    fn fences_use_their_delimiter_and_width_and_exclude_quoted_examples() {
+        let source = "\
+## 8.2 Math\r\n\
+````markdown\r\n\
+```aevia\r\n\
+quoted : Int\r\n\
+```\r\n\
+## 8.9 Quoted heading\r\n\
+`````\r\n\
+~~~aevia\r\n\
+first : Int\r\n\
+~~~text\r\n\
+second : Int\r\n\
+~~~~\r\n";
+        let parsed = sections(source);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].number, "8.2");
+        assert_eq!(parsed[0].names, ["first", "second"]);
+        assert_eq!(
+            signatures(source).into_keys().collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+    }
+
+    #[test]
+    fn signatures_preserve_distinct_overloads_in_document_order() {
+        let source = "```text\nrepeat<F<X>>() : Eq<X> => X\n    -> X # continuation\n\
+                      repeat : Eq<X> => X -> X\nrepeat : Int -> Int\n```\n";
+        assert_eq!(names(source), ["repeat"]);
+        assert_eq!(
+            signatures(source).get("repeat").unwrap(),
+            &["Eq<X> => X -> X", "Int -> Int"]
+        );
     }
 
     #[test]

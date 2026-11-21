@@ -98,7 +98,8 @@ FFT	rfftn	沿全部轴作实数傅里叶变换，最后一轴仅保留非冗余�
 FFT	rfftn_axes	沿指定轴列表作实数傅里叶变换。列表末尾的轴保留半频谱，其余轴使用完整复数变换。
 Interpolate	chebyshev_fit	对样本 (xs, ys) 拟合给定次数的 Chebyshev 级数。高阶拟合通常比幂基底的 polyfit 条件更好。
 Interpolate	interp1	依据严格递增的样本坐标 xs，在相邻节点间线性插值 ys，以求 x 处的值。
-Interpolate	interp2	在矩形网格上执行双线性插值。table[i][j] 是 (xs[i], ys[j]) 处的函数值。
+Interpolate	interp2	在矩形网格的 (x, y) 处执行双线性插值。table[j][i] 是 (xs[i], ys[j]) 处的采样值。有限的越界坐标限制到网格边界。
+Interpolate	interp2Batch	对多个坐标对执行双线性插值。坐标轴必须严格递增，table[j][i] 存储 (xs[i], ys[j]) 处的采样值。两个查询张量等长并各自匹配坐标轴量纲。有限的越界坐标限制到网格边界。返回的 Float 张量保留查询顺序和采样表量纲。
 Interpolate	polyfit	对样本坐标和值进行给定次数的最小二乘多项式拟合。
 Interpolate	polyval	按从常数项开始的顺序接收多项式系数，并计算给定 x 处的值。
 Interpolate	spline	对严格递增的 xs 与对应 ys 拟合三次样条，返回 x 处的值。
@@ -136,7 +137,7 @@ Sde	sdeint_diag	积分 dy = drift dt + diffusion dW，其中每个状态分量�
 Sde	sdeint_general	积分各分量通过噪声耦合的随机微分方程。扩散函数返回一个矩阵，每条噪声通道对应一列。
 Sde	wiener	从给定种子生成独立布朗运动的增量。返回形状为 steps × channels 的矩阵，dt 是每步时长。
 Pde	solve_advection	在规则网格上求解平流方程。返回各时间步的场，时间步不稳定或场与网格不匹配时返回 Err(PdeError)。
-Pde	solve_heat	在规则网格上用差分法求解扩散方程。返回各时间步的温度或场值，时间步不稳定或网格不匹配时报错。
+Pde	solve_heat	在规则二维网格上求解热扩散方程，固定初始场四边，并返回初始场和每个时间步的场值。默认 `method = "explicit"`，扩散数不得超过 `1/4`。设为 `"adi"` 时使用交替方向隐式步进，可超过显式限制。
 Pde	solve_poisson	在规则矩形网格上用有限差分求解 Poisson 方程。按问题设置边界条件并检查返回场。
 Pde	solve_wave	在规则网格上用有限差分求解波动方程。返回各时间步的场，时间步不稳定或网格不匹配时返回 Err(PdeError)。
 Units.Constants	f	法拉第常数。2019 年 SI 定义的精确值。

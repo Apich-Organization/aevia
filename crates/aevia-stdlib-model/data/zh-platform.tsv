@@ -62,8 +62,8 @@ Measurement	measure	用测量值和标准不确定度构造 `Measurement<d>`。�
 Measurement	uncertainty	返回测量值的标准不确定度，也就是一个标准差（1σ）对应的误差量，量纲与测量值相同。
 Measurement	value	返回 `Measurement<d>` 中的测量值，保留其物理量纲。用 `uncertainty` 单独读取不确定度。
 Device	device_of	返回张量当前所在的计算设备。
-Device	on	`on(device, thunk)` 在指定设备上执行零参数函数 `thunk`，并返回其结果。这是一个 `IO` 操作。
-Device	to_device	将张量传输到指定计算设备并返回张量。`Device` 可以是 `Cpu`、`Gpu(index)` 或 `Distributed`。使用 `device_of` 查询张量当前所在的设备。此操作具有 `IO` 效果，未启用 GPU 支持的构建收到 GPU 请求时会在运行时报告错误。
+Device	on	`on(device, thunk)` 在请求的 CPU 设备上执行零参数函数 `thunk`，并返回 `IO` 结果。目前支持 `Cpu`，请求 `Gpu` 或 `Distributed` 会报 `E1001`。
+Device	to_device	将张量放置在请求的 CPU 设备上，并以 `IO` 返回张量。用 `device_of` 查询张量位置。目前支持 `Cpu`。即使 RSSN 宿主已发现 GPU，`Gpu` 或 `Distributed` 放置请求仍会报 `E1001`。
 Physics	simulate	按名称运行科学计算内核中的模拟场景，例如 `"ising"`。从 `Json` 读取参数并以 `Json` 返回结果。场景未知或参数无效时返回 `Err(SimError)`。可优先使用相应的类型化模块，例如 `Physics.Ising`。
 Physics.Ising	Params	伊辛模型模拟的输入。`width` 和 `height` 指定格点网格的尺寸，`temperature` 是无量纲温度，`mc_steps` 是蒙特卡洛步数，`seed` 是可选随机种子。
 Physics.Ising	IsingResult	伊辛模拟的输出，包含保存各格点自旋的二维整型张量 `spins`，以及无量纲的磁化量 `magnetization`。

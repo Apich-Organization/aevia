@@ -169,11 +169,13 @@ Math.NumberTheory	factor	对整数做质因数分解，返回由「质数、指�
 Math.NumberTheory	gcd	求两个整数的最大公约数。结果无量纲且非负，两个参数都是零时返回零。
 Math.NumberTheory	is_prime	判断整数是否为质数。负数、零和一都返回 `false`。
 Math.NumberTheory	lcm	求两个整数的最小公倍数。结果无量纲，任一参数为零时返回零。
+Math.NumberTheory	mod_pow	直接计算整数幂在正模数下的精确余数，结果在 [0, modulus) 内。所有参数支持任意精度整数，指数必须非负，模数必须为正。
 Math.NumberTheory	primes	返回由所有不大于 `n` 的质数组成的向量。
 Math.Combinatorics	binomial	精确计算从 `n` 个元素中选出 `k` 个的组合数，返回无量纲整数。若 `k > n`，结果为零。
 Math.Combinatorics	permutations	计算 `n` 个不同元素的排列总数 `n!`，结果无量纲。
 Math.Geometry	distance	计算两个点之间的欧几里得距离。两个点须由等长坐标向量表示，所得距离保留坐标的量纲。
 Math.Geometry	polygon_area	按边界顺序提供简单多边形的顶点，将每一行写成一对 `(x, y)` 坐标。函数使用鞋带公式计算面积，结果量纲是坐标量纲的平方。
+Math.Geometry	tetrahedron_volume	由四行三列的有限坐标计算非负体积。结果量纲是坐标量纲的立方，与顶点顺序无关。共面或重复顶点的体积为零。坐标或计算所得体积非有限时报告定义域错误。
 Tensor	fill	用同一个值填充指定形状的张量，保留该值的数值类型和量纲。例如 `fill(2.0 m, 3)` 得到含三个 `2 m` 的向量。
 Tensor	ones	创建各元素均为一的张量，每个参数给出一条轴的长度。元素默认为 `Float`，也可显式指定类型，例如 `ones<Int>(3)`。
 Tensor	zeros	创建各元素均为零的张量，每个参数给出一条轴的长度。例如 `zeros(3)` 得到向量，`zeros(2, 3)` 得到两行三列的矩阵。元素默认为 `Float`，可用 `zeros<Int>(3)` 或 `zeros<Real>(3)` 指定类型，形状为编译期常量时还可用 `zeros_of<[2, 3]>()` 将其纳入类型。
@@ -216,6 +218,7 @@ Stats	mean	计算任意秩张量中全部元素的算术平均值，保留元素
 Stats	median	将向量排序后取中间值。长度为偶数时取中间两个值的平均，结果保留元素量纲。
 Stats	mode	返回向量中出现最频繁的值。若多个值并列，取其中最小的一个，保留原量纲。
 Stats	quantile	计算比例 `q` 对应的分位数，要求 `q` 位于 `[0, 1]`。在相邻排序样本间使用线性插值，结果保留数据的量纲。`q = 0.5` 对应中位数。
+Stats	quantiles	对无量纲且位于 `[0, 1]` 的概率向量批量计算第 7 型分位数。各查询共用一次样本排序，结果保留样本量纲、查询顺序和重复项。精确输入使用有理数插值。样本必须非空且各元素有限，空概率向量得到空结果。
 Stats	skewness	计算样本偏度，结果无量纲。右侧长尾对应正偏度。
 Stats	std	计算样本标准差，保留样本元素的量纲。单元素样本的标准差为零。
 Stats	var	样本至少有两个元素时，以 `n - 1` 为分母计算样本方差。单元素样本的方差为零。第二个参数为 `true` 时改算总体方差，分母为 `n`。结果量纲是元素量纲的平方。
@@ -234,8 +237,10 @@ Stats.Distributions	Cauchy	柯西分布。位置参数 `loc` 与尺度参数和�
 Stats.Distributions	F	分子自由度为 `df1`、分母自由度为 `df2` 的 F 分布，常用于描述方差之比。
 Stats.Distributions	NegativeBinomial	负二项分布描述第 `r` 次成功前发生的失败次数。每次试验的成功概率均为 `p`，失败次数从零计起。
 Stats.Distributions	Geometric	几何分布描述首次成功前发生的失败次数。每次试验的成功概率均为 `p`，失败次数从零计起。
-Stats.Distributions	Distribution	用分布构造器创建的概率分布值，例如 `Normal({ mu = 0.0, sigma = 1.0 })`。它可传给 `pdf`、`cdf`、`sample` 或 `sample_n`。构造器参数可携带量纲，例如描述长度的正态分布可用米表示均值和标准差，此时密度以每米计。
+Stats.Distributions	Distribution	用分布构造器创建的概率分布值，例如 `Normal({ mu = 0.0, sigma = 1.0 })`。它可传给 `pdf`、`cdf`、`cdf_batch`、`dist_quantile`、`sample` 或 `sample_n`。构造器参数可携带量纲，例如描述长度的正态分布可用米表示均值和标准差，此时密度以每米计。
 Stats.Distributions	cdf	计算从给定分布抽取的值不大于 `x` 的概率。结果无量纲且位于 `[0, 1]` 内。
+Stats.Distributions	cdf_batch	对查询向量的各元素计算累积概率。查询点采用分布的量纲，结果无量纲并保留查询顺序和重复项。分布参数有效时，空查询向量返回空结果。无效参数或 NaN 查询点会引发定义域错误。
+Stats.Distributions	dist_quantile	返回给定概率下的分布分位数，结果具有分布的量纲。概率必须无量纲且在 [0, 1] 内。概率为 0 或 1 时返回支撑集的下端或上端，端点可以是无穷。无效的参数或概率会引发定义域错误。
 Stats.Distributions	pdf	计算分布在 `x` 处的概率密度，或者离散分布在该点的概率质量。密度量纲是 `x` 量纲的倒数，概率质量无量纲。分布可用 `Normal`、`Uniform` 等构造器创建。
 Stats.Distributions	sample	从分布中随机抽取一个值，返回一个 IO 操作。需要重现抽样序列时，使用带种子的 `sample_n`。
 Stats.Distributions	sample_n	从分布中抽取 `n` 个值。传入 `Some(seed)` 可重现抽样序列，传入 `None` 则随机抽样。

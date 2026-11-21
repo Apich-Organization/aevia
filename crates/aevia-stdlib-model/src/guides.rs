@@ -106,7 +106,7 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "Distribution",
-        description: "A probability distribution, built with one of its constructors, for example Normal({ mu = 0.0, sigma = 1.0 }). Pass it to pdf, cdf, sample and sample_n. Parameters carry dimensions, so a Normal of lengths has mu and sigma in metres and its density is per metre.",
+        description: "A probability distribution, built with one of its constructors, for example Normal({ mu = 0.0, sigma = 1.0 }). Pass it to pdf, cdf, cdf_batch, dist_quantile, sample or sample_n. Parameters carry dimensions, so a Normal of lengths has mu and sigma in metres and its density is per metre.",
         example: "",
     },
     Guide {
@@ -460,6 +460,11 @@ pub const GUIDES: &[Guide] = &[
         example: "import Stats.Distributions { Normal }\ncdf(Normal({ mu = 0.0, sigma = 1.0 }), 0.0)",
     },
     Guide {
+        name: "cdf_batch",
+        description: "Evaluates cumulative probabilities for a vector of points in the distribution's dimension. The results are dimensionless and retain point order and repetitions. A valid distribution and an empty input give an empty result. Invalid parameters or a NaN point raise a domain error.",
+        example: "import Stats.Distributions { cdf_batch, Normal }\ncdf_batch(Normal({ mu = 0.0, sigma = 1.0 }), [-1.0, 0.0, 1.0])",
+    },
+    Guide {
         name: "ceil",
         description: "Rounds up to the nearest whole number, keeping the type and dimension: ceil(-2.2) is -2.",
         example: "ceil(2.1)",
@@ -713,6 +718,11 @@ pub const GUIDES: &[Guide] = &[
         name: "difference",
         description: "The elements of the first set that are not in the second.",
         example: "difference(set_of([1, 2, 3]), set_of([2]))",
+    },
+    Guide {
+        name: "dist_quantile",
+        description: "Returns the quantile of a distribution at a dimensionless probability in [0, 1]. The result has the distribution's dimension. At probabilities 0 and 1 it returns the lower and upper support endpoints, which can be infinite. Invalid parameters and probabilities raise a domain error.",
+        example: "import Stats.Distributions { Normal, dist_quantile }\ndist_quantile(Normal({ mu = 2.0 m, sigma = 0.5 m }), 0.975)",
     },
     Guide {
         name: "distance",
@@ -1116,8 +1126,13 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "interp2",
-        description: "Bilinear interpolation on a grid: interp2(xs, ys, table, x, y) where table[i][j] is the value at (xs[i], ys[j]).",
+        description: "Bilinear interpolation at (x, y) on a grid. Store the sample at (xs[i], ys[j]) in table[j][i]. Finite queries outside the grid are clamped to its edges.",
         example: "interp2([0.0, 1.0], [0.0, 1.0], [[0.0, 1.0], [2.0, 3.0]], 0.5, 0.5)",
+    },
+    Guide {
+        name: "interp2Batch",
+        description: "Bilinear interpolation for paired samples. Use increasing axes and place the sample at (xs[i], ys[j]) in table[j][i]. Supply two equally long query tensors with the dimensions of their respective axes. Finite queries clamp to the edges. Float results keep the input order and the table's dimension.",
+        example: "interp2Batch([0.0, 1.0], [0.0, 1.0], [[0.0, 1.0], [2.0, 3.0]], [0.5, 0.0], [0.5, 1.0])",
     },
     Guide {
         name: "intersection",
@@ -1425,6 +1440,11 @@ pub const GUIDES: &[Guide] = &[
         example: "mod(-7, 3)\nmod(7.5, 2.0)",
     },
     Guide {
+        name: "mod_pow",
+        description: "Computes the exact residue of base raised to exponent modulo modulus. The result lies in [0, modulus). All arguments support arbitrary-size integers. The exponent must be nonnegative and the modulus positive.",
+        example: "mod_pow(-3, 3, 7)\nmod_pow(2, 1000000, 97)",
+    },
+    Guide {
         name: "mode",
         description: "The most frequent value of a vector; ties go to the smallest value.",
         example: "mode([1, 2, 2, 3])",
@@ -1516,7 +1536,7 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "on",
-        description: "on(device, thunk) runs the computation thunk() on a device and returns its result. It is an IO action.",
+        description: "Runs the zero-argument function thunk on the requested CPU device. This IO action currently supports Cpu. Requests for Gpu or Distributed produce E1001.",
         example: "fn run_here(m: Tensor<2, Float>): IO Int = on(device_of(m), fn () => 1 + 1)",
     },
     Guide {
@@ -1658,6 +1678,11 @@ pub const GUIDES: &[Guide] = &[
         name: "quantile",
         description: "quantile(xs, q) is the value below which a fraction q (between 0 and 1) of the data falls, with linear interpolation; quantile(xs, 0.5) is the median.",
         example: "quantile([1.0, 2.0, 3.0, 4.0], 0.25)",
+    },
+    Guide {
+        name: "quantiles",
+        description: "Compute Type-7 quantiles for a vector of dimensionless probabilities in [0, 1]. The batch shares one ordered sample and keeps the sample dimension and query order, including duplicates. Exact inputs use rational interpolation. The sample must be finite and nonempty. An empty probability vector returns an empty result.",
+        example: "quantiles([4.0 m, 1.0 m, 3.0 m, 2.0 m], [0.75, 0.25, 0.5])",
     },
     Guide {
         name: "quot",
@@ -1981,8 +2006,8 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "solve_heat",
-        description: "Solves the heat (diffusion) equation on a regular grid by finite differences, returning the field at each time step as Ok(fields), or Err(PdeError) for an unstable time step or mismatched grid. See the Pde module for the record fields.",
-        example: "let solver = solve_heat",
+        description: "Solves heat diffusion on a regular 2D grid and returns the initial field and every time step. The edges keep their initial values. Set method to \"adi\" for implicit stepping beyond the explicit stability limit. The default \"explicit\" requires alpha * dt / h^2 <= 1/4.",
+        example: "import Pde { solve_heat }\nsolve_heat({ grid = { nx = 3, ny = 3, h = 1.0 }, alpha = 1.0, dt = 2.0, steps = 1, method = \"adi\", initial = [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0]] })",
     },
     Guide {
         name: "solve_ivp",
@@ -2135,6 +2160,11 @@ pub const GUIDES: &[Guide] = &[
         example: "tanh(0.5)",
     },
     Guide {
+        name: "tetrahedron_volume",
+        description: "Computes the nonnegative volume from four rows of three finite coordinates. It cubes the coordinate dimension and is independent of vertex order. Coplanar or repeated vertices give zero. Non-finite coordinates or a non-finite computed volume raise a domain error.",
+        example: "import Math.Geometry { tetrahedron_volume }\ntetrahedron_volume([[0.0 m, 0.0 m, 0.0 m], [1.0 m, 0.0 m, 0.0 m], [0.0 m, 1.0 m, 0.0 m], [0.0 m, 0.0 m, 1.0 m]])",
+    },
+    Guide {
         name: "time_now",
         description: "The current wall-clock time as a Float in seconds. It is an IO action because each call gives a different answer. Subtract two readings to time a computation.",
         example: "time_now()",
@@ -2161,7 +2191,7 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "to_device",
-        description: "Moves a matrix to a compute device and returns it. A Device is Cpu, Gpu(index) or Distributed, and you can obtain the one a matrix already lives on with device_of. It is an IO action. Without GPU support in the build, asking for a Gpu device is a runtime error.",
+        description: "Places a tensor on the requested CPU device and returns it. This IO action currently supports Cpu. Use device_of to query the tensor location. Gpu and Distributed placement produce E1001 even if the RSSN host can discover a GPU.",
         example: "fn stay(m: Tensor<2, Float>): IO Tensor<2, Float> = to_device(m, device_of(m))",
     },
     Guide {

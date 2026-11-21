@@ -58,7 +58,7 @@ pub const TREE: &[ModuleDef] = &[
     ModuleDef {
         path: "Math/NumberTheory",
         sections: &[],
-        names: &["factor", "is_prime", "primes", "gcd", "lcm"],
+        names: &["factor", "is_prime", "primes", "gcd", "lcm", "mod_pow"],
         types: &[],
     },
     ModuleDef {
@@ -70,7 +70,7 @@ pub const TREE: &[ModuleDef] = &[
     ModuleDef {
         path: "Math/Geometry",
         sections: &[],
-        names: &["polygon_area", "distance"],
+        names: &["polygon_area", "distance", "tetrahedron_volume"],
         types: &[],
     },
     ModuleDef {
@@ -224,6 +224,7 @@ pub const TREE: &[ModuleDef] = &[
         names: &[
             "interp1",
             "interp2",
+            "interp2Batch",
             "spline",
             "polyfit",
             "polyval",
@@ -404,15 +405,24 @@ pub fn spec_module_sources_with_docs(
 ///
 /// # Errors
 ///
-/// Returns an error for an invalid catalog or a missing section, export, or type.
+/// Returns an error for an invalid catalog, a missing section, export, or type,
+/// or a duplicate numbered section or constructible type in that section.
 pub fn try_spec_module_sources_with_docs(
     spec_source: &str,
     docs: DocFn<'_>,
 ) -> Result<Vec<(String, String)>, String> {
     validate_catalog()?;
-    let signatures = spec::signatures(spec_source);
-    let sections = spec::sections(spec_source);
-    let declared: BTreeSet<&str> = sections
+    let chapter = spec::read_chapter(spec_source, true);
+    let mut by_number = BTreeMap::new();
+    for section in &chapter.sections {
+        if !section.number.is_empty()
+            && by_number.insert(section.number.as_str(), section).is_some()
+        {
+            return Err(format!("duplicate chapter 8 section {}", section.number));
+        }
+    }
+    let declared: BTreeSet<&str> = chapter
+        .sections
         .iter()
         .flat_map(|section| section.names.iter().map(String::as_str))
         .collect();
@@ -426,10 +436,6 @@ pub fn try_spec_module_sources_with_docs(
             }
         }
     }
-    let by_number: BTreeMap<&str, &spec::Section> = sections
-        .iter()
-        .map(|section| (section.number.as_str(), section))
-        .collect();
     TREE.iter()
         .filter(|module| !is_manifest_generated(module.path))
         .map(|module| {
@@ -446,7 +452,7 @@ pub fn try_spec_module_sources_with_docs(
             names.dedup();
             Ok((
                 module.path.to_string(),
-                render_module(module, &names, spec_source, &signatures, docs)?,
+                render_module(module, &names, &chapter, docs)?,
             ))
         })
         .collect()
@@ -516,66 +522,15 @@ const TYPE_SOURCES: &[(&str, &str, &[&str])] = &[
 )]
 fn type_declarations(
     path: &str,
-    source: &str,
+    chapter: &spec::Chapter<'_>,
 ) -> Result<Vec<String>, String> {
     let Some(&(_, section, wanted)) = TYPE_SOURCES.iter().find(|(module, _, _)| *module == path)
     else {
         return Ok(Vec::new());
     };
-    let mut active = false;
-    let mut fenced = false;
-    let mut declarations = BTreeMap::new();
-    let mut current: Option<(String, Vec<String>)> = None;
-    let mut flush = |current: &mut Option<(String, Vec<String>)>| {
-        if let Some((name, lines)) = current.take() {
-            declarations.insert(name, lines.join("\n"));
-        }
-    };
-    for raw in source.lines() {
-        if raw.trim_start().starts_with("```") {
-            flush(&mut current);
-            fenced = !fenced;
-            continue;
-        }
-        if !fenced && (raw.starts_with("## ") || raw.starts_with("### ")) {
-            active = raw.split_whitespace().nth(1) == Some(section);
-        }
-        if !active || !fenced {
-            continue;
-        }
-        let line = raw.split('#').next().unwrap_or("").trim_end();
-        if let Some(rest) = line.strip_prefix("type ") {
-            flush(&mut current);
-            let name = rest
-                .split(|c: char| c == '<' || c == '=' || c.is_whitespace())
-                .next()
-                .unwrap_or("");
-            if wanted.contains(&name) {
-                current = Some((name.to_string(), vec![line.to_string()]));
-            }
-        } else if line.trim().is_empty() || (!line.starts_with(char::is_whitespace) && line != "}")
-        {
-            // A declaration ends before another top-level signature.
-            flush(&mut current);
-        } else if let Some((_, lines)) = &mut current {
-            if line.trim_start().starts_with("| ") {
-                // The specification packs variants onto continuation lines.
-                for variant in line.trim().trim_start_matches("| ").split(" | ") {
-                    lines.push(format!("    | {variant}"));
-                }
-            } else {
-                lines.push(line.to_string());
-            }
-        }
-    }
-    flush(&mut current);
     wanted
         .iter()
-        .map(|name| {
-            declarations
-                .remove(*name)
-                .ok_or_else(|| format!("missing type `{name}` in section {section}"))
-        })
+        .map(|name| chapter.type_source(section, name))
         .collect()
 }
 
@@ -714,8 +669,7 @@ fn push_type_doc(
 fn render_module(
     module: &ModuleDef,
     names: &[&str],
-    spec_source: &str,
-    signatures: &std::collections::BTreeMap<String, Vec<String>>,
+    chapter: &spec::Chapter<'_>,
     docs: DocFn<'_>,
 ) -> Result<String, String> {
     let mut out = String::new();
@@ -730,7 +684,7 @@ fn render_module(
         module.path,
         module.path.replace('/', ".")
     );
-    for declaration in type_declarations(module.path, spec_source)? {
+    for declaration in type_declarations(module.path, chapter)? {
         push_type_doc(&mut out, &declaration);
         out.push_str(&declaration);
         out.push_str("\n\n");
@@ -751,7 +705,7 @@ fn render_module(
             ));
             continue;
         }
-        let found = signatures.get(*name).map_or(&[][..], Vec::as_slice);
+        let found = chapter.signatures(name);
         if let Some(text) = docs(module.path, name, found) {
             push_doc_text(&mut out, &text);
         }
@@ -834,7 +788,7 @@ mod tests {
         let source = "```markdown\n## 8.8 Quoted heading\ntype Norm = Fake\n```\n\
                       ## 8.8 FFT\n```aevia\ntype Norm = | Unscaled\ntype AxisScale = | Linear\n```\n";
         assert_eq!(
-            type_declarations("FFT", source).expect("extract types"),
+            type_declarations("FFT", &spec::read_chapter(source, true)).expect("extract types"),
             ["type Norm = | Unscaled", "type AxisScale = | Linear"]
         );
     }
@@ -844,5 +798,30 @@ mod tests {
         let error =
             try_spec_module_sources_with_docs("", &|_, _, _| None).expect_err("missing source");
         assert!(error.contains("which is absent from chapter 8"), "{error}");
+    }
+
+    #[test]
+    fn duplicate_numbered_sections_fail_instead_of_overwriting_exports() {
+        let source = "## 8.8 FFT\n```\nfft : Int\n```\n### 8.8 Repeated\n";
+        let result = try_spec_module_sources_with_docs(source, &|_, _, _| None);
+        assert_eq!(result.unwrap_err(), "duplicate chapter 8 section 8.8");
+    }
+
+    #[test]
+    fn duplicate_constructible_types_fail_instead_of_overwriting_a_definition() {
+        let source = "## 8.8 FFT\n```aevia\ntype Norm = | First\n```\n\
+                      ```text\ntype Norm = | Second\ntype AxisScale = | Linear\n```\n";
+        let result = type_declarations("FFT", &spec::read_chapter(source, true));
+        assert_eq!(result.unwrap_err(), "duplicate type `Norm` in section 8.8");
+    }
+
+    #[test]
+    fn a_blank_line_inside_a_constructible_record_preserves_its_remaining_fields() {
+        let source = "## 8.9 Ode\n```aevia\ntype OdeOpts = {\n    a: Int,\n\n    b: Int,\n}\n```\n";
+        let parsed = spec::read_chapter(source, true);
+        assert_eq!(
+            parsed.type_source("8.9", "OdeOpts").unwrap(),
+            "type OdeOpts = {\n    a: Int,\n\n    b: Int,\n}"
+        );
     }
 }
