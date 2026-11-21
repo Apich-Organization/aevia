@@ -41,6 +41,11 @@ use std::sync::LazyLock;
 
 use crate::html::push_escaped;
 
+const OPTIONS: Options = Options::ENABLE_TABLES
+    .union(Options::ENABLE_FOOTNOTES)
+    .union(Options::ENABLE_STRIKETHROUGH)
+    .union(Options::ENABLE_TASKLISTS);
+
 /// Renders Markdown to HTML with the registry's conventions.
 ///
 /// Tables, footnotes, strikethrough and task lists are enabled because a
@@ -79,18 +84,42 @@ fn render(
     markdown: &str,
     manual_links: Option<&dyn Fn(&str) -> String>,
 ) -> String {
-    let mut options = Options::empty();
-    options.insert(Options::ENABLE_TABLES);
-    options.insert(Options::ENABLE_FOOTNOTES);
-    options.insert(Options::ENABLE_STRIKETHROUGH);
-    options.insert(Options::ENABLE_TASKLISTS);
-    let parser = Parser::new_ext(markdown, options);
+    let mut needs_sanitiser = false;
     let mut rendered = String::with_capacity(markdown.len().saturating_add(markdown.len() / 2));
     pulldown_cmark::html::push_html(
         &mut rendered,
-        parser.map(|event| adapt(event, manual_links)),
+        Parser::new_ext(markdown, OPTIONS).map(|event| {
+            needs_sanitiser = needs_sanitiser || !is_plain_prose(&event);
+            adapt(event, manual_links)
+        }),
     );
-    sanitise(&rendered)
+    if needs_sanitiser {
+        sanitise(&rendered)
+    } else {
+        rendered
+    }
+}
+
+/// True for renderer-generated prose whose HTML requires no attributes or
+/// normalisation. Raw HTML, links, and all other events use the full policy.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps the plain-prose allowlist separate from rendering and URL adaptation"
+)]
+fn is_plain_prose(event: &Event<'_>) -> bool {
+    match event {
+        | Event::Start(Tag::Paragraph | Tag::Emphasis | Tag::Strong | Tag::Strikethrough)
+        | Event::End(
+            TagEnd::Paragraph | TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough,
+        )
+        | Event::SoftBreak => true,
+        | Event::Text(text) | Event::Code(text) => {
+            !text.chars().any(|character| {
+                character.is_control() || matches!(character, '<' | '>' | '&' | '\u{a0}')
+            })
+        },
+        | _ => false,
+    }
 }
 
 /// Rewrites one event, or returns it unchanged.
@@ -293,6 +322,41 @@ fn sanitise(html: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skipping_the_html_parser_preserves_rendering() {
+        let plain = [
+            "",
+            "Ordinary prose with an apostrophe's mark and \"quotes\".",
+            "中文和 λ 都保留。",
+            "`inline code` and **bold**, *emphasis*, ~~struck~~.",
+            "A soft\nwrap.\n\nA second paragraph.",
+        ];
+        let checked = [
+            "A hard  \nwrap.",
+            "`vector<T>` & non-breaking\u{a0}space.",
+            "[module](Kinematics.md) and <strong>inline HTML</strong>",
+            "# Heading\n\n- Item",
+            "```aevia\nlet x = 1\n```",
+            "A\0B",
+            "An entity &amp; a line\rbreak.",
+        ];
+        for (cases, plain_only) in [(&plain[..], true), (&checked[..], false)] {
+            for source in cases {
+                assert_eq!(
+                    Parser::new_ext(source, OPTIONS).all(|event| is_plain_prose(&event)),
+                    plain_only,
+                    "{source:?}"
+                );
+                let mut old_html = String::new();
+                pulldown_cmark::html::push_html(
+                    &mut old_html,
+                    Parser::new_ext(source, OPTIONS).map(|event| adapt(event, None)),
+                );
+                assert_eq!(render_markdown(source), sanitise(&old_html), "{source:?}");
+            }
+        }
+    }
 
     #[test]
     fn a_table_survives() {

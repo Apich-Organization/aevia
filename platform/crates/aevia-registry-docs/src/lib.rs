@@ -56,6 +56,7 @@ mod markdown;
 mod fallback;
 
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 
 use aevia_registry_core::Error;
 use aevia_registry_core::Result;
@@ -128,10 +129,8 @@ pub struct BuiltDocs {
 /// a consumer may rely on.
 ///
 /// A file that fails to parse is skipped with a warning and the rest of the
-/// package still builds; see the crate documentation for why that is the right
-/// trade. Two files that declare the same module path are a conflict, not a
-/// merge — merging would interleave two source files into one page and make
-/// every anchor ambiguous — so the second is skipped with a warning as well.
+/// package still builds. When parsed files claim the same module path, the
+/// lexicographically first archive path wins and the others are logged as skipped.
 /// The compiler's module description and documentation visibility attributes
 /// control the module page. Visible private declarations carry a private badge.
 ///
@@ -171,15 +170,24 @@ pub fn build(
         sources = sources.saturating_add(1);
         match module_from_source(contents, name, stem) {
             | Ok(module) => {
-                if modules.contains_key(&module.path) {
-                    tracing::warn!(
-                        file = name.as_str(),
-                        module = module.path.as_str(),
-                        "another file already documents this module path; skipping this one"
-                    );
-                    continue;
+                match modules.entry(module.path.clone()) {
+                    | Entry::Vacant(slot) => {
+                        slot.insert(module);
+                    },
+                    | Entry::Occupied(mut slot) => {
+                        let skipped = if module.file < slot.get().file {
+                            slot.insert(module).file
+                        } else {
+                            module.file
+                        };
+                        tracing::warn!(
+                            file = skipped.as_str(),
+                            module = slot.key().as_str(),
+                            selected_file = slot.get().file.as_str(),
+                            "skipping a duplicate documentation module path"
+                        );
+                    },
                 }
-                modules.insert(module.path.clone(), module);
             },
             | Err(message) => {
                 tracing::warn!(
@@ -260,7 +268,7 @@ pub(crate) struct Decl {
     pub doc: Option<String>,
     /// Whether the declaration is not exported.
     pub private: bool,
-    /// The fallback scanner does not recognize documentation attributes.
+    /// Whether a single-line visibility annotation hides this declaration.
     pub doc_hidden: bool,
 }
 
@@ -328,7 +336,8 @@ fn source_stem(name: &str) -> Option<&str> {
     (!stem.is_empty() && extension.eq_ignore_ascii_case("aev")).then_some(stem)
 }
 
-/// The README of a package, preferring the shallowest one.
+/// The README of a package, preferring the shallowest one. At equal depths,
+/// use the lexicographically first archive path.
 ///
 /// `README.md` is matched case-insensitively because a package packed on
 /// Windows may spell it `Readme.MD`, and the file is the author's README
@@ -345,7 +354,12 @@ fn find_readme(files: &[(String, String)]) -> Option<&(String, String)> {
                 .next()
                 .is_some_and(|base| base.eq_ignore_ascii_case("README.md"))
         })
-        .min_by_key(|(name, _)| name.matches('/').count())
+        .min_by(|(left, _), (right, _)| {
+            left.matches('/')
+                .count()
+                .cmp(&right.matches('/').count())
+                .then_with(|| left.cmp(right))
+        })
 }
 
 #[cfg(test)]
@@ -511,19 +525,28 @@ mod tests {
         assert_eq!((page.decls, page.undocumented), (1, 0));
     }
 
-    #[cfg(feature = "compiler")]
     #[test]
     fn hidden_declarations_do_not_render_or_contribute_to_counts() {
-        let source = "module Main\n\n@doc(hidden)\nfn hidden_impl(): Int = 1\n\n## Visible private helper.\nprivate fn helper(): Int = 2\n";
+        let source = concat!(
+            "module Main\n\n@doc(hidden)\nfn hidden_impl(): Int = 1\n",
+            "@doc(hidden = true) fn hidden_argument(): Int = 1\n",
+            "## Hidden with a single marker.\n@hidden fn hidden_marker(): Int = 1\n",
+            "\n## Visible private helper.\n@doc(hidden = false) private fn helper(): Int = 2\n",
+        );
         let files = vec![("src/Main.aev".to_owned(), source.to_owned())];
         let built = build(&files, "demo").expect("docs");
         let page = page(&built, "Main");
         assert_eq!((page.decls, page.undocumented), (1, 0));
         assert_eq!((built.total_decls, built.undocumented), (1, 0));
         assert!(!page.html.contains("hidden_impl"), "{}", page.html);
+        assert!(!page.html.contains("hidden_marker"), "{}", page.html);
+        assert!(!page.html.contains("hidden_argument"), "{}", page.html);
         assert!(page.html.contains("badge private"), "{}", page.html);
-        let doc = aevia_doc::module_doc(source, "src/Main.aev", "Main").expect("parsed");
-        assert_eq!(render_module_html(&doc), page.html);
+        #[cfg(feature = "compiler")]
+        {
+            let doc = aevia_doc::module_doc(source, "src/Main.aev", "Main").expect("parsed");
+            assert_eq!(render_module_html(&doc), page.html);
+        }
     }
 
     // Skipping a broken file is the compiler path's behaviour: the degraded
@@ -598,6 +621,30 @@ mod tests {
         let docs = build(&files, "demo").expect("docs");
         assert_eq!(docs.pages[0].source_file, "Readme.MD");
         assert!(docs.pages[0].html.contains("<h1>Demo</h1>"));
+    }
+
+    #[test]
+    fn equal_depth_readmes_and_duplicate_modules_use_archive_path_order() {
+        let mut files = vec![
+            ("z/README.md".to_owned(), "# Other README\n".to_owned()),
+            (
+                "src/Z.aev".to_owned(),
+                "module Same\nlet z = 0\n".to_owned(),
+            ),
+            ("a/readme.MD".to_owned(), "# Selected README\n".to_owned()),
+            (
+                "src/A.aev".to_owned(),
+                "module Same\nlet a = 0\n".to_owned(),
+            ),
+            ("a/0/readme.md".to_owned(), "# Deeper README\n".to_owned()),
+        ];
+        let docs = build(&files, "demo").expect("docs");
+        files.reverse();
+        assert_eq!(build(&files, "demo").expect("docs"), docs);
+        assert_eq!(page(&docs, "").source_file, "a/readme.MD");
+        assert_eq!(page(&docs, "Same").source_file, "src/A.aev");
+        assert!(page(&docs, "Same").html.contains("id=\"let-a\""));
+        assert_eq!(docs.total_decls, 1);
     }
 
     #[cfg(feature = "compiler")]

@@ -8,9 +8,9 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-# On by default: the documentation site is built by the compiler that will run
-# the package, not by a second, weaker parser. Turn it off only to build the
-# platform on a machine where the language repository is not checked out.
+# The documentation site uses the language parser and formatter by default.
+# Disabling this feature selects the fallback renderer. Cargo still needs the
+# language workspace manifests to resolve local dependencies.
 default = ["compiler"]
 compiler = ["dep:aevia-doc", "dep:aevia-syntax"]
 

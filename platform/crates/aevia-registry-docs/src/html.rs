@@ -25,6 +25,7 @@
 //! tokeniser to render a page.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
 use crate::Module;
 use crate::markdown::render_markdown;
@@ -131,7 +132,7 @@ fn push_prose(
 /// The set of anchor ids handed out while rendering one page.
 #[derive(Default)]
 struct Anchors {
-    /// How many times each base id has been claimed.
+    /// Every emitted id and the last suffix used for that id as a base.
     claimed: HashMap<String, usize>,
 }
 
@@ -146,12 +147,23 @@ impl Anchors {
         if base.trim_matches('-').is_empty() {
             base = "decl".to_string();
         }
-        let count = self.claimed.entry(base.clone()).or_insert(0);
-        *count = count.saturating_add(1);
-        if *count == 1 {
-            base
-        } else {
-            format!("{base}-{count}")
+        let mut suffix = match self.claimed.entry(base.clone()) {
+            | Entry::Vacant(slot) => {
+                slot.insert(1);
+                return base;
+            },
+            | Entry::Occupied(slot) => *slot.get(),
+        };
+        // A declaration slug can equal a generated suffix, so check the
+        // complete candidate as well as remembering where this base left off.
+        loop {
+            suffix = suffix.saturating_add(1);
+            let candidate = format!("{base}-{suffix}");
+            if let Entry::Vacant(slot) = self.claimed.entry(candidate.clone()) {
+                slot.insert(1);
+                self.claimed.insert(base, suffix);
+                return candidate;
+            }
         }
     }
 }
@@ -206,6 +218,19 @@ mod tests {
         assert_eq!(anchors.claim("fn", "Circle"), "fn-circle-3");
         // A different kind is a different id even with the same name.
         assert_eq!(anchors.claim("let", "Circle"), "let-circle");
+    }
+
+    #[test]
+    fn generated_anchor_suffixes_cannot_collide_with_other_base_slugs() {
+        let mut anchors = Anchors::default();
+        assert_eq!(anchors.claim("instance", "Example"), "instance-example");
+        assert_eq!(anchors.claim("instance", "Example 2"), "instance-example-2");
+        assert_eq!(anchors.claim("instance", "Example"), "instance-example-3");
+        assert_eq!(
+            anchors.claim("instance", "Example 3"),
+            "instance-example-3-2"
+        );
+        assert_eq!(anchors.claim("instance", "Example"), "instance-example-4");
     }
 
     #[test]

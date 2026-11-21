@@ -17,10 +17,8 @@ license = "Apache-2.0"
 repository = "https://github.com/Apich-Organization/aevia"
 
 [workspace.dependencies]
-# The compiler crates, used read-only for documentation rendering. They are
-# path dependencies into the parent workspace. `aevia-doc` needs
-# only the lexer/parser/formatter, never the RSSN kernel, so the registry does
-# not pay for a 3-million-line build to render a page.
+# The default documentation feature reuses the language parser and formatter.
+# Cargo resolves these local dependencies from the surrounding workspace.
 aevia-doc = { path = "../crates/aevia-doc" }
 aevia-syntax = { path = "../crates/aevia-syntax" }
 # Versions, requirements, the resolver and the sparse-index reader: pure, no
