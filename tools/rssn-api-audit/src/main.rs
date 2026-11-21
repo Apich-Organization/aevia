@@ -21,6 +21,7 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
+use std::rc::Rc;
 use syn::Item;
 use syn::Visibility;
 
@@ -32,6 +33,28 @@ struct Entry {
     cfg: String,
     reason: &'static str,
 }
+
+#[derive(Default)]
+struct Sources {
+    parsed: BTreeMap<PathBuf, Rc<syn::File>>,
+}
+
+impl Sources {
+    fn parse(
+        &mut self,
+        path: &Path,
+    ) -> Result<Rc<syn::File>, String> {
+        if let Some(parsed) = self.parsed.get(path) {
+            return Ok(Rc::clone(parsed));
+        }
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let parsed =
+            Rc::new(syn::parse_file(&text).map_err(|e| format!("{}: {e}", path.display()))?);
+        self.parsed.insert(path.to_path_buf(), Rc::clone(&parsed));
+        Ok(parsed)
+    }
+}
+
 const fn public(vis: &Visibility) -> bool {
     matches!(vis, Visibility::Public(_))
 }
@@ -157,35 +180,39 @@ fn collect_parent_imports(
     }
 }
 
-// Expand only named, local imports. Globs and external paths remain explicit
-// unresolved entries; guessing their exports would give false ABI evidence.
+// Collect named import paths and remember whether the statement has a glob.
 fn named_uses(
     tree: &syn::UseTree,
-    prefix: &[String],
+    prefix: &mut Vec<String>,
     out: &mut Vec<(Vec<String>, String)>,
-) {
+) -> bool {
     match tree {
         | syn::UseTree::Path(path) => {
-            let mut prefix = prefix.to_vec();
             prefix.push(path.ident.to_string());
-            named_uses(&path.tree, &prefix, out);
+            let has_glob = named_uses(&path.tree, prefix, out);
+            let _ = prefix.pop();
+            has_glob
         },
         | syn::UseTree::Name(name) => {
-            let mut path = prefix.to_vec();
+            let mut path = prefix.clone();
             path.push(name.ident.to_string());
             out.push((path, name.ident.to_string()));
+            false
         },
         | syn::UseTree::Rename(name) => {
-            let mut path = prefix.to_vec();
+            let mut path = prefix.clone();
             path.push(name.ident.to_string());
             out.push((path, name.rename.to_string()));
+            false
         },
         | syn::UseTree::Group(group) => {
+            let mut has_glob = false;
             for tree in &group.items {
-                named_uses(tree, prefix, out);
+                has_glob |= named_uses(tree, prefix, out);
             }
+            has_glob
         },
-        | syn::UseTree::Glob(_) => {},
+        | syn::UseTree::Glob(_) => true,
     }
 }
 
@@ -194,6 +221,7 @@ fn named_uses(
     reason = "keeps visibility, cfg and re-export traversal in one place"
 )]
 fn resolve_local_function(
+    sources: &mut Sources,
     items: &[Item],
     dir: &Path,
     path: &[String],
@@ -227,11 +255,12 @@ fn resolve_local_function(
                     continue;
                 }
                 let mut names = Vec::new();
-                named_uses(&u.tree, &[], &mut names);
+                named_uses(&u.tree, &mut Vec::new(), &mut names);
                 for (target, alias) in names {
                     if alias == *head {
                         let child_cfg = [cfg_so_far, &cfg(&u.attrs)].join(" ").trim().to_string();
                         if let Some(found) = resolve_local_function(
+                            sources,
                             items,
                             dir,
                             &target,
@@ -265,6 +294,7 @@ fn resolve_local_function(
             .to_string();
         if let Some((_, children)) = &module.content {
             return resolve_local_function(
+                sources,
                 children,
                 &dir.join(head),
                 tail,
@@ -303,10 +333,9 @@ fn resolve_local_function(
         if !file.exists() {
             return Ok(None);
         }
-        let text =
-            std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
-        let parsed = syn::parse_file(&text).map_err(|e| format!("{}: {e}", file.display()))?;
+        let parsed = sources.parse(&file)?;
         return resolve_local_function(
+            sources,
             &parsed.items,
             &dir.join(head),
             tail,
@@ -325,6 +354,7 @@ fn resolve_local_function(
     reason = "keeps visibility, cfg and inherent-method traversal in one place"
 )]
 fn resolve_local_methods(
+    sources: &mut Sources,
     items: &[Item],
     dir: &Path,
     path: &[String],
@@ -388,11 +418,12 @@ fn resolve_local_methods(
                 && public(&u.vis)
             {
                 let mut uses = Vec::new();
-                named_uses(&u.tree, &[], &mut uses);
+                named_uses(&u.tree, &mut Vec::new(), &mut uses);
                 for (target, alias) in uses {
                     if alias == *head {
                         let c = [cfg_so_far, &cfg(&u.attrs)].join(" ").trim().to_string();
                         let found = resolve_local_methods(
+                            sources,
                             items,
                             dir,
                             &target,
@@ -423,6 +454,7 @@ fn resolve_local_methods(
             .to_string();
         if let Some((_, children)) = &module.content {
             return resolve_local_methods(
+                sources,
                 children,
                 &dir.join(head),
                 tail,
@@ -466,10 +498,9 @@ fn resolve_local_methods(
         if !file.exists() {
             return Ok(Vec::new());
         }
-        let source =
-            std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
-        let parsed = syn::parse_file(&source).map_err(|e| format!("{}: {e}", file.display()))?;
+        let parsed = sources.parse(&file)?;
         return resolve_local_methods(
+            sources,
             &parsed.items,
             &dir.join(head),
             tail,
@@ -492,6 +523,7 @@ fn token_digest(text: &str) -> u64 {
     reason = "all Rust item forms participate in one ordered source inventory pass"
 )]
 fn visit_items(
+    sources: &mut Sources,
     items: &[Item],
     prefix: &str,
     dir: &Path,
@@ -585,10 +617,13 @@ fn visit_items(
                 let hash = token_digest(&text);
                 let c = [inherited_cfg, &cfg(&u.attrs)].join(" ").trim().to_string();
                 let mut names = Vec::new();
-                named_uses(&u.tree, &[], &mut names);
+                let has_glob = named_uses(&u.tree, &mut Vec::new(), &mut names);
+                let named_count = names.len();
+                let mut resolved = 0usize;
                 for (target, alias) in names {
+                    let start = out.len();
                     if let Some((signature, resolved_cfg)) =
-                        resolve_local_function(items, dir, &target, &c, 0, 0)?
+                        resolve_local_function(sources, items, dir, &target, &c, 0, 0)?
                     {
                         out.push(Entry {
                             alias_of: Some(format!(
@@ -607,7 +642,7 @@ fn visit_items(
                         });
                     }
                     for (method, mut self_ty, resolved_cfg) in
-                        resolve_local_methods(items, dir, &target, &c, 0, 0)?
+                        resolve_local_methods(sources, items, dir, &target, &c, 0, 0)?
                     {
                         let original = compact(&self_ty).replace(' ', "");
                         let module = target
@@ -642,13 +677,21 @@ fn visit_items(
                             reason: type_reason(&method.sig, true),
                         });
                     }
+                    resolved = resolved.saturating_add(usize::from(out.len() > start));
                 }
+                let reason = if resolved == 0 {
+                    "unresolved-reexport"
+                } else if has_glob || resolved != named_count {
+                    "partial-reexport"
+                } else {
+                    "resolved-reexport"
+                };
                 out.push(Entry {
                     alias_of: None,
                     path: format!("{prefix}::<reexport:{hash:016x}>"),
                     signature: text,
                     cfg: c,
-                    reason: "unresolved-reexport",
+                    reason,
                 });
             },
             // Inherent implementations may live in a private child module while
@@ -687,10 +730,7 @@ fn visit_items(
                     } else {
                         continue;
                     };
-                    let text = std::fs::read_to_string(&file)
-                        .map_err(|e| format!("{}: {e}", file.display()))?;
-                    parsed =
-                        syn::parse_file(&text).map_err(|e| format!("{}: {e}", file.display()))?;
+                    parsed = sources.parse(&file)?;
                     parsed.items.as_slice()
                 };
                 let mut aliases = BTreeMap::new();
@@ -727,7 +767,14 @@ fn visit_items(
                         segment.ident = syn::parse_str(original)
                             .map_err(|e| format!("invalid parent type: {e}"))?;
                         implementation.self_ty = Box::new(syn::Type::Path(receiver));
-                        visit_items(&[Item::Impl(implementation)], prefix, dir, &child_cfg, out)?;
+                        visit_items(
+                            sources,
+                            &[Item::Impl(implementation)],
+                            prefix,
+                            dir,
+                            &child_cfg,
+                            out,
+                        )?;
                     }
                 }
             },
@@ -736,7 +783,14 @@ fn visit_items(
                 let child_prefix = format!("{prefix}::{name}");
                 let child_cfg = [inherited_cfg, &cfg(&m.attrs)].join(" ").trim().to_string();
                 if let Some((_, items)) = &m.content {
-                    visit_items(items, &child_prefix, &dir.join(&name), &child_cfg, out)?;
+                    visit_items(
+                        sources,
+                        items,
+                        &child_prefix,
+                        &dir.join(&name),
+                        &child_cfg,
+                        out,
+                    )?;
                 } else {
                     let file = dir.join(format!("{name}.rs"));
                     let nested = dir.join(&name).join("mod.rs");
@@ -745,11 +799,9 @@ fn visit_items(
                     } else {
                         nested
                     };
-                    let text = std::fs::read_to_string(&file)
-                        .map_err(|e| format!("{}: {e}", file.display()))?;
-                    let parsed =
-                        syn::parse_file(&text).map_err(|e| format!("{}: {e}", file.display()))?;
+                    let parsed = sources.parse(&file)?;
                     visit_items(
+                        sources,
                         &parsed.items,
                         &child_prefix,
                         &dir.join(&name),
@@ -814,19 +866,46 @@ fn exported() -> Result<BTreeMap<String, Vec<String>>, String> {
     Ok(paths)
 }
 
+/// Checks the exact public function referenced by an adapter outside the
+/// inventoried numerical modules, without auditing every sibling rule API.
+fn resolve_additional_export(
+    sources: &mut Sources,
+    src: &Path,
+    path: &str,
+) -> Result<Option<Entry>, String> {
+    let Some(tail) = path.strip_prefix("crate::") else {
+        return Ok(None);
+    };
+    let segments: Vec<String> = tail.split("::").map(str::to_owned).collect();
+    let lib = sources.parse(&src.join("lib.rs"))?;
+    Ok(
+        resolve_local_function(sources, &lib.items, src, &segments, "", 0, 1)?.map(
+            |(signature, cfg)| {
+                Entry {
+                    alias_of: None,
+                    path: path.to_owned(),
+                    reason: type_reason(&signature, false),
+                    signature: compact(&signature),
+                    cfg,
+                }
+            },
+        ),
+    )
+}
+
 #[allow(
     clippy::single_call_fn,
     reason = "isolates source collection from snapshot rendering"
 )]
 fn report(root: &Path) -> Result<String, String> {
     let mut entries = Vec::new();
+    let mut sources = Sources::default();
     for module in ["kernels", "backend", "sim"] {
         let dir = root.join("src").join(module);
         let path = dir.join("mod.rs");
-        let text =
-            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let parsed = syn::parse_file(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        let parsed = sources.parse(&path)?;
         visit_items(
+            &mut sources,
             &parsed.items,
             &format!("crate::{module}"),
             &dir,
@@ -834,13 +913,21 @@ fn report(root: &Path) -> Result<String, String> {
             &mut entries,
         )?;
     }
-    entries.sort_by(|a, b| (&a.path, &a.signature, &a.cfg).cmp(&(&b.path, &b.signature, &b.cfg)));
     let exports = exported()?;
     let present: BTreeSet<_> = entries.iter().map(|entry| entry.path.as_str()).collect();
-    let missing: Vec<_> = exports
+    let mut missing = Vec::new();
+    let mut resolved = Vec::new();
+    let src = root.join("src");
+    for path in exports
         .keys()
         .filter(|path| !present.contains(path.as_str()))
-        .collect();
+    {
+        if let Some(entry) = resolve_additional_export(&mut sources, &src, path)? {
+            resolved.push(entry);
+        } else {
+            missing.push(path);
+        }
+    }
     if !missing.is_empty() {
         return Err(format!(
             "ABI metadata points to missing public kernel functions:\n{}",
@@ -851,6 +938,8 @@ fn report(root: &Path) -> Result<String, String> {
                 .join("\n")
         ));
     }
+    entries.extend(resolved);
+    entries.sort_by(|a, b| (&a.path, &a.signature, &a.cfg).cmp(&(&b.path, &b.signature, &b.cfg)));
     Ok(render(entries, &exports))
 }
 fn identity(
@@ -927,7 +1016,7 @@ fn check_snapshot(
     if saved == actual {
         Ok(())
     } else {
-        Err("kernel API inventory changed; inspect --report and update with --write")
+        Err("kernel API inventory changed; inspect --report and update with --write-checked")
     }
 }
 
@@ -966,7 +1055,10 @@ fn check_complete(
         let [path, class, names, _, _] = fields.as_slice() else {
             return Err("malformed source inventory row".into());
         };
-        if matches!(*class, "unexpanded-macro" | "unresolved-reexport") {
+        if matches!(
+            *class,
+            "unexpanded-macro" | "unresolved-reexport" | "partial-reexport" | "resolved-reexport"
+        ) {
             continue;
         }
         if matches!(*class, "declared" | "declared-alias") && !names.is_empty() {
@@ -1001,9 +1093,39 @@ fn check_complete(
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps snapshot writes and validation directly testable"
+)]
+fn apply_inventory(
+    mode: &str,
+    snapshot: &Path,
+    inventory: &str,
+    policy: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if matches!(mode, "--check" | "--verify") {
+        check_snapshot(&std::fs::read_to_string(snapshot)?, inventory)?;
+        println!("kernel API inventory verified");
+    }
+    if matches!(mode, "--coverage-check" | "--verify" | "--write-checked") {
+        let (adapted, host_only) = check_complete(inventory, policy)?;
+        println!(
+            "{adapted} callable source interfaces have declared adapters; {host_only} reviewed Rust host interfaces"
+        );
+    }
+    if matches!(mode, "--write" | "--write-checked") {
+        std::fs::write(snapshot, inventory)?;
+        println!("wrote {}", snapshot.display());
+    }
+    if mode == "--report" {
+        print!("{inventory}");
+    }
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     type Generator = fn(&Path, &str) -> Result<String, String>;
-    const USAGE: &str = "usage: rssn-api-audit --check|--write|--report|--coverage-check|--bindings-check|--bindings-write|--bindings-report|--structured-check|--structured-write|--structured-report|--codecs-check|--codecs-write|--codecs-report";
+    const USAGE: &str = "usage: rssn-api-audit --verify|--write-checked|--check|--write|--report|--coverage-check|--bindings-check|--bindings-write|--bindings-report|--structured-check|--structured-write|--structured-report|--codecs-check|--codecs-write|--codecs-report";
     let mut args = std::env::args().skip(1);
     let (Some(mode), None) = (args.next(), args.next()) else {
         return Err(USAGE.into());
@@ -1063,32 +1185,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if !matches!(
         mode,
-        "--check" | "--write" | "--report" | "--coverage-check"
+        "--verify" | "--write-checked" | "--check" | "--write" | "--report" | "--coverage-check"
     ) {
         return Err(USAGE.into());
     }
     let snapshot = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("inventory.tsv");
     let result = report(&root)?;
-    match mode {
-        | "--report" => print!("{result}"),
-        | "--coverage-check" => {
-            let policy = include_str!("../source-boundaries.tsv");
-            let (adapted, host_only) = check_complete(&result, policy)?;
-            println!(
-                "{adapted} callable source interfaces have declared adapters; {host_only} reviewed Rust host interfaces"
-            );
-        },
-        | "--write" => {
-            std::fs::write(&snapshot, &result)?;
-            println!("wrote {}", snapshot.display());
-        },
-        | _ => {
-            let saved = std::fs::read_to_string(&snapshot)?;
-            check_snapshot(&saved, &result)?;
-            println!("kernel API inventory verified");
-        },
-    }
-    Ok(())
+    apply_inventory(
+        mode,
+        &snapshot,
+        &result,
+        include_str!("../source-boundaries.tsv"),
+    )
 }
 
 #[cfg(test)]
@@ -1102,10 +1210,83 @@ mod tests {
     use super::*;
 
     #[test]
+    fn declared_exports_can_point_outside_the_numerical_modules() {
+        let dir =
+            std::env::temp_dir().join(format!("rssn-audit-extra-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("lib.rs"),
+            r#"#[cfg(feature = "pde")] pub mod rules;
+               mod private { pub fn f() {} }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("rules.rs"),
+            "pub mod pde { pub fn sample(x: f64) -> f64 { x } fn hidden() {} }",
+        )
+        .unwrap();
+        let mut sources = Sources::default();
+        let path = "crate::rules::pde::sample";
+        let entry = resolve_additional_export(&mut sources, &dir, path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(entry.path, path);
+        assert!(entry.signature.contains("x : f64"));
+        assert_eq!(entry.cfg, r#"# [cfg (feature = "pde")]"#);
+        for missing in [
+            "crate::rules::pde::hidden",
+            "crate::rules::pde::absent",
+            "crate::private::f",
+        ] {
+            assert!(
+                resolve_additional_export(&mut sources, &dir, missing)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn combined_snapshot_actions_use_the_same_checked_report() {
+        let path =
+            std::env::temp_dir().join(format!("rssn-checked-inventory-{}.tsv", std::process::id()));
+        let accepted = "crate::kernels::f\tdeclared\tnum_f\t\tfn f()\n";
+        let incomplete = "crate::kernels::f\tno-declared-adapter\t\t\tfn f()\n";
+        std::fs::write(&path, "previous snapshot").unwrap();
+        assert!(apply_inventory("--write-checked", &path, incomplete, "").is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "previous snapshot");
+        assert!(apply_inventory("--verify", &path, accepted, "").is_err());
+
+        apply_inventory("--write-checked", &path, accepted, "").unwrap();
+        apply_inventory("--verify", &path, accepted, "").unwrap();
+        std::fs::write(&path, incomplete).unwrap();
+        assert!(apply_inventory("--verify", &path, incomplete, "").is_err());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn one_audit_resolves_each_file_from_the_same_snapshot() {
+        let dir = std::env::temp_dir().join(format!("rssn-audit-syntax-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("module.rs");
+        std::fs::write(&path, "pub fn first() {}").unwrap();
+        let mut sources = Sources::default();
+        let first = sources.parse(&path).unwrap();
+        std::fs::write(&path, "pub fn second() {}").unwrap();
+        let again = sources.parse(&path).unwrap();
+        assert!(Rc::ptr_eq(&first, &again));
+        let fresh = Sources::default().parse(&path).unwrap();
+        assert!(compact(&fresh.items[0]).contains("second"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn alias_coverage_requires_resolved_item_identity() {
         let parsed=syn::parse_file(r"pub mod child{pub struct T;impl T{pub fn method(&self){}}}pub use child::T as Alias;pub fn unrelated(){}").unwrap();
         let mut rows = Vec::new();
         visit_items(
+            &mut Sources::default(),
             &parsed.items,
             "crate::kernels",
             Path::new("."),
@@ -1129,9 +1310,10 @@ mod tests {
 
     #[test]
     fn reexported_public_type_methods_and_parent_generic_receivers_keep_public_paths() {
-        let source=syn::parse_file(r"mod hidden {pub struct Model<T>(T);impl<T> Model<T>{pub fn new(x:T)->Self{Self(x)} fn private(){}}}pub use hidden::Model as Public;pub struct Parent<T>(T);mod child{use super::Parent;impl<T> Parent<T>{pub fn value(&self)->&T{&self.0}}}").unwrap();
+        let source=syn::parse_file(r"mod hidden {pub struct Model<T>(T);impl<T> Model<T>{pub fn new(x:T)->Self{Self(x)} fn private(){}}}pub use hidden::Model as Public;pub struct Parent<T>(T);mod child{use super::Parent;impl<T> Parent<T>{pub fn value(&self)->&T{&self.0}}}pub struct Grid<'grid>(&'grid [f64]);impl<'grid> Grid<'grid>{pub fn new(axis:&'grid[f64])->Self{Self(axis)}}").unwrap();
         let mut rows = Vec::new();
         visit_items(
+            &mut Sources::default(),
             &source.items,
             "crate::kernels",
             Path::new("."),
@@ -1148,6 +1330,10 @@ mod tests {
                 .any(|r| r.path == "crate::kernels::Parent<T>::value")
         );
         assert!(
+            rows.iter()
+                .any(|r| r.path == "crate::kernels::Grid<'grid>::new")
+        );
+        assert!(
             !rows
                 .iter()
                 .any(|r| r.path.contains("hidden::") || r.path.ends_with("::private"))
@@ -1156,7 +1342,13 @@ mod tests {
 
     #[test]
     fn completeness_requires_real_declared_adapters_and_ignores_noncallable_fingerprints() {
-        let complete = "# header\ncrate::kernels::f\tdeclared\tnum_f\t\tfn f()\ncrate::kernels::<macro:1>\tunexpanded-macro\t\t\tthread_local\n";
+        let complete = concat!(
+            "# header\ncrate::kernels::f\tdeclared\tnum_f\t\tfn f()\n",
+            "crate::kernels::<macro:1>\tunexpanded-macro\t\t\tthread_local\n",
+            "crate::kernels::<reexport:1>\tresolved-reexport\t\t\tf\n",
+            "crate::kernels::<reexport:2>\tpartial-reexport\t\t\t{ f, missing }\n",
+            "crate::kernels::<reexport:3>\tunresolved-reexport\t\t\tother::*\n",
+        );
         assert_eq!(check_complete(complete, ""), Ok((1, 0)));
         assert!(
             check_complete(&complete.replace("declared\tnum_f", "opaque\t"), "")
@@ -1182,6 +1374,7 @@ mod tests {
         .unwrap();
         let mut entries = Vec::new();
         visit_items(
+            &mut Sources::default(),
             &parsed.items,
             "crate::kernels::example",
             Path::new("."),
@@ -1203,11 +1396,10 @@ mod tests {
                 .cfg
                 .contains("child")
         );
-        assert!(
-            entries
-                .iter()
-                .any(|entry| entry.reason == "unresolved-reexport")
-        );
+        let import_count = |class| entries.iter().filter(|entry| entry.reason == class).count();
+        assert_eq!(import_count("resolved-reexport"), 1);
+        assert_eq!(import_count("partial-reexport"), 1);
+        assert_eq!(import_count("unresolved-reexport"), 3);
     }
 
     #[test]
@@ -1222,6 +1414,7 @@ mod tests {
         let parsed = syn::parse_file("#[path = \"sub/actual.rs\"] mod implementation; pub use implementation::exposed as result;").unwrap();
         let mut entries = Vec::new();
         visit_items(
+            &mut Sources::default(),
             &parsed.items,
             "crate::kernels::example",
             &root.join("example"),
@@ -1255,6 +1448,7 @@ mod tests {
         .unwrap();
         let mut rows = Vec::new();
         visit_items(
+            &mut Sources::default(),
             &parsed.items,
             "crate::kernels",
             Path::new("."),
@@ -1293,6 +1487,7 @@ mod tests {
         .unwrap();
         let mut entries = Vec::new();
         visit_items(
+            &mut Sources::default(),
             &file.items,
             "crate::backend::tape",
             Path::new("."),
@@ -1309,6 +1504,7 @@ mod tests {
             let file = syn::parse_file(source).expect("fixture");
             let mut entries = Vec::new();
             visit_items(
+                &mut Sources::default(),
                 &file.items,
                 "crate::kernels::fixture",
                 Path::new("."),

@@ -1,11 +1,14 @@
 # RSSN kernel API inventory
 
 `cargo run -p rssn-api-audit -- --report` lists public kernel, backend and simulation source APIs,
-including conditional declarations. `--check` compares the live inventory with
-the checked-in snapshot; after reviewing intentional source/API changes, run
-`--write` to update it. The check also rejects an ABI descriptor whose declared
-Rust path is no longer a public function. `--coverage-check` independently
-requires each inventoried callable to have a declared adapter or an exact
+including conditional declarations. `--verify` checks both the checked-in
+snapshot and callable coverage from one reading of the kernel sources. After
+reviewing an intentional change, use `--write-checked` to validate coverage and
+update the snapshot. `--check`, `--coverage-check` and `--write` still support
+running those steps individually. The audit rejects any ABI descriptor whose
+declared Rust path is missing. A declared adapter outside these modules is inventoried
+when its fully qualified public function resolves through the crate source.
+Every inventoried callable needs an adapter or an exact
 path and rationale in [the Rust host interface inventory](source-boundaries.tsv).
 The latter covers APIs such as a solver that takes a borrowed mutable Rust
 callback or writes into caller-supplied storage. The check rejects stale
@@ -25,11 +28,16 @@ The inventory includes public parent-type inherent methods in private child modu
 
 The inventory parses Rust syntax and resolves named local `pub use` functions
 and public type methods, including private defining modules and explicit
-`#[path]` files. `declared-alias` inherits an existing adapter only when source
-resolution proves both paths name the same Rust item. It does not infer
+`#[path]` files. Source collection and re-export resolution share one parsed
+snapshot per file for the current audit. `declared-alias` inherits an existing
+adapter only when source resolution proves both paths name the same Rust item. It does not infer
 coverage from similar names or signatures. External imports, globs and macros
 remain fingerprinted review evidence; macros are not expanded and `cfg` is not
 evaluated. Conditional JIT/GPU adapters report their required feature explicitly.
+Each `pub use` statement has a fingerprint with its own resolution status.
+`resolved-reexport` indicates that every named item produced callable rows.
+`partial-reexport` indicates a mixture of callable rows and unresolved imports.
+`unresolved-reexport` records statements that yielded no callable rows.
 
 The independent RSSN-side `cargo run -p rssn-api-gen -- --bindings-report`,
 `--bindings-check`, and `--bindings-write` generate the
@@ -54,6 +62,9 @@ operator or assert a dimension. Generated record destructuring makes field
 addition or removal a Rust compilation error until the policy is reviewed.
 
 ## Manifest coverage report
+
+`aevia rssn --describe OPERATOR` shows one operator's documentation, overloads,
+dimension rule and available flat bindings from the live kernel.
 
 `RSSN-COVERAGE.md` (generated, do not edit) is the manifest-level counterpart of the
 source inventory: for every kernel operator family it states how Aevia exposes it

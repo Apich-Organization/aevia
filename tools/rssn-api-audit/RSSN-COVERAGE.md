@@ -9,13 +9,13 @@ RSSN 3.0.0-beta.1, kernel API 2.
 
 | | operators |
 |---|---:|
-| in the manifest | 5154 |
-| typed in a domain module (curated `sig`, `Result` channel) | 261 |
-| typed in a domain module from kernel evidence (witnessed overload, `Result` channel) | 446 |
-| dynamic in a domain module (generated, `Result<Value, OpError>`) | 4447 |
+| in the manifest | 5353 |
+| typed in a domain module (curated `sig`, `Result` channel) | 265 |
+| typed in a domain module from kernel evidence (witnessed overload, `Result` channel) | 445 |
+| dynamic in a domain module (generated, `Result<Value, OpError>`) | 4643 |
 | excluded from domain modules (with reason) | 0 |
 | unclassified (must be 0) | 0 |
-| exact-typed in the flat `Rssn.<op>` facade (some overload pinned to a declared/overlay signature) | 1060 |
+| exact-typed in the flat `Rssn.<op>` facade (some overload pinned to a declared/overlay signature) | 1098 |
 | with a same-named chapter-8 standard-library entry | 102 |
 
 Exposure tiers, from best to worst: **typed** (`Rssn_<Domain>.f(x: Int): Result<Int, OpError>`, curated), **witnessed** (the same shape of wrapper, generated from an overload the kernel observed and can replay), **dynamic** (`Rssn_<Domain>.f(a, b): Result<Value, OpError>`), and the always-available escape hatch `Rssn.dynamic("f", [..])`. Nothing in the manifest is unreachable.
@@ -24,7 +24,7 @@ Exposure tiers, from best to worst: **typed** (`Rssn_<Domain>.f(x: Int): Result<
 
 | module | mode | ops | typed | witnessed | dynamic | excluded | kernel rule sets |
 |---|---|---:|---:|---:|---:|---:|---|
-| `Rssn_NumberTheory` | typed-required | 46 | 43 | 0 | 3 | 0 | number_theory |
+| `Rssn_NumberTheory` | typed-required | 47 | 44 | 0 | 3 | 0 | number_theory |
 | `Rssn_Combinatorics` | typed-required | 50 | 43 | 0 | 7 | 0 | combinatorics |
 | `Rssn_Group` | dynamic-ok | 108 | 23 | 34 | 51 | 0 | discrete |
 | `Rssn_FiniteField` | typed-required | 53 | 42 | 0 | 11 | 0 | discrete |
@@ -37,19 +37,19 @@ Exposure tiers, from best to worst: **typed** (`Rssn_<Domain>.f(x: Int): Result<
 | `Rssn_Graphics` | dynamic-ok | 44 | 0 | 33 | 11 | 0 | discrete |
 | `Rssn_Discrete` | dynamic-ok | 5 | 0 | 3 | 2 | 0 | discrete |
 | `Rssn_LieAlgebra` | dynamic-ok | 61 | 0 | 18 | 43 | 0 | lie, lie_structure |
-| `Rssn_Polynomial` | dynamic-ok | 28 | 0 | 4 | 24 | 0 | poly |
+| `Rssn_Polynomial` | dynamic-ok | 29 | 0 | 4 | 25 | 0 | poly |
 | `Rssn_Logic` | dynamic-ok | 31 | 0 | 18 | 13 | 0 | logic |
 | `Rssn_GeometricAlgebra` | dynamic-ok | 31 | 0 | 10 | 21 | 0 | geometric_algebra |
 | `Rssn_DifferentialGeometry` | dynamic-ok | 48 | 0 | 28 | 20 | 0 | geometry |
 | `Rssn_Functional` | dynamic-ok | 32 | 0 | 7 | 25 | 0 | functional |
-| `Rssn_Special` | dynamic-ok | 238 | 0 | 22 | 216 | 0 | numerical_special, special |
-| `Rssn_Statistics` | dynamic-ok | 166 | 0 | 39 | 127 | 0 | numerical_stats, stats |
-| `Rssn_Calculus` | dynamic-ok | 45 | 0 | 15 | 30 | 0 | calculus, holonomic, variational, verify |
+| `Rssn_Special` | dynamic-ok | 254 | 0 | 22 | 232 | 0 | numerical_special, special |
+| `Rssn_Statistics` | dynamic-ok | 170 | 0 | 39 | 131 | 0 | numerical_stats, stats |
+| `Rssn_Calculus` | dynamic-ok | 45 | 0 | 14 | 31 | 0 | calculus, holonomic, variational, verify |
 | `Rssn_Elementary` | dynamic-ok | 72 | 0 | 12 | 60 | 0 | complex, elementary, radicals |
 | `Rssn_Core` | dynamic-ok | 18 | 0 | 3 | 15 | 0 | cse, kernel, rewriting, units |
-| `Rssn_Numeric` | dynamic-ok | 3480 | 89 | 0 | 3391 | 0 | numeric, numerical_callback, numerical_matrix, numerical_vector |
+| `Rssn_Numeric` | dynamic-ok | 3657 | 90 | 0 | 3567 | 0 | numeric, numerical_callback, numerical_matrix, numerical_vector |
 | `Rssn_LinearAlgebra` | dynamic-ok | 91 | 0 | 62 | 29 | 0 | linalg, sparse_symbolic |
-| `Rssn_Differential` | dynamic-ok | 103 | 0 | 10 | 93 | 0 | ode, pde, sde |
+| `Rssn_Differential` | dynamic-ok | 103 | 2 | 10 | 91 | 0 | ode, pde, sde |
 | `Rssn_Physics` | dynamic-ok | 147 | 0 | 28 | 119 | 0 | physics, physics_quantum |
 | `Rssn_Solving` | dynamic-ok | 24 | 0 | 7 | 17 | 0 | optimize, solve |
 | `Rssn_Transforms` | dynamic-ok | 15 | 0 | 0 | 15 | 0 | transforms |
@@ -73,19 +73,19 @@ Exposure tiers, from best to worst: **typed** (`Rssn_<Domain>.f(x: Int): Result<
 | `lie_structure` | 48 | 0 | 48 | 11 | 0 | 0 | 17 | 31 | 0 | LieAlgebra |
 | `linalg` | 70 | 8 | 62 | 51 | 4 | 0 | 46 | 24 | 0 | LinearAlgebra |
 | `logic` | 31 | 6 | 25 | 12 | 3 | 0 | 18 | 13 | 0 | Logic |
-| `number_theory` | 46 | 0 | 46 | 35 | 0 | 43 | 0 | 3 | 0 | NumberTheory |
-| `numeric` | 89 | 82 | 7 | 7 | 64 | 89 | 0 | 0 | 0 | Numeric |
-| `numerical_callback` | 144 | 144 | 0 | 0 | 10 | 0 | 0 | 144 | 0 | Numeric |
-| `numerical_matrix` | 414 | 414 | 0 | 0 | 183 | 0 | 0 | 414 | 0 | Numeric |
-| `numerical_special` | 162 | 162 | 0 | 0 | 162 | 0 | 0 | 162 | 0 | Special |
-| `numerical_stats` | 70 | 70 | 0 | 0 | 69 | 0 | 0 | 70 | 0 | Statistics |
-| `numerical_vector` | 2833 | 2833 | 0 | 0 | 560 | 0 | 0 | 2833 | 0 | Numeric |
+| `number_theory` | 47 | 1 | 46 | 35 | 1 | 44 | 0 | 3 | 0 | NumberTheory |
+| `numeric` | 90 | 83 | 7 | 7 | 65 | 90 | 0 | 0 | 0 | Numeric |
+| `numerical_callback` | 148 | 148 | 0 | 0 | 10 | 0 | 0 | 148 | 0 | Numeric |
+| `numerical_matrix` | 436 | 436 | 0 | 0 | 184 | 0 | 0 | 436 | 0 | Numeric |
+| `numerical_special` | 178 | 178 | 0 | 0 | 171 | 0 | 0 | 178 | 0 | Special |
+| `numerical_stats` | 74 | 74 | 0 | 0 | 73 | 0 | 0 | 74 | 0 | Statistics |
+| `numerical_vector` | 2983 | 2983 | 0 | 0 | 582 | 0 | 0 | 2983 | 0 | Numeric |
 | `ode` | 16 | 0 | 16 | 4 | 0 | 0 | 4 | 12 | 0 | Differential |
 | `optimize` | 16 | 0 | 16 | 13 | 0 | 0 | 3 | 13 | 0 | Solving |
-| `pde` | 84 | 0 | 84 | 6 | 0 | 0 | 6 | 78 | 0 | Differential |
+| `pde` | 84 | 0 | 84 | 6 | 0 | 2 | 6 | 76 | 0 | Differential |
 | `physics` | 138 | 0 | 138 | 23 | 0 | 0 | 27 | 111 | 0 | Physics |
 | `physics_quantum` | 9 | 0 | 9 | 0 | 0 | 0 | 1 | 8 | 0 | Physics |
-| `poly` | 28 | 0 | 28 | 3 | 0 | 0 | 4 | 24 | 0 | Polynomial |
+| `poly` | 29 | 1 | 28 | 3 | 0 | 0 | 4 | 25 | 0 | Polynomial |
 | `radicals` | 2 | 0 | 2 | 0 | 0 | 0 | 0 | 2 | 0 | Elementary |
 | `rewriting` | 3 | 0 | 3 | 2 | 0 | 0 | 1 | 2 | 0 | Core |
 | `sde` | 3 | 3 | 0 | 0 | 3 | 0 | 0 | 3 | 0 | Differential |
@@ -96,16 +96,17 @@ Exposure tiers, from best to worst: **typed** (`Rssn_<Domain>.f(x: Int): Result<
 | `transforms` | 15 | 0 | 15 | 0 | 0 | 0 | 0 | 15 | 0 | Transforms |
 | `units` | 5 | 2 | 3 | 1 | 0 | 0 | 1 | 4 | 0 | Core |
 | `variational` | 12 | 0 | 12 | 3 | 0 | 0 | 3 | 9 | 0 | Calculus |
-| `verify` | 7 | 0 | 7 | 4 | 0 | 0 | 7 | 0 | 0 | Calculus |
+| `verify` | 7 | 1 | 6 | 3 | 0 | 0 | 6 | 1 | 0 | Calculus |
 
 ## Typed operators
 
-* `Rssn_NumberTheory`: bigomega, binomial_mod, carmichael, crt, divisor_count, divisor_sum, divisors, dlog, egcd, factorint, farey, gcd, invmod, iroot, is_square, is_squarefree, isprime, isqrt, jacobi, kronecker_symbol, lcm, legendre_symbol, lincong, liouville, mobius, mod, mult_order, nextprime, nth_prime, omega, pell, perfect_power, powmod, prevprime, prime_pi, primes, primitive_root, quadratic_residues, radical, sigma, sqrtmod, totient, two_squares
+* `Rssn_NumberTheory`: bigomega, binomial_mod, carmichael, crt, crt_general, divisor_count, divisor_sum, divisors, dlog, egcd, factorint, farey, gcd, invmod, iroot, is_square, is_squarefree, isprime, isqrt, jacobi, kronecker_symbol, lcm, legendre_symbol, lincong, liouville, mobius, mod, mult_order, nextprime, nth_prime, omega, pell, perfect_power, powmod, prevprime, prime_pi, primes, primitive_root, quadratic_residues, radical, sigma, sqrtmod, totient, two_squares
 * `Rssn_Combinatorics`: ballot, bell, bernoulli_number, binomial, bracelets, catalan, central_binomial, compositions, cycle_type, derangements, double_factorial, euler_number, eulerian, factorial, falling, fibonacci, fubini, harmonic, inversions, involutions, lah, lucas, motzkin, multinomial, narayana, necklaces, partitions, partitions_distinct, partitions_k, partitions_max, permutation_order, permutation_rank, permutation_sign, permutation_unrank, permutations, rencontres, rising, schroeder, stirling1, stirling2, syt_count, weak_compositions, zigzag
 * `Rssn_Group`: cyclic_group, dihedral_group, group_class_count, group_exponent, group_is_abelian, group_is_nilpotent, group_is_simple, group_is_solvable, group_is_valid, group_order, group_sylow_count, klein_four_group, perm_compose, perm_group_contains, perm_group_is_abelian, perm_group_is_nilpotent, perm_group_is_solvable, perm_group_is_transitive, perm_group_order, perm_inverse, perm_order, perm_sign, symmetric_group
 * `Rssn_FiniteField`: gf256_add, gf256_div, gf256_exp, gf256_inv, gf256_log, gf256_mul, gf256_poly_add, gf256_poly_derivative, gf256_poly_eval, gf256_poly_gcd, gf256_poly_mod, gf256_poly_mul, gf256_poly_scale, gf256_pow, gf_add, gf_div, gf_inv, gf_is_one, gf_is_zero, gf_mul, gf_neg, gf_pow, gf_sub, gfp_add, gfp_degree, gfp_derivative, gfp_eval, gfp_gcd, gfp_invmod, gfp_isirreducible, gfp_monic, gfp_mul, gfp_powmod, gfp_sub, gfx_add, gfx_div, gfx_inv, gfx_mul, gfx_neg, gfx_pow, gfx_reduce, gfx_sub
 * `Rssn_Graph`: graph_add_edge, graph_add_node, graph_adjacency, graph_bfs, graph_chromatic_number, graph_complement, graph_complete, graph_cycle, graph_dfs, graph_disjoint_union, graph_empty, graph_has_cycle, graph_in_degree, graph_is_connected, graph_is_directed, graph_isomorphic, graph_join, graph_laplacian, graph_node_count, graph_out_degree, graph_path
-* `Rssn_Numeric`: advect_fd (advect_fd, advect_fd_2d, advect_fd_3d), advect_fd_upwind (advect_fd_upwind, advect_fd_upwind_2d, advect_fd_upwind_3d), amg_solve, anderson_fixed_point, bandwidth_scott, bandwidth_silverman, bessel_i_complex, bessel_j_complex, bicgstab_l_solve, biweight_location, blackman_window, bootstrap_ci, coherence, cp_als (cp_als_2, cp_als_3, cp_als_4), cp_dense (cp_dense_2, cp_dense_3, cp_dense_4), cross_correlation, digamma_complex, dwt2, dwt_approx, dwt_detail, ecdf, erf_complex, fft_abs, fft_im, fft_re, fftconv, fgmres_solve, fresnel_c_complex, fresnel_s_complex, frft_im, frft_re, function_inf_norm, function_inner, function_l1_norm, function_l2_norm, function_normalize, function_project, gamma_complex, hamming_window, hann_window, heat_fd (heat_fd, heat_fd_2d, heat_fd_3d), heat_fd_bc (heat_fd_bc, heat_fd_bc_2d, heat_fd_bc_3d), hooi (hooi_2, hooi_3, hooi_4), hosvd (hosvd_2, hosvd_3, hosvd_4), huber_location, idwt, idwt2, ifft_abs, ifft_im, ifft_re, interpolate, inverse_wavelet_packet, kde, lambert_w_complex, lgamma_complex, lobpcg_eigenvalues, mad, mad_sigma, minres_solve, nested_dissection_order, newton_cg_minimize, ode_etdrk4, ode_imex, ode_solve, ode_symplectic, oscillatory_integral, poisson_fd (poisson_fd, poisson_fd_2d, poisson_fd_3d), poisson_fd_bc (poisson_fd_bc, poisson_fd_bc_2d, poisson_fd_bc_3d), polynomial_system_roots, qr_pivoted_diagonal, qr_pivoted_permutation, qr_pivoted_rank, quantile_hf, randomized_singular_values, sparse_solve, tensor_contract (tensor_contract_2, tensor_contract_3, tensor_contract_4), tensor_inner (tensor_inner_1, tensor_inner_2, tensor_inner_3, tensor_inner_4), tensor_norm (tensor_norm_1, tensor_norm_2, tensor_norm_3, tensor_norm_4), tensordot (tensordot_1_1_1, tensordot_1_2_1, tensordot_1_3_1, tensordot_1_4_1, tensordot_2_1_1, tensordot_2_2_1, tensordot_2_2_2, tensordot_2_3_1, tensordot_2_3_2, tensordot_2_4_1, tensordot_2_4_2, tensordot_3_1_1, tensordot_3_2_1, tensordot_3_2_2, tensordot_3_3_1, tensordot_3_3_2, tensordot_3_3_3, tensordot_3_4_2, tensordot_3_4_3, tensordot_4_1_1, tensordot_4_2_1, tensordot_4_2_2, tensordot_4_3_2, tensordot_4_3_3, tensordot_4_4_2, tensordot_4_4_3, tensordot_4_4_4), trimmed_mean, tt_dense (tt_dense_2, tt_dense_3, tt_dense_4), tt_svd (tt_svd_2, tt_svd_3, tt_svd_4), tucker_dense (tucker_dense_2, tucker_dense_3, tucker_dense_4), wave_fd (wave_fd, wave_fd_2d, wave_fd_3d), wave_fd_bc (wave_fd_bc, wave_fd_bc_2d, wave_fd_bc_3d), wavedec, wavelet_packet, waverec, winsorized_mean
+* `Rssn_Numeric`: advect_fd (advect_fd, advect_fd_2d, advect_fd_3d), advect_fd_upwind (advect_fd_upwind, advect_fd_upwind_2d, advect_fd_upwind_3d), amg_solve, anderson_fixed_point, bandwidth_scott, bandwidth_silverman, bessel_i_complex, bessel_j_complex, bicgstab_l_solve, biweight_location, blackman_window, bootstrap_basic_ci, bootstrap_ci, coherence, cp_als (cp_als_2, cp_als_3, cp_als_4), cp_dense (cp_dense_2, cp_dense_3, cp_dense_4), cross_correlation, digamma_complex, dwt2, dwt_approx, dwt_detail, ecdf, erf_complex, fft_abs, fft_im, fft_re, fftconv, fgmres_solve, fresnel_c_complex, fresnel_s_complex, frft_im, frft_re, function_inf_norm, function_inner, function_l1_norm, function_l2_norm, function_normalize, function_project, gamma_complex, hamming_window, hann_window, heat_fd (heat_fd, heat_fd_2d, heat_fd_3d), heat_fd_bc (heat_fd_bc, heat_fd_bc_2d, heat_fd_bc_3d), hooi (hooi_2, hooi_3, hooi_4), hosvd (hosvd_2, hosvd_3, hosvd_4), huber_location, idwt, idwt2, ifft_abs, ifft_im, ifft_re, interpolate, inverse_wavelet_packet, kde, lambert_w_complex, lgamma_complex, lobpcg_eigenvalues, mad, mad_sigma, minres_solve, nested_dissection_order, newton_cg_minimize, ode_etdrk4, ode_imex, ode_solve, ode_symplectic, oscillatory_integral, poisson_fd (poisson_fd, poisson_fd_2d, poisson_fd_3d), poisson_fd_bc (poisson_fd_bc, poisson_fd_bc_2d, poisson_fd_bc_3d), polynomial_system_roots, qr_pivoted_diagonal, qr_pivoted_permutation, qr_pivoted_rank, quantile_hf, randomized_singular_values, sparse_solve, tensor_contract (tensor_contract_2, tensor_contract_3, tensor_contract_4), tensor_inner (tensor_inner_1, tensor_inner_2, tensor_inner_3, tensor_inner_4), tensor_norm (tensor_norm_1, tensor_norm_2, tensor_norm_3, tensor_norm_4), tensordot (tensordot_1_1_1, tensordot_1_2_1, tensordot_1_3_1, tensordot_1_4_1, tensordot_2_1_1, tensordot_2_2_1, tensordot_2_2_2, tensordot_2_3_1, tensordot_2_3_2, tensordot_2_4_1, tensordot_2_4_2, tensordot_3_1_1, tensordot_3_2_1, tensordot_3_2_2, tensordot_3_3_1, tensordot_3_3_2, tensordot_3_3_3, tensordot_3_4_2, tensordot_3_4_3, tensordot_4_1_1, tensordot_4_2_1, tensordot_4_2_2, tensordot_4_3_2, tensordot_4_3_3, tensordot_4_4_2, tensordot_4_4_3, tensordot_4_4_4), trimmed_mean, tt_dense (tt_dense_2, tt_dense_3, tt_dense_4), tt_svd (tt_svd_2, tt_svd_3, tt_svd_4), tucker_dense (tucker_dense_2, tucker_dense_3, tucker_dense_4), wave_fd (wave_fd, wave_fd_2d, wave_fd_3d), wave_fd_bc (wave_fd_bc, wave_fd_bc_2d, wave_fd_bc_3d), wavedec, wavelet_packet, waverec, winsorized_mean
+* `Rssn_Differential`: bessel_root, bessel_zero
 
 ## Exclusions and accepted-dynamic decisions
 

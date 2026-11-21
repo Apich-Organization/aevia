@@ -270,10 +270,8 @@ jobs:
           python3 tools/check_stdlib_docs.py --aevia target/debug/aevia
       - name: Kernel source-derived bindings are current
         run: cargo run --locked -p rssn-api-audit -- --codecs-check
-      - name: Kernel API inventory is current
-        run: cargo run --locked -p rssn-api-audit -- --check
-      - name: Every callable kernel source interface is accounted for
-        run: cargo run --locked -p rssn-api-audit -- --coverage-check
+      - name: Verify kernel API inventory and callable coverage
+        run: cargo run --locked -p rssn-api-audit -- --verify
       - name: Install the specification renderer
         run: |
           archive="$RUNNER_TEMP/pandoc-3.11-linux-amd64.tar.gz"

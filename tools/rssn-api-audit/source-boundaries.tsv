@@ -1,6 +1,17 @@
 # Rust source path	Reason this entry point belongs to the Rust host API.
-crate::kernels::fftconv::OverlapSavePlan::apply	Applies a caller-owned FFT filter plan across inputs. The manifest exposes checked one-shot overlap-save convolution.
-crate::kernels::fftconv::OverlapSavePlan::new	Builds a caller-owned filter spectrum for repeated overlap-save convolution.
+crate::sim::spin_models::Potts<D>::heat_bath_sweep_with	Accepts caller-owned work storage. The Aevia Potts heat-bath and update operators reuse the workspace retained with their model handle.
+crate::kernels::amg_general::AmgGeneral::vcycle_with_workspace	Uses caller-owned working storage and an initial iterate. Aevia's general V-cycle returns an owned array and leases the reusable workspace internally.
+crate::kernels::contractions::contract_rectangular_append	Appends generic scalar cells into caller-owned storage. Aevia exposes an owned result for its compiled scalar contraction.
+crate::kernels::contractions::contract_rectangular_for_each	Streams generic scalar cells into a host consumer callback. Aevia exposes the compiled scalar contraction as a retained tensor.
+crate::kernels::finite_field::Gf256Multiplier::new	Returns a caller-owned byte lookup table. Aevia selects the coefficient in each batch scale or multiply-add call and reuses the table internally.
+crate::kernels::tensor_train::TensorTrain::inner_with_workspace	Contracts with caller-owned scratch. Aevia's tensor-train inner product shares the numerical work pool.
+crate::kernels::tensor::tensordot_views	Borrows caller-owned ndarray views, including strided layouts. Aevia's measured tensor contraction calls the same implementation through its owning array handles.
+crate::kernels::newton_cg::NewtonCgWorkspace::minimize	Reuses caller-owned solver buffers for Rust callbacks. Aevia offers the same workspace with a session-owned compiled tape.
+crate::kernels::ode_geom::GaussLegendreWorkspace::step	Reuses caller-owned stage vectors for a Rust ODE callback. Aevia evaluates the same Gauss–Legendre steps through the measured geometric ODE solvers.
+crate::kernels::indefinite_sum::indefinite_sum	Applies a default budget for a Rust callback. The existing Aevia operator uses the same recurrence with the caller's explicit budget.
+crate::kernels::indefinite_sum::indefinite_product	Applies a default budget for a Rust callback. The existing Aevia operator uses the same recurrence with the caller's explicit budget.
+crate::kernels::robust::bootstrap_basic_ci	Accepts an arbitrary thread-safe Rust statistic. Aevia exposes the same seeded basic interval for built-in named statistics in Rssn_Numeric.
+crate::kernels::robust::bootstrap_ci_parallel	Accepts a thread-safe Rust statistic that may be evaluated concurrently. Aevia parallelizes named order statistics and evaluates language callbacks through the checked serial bootstrap adapter.
 crate::kernels::reuse::PlanCache<K,V>::get_or_insert_with	Shares immutable Rust plans and accepts a caller-owned builder closure.
 crate::kernels::reuse::PlanCache<K,V>::new	Sets the retention limit for a caller-owned Rust plan cache.
 crate::kernels::reuse::ScratchPool<T>::checkout	Returns a Rust lease that borrows the owning scratch pool.
@@ -59,6 +70,22 @@ crate::kernels::ode_stiff::bdf_fixed_events	Rust fixed-step BDF using an in-plac
 crate::kernels::ode_stiff::radau5_fixed_events	Rust fixed-step Radau using native rate/Jacobian callbacks and borrowed events.
 crate::kernels::solve_ode	Re-exported Rust dispatcher for typed controls and an in-place rate callback.
 crate::kernels::solve_ode_events	Re-exported Rust dispatcher for typed controls, an in-place rate callback and borrowed events.
+crate::kernels::error_correction::ReedSolomonEncoder::encode_into	Writes the codeword into caller-owned Rust storage. Aevia can reuse the same prepared feedback table through num_native_rs_encoder_encode, which returns an owned byte tensor.
+crate::kernels::matrix::Matrix<T>::transpose_into	Writes into a mutable caller-owned matrix whose shape is the transpose of the input. Aevia's num_matrix_float_transpose and num_matrix_real_transpose return owned matrices.
+crate::kernels::random::Categorical::heap_bytes	Reports Rust allocation capacity for the retained alias table. Aevia charges the table against the session storage budget and reports total retained bytes through num_native_usage.
+crate::sim::fem_triangles::PreparedTriangles::retained_bytes	Reports Rust allocation capacity for the prepared P1/P2 geometry. Aevia charges that capacity internally and reports the session total through num_native_usage.
+crate::sim::physics_bem::PreparedLaplaceBem3d::retained_bytes	Reports Rust allocation capacity for the retained dense factors and collocation operator. Aevia charges that capacity internally and reports the session total through num_native_usage.
+crate::sim::fmm::PreparedFmm2d::retained_bytes	Reports Rust allocation capacity for prepared FMM geometry and interactions. Aevia charges that capacity internally and reports the session total through num_native_usage.
+crate::sim::physics_cfd::compute_laplacian_into	Writes into caller-owned Rust storage. Aevia returns an owned measured grid through num_grid_legacy_compute_laplacian.
+crate::sim::physics_fea::BeamElement2D::global_stiffness_entries	Returns fixed-size Rust matrix storage. Aevia exposes the same coefficient calculation through num_grid_beam_global_stiffness_matrix with the beam's reference frame.
+crate::sim::integrators::symplectic_step_with_workspace	Updates borrowed Rust position, momentum and acceleration storage using a Rust callback. Aevia returns owned measured states through its Verlet and Yoshida operators.
+crate::sim::dg::DgAdvection1dPlan::step_into	Writes into caller-owned Rust nodal storage using a shared scratch lease. Aevia returns the same step as an owned measured vector through num_dg_advection_step_prepared1d.
+crate::kernels::vector::normalize_into	Writes the unit vector into caller-owned Rust storage. Aevia's num_normalize uses the same scaled normalization and returns an owned tensor.
 crate::sim::integrators::solve_symplectic	Rust symplectic dispatcher taking the simulator's mutable derivative callback.
+crate::sim::nbody::direct_field_into	Writes the direct N-body field into caller-owned storage. Aevia's dimension-specific direct-field operators return owned tensors.
+crate::sim::ns_mac::NsSolver::divergence_into	Writes a MAC divergence field into caller-owned storage. Aevia can request the owned divergence field or its measured scalar summary.
 crate::sim::pde_api::adaptive::solve_pde	Generic Rust controller over a supplied stepper and CFL callback. Aevia exposes checked PDE family adapters.
 crate::sim::pde_api::solve_pde	Re-exported generic Rust controller over a supplied stepper and CFL callback.
+crate::sim::spectral::PeriodicHelmholtzPlan::size	Reports the size of a caller-owned prepared symbol. Aevia can read the same point count through the Fourier grid size operator.
+crate::sim::spectral::PeriodicHelmholtzPlan::solve	Uses a caller-owned prepared symbol on one borrowed forcing. The Fourier Helmholtz operator reuses the same cached symbol for scalar solves.
+crate::sim::spectral::SpectralGrid::helmholtz_plan	Returns a Rust Arc over a prepared shifted symbol. The Fourier Helmholtz operators prepare or reuse that symbol internally.
