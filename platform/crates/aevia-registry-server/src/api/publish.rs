@@ -13,6 +13,7 @@ use axum::Json;
 use axum::body::Bytes;
 use axum::extract::Multipart;
 use axum::extract::State;
+use axum::extract::multipart::Field;
 use axum::http::StatusCode;
 use chrono::Utc;
 use serde::Deserialize;
@@ -367,20 +368,7 @@ pub async fn publish(
                 })?);
             },
             | Some("package") if archive.is_none() => {
-                let bytes = field.bytes().await.map_err(|error| {
-                    ApiError::bad_request(
-                        "E_MULTIPART",
-                        format!("cannot read the archive: {error}"),
-                    )
-                })?;
-                if bytes.len() as u64 > tarball::MAX_ARCHIVE_BYTES {
-                    return Err(ApiError::new(
-                        StatusCode::PAYLOAD_TOO_LARGE,
-                        "E_TARBALL",
-                        "A package archive can be at most 16 MiB",
-                    ));
-                }
-                archive = Some(bytes);
+                archive = Some(read_archive_part(field).await?);
             },
             | Some("envelope" | "package") => {
                 return Err(ApiError::bad_request(
@@ -642,6 +630,59 @@ pub async fn publish(
     ))
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "keep archive size and multipart framing checks together"
+    )
+)]
+async fn read_archive_part(mut field: Field<'_>) -> ApiResult<Bytes> {
+    let limit = usize::try_from(tarball::MAX_ARCHIVE_BYTES).unwrap_or(usize::MAX);
+    let mut archive = Some(Vec::new());
+    let mut first_chunk = None;
+    while let Some(chunk) = field.chunk().await.map_err(|error| {
+        ApiError::bad_request("E_MULTIPART", format!("cannot read the archive: {error}"))
+    })? {
+        let Some(bytes) = &mut archive else {
+            // Continue checking the framing after the stored bytes are released.
+            continue;
+        };
+        let length = first_chunk.as_ref().map_or(bytes.len(), Bytes::len);
+        let end = length.saturating_add(chunk.len());
+        if end > limit {
+            archive = None;
+            first_chunk = None;
+            continue;
+        }
+        if chunk.is_empty() {
+            continue;
+        }
+        if length == 0 {
+            // A complete field in one chunk can keep Multer's allocation.
+            first_chunk = Some(chunk);
+            continue;
+        }
+        if end > bytes.capacity() {
+            let capacity = end.checked_next_power_of_two().unwrap_or(limit).min(limit);
+            bytes.reserve_exact(capacity.saturating_sub(bytes.len()));
+        }
+        if let Some(first_chunk) = first_chunk.take() {
+            bytes.extend_from_slice(&first_chunk);
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    archive
+        .map(|bytes| first_chunk.unwrap_or_else(|| Bytes::from(bytes)))
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "E_TARBALL",
+                "A package archive can be at most 16 MiB",
+            )
+        })
+}
+
 async fn publication_task<T: Send + 'static>(
     slot: &Arc<OwnedSemaphorePermit>,
     operation: impl FnOnce() -> T + Send + 'static,
@@ -808,6 +849,85 @@ fn check_checksum(checksum: &str) -> ApiResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn archive_part_keeps_exact_limit_and_malformed_precedence() {
+        use axum::Router;
+        use axum::body::Body;
+        use axum::body::to_bytes;
+        use axum::extract::DefaultBodyLimit;
+        use axum::http::Request;
+        use axum::http::header::CONTENT_TYPE;
+        use axum::routing::post;
+        use tower::ServiceExt as _;
+
+        async fn archive_only(mut multipart: Multipart) -> ApiResult<Bytes> {
+            let field = multipart
+                .next_field()
+                .await
+                .expect("archive header")
+                .expect("archive part");
+            read_archive_part(field).await
+        }
+
+        let router = Router::new()
+            .route("/", post(archive_only))
+            .layer(DefaultBodyLimit::max(20 * 1024 * 1024));
+        let limit = usize::try_from(tarball::MAX_ARCHIVE_BYTES).expect("package limit fits usize");
+        for (size, complete, status, code) in [
+            (0, true, StatusCode::OK, None),
+            (3, true, StatusCode::OK, None),
+            (limit, true, StatusCode::OK, None),
+            (
+                limit.saturating_add(1),
+                true,
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Some("E_TARBALL"),
+            ),
+            (
+                limit.saturating_add(1),
+                false,
+                StatusCode::BAD_REQUEST,
+                Some("E_MULTIPART"),
+            ),
+        ] {
+            let mut body =
+                b"--archive-boundary\r\nContent-Disposition: form-data; name=\"package\"\r\n\r\n"
+                    .to_vec();
+            body.resize(body.len().saturating_add(size), b'x');
+            if complete {
+                body.extend_from_slice(b"\r\n--archive-boundary--\r\n");
+            }
+            let request = Request::post("/")
+                .header(
+                    CONTENT_TYPE,
+                    "multipart/form-data; boundary=archive-boundary",
+                )
+                .body(Body::from(body))
+                .expect("multipart request");
+            let response = router.clone().oneshot(request).await.expect("response");
+            assert_eq!(
+                response.status(),
+                status,
+                "{size} bytes complete={complete}"
+            );
+            let body = to_bytes(response.into_body(), limit)
+                .await
+                .expect("response bytes");
+            if let Some(code) = code {
+                let error: serde_json::Value = serde_json::from_slice(&body).expect("JSON error");
+                assert_eq!(
+                    error
+                        .pointer("/error/code")
+                        .and_then(serde_json::Value::as_str),
+                    Some(code)
+                );
+            } else {
+                assert_eq!(body.len(), size);
+                assert!(body.iter().all(|&byte| byte == b'x'));
+            }
+        }
+    }
 
     fn versions(list: &[(&str, bool)]) -> Vec<(String, bool)> {
         list.iter()

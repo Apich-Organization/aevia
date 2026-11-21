@@ -77,11 +77,13 @@ record for a version wins. A yank updates the affected record’s `yanked` flag.
 Each dependency record names a registry package `package` in lower-case `owner/name` form and a canonical version requirement `req`, such as `^1.2`, `~1.2.3`, `>=1.2, <2`, `1.*`, `=1.2.3`, or `*`. `import` gives the import root when it differs from the default for the package name. The default root of `units-extra` is `UnitsExtra`. [Module specification](../../spec/en/07-modules.md)
 
 Send the index’s `ETag` back as `If-None-Match` to receive 304 when the catalogue record is unchanged. `Cache-Control` is
-`no-cache`, so a yank reaches a client at its next resolution.
+`no-cache`, so a client sees yank changes when it revalidates the entry.
+`aevia pkg update` refreshes the selected cached indexes. Ordinary CLI
+resolution can reuse local entries.
 
 The index identifies the signing key and archive checksum. Retrieve the signature receipt for the exact signed statement. The records are listed in publication order.
 
-The resolver selects the highest version satisfying the requirements, with at most one version per compatibility series by default (`1.x`, `0.3.x`, or `0.0.4`). A pre-release qualifies when a requirement names a pre-release of the same `major.minor.patch`. An already locked version remains selectable after a yank.
+The resolver selects the highest version satisfying the requirements, with at most one version per compatibility series by default (`1.x`, `0.3.x`, or `0.0.4`). A pre-release qualifies when a requirement names a pre-release of the same `major.minor.patch`. Decimal pre-release identifiers are ordered numerically, including identifiers beyond the machine integer range. An already locked version remains selectable after a yank.
 
 ### `GET /api/v1/crates/{owner}/{name}/dependents`
 
@@ -155,7 +157,9 @@ The armoured public key as `text/plain`. Certificates of retired keys remain acc
               "hash": "…", "prev": "0000…", "at": "…"}]}
 ```
 
-`kind` is `publish`, `yank` or `key`. `limit` is capped at 500.
+`kind` is `publish`, `yank` or `key`. The response returns entries in ascending sequence order, starting at `from` inclusive. `limit` defaults to 100 and is bounded to 1–500.
+
+`head` and `entries` come from the same database snapshot. A request past the end of the log still returns the current head. An empty log returns `head: null`.
 
 ## Writing
 
@@ -200,6 +204,8 @@ recommendation to switch to an OpenPGP (PGP) key, ideally hardware-backed. OpenP
 signatures return `warnings: []` (or omit empty warnings).
 
 The server combines envelope metadata with `aevia.toml` and `aevia-pkg.toml` from the archive. A publication must include a description and either a license expression or a nonempty license file. The returned documentation URL may take a short time to become available.
+
+The registry reads `[package]` and `[dependencies]` and accepts a `[lints]` table. The toolchain validates lint settings. The archive entry comes from `[package] entry` and defaults to `src/main.aev`. A `[lib]` table in a publication manifest returns `E_MANIFEST`.
 
 Before anything is written the server checks the archive's `aevia.toml`
 dependencies (`E_DEPENDENCY`): none may be a bare `path`, none may name the

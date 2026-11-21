@@ -36,7 +36,6 @@ use aevia_registry_core::vm::DependentView;
 use aevia_registry_core::vm::DocModulePage;
 use aevia_registry_core::vm::DocsIndexPage;
 use aevia_registry_core::vm::KeyView;
-use aevia_registry_core::vm::LogEntryView;
 use aevia_registry_core::vm::OwnerView;
 use aevia_registry_core::vm::UserPage;
 use aevia_registry_core::vm::VersionView;
@@ -681,16 +680,14 @@ pub async fn log(
     Language(lang): Language,
     headers: HeaderMap,
 ) -> PageResult<Html<String>> {
-    let entries = repo::log_entries(&state.pool, 0, LOG_PAGE).await?;
-    let head = repo::log_head(&state.pool).await?;
-    let views: Vec<LogEntryView> = entries.iter().map(log_view).collect();
-    let (seq, hash) = head.as_ref().map_or_else(
+    let (entries, head) = repo::log_page(&state.pool, 0, LOG_PAGE).await?;
+    let (seq, hash) = head.map_or_else(
         || (0, "0".repeat(64)),
-        |entry| (entry.seq, entry.entry_hash.clone()),
+        |entry| (entry.seq, entry.entry_hash),
     );
     Ok(Html(web::log_page(
         lang,
-        &views,
+        &entries,
         seq,
         &hash,
         state.viewer(&headers).await.as_ref(),
@@ -1012,20 +1009,5 @@ fn version_view(row: &Version) -> VersionView {
         key_kind: row.key_kind.clone(),
         fingerprint: row.fingerprint.clone(),
         downloads: row.downloads,
-    }
-}
-
-#[allow(
-    clippy::single_call_fn,
-    reason = "a transparency entry maps to the public view model at this boundary"
-)]
-fn log_view(entry: &aevia_registry_db::models::LogEntry) -> LogEntryView {
-    LogEntryView {
-        seq: entry.seq,
-        kind: entry.kind.clone(),
-        summary: entry.summary.clone(),
-        hash: entry.entry_hash.clone(),
-        prev: entry.prev_hash.clone(),
-        at: entry.created_at.to_rfc3339(),
     }
 }

@@ -1178,6 +1178,266 @@ async fn an_unknown_package_and_an_empty_specification_are_not_found() {
 }
 
 #[tokio::test]
+async fn index_validators_and_head_follow_the_live_catalogue() {
+    use aevia_registry::api::index::record_of;
+    use aevia_registry_core::PackageId;
+    use aevia_registry_core::index::IndexRecord;
+    use aevia_registry_core::index::etag;
+
+    let Some(app) = start().await else {
+        return;
+    };
+    let mut first = catalogue_version(
+        &app,
+        "2.0.0",
+        &format!("sha256:{}", "a".repeat(64)),
+        123,
+        false,
+    )
+    .await;
+    let mut second = catalogue_version(
+        &app,
+        "1.0.0",
+        &format!("sha256:{}", "b".repeat(64)),
+        456,
+        false,
+    )
+    .await;
+    let tied = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    for row in [&mut first, &mut second] {
+        sqlx::query("UPDATE versions SET created_at = $1 WHERE id = $2")
+            .bind(tied)
+            .bind(row.id)
+            .execute(&app.pool)
+            .await
+            .unwrap();
+        row.created_at = tied;
+    }
+    first.signature = "signature\n\"雪\"\\".into();
+    first.dependencies = serde_json::json!([
+        {"package":"test-reader/dep", "req":"^1.2", "import":"Dep"},
+        {"import":"Legacy", "path":"../legacy"}
+    ]);
+    sqlx::query("UPDATE versions SET signature = $1, dependencies = $2 WHERE id = $3")
+        .bind(&first.signature)
+        .bind(&first.dependencies)
+        .bind(first.id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+
+    let uri = "/api/v1/index/test-reader/Archive_Fixture";
+    let id = PackageId::new("test-reader", "archive_fixture").unwrap();
+    let expected = format!(
+        "{}\n{}\n",
+        record_of(&id, &first).to_line().unwrap(),
+        record_of(&id, &second).to_line().unwrap()
+    );
+    let tag = etag(&expected);
+    let (status, headers, body) = get(&app.app, uri).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::ETAG], tag);
+    assert_eq!(headers[header::CACHE_CONTROL], "public, no-cache");
+    assert_eq!(headers[header::CONTENT_TYPE], "text/plain; charset=utf-8");
+    assert_eq!(body, expected.as_bytes());
+
+    let head = Request::head(uri).body(Body::empty()).unwrap();
+    let (status, headers, body) = send(&app.app, head).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::ETAG], tag);
+    assert_eq!(headers[header::CONTENT_LENGTH], expected.len().to_string());
+    assert!(body.is_empty());
+
+    for (method, validator) in [
+        ("GET", tag.clone()),
+        ("GET", format!("\"other,tag\", W/{tag}")),
+        ("HEAD", "*".into()),
+    ] {
+        let request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::IF_NONE_MATCH, validator)
+            .body(Body::empty())
+            .unwrap();
+        let (status, headers, body) = send(&app.app, request).await;
+        assert_eq!(status, StatusCode::NOT_MODIFIED);
+        assert_eq!(headers[header::ETAG], tag);
+        assert_eq!(headers[header::CACHE_CONTROL], "public, no-cache");
+        assert!(body.is_empty());
+    }
+
+    let multi = Request::get(uri)
+        .header(header::IF_NONE_MATCH, "\"other\"")
+        .header(header::IF_NONE_MATCH, &tag)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(send(&app.app, multi).await.0, StatusCode::NOT_MODIFIED);
+
+    repo::set_yanked(&app.pool, first.package_id, &first.version, true)
+        .await
+        .unwrap()
+        .unwrap();
+    let stale = Request::get(uri)
+        .header(header::IF_NONE_MATCH, &tag)
+        .body(Body::empty())
+        .unwrap();
+    let (status, headers, body) = send(&app.app, stale).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_ne!(headers[header::ETAG], tag);
+    let body = String::from_utf8(body).unwrap();
+    let mut records = body
+        .lines()
+        .map(|line| IndexRecord::from_line(line).unwrap());
+    assert!(records.next().unwrap().yanked);
+    assert!(!records.next().unwrap().yanked);
+    assert!(records.next().is_none());
+
+    let missing = Request::get("/api/v1/index/test-reader/missing")
+        .header(header::IF_NONE_MATCH, "*")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(send(&app.app, missing).await.0, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn resolve_agrees_with_the_sparse_index_for_catalogue_rows() {
+    use std::collections::BTreeMap;
+
+    use aevia_registry::api::deps::RecordSource;
+    use aevia_registry::api::deps::resolve_request;
+    use aevia_resolve::SparseRecord;
+    use aevia_resolve::sparse::parse_text;
+
+    struct TextCatalogue(BTreeMap<String, Vec<SparseRecord>>);
+
+    impl RecordSource for TextCatalogue {
+        async fn records(
+            &self,
+            package: &str,
+        ) -> aevia_registry_core::Result<Option<Vec<SparseRecord>>> {
+            Ok(self.0.get(package).cloned())
+        }
+    }
+
+    let Some(app) = start().await else {
+        return;
+    };
+    let root = "test-reader/archive_fixture";
+    let dependency = "test-reader/units_fixture";
+    let checksum = |byte: &str| format!("sha256:{}", byte.repeat(64));
+    let fallback = catalogue_version(&app, "1.0.0", &checksum("a"), 100, false).await;
+    let superseded = catalogue_version(&app, "1.1.0+local", &checksum("b"), 100, false).await;
+    // The DB sees a distinct spelling of the same parsed version. The newer
+    // row wins even when the timestamps tie and that row is yanked.
+    let preferred = catalogue_version(&app, " 1.1.0+local ", &checksum("c"), 100, false).await;
+    let owner = preferred.published_by.unwrap();
+    let units = repo::create_package(&app.pool, owner, "units_fixture")
+        .await
+        .unwrap();
+    repo::insert_version(
+        &app.pool,
+        &NewVersion {
+            package_id: units.id,
+            version: "2.0.0",
+            checksum: &checksum("d"),
+            size_bytes: 200,
+            manifest: serde_json::json!({}),
+            dependencies: serde_json::json!([]),
+            readme: None,
+            published_by: owner,
+            key_kind: "openpgp",
+            fingerprint: "fixture",
+            signature: "fixture signature",
+            statement: "fixture statement\n",
+            build_docs: false,
+        },
+    )
+    .await
+    .unwrap();
+    let time = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    sqlx::query("UPDATE versions SET created_at = $1 WHERE package_id = $2")
+        .bind(time)
+        .bind(preferred.package_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE versions SET yanked = true, dependencies = $1 WHERE id = $2")
+        .bind(serde_json::json!([
+            {"import":"Legacy", "path":"../legacy"},
+            {"package":"TEST-READER/Units_Fixture", "req":"^2", "import":"UnitsAlias"}
+        ]))
+        .bind(preferred.id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+
+    let mut texts = BTreeMap::new();
+    for package in [root, dependency] {
+        let (status, _, body) = get(&app.app, &format!("/api/v1/index/{package}")).await;
+        assert_eq!(status, StatusCode::OK);
+        texts.insert(
+            package.to_string(),
+            parse_text(std::str::from_utf8(&body).unwrap()).unwrap(),
+        );
+    }
+    let source = TextCatalogue(texts);
+    for locked in [
+        serde_json::json!([]),
+        serde_json::json!([{"package":root, "version":"1.1.0+local"}]),
+    ] {
+        let request = serde_json::json!({
+            "dependencies": [{"package":"TEST-READER/Archive_Fixture", "req":"^1"}],
+            "locked": locked,
+        });
+        let expected = resolve_request(&source, &serde_json::from_value(request.clone()).unwrap())
+            .await
+            .unwrap();
+        let (status, _, body) = post_json(&app.app, "/api/v1/resolve", &request.to_string()).await;
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body, serde_json::to_value(expected).unwrap());
+        if locked.as_array().unwrap().is_empty() {
+            assert_eq!(body["packages"][0]["checksum"], fallback.checksum);
+        } else {
+            assert_eq!(body["packages"][0]["checksum"], preferred.checksum);
+            assert_eq!(body["packages"][0]["yanked"], true);
+            assert!(
+                body["edges"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|edge| edge["import"] == "UnitsAlias")
+            );
+        }
+    }
+
+    // A malformed stored requirement remains an error even for a row whose
+    // parsed version is replaced by a later valid row.
+    sqlx::query("UPDATE versions SET dependencies = $1 WHERE id = $2")
+        .bind(serde_json::json!([{"package":"test-reader/units_fixture", "req":"invalid"}]))
+        .bind(superseded.id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let (_, _, index) = get(&app.app, &format!("/api/v1/index/{root}")).await;
+    let error = parse_text(std::str::from_utf8(&index).unwrap()).unwrap_err();
+    assert_eq!(error.line, 2);
+    let (status, _, body) = post_json(
+        &app.app,
+        "/api/v1/resolve",
+        &serde_json::json!({"dependencies":[{"package":root, "req":"^1"}]}).to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["error"]["code"], "E_JSON");
+    assert_eq!(
+        body["error"]["message"],
+        format!("a stored record is damaged: {error}")
+    );
+}
+
+#[tokio::test]
 async fn archive_validators_and_head_do_not_inflate_download_counts() {
     let Some(app) = start().await else {
         return;
@@ -1185,7 +1445,8 @@ async fn archive_validators_and_head_do_not_inflate_download_counts() {
     let version = "1.0.0";
     let (_dir, archive, checksum) = fixture("archive_fixture", version);
     app.state.storage.write(&checksum, &archive).unwrap();
-    let entry = catalogue_version(&app, version, &checksum, archive.len(), false).await;
+    // A legacy row can have a stale catalogue size. Serve the verified file size.
+    let entry = catalogue_version(&app, version, &checksum, 0, false).await;
     let uri = "/api/v1/download/test-reader/archive_fixture/1.0.0";
     let etag = format!("\"{checksum}\"");
 
@@ -1198,6 +1459,8 @@ async fn archive_validators_and_head_do_not_inflate_download_counts() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers[header::ETAG], etag);
     assert_eq!(headers[header::CONTENT_LENGTH], archive.len().to_string());
+    assert_eq!(headers["x-aevia-checksum"], checksum);
+    assert_eq!(headers["x-aevia-signature-fingerprint"], entry.fingerprint);
     assert!(body.is_empty());
 
     for validator in [etag.clone(), format!("\"different\", W/{etag}"), "*".into()] {
@@ -1224,6 +1487,7 @@ async fn archive_validators_and_head_do_not_inflate_download_counts() {
     let (status, headers, body) = send(&app.app, request).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers[header::ETAG], etag);
+    assert_eq!(headers[header::CONTENT_LENGTH], archive.len().to_string());
     assert_eq!(body, archive);
     let (status, _, signature) = get(&app.app, &format!("{uri}/signature")).await;
     assert_eq!(status, StatusCode::OK);
@@ -1245,6 +1509,32 @@ async fn archive_validators_and_head_do_not_inflate_download_counts() {
     .await;
     worker.abort();
     assert_eq!(downloads.expect("the download worker flushes its batch"), 1);
+}
+
+#[tokio::test]
+async fn archive_get_and_head_require_present_verified_bytes() {
+    let Some(app) = start().await else {
+        return;
+    };
+    let good = tarball::checksum(b"signed archive");
+    let missing = tarball::checksum(b"absent archive");
+    catalogue_version(&app, "1.0.0", &missing, 0, false).await;
+    catalogue_version(&app, "1.0.1", &good, 0, false).await;
+    app.state.storage.write(&good, b"tampered archive").unwrap();
+
+    for (version, code) in [("1.0.0", "E_IO"), ("1.0.1", "E_INTEGRITY")] {
+        let uri = format!("/api/v1/download/test-reader/archive_fixture/{version}");
+        let (status, headers, body) = get(&app.app, &uri).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error_code(&body), code);
+        assert!(!headers.contains_key("x-aevia-checksum"));
+
+        let head = Request::head(&uri).body(Body::empty()).unwrap();
+        let (status, headers, body) = send(&app.app, head).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(!headers.contains_key("x-aevia-checksum"));
+        assert!(body.is_empty());
+    }
 }
 
 #[tokio::test]
@@ -1814,4 +2104,117 @@ async fn ssh_keys_register_publish_yank_and_emit_pgp_warnings() {
         "{}",
         String::from_utf8_lossy(&body)
     );
+}
+
+async fn transparency_page(
+    app: &Router,
+    uri: &str,
+) -> serde_json::Value {
+    let (status, _, body) = get(app, uri).await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    serde_json::from_slice(&body).expect("the log page is JSON")
+}
+
+#[tokio::test]
+async fn transparency_log_routes_keep_head_projection_and_page_bounds() {
+    let Some(app) = start().await else {
+        return;
+    };
+    assert_eq!(
+        transparency_page(&app.app, "/api/v1/log").await,
+        serde_json::json!({"head": null, "entries": []}),
+    );
+    let payload = serde_json::json!({"private_projection_marker": "only stored with the chain"});
+    let first = repo::append_log(&app.pool, "publish", "example 1.0.0", payload.clone())
+        .await
+        .unwrap();
+    let newest = repo::append_log(
+        &app.pool,
+        "yank",
+        "example 1.0.0 withdrawn",
+        payload.clone(),
+    )
+    .await
+    .unwrap();
+    let full = transparency_page(&app.app, "/api/v1/log").await;
+    assert_eq!(full["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(full["entries"][1]["prev"], first.entry_hash);
+    assert_eq!(full["entries"][1]["hash"], newest.entry_hash);
+
+    let head = serde_json::json!({
+        "seq": newest.seq,
+        "hash": newest.entry_hash,
+        "at": newest.created_at.to_rfc3339(),
+    });
+    let first_summary = serde_json::json!({
+        "seq": first.seq,
+        "kind": first.kind,
+        "summary": first.summary,
+        "hash": first.entry_hash,
+        "prev": first.prev_hash,
+        "at": first.created_at.to_rfc3339(),
+    });
+    let clamped = transparency_page(&app.app, "/api/v1/log?from=-5&limit=0").await;
+    assert_eq!(
+        clamped,
+        serde_json::json!({"head": head, "entries": [first_summary]}),
+    );
+    let inclusive_uri = format!("/api/v1/log?from={}", newest.seq);
+    let inclusive = transparency_page(&app.app, &inclusive_uri).await;
+    assert_eq!(inclusive["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(inclusive["entries"][0]["seq"], newest.seq);
+    let empty_uri = format!("/api/v1/log?from={}", newest.seq.saturating_add(1));
+    let empty = transparency_page(&app.app, &empty_uri).await;
+    assert_eq!(empty, serde_json::json!({"head": head, "entries": []}));
+
+    let (status, _, html) = get(&app.app, "/log").await;
+    assert_eq!(status, StatusCode::OK);
+    let html = String::from_utf8(html).unwrap();
+    assert!(html.contains("example 1.0.0 withdrawn"));
+    assert!(html.contains(&newest.entry_hash[..32]));
+    assert!(!html.contains("private_projection_marker"));
+    let legacy = repo::log_entries(&app.pool, first.seq, 1).await.unwrap();
+    assert_eq!(legacy.first().unwrap().payload, payload);
+}
+
+#[tokio::test]
+async fn transparency_log_head_matches_complete_pages_while_writes_commit() {
+    let Some(app) = start().await else {
+        return;
+    };
+    repo::append_log(&app.pool, "publish", "first", serde_json::json!({}))
+        .await
+        .unwrap();
+    let old_page = repo::log_entries(&app.pool, 0, 500).await.unwrap();
+    let second = repo::append_log(&app.pool, "publish", "second", serde_json::json!({}))
+        .await
+        .unwrap();
+    let old_head = repo::log_head(&app.pool).await.unwrap().unwrap();
+    assert_eq!(old_head.seq, second.seq);
+    assert!(old_page.last().unwrap().seq < old_head.seq);
+
+    let pool = app.pool.clone();
+    let writer = tokio::spawn(async move {
+        for sequence in 0..32 {
+            let summary = format!("concurrent entry {sequence}");
+            repo::append_log(
+                &pool,
+                "publish",
+                &summary,
+                serde_json::json!({"n": sequence}),
+            )
+            .await
+            .unwrap();
+            tokio::task::yield_now().await;
+        }
+    });
+    for _ in 0..64 {
+        let page = transparency_page(&app.app, "/api/v1/log?limit=500").await;
+        let entries = page["entries"].as_array().unwrap();
+        let latest = entries.last().unwrap();
+        assert_eq!(page["head"]["seq"], latest["seq"]);
+        assert_eq!(page["head"]["hash"], latest["hash"]);
+        assert_eq!(page["head"]["at"], latest["at"]);
+    }
+    writer.await.unwrap();
 }
