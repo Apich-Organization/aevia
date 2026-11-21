@@ -1,6 +1,6 @@
 # Merge this into ~/.config/helix/languages.toml (%AppData%\helix\languages.toml on Windows),
 # or run `scripts/install.ps1` / `scripts/install.sh`, which does it for you.
-# Then: `hx --grammar fetch` is NOT needed (the grammar is local); run `hx --grammar build`.
+# Use the installer with --build (sh) or -Build (PowerShell) to compile the local grammar.
 
 [language-server.aevia-lsp]
 command = "aevia-lsp"

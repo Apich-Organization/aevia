@@ -27,12 +27,25 @@ syn match aeviaUnit   "\%(\<\d[0-9_]*\%(\.\d[0-9_]*\)\?\%([eE][-+]\?\d\+\)\?\s*\
 
 syn match aeviaOperator "|>\|<|\|->\|=>\|<-\|::\|\.\.\.\|\.\.=\|\.\.\|==\|!=\|<=\|>=\|&&\|||\|[≤≥≠√]\|[-+*/^@!?=<>|·×÷−&:]"
 
-" Strings with interpolation and escapes.
-syn region aeviaInterp contained matchgroup=aeviaInterpDelim start="{" end="}" contains=TOP
-syn match  aeviaEscape contained "\\\%(u{\x\+}\|[ntr\\\"{}]\)"
-syn region aeviaString start=+"+ skip=+\\\\\|\\"+ end=+"+ contains=aeviaEscape,aeviaInterp oneline
-syn region aeviaString start=+"""+ end=+"""+ contains=aeviaEscape,aeviaInterp
-syn match  aeviaRawString +\<r"[^"]*"+
+" Only code within interpolation can start a nested brace group or a
+" backslash-protected string. Ordinary string text ends at the line break.
+syn region aeviaInterp contained matchgroup=aeviaInterpDelim start=+{+ end=+\%(\\\)\@<!}+ contains=TOP
+syn region aeviaInterpGroup contained containedin=aeviaInterp,aeviaInterpGroup
+      \ matchgroup=aeviaInterpDelim start=+\%(\\\)\?{+ end=+\%(\\\)\?}+ contains=TOP
+syn match  aeviaInvalidEscape contained +\\\%(u{[^}"]*}\|.\)+
+syn match  aeviaEscape contained +\\\%(u{\x\+}\|[0ntr\\"{}]\)+
+syn cluster aeviaStringBody contains=aeviaEscape,aeviaInvalidEscape,aeviaInterp
+" A protected quote ends its string instead of being part of an escape.
+syn match aeviaInvalidProtectedEscape contained +\\\%(u{[^}"]*}\|[^"]\)+
+syn match aeviaProtectedEscape contained +\\\%(u{\x\+}\|[0ntr\\{}]\)+
+syn cluster aeviaProtectedStringBody contains=aeviaProtectedEscape,aeviaInvalidProtectedEscape,aeviaInterp
+syn region aeviaString start=+"\%(""\)\@!+ skip=+\\\\\|\\"+ end=+"\|$+ contains=@aeviaStringBody
+syn region aeviaString start=+"""+ skip=+\\\\\|\\"+ end=+"""+ contains=@aeviaStringBody
+syn region aeviaRawString start=+\<r"+ end=+"\|$+
+syn region aeviaProtectedString contained containedin=aeviaInterp,aeviaInterpGroup
+      \ start=+\\"+ skip=+\\\\+ end=+\\"\|$+ contains=@aeviaProtectedStringBody
+syn region aeviaProtectedRawString contained containedin=aeviaInterp,aeviaInterpGroup
+      \ start=+\<r\\"+ end=+\\"\|$+
 
 " Comments: nestable block, doc, line.
 syn region aeviaBlockComment start="#-" end="-#" contains=aeviaBlockComment,aeviaTodo
@@ -40,6 +53,10 @@ syn match  aeviaDocComment   "^\s*##.*$" contains=aeviaTodo
 syn match  aeviaComment      "#\%(-\|#\)\@!.*$" contains=aeviaTodo
 syn match  aeviaShebang      "\%^#!.*$"
 syn keyword aeviaTodo contained TODO FIXME XXX NOTE
+
+" Quoted text can contain both comment markers and nested quotes, so a
+" cold jump needs the preceding syntax state. Vim caches it as it scans.
+syn sync fromstart
 
 hi def link aeviaKeyword      Keyword
 hi def link aeviaBoolean      Boolean
@@ -55,7 +72,12 @@ hi def link aeviaNumber       Number
 hi def link aeviaOperator     Operator
 hi def link aeviaString       String
 hi def link aeviaRawString    String
+hi def link aeviaProtectedString aeviaString
+hi def link aeviaProtectedRawString aeviaRawString
 hi def link aeviaEscape       SpecialChar
+hi def link aeviaInvalidEscape Error
+hi def link aeviaProtectedEscape aeviaEscape
+hi def link aeviaInvalidProtectedEscape aeviaInvalidEscape
 hi def link aeviaInterpDelim  Delimiter
 hi def link aeviaComment      Comment
 hi def link aeviaBlockComment Comment

@@ -1,0 +1,10 @@
+let text = "#-tag-# \0 {42} tail"
+#           ^^ string
+#                   ^^ string.escape
+#                      ^ punctuation.special
+#                       ^^ number
+#                         ^ punctuation.special
+
+let raw = r"{} # literal"
+#           ^^ string
+#              ^ string

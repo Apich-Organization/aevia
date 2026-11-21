@@ -8,6 +8,18 @@ The Aevia plugin uses LSP4IJ for editor language features and source debugging.
 [LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij) 插件。
 Aevia 插件通过 LSP4IJ 提供代码编辑和源码调试功能。
 
+The bundled TextMate grammar highlights ordinary, raw and triple-quoted
+strings with escape sequences and nested interpolation. The JetBrains build
+takes language registration, editor settings and the grammar from the
+[VS Code extension](../vscode/README.md). The shared registration includes
+`.aev` files and Aevia shebangs. LSP4IJ receives compiler diagnostics and
+semantic highlighting from the Aevia language server.
+
+随包提供的 TextMate 语法为普通、原始和三引号字符串提供高亮，并识别转义和
+嵌套插值。构建 JetBrains 插件时，语言注册信息、编辑器设置和语法取自
+[VS Code 扩展](../vscode/README.md)。共享注册规则识别 `.aev` 文件和 Aevia
+shebang。LSP4IJ 从 Aevia 语言服务器接收编译器诊断和语义高亮信息。
+
 ## Run and debug / 运行与调试
 
 - **Run Aevia File** and **Test Aevia File** are in the Run and editor context menus.
@@ -40,9 +52,11 @@ from the `aevia-editor-extensions` artifact of a [CI run][ci]. Open
 To build from source with JDK 21 and Gradle 8.14.3, run `gradle buildPlugin`
 from `editors/jetbrains`. The ZIP appears in `build/distributions/`. To build
 against a local IDE distribution, set `AEVIA_IDE_PATH` to its installation directory.
+Run `gradle verifyPluginStructure` to check the plugin archive structure.
 
 若要从源码构建，请使用 JDK 21 和 Gradle 8.14.3，在 `editors/jetbrains`
 中运行 `gradle buildPlugin`。ZIP 文件会生成在 `build/distributions/` 下。
 若要使用本地 IDE 构建，将 `AEVIA_IDE_PATH` 设为其安装目录。
+运行 `gradle verifyPluginStructure` 可检查插件归档结构。
 
 [ci]: https://github.com/Apich-Organization/aevia/actions/workflows/ci.yml

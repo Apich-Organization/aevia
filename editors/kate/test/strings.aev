@@ -1,0 +1,16 @@
+let ordinary = "  ## quoted #- text -# \0 \u{41} {1 + 2} tail"
+let multiline = """
+    # quoted
+    literal "single" and ""double""
+    "{4} \0
+    """
+let record = "{ { outer = { inner = 1 }, raw = r"# raw {}" }.outer.inner + 2 } tail"
+let protected = "{show(\"one\")} tail"
+let escaped_group = "{(\{ a = 1 \}).a} tail"
+let protected_raw = "{format(r\"{} # raw\", [5])} tail"
+let comments = "prefix {1 #- outer #- nested -# -# + 2 # real
+} trailing"
+let broken = "unclosed
+let raw = r"end-of-line \0 {x} # literal
+let after = 4
+let invalid = "\q \u{Q} tail"

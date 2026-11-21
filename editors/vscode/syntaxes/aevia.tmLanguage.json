@@ -38,7 +38,11 @@
     },
     "strings": {
       "patterns": [
-        { "name": "string.quoted.raw.aevia", "match": "\\br\"[^\"]*\"" },
+        {
+          "name": "string.quoted.raw.aevia",
+          "begin": "(?<![\\p{L}\\p{M}\\p{N}_'])r\"",
+          "end": "\"|$"
+        },
         {
           "name": "string.quoted.triple.aevia",
           "begin": "\"\"\"",
@@ -48,21 +52,53 @@
         {
           "name": "string.quoted.double.aevia",
           "begin": "\"",
-          "end": "\"",
+          "end": "\"|$",
           "patterns": [{ "include": "#string-inner" }]
         }
       ]
     },
     "string-inner": {
       "patterns": [
-        { "name": "constant.character.escape.aevia", "match": "\\\\(u\\{[0-9a-fA-F]+\\}|[ntr\\\\\"{}])" },
+        { "name": "constant.character.escape.aevia", "match": "\\\\(?:u\\{[0-9a-fA-F]+\\}|[0ntr\\\\\"{}])" },
+        { "name": "invalid.illegal.escape.aevia", "match": "\\\\(?:u\\{[^}\\r\\n]*\\}|[^\\r\\n])" },
         {
           "name": "meta.interpolation.aevia",
           "begin": "\\{",
-          "end": "\\}",
+          "end": "(?<!\\\\)\\}",
           "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.aevia" } },
           "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.aevia" } },
-          "patterns": [{ "include": "$self" }]
+          "patterns": [{ "include": "#interpolation-inner" }]
+        }
+      ]
+    },
+    "interpolation-inner": {
+      "patterns": [
+        { "include": "#protected-strings" },
+        { "include": "#interpolation-group" },
+        { "include": "$self" }
+      ]
+    },
+    "interpolation-group": {
+      "name": "meta.interpolation.group.aevia",
+      "begin": "(?:\\\\)?\\{",
+      "end": "(?:\\\\)?\\}",
+      "beginCaptures": { "0": { "name": "punctuation.section.group.begin.aevia" } },
+      "endCaptures": { "0": { "name": "punctuation.section.group.end.aevia" } },
+      "patterns": [{ "include": "#interpolation-inner" }]
+    },
+    "protected-strings": {
+      "comment": "The compiler also accepts backslash-protected delimiters inside interpolation.",
+      "patterns": [
+        {
+          "name": "string.quoted.raw.aevia",
+          "begin": "(?<![\\p{L}\\p{M}\\p{N}_'])r\\\\\"",
+          "end": "\\\\\"|$"
+        },
+        {
+          "name": "string.quoted.double.aevia",
+          "begin": "\\\\\"",
+          "end": "\\\\\"|$",
+          "patterns": [{ "include": "#string-inner" }]
         }
       ]
     },

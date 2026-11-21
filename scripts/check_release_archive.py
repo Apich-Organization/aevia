@@ -43,6 +43,7 @@ def verify(archive: Path) -> None:
         binaries.append("aevia-playground")
     required = {
         *(name + (".exe" if windows else "") for name in binaries),
+        "RSSN-COMMIT",
         "LICENSE",
         "README.md",
         "README.zh-CN.md",
@@ -53,22 +54,34 @@ def verify(archive: Path) -> None:
         "platform/stdlib-docs/stdlib-docs.json",
         "examples/kinematics.aev",
     }
+    commit_name = f"{root}/RSSN-COMMIT"
+    # A 40-byte Git hash and CRLF, plus one byte to detect trailing data.
+    commit_read_limit = 43
+    commit = b""
     if windows:
         with zipfile.ZipFile(archive) as bundle:
             files = {member.filename for member in bundle.infolist() if not member.is_dir()}
-            commit = bundle.read(f"{root}/RSSN-COMMIT")
+            if commit_name in files:
+                with bundle.open(commit_name) as stream:
+                    commit = stream.read(commit_read_limit)
     else:
         with tarfile.open(archive, "r:gz") as bundle:
-            files = {member.name for member in bundle if member.isfile()}
-            with bundle.extractfile(f"{root}/RSSN-COMMIT") as stream:
-                commit = stream.read()
-    if not re.fullmatch(rb"[0-9a-f]{40}\r?\n", commit):
-        raise ValueError("RSSN-COMMIT must name a Git commit")
+            files = set()
+            for member in bundle:
+                if not member.isfile():
+                    continue
+                files.add(member.name)
+                if member.name == commit_name:
+                    # Read the record in archive order to avoid re-inflating the binaries.
+                    with bundle.extractfile(member) as stream:
+                        commit = stream.read(commit_read_limit)
     if any(PurePosixPath(name).parts[0] != root for name in files):
         raise ValueError("archive files must live under the single distribution directory")
     missing = {f"{root}/{name}" for name in required} - files
     if missing:
         raise ValueError(f"archive omitted {', '.join(sorted(missing))}")
+    if not re.fullmatch(rb"[0-9a-f]{40}\r?\n", commit):
+        raise ValueError("RSSN-COMMIT must name a Git commit")
     print(f"Verified {archive.name} ({len(files)} files)")
 
 

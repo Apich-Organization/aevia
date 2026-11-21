@@ -9,6 +9,7 @@ scope: source.aevia
 variables:
   ident: '[\p{L}_][\p{L}\p{N}_''₀-₉]*'
   uident: '[A-Z][\p{L}\p{N}_''₀-₉]*'
+  start_of_word: '(?<![\p{L}\p{M}\p{N}_''])'
   unit_start: '[\p{L}°µμΩÅ]'
   unit_char: '[\p{L}\p{N}_°µμΩÅ.]'
   number: '(?:0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|[0-9][0-9_]*(?:\.[0-9][0-9_]*)?(?:[eE][-+]?[0-9]+)?)'
@@ -66,14 +67,24 @@ contexts:
       pop: true
 
   strings:
-    - match: 'r"[^"]*"'
-      scope: string.quoted.raw.aevia
+    - match: '{{start_of_word}}r"'
+      scope: punctuation.definition.string.begin.aevia
+      push: raw-string
     - match: '"""'
       scope: punctuation.definition.string.begin.aevia
       push: triple-string
     - match: '"'
       scope: punctuation.definition.string.begin.aevia
       push: string
+
+  raw-string:
+    - meta_include_prototype: false
+    - meta_scope: string.quoted.raw.aevia
+    - match: '"'
+      scope: punctuation.definition.string.end.aevia
+      pop: true
+    - match: '\n'
+      pop: true
 
   string:
     - meta_include_prototype: false
@@ -94,8 +105,10 @@ contexts:
     - include: string-inner
 
   string-inner:
-    - match: '\\(?:u\{[0-9a-fA-F]+\}|[ntr\\"{}])'
+    - match: '\\(?:u\{[0-9a-fA-F]+\}|[0ntr\\"{}])'
       scope: constant.character.escape.aevia
+    - match: '\\(?:u\{[^}\r\n]*\}|[^\r\n])'
+      scope: invalid.illegal.escape.aevia
     - match: '\{'
       scope: punctuation.section.interpolation.begin.aevia
       push: interpolation
@@ -103,10 +116,49 @@ contexts:
   interpolation:
     - meta_include_prototype: false
     - meta_scope: meta.interpolation.aevia
-    - match: '\}'
+    - match: '(?<!\\)\}'
       scope: punctuation.section.interpolation.end.aevia
       pop: true
+    - include: interpolation-code
+
+  interpolation-code:
+    - match: '{{start_of_word}}r\\"'
+      scope: punctuation.definition.string.begin.aevia
+      push: protected-raw-string
+    - match: '\\"'
+      scope: punctuation.definition.string.begin.aevia
+      push: protected-string
+    - match: '(?:\\)?\{'
+      scope: punctuation.section.group.begin.aevia
+      push: interpolation-group
     - include: main
+
+  interpolation-group:
+    - meta_include_prototype: false
+    - meta_scope: meta.interpolation.group.aevia
+    - match: '(?:\\)?\}'
+      scope: punctuation.section.group.end.aevia
+      pop: true
+    - include: interpolation-code
+
+  protected-string:
+    - meta_include_prototype: false
+    - meta_scope: string.quoted.double.aevia
+    - match: '\\"'
+      scope: punctuation.definition.string.end.aevia
+      pop: true
+    - match: '\n'
+      pop: true
+    - include: string-inner
+
+  protected-raw-string:
+    - meta_include_prototype: false
+    - meta_scope: string.quoted.raw.aevia
+    - match: '\\"'
+      scope: punctuation.definition.string.end.aevia
+      pop: true
+    - match: '\n'
+      pop: true
 
   declarations:
     - match: '\b(fn)\b(?:\s+(rec)\b)?\s+({{ident}})'

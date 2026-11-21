@@ -6,7 +6,8 @@
 (raw_string) @string
 (string_content) @string
 (escape_sequence) @string.escape
-(interpolation "{" @punctuation.special "}" @punctuation.special)
+(interpolation open: "{" @punctuation.special close: "}" @punctuation.special)
+(unterminated_string) @error
 
 (number) @number
 (boolean) @boolean

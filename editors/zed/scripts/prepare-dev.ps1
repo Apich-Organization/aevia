@@ -26,9 +26,9 @@ function Invoke-Git {
 
 Invoke-Git init -q
 Invoke-Git add -A
-Invoke-Git -c user.name=Aevia -c user.email=dev@localhost commit -q -m grammar
+Invoke-Git -c user.name=Aevia -c user.email=dev@localhost commit --no-gpg-sign -q -m grammar
 $rev = (Invoke-Git rev-parse HEAD).Trim()
-$url = ([uri]$grammar).AbsoluteUri
+$url = [uri]::new($grammar, [UriKind]::Absolute).AbsoluteUri
 $toml = Join-Path $extension 'extension.toml'
 $text = Get-Content -Raw $toml
 $text = $text -replace '(?ms)^\[grammars\.aevia\].*?(?=^\[|\z)', "[grammars.aevia]`nrepository = `"$url`"`nrev = `"$rev`"`n"

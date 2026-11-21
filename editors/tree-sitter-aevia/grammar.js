@@ -1,12 +1,10 @@
 /**
  * A lexical tree-sitter grammar for Aevia.
  *
- * Aevia is layout-sensitive (offside rule, spec 1.4) and its unit literals
- * are context-free at the lexical level (spec 1.8.1: a number followed by
- * identifiers is a quantity). Editors need highlighting, brackets and
- * declaration heads, not a full parse tree; everything semantic comes from
- * `aevia-lsp` through semantic tokens. So this grammar recognises tokens and
- * the few declaration heads that benefit from a capture, and never fails.
+ * Aevia is layout-sensitive (offside rule, spec 1.4). A number
+ * may carry a unit suffix within a logical line (spec 1.8.1). This
+ * grammar recognises tokens, bracket groups and declaration heads for
+ * editors. The language server provides the semantic tokens.
  */
 const KEYWORDS = [
   'as', 'class', 'derive', 'dimension', 'do', 'else', 'fn', 'for', 'if',
@@ -14,21 +12,26 @@ const KEYWORDS = [
   'rec', 'test', 'then', 'type', 'unit', 'where', 'with',
 ];
 
+const LINE_BREAK = /\r\n|[\r\n]/;
+
 const HEADS = ['fn', 'module', 'import', 'open', 'type', 'class', 'instance', 'dimension', 'unit'];
 
 module.exports = grammar({
   name: 'aevia',
 
-  extras: $ => [/\s+/, $.comment, $.doc_comment, $.block_comment],
+  extras: $ => [/[ \t]+/, $.comment, $.doc_comment, $.block_comment],
 
-  externals: $ => [$.block_comment],
+  externals: $ => [$.block_comment, $.string_content, $._multiline_content, $._tight_unit_operator],
 
   word: $ => $.identifier,
+  // Inside delimiters, a newline after a number may precede either a
+  // unit suffix or the next token. Prefer the suffix if both parses fit.
+  conflicts: $ => [[$._atom, $._delimited_quantity], [$._inner, $._delimited_quantity]],
 
   rules: {
-    source_file: $ => repeat($._item),
+    source_file: $ => repeat(choice($._common_item, $.quantity, $._line_break, $._unmatched_close)),
 
-    _item: $ => choice(
+    _common_item: $ => choice(
       $.module_declaration,
       $.import_declaration,
       $.function_declaration,
@@ -36,7 +39,9 @@ module.exports = grammar({
       $.dimension_declaration,
       $.unit_declaration,
       $.attribute,
-      $.quantity,
+      $.parenthesized,
+      $.bracketed,
+      $.braced,
       $._atom,
     ),
 
@@ -50,8 +55,25 @@ module.exports = grammar({
       $.identifier,
       $.operator,
       $.punctuation,
-      $.bracket,
     ),
+
+    // Keep the anonymous delimiter tokens beneath the named bracket leaves
+    // used by highlighting and bracket queries.
+    _lparen: _ => '(',
+    _rparen: _ => ')',
+    _lbracket: _ => '[',
+    _rbracket: _ => ']',
+    _lbrace: _ => '{',
+    _rbrace: _ => '}',
+
+    // Physical newlines separate tokens at layout depth zero. Delimited
+    // expressions and string interpolations permit a suffix after a newline.
+    _line_break: _ => LINE_BREAK,
+    _delimited_item: $ => choice($._common_item, alias($._delimited_quantity, $.quantity), $._line_break),
+    parenthesized: $ => seq(alias($._lparen, $.bracket), repeat($._delimited_item), alias($._rparen, $.bracket)),
+    bracketed: $ => seq(alias($._lbracket, $.bracket), repeat($._delimited_item), alias($._rbracket, $.bracket)),
+    braced: $ => seq(alias($._lbrace, $.bracket), repeat($._delimited_item), alias($._rbrace, $.bracket)),
+    _unmatched_close: $ => alias(choice(')', ']', '}'), $.bracket),
 
     module_declaration: $ => prec.right(seq('module', optional(field('path', $.module_path)))),
     import_declaration: $ => prec.right(seq(choice('import', 'open'), optional(field('path', $.module_path)))),
@@ -66,14 +88,23 @@ module.exports = grammar({
 
     attribute: $ => seq('@', $.identifier),
 
-    // spec 1.8.1: a number followed by identifier text is a unit literal.
-    quantity: $ => prec.right(seq($.number, $.unit_expression)),
+    quantity: $ => prec.right(1, seq($.number, $.unit_expression)),
+    _delimited_quantity: $ => prec.dynamic(1, prec.right(seq($.number, repeat($._line_break), $.unit_expression))),
     unit_expression: $ => seq(
-      $._unit_factor,
-      repeat(seq(token.immediate(/[*·\/]/), $._unit_factor)),
+      choice($._unit_factor, $._unit_group),
+      repeat(seq($._tight_unit_operator, $._unit_factor)),
     ),
+    _unit_group: $ => seq(
+      alias($._lparen, $.bracket),
+      repeat($._line_break),
+      $.unit_expression,
+      repeat($._line_break),
+      alias($._rparen, $.bracket),
+      optional($._unit_power),
+    ),
+    _unit_power: $ => choice(seq(token.immediate('^'), $.unit_exponent), $.superscript),
     _unit_factor: $ => choice(
-      seq($.unit_name, optional(choice(seq(token.immediate('^'), $.unit_exponent), $.superscript))),
+      seq($.unit_name, optional($._unit_power)),
       '%',
     ),
     unit_name: _ => token(/[\p{L}°µμΩÅ_][\p{L}\p{N}_°µμΩÅ]*(\.[\p{L}\p{N}_]+)*/),
@@ -87,17 +118,47 @@ module.exports = grammar({
       /[0-9]+(_[0-9]+)*(\.[0-9]+(_[0-9]+)*)?([eE][+-]?[0-9]+)?/,
     )),
 
-    string: $ => choice(
-      seq('"""', repeat(choice($.escape_sequence, $.interpolation, $.string_content)), '"""'),
-      seq('"', repeat(choice($.escape_sequence, $.interpolation, $.string_content)), '"'),
+    string: $ => choice($._ordinary_string, $._multiline_string),
+    _ordinary_string: $ => seq(
+      '"',
+      repeat(choice($.escape_sequence, $.interpolation, $.string_content)),
+      choice(token.immediate('"'), $.unterminated_string),
     ),
-    string_content: _ => token(prec(-1, /[^"\\{]+|"[^"]|""[^"]/)),
-    raw_string: _ => token(seq('r"', /[^"]*/, '"')),
-    escape_sequence: _ => token(/\\(u\{[0-9a-fA-F]+\}|[ntr\\"{}])/),
-    interpolation: $ => seq('{', repeat($._inner), '}'),
+    _multiline_string: $ => seq(
+      '"""',
+      repeat(choice($.escape_sequence, $.interpolation, alias($._multiline_content, $.string_content))),
+      token.immediate('"""'),
+    ),
+    // Keep error recovery at the end of an ordinary line. The compiler
+    // supplies the missing-quote diagnostic through the language server.
+    unterminated_string: _ => token.immediate(LINE_BREAK),
+    raw_string: _ => token(seq('r"', /[^"\r\n]*/, '"')),
+    escape_sequence: _ => token.immediate(/\\(u\{[0-9a-fA-F]+\}|[0ntr\\"{}])/),
+
+    interpolation: $ => seq(
+      field('open', token.immediate('{')),
+      repeat1($._inner),
+      field('close', '}'),
+    ),
+    interpolation_group: $ => seq(
+      field('open', alias(choice('{', '\\{'), $.bracket)),
+      repeat($._inner),
+      field('close', alias(choice('}', '\\}'), $.bracket)),
+    ),
+    _protected_string: $ => seq(
+      '\\"',
+      repeat(choice(alias($._protected_escape, $.escape_sequence), $.interpolation, $.string_content)),
+      choice(token.immediate('\\"'), $.unterminated_string),
+    ),
+    _protected_escape: _ => token.immediate(/\\(u\{[0-9a-fA-F]+\}|[0ntr\\{}])/),
+    _protected_raw_string: _ => token(seq('r\\"', /([^\\\r\n]|\\[^"\r\n])*/, '\\"')),
     _inner: $ => choice(
-      $.quantity, $.string, $.raw_string, $.number, $.boolean, $.keyword,
+      alias($._delimited_quantity, $.quantity), $._line_break,
+      $.string, $.raw_string, $.number, $.boolean, $.keyword,
       $.type_identifier, $.identifier, $.operator, $.punctuation,
+      $.interpolation_group,
+      alias($._protected_string, $.string),
+      alias($._protected_raw_string, $.raw_string),
       alias(choice('(', ')', '[', ']'), $.bracket),
     ),
 
@@ -115,9 +176,8 @@ module.exports = grammar({
     )),
 
     punctuation: _ => choice(',', ';', '.', '_'),
-    bracket: _ => choice('(', ')', '[', ']', '{', '}'),
 
-    comment: _ => token(prec(-1, /#[^\-#\n][^\n]*|#/)),
-    doc_comment: _ => token(prec(1, seq('##', /[^\n]*/))),
+    comment: _ => token(prec(-1, /#[^\-#\r\n][^\r\n]*|#/)),
+    doc_comment: _ => token(prec(1, seq('##', /[^\r\n]*/))),
   },
 });

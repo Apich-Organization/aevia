@@ -9,6 +9,15 @@ completions, navigation, edits, and formatting.
 安装到扩展所在的主机上。打开 `.aev` 文件即可使用高亮、诊断、悬停提示、补全、
 跳转、编辑和格式化。
 
+String highlighting covers ordinary, raw and triple-quoted strings, including
+escapes and nested interpolation. Unclosed ordinary or raw string text ends at
+the line break. Interpolation expressions can continue across lines. The
+language server reports invalid escapes and interpolation expressions.
+
+字符串高亮支持普通、原始和三引号字符串，也识别转义和嵌套插值。未闭合的普通或
+原始字符串文本到换行处结束。插值表达式可以跨行。语言服务器会报告无效的转义和
+插值表达式。
+
 | Command / 命令 | Behavior / 功能 |
 |---|---|
 | **Aevia: Run Current File** | Saves and runs the file in a task terminal. / 保存后在任务终端中运行。 |
@@ -57,5 +66,10 @@ Node.js 22 or later, run `npm ci --ignore-scripts` and `npm run package` in
 `aevia-editor-extensions` 构建产物中解压该文件。若要从源码构建，请使用
 Node.js 22 或更新版本，在 `editors/vscode` 中运行 `npm ci --ignore-scripts`
 和 `npm run package`。打开 **Extensions: Install from VSIX** 并选择该文件。
+
+After installing dependencies, run `npm test` in `editors/vscode` to verify the
+extension commands and TextMate highlighting.
+
+安装依赖后，在 `editors/vscode` 中运行 `npm test`，验证扩展命令和 TextMate 高亮。
 
 [ci]: https://github.com/Apich-Organization/aevia/actions/workflows/ci.yml

@@ -3,10 +3,11 @@
 [
   <!ENTITY ident "[\p{L}_][\p{L}\p{N}_&apos;₀-₉]*">
   <!ENTITY uident "[A-Z][\p{L}\p{N}_&apos;₀-₉]*">
+  <!ENTITY wordStart "(?&lt;![\p{L}\p{M}\p{N}_&apos;])">
   <!ENTITY number "(?:0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|[0-9][0-9_]*(?:\.[0-9][0-9_]*)?(?:[eE][-+]?[0-9]+)?)">
   <!ENTITY unitatom "(?:[\p{L}°µμΩÅ][\p{L}\p{N}_°µμΩÅ.]*|&#37;)(?:\^-?[0-9]+|\^\(-?[0-9]+(?:/[0-9]+)?\)|[⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺]+)?">
 ]>
-<language name="Aevia" version="1" kateversion="5.0" section="Scientific"
+<language name="Aevia" version="2" kateversion="5.0" section="Scientific"
           extensions="*.aev" mimetype="text/x-aevia" casesensitive="1"
           author="The Aevia authors" license="Apache-2.0" indenter="normal">
   <highlighting>
@@ -32,7 +33,7 @@
         <DetectChar char="#" attribute="Comment" context="LineComment"/>
 
         <!-- strings -->
-        <RegExpr String="r&quot;[^&quot;]*&quot;" attribute="String"/>
+        <RegExpr String="&wordStart;r&quot;" attribute="String" context="RawString"/>
         <StringDetect String="&quot;&quot;&quot;" attribute="String" context="TripleString"/>
         <DetectChar char="&quot;" attribute="String" context="String"/>
 
@@ -79,17 +80,41 @@
       </context>
 
       <context name="String" attribute="String" lineEndContext="#pop">
-        <RegExpr String="\\(?:u\{[0-9a-fA-F]+\}|[ntr\\&quot;{}])" attribute="Escape"/>
-        <DetectChar char="{" attribute="Interpolation" context="Interpolation"/>
         <DetectChar char="&quot;" attribute="String" context="#pop"/>
+        <IncludeRules context="StringContents"/>
       </context>
       <context name="TripleString" attribute="String" lineEndContext="#stay">
-        <RegExpr String="\\(?:u\{[0-9a-fA-F]+\}|[ntr\\&quot;{}])" attribute="Escape"/>
-        <DetectChar char="{" attribute="Interpolation" context="Interpolation"/>
         <StringDetect String="&quot;&quot;&quot;" attribute="String" context="#pop"/>
+        <IncludeRules context="StringContents"/>
+      </context>
+      <context name="RawString" attribute="String" lineEndContext="#pop">
+        <DetectChar char="&quot;" attribute="String" context="#pop"/>
+      </context>
+      <context name="ProtectedString" attribute="String" lineEndContext="#pop">
+        <Detect2Chars char="\" char1="&quot;" attribute="String" context="#pop"/>
+        <IncludeRules context="StringContents"/>
+      </context>
+      <context name="ProtectedRawString" attribute="String" lineEndContext="#pop">
+        <Detect2Chars char="\" char1="&quot;" attribute="String" context="#pop"/>
+      </context>
+      <context name="StringContents" attribute="String" lineEndContext="#stay">
+        <RegExpr String="\\(?:u\{[0-9a-fA-F]+\}|[0ntr\\&quot;{}])" attribute="Escape"/>
+        <RegExpr String="\\(?:u\{[^}&quot;]*(?:\}|(?=&quot;|$))|.)" attribute="Invalid Escape"/>
+        <DetectChar char="{" attribute="Interpolation" context="Interpolation"/>
       </context>
       <context name="Interpolation" attribute="Normal Text" lineEndContext="#stay">
         <DetectChar char="}" attribute="Interpolation" context="#pop"/>
+        <Detect2Chars char="\" char1="}" attribute="Symbol"/>
+        <IncludeRules context="InterpolationCode"/>
+      </context>
+      <context name="InterpolationGroup" attribute="Normal Text" lineEndContext="#stay">
+        <RegExpr String="\\?\}" attribute="Symbol" context="#pop"/>
+        <IncludeRules context="InterpolationCode"/>
+      </context>
+      <context name="InterpolationCode" attribute="Normal Text" lineEndContext="#stay">
+        <RegExpr String="&wordStart;r\\&quot;" attribute="String" context="ProtectedRawString"/>
+        <Detect2Chars char="\" char1="&quot;" attribute="String" context="ProtectedString"/>
+        <RegExpr String="\\?\{" attribute="Symbol" context="InterpolationGroup"/>
         <IncludeRules context="Normal"/>
       </context>
     </contexts>
@@ -109,6 +134,7 @@
       <itemData name="Symbol" defStyleNum="dsNormal" spellChecking="false"/>
       <itemData name="String" defStyleNum="dsString"/>
       <itemData name="Escape" defStyleNum="dsSpecialChar" spellChecking="false"/>
+      <itemData name="Invalid Escape" defStyleNum="dsError" spellChecking="false"/>
       <itemData name="Interpolation" defStyleNum="dsSpecialChar" spellChecking="false"/>
       <itemData name="Comment" defStyleNum="dsComment"/>
       <itemData name="Doc Comment" defStyleNum="dsComment" italic="1"/>

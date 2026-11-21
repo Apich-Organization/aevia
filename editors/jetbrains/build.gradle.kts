@@ -1,3 +1,6 @@
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+
 plugins {
     id("org.jetbrains.kotlin.jvm") version "2.1.20"
     id("org.jetbrains.intellij.platform") version "2.10.2"
@@ -37,8 +40,31 @@ intellijPlatform {
     buildSearchableOptions = false
 }
 
-// One TextMate grammar for VS Code and JetBrains.
+// Bundle the grammar and registration metadata from the VS Code extension.
+val textMateManifest = tasks.register("generateTextMateManifest") {
+    val source = layout.projectDirectory.file("../vscode/package.json")
+    val output = layout.buildDirectory.file("generated/textmate/package.json")
+    inputs.file(source)
+    outputs.file(output)
+
+    doLast {
+        val extension = JsonSlurper().parse(source.asFile) as Map<*, *>
+        val contributions = extension["contributes"] as Map<*, *>
+        val registration = listOf("languages", "grammars").associateWith { key ->
+            requireNotNull(contributions[key]) { "Missing TextMate contribution $key" }
+        }
+        val bundle = listOf("name", "displayName", "version").associateWith { key ->
+            requireNotNull(extension[key]) { "Missing TextMate bundle metadata $key" }
+        } + ("contributes" to registration)
+        output.get().asFile.apply {
+            parentFile.mkdirs()
+            writeText(JsonOutput.prettyPrint(JsonOutput.toJson(bundle)) + "\n", Charsets.UTF_8)
+        }
+    }
+}
+
 tasks.processResources {
+    from(textMateManifest) { into("textmate/aevia") }
     from("../vscode/syntaxes") { into("textmate/aevia/syntaxes") }
     from("../vscode/language-configuration.json") { into("textmate/aevia") }
 }

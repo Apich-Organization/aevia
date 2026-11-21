@@ -5,9 +5,24 @@
    - Linux `~/.local/share/org.kde.syntax-highlighting/syntax/`
    - Windows `%LOCALAPPDATA%\org.kde.syntax-highlighting\syntax\`
 2. Enable **LSP Client**, then merge [lspclient-settings.json](lspclient-settings.json)
-   into **LSP Client → User Server Settings** and restart Kate.
+   into **LSP Client → User Server Settings** and restart Kate. Put
+   `aevia-lsp` on Kate's `PATH` and approve the command if prompted. Kate
+   uses `aevia.toml` to find the package root.
    启用 **LSP Client**，将 [lspclient-settings.json](lspclient-settings.json) 合并到
-   **LSP Client → User Server Settings**，然后重启 Kate。
+   **LSP Client → User Server Settings**，然后重启 Kate。确认 Kate 的
+   `PATH` 包含 `aevia-lsp`，并在提示时允许启动该命令。Kate 通过
+   `aevia.toml` 查找包的根目录。
+
+The syntax highlights ordinary, raw, and triple-quoted strings, including
+nested expressions inside interpolation. With `ksyntaxhighlighter6` on
+`PATH`, run the regression checks against the shipped definition.
+
+语法高亮支持普通、原始和三引号字符串，以及插值中的嵌套表达式。将
+`ksyntaxhighlighter6` 加入 `PATH` 后，可运行随包语法的回归检查。
+
+```sh
+python3 editors/kate/test/check_strings.py
+```
 
 Enable **External Tools** to configure run and test actions. Use executable
 `aevia`, arguments from the table, working directory `%{Document:Path}`, and
