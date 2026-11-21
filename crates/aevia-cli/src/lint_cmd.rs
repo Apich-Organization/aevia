@@ -1,6 +1,7 @@
 //! `aevia lint` command implementation and shared lint-flag/config helpers for `aevia check`.
 
 use std::collections::BTreeMap;
+use std::io::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -14,9 +15,11 @@ use aevia_lint::Driver;
 use aevia_lint::FixEngine;
 use aevia_lint::Level;
 use aevia_lint::LintConfig;
+use aevia_lint::LintReport;
 use aevia_lint::LintStore;
 use aevia_lint::OutputFormat;
 use aevia_syntax::FileId;
+use aevia_syntax::SourceMap;
 
 use crate::Options;
 use crate::entry_path;
@@ -204,6 +207,8 @@ pub fn run(
             | Err(code) => return code,
         }
     }
+    let batch = paths.len() > 1 && format != OutputFormat::Human;
+    let mut reports = Vec::new();
     let mut failed = false;
     for path in paths {
         let start_dir = path.parent().unwrap_or(&cwd);
@@ -212,7 +217,21 @@ pub fn run(
             cli_overrides: cli_overrides.clone(),
             run_extra_lints: true,
         };
-        failed |= lint_path(&path, options, &store, &config, fix, format, no_cache);
+        let Some((sources, report)) = lint_path(&path, &store, &config, fix, no_cache) else {
+            failed = true;
+            continue;
+        };
+        failed |= report.has_errors();
+        if batch {
+            reports.push((report, sources));
+        } else {
+            print_report(&sources, &report, &store, format, options);
+        }
+    }
+    if batch && !reports.is_empty() {
+        let reports = reports.iter().map(|(report, sources)| (report, sources));
+        let rendered = aevia_lint::format::render_many(reports, &store, format, style(options));
+        print_structured(&rendered);
     }
     if failed {
         ExitCode::from(1)
@@ -227,13 +246,11 @@ pub fn run(
 )]
 fn lint_path(
     path: &Path,
-    options: Options,
     store: &LintStore,
     config: &LintConfig,
     fix: bool,
-    format: OutputFormat,
     no_cache: bool,
-) -> bool {
+) -> Option<(SourceMap, LintReport)> {
     let mut program = load_at_with(path, !no_cache);
     let root_files = program.entry().map(|module| [module.file]);
     let mut report = Driver::run_program(
@@ -262,12 +279,11 @@ fn lint_path(
             | Ok(_) => {},
             | Err(error) => {
                 eprintln!("aevia lint: {}: {error}", path.display());
-                return true;
+                return None;
             },
         }
     }
-    print_report(&program.sources, &report, store, format, options);
-    report.has_errors()
+    Some((program.sources, report))
 }
 
 #[allow(
@@ -400,8 +416,12 @@ fn print_report(
     let rendered = aevia_lint::render(report, sources, store, format, style(options));
     match format {
         | OutputFormat::Human => eprint!("{rendered}"),
-        | OutputFormat::Json | OutputFormat::Sarif => print!("{rendered}"),
+        | OutputFormat::Json | OutputFormat::Sarif => print_structured(&rendered),
     }
+}
+
+fn print_structured(rendered: &str) {
+    let _ = std::io::stdout().lock().write_all(rendered.as_bytes());
 }
 
 #[allow(

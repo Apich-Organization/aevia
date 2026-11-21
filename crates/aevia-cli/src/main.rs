@@ -795,6 +795,7 @@ fn run_command(
     ) {
         return ExitCode::from(1);
     }
+    let program = std::sync::Arc::new(program);
     let Some(entry) = program.entry() else {
         eprintln!("aevia: no module produced");
         return ExitCode::from(1);
@@ -804,34 +805,33 @@ fn run_command(
     interp.output = Output::Console;
     // Host arguments exist before the program's top-level declarations run.
     interp.set_args(program_args.clone());
-    // §9.7: worker threads rebuild the program from the same entry file, so
-    // closures cross by source span. A replica keeps the interpreter's own
-    // call-depth guard: it has no `install_stack_budget` of its own.
-    interp.set_replica(std::sync::Arc::new(move || {
-        let program = load_at_with(&path, !no_cache);
-        if program.diagnostics.has_errors() {
-            return Err("the program no longer checks".to_string());
-        }
-        let entry = program.entry().ok_or("no module produced")?;
-        let mut replica = Interp::new(&entry.checked);
-        replica.optimize_ir = options.release;
-        if options.release {
-            replica.mode = aevia_core::Mode::Ir;
-        }
-        if let Some(budget) = options.budget {
-            replica.max_tail_calls = budget;
-            replica.max_io_steps = budget;
-        }
-        if let Some(caps) = options.caps {
-            replica.capabilities = caps;
-        }
-        replica.set_args(program_args.clone());
-        let diagnostics = driver::run_modules(&mut replica, &program);
-        if diagnostics.has_errors() {
-            return Err("the program's top level failed on a worker".to_string());
-        }
-        Ok(replica)
-    }));
+    // §9.7: workers initialize the same checked revision, so closure spans and
+    // imported definitions remain valid throughout the run. Each replica keeps
+    // its own call-depth guard because it has no installed stack budget.
+    if !program.diagnostics.has_errors() {
+        let replica_program = std::sync::Arc::clone(&program);
+        interp.set_replica(std::sync::Arc::new(move || {
+            let entry = replica_program.entry().ok_or("no module produced")?;
+            let mut replica = Interp::new(&entry.checked);
+            replica.optimize_ir = options.release;
+            if options.release {
+                replica.mode = aevia_core::Mode::Ir;
+            }
+            if let Some(budget) = options.budget {
+                replica.max_tail_calls = budget;
+                replica.max_io_steps = budget;
+            }
+            if let Some(caps) = options.caps {
+                replica.capabilities = caps;
+            }
+            replica.set_args(program_args.clone());
+            let diagnostics = driver::run_modules(&mut replica, &replica_program);
+            if diagnostics.has_errors() {
+                return Err("the program's top level failed on a worker".to_string());
+            }
+            Ok(replica)
+        }));
+    }
     let load_diagnostics = driver::run_modules(&mut interp, &program);
     if report(&load_diagnostics, &program.sources, style(options)) {
         return ExitCode::from(1);
@@ -1378,47 +1378,45 @@ fn check_all(
         ids.entry(source.name.clone()).or_insert(file);
         file = file.saturating_add(1);
     }
-    let root_ids: Vec<aevia_syntax::FileId> = paths
+    let path_ids: Vec<_> = paths
         .iter()
-        .filter_map(|p| {
-            ids.get(&aevia_core::source::canonical_path(p).display().to_string())
-                .copied()
+        .map(|path| {
+            ids.get(
+                &aevia_core::source::canonical_path(path)
+                    .display()
+                    .to_string(),
+            )
+            .copied()
         })
         .collect();
+    let root_ids: Vec<_> = path_ids.iter().flatten().copied().collect();
     let lint_report =
         aevia_lint::Driver::run_program(&program, &store, &lint_config, Some(&root_ids));
+    let roots: std::collections::HashSet<_> = root_ids.into_iter().collect();
+    let mut by_file = std::collections::HashMap::<_, Diagnostics>::new();
+    let mut imported = Diagnostics::new();
+    for item in lint_report.diagnostics.items {
+        if roots.contains(&item.span.file) {
+            by_file.entry(item.span.file).or_default().push(item);
+        } else {
+            // A dependency's diagnostics are still part of the package run.
+            imported.push(item);
+        }
+    }
     let mut failed = 0usize;
-    let mut shown: std::collections::HashSet<aevia_syntax::FileId> =
-        std::collections::HashSet::new();
-    for path in &paths {
-        let Some(&id) = ids.get(
-            &aevia_core::source::canonical_path(path)
-                .display()
-                .to_string(),
-        ) else {
+    for (path, id) in paths.iter().zip(path_ids) {
+        let Some(id) = id else {
             eprintln!("aevia check: `{}` could not be loaded", path.display());
             failed = failed.saturating_add(1);
             continue;
         };
-        let mut own = Diagnostics::new();
-        for item in &lint_report.diagnostics.items {
-            if item.span.file == id {
-                own.push(item.clone());
-            }
-        }
-        shown.insert(id);
-        if report(&own, &program.sources, style(options)) {
+        if by_file
+            .get(&id)
+            .is_some_and(|own| report(own, &program.sources, style(options)))
+        {
             failed = failed.saturating_add(1);
         } else {
             println!("{}: ok", path.display());
-        }
-    }
-    // A diagnostic in a file that is not one of the package's own modules (a
-    // dependency's source) is still part of the run; show it once.
-    let mut imported = Diagnostics::new();
-    for item in &lint_report.diagnostics.items {
-        if !shown.contains(&item.span.file) {
-            imported.push(item.clone());
         }
     }
     if report(&imported, &program.sources, style(options)) {
@@ -1522,7 +1520,10 @@ fn test_command(
                 continue;
             }
             matched = matched.saturating_add(1);
-            match interp.eval(body, &root) {
+            let result = interp
+                .eval_source_test(body, &root)
+                .map_err(|error| error.message);
+            match result {
                 | Ok(aevia_core::value::Value::Bool(true)) => {
                     println!("test {name} ... ok");
                     passed = passed.saturating_add(1);
@@ -1535,7 +1536,7 @@ fn test_command(
                     failed = failed.saturating_add(1);
                 },
                 | Err(error) => {
-                    println!("test {name} ... FAILED ({})", error.message);
+                    println!("test {name} ... FAILED ({error})");
                     failed = failed.saturating_add(1);
                 },
             }
@@ -1566,6 +1567,15 @@ fn rssn_command(args: &[String]) -> ExitCode {
     if let Err(error) = aevia_rssn::check_compatibility(registry) {
         eprintln!("aevia rssn: {error}");
         return ExitCode::from(1);
+    }
+    if let Some((flag, rest)) = args.split_first()
+        && flag == "--describe"
+    {
+        let [name] = rest else {
+            eprintln!("aevia rssn: --describe expects exactly one operator name");
+            return ExitCode::from(2);
+        };
+        return describe_rssn_operator(registry, name);
     }
     let mut emit = false;
     let mut out: Option<String> = None;
@@ -1657,7 +1667,7 @@ fn rssn_command(args: &[String]) -> ExitCode {
 
     if audit {
         use aevia_rssn::bindings::Coverage;
-        let catalog = aevia_rssn::bindings::catalog(registry);
+        let catalog = aevia_rssn::bindings::live_catalog();
         let typed = catalog
             .iter()
             .filter(|row| matches!(row.coverage, Coverage::Typed))
@@ -1675,7 +1685,7 @@ fn rssn_command(args: &[String]) -> ExitCode {
             "bindings: {typed} exact typed, {dynamic} dynamic/approximate, {unavailable} unavailable"
         );
         println!("typed callback aliases: {callback_aliases} (also counted in dynamic bindings)");
-        for row in &catalog {
+        for row in catalog {
             let (status, reasons): (&str, &[String]) = match &row.coverage {
                 | Coverage::Typed => ("typed", &[]),
                 | Coverage::Dynamic(reasons) => ("dynamic", reasons),
@@ -1727,6 +1737,70 @@ fn rssn_command(args: &[String]) -> ExitCode {
                     return ExitCode::from(1);
                 },
             }
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps one-operator manifest rendering separate from the inventory command"
+)]
+fn describe_rssn_operator(
+    registry: &aevia_rssn::registry::Registry,
+    name: &str,
+) -> ExitCode {
+    use aevia_rssn::bindings::Coverage;
+
+    let (namespace, short_name) = name.rsplit_once('.').unwrap_or(("", name));
+    let Some(op) = registry
+        .op(short_name)
+        .filter(|op| matches!(namespace, "" | "Rssn") || namespace == op.rule_set)
+    else {
+        eprintln!("aevia rssn: unknown operator `{name}` (see `aevia rssn --audit`)");
+        return ExitCode::from(1);
+    };
+
+    println!("{}.{}", op.rule_set, op.name);
+    if !op.doc.trim().is_empty() {
+        println!("\n{}", op.doc.trim());
+    }
+    if let Some(path) = op.rust_path.as_ref().or(op.doc_path.as_ref()) {
+        println!("\nRust source `{path}`");
+    }
+    println!("\nKernel signatures ({})", op.source.as_str());
+    for signature in &op.signatures {
+        println!("  {}", signature.render());
+    }
+    if let Some(reason) = &op.dynamic_reason {
+        println!("  {reason}");
+    }
+    if let Some(rule) = &op.dim_rule {
+        println!("\nDimension rule {rule:?}");
+    }
+    if !op.examples.is_empty() {
+        println!("\nKernel examples");
+        for example in &op.examples {
+            println!("  {} => {}", example.input, example.output);
+            if !example.note.is_empty() {
+                println!("    {}", example.note);
+            }
+        }
+    }
+    println!("\nAevia bindings");
+    for row in aevia_rssn::bindings::live_catalog()
+        .iter()
+        .filter(|row| row.op.name == op.name)
+    {
+        match &row.coverage {
+            | Coverage::Typed => println!("  Rssn.{} (typed)", row.name),
+            | Coverage::Dynamic(_) => println!("  Rssn.{} (dynamic)", row.name),
+            | Coverage::Unavailable(reasons) => {
+                println!("  {} (unavailable) – {}", row.name, reasons.join(", "));
+            },
+        }
+        if let Some(alias) = &row.typed_callback_name {
+            println!("  Rssn.{alias} (typed callback)");
         }
     }
     ExitCode::SUCCESS

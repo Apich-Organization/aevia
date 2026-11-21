@@ -9,9 +9,11 @@ use aevia_syntax::PatKind;
 use aevia_syntax::Span;
 use aevia_types::CheckedModule;
 use aevia_types::Export;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
+use std::sync::OnceLock;
 
 #[derive(Clone)]
 struct Item {
@@ -32,6 +34,11 @@ pub struct Catalog {
     items: BTreeMap<String, Item>,
     units: BTreeMap<String, aevia_dim::UnitDef>,
     dimensions: BTreeMap<String, String>,
+}
+
+fn builtin_units() -> &'static aevia_dim::UnitTable {
+    static UNITS: OnceLock<aevia_dim::UnitTable> = OnceLock::new();
+    UNITS.get_or_init(aevia_rssn::unit_table)
 }
 
 impl Catalog {
@@ -194,12 +201,14 @@ impl Catalog {
             .units
             .get(name)
             .cloned()
-            .or_else(|| aevia_rssn::unit_table().lookup(name))
+            .or_else(|| builtin_units().lookup(name))
         {
             return Ok(unit_help(name, &unit));
         }
         if let Some(dim) = self.dimensions.get(name).cloned().or_else(|| {
-            aevia_dim::DimEnv::si()
+            static DIMENSIONS: OnceLock<aevia_dim::DimEnv> = OnceLock::new();
+            DIMENSIONS
+                .get_or_init(aevia_dim::DimEnv::si)
                 .lookup(name)
                 .map(|dim| dim.to_plain_string())
         }) {
@@ -210,21 +219,21 @@ impl Catalog {
         if let Some(text) = kernel_help(name) {
             return Ok(text);
         }
-        let candidates = self.names();
         let lower = name.to_lowercase();
-        let mut suggestions: Vec<_> = candidates
-            .iter()
+        let limit = (name.chars().count() / 3).clamp(1, 3);
+        let mut suggestions: Vec<_> = self
+            .names()
+            .into_iter()
             .filter_map(|candidate| {
                 let distance = edit_distance(&lower, &candidate.to_lowercase());
-                (distance <= (name.chars().count() / 3).clamp(1, 3))
-                    .then_some((distance, candidate))
+                (distance <= limit).then_some((distance, candidate))
             })
             .collect();
-        suggestions.sort();
+        suggestions.sort_unstable();
         let hint = suggestions
             .iter()
             .take(5)
-            .map(|(_, name)| name.as_str())
+            .map(|&(_, name)| name)
             .collect::<Vec<_>>()
             .join(", ");
         Err(if hint.is_empty() {
@@ -242,72 +251,80 @@ impl Catalog {
         &self,
         query: &str,
     ) -> Result<String, String> {
+        const SHOWN: usize = 30;
         let words: Vec<_> = query.split_whitespace().map(str::to_lowercase).collect();
         if words.is_empty() {
             return Err(
                 "usage: :apropos TEXT (for example :apropos print or :apropos matrix)".into(),
             );
         }
-        let mut matches = Vec::new();
+        let mut count = 0_usize;
+        let mut names = Vec::new();
+        let mut descriptions = Vec::new();
         for name in self.names() {
-            let stored = self.items.get(&name);
-            let built_in_description = builtin_guide(&name).map(|(description, _)| description);
-            let type_doc = type_item(&name);
-            let description = stored
-                .and_then(|item| item.doc.as_deref())
-                .or(built_in_description)
-                .or_else(|| type_doc.as_ref().and_then(|item| item.doc.as_deref()))
-                .unwrap_or("");
-            let haystack = format!("{name} {description}").to_lowercase();
-            if words.iter().all(|word| haystack.contains(word)) {
-                let item = stored.cloned().or_else(|| builtin_item(&name)).or(type_doc);
-                let summary = item
-                    .and_then(|item| item.ty.or(Some(item.signature)))
-                    .unwrap_or_else(|| "unit or dimension".into());
-                let score = !words.iter().all(|word| name.to_lowercase().contains(word));
-                matches.push((score, name, summary));
+            let lower_name = name.to_lowercase();
+            let mut missing = words
+                .iter()
+                .filter(|word| !lower_name.contains(word.as_str()));
+            let group = if let Some(first) = missing.next() {
+                // Query words cannot cross the space separating a name from
+                // its description. Inspect descriptions only for missing words.
+                let description = self
+                    .items
+                    .get(name)
+                    .and_then(|item| item.doc.as_deref())
+                    .or_else(|| builtin_guide(name).map(|(description, _)| description))
+                    .or_else(|| type_help(name).map(|(_, description)| description))
+                    .unwrap_or("")
+                    .to_lowercase();
+                if !description.contains(first.as_str())
+                    || !missing.all(|word| description.contains(word.as_str()))
+                {
+                    continue;
+                }
+                &mut descriptions
+            } else {
+                &mut names
+            };
+            // The name set already visits both result groups in name order.
+            count = count.saturating_add(1);
+            if group.len() < SHOWN {
+                group.push(name);
             }
         }
-        matches.sort();
-        if matches.is_empty() {
+        if count == 0 {
             return Err(format!(
                 "no item help matches `{}`; try a shorter name or keyword",
                 query.trim()
             ));
         }
-        let mut out = format!(
-            "Item help matching `{}` ({}):\n",
-            query.trim(),
-            matches.len()
-        );
-        for (_, name, summary) in matches.iter().take(30) {
+        let mut out = format!("Item help matching `{}` ({count}):\n", query.trim());
+        for name in names.into_iter().chain(descriptions).take(SHOWN) {
+            let summary = self
+                .items
+                .get(name)
+                .map(|item| Cow::Borrowed(item.ty.as_deref().unwrap_or(&item.signature)))
+                .or_else(|| builtin_item(name).map(|item| Cow::Owned(item.signature)))
+                .or_else(|| type_help(name).map(|(signature, _)| Cow::Borrowed(signature)))
+                .unwrap_or(Cow::Borrowed("unit or dimension"));
             let _ = writeln!(out, "  {name} : {}", summary.replace('\n', " "));
         }
-        if matches.len() > 30 {
+        if count > SHOWN {
             let _ = writeln!(out, "  … narrow the query to see more");
         }
         out.push_str("Use :doc NAME to read an item.");
         Ok(out)
     }
 
-    fn names(&self) -> BTreeSet<String> {
+    fn names(&self) -> BTreeSet<&str> {
         self.items
             .keys()
-            .cloned()
-            .chain(
-                aevia_types::builtins::PRELUDE_NAMES
-                    .iter()
-                    .map(|name| (*name).to_string()),
-            )
-            .chain(TYPE_NAMES.iter().map(|name| (*name).to_string()))
-            .chain(self.units.keys().cloned())
-            .chain(self.dimensions.keys().cloned())
-            .chain(
-                aevia_rssn::unit_table()
-                    .list()
-                    .iter()
-                    .map(|unit| unit.name.clone()),
-            )
+            .map(String::as_str)
+            .chain(aevia_types::builtins::PRELUDE_NAMES.iter().copied())
+            .chain(TYPE_NAMES.iter().copied())
+            .chain(self.units.keys().map(String::as_str))
+            .chain(self.dimensions.keys().map(String::as_str))
+            .chain(builtin_units().list().iter().map(|unit| unit.name.as_str()))
             .collect()
     }
 }
@@ -627,7 +644,7 @@ const TYPE_NAMES: &[&str] = &[
     clippy::too_many_lines,
     reason = "keeps the type reference descriptions and signatures together"
 )]
-fn type_item(name: &str) -> Option<Item> {
+fn type_help(name: &str) -> Option<(&'static str, &'static str)> {
     let (signature, doc) = match name {
         | "Int" => {
             (
@@ -733,6 +750,15 @@ fn type_item(name: &str) -> Option<Item> {
         },
         | _ => return None,
     };
+    Some((signature, doc))
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "renders a full document from shared type reference metadata"
+)]
+fn type_item(name: &str) -> Option<Item> {
+    let (signature, doc) = type_help(name)?;
     Some(Item {
         kind: "built-in type or class",
         signature: signature.into(),
@@ -786,7 +812,7 @@ fn kernel_help(name: &str) -> Option<String> {
         return Some("Rssn — scientific kernel module\n\nKernel functions are available under Rssn. Native signatures and documentation come from the bundled kernel manifest.\nUse :doc Rssn.NAME for a binding, or import Rssn as K and inspect K.NAME.\nThe dynamic escape hatch is Rssn.dynamic(\"operator\", [to_value(argument)]).".into());
     }
     let binding_name = name.strip_prefix("Rssn.")?;
-    for binding in aevia_rssn::bindings::catalog(aevia_rssn::registry()) {
+    for binding in aevia_rssn::bindings::live_catalog() {
         if binding.name != binding_name
             && binding.typed_callback_name.as_deref() != Some(binding_name)
         {
@@ -802,7 +828,7 @@ fn kernel_help(name: &str) -> Option<String> {
         {
             let _ = writeln!(out, "Kernel contract: {}", signature.render());
         }
-        match binding.coverage {
+        match &binding.coverage {
             | aevia_rssn::bindings::Coverage::Typed => {
                 out.push_str("An exact typed Aevia binding is available.\n");
             },
@@ -960,6 +986,91 @@ fn operator_help(name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn catalog_item(
+        signature: &str,
+        doc: &str,
+    ) -> Item {
+        Item {
+            kind: "value",
+            signature: signature.into(),
+            ty: None,
+            origin: "<test REPL>".into(),
+            doc: Some(doc.into()),
+            alias: None,
+            builtin: None,
+            exported: false,
+        }
+    }
+
+    #[test]
+    fn apropos_counts_all_matches_and_orders_visible_bindings_before_descriptions() {
+        let mut catalog = Catalog::default();
+        for index in (0..36).rev() {
+            catalog.items.insert(
+                format!("find_probe_{index:02}"),
+                catalog_item("a\nb", "marker in the description"),
+            );
+        }
+        catalog.items.insert(
+            "aa_doc_only".into(),
+            catalog_item("c", "A find_probe note about the marker"),
+        );
+        let mut expected = String::from("Item help matching `find_probe` (37):\n");
+        for index in 0..30 {
+            let _ = writeln!(expected, "  find_probe_{index:02} : a b");
+        }
+        expected.push_str("  … narrow the query to see more\nUse :doc NAME to read an item.");
+        assert_eq!(catalog.search("  find_probe  ").unwrap(), expected);
+
+        let two_words = catalog.search("find_probe marker").unwrap();
+        assert!(two_words.starts_with("Item help matching `find_probe marker` (37):\n  aa_doc_only : c\n  find_probe_00 : a b\n"));
+        assert_eq!(
+            catalog.search("\t \u{2003}\n").unwrap_err(),
+            "usage: :apropos TEXT (for example :apropos print or :apropos matrix)"
+        );
+    }
+
+    #[test]
+    fn cached_prelude_units_do_not_shadow_new_catalog_units_or_operators() {
+        let mut catalog = Catalog::default();
+        let original = catalog.render("m").unwrap();
+        let original_add = catalog.render("+").unwrap();
+        let dim = aevia_dim::Dim::base("Length");
+        let replacement =
+            aevia_dim::UnitDef::linear("m", dim.clone(), aevia_dim::Scale::parse("2").unwrap());
+        catalog.units.insert("m".into(), replacement.clone());
+        catalog
+            .units
+            .insert("custom_probe_unit".into(), replacement.clone());
+        catalog.units.insert("+".into(), replacement);
+        let updated = catalog.render("m").unwrap();
+        assert_ne!(original, updated);
+        assert!(updated.contains("Exact coherent scale: 2"));
+        assert_eq!(catalog.render("+").unwrap(), original_add);
+        assert_eq!(
+            catalog.search("CUSTOM_PROBE_UNIT").unwrap(),
+            "Item help matching `CUSTOM_PROBE_UNIT` (1):\n  custom_probe_unit : unit or dimension\nUse :doc NAME to read an item."
+        );
+    }
+
+    #[test]
+    fn accepted_repl_unit_joins_the_search_after_the_prelude_is_read() {
+        let name = "repl_doc_probe_unit";
+        assert!(Catalog::default().render(name).is_err());
+        let identity = aevia_core::source::SourceIdentity::from_name("repl-doc-unit-test.aev");
+        let mut compiler = aevia_core::driver::ReplCompiler::new(&std::env::temp_dir(), identity);
+        let compilation = compiler.compile("unit repl_doc_probe_unit : Length = 2 m\n", None);
+        assert!(
+            !compilation.diagnostics.has_errors(),
+            "{:?}",
+            compilation.diagnostics.items
+        );
+        let catalog = Catalog::with_origins(&compilation, &|_| "<test REPL>".into());
+        assert!(catalog.render(name).unwrap().contains(name));
+        let help = catalog.search(name).unwrap();
+        assert!(help.starts_with("Item help matching `repl_doc_probe_unit` (1):\n"));
+    }
 
     #[test]
     fn bundled_examples_typecheck_without_running_any_effects() {

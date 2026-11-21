@@ -69,6 +69,34 @@ fn code(output: &Output) -> i32 {
 }
 
 #[test]
+fn run_workers_use_the_checked_import_revision() {
+    let scratch = Scratch::new("worker-source-revision");
+    let original = "fn value(_i: Int): Int = 1\n";
+    let replacement = "fn value(_i: Int): Int = 2\n";
+    let helper = scratch.write("Helper.aev", original);
+    scratch.write(
+        "main.aev",
+        r#"import Helper as H
+
+fn main(): IO Unit = do
+    _ <- write_file("Helper.aev", "fn value(_i: Int): Int = 2\n")
+    let values = par_tabulate(64, H.value)
+    println("{sum(values)}")
+"#,
+    );
+    for jobs in ["1", "2"] {
+        std::fs::write(&helper, original).expect("restore original import");
+        let output = aevia(
+            scratch.path(),
+            &["--release", "--jobs", jobs, "run", "--no-cache", "main.aev"],
+        );
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+        assert_eq!(stdout(&output), "64\n", "jobs={jobs}");
+        assert_eq!(std::fs::read_to_string(&helper).unwrap(), replacement);
+    }
+}
+
+#[test]
 fn init_writes_a_package_that_runs() {
     let scratch = Scratch::new("init");
     let output = aevia(scratch.path(), &["init", "demo"]);
@@ -555,6 +583,35 @@ fn rssn_audit_reports_typed_callback_aliases() {
 }
 
 #[test]
+fn rssn_describe_reports_operator_docs_and_callable_binding() {
+    let scratch = Scratch::new("rssn-describe");
+    let output = aevia(
+        scratch.path(),
+        &[
+            "rssn",
+            "--describe",
+            "numerical_vector.num_signal_autocovariance",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let text = stdout(&output);
+    for expected in [
+        "numerical_vector.num_signal_autocovariance",
+        "biased sample autocovariances",
+        "crate::kernels::signal::autocovariance",
+        "Kernel signatures (declared)",
+        "Rssn.num_signal_autocovariance (typed)",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in {text}");
+    }
+    let unknown = aevia(scratch.path(), &["rssn", "--describe", "no_such_operator"]);
+    assert_eq!(code(&unknown), 1);
+    assert!(stderr(&unknown).contains("unknown operator `no_such_operator`"));
+    let missing = aevia(scratch.path(), &["rssn", "--describe"]);
+    assert_eq!(code(&missing), 2);
+}
+
+#[test]
 fn rssn_emit_writes_the_generated_module_into_out() {
     let scratch = Scratch::new("rssn-emit");
     let output = aevia(scratch.path(), &["rssn", "--emit", "--out", "gen"]);
@@ -697,6 +754,55 @@ fn test_filter_selects_by_name_and_refuses_an_empty_selection() {
 }
 
 #[test]
+fn source_tests_release_their_native_objects_after_success_and_failure() {
+    let scratch = Scratch::new("test-native-object-scope");
+    scratch.write("suite.aev", r#"
+let frame = unwrap_or(Rssn.dynamic("num_grid_frame_new", [to_value(1.0 m), to_value(1.0 s), to_value(1.0 K)]), to_value(0))
+
+fn object_count(): Int =
+    match Rssn.dynamic("num_native_usage", []) with
+    | Ok(data) ->
+        match from_value<{ objects: Int, bytes: Int }>(data) with
+        | Ok(info) -> info.objects
+        | Err(_) -> -1
+    | Err(_) -> -1
+
+fn allocate_grid(): Bool =
+    match Rssn.dynamic("num_grid_legacy_fdm_new", [frame, to_value([2])]) with
+    | Ok(_) -> true
+    | Err(_) -> false
+
+test "uses the file-scope frame" =
+    let before = object_count()
+    let allocated = allocate_grid()
+    before == 1 && allocated && object_count() == 2
+
+test "failure discards its objects" =
+    let allocated = allocate_grid()
+    allocated && object_count() == 0
+
+test "the next test can reuse the original frame" =
+    object_count() == 1 && allocate_grid()
+"#);
+    let output = aevia(scratch.path(), &["test", "suite.aev"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let out = stdout(&output);
+    assert!(
+        out.contains("test uses the file-scope frame ... ok"),
+        "{out}"
+    );
+    assert!(
+        out.contains("test failure discards its objects ... FAILED (returned false)"),
+        "{out}"
+    );
+    assert!(
+        out.contains("test the next test can reuse the original frame ... ok"),
+        "{out}"
+    );
+    assert!(out.contains("2 passed, 1 failed"), "{out}");
+}
+
+#[test]
 fn check_all_checks_modules_the_entry_does_not_import() {
     let scratch = Scratch::new("check-all");
     assert_eq!(code(&aevia(scratch.path(), &["init", "demo"])), 0);
@@ -713,6 +819,38 @@ fn check_all_checks_modules_the_entry_does_not_import() {
         stderr(&output).contains("orphan.aev"),
         "{}",
         stderr(&output)
+    );
+}
+
+#[test]
+fn check_all_reports_identical_errors_in_each_source_file() {
+    let scratch = Scratch::new("check-all-identical-errors");
+    assert_eq!(code(&aevia(scratch.path(), &["init", "demo"])), 0);
+    let demo = scratch.path().join("demo");
+    // These errors share a code, message, and byte range, but belong to
+    // separate modules. Their source locations must survive deduplication.
+    scratch.write(
+        "demo/src/First.aev",
+        "module First\n\nfn value(): Int = 1 m + 1\n",
+    );
+    scratch.write(
+        "demo/src/Other.aev",
+        "module Other\n\nfn value(): Int = 1 m + 1\n",
+    );
+
+    let output = aevia(&demo, &["--color", "never", "check", "--all"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert_eq!(errors.matches("error[E0401]").count(), 2, "{errors}");
+    let first = errors.find("First.aev:3:").expect("First source location");
+    let other = errors.find("Other.aev:3:").expect("Other source location");
+    assert!(first < other, "{errors}");
+    let status = stdout(&output);
+    assert_eq!(status.matches(": ok").count(), 1, "{status}");
+    assert!(status.contains("main.aev: ok"), "{status}");
+    assert!(
+        status.contains("checked 3 entries: 3 modules, 3 checks"),
+        "{status}"
     );
 }
 
@@ -796,6 +934,71 @@ fn check_accepts_several_files() {
         stdout(&output)
     );
     assert!(stderr(&output).contains("bad.aev"), "{}", stderr(&output));
+}
+
+#[test]
+fn lint_emits_one_uncolored_structured_report_for_multiple_files() {
+    let scratch = Scratch::new("lint-multiple-files");
+    scratch.write("First.aev", "fn value(): Int = 1 m + 1\n");
+    scratch.write("Clean.aev", "fn value(): Int = 1\n");
+    scratch.write("Other.aev", "\n\nfn value(): Int = 1 m + 1\n");
+
+    for format in ["json", "sarif"] {
+        let output = aevia(
+            scratch.path(),
+            &[
+                "--color",
+                "always",
+                "lint",
+                "--no-cache",
+                "--format",
+                format,
+                "Other.aev",
+                "Clean.aev",
+                "First.aev",
+            ],
+        );
+        assert_eq!(code(&output), 1, "{}", stderr(&output));
+        assert!(output.stderr.is_empty(), "{}", stderr(&output));
+        let report: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("one plain JSON document");
+        let (files, lines): (Vec<_>, Vec<_>) = if format == "json" {
+            assert_eq!(report["version"], 1);
+            assert_eq!(report["has_errors"], true);
+            report["diagnostics"]
+                .as_array()
+                .expect("diagnostics")
+                .iter()
+                .map(|item| {
+                    assert_eq!(item["code"], "E0401");
+                    (
+                        item["file"].as_str().unwrap(),
+                        item["start_line"].as_u64().unwrap(),
+                    )
+                })
+                .unzip()
+        } else {
+            assert_eq!(report["version"], "2.1.0");
+            assert_eq!(report["runs"].as_array().expect("runs").len(), 1);
+            report["runs"][0]["results"]
+                .as_array()
+                .expect("results")
+                .iter()
+                .map(|item| {
+                    assert_eq!(item["ruleId"], "E0401");
+                    let location = &item["locations"][0]["physicalLocation"];
+                    (
+                        location["artifactLocation"]["uri"].as_str().unwrap(),
+                        location["region"]["startLine"].as_u64().unwrap(),
+                    )
+                })
+                .unzip()
+        };
+        assert_eq!(files.len(), 2);
+        assert!(files[0].ends_with("Other.aev"), "{files:?}");
+        assert!(files[1].ends_with("First.aev"), "{files:?}");
+        assert_eq!(lines, vec![3, 1]);
+    }
 }
 
 #[test]

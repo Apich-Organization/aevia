@@ -22,6 +22,7 @@ use aevia_core::manifest::valid_package_name;
 use aevia_resolve::Index as _;
 use aevia_resolve::Version;
 use aevia_resolve::VersionReq;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -1022,53 +1023,75 @@ pub fn sources_under(dir: &Path) -> Vec<PathBuf> {
 /// is a directory, which keeps the rule simple and the errors honest. A
 /// pattern that matches nothing is left as it was, so the file-not-found
 /// diagnostic names exactly what the user wrote.
+/// Patterns sharing a directory use one scan and emit sorted matches in
+/// argument order, including repeated matches.
 #[must_use]
 pub fn expand_globs(names: &[String]) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    for name in names {
-        if !name.contains('*') && !name.contains('?') {
-            paths.push(PathBuf::from(name));
-            continue;
-        }
-        let (parent, pattern) =
-            name.rsplit_once(['/', '\\'])
-                .map_or((".", name.as_str()), |(parent, pattern)| {
-                    let directory = if parent.is_empty() || (cfg!(windows) && parent.ends_with(':'))
-                    {
-                        name.get(..parent.len().saturating_add(1)).unwrap_or(parent)
-                    } else {
-                        parent
-                    };
-                    (directory, pattern)
-                });
-        let Ok(entries) = std::fs::read_dir(if parent.is_empty() {
-            "."
-        } else {
-            parent
-        }) else {
-            paths.push(PathBuf::from(name));
+    struct Glob<'a> {
+        parent: &'a str,
+        pattern: &'a str,
+        matches: Vec<PathBuf>,
+    }
+
+    let has_pattern = |name: &str| name.contains('*') || name.contains('?');
+    if names.iter().all(|name| !has_pattern(name)) {
+        return names.iter().map(PathBuf::from).collect();
+    }
+    // Keep one output slot per argument so duplicates and argument order survive grouping.
+    let mut arguments: Vec<_> = names
+        .iter()
+        .map(|name| {
+            has_pattern(name).then(|| {
+                let (parent, pattern) = name.rsplit_once(['/', '\\']).map_or(
+                    (".", name.as_str()),
+                    |(parent, pattern)| {
+                        let directory =
+                            if parent.is_empty() || (cfg!(windows) && parent.ends_with(':')) {
+                                name.get(..parent.len().saturating_add(1)).unwrap_or(parent)
+                            } else {
+                                parent
+                            };
+                        (directory, pattern)
+                    },
+                );
+                Glob {
+                    parent,
+                    pattern,
+                    matches: Vec::new(),
+                }
+            })
+        })
+        .collect();
+    let mut directories: HashMap<&Path, Vec<&mut Glob<'_>>> = HashMap::new();
+    for glob in arguments.iter_mut().flatten() {
+        directories
+            .entry(Path::new(glob.parent))
+            .or_default()
+            .push(glob);
+    }
+    for (directory, mut globs) in directories {
+        let Ok(entries) = std::fs::read_dir(directory) else {
             continue;
         };
-        let pattern: Vec<_> = pattern.chars().collect();
-        let mut matches: Vec<PathBuf> = entries
-            .flatten()
-            .filter(|entry| {
-                wildcard_matches(
-                    &pattern,
-                    &entry
-                        .file_name()
-                        .to_string_lossy()
-                        .chars()
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .map(|entry| PathBuf::from(parent).join(entry.file_name()))
-            .collect();
-        if matches.is_empty() {
-            paths.push(PathBuf::from(name));
+        for entry in entries.flatten() {
+            let filename = entry.file_name();
+            let spelling = filename.to_string_lossy();
+            for glob in &mut globs {
+                if wildcard_matches(glob.pattern, &spelling) {
+                    glob.matches.push(Path::new(glob.parent).join(&filename));
+                }
+            }
+        }
+    }
+    let mut paths = Vec::new();
+    for (name, glob) in names.iter().zip(arguments) {
+        if let Some(mut glob) = glob
+            && !glob.matches.is_empty()
+        {
+            glob.matches.sort();
+            paths.extend(glob.matches);
         } else {
-            matches.sort();
-            paths.extend(matches);
+            paths.push(PathBuf::from(name));
         }
     }
     paths
@@ -1080,33 +1103,216 @@ pub fn expand_globs(names: &[String]) -> Vec<PathBuf> {
     reason = "keeps filename matching separate from filesystem traversal"
 )]
 fn wildcard_matches(
-    pattern: &[char],
-    name: &[char],
+    pattern: &str,
+    name: &str,
 ) -> bool {
-    let mut position = 0usize;
-    let mut part = 0usize;
+    let mut pattern = pattern.chars();
+    let mut name = name.chars();
+    let mut current = name.next();
     let mut star = None;
-    while let Some(character) = name.get(position) {
-        match pattern.get(part) {
+    while let Some(character) = current {
+        let mut next_pattern = pattern.clone();
+        match next_pattern.next() {
             | Some('*') => {
-                part = part.saturating_add(1);
-                star = Some((part, position));
+                pattern = next_pattern;
+                // `name` is already past the scalar currently being compared.
+                star = Some((pattern.clone(), name.clone()));
             },
-            | Some(next) if next == character || *next == '?' => {
-                position = position.saturating_add(1);
-                part = part.saturating_add(1);
+            | Some(next) if next == character || next == '?' => {
+                pattern = next_pattern;
+                current = name.next();
             },
             | _ => {
-                let Some((suffix, consumed)) = star else {
+                let Some((suffix, consumed)) = &mut star else {
                     return false;
                 };
-                position = consumed.saturating_add(1);
-                part = suffix;
-                star = Some((suffix, position));
+                pattern = suffix.clone();
+                current = consumed.next();
+                name = consumed.clone();
             },
         }
     }
-    pattern.iter().skip(part).all(|character| *character == '*')
+    pattern.all(|character| character == '*')
+}
+
+#[cfg(test)]
+mod glob_tests {
+    use super::expand_globs;
+    use super::wildcard_matches;
+    use std::path::Path;
+    use std::path::PathBuf;
+
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(label: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "aevia-package-globs-{label}-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn spelling(path: &Path) -> String {
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn directory_groups_keep_argument_order_and_the_spelling_of_each_argument() {
+        let scratch = Scratch::new("order");
+        let shared = scratch.0.join("shared");
+        let other = scratch.0.join("other");
+        std::fs::create_dir_all(shared.join("folder.aev")).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        for entry in ["z.aev", "猫.aev", "x\u{301}.aev", "plain.txt"] {
+            std::fs::write(shared.join(entry), "").unwrap();
+        }
+        std::fs::write(other.join("first.aev"), "").unwrap();
+
+        let literal = scratch.0.join("missing.aev");
+        let alias = shared.join(".");
+        let glob = spelling(&shared.join("*.aev"));
+        let missing = spelling(&shared.join("absent*.aev"));
+        let actual = expand_globs(&[
+            glob.clone(),
+            spelling(&literal),
+            spelling(&other.join("*.aev")),
+            spelling(&alias.join("?.aev")),
+            missing.clone(),
+            glob,
+        ]);
+        let mut shared_matches =
+            ["folder.aev", "z.aev", "猫.aev", "x\u{301}.aev"].map(|basename| shared.join(basename));
+        shared_matches.sort();
+        let mut alias_matches = ["z.aev", "猫.aev"].map(|basename| alias.join(basename));
+        alias_matches.sort();
+        let expected = shared_matches
+            .iter()
+            .cloned()
+            .chain([literal, other.join("first.aev")])
+            .chain(alias_matches)
+            .chain([PathBuf::from(missing)])
+            .chain(shared_matches.iter().cloned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual
+                .iter()
+                .map(|path| path.as_os_str())
+                .collect::<Vec<_>>(),
+            expected
+                .iter()
+                .map(|path| path.as_os_str())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn unavailable_directories_are_retried_by_the_next_expansion() {
+        let scratch = Scratch::new("refresh");
+        let directory = scratch.0.join("sources");
+        let patterns = [
+            spelling(&directory.join("*.aev")),
+            spelling(&directory.join("?.aev")),
+        ];
+        let fallback = patterns.each_ref().map(PathBuf::from);
+        assert_eq!(expand_globs(&patterns), fallback);
+
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(directory.join("a.aev"), "").unwrap();
+        assert_eq!(
+            expand_globs(&patterns),
+            [directory.join("a.aev"), directory.join("a.aev")]
+        );
+
+        std::fs::rename(&directory, scratch.0.join("previous")).unwrap();
+        std::fs::write(&directory, "").unwrap();
+        assert_eq!(expand_globs(&patterns), fallback);
+        std::fs::remove_file(&directory).unwrap();
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(directory.join("b.aev"), "").unwrap();
+        assert_eq!(
+            expand_globs(&patterns),
+            [directory.join("b.aev"), directory.join("b.aev")]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lossy_matching_keeps_the_native_filename() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let scratch = Scratch::new("native");
+        let directory = scratch.0.join("literal?component");
+        std::fs::create_dir(&directory).unwrap();
+        let filename = OsString::from_vec(b"\xff.aev".to_vec());
+        let original = directory.join(filename);
+        std::fs::write(&original, "").unwrap();
+        assert_eq!(
+            expand_globs(&[spelling(&directory.join("?.aev"))]),
+            [original]
+        );
+    }
+
+    #[test]
+    fn wildcard_backtracking_matches_a_unicode_dynamic_program() {
+        fn words(alphabet: &[char]) -> Vec<String> {
+            let mut values = vec![String::new()];
+            let mut layer = values.clone();
+            for _ in 0..4 {
+                layer = layer
+                    .iter()
+                    .flat_map(|prefix| {
+                        alphabet
+                            .iter()
+                            .map(move |character| format!("{prefix}{character}"))
+                    })
+                    .collect();
+                values.extend(layer.iter().cloned());
+            }
+            values
+        }
+        fn reference(
+            pattern: &str,
+            name: &str,
+        ) -> bool {
+            let name: Vec<_> = name.chars().collect();
+            let mut row = vec![false; name.len() + 1];
+            row[0] = true;
+            for token in pattern.chars() {
+                let mut next = vec![false; name.len() + 1];
+                next[0] = token == '*' && row[0];
+                for (index, &character) in name.iter().enumerate() {
+                    next[index + 1] = match token {
+                        | '*' => row[index + 1] || next[index],
+                        | '?' => row[index],
+                        | literal => literal == character && row[index],
+                    };
+                }
+                row = next;
+            }
+            row[name.len()]
+        }
+        let filenames = words(&['a', 'é', '\u{301}']);
+        for pattern in words(&['a', 'é', '*', '?']) {
+            for name in &filenames {
+                assert_eq!(
+                    wildcard_matches(&pattern, name),
+                    reference(&pattern, name),
+                    "{pattern:?} against {name:?}"
+                );
+            }
+        }
+    }
 }
 
 fn collect(

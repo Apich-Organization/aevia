@@ -917,17 +917,18 @@ pub fn split_submissions(source: &str) -> Vec<String> {
         units.push(current);
     }
     let mut grouped: Vec<String> = Vec::new();
+    let mut previous_is_declaration = false;
     for unit in units {
-        if !unit.trim_start().starts_with(':')
-            && declaration(&unit)
+        let is_declaration = !unit.trim_start().starts_with(':') && declaration(&unit);
+        if is_declaration
+            && previous_is_declaration
             && let Some(previous) = grouped.last_mut()
-            && !previous.trim_start().starts_with(':')
-            && declaration(previous)
         {
             previous.push_str(&unit);
         } else {
             grouped.push(unit);
         }
+        previous_is_declaration = is_declaration;
     }
     grouped
 }
@@ -1047,6 +1048,29 @@ mod tests {
         assert!(units[0].contains("helper():"));
         assert_eq!(units[1], ":run");
         assert_eq!(units[3].trim(), "x + 1");
+    }
+
+    #[test]
+    fn piped_groups_preserve_comments_and_invalid_definitions_across_commands() {
+        let first = concat!(
+            "# header\n",
+            "let first = 1\n\n",
+            "# attached to broken\n",
+            "let broken = \"unterminated\n",
+            "fn invalid(, x) = x\n",
+            "let later = first\n",
+        );
+        let second = concat!(
+            "\n# next definitions\n",
+            "fn add(x: Int): Int =\n",
+            "    x + 1\n",
+            "let answer = add(2)\n",
+        );
+        let source = format!("{first}:type first\n{second}answer\n:quit\n");
+        assert_eq!(
+            split_submissions(&source),
+            [first, ":type first", second, "answer\n", ":quit"]
+        );
     }
 
     #[test]
