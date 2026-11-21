@@ -215,6 +215,117 @@ fn adjacent_fixes_keep_their_insertions_but_competing_insertions_apply_once() {
 }
 
 #[test]
+fn alternate_paths_share_one_edit_plan_and_stale_snapshots_do_not_block_it() {
+    let scratch = Scratch::new();
+    let mut sources = SourceMap::new();
+    let (path, file) = scratch.source(&mut sources, "source.aev", "αβγ");
+    let subdir = scratch.0.join("subdir");
+    std::fs::create_dir(&subdir).expect("alias parent exists");
+    let alias_path = subdir.join("..").join("source.aev");
+    let stale = sources.add(path.to_string_lossy(), "stale");
+    let alias = sources.add(alias_path.to_string_lossy(), "αβγ");
+    let warnings = [finding(
+        Span::new(file, 0, 2),
+        "alias",
+        vec![
+            fix(
+                Applicability::MachineApplicable,
+                vec![edit(stale, 0, 1, "no")],
+            ),
+            fix(
+                Applicability::MachineApplicable,
+                vec![edit(file, 0, 2, "A")],
+            ),
+            fix(
+                Applicability::MachineApplicable,
+                vec![
+                    edit(alias, 0, 2, "overlap"),
+                    edit(file, 4, 6, "also skipped"),
+                ],
+            ),
+            fix(
+                Applicability::MachineApplicable,
+                vec![edit(alias, 2, 4, "B")],
+            ),
+            fix(
+                Applicability::MachineApplicable,
+                vec![edit(file, 4, 6, "C"), edit(alias, 4, 6, "duplicate")],
+            ),
+        ],
+    )];
+    let result = FixEngine::apply(&warnings, &sources).expect("apply fixes to one physical path");
+    assert_eq!(result.applied, 2);
+    assert_eq!(result.files_modified, [path.to_string_lossy()]);
+    assert_eq!(read(&path), "ABγ");
+}
+
+#[test]
+fn program_diagnostics_remain_partitioned_by_source_and_root() {
+    let scratch = Scratch::new();
+    let main = scratch.0.join("Main.aev");
+    let helper = scratch.0.join("Helper.aev");
+    std::fs::write(
+        &main,
+        "import Helper\nfn main(arg: Int): Int = Helper.f(1)\n",
+    )
+    .expect("write entry module");
+    std::fs::write(&helper, "module Helper\nfn f(arg: Int): Int = 2\n")
+        .expect("write dependency module");
+    let mut program = aevia_core::driver::load(&main);
+    assert!(
+        !program.diagnostics.has_errors(),
+        "{:?}",
+        program.diagnostics.items
+    );
+    let root = program.entry().expect("entry module").file;
+    let dependency = program
+        .modules
+        .iter()
+        .find(|module| module.path == ["Helper"])
+        .expect("dependency module")
+        .file;
+    let orphan = program.sources.add("orphan.aev", "");
+    program.diagnostics.push(Diagnostic::error(
+        "E9998",
+        "dependency error",
+        Span::new(dependency, 0, 0),
+    ));
+    program.diagnostics.push(Diagnostic::warning(
+        "W9999",
+        "orphan warning",
+        Span::new(orphan, 0, 0),
+    ));
+
+    let report = Driver::run_program(
+        &program,
+        &LintStore::with_builtins(),
+        &LintConfig::default(),
+        Some(&[root, root]),
+    );
+    let warnings: Vec<_> = report
+        .lint_diagnostics
+        .iter()
+        .filter(|item| item.lint.code == "W0101")
+        .collect();
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].diagnostic.span.file, root);
+    assert!(
+        report
+            .diagnostics
+            .items
+            .iter()
+            .any(|diag| diag.code == "E9998" && diag.span.file == dependency)
+    );
+    assert!(
+        report
+            .diagnostics
+            .items
+            .iter()
+            .any(|diag| diag.code == "W9999" && diag.span.file == orphan)
+    );
+}
+
+#[test]
 fn cli_config_and_attributes_respect_forbid_and_cap_dependency_lints() {
     let source = "@allow(unused_variable)\nfn f(unused: Int): Int = 1\n";
     let mut sources = SourceMap::new();
@@ -328,6 +439,65 @@ fn json_attaches_only_matching_fixes_and_sarif_declares_its_column_unit() {
             "startLine": 2, "startColumn": 2, "endLine": 2, "endColumn": 3,
         })
     );
+}
+
+#[test]
+fn large_json_reports_keep_first_matching_fix_and_each_source_map() {
+    const DIAGNOSTICS_PER_ROOT: usize = 1024;
+    let make_report = |name: &str| {
+        let mut sources = SourceMap::new();
+        let file = sources.add(name, "x\n".repeat(DIAGNOSTICS_PER_ROOT));
+        let edit_file = sources.add(format!("{name}-edit"), "y");
+        let span = Span::new(file, 0, 1);
+        let suggestion = fix(
+            Applicability::MachineApplicable,
+            vec![edit(edit_file, 0, 1, "_y")],
+        );
+        let first = finding(span, "empty first match", Vec::new());
+        let duplicate = finding(span, "empty first match", vec![suggestion.clone()]);
+        let other = finding(span, "different message", vec![suggestion]);
+
+        let mut lint_diagnostics = vec![first, other, duplicate];
+        let mut items = lint_diagnostics
+            .iter()
+            .take(2)
+            .map(|lint| lint.diagnostic.clone())
+            .collect::<Vec<_>>();
+        for line in 2..DIAGNOSTICS_PER_ROOT {
+            let from = line * 2;
+            let lint = finding(Span::new(file, from, from + 1), "padding", Vec::new());
+            items.push(lint.diagnostic.clone());
+            lint_diagnostics.push(lint);
+        }
+        let report = LintReport {
+            diagnostics: Diagnostics { items },
+            lint_diagnostics,
+            modules_checked: 1,
+        };
+        (report, sources)
+    };
+    let first = make_report("first.aev");
+    let second = make_report("second.aev");
+    let rendered = aevia_lint::format::render_many(
+        [(&first.0, &first.1), (&second.0, &second.1)],
+        &LintStore::with_builtins(),
+        aevia_lint::OutputFormat::Json,
+        aevia_syntax::Style::Plain,
+    );
+    let report: serde_json::Value = serde_json::from_str(&rendered).expect("JSON report");
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+    assert_eq!(diagnostics.len(), DIAGNOSTICS_PER_ROOT * 2);
+    for (offset, file, edit_file) in [
+        (0, "first.aev", "first.aev-edit"),
+        (DIAGNOSTICS_PER_ROOT, "second.aev", "second.aev-edit"),
+    ] {
+        assert_eq!(diagnostics[offset]["file"], file);
+        assert_eq!(diagnostics[offset]["fixes"], serde_json::json!([]));
+        assert_eq!(
+            diagnostics[offset + 1]["fixes"][0]["edits"][0]["file"],
+            edit_file
+        );
+    }
 }
 
 #[test]

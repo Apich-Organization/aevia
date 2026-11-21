@@ -241,6 +241,23 @@ impl LevelResolver {
         diagnostics: &Diagnostics,
         file: FileId,
     ) -> (Vec<LintDiagnostic>, Diagnostics) {
+        Self::apply_to_file_diagnostics(
+            store,
+            levels,
+            diagnostics
+                .items
+                .iter()
+                .filter(|diag| diag.span.file == file),
+            file,
+        )
+    }
+
+    pub(crate) fn apply_to_file_diagnostics<'a>(
+        store: &LintStore,
+        levels: &LevelMap,
+        diagnostics: impl Iterator<Item = &'a Diagnostic>,
+        file: FileId,
+    ) -> (Vec<LintDiagnostic>, Diagnostics) {
         let mut lint_diags = Vec::new();
         let mut out = Diagnostics::new();
 
@@ -250,10 +267,7 @@ impl LevelResolver {
             }
         }
 
-        for diag in &diagnostics.items {
-            if diag.span.file != file {
-                continue;
-            }
+        for diag in diagnostics {
             if diag.severity != Severity::Warning {
                 out.push(diag.clone());
                 continue;

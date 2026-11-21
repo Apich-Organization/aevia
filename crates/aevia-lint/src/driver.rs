@@ -1,5 +1,8 @@
 //! Lint orchestrator, single-walk AST dispatch, and deterministic result caching.
 
+use std::collections::HashMap;
+use std::collections::HashSet;
+
 use aevia_core::driver::Program;
 use aevia_syntax::Diagnostic;
 use aevia_syntax::Diagnostics;
@@ -73,9 +76,38 @@ impl Driver {
         config: &LintConfig,
         is_root_package: bool,
     ) -> ModuleLintResult {
+        Self::run_module_with_diagnostics(
+            sources,
+            module,
+            checked,
+            raw_diagnostics
+                .items
+                .iter()
+                .filter(|diag| diag.span.file == file),
+            file,
+            store,
+            config,
+            is_root_package,
+        )
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "shares module linting between standalone and prepartitioned compiler diagnostics"
+    )]
+    fn run_module_with_diagnostics<'a>(
+        sources: &SourceMap,
+        module: &Module,
+        checked: Option<&CheckedModule>,
+        raw_diagnostics: impl Iterator<Item = &'a Diagnostic>,
+        file: FileId,
+        store: &LintStore,
+        config: &LintConfig,
+        is_root_package: bool,
+    ) -> ModuleLintResult {
         let levels = LevelResolver::resolve(store, config, Some(module), is_root_package);
         let (mut lint_diags, mut merged) =
-            LevelResolver::apply_to_compiler_diagnostics(store, &levels, raw_diagnostics, file);
+            LevelResolver::apply_to_file_diagnostics(store, &levels, raw_diagnostics, file);
 
         if config.run_extra_lints && is_root_package {
             let syntax_passes = passes::syntax_passes();
@@ -160,22 +192,36 @@ impl Driver {
         let mut all_lint_diags = Vec::new();
         let mut all_diags = Diagnostics::new();
 
-        // Preserve non-module diagnostics (e.g. parse/loader errors on files without a LoadedModule).
-        let module_files: std::collections::HashSet<FileId> =
-            program.modules.iter().map(|m| m.file).collect();
+        // Bucket once rather than filter all compiler diagnostics for every module.
+        // Diagnostics on files without a loaded module are preserved directly.
+        let mut module_diagnostics: HashMap<FileId, Vec<&Diagnostic>> = program
+            .modules
+            .iter()
+            .map(|m| (m.file, Vec::new()))
+            .collect();
         for diag in &program.diagnostics.items {
-            if !module_files.contains(&diag.span.file) {
+            if let Some(items) = module_diagnostics.get_mut(&diag.span.file) {
+                items.push(diag);
+            } else {
                 all_diags.push(diag.clone());
             }
         }
 
+        let root_files = root_files.map(|roots| roots.iter().copied().collect::<HashSet<_>>());
         for loaded in &program.modules {
-            let is_root = root_files.is_none_or(|roots| roots.contains(&loaded.file));
-            let res = Self::run_module(
+            let is_root = root_files
+                .as_ref()
+                .is_none_or(|roots| roots.contains(&loaded.file));
+            let raw_diagnostics = module_diagnostics
+                .get(&loaded.file)
+                .into_iter()
+                .flatten()
+                .copied();
+            let res = Self::run_module_with_diagnostics(
                 &program.sources,
                 &loaded.module,
                 Some(&loaded.checked),
-                &program.diagnostics,
+                raw_diagnostics,
                 loaded.file,
                 store,
                 config,

@@ -1,6 +1,6 @@
 //! `W0710` (`duplicate-import`): importing the same module path multiple times.
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 use aevia_syntax::ast::DeclKind;
 use aevia_syntax::ast::Module;
@@ -27,17 +27,16 @@ impl SyntaxPass for DuplicateImportPass {
         cx: &mut LintCx<'_>,
         module: &Module,
     ) {
-        let mut seen: HashMap<String, usize> = HashMap::new();
-        for (idx, decl) in module.decls.iter().enumerate() {
+        let mut seen = HashSet::new();
+        for decl in &module.decls {
             let DeclKind::Import { path, .. } = &decl.kind else {
                 continue;
             };
-            let key = path.join(".");
-            if seen.insert(key.clone(), idx).is_some() {
+            if !seen.insert(path.as_slice()) {
                 cx.emit(
                     &W0710_DUPLICATE_IMPORT,
                     decl.span,
-                    format!("duplicate import of `{key}`"),
+                    format!("duplicate import of `{}`", path.join(".")),
                 )
                 .help("combine duplicate imports from the same module into one declaration");
             }

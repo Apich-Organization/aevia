@@ -1,8 +1,12 @@
 //! Applies machine-applicable fixes to their original source snapshots.
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fs;
+use std::ops::Bound;
+use std::path::PathBuf;
 
+use aevia_syntax::FileId;
 use aevia_syntax::SourceFile;
 use aevia_syntax::SourceMap;
 
@@ -22,6 +26,7 @@ pub struct FixSummary {
 type ByteRange = (usize, usize);
 
 struct FileEdits<'a> {
+    path: PathBuf,
     source: &'a SourceFile,
     replacements: BTreeMap<ByteRange, &'a str>,
 }
@@ -31,10 +36,19 @@ impl FileEdits<'_> {
         &self,
         range: ByteRange,
     ) -> bool {
-        let before = self.replacements.range(..range).next_back();
-        let after = self.replacements.range(range..).next();
-        before.is_some_and(|(previous, _)| ranges_conflict(*previous, range))
-            || after.is_some_and(|(next, _)| ranges_conflict(range, *next))
+        let (start, end) = range;
+        // Accepted ranges are disjoint. Only the last range starting before
+        // the proposed end can intersect it. For an insertion, also include
+        // an earlier insertion at the exact same byte.
+        let upper = if start == end {
+            Bound::Included(range)
+        } else {
+            Bound::Excluded((end, 0))
+        };
+        self.replacements
+            .range((Bound::Unbounded, upper))
+            .next_back()
+            .is_some_and(|(&previous, _)| ranges_conflict(previous.min(range), previous.max(range)))
     }
 }
 
@@ -48,9 +62,64 @@ fn ranges_conflict(
 }
 
 struct PlannedEdit<'a> {
-    file: &'a str,
+    file: usize,
     range: ByteRange,
     replacement: &'a str,
+}
+
+#[derive(Default)]
+struct EditPlan<'a> {
+    by_source: HashMap<FileId, Option<usize>>,
+    by_path: HashMap<PathBuf, usize>,
+    files: Vec<FileEdits<'a>>,
+}
+
+impl<'a> EditPlan<'a> {
+    fn source_index(
+        &mut self,
+        source: &'a SourceFile,
+    ) -> Option<usize> {
+        let path = fs::canonicalize(&source.name).ok()?;
+        if let Some(&index) = self.by_path.get(&path) {
+            return (self.files.get(index)?.source.text == source.text).then_some(index);
+        }
+        if fs::read_to_string(&path).ok()? != source.text {
+            return None;
+        }
+        let index = self.files.len();
+        self.by_path.insert(path.clone(), index);
+        self.files.push(FileEdits {
+            path,
+            source,
+            replacements: BTreeMap::new(),
+        });
+        Some(index)
+    }
+
+    fn edit(
+        &mut self,
+        sources: &'a SourceMap,
+        edit: &'a TextEdit,
+    ) -> Option<PlannedEdit<'a>> {
+        let id = edit.span.file;
+        let file = match self.by_source.get(&id) {
+            | Some(index) => *index,
+            | None => {
+                let index = self.source_index(sources.file(id)?);
+                self.by_source.insert(id, index);
+                index
+            },
+        }?;
+        let start = usize::try_from(edit.span.start).ok()?;
+        let end = usize::try_from(edit.span.end).ok()?;
+        let plan = self.files.get(file)?;
+        plan.source.text.get(start..end)?;
+        (!plan.overlaps((start, end))).then_some(PlannedEdit {
+            file,
+            range: (start, end),
+            replacement: &edit.replacement,
+        })
+    }
 }
 
 /// Applies `MachineApplicable` fixes cleanly, rejecting overlapping edits.
@@ -68,28 +137,33 @@ impl FixEngine {
         diagnostics: &[LintDiagnostic],
         sources: &SourceMap,
     ) -> Result<FixSummary, String> {
-        let mut per_file = BTreeMap::new();
+        let mut plan = EditPlan::default();
+        let mut planned = Vec::new();
         let mut applied = 0usize;
         for fix in diagnostics.iter().flat_map(|diagnostic| &diagnostic.fixes) {
             if fix.applicability != Applicability::MachineApplicable || fix.edits.is_empty() {
                 continue;
             }
-            let Some(mut planned): Option<Vec<_>> = fix
+            planned.clear();
+            if fix
                 .edits
                 .iter()
-                .map(|edit| plan_edit(sources, &mut per_file, edit))
-                .collect()
-            else {
+                .try_for_each(|edit| {
+                    planned.push(plan.edit(sources, edit)?);
+                    Some(())
+                })
+                .is_none()
+            {
                 continue;
-            };
+            }
             planned.sort_unstable_by_key(|edit| (edit.file, edit.range));
             if planned.windows(2).any(|pair| {
                 matches!(pair, [a, b] if a.file == b.file && ranges_conflict(a.range, b.range))
             }) {
                 continue;
             }
-            for edit in planned {
-                if let Some(Some(file)) = per_file.get_mut(edit.file) {
+            for edit in &planned {
+                if let Some(file) = plan.files.get_mut(edit.file) {
                     file.replacements.insert(edit.range, edit.replacement);
                 }
             }
@@ -97,11 +171,13 @@ impl FixEngine {
         }
 
         let mut modified_files = Vec::new();
-        for (path, file) in per_file {
-            let Some(file) = file else { continue };
+        plan.files
+            .sort_unstable_by_key(|file| file.source.name.as_str());
+        for file in plan.files {
             if file.replacements.is_empty() {
                 continue;
             }
+            let path = file.source.name.as_str();
             let mut updated = String::with_capacity(file.source.text.len());
             let mut cursor = 0;
             for ((start, end), replacement) in file.replacements {
@@ -120,15 +196,15 @@ impl FixEngine {
                 continue;
             }
             let current =
-                fs::read_to_string(path).map_err(|e| format!("cannot read `{path}`: {e}"))?;
+                fs::read_to_string(&file.path).map_err(|e| format!("cannot read `{path}`: {e}"))?;
             if current != file.source.text {
                 return Err(format!("`{path}` changed while preparing lint fixes"));
             }
-            modified_files.push((path, updated));
+            modified_files.push((file.path, path, updated));
         }
         let mut files_modified = Vec::with_capacity(modified_files.len());
-        for (path, updated) in modified_files {
-            fs::write(path, updated).map_err(|e| format!("cannot write `{path}`: {e}"))?;
+        for (target, path, updated) in modified_files {
+            fs::write(target, updated).map_err(|e| format!("cannot write `{path}`: {e}"))?;
             files_modified.push(path.to_owned());
         }
         Ok(FixSummary {
@@ -138,40 +214,40 @@ impl FixEngine {
     }
 }
 
-#[allow(
-    clippy::single_call_fn,
-    reason = "validates each edit against its UTF-8 source snapshot before overlap checks"
-)]
-fn plan_edit<'a>(
-    sources: &'a SourceMap,
-    files: &mut BTreeMap<&'a str, Option<FileEdits<'a>>>,
-    edit: &'a TextEdit,
-) -> Option<PlannedEdit<'a>> {
-    let source = sources.file(edit.span.file)?;
-    let start = usize::try_from(edit.span.start).ok()?;
-    let end = usize::try_from(edit.span.end).ok()?;
-    let path = source.name.as_str();
-    let file = files
-        .entry(path)
-        .or_insert_with(|| {
-            let current = fs::read_to_string(path).ok()?;
-            (current == source.text).then(|| {
-                FileEdits {
-                    source,
-                    replacements: BTreeMap::new(),
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_lookup_matches_pairwise_checks_at_all_small_boundaries() {
+        let source = SourceFile::new("test", "");
+        let ranges: Vec<_> = (0..5)
+            .flat_map(|start| (start..5).map(move |end| (start, end)))
+            .collect();
+        let mut file = FileEdits {
+            path: PathBuf::new(),
+            source: &source,
+            replacements: BTreeMap::new(),
+        };
+        for &left in &ranges {
+            for &right in &ranges {
+                if ranges_conflict(left.min(right), left.max(right)) {
+                    continue;
                 }
-            })
-        })
-        .as_ref()?;
-    if (!std::ptr::eq(file.source, source) && file.source.text != source.text)
-        || file.overlaps((start, end))
-    {
-        return None;
+                file.replacements.clear();
+                file.replacements.insert(left, "");
+                file.replacements.insert(right, "");
+                for &candidate in &ranges {
+                    let expected = [left, right]
+                        .into_iter()
+                        .any(|old| ranges_conflict(old.min(candidate), old.max(candidate)));
+                    assert_eq!(
+                        file.overlaps(candidate),
+                        expected,
+                        "{left:?} {right:?} {candidate:?}"
+                    );
+                }
+            }
+        }
     }
-    file.source.text.get(start..end)?;
-    Some(PlannedEdit {
-        file: path,
-        range: (start, end),
-        replacement: &edit.replacement,
-    })
 }

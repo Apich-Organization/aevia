@@ -563,6 +563,17 @@ pub static W0710_DUPLICATE_IMPORT: Lint = Lint {
     explanation: "Importing the same module multiple times is redundant; combine the imports into a single declaration.",
 };
 
+/// Reports an `if` whose condition is a boolean literal.
+pub static W0711_CONSTANT_CONDITION: Lint = Lint {
+    code: "W0711",
+    name: "constant-condition",
+    group: LintGroup::Pedantic,
+    default_level: Level::Allow,
+    compiler_lint: false,
+    summary: "an `if` condition is always `true` or `false`",
+    explanation: "A literal `if` condition always selects the same branch. Check whether a variable or test was intended. Enable with `-W constant-condition` or `@warn(constant-condition)`.",
+};
+
 static BUILTIN_LINTS: &[&Lint] = &[
     &W0101_UNUSED_VARIABLE,
     &W0102_UNUSED_IMPORT,
@@ -587,4 +598,5 @@ static BUILTIN_LINTS: &[&Lint] = &[
     &W0708_SELF_COMPARISON,
     &W0709_REDUNDANT_IF,
     &W0710_DUPLICATE_IMPORT,
+    &W0711_CONSTANT_CONDITION,
 ];

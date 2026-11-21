@@ -36,6 +36,29 @@ pub struct TextEdit {
     pub replacement: String,
 }
 
+/// The source retained by a simplification, provided the removed text has
+/// no comment marker and both spans describe valid byte ranges in the file.
+pub(crate) fn retained_source(
+    sources: &SourceMap,
+    whole: Span,
+    retained: Span,
+) -> Option<&str> {
+    if whole.file != retained.file {
+        return None;
+    }
+    let source = &sources.file(whole.file)?.text;
+    let start = usize::try_from(whole.start).ok()?;
+    let end = usize::try_from(whole.end).ok()?;
+    let retained_start = usize::try_from(retained.start).ok()?;
+    let retained_end = usize::try_from(retained.end).ok()?;
+    if source.get(start..retained_start)?.contains('#')
+        || source.get(retained_end..end)?.contains('#')
+    {
+        return None;
+    }
+    source.get(retained_start..retained_end)
+}
+
 /// A suggested fix attached to a [`LintDiagnostic`].
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Fix {

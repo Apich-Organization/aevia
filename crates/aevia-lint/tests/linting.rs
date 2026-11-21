@@ -272,6 +272,103 @@ fn check_vals(x: Int, cond: Bool): Bool =
 }
 
 #[test]
+fn constant_condition_obeys_lint_levels_and_points_at_the_boolean() {
+    let source = "@warn(constant-condition)\nfn chosen(): Int = if true then 1 else 2\n\
+                  fn ordinary(): Int = if false then 3 else 4\n";
+    let config = LintConfig {
+        run_extra_lints: true,
+        ..LintConfig::default()
+    };
+    let (program, report) = lint_source(source, config);
+    assert!(!report.has_errors(), "{:?}", report.diagnostics.items);
+    let matches: Vec<_> = report
+        .lint_diagnostics
+        .iter()
+        .filter(|item| item.diagnostic.code == "W0711")
+        .collect();
+    assert_eq!(matches.len(), 1);
+    assert_eq!(program.sources.text(matches[0].diagnostic.span), "true");
+    assert!(matches[0].fixes.is_empty());
+    let store = LintStore::with_builtins();
+    assert!(store.format_list().contains("W0711  constant-condition"));
+}
+
+#[test]
+fn conditional_fixes_preserve_precedence_and_comments() {
+    let dir = std::env::temp_dir().join(format!("aevia-lint-if-rewrite-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let path = dir.join("Main.aev");
+    let source = "fn choose(a: Bool, b: Bool): Bool = false && if a || b then true else false\n\
+                  fn commented(c: Bool): Bool = if c then true # retain this comment\n\
+                  else false\n";
+    std::fs::write(&path, source).expect("write source");
+    let config = LintConfig {
+        run_extra_lints: true,
+        ..LintConfig::default()
+    };
+    let store = LintStore::with_builtins();
+    let program = driver::load(&path);
+    let report = Driver::run_program(&program, &store, &config, None);
+    assert!(!report.has_errors(), "{:?}", report.diagnostics.items);
+    assert_eq!(
+        report
+            .lint_diagnostics
+            .iter()
+            .filter(|item| item.lint.code == "W0709")
+            .count(),
+        2
+    );
+
+    let fixed = FixEngine::apply(&report.lint_diagnostics, &program.sources).expect("apply");
+    assert_eq!(fixed.applied, 1);
+    let rewritten = std::fs::read_to_string(&path).expect("read source");
+    assert_eq!(
+        rewritten,
+        "fn choose(a: Bool, b: Bool): Bool = false && (a || b)\n\
+         fn commented(c: Bool): Bool = if c then true # retain this comment\n\
+         else false\n"
+    );
+    let (_, report) = lint_source(&rewritten, config);
+    assert!(!report.has_errors(), "{:?}", report.diagnostics.items);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn nested_annotations_remove_only_the_repeated_type_suffix() {
+    let dir = std::env::temp_dir().join(format!("aevia-lint-type-rewrite-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let path = dir.join("Main.aev");
+    let source = "type Truth = Bool\n\
+                  fn redundant(c: Bool): Bool = ((c : Bool) : Bool)\n\
+                  fn different(c: Bool): Truth = ((c : Bool) : Truth)\n";
+    std::fs::write(&path, source).expect("write source");
+    let config = LintConfig {
+        run_extra_lints: true,
+        cli_overrides: vec![CliOverride {
+            level: Level::Warn,
+            target: "redundant-annotation".to_owned(),
+        }],
+        ..LintConfig::default()
+    };
+    let store = LintStore::with_builtins();
+    let program = driver::load(&path);
+    let report = Driver::run_program(&program, &store, &config, None);
+    assert!(!report.has_errors(), "{:?}", report.diagnostics.items);
+    let fixed = FixEngine::apply(&report.lint_diagnostics, &program.sources).expect("apply");
+    assert_eq!(fixed.applied, 1);
+    let rewritten = std::fs::read_to_string(&path).expect("read source");
+    assert_eq!(
+        rewritten,
+        "type Truth = Bool\n\
+         fn redundant(c: Bool): Bool = ((c : Bool))\n\
+         fn different(c: Bool): Truth = ((c : Bool) : Truth)\n"
+    );
+    let (_, report) = lint_source(&rewritten, config);
+    assert!(!report.has_errors(), "{:?}", report.diagnostics.items);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn redundant_if_and_redundant_annotation_fixes_apply_cleanly() {
     let dir = std::env::temp_dir().join(format!("aevia-lint-fix2-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

@@ -1,9 +1,11 @@
 //! Output renderers for `aevia lint`: `human`, `json`, and `sarif` (2.1.0).
 
+use aevia_syntax::Diagnostic;
 use aevia_syntax::Severity;
 use aevia_syntax::SourceMap;
 use aevia_syntax::Span;
 use aevia_syntax::Style;
+use std::collections::HashMap;
 
 use crate::driver::LintReport;
 use crate::lint::Level;
@@ -48,6 +50,28 @@ pub fn render(
         | OutputFormat::Human => report.diagnostics.render_with(sources, style),
         | OutputFormat::Json => render_json(report, sources, store),
         | OutputFormat::Sarif => render_sarif(report, sources, store),
+    }
+}
+
+/// Renders ordered reports using the source map belonging to each report.
+///
+/// Structured formats use a single envelope for all diagnostics.
+#[must_use]
+pub fn render_many<'a>(
+    reports: impl IntoIterator<Item = (&'a LintReport, &'a SourceMap)>,
+    store: &LintStore,
+    format: OutputFormat,
+    style: Style,
+) -> String {
+    match format {
+        | OutputFormat::Human => {
+            reports
+                .into_iter()
+                .map(|(report, sources)| report.diagnostics.render_with(sources, style))
+                .collect()
+        },
+        | OutputFormat::Json => render_json_many(reports, store),
+        | OutputFormat::Sarif => render_sarif_many(reports, store),
     }
 }
 
@@ -98,22 +122,48 @@ pub fn render_json(
     sources: &SourceMap,
     store: &LintStore,
 ) -> String {
-    let diagnostics: Vec<JsonDiag<'_>> = report
-        .diagnostics
-        .items
-        .iter()
-        .map(|d| {
+    render_json_many([(report, sources)], store)
+}
+
+fn render_json_many<'a>(
+    reports: impl IntoIterator<Item = (&'a LintReport, &'a SourceMap)>,
+    store: &LintStore,
+) -> String {
+    // For smaller reports a linear search avoids the cost of building an index.
+    const MIN_INDEXED_REPORT_SIZE: usize = 1024;
+    let mut has_errors = false;
+    let mut diagnostics = Vec::new();
+    for (report, sources) in reports {
+        has_errors |= report.has_errors();
+        let fix_index = (report.diagnostics.items.len() >= MIN_INDEXED_REPORT_SIZE
+            && report.lint_diagnostics.len() >= MIN_INDEXED_REPORT_SIZE)
+            .then(|| {
+                let mut fixes = HashMap::with_capacity(report.lint_diagnostics.len());
+                for lint in &report.lint_diagnostics {
+                    fixes
+                        .entry(diagnostic_key(&lint.diagnostic))
+                        .or_insert(lint.fixes.as_slice());
+                }
+                fixes
+            });
+        diagnostics.extend(report.diagnostics.items.iter().map(|d| {
             let (file, sl, sc, el, ec) = locate(sources, d.span);
             let name = store.find_by_code(&d.code).map(|(_, l)| l.name);
-            let fixes = report
-                .lint_diagnostics
-                .iter()
-                .find(|ld| {
-                    ld.diagnostic.span == d.span
-                        && ld.diagnostic.code == d.code
-                        && ld.diagnostic.message == d.message
-                })
-                .map_or_else(Vec::new, |ld| convert_fixes(&ld.fixes, sources));
+            let matching_fixes = fix_index.as_ref().map_or_else(
+                || {
+                    report
+                        .lint_diagnostics
+                        .iter()
+                        .find(|lint| {
+                            lint.diagnostic.span == d.span
+                                && lint.diagnostic.code == d.code
+                                && lint.diagnostic.message == d.message
+                        })
+                        .map(|lint| lint.fixes.as_slice())
+                },
+                |fixes| fixes.get(&diagnostic_key(d)).copied(),
+            );
+            let fixes = matching_fixes.map_or_else(Vec::new, |fixes| convert_fixes(fixes, sources));
             JsonDiag {
                 code: &d.code,
                 name,
@@ -132,14 +182,18 @@ pub fn render_json(
                 notes: &d.notes,
                 fixes,
             }
-        })
-        .collect();
+        }));
+    }
     let doc = JsonReport {
         version: 1,
-        has_errors: report.has_errors(),
+        has_errors,
         diagnostics,
     };
     serde_json::to_string_pretty(&doc).unwrap_or_else(|_| "{}".to_string()) + "\n"
+}
+
+fn diagnostic_key(diagnostic: &Diagnostic) -> (Span, &str, &str) {
+    (diagnostic.span, &diagnostic.code, &diagnostic.message)
 }
 
 #[allow(
@@ -189,6 +243,13 @@ pub fn render_sarif(
     sources: &SourceMap,
     store: &LintStore,
 ) -> String {
+    render_sarif_many([(report, sources)], store)
+}
+
+fn render_sarif_many<'a>(
+    reports: impl IntoIterator<Item = (&'a LintReport, &'a SourceMap)>,
+    store: &LintStore,
+) -> String {
     let rules: Vec<serde_json::Value> = store
         .all()
         .iter()
@@ -211,11 +272,9 @@ pub fn render_sarif(
         })
         .collect();
 
-    let results: Vec<serde_json::Value> = report
-        .diagnostics
-        .items
-        .iter()
-        .map(|d| {
+    let mut results = Vec::new();
+    for (report, sources) in reports {
+        results.extend(report.diagnostics.items.iter().map(|d| {
             let (file, sl, sc, el, ec) = locate(sources, d.span);
             let level = match d.severity {
                 | Severity::Error => "error",
@@ -238,8 +297,8 @@ pub fn render_sarif(
                     }
                 }]
             })
-        })
-        .collect();
+        }));
+    }
 
     let sarif = serde_json::json!({
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",

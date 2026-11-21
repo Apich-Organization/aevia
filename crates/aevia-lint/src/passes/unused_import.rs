@@ -41,33 +41,39 @@ impl SyntaxPass for UnusedImportPass {
         cx: &mut LintCx<'_>,
         module: &Module,
     ) {
+        let mut imports = module
+            .decls
+            .iter()
+            .filter_map(|decl| {
+                match &decl.kind {
+                    | DeclKind::Import {
+                        path,
+                        alias,
+                        names,
+                        open: false,
+                        export: false,
+                    } => Some((decl.span, path, alias, names)),
+                    | _ => None,
+                }
+            })
+            .peekable();
+        if imports.peek().is_none() {
+            return;
+        }
         let mut refs = RefCollector::default();
         visit::walk_module(&mut refs, module);
 
-        for decl in &module.decls {
-            let DeclKind::Import {
-                path,
-                alias,
-                names,
-                open,
-                export,
-            } = &decl.kind
-            else {
-                continue;
-            };
-            if *open || *export {
-                continue;
-            }
+        for (span, path, alias, names) in imports {
             if let Some(selective) = names {
                 let unused: Vec<&String> = selective
                     .iter()
-                    .filter(|name| !refs.used.contains(*name))
+                    .filter(|name| !refs.used.contains(name.as_str()))
                     .collect();
                 if unused.len() == selective.len() {
-                    let fix = delete_decl_fix(cx.sources, decl.span, "remove unused import");
+                    let fix = delete_decl_fix(cx.sources, span, "remove unused import");
                     cx.emit(
                         &W0102_UNUSED_IMPORT,
-                        decl.span,
+                        span,
                         format!("unused import `{}`", path.join(".")),
                     )
                     .fix(fix);
@@ -75,19 +81,19 @@ impl SyntaxPass for UnusedImportPass {
                     for name in unused {
                         cx.emit(
                             &W0102_UNUSED_IMPORT,
-                            decl.span,
+                            span,
                             format!("unused import `{name}` from `{}`", path.join(".")),
                         )
                         .help(format!("remove `{name}` from the import list"));
                     }
                 }
             } else if let Some(binding) = alias.as_ref().or_else(|| path.last())
-                && !refs.used.contains(binding)
+                && !refs.used.contains(binding.as_str())
             {
-                let fix = delete_decl_fix(cx.sources, decl.span, "remove unused import");
+                let fix = delete_decl_fix(cx.sources, span, "remove unused import");
                 cx.emit(
                     &W0102_UNUSED_IMPORT,
-                    decl.span,
+                    span,
                     format!("unused import `{}`", path.join(".")),
                 )
                 .fix(fix);
@@ -108,7 +114,7 @@ fn delete_decl_fix(
         let idx = usize::try_from(end).unwrap_or(bytes.len());
         match bytes.get(idx..) {
             | Some([b'\r', b'\n', ..]) => end = end.checked_add(2).unwrap_or(end),
-            | Some([b'\n', ..]) => end = end.checked_add(1).unwrap_or(end),
+            | Some([b'\n' | b'\r', ..]) => end = end.checked_add(1).unwrap_or(end),
             | _ => {},
         }
     }
@@ -127,20 +133,18 @@ fn delete_decl_fix(
 }
 
 #[derive(Default)]
-struct RefCollector {
-    used: HashSet<String>,
+struct RefCollector<'a> {
+    used: HashSet<&'a str>,
 }
 
-impl RefCollector {
+impl<'a> RefCollector<'a> {
     fn record_unit_expr(
         &mut self,
-        unit: &UnitExpr,
+        unit: &'a UnitExpr,
     ) {
         match unit {
             | UnitExpr::Name(name) => {
-                for seg in name.split('.') {
-                    self.used.insert(seg.to_string());
-                }
+                self.used.extend(name.split('.'));
             },
             | UnitExpr::Percent => {},
             | UnitExpr::Mul(a, b) | UnitExpr::Div(a, b) => {
@@ -152,7 +156,7 @@ impl RefCollector {
     }
 }
 
-impl<'ast> visit::Visitor<'ast> for RefCollector {
+impl<'ast> visit::Visitor<'ast> for RefCollector<'ast> {
     fn visit_decl(
         &mut self,
         decl: &'ast Decl,
@@ -160,15 +164,11 @@ impl<'ast> visit::Visitor<'ast> for RefCollector {
         match &decl.kind {
             | DeclKind::Import { .. } => return,
             | DeclKind::Instance { class, .. } => {
-                for seg in class.split('.') {
-                    self.used.insert(seg.to_string());
-                }
+                self.used.extend(class.split('.'));
             },
             | DeclKind::Derive { classes, .. } => {
                 for class in classes {
-                    for seg in class.split('.') {
-                        self.used.insert(seg.to_string());
-                    }
+                    self.used.extend(class.split('.'));
                 }
             },
             | DeclKind::Unit { base, offset, .. } => {
@@ -190,12 +190,10 @@ impl<'ast> visit::Visitor<'ast> for RefCollector {
     ) {
         match &expr.kind {
             | ExprKind::Var(name) => {
-                self.used.insert(name.clone());
+                self.used.insert(name.as_str());
             },
             | ExprKind::QName(path) => {
-                for seg in path {
-                    self.used.insert(seg.clone());
-                }
+                self.used.extend(path.iter().map(String::as_str));
             },
             | ExprKind::Quantity { unit, .. } => {
                 self.record_unit_expr(unit);
@@ -210,9 +208,7 @@ impl<'ast> visit::Visitor<'ast> for RefCollector {
         pat: &'ast Pat,
     ) {
         if let PatKind::Ctor { name, .. } = &pat.kind {
-            for seg in name.split('.') {
-                self.used.insert(seg.to_string());
-            }
+            self.used.extend(name.split('.'));
         }
         visit::walk_pat(self, pat);
     }
@@ -222,9 +218,7 @@ impl<'ast> visit::Visitor<'ast> for RefCollector {
         ty: &'ast Ty,
     ) {
         if let TyKind::Named { path, .. } = &ty.kind {
-            for seg in path {
-                self.used.insert(seg.clone());
-            }
+            self.used.extend(path.iter().map(String::as_str));
         }
         visit::walk_ty(self, ty);
     }
