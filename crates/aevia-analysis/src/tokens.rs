@@ -23,6 +23,7 @@ use crate::occurrence::{
 };
 use crate::types::SemanticToken;
 use crate::types::TokenKind;
+use aevia_syntax::Span;
 use aevia_syntax::token::TokenKind as SyntaxToken;
 use aevia_types::check::CheckedModule;
 use aevia_types::check::Export;
@@ -38,6 +39,8 @@ const PRIMITIVE_TYPES: [&str; 22] = [
     "Int", "Float", "Real", "Complex", "Bool", "Prop", "String", "Str", "Unit", "Tensor", "Matrix",
     "Sparse", "Result", "Option", "Set", "Table", "RateOf", "Io", "Dyn", "Point", "Sym", "Nat",
 ];
+
+const INDEX_DICTIONARY_AT: usize = 32;
 
 /// Classifies every highlighted word in `document`.
 #[must_use]
@@ -56,8 +59,17 @@ pub fn tokens(
 ) -> Vec<SemanticToken> {
     let text = document.text();
     let mut spans: Vec<(u32, u32, TokenKind)> = Vec::new();
+    let dictionary_calls = (occurrences.len() >= INDEX_DICTIONARY_AT
+        && checked.dictionaries.len() >= INDEX_DICTIONARY_AT)
+        .then(|| {
+            checked
+                .dictionaries
+                .iter()
+                .map(|call| (call.span, call.method.as_str()))
+                .collect::<HashSet<_>>()
+        });
     for occurrence in occurrences {
-        let kind = classify(occurrence, checked);
+        let kind = classify(occurrence, checked, dictionary_calls.as_ref());
         let span = match &occurrence.role {
             | Role::Qualified(_) => occurrence.span,
             | Role::Name(name)
@@ -130,6 +142,7 @@ pub fn tokens(
 fn classify(
     occurrence: &Occurrence,
     checked: &CheckedModule,
+    dictionary_calls: Option<&HashSet<(Span, &str)>>,
 ) -> TokenKind {
     match &occurrence.role {
         | Role::Name(name) => {
@@ -139,10 +152,15 @@ fn classify(
             // A class-method call: the interesting fact is which instance
             // implements it, which is what "operator provenance" means here.
             if let Some(call) = occurrence.call
-                && checked
-                    .dictionaries
-                    .iter()
-                    .any(|use_| use_.span == call && use_.method == *name)
+                && dictionary_calls.map_or_else(
+                    || {
+                        checked
+                            .dictionaries
+                            .iter()
+                            .any(|use_| use_.span == call && use_.method == *name)
+                    },
+                    |calls| calls.contains(&(call, name.as_str())),
+                )
             {
                 return TokenKind::Operator;
             }
@@ -195,5 +213,46 @@ const fn export_kind(export: &Export) -> TokenKind {
         | Export::TypeCtor { .. } | Export::Type { .. } | Export::Alias { .. } => TokenKind::Type,
         | Export::Unit { .. } => TokenKind::Unit,
         | Export::Dimension { .. } => TokenKind::Dimension,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Analysis;
+    use std::fmt::Write as _;
+
+    #[test]
+    fn busy_token_stream_keeps_overload_qualification_and_local_shadowing() {
+        let mut source = "fn shadow(show: Int): Int = show\n".to_string();
+        for index in 0..INDEX_DICTIONARY_AT {
+            let value = if index % 2 == 0 { "1" } else { "1.0" };
+            writeln!(source, "let s{index} = show({value})").unwrap();
+        }
+        source.push_str("let unicode = { label = \"🌡\", ready = show(true) }\n");
+        source.push_str("let qualified = Rssn.sin(0.5)\n");
+        let document = Document::new("indexed_tokens.aev", 1, &source);
+        let analysis = Analysis::new(&document);
+        assert!(analysis.checked().dictionaries.len() >= INDEX_DICTIONARY_AT);
+
+        let tokens = analysis.semantic_tokens();
+        let mut previous_end = 0;
+        let mut shows = Vec::new();
+        let mut qualified = Vec::new();
+        for token in tokens {
+            let start = document.offset(token.range.start).unwrap();
+            let end = document.offset(token.range.end).unwrap();
+            assert!(start < end && start >= previous_end);
+            previous_end = end;
+            match &source[start as usize..end as usize] {
+                | "show" => shows.push(token.kind),
+                | "Rssn.sin" => qualified.push(token.kind),
+                | _ => {},
+            }
+        }
+        assert_eq!(shows.len(), INDEX_DICTIONARY_AT + 3);
+        assert_eq!(shows[..2], [TokenKind::Variable, TokenKind::Variable]);
+        assert!(shows[2..].iter().all(|kind| *kind == TokenKind::Operator));
+        assert_eq!(qualified, [TokenKind::Operator]);
     }
 }

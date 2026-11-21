@@ -1,21 +1,12 @@
 //! The names the prelude binds.
 //!
-//! `aevia_types::builtins` decides what a builtin *means*, but it answers one
-//! question at a time (`schemes("sqrt")`), so it cannot be enumerated. The
-//! list below is the set of names that function accepts, transcribed from it;
-//! [`NAMES`] is filtered through `builtins::is_builtin` before use, and
-//! `tests::every_prelude_name_is_a_builtin` fails if a name here stops being
-//! one. The list is the only thing this crate knows that the checker does not
-//! expose, and it is checked rather than trusted.
-//!
-//! It is not a second copy of the *types*: the scheme always comes from the
-//! checker, so a completion can never disagree with what `check_module` would
-//! infer.
+//! The checker exposes both the [prelude names][NAMES] and their builtin
+//! schemes. The editor uses the schemes for completion and hover. The short
+//! descriptions in this module accompany those schemes in the editor.
 
 use aevia_types::builtins;
 
-/// Every name `aevia_types::builtins::schemes` answers for (the list lives
-/// next to the schemes so the checker can offer spelling suggestions too).
+/// The checker's list of prelude names, also used for spelling suggestions.
 pub use aevia_types::builtins::PRELUDE_NAMES as NAMES;
 
 /// The prelude names that are still builtins.

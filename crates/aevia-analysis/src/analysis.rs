@@ -32,6 +32,7 @@ use crate::occurrence::{
 };
 use crate::position::LineIndex;
 use crate::position::Range;
+use crate::position::split_last_line;
 use crate::prelude;
 use crate::tokens;
 use crate::types::CodeAction;
@@ -3719,20 +3720,18 @@ fn doc_before(
     start: u32,
 ) -> Option<String> {
     let start = usize::try_from(start).ok()?;
-    let before = text.get(..start)?;
-    let mut lines: Vec<&str> = before.split('\n').collect();
-    if !lines.last().is_some_and(|line| line.trim().is_empty()) {
+    let (indent, mut before) = split_last_line(text.get(..start)?);
+    if !indent.trim().is_empty() {
         return None;
     }
-    lines.pop();
     let mut documented = Vec::new();
-    while let Some(line) = lines.last() {
-        let trimmed = line.trim();
-        let Some(rest) = trimmed.strip_prefix("##") else {
+    while let Some(text) = before {
+        let (line, preceding) = split_last_line(text);
+        let Some(rest) = line.trim().strip_prefix("##") else {
             break;
         };
-        documented.push(rest.trim().to_string());
-        lines.pop();
+        documented.push(rest.trim());
+        before = preceding;
     }
     documented.reverse();
     if documented.is_empty() {
@@ -3740,6 +3739,19 @@ fn doc_before(
     } else {
         Some(documented.join("\n"))
     }
+}
+
+#[test]
+fn fallback_docs_are_adjacent_physical_lines_with_any_terminator() {
+    let text = "let old = 1\r\n## first\r## second\n## last\r\n    let new = 2";
+    let start = u32::try_from(text.find("let new").unwrap()).unwrap();
+    assert_eq!(
+        doc_before(text, start).as_deref(),
+        Some("first\nsecond\nlast")
+    );
+    let text = "## before a blank\r\n\rlet value = 1";
+    let start = u32::try_from(text.find("let").unwrap()).unwrap();
+    assert_eq!(doc_before(text, start), None);
 }
 
 // --- Completion details ----------------------------------------------------

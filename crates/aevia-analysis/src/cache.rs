@@ -8,6 +8,7 @@
 use crate::analysis::Analysis;
 use crate::analysis::ProgramQueryIndex;
 use crate::document::Document;
+use aevia_core::driver::CheckCache;
 use aevia_core::driver::Program;
 use aevia_core::driver::{
     self,
@@ -16,6 +17,7 @@ use aevia_core::manifest::Package;
 use aevia_core::manifest::Roots;
 use aevia_core::source::SourceOverlays;
 use std::cell::OnceCell;
+use std::cell::RefCell;
 use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -27,6 +29,7 @@ struct CacheEntry {
     path: PathBuf,
     resolution: String,
     program: Rc<Program>,
+    checks: Rc<RefCell<CheckCache>>,
     query_index: OnceCell<Rc<ProgramQueryIndex>>,
 }
 
@@ -181,12 +184,19 @@ impl AnalysisCache {
             return program;
         }
         self.loads = self.loads.saturating_add(1);
-        let program = Rc::new(driver::load_with_roots_and_overlays(
+        let checks = self
+            .entries
+            .iter()
+            .find(|entry| entry.path == path && entry.resolution == resolution)
+            .map_or_else(Rc::default, |entry| Rc::clone(&entry.checks));
+        let (program, _) = driver::load_incremental(
             path,
             roots,
             overlays,
             &aevia_types::check::CheckOptions::default(),
-        ));
+            &checks,
+        );
+        let program = Rc::new(program);
         self.entries.retain(|entry| entry.path != path);
         // A file may change while it is being compiled. Cache only the actual
         // observed snapshot if it is still current after the load completes.
@@ -200,6 +210,7 @@ impl AnalysisCache {
                 path: path.to_path_buf(),
                 resolution,
                 program: program.clone(),
+                checks,
                 query_index: OnceCell::new(),
             });
             while self.entries.len() > CAPACITY {
@@ -239,5 +250,34 @@ impl AnalysisCache {
         let mut snapshot = overlays.clone();
         snapshot.insert(path, source);
         Some(self.program_with_overlays(path, &snapshot))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_changed_buffer_reuses_checked_imports() {
+        let directory =
+            std::env::temp_dir().join(format!("aevia-editor-recheck-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("Helper.aev"),
+            "module Helper\nlet value: Int = 3\n",
+        )
+        .unwrap();
+        let entry = directory.join("main.aev");
+        let mut cache = AnalysisCache::new();
+        let first = cache.program_with_source(&entry, "import Helper\nlet n = Helper.value + 1\n");
+        assert!(!first.diagnostics.has_errors());
+        let second = cache.program_with_source(&entry, "import Helper\nlet n = Helper.value + 2\n");
+        assert!(!second.diagnostics.has_errors());
+        assert!(!Rc::ptr_eq(&first, &second));
+        assert_eq!(cache.loads(), 2);
+        let checks = cache.entries.last().unwrap().checks.borrow();
+        assert_eq!(checks.checked, 1);
+        assert_eq!(checks.reused, 1);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }
