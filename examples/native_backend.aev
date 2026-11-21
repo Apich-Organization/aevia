@@ -38,3 +38,13 @@ test "native compiled program rejects the wrong physical input axis" =
     match N.num_backend_call([compiled, to_value([wrong_axis, t])]) with
     | Ok(_) -> false
     | Err(_) -> true
+
+test "native compiled columns accept directly measured samples per axis" =
+    let positions = to_value([1.0 m, 4.0 m, 9.0 m])
+    let times = to_value([1.0 s, 2.0 s, 3.0 s])
+    match Rssn.dynamic("num_backend_call_batch_columns", [compiled, to_value(3), to_value([positions, times])]) with
+    | Ok(value) ->
+        match from_value<Tensor<1, Float[Length/Time]>>(value) with
+        | Ok(speeds) -> length(speeds) == 3 && speeds[0] == 1.0 m/s && speeds[1] == 2.0 m/s && speeds[2] == 3.0 m/s
+        | Err(_) -> false
+    | Err(_) -> false

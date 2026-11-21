@@ -6,6 +6,22 @@ import Rssn_numerical_vector as V
 
 import Rssn_numerical_callback as C
 
+test "fused native regression returns measured loss and gradient" =
+    let data = [to_value([[2.0 s], [4.0 s], [6.0 s]]), to_value([8.0 m, 12.0 m, 16.0 m]), to_value(2.0 s), to_value(4.0 m)]
+    match Rssn.dynamic("num_analysis_linear_regression_new", data) with
+    | Ok(model) ->
+        let coefficients = to_value([to_value(0.0 m), to_value(2.0 m/s)])
+        match Rssn.dynamic("num_analysis_regression_value_and_gradient", [model, coefficients]) with
+        | Ok(value) ->
+            match from_value<{ value: Float[Length^2], gradient: Tensor<1, Value> }>(value) with
+            | Ok(result) ->
+                match (from_value<Float[Length]>(result.gradient[0]), from_value<Float[Length*Time]>(result.gradient[1])) with
+                | (Ok(intercept), Ok(slope)) -> approx_eq(result.value, 8.0 m^2, 1e-12 m^2) && approx_eq(intercept, -4.0 m, 1e-12 m) && approx_eq(slope, -16.0 m*s, 1e-12 m*s)
+                | _ -> false
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
 let a = M.num_matrix_float_new([[1.0 m, 2.0 m], [3.0 m, 4.0 m]], 0)
 
 let changed = M.num_matrix_float_get_mut(a, 0, 0, 5.0 m)
@@ -44,6 +60,14 @@ let integral = V.num_polynomial_model_integral(p)
 let roots = V.num_polynomial_model_find_roots(p)
 
 test "normalized polynomials restore physical derivative and integral powers" = approx_eq(V.num_polynomial_model_eval(p, 4.0 m), 0.0 s, 1e-10 s) && approx_eq(V.num_polynomial_model_eval(dp, 4.0 m), 2.0 s/m, 1e-10 s/m) && approx_eq(V.num_polynomial_model_eval(integral, 4.0 m), -32.0 / 3.0 * 1.0 m*s, 1e-9 m*s) && any(fn (x: Float[Length]) => approx_eq(x, 4.0 m, 1e-7 m), roots)
+
+test "checked polynomial division preserves a finite measured remainder" =
+    let dividend = V.num_polynomial_model_new([2.0 s, 1.7976931348623157e308 s], 1.0 m)
+    let divisor = V.num_polynomial_model_new([0.0 kg, 1.0 kg, 1.7976931348623157e308 kg], 1.0 m)
+    let result = V.num_polynomial_model_try_long_division(dividend, divisor)
+    let quotient = V.num_polynomial_model_eval(result.quotient, 0.0 m)
+    let remainder = V.num_polynomial_model_eval(result.remainder, 0.0 m)
+    quotient == 2.0 s/kg && remainder == -1.7976931348623157e308 s
 
 let spline = V.num_native_cubic_spline_new([0.0 s, 1.0 s, 2.0 s], [0.0 m, 1.0 m, 4.0 m], 1, 0.0 m/s, 4.0 m/s)
 

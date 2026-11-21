@@ -31,7 +31,7 @@ fn resampling_example_checks_seeded_realization_statistic_units_and_budgets() {
                 let mut count = 0;
                 for declaration in &entry.module.decls {
                     if let DeclKind::Test { name, body } = &declaration.kind {
-                        let outcome = interp.eval(body, &root);
+                        let outcome = interp.eval_source_test(body, &root);
                         assert!(
                             matches!(outcome, Ok(Value::Bool(true))),
                             "{mode:?}: {name}: {outcome:?}"

@@ -23,11 +23,13 @@
     )
 )]
 
+use crate::fxhash::FxHashMap;
 use crate::sym::Term;
 use crate::value::NumKind;
 use crate::value::NumVal;
 use aevia_dim::Dim;
 use aevia_dim::Scale;
+use aevia_dim::UnitDef;
 use aevia_dim::systems::UnitSystem;
 use num_bigint::BigInt;
 use num_rational::BigRational;
@@ -156,13 +158,15 @@ impl crate::Interp {
         let Some(system) = units.system() else {
             return value;
         };
-        display_in(system, units, value, 0)
+        let mut units_by_dimension = FxHashMap::default();
+        display_in(system, units, &mut units_by_dimension, value, 0)
     }
 }
 
 fn display_in(
     system: &UnitSystem,
     units: &aevia_dim::UnitTable,
+    units_by_dimension: &mut FxHashMap<Dim, Option<Rc<UnitDef>>>,
     value: crate::Value,
     depth: usize,
 ) -> crate::Value {
@@ -171,54 +175,78 @@ fn display_in(
         return value;
     }
     match value {
-        | Value::Num(num) if num.display.is_none() && !num.dim.is_one() => {
-            let Some((unit, power)) = system.display_of(&num.dim) else {
-                return Value::Num(num);
-            };
-            let Some(base) = units.lookup(&unit) else {
-                return Value::Num(num);
-            };
-            let Some(power_i32) = num_traits::ToPrimitive::to_i32(&power) else {
-                return Value::Num(num);
-            };
-            let exponent = BigRational::from_integer(power);
-            let Some(scale) = base.scale.pow(&exponent) else {
-                return Value::Num(num);
-            };
-            let name = if power_i32 == 1 {
-                base.display
+        | Value::Num(mut num) if num.display.is_none() && !num.dim.is_one() => {
+            num.display = if depth == 0 {
+                display_unit(system, units, &num.dim)
+            } else if let Some(unit) = units_by_dimension.get(&num.dim) {
+                unit.clone()
             } else {
-                format!("{}^{power_i32}", base.display)
+                // A rendering uses one lexical unit table. Bound scratch
+                // space even for a record with many distinct dimensions.
+                let unit = display_unit(system, units, &num.dim);
+                if units_by_dimension.len() < 64 {
+                    units_by_dimension.insert(num.dim.clone(), unit.clone());
+                }
+                unit
             };
-            let def = aevia_dim::UnitDef {
-                name: name.clone(),
-                aliases: Vec::new(),
-                dim: num.dim.clone(),
-                scale,
-                offset: None,
-                prefixable: false,
-                affine: false,
-                display: name,
-                category: "system".to_string(),
-            };
-            Value::Num(num.with_display(Rc::new(def)))
+            Value::Num(num)
         },
         | Value::Variant(mut variant) => {
             for field in &mut Rc::make_mut(&mut variant).fields {
                 let value = std::mem::replace(field, Value::Unit);
-                *field = display_in(system, units, value, depth.saturating_add(1));
+                *field = display_in(
+                    system,
+                    units,
+                    units_by_dimension,
+                    value,
+                    depth.saturating_add(1),
+                );
             }
             Value::Variant(variant)
         },
         | Value::Record(mut record) => {
             for field in Rc::make_mut(&mut record).fields.values_mut() {
                 let value = std::mem::replace(field, Value::Unit);
-                *field = display_in(system, units, value, depth.saturating_add(1));
+                *field = display_in(
+                    system,
+                    units,
+                    units_by_dimension,
+                    value,
+                    depth.saturating_add(1),
+                );
             }
             Value::Record(record)
         },
         | other => other,
     }
+}
+
+fn display_unit(
+    system: &UnitSystem,
+    units: &aevia_dim::UnitTable,
+    dim: &Dim,
+) -> Option<Rc<UnitDef>> {
+    let (unit, power) = system.display_of(dim)?;
+    let base = units.lookup(&unit)?;
+    let power_i32 = num_traits::ToPrimitive::to_i32(&power)?;
+    let exponent = BigRational::from_integer(power);
+    let scale = base.scale.pow(&exponent)?;
+    let name = if power_i32 == 1 {
+        base.display
+    } else {
+        format!("{}^{power_i32}", base.display)
+    };
+    Some(Rc::new(UnitDef {
+        name: name.clone(),
+        aliases: Vec::new(),
+        dim: dim.clone(),
+        scale,
+        offset: None,
+        prefixable: false,
+        affine: false,
+        display: name,
+        category: "system".to_string(),
+    }))
 }
 
 #[cfg(test)]

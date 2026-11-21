@@ -19,3 +19,14 @@ test "jump-adapted implicit path reaches the endpoint and preserves every mark" 
     | Err(_) -> false
 
 fn main(): IO Unit = println(solution)
+
+test "native jump batches return physical marks with one sample per row" =
+    let empty_samples: Tensor<1, Float> = []
+    let distribution = unwrap_or(Rssn.dynamic("num_analysis_stochastic_jump_distribution", [to_value("Constant"), to_value([1.0, -2.0]), to_value(empty_samples), to_value(empty_samples), to_value(3.0 m), to_value(2)]), to_value(0))
+    let stream = unwrap_or(Rssn.dynamic("num_analysis_stochastic_stream_new", [to_value(2718)]), to_value(0))
+    match Rssn.dynamic("num_analysis_stochastic_jump_sample_batch", [distribution, stream, to_value(3)]) with
+    | Ok(value) ->
+        match from_value<Tensor<2, Float[Length]>>(value) with
+        | Ok(marks) -> marks == [[3.0 m, -6.0 m], [3.0 m, -6.0 m], [3.0 m, -6.0 m]]
+        | Err(_) -> false
+    | Err(_) -> false

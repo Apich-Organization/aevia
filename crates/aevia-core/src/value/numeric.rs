@@ -19,6 +19,7 @@ use super::NumVal;
 use super::Storage;
 use super::TensorData;
 use super::Value;
+use super::View;
 use aevia_dim::Dim;
 use aevia_syntax::ast::BinOp;
 use num_rational::BigRational;
@@ -28,6 +29,18 @@ use std::rc::Rc;
 /// Buffers at least this long are split across threads. Each element is
 /// computed independently, so the split never changes a result.
 const DENSE_PAR_MIN: usize = 1 << 17;
+
+macro_rules! compensated_add {
+    ($total:ident, $compensation:ident, $value:ident) => {{
+        let next = $total + $value;
+        $compensation += if $total.abs() >= $value.abs() {
+            ($total - next) + $value
+        } else {
+            ($value - next) + $total
+        };
+        $total = next;
+    }};
+}
 
 /// `f` over the pairs of two equally long buffers, in parallel when long.
 fn zip_map(
@@ -78,14 +91,15 @@ pub fn compensated_sum(mut data: impl ExactSizeIterator<Item = f64>) -> f64 {
     let mut total = 0.0f64;
     let mut compensation = 0.0f64;
     for value in data {
-        let next = total + value;
-        compensation += if total.abs() >= value.abs() {
-            (total - next) + value
-        } else {
-            (value - next) + total
-        };
-        total = next;
+        compensated_add!(total, compensation, value);
     }
+    compensated_total(total, compensation)
+}
+
+fn compensated_total(
+    total: f64,
+    compensation: f64,
+) -> f64 {
     if total.is_finite() {
         total + compensation
     } else {
@@ -95,6 +109,13 @@ pub fn compensated_sum(mut data: impl ExactSizeIterator<Item = f64>) -> f64 {
 }
 
 impl TensorData {
+    fn strided_float_view(&self) -> Option<&View> {
+        match &self.storage {
+            | Storage::View(view) if view.contiguous_slice(&self.shape).is_none() => Some(view),
+            | _ => None,
+        }
+    }
+
     fn dense_result(
         shape: Vec<usize>,
         data: Vec<f64>,
@@ -242,20 +263,37 @@ impl TensorData {
     /// The `+` reduction over an `f64` tensor, using the compensated
     /// summation §6.6.6 and §9.5 ask for.
     ///
-    /// A strided view is materialised first, so the fold order — and
-    /// therefore the bits — is the one the boxed reduction produces.
+    /// Strided views are traversed in logical order, preserving the bits
+    /// produced by the boxed reduction.
     ///
     /// A one-element tensor keeps its display unit, because the boxed
     /// reduction returns the element it started from unchanged.
     #[must_use]
     pub fn dense_sum(&self) -> Option<NumVal> {
-        let data = self.dense_flat()?;
-        if data.is_empty() {
+        let (total, len) = if let Some(view) = self.strided_float_view() {
+            let mut values = view.flat_values(&self.shape)?;
+            let len = values.len();
+            let total = if len == 1 {
+                values.next()??
+            } else {
+                let mut total = 0.0f64;
+                let mut compensation = 0.0f64;
+                for value in values {
+                    let value = value?;
+                    compensated_add!(total, compensation, value);
+                }
+                compensated_total(total, compensation)
+            };
+            (total, len)
+        } else {
+            let data = self.dense_flat()?;
+            (kahan_sum(&data), data.len())
+        };
+        if len == 0 {
             return None;
         }
-        let total = kahan_sum(&data);
         let mut num = NumVal::float(total, self.dim.clone());
-        if data.len() == 1 {
+        if len == 1 {
             num.display.clone_from(&self.display);
         }
         Some(num)
@@ -264,14 +302,25 @@ impl TensorData {
     /// The `*` reduction over an `f64` tensor, folded left to right.
     #[must_use]
     pub fn dense_prod(&self) -> Option<NumVal> {
-        let data = self.dense_flat()?;
-        let (&first, rest) = data.split_first()?;
-        let mut total = first;
-        for value in rest {
-            total *= value;
-        }
+        let (total, singleton) = if let Some(view) = self.strided_float_view() {
+            let mut values = view.flat_values(&self.shape)?;
+            let mut total = values.next()??;
+            let singleton = values.len() == 0;
+            for value in values {
+                total *= value?;
+            }
+            (total, singleton)
+        } else {
+            let data = self.dense_flat()?;
+            let (&first, rest) = data.split_first()?;
+            let mut total = first;
+            for value in rest {
+                total *= value;
+            }
+            (total, rest.is_empty())
+        };
         let mut num = NumVal::float(total, self.dim.clone());
-        if rest.is_empty() {
+        if singleton {
             num.display.clone_from(&self.display);
         }
         Some(num)

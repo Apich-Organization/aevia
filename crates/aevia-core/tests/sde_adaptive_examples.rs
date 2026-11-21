@@ -41,7 +41,7 @@ fn adaptive_sde_examples_keep_dimensions_rejection_and_reproducible_noise() {
                             body,
                         } = &declaration.kind
                         {
-                            let outcome = interp.eval(body, &root);
+                            let outcome = interp.eval_source_test(body, &root);
                             assert!(
                                 matches!(outcome, Ok(Value::Bool(true))),
                                 "{name} {mode:?}: {assertion}: {outcome:?}"

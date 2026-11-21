@@ -20,6 +20,7 @@
 )]
 use aevia_types::keys::ModuleOrigin;
 use aevia_types::keys::ModulePath;
+use std::borrow::Cow;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
@@ -223,8 +224,7 @@ pub fn file_uri_path(name: &str) -> Option<PathBuf> {
     let mut decoded = Vec::with_capacity(bytes.len());
     while let Some(byte) = bytes.next() {
         let value = if byte == b'%' {
-            let hex = |byte: u8| u8::try_from(char::from(byte).to_digit(16)?).ok();
-            (hex(bytes.next()?)? << 4) | hex(bytes.next()?)?
+            (hex_nibble(bytes.next()?)? << 4) | hex_nibble(bytes.next()?)?
         } else {
             byte
         };
@@ -243,6 +243,10 @@ pub fn file_uri_path(name: &str) -> Option<PathBuf> {
         | _ => &decoded,
     };
     Some(PathBuf::from(path))
+}
+
+fn hex_nibble(byte: u8) -> Option<u8> {
+    u8::try_from(char::from(byte).to_digit(16)?).ok()
 }
 
 /// A snapshot of unsaved physical source buffers.
@@ -372,6 +376,9 @@ impl SourceDependency {
     /// the logical and physical path, whether the file existed, and a hash
     /// of the text that was read. [`stamp_is_current`] answers, in a later
     /// process, whether the file system still matches it.
+    /// Paths containing record separators or non-Unicode data are encoded
+    /// losslessly in a separate format. Ordinary path records can still be
+    /// read by older callers.
     #[must_use]
     pub fn stamp(&self) -> String {
         let read = match &self.read {
@@ -379,12 +386,18 @@ impl SourceDependency {
             | SourceRead::Loaded(text) => format!("{:016x}", text_hash(text)),
             | SourceRead::Failed(kind) => format!("!{kind:?}"),
         };
-        format!(
-            "{}\t{}\t{}\t{read}",
-            self.path.display(),
-            self.canonical.display(),
-            u8::from(self.available)
-        )
+        let available = u8::from(self.available);
+        if let Some(path) = plain_stamp_path(&self.path)
+            && let Some(canonical) = plain_stamp_path(&self.canonical)
+        {
+            format!("{path}\t{canonical}\t{available}\t{read}")
+        } else {
+            format!(
+                "{ENCODED_STAMP}\t{}\t{}\t{available}\t{read}",
+                encode_stamp_path(&self.path),
+                encode_stamp_path(&self.canonical)
+            )
+        }
     }
 
     /// Physical target observed at load time, retained separately from the
@@ -434,24 +447,98 @@ fn text_hash(text: &str) -> u64 {
     hasher.finish()
 }
 
+const ENCODED_STAMP: &str = "path-v2";
+
+fn plain_stamp_path(path: &Path) -> Option<&str> {
+    path.to_str()
+        .filter(|text| !text.contains(['\0', '\t', '\r', '\n']))
+}
+
+fn encode_stamp_path(path: &Path) -> String {
+    use std::fmt::Write as _;
+    #[cfg(windows)]
+    let bytes = {
+        use std::os::windows::ffi::OsStrExt as _;
+        path.as_os_str().encode_wide().flat_map(u16::to_le_bytes)
+    };
+    #[cfg(not(windows))]
+    let bytes = path.as_os_str().as_encoded_bytes().iter().copied();
+    let mut encoded = String::new();
+    for byte in bytes {
+        let _ = write!(encoded, "{byte:02x}");
+    }
+    encoded
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps native path decoding separate from stamp validation"
+)]
+fn decode_stamp_path(field: &str) -> Option<PathBuf> {
+    let (pairs, remainder) = field.as_bytes().as_chunks::<2>();
+    if !remainder.is_empty() {
+        return None;
+    }
+    let bytes: Vec<_> = pairs
+        .iter()
+        .map(|&[high, low]| Some((hex_nibble(high)? << 4) | hex_nibble(low)?))
+        .collect::<Option<_>>()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt as _;
+        Some(std::ffi::OsString::from_vec(bytes).into())
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt as _;
+        let (pairs, remainder) = bytes.as_chunks::<2>();
+        if !remainder.is_empty() {
+            return None;
+        }
+        let wide: Vec<_> = pairs.iter().copied().map(u16::from_le_bytes).collect();
+        Some(std::ffi::OsString::from_wide(&wide).into())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        String::from_utf8(bytes).ok().map(PathBuf::from)
+    }
+}
+
 /// Whether the file system still matches a [`SourceDependency::stamp`]
 /// written by an earlier process: same physical target, same existence, and
 /// — for a file that was read — the same text.
 #[must_use]
 pub fn stamp_is_current(stamp: &str) -> bool {
     let mut fields = stamp.split('\t');
-    let (Some(path), Some(canonical), Some(available), Some(read), None) = (
+    let (path, canonical, available, read) = match (
         fields.next(),
         fields.next(),
         fields.next(),
         fields.next(),
         fields.next(),
-    ) else {
-        return false;
+        fields.next(),
+    ) {
+        | (Some(path), Some(canonical), Some(available), Some(read), None, None) => {
+            (
+                Cow::Borrowed(Path::new(path)),
+                Cow::Borrowed(Path::new(canonical)),
+                available,
+                read,
+            )
+        },
+        | (Some(ENCODED_STAMP), Some(path), Some(canonical), Some(available), Some(read), None) => {
+            let (Some(path), Some(canonical)) =
+                (decode_stamp_path(path), decode_stamp_path(canonical))
+            else {
+                return false;
+            };
+            (Cow::Owned(path), Cow::Owned(canonical), available, read)
+        },
+        | _ => return false,
     };
-    let path = Path::new(path);
-    if canonical_path(path).display().to_string() != canonical
-        || u8::from(path.is_file()).to_string() != available
+    let path = path.as_ref();
+    if canonical_path(path).as_os_str() != canonical.as_os_str()
+        || (if path.is_file() { "1" } else { "0" }) != available
     {
         return false;
     }

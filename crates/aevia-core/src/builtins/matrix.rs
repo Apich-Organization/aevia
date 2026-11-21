@@ -37,6 +37,7 @@ use aevia_syntax::Span;
 use num_rational::BigRational;
 use num_traits::ToPrimitive;
 use num_traits::Zero;
+use std::borrow::Cow;
 use std::rc::Rc;
 
 pub(super) fn shape_from_args(
@@ -258,49 +259,64 @@ pub(super) fn triangle(
     if count == 0 {
         return Ok(empty_tensor_like(tensor, tensor.shape.clone()));
     }
+    let invalid = || invalid_tensor(span);
     let lower = name == "tril";
-    let keep = |row, column| {
+    let kept = |row: usize| {
         if lower {
-            column <= row
+            0..row.saturating_add(1).min(*columns)
         } else {
-            column >= row
+            row.min(*columns)..*columns
         }
     };
-    if let Some(values) = tensor.dense_flat() {
-        let mut output = output_buffer(count, span)?;
-        for (row, items) in values.chunks_exact(*columns).enumerate() {
-            output.extend(items.iter().enumerate().map(|(column, &value)| {
-                if keep(row, column) {
-                    value
-                } else {
-                    0.0
+    let output = match tensor.dense_flat() {
+        | Some(Cow::Borrowed(source)) => {
+            let mut output = output_buffer(count, span)?;
+            for (row, items) in source.chunks_exact(*columns).enumerate() {
+                let kept = kept(row);
+                let start = output.len();
+                output.resize(start.checked_add(kept.start).ok_or_else(invalid)?, 0.0);
+                output.extend_from_slice(items.get(kept).ok_or_else(invalid)?);
+                output.resize(start.checked_add(*columns).ok_or_else(invalid)?, 0.0);
+            }
+            output
+        },
+        | Some(Cow::Owned(mut output)) => {
+            // A non-contiguous view already has a private row-major buffer.
+            for (row, items) in output.chunks_exact_mut(*columns).enumerate() {
+                let kept = kept(row);
+                items.get_mut(..kept.start).ok_or_else(invalid)?.fill(0.0);
+                items.get_mut(kept.end..).ok_or_else(invalid)?.fill(0.0);
+            }
+            output
+        },
+        // A malformed Float view must fail even when the mask would hide its missing elements.
+        | None if matches!(tensor.storage, Storage::View(_)) => return Err(invalid()),
+        | None => {
+            let mut output = output_buffer(count, span)?;
+            let zero = zero_like(tensor);
+            for (row, start) in (0..count).step_by(*columns).enumerate() {
+                let kept = kept(row);
+                let begin = start.checked_add(kept.start).ok_or_else(invalid)?;
+                let end = start.checked_add(kept.end).ok_or_else(invalid)?;
+                output.resize(begin, zero.clone());
+                for index in begin..end {
+                    output.push(tensor.get_flat(index).ok_or_else(invalid)?);
                 }
-            }));
-        }
-        return Ok(dense_output(
-            output,
-            tensor.shape.clone(),
-            tensor.dim.clone(),
-            tensor.display.clone(),
-        ));
-    }
-    let mut output = output_buffer(count, span)?;
-    let zero = zero_like(tensor);
-    for index in 0..count {
-        let row = index
-            .checked_div(*columns)
-            .ok_or_else(|| invalid_tensor(span))?;
-        let column = index
-            .checked_rem(*columns)
-            .ok_or_else(|| invalid_tensor(span))?;
-        output.push(if keep(row, column) {
-            tensor.get_flat(index).ok_or_else(|| invalid_tensor(span))?
-        } else {
-            zero.clone()
-        });
-    }
-    let output = build_tensor(output, tensor.shape.clone(), tensor.dim.clone());
-    Ok(crate::host_witness::preserve_tensor_schema(output, tensor))
+                output.resize(
+                    start.checked_add(*columns).ok_or_else(invalid)?,
+                    zero.clone(),
+                );
+            }
+            let output = build_tensor(output, tensor.shape.clone(), tensor.dim.clone());
+            return Ok(crate::host_witness::preserve_tensor_schema(output, tensor));
+        },
+    };
+    Ok(dense_output(
+        output,
+        tensor.shape.clone(),
+        tensor.dim.clone(),
+        tensor.display.clone(),
+    ))
 }
 
 pub(super) fn repeat_float(

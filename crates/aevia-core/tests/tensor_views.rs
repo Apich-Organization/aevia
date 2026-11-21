@@ -27,6 +27,7 @@ use aevia_core::value::NumKind;
 use aevia_core::value::Storage;
 use aevia_core::value::TensorData;
 use aevia_core::value::Value;
+use aevia_core::value::View;
 use aevia_core::value::equal;
 use aevia_core::value::repr;
 use aevia_core::value::show;
@@ -1032,21 +1033,149 @@ fn zero_extent_shapes_survive_reshape_transpose_and_sum() {
     assert_eq!(tensor_of(&reduced).shape, vec![0, usize::MAX, 1]);
     assert!(tensor_of(&reduced).dense().is_some());
 
-    let empty_matrix = Value::Tensor(Rc::new(TensorData::new(
-        vec![usize::MAX, 0],
-        Storage::Dense(Rc::new(Vec::new())),
-        aevia_dim::Dim::one(),
-        None,
-    )));
-    for name in ["tril", "triu"] {
-        let triangle = call(
-            &mut interp,
-            name,
-            vec![empty_matrix.clone()],
-            Span::default(),
-        )
-        .expect("extract a triangle from an empty matrix");
-        assert_eq!(tensor_of(&triangle).shape, [usize::MAX, 0]);
+    for shape in [vec![0, usize::MAX], vec![usize::MAX, 0]] {
+        let empty_matrix = Value::Tensor(Rc::new(TensorData::new(
+            shape.clone(),
+            Storage::Dense(Rc::new(Vec::new())),
+            aevia_dim::Dim::one(),
+            None,
+        )));
+        for name in ["tril", "triu"] {
+            let triangle = call(
+                &mut interp,
+                name,
+                vec![empty_matrix.clone()],
+                Span::default(),
+            )
+            .expect("extract a triangle from an empty matrix");
+            assert_eq!(tensor_of(&triangle).shape, shape);
+            assert_eq!(tensor_of(&triangle).dense(), Some(&[][..]));
+        }
+    }
+}
+
+#[test]
+fn triangle_masks_follow_rectangular_float_views_without_changing_float_bits() {
+    let mut interp = session("let lengths = [1.0 cm]\n");
+    let lengths = interp.eval_toplevel("lengths").unwrap();
+    let lengths = tensor_of(&lengths);
+    let nan = f64::from_bits(0x7ff8_0000_0000_00a5);
+    let input = vec![
+        nan, -0.0, 2.0, 3.0, -0.0, 5.0, 6.0, nan, 8.0, 9.0, nan, -0.0,
+    ];
+    let data = Rc::new(input.clone());
+    let dense = TensorData::new(
+        vec![3, 4],
+        Storage::Dense(Rc::clone(&data)),
+        lengths.dim.clone(),
+        lengths.display.clone(),
+    );
+    let broadcast = TensorData::new(
+        vec![2, 3],
+        Storage::View(View {
+            data: Rc::new(vec![nan, -0.0, 2.0]),
+            offset: 0,
+            strides: vec![0, 1],
+            reversed: vec![false, false],
+            len: 6,
+        }),
+        lengths.dim.clone(),
+        lengths.display.clone(),
+    );
+    for layout in [
+        dense.clone(),
+        dense.slice_view(&[(1, 3), (0, 4)]).unwrap(),
+        dense.transposed_view().unwrap(),
+        dense.reversed_view(0).unwrap().reversed_view(1).unwrap(),
+        broadcast,
+    ] {
+        let [rows, columns] = layout.shape.as_slice() else {
+            panic!("expected a matrix");
+        };
+        let value = Value::Tensor(Rc::new(layout.clone()));
+        for name in ["tril", "triu"] {
+            let output = call(&mut interp, name, vec![value.clone()], Span::default()).unwrap();
+            let output = tensor_of(&output);
+            assert_eq!(output.shape, layout.shape, "{name} shape");
+            assert_eq!(output.dim, layout.dim, "{name} dimension");
+            assert!(Rc::ptr_eq(
+                output.display.as_ref().unwrap(),
+                lengths.display.as_ref().unwrap()
+            ));
+            let result = output.dense().expect("dense Float result");
+            for row in 0..*rows {
+                for column in 0..*columns {
+                    let index = row * columns + column;
+                    let keep = if name == "tril" {
+                        column <= row
+                    } else {
+                        column >= row
+                    };
+                    let expected = if keep {
+                        layout.get_flat(index).unwrap().as_f64().unwrap()
+                    } else {
+                        0.0
+                    };
+                    assert_eq!(
+                        result[index].to_bits(),
+                        expected.to_bits(),
+                        "{name} ({row}, {column})"
+                    );
+                }
+            }
+        }
+    }
+    for (&retained, original) in data.iter().zip(input) {
+        assert_eq!(retained.to_bits(), original.to_bits(), "source buffer");
+    }
+}
+
+#[test]
+fn triangle_masks_preserve_exact_and_boolean_element_types() {
+    let mut interp = session(concat!(
+        "let exact = [[1/3, 2/3, 4/3], [3/5, 1/5, 2/5]]\n",
+        "let lower = tril(exact)\n",
+        "let upper = triu(exact)\n",
+        "let flags = tril([[true, true], [false, true]])\n",
+    ));
+    for (binding, expected) in [
+        ("lower", "[[1/3, 0, 0], [3/5, 1/5, 0]]"),
+        ("upper", "[[1/3, 2/3, 4/3], [0, 1/5, 2/5]]"),
+    ] {
+        let output = interp.eval_toplevel(binding).unwrap();
+        assert_eq!(repr(&output), expected);
+        assert!(!tensor_of(&output).is_dense());
+    }
+    let flags = interp.eval_toplevel("flags").unwrap();
+    assert_eq!(repr(&flags), "[[true, false], [false, true]]");
+    assert!(matches!(tensor_of(&flags).storage, Storage::Bool(_)));
+}
+
+#[test]
+fn triangle_masks_reject_a_host_view_with_an_invalid_masked_position() {
+    let mut interp = session(MATRIX);
+    for (name, strides, reversed) in [
+        ("tril", vec![1, 3], vec![true, false]),
+        ("triu", vec![3, 1], vec![false, true]),
+    ] {
+        let invalid = Value::Tensor(Rc::new(TensorData::new(
+            vec![2, 2],
+            Storage::View(View {
+                data: Rc::new(vec![4.0; 5]),
+                offset: 2,
+                strides,
+                reversed,
+                len: 4,
+            }),
+            aevia_dim::Dim::one(),
+            None,
+        )));
+        assert_eq!(
+            call(&mut interp, name, vec![invalid], Span::default())
+                .unwrap_err()
+                .code,
+            "E0802"
+        );
     }
 }
 

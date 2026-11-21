@@ -27,6 +27,7 @@ use crate::eval::Interp;
 use crate::eval::build_tensor;
 use crate::eval::empty_tensor_like;
 use crate::int::Int;
+use crate::value::ExactRep;
 use crate::value::NumKind;
 use crate::value::NumVal;
 use crate::value::Storage;
@@ -38,6 +39,7 @@ use aevia_std::stats;
 use aevia_syntax::Span;
 use num_rational::BigRational;
 use num_traits::ToPrimitive;
+use std::borrow::Cow;
 use std::rc::Rc;
 
 fn shape_error(span: Span) -> EvalError {
@@ -172,6 +174,81 @@ pub(super) fn mean(
     let values = tensor_entries(tensor).map_err(|error| error.at(span))?;
     let average = stats::mean(&values).map_err(|error| numeric_error("mean", error, span))?;
     Ok(Value::Num(NumVal::float(average, dim)))
+}
+
+fn sort_exact_sample(values: &mut Cow<'_, [BigRational]>) {
+    if !values.is_sorted() {
+        values.to_mut().sort_unstable();
+    }
+}
+
+fn has_float_storage(tensor: &TensorData) -> bool {
+    matches!(
+        tensor.storage.backing(),
+        Storage::Dense(_) | Storage::View(_)
+    )
+}
+
+#[expect(clippy::single_call_fn, reason = "the scalar quantile dispatches here")]
+pub(super) fn quantile(
+    tensor: &TensorData,
+    fraction: &NumVal,
+    span: Span,
+) -> Result<Value, EvalError> {
+    let failed = |error| numeric_error("quantile", error, span);
+    if !has_float_storage(tensor)
+        && let Some(mut sample) = exact_values(tensor)
+        && let Some(probability) = fraction.to_rational()
+    {
+        sort_exact_sample(&mut sample);
+        let value = stats::quantile_exact(&sample, &probability).map_err(failed)?;
+        return Ok(exact_number(value, tensor.dim.clone()));
+    }
+    let probability = fraction
+        .to_f64()
+        .ok_or_else(|| EvalError::new("E0806", "`quantile` needs a concrete fraction").at(span))?;
+    let sample = tensor_entries(tensor).map_err(|error| error.at(span))?;
+    let value = stats::quantile(&sample, probability).map_err(failed)?;
+    Ok(Value::Num(NumVal::float(value, tensor.dim.clone())))
+}
+
+#[expect(clippy::single_call_fn, reason = "the batch quantile dispatches here")]
+pub(super) fn quantiles(
+    tensor: &TensorData,
+    probabilities: &TensorData,
+    span: Span,
+) -> Result<Value, EvalError> {
+    if tensor.shape.len() != 1 || probabilities.shape.len() != 1 {
+        return Err(EvalError::new("E0802", "`quantiles` needs two vectors").at(span));
+    }
+    if !probabilities.dim.is_one() {
+        return Err(
+            EvalError::new("E0401", "`quantiles` needs dimensionless probabilities").at(span),
+        );
+    }
+    let failed = |error| numeric_error("quantiles", error, span);
+    let storage = if !has_float_storage(tensor)
+        && !has_float_storage(probabilities)
+        && let Some(queries) = exact_values(probabilities)
+        && let Some(mut sample) = exact_values(tensor)
+    {
+        if !queries.is_empty() {
+            sort_exact_sample(&mut sample);
+        }
+        let results = stats::quantiles_exact(&sample, &queries).map_err(failed)?;
+        Storage::TypedExact(results, ExactRep::Real)
+    } else {
+        let sample = tensor_entries(tensor).map_err(|error| error.at(span))?;
+        let queries = tensor_entries(probabilities).map_err(|error| error.at(span))?;
+        let results = stats::quantiles(&sample, &queries).map_err(failed)?;
+        Storage::Dense(Rc::new(results))
+    };
+    Ok(Value::Tensor(Rc::new(TensorData::new(
+        probabilities.shape.clone(),
+        storage,
+        tensor.dim.clone(),
+        tensor.display.clone(),
+    ))))
 }
 
 #[expect(

@@ -27,7 +27,7 @@ fn adaptive_ode_dae_dde_examples_run_in_ast_and_ir() {
             let mut tested = 0;
             for decl in &entry.module.decls {
                 if let DeclKind::Test { name: test, body } = &decl.kind {
-                    let result = interp.eval(body, &env);
+                    let result = interp.eval_source_test(body, &env);
                     assert!(
                         matches!(result, Ok(Value::Bool(true))),
                         "{name}/{mode:?}/{test}: {result:?}"
@@ -80,7 +80,7 @@ test "invalid atol" = ode_solve(rate, [1.0 m], (0.0 s, 1.0 s), {{ rtol = 0.00000
                 })
                 .expect("invalid tolerance test");
             let error = interp
-                .eval(body, &env)
+                .eval_source_test(body, &env)
                 .expect_err("invalid physical tolerance must fail before a numerical solve");
             assert_eq!(error.code, code, "{atol}/{mode:?}: {error:?}");
         }

@@ -55,6 +55,7 @@ by_cases
 cancel
 cbrt
 cdf
+cdf_batch
 ceil
 centroid
 cg
@@ -102,6 +103,7 @@ diag
 diff
 diff_at
 difference
+dist_quantile
 distance
 div
 divergence
@@ -177,6 +179,7 @@ ifftshift_axis
 im
 interp1
 interp2
+interp2Batch
 intersection
 inv
 irfft
@@ -236,6 +239,7 @@ min
 minimize
 minimize_f
 mod
+mod_pow
 mode
 nan
 nnz
@@ -281,6 +285,7 @@ product_dyn
 qr
 quadrature
 quantile
+quantiles
 quot
 range
 rank
@@ -368,6 +373,7 @@ sym_ne
 take
 tan
 tanh
+tetrahedron_volume
 to_bcsr
 to_callback
 to_dense

@@ -8,7 +8,7 @@ let periodic = { kind = [3], value = [0.0 m], flux = [0.0], alpha = [0.0], beta 
 
 let initial = [1.0 m, 0.0 m, -1.0 m, 0.0 m]
 
-fn threshold(t: Float[Time], u: Tensor<1, Float[Length]>): Float = (at(u, 0) - 0.9 m) / 1.0 m
+fn threshold(_t: Float[Time], u: Tensor<1, Float[Length]>): Float = (at(u, 0) - 0.9 m) / 1.0 m
 
 test "wave evolution retains physical velocity and rejects inaccurate trials" =
     let r = N.num_pde_wave_adaptive([4], 1.0 m, 1.0 m/s, initial, [0.0 m/s, 0.0 m/s, 0.0 m/s, 0.0 m/s], 0.000000001 m/s, periodic, control)

@@ -342,15 +342,17 @@ impl Interp {
     clippy::single_call_fn,
     reason = "distinguish free symbolic terms from closed exact numbers at dispatch"
 )]
-fn is_symbolic(value: &Value) -> bool {
-    match value {
-        | Value::Num(num) => {
-            match &num.kind {
-                | crate::value::NumKind::Sym(term) => !term.free_symbols().is_empty(),
-                | _ => false,
-            }
-        },
-        | _ => false,
+fn is_symbolic(value: &Value) -> Result<bool, crate::eval::EvalError> {
+    let Value::Num(num) = value else {
+        return Ok(false);
+    };
+    let crate::value::NumKind::Sym(term) = &num.kind else {
+        return Ok(false);
+    };
+    match term.as_ref() {
+        | crate::sym::Term::Num(_) => Ok(false),
+        | crate::sym::Term::Sym(_) => Ok(true),
+        | _ => Ok(!term.try_free_symbols()?.is_empty()),
     }
 }
 
@@ -381,7 +383,12 @@ fn operator_wrapper(
     let result = registration.result.clone();
     Value::Native(Rc::new(crate::value::NativeFn(Box::new(
         move |interp: &mut Interp, args: Vec<Value>, span| {
-            if !args.iter().any(is_symbolic) {
+            let mut symbolic = false;
+            for arg in &args {
+                // Every term must have live handles before either branch can run.
+                symbolic |= is_symbolic(arg).map_err(|error| error.at(span))?;
+            }
+            if !symbolic {
                 return interp.apply(original.clone(), args, span);
             }
             let mut unifier = aevia_dim::DimUnifier::new();

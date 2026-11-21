@@ -1,0 +1,35 @@
+## Run: aevia test examples/symbolic_poisson_boundary.aev
+import Rssn_Differential as Differential
+open Units.SI
+
+test "the constant disk extension equals its boundary datum" =
+    match Differential.pde_poisson_integral(5.0, 2.0, 2) with
+    | Ok(value) ->
+        match from_value<Float>(value) with
+        | Ok(field) -> field == 5.0
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "the constant ball extension keeps the exact integer datum" =
+    match Differential.pde_poisson_integral(7, 2, 3) with
+    | Ok(value) ->
+        match from_value<Int>(value) with
+        | Ok(field) -> field == 7
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "a dimensionless extension cannot be decoded as a temperature" =
+    match Differential.pde_poisson_integral(5.0, 2.0, 2) with
+    | Ok(value) ->
+        match from_value<Float[Temperature]>(value) with
+        | Ok(_) -> false
+        | Err(_) -> true
+    | Err(_) -> false
+
+test "unsupported geometry leaves a symbolic expression" =
+    match Differential.pde_poisson_integral(7, 2, 4) with
+    | Ok(value) ->
+        match from_value<Int>(value) with
+        | Ok(_) -> false
+        | Err(_) -> true
+    | Err(_) -> false

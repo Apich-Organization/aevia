@@ -10,7 +10,9 @@
 //! program by the host's [`Replica`] factory, once per thread — and threads
 //! exchange [`Portable`] values: a `Send` mirror of the data a pure function
 //! consumes and produces (numbers with their dimension and display unit,
-//! strings, tensors, records, variants, constructors and IR closures).
+//! strings, tensors, records, variants, constructors and IR closures). A
+//! homogeneous Float prefix of a map batch carries its values in a contiguous
+//! buffer with shared scalar metadata.
 //!
 //! A closure crosses as *code identity plus captured data*: the Core IR is
 //! closure-converted, so a lambda is its function's source span and the
@@ -77,6 +79,7 @@ use crate::value::Storage;
 use crate::value::TensorData;
 use crate::value::Value;
 use crate::value::VariantValue;
+use aevia_dim::Atom;
 use aevia_dim::Dim;
 use aevia_dim::UnitDef;
 use aevia_syntax::FileId;
@@ -100,11 +103,10 @@ use std::sync::atomic::Ordering;
 
 /// Builds a fresh interpreter for the running program on a worker thread.
 ///
-/// The host that loaded the program installs one ([`Interp::set_replica`]):
-/// the CLI reloads the entry file, `aevia_core::run` recompiles its source.
-/// It must produce an interpreter whose modules were loaded exactly as the
-/// main one's were (same files, same order), because closures cross by
-/// source span.
+/// The host that loaded the program installs one ([`Interp::set_replica`]).
+/// The CLI and [`crate::run`] share an immutable checked revision with workers.
+/// The factory must initialize the same modules in the same order as the main
+/// interpreter because closures cross by source span.
 pub type Replica = Arc<ReplicaFactory>;
 
 type ReplicaFactory = dyn Fn() -> Result<Interp, String> + Send + Sync;
@@ -327,11 +329,15 @@ impl NonDenseStorage {
     fn restore(
         self,
         values: Vec<Value>,
+        checkpoint: &mut TransferCheckpoint<'_>,
     ) -> Option<Storage> {
-        let rationals = |values: Vec<Value>| {
+        let mut rationals = |values: Vec<Value>| {
             values
                 .into_iter()
                 .map(|value| {
+                    if checkpoint.cancelled() {
+                        return None;
+                    }
                     match value {
                         | Value::Num(NumVal {
                             kind: NumKind::Int(value),
@@ -353,6 +359,9 @@ impl NonDenseStorage {
                     values
                         .into_iter()
                         .map(|value| {
+                            if checkpoint.cancelled() {
+                                return None;
+                            }
                             if let Value::Bool(value) = value {
                                 Some(value)
                             } else {
@@ -409,14 +418,40 @@ impl TransferMetadata {
     }
 }
 
+// A boxed tensor or record can contain many nodes inside one transfer.
+struct TransferCheckpoint<'a> {
+    cancellation: Option<&'a crate::CancellationToken>,
+    remaining: u8,
+}
+
+impl<'a> TransferCheckpoint<'a> {
+    const fn new(interp: &'a Interp) -> Self {
+        Self {
+            cancellation: interp.cancellation.as_ref(),
+            remaining: 0,
+        }
+    }
+
+    fn cancelled(&mut self) -> bool {
+        let Some(token) = self.cancellation else {
+            return false;
+        };
+        // Check the root and then every 256 values without an atomic read per leaf.
+        let checkpoint = self.remaining == 0;
+        self.remaining = self.remaining.wrapping_sub(1);
+        checkpoint && token.is_cancelled()
+    }
+}
+
 /// The portable form of `value`, or `None` when it cannot cross a thread.
 #[must_use]
 fn to_portable(
-    keys: &FileKeys,
+    interp: &Interp,
     value: &Value,
 ) -> Option<Transfer> {
     let mut metadata = TransferMetadata::default();
-    let value = to_portable_at(keys, value, 0, &mut metadata)?;
+    let mut checkpoint = TransferCheckpoint::new(interp);
+    let value = to_portable_at(&interp.file_keys, value, 0, &mut metadata, &mut checkpoint)?;
     metadata.next = 0;
     Some(Transfer { value, metadata })
 }
@@ -433,8 +468,9 @@ fn to_portable_at(
     value: &Value,
     depth: usize,
     metadata: &mut TransferMetadata,
+    checkpoint: &mut TransferCheckpoint<'_>,
 ) -> Option<Portable> {
-    if depth > MAX_DEPTH {
+    if depth > MAX_DEPTH || checkpoint.cancelled() {
         return None;
     }
     let next = depth.checked_add(1)?;
@@ -481,8 +517,8 @@ fn to_portable_at(
                     .into_entry(),
                 )?;
                 let mut elements = Vec::with_capacity(tensor.storage.len());
-                for element in tensor.elements() {
-                    elements.push(to_portable_at(keys, &element, next, metadata)?);
+                for element in tensor.iter_elements() {
+                    elements.push(to_portable_at(keys, &element, next, metadata, checkpoint)?);
                 }
                 if elements.len() != tensor.storage.len() {
                     return None;
@@ -497,7 +533,10 @@ fn to_portable_at(
         | Value::Record(record) => {
             let mut fields = Vec::with_capacity(record.fields.len());
             for (name, field) in &record.fields {
-                fields.push((name.clone(), to_portable_at(keys, field, next, metadata)?));
+                fields.push((
+                    name.clone(),
+                    to_portable_at(keys, field, next, metadata, checkpoint)?,
+                ));
             }
             Portable::Record(fields)
         },
@@ -514,7 +553,7 @@ fn to_portable_at(
             }))?;
             let mut fields = Vec::with_capacity(variant.fields.len());
             for field in &variant.fields {
-                fields.push(to_portable_at(keys, field, next, metadata)?);
+                fields.push(to_portable_at(keys, field, next, metadata, checkpoint)?);
             }
             Portable::Variant {
                 adt: variant.adt,
@@ -535,7 +574,7 @@ fn to_portable_at(
             metadata.record(origin.clone().map(ValueMetadata::Constructor))?;
             let mut collected = Vec::with_capacity(args.len());
             for arg in args {
-                collected.push(to_portable_at(keys, arg, next, metadata)?);
+                collected.push(to_portable_at(keys, arg, next, metadata, checkpoint)?);
             }
             Portable::Ctor {
                 adt: *adt,
@@ -579,7 +618,7 @@ fn to_portable_at(
             metadata.record(selection)?;
             let mut captures = Vec::new();
             for slot in env.slots.borrow().iter() {
-                captures.push(to_portable_at(keys, slot, next, metadata)?);
+                captures.push(to_portable_at(keys, slot, next, metadata, checkpoint)?);
             }
             Portable::Closure {
                 module: keys.get(&function.span.file)?.clone(),
@@ -740,7 +779,14 @@ fn from_portable(
     index: &OnceCell<ReplicaIndex>,
     mut transfer: Transfer,
 ) -> Option<Value> {
-    let value = from_portable_at(interp, index, transfer.value, &mut transfer.metadata)?;
+    let mut checkpoint = TransferCheckpoint::new(interp);
+    let value = from_portable_at(
+        interp,
+        index,
+        transfer.value,
+        &mut transfer.metadata,
+        &mut checkpoint,
+    )?;
     transfer.metadata.entries.is_empty().then_some(value)
 }
 
@@ -756,7 +802,11 @@ fn from_portable_at(
     index: &OnceCell<ReplicaIndex>,
     value: Portable,
     metadata: &mut TransferMetadata,
+    checkpoint: &mut TransferCheckpoint<'_>,
 ) -> Option<Value> {
+    if checkpoint.cancelled() {
+        return None;
+    }
     Some(match value {
         | Portable::Unit => Value::Unit,
         | Portable::Bool(value) => Value::Bool(value),
@@ -792,9 +842,11 @@ fn from_portable_at(
             let tensor_metadata = metadata.take_tensor().ok()?;
             let mut values = Vec::with_capacity(elements.len());
             for element in elements {
-                values.push(from_portable_at(interp, index, element, metadata)?);
+                values.push(from_portable_at(
+                    interp, index, element, metadata, checkpoint,
+                )?);
             }
-            let storage = tensor_metadata.storage.restore(values)?;
+            let storage = tensor_metadata.storage.restore(values, checkpoint)?;
             let mut tensor =
                 TensorData::new(shape, storage, dim, tensor_metadata.display.map(Rc::new));
             tensor.verified_element = tensor_metadata.element.map(Rc::new);
@@ -803,7 +855,10 @@ fn from_portable_at(
         | Portable::Record(fields) => {
             let mut collected = indexmap::IndexMap::new();
             for (name, field) in fields {
-                collected.insert(name, from_portable_at(interp, index, field, metadata)?);
+                collected.insert(
+                    name,
+                    from_portable_at(interp, index, field, metadata, checkpoint)?,
+                );
             }
             Value::Record(Rc::new(crate::value::RecordValue { fields: collected }))
         },
@@ -824,7 +879,9 @@ fn from_portable_at(
             };
             let mut payload = Vec::with_capacity(fields.len());
             for field in fields {
-                payload.push(from_portable_at(interp, index, field, metadata)?);
+                payload.push(from_portable_at(
+                    interp, index, field, metadata, checkpoint,
+                )?);
             }
             Value::Variant(Rc::new(VariantValue {
                 adt,
@@ -850,7 +907,7 @@ fn from_portable_at(
             };
             let mut values = Vec::with_capacity(args.len());
             for arg in args {
-                values.push(from_portable_at(interp, index, arg, metadata)?);
+                values.push(from_portable_at(interp, index, arg, metadata, checkpoint)?);
             }
             Value::ctor(CtorValue {
                 adt,
@@ -889,7 +946,9 @@ fn from_portable_at(
             let scope = interp.file_scopes.get(&span.file)?.clone();
             let mut slots = Vec::with_capacity(captures.len());
             for capture in captures {
-                slots.push(from_portable_at(interp, index, capture, metadata)?);
+                slots.push(from_portable_at(
+                    interp, index, capture, metadata, checkpoint,
+                )?);
             }
             if slots.len() != function.captures.len() {
                 return None;
@@ -1015,30 +1074,62 @@ fn with_worker<T>(
     result
 }
 
-/// Reuses the most recently used pool with the requested thread count.
-fn pool(jobs: usize) -> Option<Arc<rayon::ThreadPool>> {
-    static POOL: Mutex<Option<(usize, Arc<rayon::ThreadPool>)>> = Mutex::new(None);
-    let jobs = jobs.max(1);
-    let mut cache = POOL.lock().ok()?;
-    if let Some((size, pool)) = cache.as_ref()
-        && *size == jobs
-    {
-        return Some(Arc::clone(pool));
+struct PoolCache {
+    pool: Option<Arc<rayon::ThreadPool>>,
+}
+
+impl PoolCache {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "initializes both the global pool and an isolated sizing test"
+    )]
+    const fn new() -> Self {
+        Self { pool: None }
     }
-    let pool = Arc::new(
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(jobs)
-            // The interpreter is recursive; a worker needs the same headroom
-            // the CLI gives the main interpreter thread.
-            .stack_size(256 * 1024 * 1024)
-            .thread_name(|index| format!("aevia-worker-{index}"))
-            .build()
-            .ok()?,
-    );
-    // Running callers retain their pool, while unused configurations can exit.
-    *cache = Some((jobs, Arc::clone(&pool)));
-    drop(cache);
-    Some(pool)
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "pool sizing is tested independently of the global cache"
+    )]
+    fn get(
+        &mut self,
+        jobs: usize,
+        work_items: usize,
+    ) -> Option<Arc<rayon::ThreadPool>> {
+        let budget = jobs.clamp(1, rayon::max_num_threads());
+        let needed = work_items.clamp(1, budget);
+        if let Some(pool) = self.pool.as_ref()
+            && (needed..=budget).contains(&pool.current_num_threads())
+        {
+            return Some(Arc::clone(pool));
+        }
+        // Grow in steps so slightly larger workloads can reuse the same workers.
+        let threads = needed
+            .checked_next_power_of_two()
+            .unwrap_or(budget)
+            .min(budget);
+        let pool = Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                // Workers need enough stack for recursive interpretation.
+                .stack_size(256 * 1024 * 1024)
+                .thread_name(|index| format!("aevia-worker-{index}"))
+                .build()
+                .ok()?,
+        );
+        // Running callers retain their pool while unused configurations exit.
+        self.pool = Some(Arc::clone(&pool));
+        Some(pool)
+    }
+}
+
+/// Reuses the runtime worker pool within the host's job budget.
+pub(crate) fn pool(
+    jobs: usize,
+    work_items: usize,
+) -> Option<Arc<rayon::ThreadPool>> {
+    static POOL: Mutex<PoolCache> = Mutex::new(PoolCache::new());
+    POOL.lock().ok()?.get(jobs, work_items)
 }
 
 /// The number of worker threads to use when the host does not say.
@@ -1061,9 +1152,147 @@ const MAP_BATCHES_PER_WORKER: usize = 4;
 
 const REDUCE_BLOCK_SIZE: usize = 1024;
 
+struct FloatMapBatch {
+    values: Vec<f64>,
+    dim: Dim,
+    display: Option<UnitDef>,
+}
+
+// Once an output cannot share the prefix's metadata, the remainder uses the
+// canonical transfer representation. This retains exact metadata for a boxed
+// result without copying a unit for every value of a homogeneous batch.
+struct MappedBatch {
+    floats: Option<FloatMapBatch>,
+    rest: Vec<Transfer>,
+}
+
+// Nominal dimensions compare equal across import aliases. A mixed output may
+// still need to restore the original spelling of every boxed value.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "keeps the alias-sensitive transfer check explicit"
+    )
+)]
+fn same_map_dimension(
+    first: &Dim,
+    next: &Dim,
+) -> bool {
+    first == next
+        && first
+            .factors()
+            .zip(next.factors())
+            .all(|((left, _), (right, _))| {
+                match (left, right) {
+                    | (Atom::Nominal(left), Atom::Nominal(right)) => {
+                        left.display_name() == right.display_name()
+                    },
+                    | _ => true,
+                }
+            })
+}
+
+fn map_worker_batch(
+    interp: &mut Interp,
+    index: &OnceCell<ReplicaIndex>,
+    function: &Transfer,
+    len: usize,
+    mut next: impl FnMut(&Interp, &OnceCell<ReplicaIndex>) -> Option<Value>,
+) -> Option<MappedBatch> {
+    let function = from_portable(interp, index, function.clone())
+        .or_else(|| fallback("the replica has no such function"))?;
+    let mut numbers = Vec::new();
+    let mut metadata: Option<(Dim, Option<Rc<UnitDef>>)> = None;
+    let mut rest = Vec::new();
+    for _ in 0..len {
+        let value = next(interp, index)?;
+        let result = match interp.apply(function.clone(), vec![value], Span::default()) {
+            | Ok(result) => result,
+            | Err(error) if error.code == crate::cancellation::INTERRUPTED => return None,
+            | Err(error) => {
+                return fallback(&format!(
+                    "a worker failed ({}: {}); rerunning sequentially",
+                    error.code, error.message
+                ));
+            },
+        };
+        if rest.is_empty()
+            && let Value::Num(NumVal {
+                kind: NumKind::Float(raw),
+                dim,
+                display,
+            }) = &result
+        {
+            let (first_dim, first_display) = metadata.get_or_insert_with(|| {
+                numbers.reserve_exact(len);
+                (dim.clone(), display.clone())
+            });
+            let same_display = match (first_display.as_ref(), display.as_ref()) {
+                | (Some(left), Some(right)) => Rc::ptr_eq(left, right),
+                | (None, None) => true,
+                | _ => false,
+            };
+            if same_display && same_map_dimension(first_dim, dim) {
+                numbers.push(*raw);
+                continue;
+            }
+        }
+        if rest.capacity() == 0 {
+            rest.reserve_exact(len.saturating_sub(numbers.len()));
+        }
+        rest.push(to_portable(interp, &result).or_else(|| fallback("a result cannot cross back"))?);
+    }
+    interp.check_cancelled().ok()?;
+    Some(MappedBatch {
+        floats: metadata.map(|(dim, display)| {
+            FloatMapBatch {
+                values: numbers,
+                dim,
+                display: display.as_deref().cloned(),
+            }
+        }),
+        rest,
+    })
+}
+
+#[derive(Clone, Copy)]
+enum ReduceInput<'a> {
+    Boxed(&'a [Value]),
+    Dense {
+        values: &'a [f64],
+        dim: &'a Dim,
+        display: Option<&'a UnitDef>,
+    },
+}
+
+fn reduce_worker_batch(
+    interp: &mut Interp,
+    index: &OnceCell<ReplicaIndex>,
+    function: &Transfer,
+    zero: &Transfer,
+    len: usize,
+    mut next: impl FnMut(&Interp, &OnceCell<ReplicaIndex>) -> Option<Value>,
+) -> Option<Vec<Transfer>> {
+    let function = from_portable(interp, index, function.clone())?;
+    let zero = from_portable(interp, index, zero.clone())?;
+    let mut results = Vec::with_capacity(len.div_ceil(REDUCE_BLOCK_SIZE));
+    for start in (0..len).step_by(REDUCE_BLOCK_SIZE) {
+        let mut acc = zero.clone();
+        for _ in 0..len.saturating_sub(start).min(REDUCE_BLOCK_SIZE) {
+            let value = next(interp, index)?;
+            acc = interp
+                .apply(function.clone(), vec![acc, value], Span::default())
+                .ok()?;
+        }
+        results.push(to_portable(interp, &acc)?);
+    }
+    Some(results)
+}
+
 impl Interp {
     /// Installs the factory workers build their replicas with (see
-    /// [`Replica`]). Without one every parallel primitive is sequential.
+    /// [`Replica`]). Parallel evaluation of Aevia closures uses this factory.
     pub fn set_replica(
         &mut self,
         replica: Replica,
@@ -1087,36 +1316,37 @@ impl Interp {
         self.replica.clone()
     }
 
-    /// `par_map` on worker threads: `Some` with the mapped elements in input
-    /// order, or `None` to map sequentially (see the module documentation).
+    /// Maps values on worker threads and returns a tensor in input order.
+    /// `None` requests sequential replay (see the module documentation).
+    /// With no explicit dimension, the tensor uses the first result's dimension.
     pub(crate) fn par_map_values(
         &self,
         function: &Value,
         elements: &[Value],
-    ) -> Option<Vec<Value>> {
+        dim: Option<Dim>,
+    ) -> Option<Value> {
         if elements.len() < MIN_PARALLEL {
             return None;
         }
         let replica = self
             .parallel_replica()
             .or_else(|| fallback("no replica factory, or --jobs 1"))?;
-        let function = to_portable(&self.file_keys, function)
+        let function = to_portable(self, function)
             .or_else(|| fallback("the function cannot cross threads"))?;
         let mut inputs = Vec::with_capacity(elements.len());
         for element in elements {
-            inputs.push(
-                to_portable(&self.file_keys, element)
-                    .or_else(|| fallback("an element cannot cross"))?,
-            );
+            inputs
+                .push(to_portable(self, element).or_else(|| fallback("an element cannot cross"))?);
         }
-        let pool = pool(self.jobs).or_else(|| fallback("the worker pool did not start"))?;
+        let pool =
+            pool(self.jobs, inputs.len()).or_else(|| fallback("the worker pool did not start"))?;
         let batch_size = inputs.len().div_ceil(
             pool.current_num_threads()
                 .saturating_mul(MAP_BATCHES_PER_WORKER),
         );
         let cancellation = self.cancellation_token().map(|token| token.child());
         let capabilities = self.capabilities;
-        let results: Option<Vec<Vec<Transfer>>> = pool.install(|| {
+        let results: Option<Vec<MappedBatch>> = pool.install(|| {
             use rayon::prelude::*;
             inputs
                 .par_chunks_mut(batch_size)
@@ -1126,48 +1356,191 @@ impl Interp {
                         cancellation.as_ref(),
                         capabilities,
                         |interp, index| {
-                            let function = from_portable(interp, index, function.clone())
-                                .or_else(|| fallback("the replica has no such function"))?;
-                            let mut out = Vec::with_capacity(inputs.len());
-                            for input in inputs {
-                                let value = from_portable(
+                            let len = inputs.len();
+                            let mut inputs = inputs.iter_mut();
+                            map_worker_batch(interp, index, &function, len, |interp, index| {
+                                from_portable(
                                     interp,
                                     index,
-                                    std::mem::replace(input, Transfer::unit()),
-                                )?;
-                                let result = match interp.apply(
-                                    function.clone(),
-                                    vec![value],
-                                    Span::default(),
-                                ) {
-                                    | Ok(result) => result,
-                                    | Err(error)
-                                        if error.code == crate::cancellation::INTERRUPTED =>
-                                    {
-                                        return None;
-                                    },
-                                    | Err(error) => {
-                                        return fallback(&format!(
-                                            "a worker failed ({}: {}); rerunning sequentially",
-                                            error.code, error.message
-                                        ));
-                                    },
-                                };
-                                out.push(
-                                    to_portable(&interp.file_keys, &result)
-                                        .or_else(|| fallback("a result cannot cross back"))?,
-                                );
-                            }
-                            Some(out)
+                                    std::mem::replace(inputs.next()?, Transfer::unit()),
+                                )
+                            })
                         },
                     )
                     .or_else(|| fallback("a worker could not run"))
                 })
                 .collect()
         });
-        let results = results?;
+        self.finish_parallel_map(results?, elements.len(), dim)
+    }
+
+    /// Maps a checked contiguous `Float` window through the normal worker dispatch.
+    /// Each worker boxes its own inputs and shares their display unit within a batch.
+    pub(crate) fn par_map_dense_values(
+        &self,
+        function: &Value,
+        elements: &[f64],
+        dim: &Dim,
+        display: Option<&UnitDef>,
+    ) -> Option<Value> {
+        if elements.len() < MIN_PARALLEL {
+            return None;
+        }
+        let replica = self
+            .parallel_replica()
+            .or_else(|| fallback("no replica factory, or --jobs 1"))?;
+        let function = to_portable(self, function)
+            .or_else(|| fallback("the function cannot cross threads"))?;
+        let pool = pool(self.jobs, elements.len())
+            .or_else(|| fallback("the worker pool did not start"))?;
+        let batch_size = elements.len().div_ceil(
+            pool.current_num_threads()
+                .saturating_mul(MAP_BATCHES_PER_WORKER),
+        );
+        let cancellation = self.cancellation_token().map(|token| token.child());
+        let capabilities = self.capabilities;
+        // `install` joins the workers before the caller's immutable slice and
+        // scalar metadata leave scope. No interpreter-owned Rc crosses threads.
+        let results: Option<Vec<MappedBatch>> = pool.install(|| {
+            use rayon::prelude::*;
+            elements
+                .par_chunks(batch_size)
+                .map(|inputs| {
+                    with_worker(
+                        &replica,
+                        cancellation.as_ref(),
+                        capabilities,
+                        |interp, index| {
+                            let display = display.cloned().map(Rc::new);
+                            let mut elements = inputs.iter().copied();
+                            map_worker_batch(interp, index, &function, inputs.len(), |_, _| {
+                                Some(Value::Num(NumVal {
+                                    kind: NumKind::Float(elements.next()?),
+                                    dim: dim.clone(),
+                                    display: display.clone(),
+                                }))
+                            })
+                        },
+                    )
+                    .or_else(|| fallback("a worker could not run"))
+                })
+                .collect()
+        });
+        self.finish_parallel_map(results?, elements.len(), None)
+    }
+
+    /// Tabulates integer indices on workers without a caller-owned input buffer.
+    pub(crate) fn par_tabulate_values(
+        &self,
+        function: &Value,
+        count: usize,
+    ) -> Option<Value> {
+        if count < MIN_PARALLEL {
+            return None;
+        }
+        let replica = self
+            .parallel_replica()
+            .or_else(|| fallback("no replica factory, or --jobs 1"))?;
+        let function = to_portable(self, function)
+            .or_else(|| fallback("the function cannot cross threads"))?;
+        let pool = pool(self.jobs, count).or_else(|| fallback("the worker pool did not start"))?;
+        let batch_size = count.div_ceil(
+            pool.current_num_threads()
+                .saturating_mul(MAP_BATCHES_PER_WORKER),
+        );
+        let cancellation = self.cancellation_token().map(|token| token.child());
+        let capabilities = self.capabilities;
+        let results: Option<Vec<MappedBatch>> = pool.install(|| {
+            use rayon::prelude::*;
+            (0..count.div_ceil(batch_size))
+                .into_par_iter()
+                .map(|batch| {
+                    let start = batch.checked_mul(batch_size)?;
+                    let end = start.saturating_add(batch_size).min(count);
+                    let mut indices = start..end;
+                    with_worker(
+                        &replica,
+                        cancellation.as_ref(),
+                        capabilities,
+                        |interp, index| {
+                            map_worker_batch(interp, index, &function, indices.len(), |_, _| {
+                                indices.next().map(|index| Value::Num(NumVal::int(index)))
+                            })
+                        },
+                    )
+                    .or_else(|| fallback("a worker could not run"))
+                })
+                .collect()
+        });
+        self.finish_parallel_map(results?, count, None)
+    }
+
+    fn finish_parallel_map(
+        &self,
+        results: Vec<MappedBatch>,
+        len: usize,
+        dim: Option<Dim>,
+    ) -> Option<Value> {
+        self.check_cancelled().ok()?;
+        if results.iter().all(|batch| batch.rest.is_empty()) {
+            let mut batches = results.into_iter();
+            let first = batches.next()?.floats?;
+            let mut values = first.values;
+            values.reserve_exact(len.saturating_sub(values.len()));
+            let mut display = first.display;
+            for batch in batches {
+                let batch = batch.floats?;
+                if display.is_none() {
+                    display = batch.display;
+                }
+                // Check between bounded copies even when a worker batch is large.
+                for chunk in batch.values.chunks(8192) {
+                    self.check_cancelled().ok()?;
+                    values.extend_from_slice(chunk);
+                }
+            }
+            return Some(Value::Tensor(Rc::new(TensorData::new(
+                vec![len],
+                Storage::Dense(Rc::new(values)),
+                dim.unwrap_or(first.dim),
+                display.map(Rc::new),
+            ))));
+        }
+
         let index = OnceCell::new();
-        let mut values = Vec::with_capacity(elements.len());
+        let mut checkpoint = TransferCheckpoint::new(self);
+        let mut values = Vec::with_capacity(len);
+        for batch in results {
+            if let Some(floats) = batch.floats {
+                let display = floats.display.map(Rc::new);
+                for raw in floats.values {
+                    if checkpoint.cancelled() {
+                        return None;
+                    }
+                    values.push(Value::Num(NumVal {
+                        kind: NumKind::Float(raw),
+                        dim: floats.dim.clone(),
+                        display: display.clone(),
+                    }));
+                }
+            }
+            for portable in batch.rest {
+                values.push(from_portable(self, &index, portable)?);
+            }
+        }
+        let dim = values
+            .first()
+            .map_or_else(Dim::one, crate::value::value_dim);
+        Some(crate::eval::build_tensor(values, vec![len], dim))
+    }
+
+    fn restore_parallel_map(
+        &self,
+        results: Vec<Vec<Transfer>>,
+        len: usize,
+    ) -> Option<Vec<Value>> {
+        let index = OnceCell::new();
+        let mut values = Vec::with_capacity(len);
         for portable in results.into_iter().flatten() {
             values.push(from_portable(self, &index, portable)?);
         }
@@ -1192,13 +1565,26 @@ impl Interp {
         &mut self,
         function: &Value,
         zero: &Value,
-        elements: &[Value],
+        tensor: &TensorData,
         span: Span,
     ) -> Result<Value, EvalError> {
-        let parallel = self.parallel_blocks(function, zero, elements);
+        let dense = tensor.dense();
+        let boxed = dense.is_none().then(|| tensor.elements());
+        let input = match dense {
+            | Some(values) => {
+                ReduceInput::Dense {
+                    values,
+                    dim: &tensor.dim,
+                    display: tensor.display.as_deref(),
+                }
+            },
+            | None => ReduceInput::Boxed(boxed.as_deref().unwrap_or_default()),
+        };
+        let parallel = self.parallel_blocks(function, zero, input);
         self.check_cancelled().map_err(|error| error.at(span))?;
         let partial = parallel.map_or_else(
             || {
+                let elements = boxed.unwrap_or_else(|| tensor.elements());
                 elements
                     .chunks(REDUCE_BLOCK_SIZE)
                     .map(|block| {
@@ -1223,54 +1609,106 @@ impl Interp {
         &self,
         function: &Value,
         zero: &Value,
-        elements: &[Value],
+        input: ReduceInput<'_>,
     ) -> Option<Vec<Value>> {
-        if elements.len() <= REDUCE_BLOCK_SIZE {
+        let len = match &input {
+            | ReduceInput::Boxed(values) => values.len(),
+            | ReduceInput::Dense { values, .. } => values.len(),
+        };
+        if len <= REDUCE_BLOCK_SIZE {
             return None;
         }
         let replica = self.parallel_replica()?;
-        let function = to_portable(&self.file_keys, function)?;
-        let zero = to_portable(&self.file_keys, zero)?;
-        let mut inputs = Vec::with_capacity(elements.len());
-        for element in elements {
-            inputs.push(to_portable(&self.file_keys, element)?);
-        }
-        let pool = pool(self.jobs)?;
+        let function = to_portable(self, function)?;
+        let zero = to_portable(self, zero)?;
+        let (mut packed, dense) = match input {
+            | ReduceInput::Boxed(values) => {
+                let mut packed = Vec::with_capacity(values.len());
+                for value in values {
+                    packed.push(to_portable(self, value)?);
+                }
+                (packed, None)
+            },
+            | ReduceInput::Dense { values, dim, display } => {
+                (Vec::new(), Some((values, dim, display)))
+            },
+        };
+        let blocks = len.div_ceil(REDUCE_BLOCK_SIZE);
+        let pool = pool(self.jobs, blocks)?;
+        let blocks_per_batch = blocks.div_ceil(
+            pool.current_num_threads()
+                .saturating_mul(MAP_BATCHES_PER_WORKER),
+        );
+        let batch_size = blocks_per_batch.saturating_mul(REDUCE_BLOCK_SIZE);
         let cancellation = self.cancellation_token().map(|token| token.child());
         let capabilities = self.capabilities;
-        let results: Option<Vec<Transfer>> = pool.install(|| {
+        let results: Option<Vec<Vec<Transfer>>> = pool.install(|| {
+            use rayon::iter::Either;
             use rayon::prelude::*;
-            inputs
-                .par_chunks_mut(REDUCE_BLOCK_SIZE)
+
+            // Both batch iterators yield whole, consecutively ordered 1024-element blocks.
+            let batches = match dense {
+                | Some((values, dim, display)) => {
+                    Either::Left(
+                        values
+                            .par_chunks(batch_size)
+                            .map(move |values| Either::Left((values, dim, display))),
+                    )
+                },
+                | None => Either::Right(packed.par_chunks_mut(batch_size).map(Either::Right)),
+            };
+            batches
                 .map(|inputs| {
                     with_worker(
                         &replica,
                         cancellation.as_ref(),
                         capabilities,
                         |interp, index| {
-                            let function = from_portable(interp, index, function.clone())?;
-                            let mut acc = from_portable(interp, index, zero.clone())?;
-                            for input in inputs {
-                                let value = from_portable(
-                                    interp,
-                                    index,
-                                    std::mem::replace(input, Transfer::unit()),
-                                )?;
-                                acc = interp
-                                    .apply(function.clone(), vec![acc, value], Span::default())
-                                    .ok()?;
+                            match inputs {
+                                | Either::Left((values, dim, display)) => {
+                                    let display = display.cloned().map(Rc::new);
+                                    let len = values.len();
+                                    let mut values = values.iter().copied();
+                                    reduce_worker_batch(
+                                        interp,
+                                        index,
+                                        &function,
+                                        &zero,
+                                        len,
+                                        |_, _| {
+                                            Some(Value::Num(NumVal {
+                                                kind: NumKind::Float(values.next()?),
+                                                dim: dim.clone(),
+                                                display: display.clone(),
+                                            }))
+                                        },
+                                    )
+                                },
+                                | Either::Right(inputs) => {
+                                    let len = inputs.len();
+                                    let mut inputs = inputs.iter_mut();
+                                    reduce_worker_batch(
+                                        interp,
+                                        index,
+                                        &function,
+                                        &zero,
+                                        len,
+                                        |interp, index| {
+                                            from_portable(
+                                                interp,
+                                                index,
+                                                std::mem::replace(inputs.next()?, Transfer::unit()),
+                                            )
+                                        },
+                                    )
+                                },
                             }
-                            to_portable(&interp.file_keys, &acc)
                         },
                     )
                 })
                 .collect()
         });
-        let index = OnceCell::new();
-        results?
-            .into_iter()
-            .map(|value| from_portable(self, &index, value))
-            .collect()
+        self.restore_parallel_map(results?, blocks)
     }
 
     // ----- tasks ------------------------------------------------------------
@@ -1282,8 +1720,8 @@ impl Interp {
         span: Span,
     ) -> Value {
         let replica = self.parallel_replica().filter(|_| !self.on_worker);
-        if let (Some(replica), Some(portable)) = (replica, to_portable(&self.file_keys, thunk))
-            && let Some(pool) = pool(self.jobs)
+        if let (Some(replica), Some(portable)) = (replica, to_portable(self, thunk))
+            && let Some(pool) = pool(self.jobs, self.jobs)
         {
             let (sender, receiver) = std::sync::mpsc::channel();
             let cancellation = self.cancellation_token().map(|token| token.child());
@@ -1446,14 +1884,19 @@ fn run_task(
     }
     let result = interp
         .apply(thunk, Vec::new(), Span::default())
-        .and_then(|action| interp.run_io_value(&action, Span::default()));
+        .and_then(|action| interp.run_io_value(&action, Span::default()))
+        .and_then(|value| {
+            let transferable = to_portable(interp, &value);
+            interp.check_cancelled()?;
+            Ok((value, transferable))
+        });
     let output = match &interp.output {
         | crate::eval::Output::Buffer(buffer) => std::mem::take(&mut *buffer.borrow_mut()),
         | crate::eval::Output::Console => String::new(),
     };
     match result {
-        | Ok(value) => {
-            match to_portable(&interp.file_keys, &value) {
+        | Ok((value, transferable)) => {
+            match transferable {
                 | Some(value) => TaskOutcome::Done { value, output },
                 | None => {
                     TaskOutcome::Failed {
@@ -1525,10 +1968,24 @@ mod tests {
 
     #[test]
     fn a_later_caller_gets_its_requested_thread_count() {
-        let wider = pool(3).expect("three-thread pool");
-        let narrower = pool(2).expect("two-thread pool");
+        let wider = pool(3, 3).expect("three-thread pool");
+        let narrower = pool(2, 2).expect("two-thread pool");
         assert_eq!(wider.current_num_threads(), 3);
         assert_eq!(narrower.current_num_threads(), 2);
+    }
+
+    #[test]
+    fn a_worker_pool_grows_only_as_work_needs_it() {
+        let mut cache = PoolCache::new();
+        let small = cache.get(8, 2).unwrap();
+        assert_eq!(small.current_num_threads(), 2);
+        let larger = cache.get(8, 3).unwrap();
+        assert_eq!(larger.current_num_threads(), 4);
+        assert!(Arc::ptr_eq(&larger, &cache.get(8, 2).unwrap()));
+        assert!(Arc::ptr_eq(&larger, &cache.get(4, 2).unwrap()));
+        assert!(Arc::ptr_eq(&larger, &cache.get(6, 4).unwrap()));
+        assert_eq!(small.current_num_threads(), 2);
+        assert_eq!(cache.get(3, 10).unwrap().current_num_threads(), 3);
     }
 
     #[test]
@@ -1576,6 +2033,133 @@ mod tests {
         assert_eq!(failure.code, crate::cancellation::INTERRUPTED);
     }
 
+    fn map_identity(
+        interp: &mut Interp,
+        inputs: Vec<Value>,
+    ) -> MappedBatch {
+        let function = Value::ctor(CtorValue {
+            adt: u32::MAX,
+            index: usize::MAX,
+            name: "id".to_owned(),
+            arity: usize::MAX,
+            args: Vec::new(),
+            origin: None,
+        });
+        let transfer = to_portable(interp, &function).unwrap();
+        let mut inputs = inputs.into_iter();
+        map_worker_batch(interp, &OnceCell::new(), &transfer, inputs.len(), |_, _| {
+            inputs.next()
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn float_map_reconstruction_preserves_raw_bits_and_first_explicit_display() {
+        let mut interp = Interp::new(&CheckedModule::default());
+        let nan = f64::from_bits(0x7ff8_0012_3456_789a);
+        let raw = [-0.0_f64, nan, 1.25, -2.5];
+        let metre = Dim::base("Metre");
+        let cm = Rc::new(UnitDef::linear(
+            "cm",
+            metre.clone(),
+            aevia_dim::Scale::one(),
+        ));
+        let inch = Rc::new(UnitDef::linear(
+            "inch",
+            metre.clone(),
+            aevia_dim::Scale::one(),
+        ));
+        let batch = map_identity(
+            &mut interp,
+            vec![Value::float(raw[0]), Value::float(raw[1])],
+        );
+        assert!(batch.rest.is_empty());
+        assert_eq!(batch.floats.as_ref().unwrap().values.len(), 2);
+        let explicit = map_identity(
+            &mut interp,
+            vec![Value::Num(
+                NumVal::float(raw[2], metre.clone()).with_display(cm),
+            )],
+        );
+        let later = map_identity(
+            &mut interp,
+            vec![Value::Num(NumVal::float(raw[3], metre).with_display(inch))],
+        );
+        let Some(Value::Tensor(out)) =
+            interp.finish_parallel_map(vec![batch, explicit, later], raw.len(), None)
+        else {
+            panic!("expected dense Float tensor")
+        };
+        assert!(out.dim.is_one());
+        assert_eq!(out.display.as_ref().unwrap().name, "cm");
+        let bits = out
+            .dense()
+            .unwrap()
+            .iter()
+            .map(|raw| raw.to_bits())
+            .collect::<Vec<_>>();
+        assert_eq!(bits, raw.map(f64::to_bits));
+    }
+
+    #[test]
+    fn mixed_map_reconstruction_preserves_nominal_aliases_and_promotion() {
+        let mut interp = Interp::new(&CheckedModule::default());
+        let definition = Dim::nominal_base("markets", "Credit");
+        let alias = definition.with_display_name("CustomerCredit");
+        assert_eq!(definition, alias);
+        let first = Value::Num(NumVal::float(8.0, definition.clone()));
+        let second = Value::Num(NumVal::float(13.0, alias.clone()));
+        let batch = map_identity(
+            &mut interp,
+            vec![first.clone(), second.clone(), Value::Bool(false)],
+        );
+        assert_eq!(batch.floats.as_ref().unwrap().values.len(), 1);
+        assert_eq!(batch.rest.len(), 2);
+        let later = map_identity(&mut interp, vec![Value::string("fallback")]);
+        let Some(Value::Tensor(out)) = interp.finish_parallel_map(vec![batch, later], 4, None)
+        else {
+            panic!("expected mixed tensor")
+        };
+        let Storage::Boxed(values) = &out.storage else {
+            panic!("expected boxed tensor")
+        };
+        assert_eq!(
+            out.dim.to_display_si_string(),
+            definition.to_display_si_string()
+        );
+        assert_eq!(
+            values[0].as_num().unwrap().dim.to_display_si_string(),
+            definition.to_display_si_string()
+        );
+        assert_eq!(
+            values[1].as_num().unwrap().dim.to_display_si_string(),
+            alias.to_display_si_string()
+        );
+        assert!(matches!(values[2], Value::Bool(false)));
+        assert!(matches!(&values[3], Value::Str(text) if text.as_ref() == "fallback"));
+
+        let numbers = map_identity(&mut interp, vec![first, Value::int(17), second]);
+        let Some(Value::Tensor(out)) = interp.finish_parallel_map(vec![numbers], 3, None) else {
+            panic!("expected promoted tensor")
+        };
+        assert_eq!(out.dense().unwrap(), &[8.0, 17.0, 13.0]);
+    }
+
+    #[test]
+    fn cancelled_map_reconstruction_drops_the_packed_worker_result() {
+        let mut interp = Interp::new(&CheckedModule::default());
+        let token = crate::CancellationToken::new();
+        interp.set_cancellation_token(token.clone());
+        let dense = map_identity(&mut interp, vec![Value::float(2.0); 32]);
+        assert!(dense.rest.is_empty());
+        token.cancel();
+        assert!(interp.finish_parallel_map(vec![dense], 32, None).is_none());
+        assert_eq!(
+            interp.check_cancelled().unwrap_err().code,
+            crate::cancellation::INTERRUPTED,
+        );
+    }
+
     #[test]
     fn moving_a_reversed_tensor_view_preserves_its_dense_logical_values() {
         let tensor = TensorData::new(
@@ -1590,7 +2174,7 @@ mod tests {
         let source = Value::Tensor(Rc::new(view));
         let interp = Interp::new(&CheckedModule::default());
         let index = OnceCell::new();
-        let portable = to_portable(&interp.file_keys, &source).expect("portable view");
+        let portable = to_portable(&interp, &source).expect("portable view");
         let Some(Value::Tensor(result)) = from_portable(&interp, &index, portable) else {
             panic!("expected the reconstructed tensor");
         };
@@ -1598,5 +2182,70 @@ mod tests {
         assert!(matches!(result.storage, Storage::Dense(_)));
         assert_eq!(result.dense_flat().as_deref(), Some([3.0, 2.0].as_slice()));
         assert!(index.get().is_none());
+    }
+    #[test]
+    fn interrupted_recursive_transfer_leaves_no_partially_rebuilt_value() {
+        let mut elements = vec![Value::string("portable text"); 600];
+        elements[0] = Value::int(17);
+        elements[599] = Value::string("last");
+        let value = Value::Tensor(Rc::new(TensorData::new(
+            vec![600],
+            Storage::Boxed(elements),
+            Dim::one(),
+            None,
+        )));
+        let mut interp = Interp::new(&CheckedModule::default());
+        let token = crate::CancellationToken::new();
+        interp.set_cancellation_token(token.clone());
+        let index = OnceCell::new();
+        let complete = to_portable(&interp, &value).unwrap();
+
+        // Starting the recursive helpers after their root checkpoint models
+        // cancellation arriving in the middle of a single large value.
+        let mut copying = TransferCheckpoint::new(&interp);
+        let mut restoring = TransferCheckpoint::new(&interp);
+        assert!(!copying.cancelled());
+        assert!(!restoring.cancelled());
+        token.cancel();
+
+        assert!(to_portable(&interp, &value).is_none());
+        assert!(from_portable(&interp, &index, complete.clone()).is_none());
+        assert!(
+            to_portable_at(
+                &interp.file_keys,
+                &value,
+                0,
+                &mut TransferMetadata::default(),
+                &mut copying,
+            )
+            .is_none()
+        );
+        let mut complete = complete;
+        assert!(
+            from_portable_at(
+                &interp,
+                &index,
+                complete.value,
+                &mut complete.metadata,
+                &mut restoring,
+            )
+            .is_none()
+        );
+        assert_eq!(
+            interp.check_cancelled().unwrap_err().code,
+            crate::cancellation::INTERRUPTED
+        );
+
+        token.reset();
+        let restored = from_portable(&interp, &index, to_portable(&interp, &value).unwrap());
+        let Some(Value::Tensor(restored)) = restored else {
+            panic!("expected a complete tensor after reset");
+        };
+        assert_eq!(restored.shape, [600]);
+        assert!(matches!(restored.storage, Storage::Boxed(_)));
+        assert_eq!(
+            crate::value::show(&Value::Tensor(restored)),
+            crate::value::show(&value)
+        );
     }
 }

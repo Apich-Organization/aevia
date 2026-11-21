@@ -85,3 +85,77 @@ fn ranges_size_from_exact_bounds_before_materializing() {
         call_simple("range", vec![Value::int(i64::MIN), Value::int(i64::MAX)]).unwrap_err();
     assert_eq!(oversized.code, "E0802");
 }
+
+#[test]
+fn range_keeps_machine_endpoints_exclusive_and_crosses_into_wider_integers() {
+    use aevia_core::value::ExactRep;
+    use aevia_core::value::Storage;
+    use aevia_core::value::Value;
+    use aevia_core::value::repr;
+
+    let source = r#"let wide: Int = 1361129467683753853853498429727072845824
+let last = range(9223372036854775806, 9223372036854775807, wide)
+let above = range(9223372036854775806, 9223372036854775812, 2)
+let below = range(-9223372036854775806, -9223372036854775812, -2)
+let min_step = range(9223372036854775807, -9223372036854775808, -9223372036854775808)
+let crossing_zero = range(-wide, wide + 1, wide)
+let away = range(0, wide, -1)
+let equal_bounds = range(wide, wide)
+"#;
+    let compilation = compile("range_edges.aev", source);
+    assert!(
+        !compilation.diagnostics.has_errors(),
+        "{:?}",
+        compilation.diagnostics.items
+    );
+    for mode in [Mode::Ast, Mode::Ir] {
+        let mut interp = Interp::new(&compilation.checked).with_mode(mode);
+        let diagnostics = interp.load(compilation.module.as_ref().unwrap());
+        assert!(
+            !diagnostics.has_errors(),
+            "{mode:?}: {:?}",
+            diagnostics.items
+        );
+        for (binding, size, expected) in [
+            ("last", 1, "[9223372036854775806]"),
+            (
+                "above",
+                3,
+                "[9223372036854775806, 9223372036854775808, 9223372036854775810]",
+            ),
+            (
+                "below",
+                3,
+                "[-9223372036854775806, -9223372036854775808, -9223372036854775810]",
+            ),
+            ("min_step", 2, "[9223372036854775807, -1]"),
+            (
+                "crossing_zero",
+                3,
+                "[-1361129467683753853853498429727072845824, 0, 1361129467683753853853498429727072845824]",
+            ),
+            ("away", 0, "[]"),
+            ("equal_bounds", 0, "[]"),
+        ] {
+            let value = interp.eval_toplevel(binding).unwrap();
+            let Value::Tensor(data) = &value else {
+                panic!("{mode:?} {binding}: expected an Int tensor");
+            };
+            assert_eq!(data.shape, [size], "{mode:?} {binding}");
+            assert!(matches!(
+                data.storage,
+                Storage::TypedExact(_, ExactRep::Int)
+            ));
+            assert_eq!(repr(&value), expected, "{mode:?} {binding}");
+        }
+        let zero_step = interp
+            .call_named(
+                "range",
+                vec![Value::int(0), Value::int(0), Value::int(0)],
+                aevia_syntax::Span::default(),
+            )
+            .unwrap_err();
+        assert_eq!(zero_step.code, "E0802");
+        assert_eq!(zero_step.message, "range step must not be zero");
+    }
+}

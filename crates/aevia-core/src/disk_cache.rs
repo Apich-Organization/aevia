@@ -46,6 +46,8 @@ use aevia_types::check::CheckedModule;
 use aevia_types::check::ModuleInterface;
 use aevia_types::persist;
 use std::fmt::Write as _;
+use std::io::ErrorKind;
+use std::io::Read as _;
 use std::io::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
@@ -59,6 +61,7 @@ pub const FORMAT_VERSION: u32 = 4;
 
 const MAGIC: &[u8; 4] = b"AEVI";
 const HEADER_LEN: usize = 40;
+const SMALL_ENTRY_LEN: usize = 4096;
 
 /// How many `.aevi` files of one module name are kept (older ones are stale
 /// revisions of the same module and are pruned after a write).
@@ -349,18 +352,49 @@ impl DiskCache {
         key: &Key,
         file: FileId,
     ) -> Option<Hit> {
-        let bytes = std::fs::read(self.dir.join(&key.file_name)).ok()?;
-        let (magic, rest) = bytes.split_first_chunk::<4>()?;
+        let mut file_handle = std::fs::File::open(self.dir.join(&key.file_name)).ok()?;
+        // Read the size and data from the opened file even if a writer replaces the path.
+        let size = usize::try_from(file_handle.metadata().ok()?.len()).ok()?;
+        let body_size = size.checked_sub(HEADER_LEN)?;
+        let mut prefix = [0; SMALL_ENTRY_LEN];
+        let prefix_size = if size <= prefix.len() {
+            size
+        } else {
+            HEADER_LEN
+        };
+        let prefix = prefix.get_mut(..prefix_size)?;
+        file_handle.read_exact(prefix).ok()?;
+        let (magic, rest) = prefix.split_first_chunk::<4>()?;
         let (version, rest) = rest.split_first_chunk::<4>()?;
         let (digest, rest) = rest.split_first_chunk::<16>()?;
         if magic != MAGIC || *version != FORMAT_VERSION.to_le_bytes() || *digest != key.digest {
             return None;
         }
         let (length, rest) = rest.split_first_chunk::<8>()?;
-        let (checksum, body) = rest.split_first_chunk::<8>()?;
-        if usize::try_from(u64::from_le_bytes(*length)).ok()? != body.len()
-            || u64::from_le_bytes(*checksum) != fnv64(body)
-        {
+        let (checksum, prefix_body) = rest.split_first_chunk::<8>()?;
+        let length = u64::from_le_bytes(*length);
+        if usize::try_from(length).ok()? != body_size {
+            return None;
+        }
+        let mut heap_body = Vec::new();
+        let body = if prefix_body.len() == body_size {
+            prefix_body
+        } else {
+            heap_body.try_reserve_exact(body_size).ok()?;
+            let read = (&mut file_handle)
+                .take(length)
+                .read_to_end(&mut heap_body)
+                .ok()?;
+            if read != body_size {
+                return None;
+            }
+            heap_body.as_slice()
+        };
+        let eof = matches!(
+            file_handle.read_exact(&mut [0]),
+            Err(error) if error.kind() == ErrorKind::UnexpectedEof
+        );
+        if !eof || u64::from_le_bytes(*checksum) != fnv64(body) {
             return None;
         }
         let entry: Entry = persist::decode(body).ok()?;

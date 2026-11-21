@@ -422,7 +422,7 @@ impl num_traits::One for Int {
 }
 
 macro_rules! arith {
-    ($trait:ident, $method:ident, $checked:ident, $op:tt) => {
+    ($trait:ident, $method:ident, $checked:ident, $op:tt, $assign:tt, $reverse:expr) => {
         impl std::ops::$trait<&Int> for &Int {
             type Output = Int;
 
@@ -448,11 +448,31 @@ macro_rules! arith {
             type Output = Int;
 
             #[inline]
+            #[allow(clippy::arithmetic_side_effects, reason = "mixed arithmetic is exact for BigInt")]
             fn $method(
                 self,
                 other: Int,
             ) -> Int {
-                (&self).$method(&other)
+                // An owned, unaliased BigInt can keep both its handle and its limbs.
+                match (self, other) {
+                    | (Int::Big(mut left), Int::Small(right)) => {
+                        if let Some(value) = Rc::get_mut(&mut left) {
+                            *value $assign right;
+                            value.to_i64().map_or(Int::Big(left), Int::Small)
+                        } else {
+                            Int::from_big(left.as_ref() $op right)
+                        }
+                    },
+                    | (Int::Small(left), Int::Big(mut right)) => {
+                        if let Some(value) = Rc::get_mut(&mut right) {
+                            ($reverse)(value, left);
+                            value.to_i64().map_or(Int::Big(right), Int::Small)
+                        } else {
+                            Int::from_big(left $op right.as_ref())
+                        }
+                    },
+                    | (left, right) => (&left).$method(&right),
+                }
             }
         }
 
@@ -482,9 +502,12 @@ macro_rules! arith {
     };
 }
 
-arith!(Add, add, checked_add, +);
-arith!(Sub, sub, checked_sub, -);
-arith!(Mul, mul, checked_mul, *);
+arith!(Add, add, checked_add, +, +=, |value: &mut BigInt, left| *value += left);
+arith!(Sub, sub, checked_sub, -, -=, |value: &mut BigInt, left| {
+    *value = -std::mem::take(value);
+    *value += left;
+});
+arith!(Mul, mul, checked_mul, *, *=, |value: &mut BigInt, left| *value *= left);
 
 impl std::ops::Neg for &Int {
     type Output = Int;
@@ -535,6 +558,8 @@ impl<'de> serde::Deserialize<'de> for Int {
 mod tests {
     use super::Int;
     use num_bigint::BigInt;
+    use num_traits::ToPrimitive;
+    use std::rc::Rc;
 
     #[test]
     fn host_constructed_small_bigints_match_by_value() {
@@ -571,6 +596,101 @@ mod tests {
         assert_eq!(-&big, minimum);
         let below = &minimum - &Int::ONE;
         assert!(matches!(below, Int::Big(_)) && below < minimum);
+    }
+
+    #[test]
+    fn owned_mixed_arithmetic_matches_exact_values_and_preserves_shared_inputs() {
+        let boundary = BigInt::from(1) << 63usize;
+        let large: BigInt = (BigInt::from(3) << 4096usize) + 5;
+        for initial in [
+            BigInt::from(3),
+            boundary.clone(),
+            -boundary - 1,
+            large.clone(),
+            -large,
+        ] {
+            for word in [i64::MIN, -3, -1, 0, 1, 7, i64::MAX] {
+                let number = BigInt::from(word);
+                for shared in [false, true] {
+                    let owner = Rc::new(initial.clone());
+                    let value = || {
+                        Int::Big(if shared {
+                            Rc::clone(&owner)
+                        } else {
+                            Rc::new(initial.clone())
+                        })
+                    };
+                    let small = Int::Small(word);
+                    for (actual, exact) in [
+                        (value() + small.clone(), &initial + &number),
+                        (small.clone() + value(), &number + &initial),
+                        (value() - small.clone(), &initial - &number),
+                        (small.clone() - value(), &number - &initial),
+                        (value() * small.clone(), &initial * &number),
+                        (small * value(), &number * &initial),
+                    ] {
+                        assert_eq!(actual.to_big(), exact);
+                        assert_eq!(matches!(actual, Int::Small(_)), exact.to_i64().is_some());
+                    }
+                    assert_eq!(owner.as_ref(), &initial);
+                }
+            }
+        }
+
+        let value = Rc::new(BigInt::from(i64::MAX) + 1);
+        let previous = Rc::downgrade(&value);
+        let result = Int::Big(value) + Int::Small(-1);
+        assert_eq!(result, Int::Small(i64::MAX));
+        assert!(previous.upgrade().is_none());
+        assert!(matches!(Int::Small(i64::MIN) * Int::Small(-1), Int::Big(_)));
+    }
+
+    #[test]
+    fn both_engines_dispatch_mixed_temporaries_and_keep_rational_fallbacks() {
+        use crate::value::NumKind;
+        use crate::value::Value;
+
+        let seed: BigInt = (BigInt::from(3) << 256usize) + 5;
+        let word = i64::MIN;
+        let source = format!(
+            "fn evaluate(seed: Int, word: Int): Int = word - ((seed + word) * (-3) - word)\n\
+             fn demote(seed: Int, word: Int): Int = word - seed\n\
+             let seed = {seed}\n\
+             let mixed = evaluate(seed, {word})\n\
+             let boundary = demote(9223372036854775808, 9223372036854775807)\n\
+             let quotient = 7 / 2\n\
+             let power = (-2) ^ 3\n"
+        );
+        let compilation = crate::compile("mixed_int.aev", &source);
+        assert!(
+            !compilation.diagnostics.has_errors(),
+            "{:?}",
+            compilation.diagnostics.items
+        );
+        let module = compilation.module.unwrap();
+        let expected: BigInt = BigInt::from(word) - ((&seed + word) * -3i64 - word);
+        for mode in [crate::Mode::Ast, crate::Mode::Ir] {
+            let mut interp = crate::Interp::new(&compilation.checked).with_mode(mode);
+            let diagnostics = interp.load(&module);
+            assert!(
+                !diagnostics.has_errors(),
+                "{mode:?}: {:?}",
+                diagnostics.items
+            );
+            for (name, expected) in [
+                ("mixed", expected.to_string()),
+                ("seed", seed.to_string()),
+                ("quotient", "7/2".into()),
+                ("power", "-8".into()),
+            ] {
+                let value = interp.eval_toplevel(name).unwrap();
+                assert_eq!(crate::value::repr(&value), expected, "{mode:?}: {name}");
+            }
+            let Value::Num(boundary) = interp.eval_toplevel("boundary").unwrap() else {
+                panic!("expected an integer result");
+            };
+            assert!(matches!(boundary.kind, NumKind::Int(Int::Small(-1))));
+        }
     }
 
     #[test]

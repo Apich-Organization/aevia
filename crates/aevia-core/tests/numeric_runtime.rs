@@ -9,6 +9,7 @@
 #![allow(clippy::result_large_err)]
 
 use aevia_core::Interp;
+use aevia_core::Mode;
 use aevia_core::builtins::call_simple;
 use aevia_core::value::NativeFn;
 use aevia_core::value::RecordValue;
@@ -69,7 +70,7 @@ fn samples_via(
 
 fn tensor_values(value: Value) -> Vec<f64> {
     let Value::Tensor(tensor) = value else {
-        panic!("`sample_n` answers a tensor")
+        panic!("expected a tensor")
     };
     tensor
         .elements()
@@ -141,6 +142,95 @@ fn an_unseeded_sample_advances_the_session_rng() {
     assert_ne!(first, second, "an unseeded sample advances the session RNG");
     let unit = samples_via(&mut interpreter, vec![uniform(), int(6), Value::Unit]);
     assert_eq!(unit.len(), 6, "the direct-dispatch shape still answers");
+}
+
+// ---------------------------------------------------------------------------
+// §8.7.1 — batch cumulative probabilities
+// ---------------------------------------------------------------------------
+
+#[test]
+fn batch_cdf_matches_scalar_calls_for_nominal_distributions() {
+    let source = "
+open Units.SI
+import Stats.Distributions { cdf_batch, cdf, Normal, Exponential, Poisson }
+
+let normal = Normal({ mu = 0.0 m, sigma = 1.0 m })
+let points = [0.0 m, 1.0 m, -8.0 m, 0.0 m]
+let batch: Tensor<1, Real[1]> = cdf_batch(normal, points[::-1])
+let scalar = [cdf(normal, 0.0 m), cdf(normal, -8.0 m), cdf(normal, 1.0 m), cdf(normal, 0.0 m)]
+let empty = cdf_batch(normal, points[0:0])
+
+let waiting = Exponential({ rate = 2.0 Hz })
+let times = cdf_batch(waiting, [0.0 s, 1.0 s])
+let counts = cdf_batch(Poisson({ lambda = 2.0 }), [-1.0, 0.0, 2.5])
+";
+    let program =
+        aevia_core::driver::load_with_source(std::path::Path::new("batch-cdf.aev"), source);
+    assert!(
+        !program.diagnostics.has_errors(),
+        "{:?}",
+        program.diagnostics.items
+    );
+    let entry = program.entry().expect("entry module");
+    for mode in [Mode::Ast, Mode::Ir] {
+        let mut interp = Interp::new(&entry.checked).with_mode(mode);
+        let diagnostics = aevia_core::driver::run_modules(&mut interp, &program);
+        assert!(
+            !diagnostics.has_errors(),
+            "{mode:?}: {:?}",
+            diagnostics.items
+        );
+        let mut evaluate = |name| {
+            let output = interp.eval_toplevel(name).expect("bound tensor");
+            let Value::Tensor(tensor) = &output else {
+                panic!("expected a tensor, got {output:?}");
+            };
+            assert!(tensor.dim.is_one());
+            tensor_values(output)
+        };
+        let batch = evaluate("batch");
+        assert_eq!(batch, evaluate("scalar"));
+        assert_eq!(batch[0], 0.5);
+        assert!(batch[1] > 0.0 && batch[1] < 1e-14, "{batch:?}");
+        assert!(evaluate("empty").is_empty());
+        let times = evaluate("times");
+        assert_eq!(times[0], 0.0);
+        assert!((times[1] - (1.0 - (-2.0_f64).exp())).abs() < 1e-14);
+        let counts = evaluate("counts");
+        assert_eq!(counts[0], 0.0);
+        assert!((counts[1] - (-2.0_f64).exp()).abs() < 1e-14);
+        assert!((counts[2] - 5.0 * (-2.0_f64).exp()).abs() < 1e-14);
+    }
+}
+
+#[test]
+fn batch_cdf_checks_domains_and_dimensions() {
+    let vector = |values: Vec<Value>| {
+        let len = values.len();
+        aevia_core::eval::build_tensor(values, vec![len], aevia_dim::Dim::one())
+    };
+    let endpoints = vector(vec![float(f64::NEG_INFINITY), int(2), float(f64::INFINITY)]);
+    assert_eq!(
+        samples("cdf_batch", vec![uniform(), endpoints]),
+        [0.0, 0.5, 1.0]
+    );
+    let invalid = record(vec![("mu", float(0.0)), ("sigma", float(0.0))]);
+    for args in [
+        vec![uniform(), vector(vec![float(f64::NAN)])],
+        vec![invalid, vector(Vec::new())],
+    ] {
+        let error = call_simple("cdf_batch", args).expect_err("invalid distribution or point");
+        assert_eq!(error.code, "E0806");
+    }
+    let dim = aevia_dim::Dim::base("Time");
+    let point = Value::Num(aevia_core::value::NumVal::float(0.25, dim.clone()));
+    let query = aevia_core::eval::build_tensor(vec![point], vec![1], dim);
+    let error = call_simple("cdf_batch", vec![uniform(), query]).expect_err("dimension mismatch");
+    assert_eq!(error.code, "E0401");
+
+    let matrix = aevia_core::eval::build_tensor(vec![int(0)], vec![1, 1], aevia_dim::Dim::one());
+    let error = call_simple("cdf_batch", vec![uniform(), matrix]).expect_err("vector expected");
+    assert_eq!(error.code, "E0802");
 }
 
 // ---------------------------------------------------------------------------

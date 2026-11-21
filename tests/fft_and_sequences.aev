@@ -70,6 +70,12 @@ test "rfftn and irfftn over rank 3" = shape(rfftn(cube)) == [2, 2, 2] && near3(i
 
 test "irfft takes an explicit length for odd signals" = near1(irfft(rfft([1.0, 2.0, 3.0, 4.0, 5.0]), 5), [1.0, 2.0, 3.0, 4.0, 5.0]) && near1(irfft(rfft([1.0, 2.0, 3.0, 4.0])), [1.0, 2.0, 3.0, 4.0])
 
+test "reordered real axes keep shape and sample units" =
+    let samples = map(fn x => x * 1.0 m, grid)
+    let spectrum = rfftn_axes(samples, [1, 0])
+    let rebuilt = irfftn_axes(spectrum, [1, 0], 3)
+    shape(spectrum) == [2, 4] && shape(rebuilt) == [3, 4] && norm(zip_with(fn (x, y) => x - y, rebuilt, samples)) < 1e-9 m
+
 ## ----- shifts and frequencies ---------------------------------------------------
 test "fftshift moves zero frequency to the middle" = fftshift([0, 1, 2, 3, 4, 5]) == [3, 4, 5, 0, 1, 2] && fftshift([0, 1, 2, 3, 4]) == [3, 4, 0, 1, 2]
 

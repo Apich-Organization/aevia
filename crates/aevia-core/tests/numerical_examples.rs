@@ -1,4 +1,4 @@
-//! Runnable dimensional examples exercise adaptive stochastic paths in both engines.
+//! Runnable dimensional examples exercise RSSN paths in both engines.
 use aevia_core::Interp;
 use aevia_core::Mode;
 use aevia_core::driver;
@@ -15,8 +15,18 @@ fn dimensioned_math_and_portable_models_work_in_both_engines() {
                 "portable_models.aev",
                 "physical_functions.aev",
                 "native_autodiff.aev",
+                "native_backend.aev",
+                "native_execution.aev",
                 "native_jacobian.aev",
                 "native_ode_objects.aev",
+                "native_linear_tensors.aev",
+                "native_particle_engines.aev",
+                "native_discrete_objects.aev",
+                "native_continuum_models.aev",
+                "native_flow_conservation.aev",
+                "native_kernel_families.aev",
+                "yee_plane_wave.aev",
+                "sde_adaptive_jump.aev",
             ] {
                 let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("../../examples")
@@ -29,6 +39,8 @@ fn dimensioned_math_and_portable_models_work_in_both_engines() {
                 );
                 let entry = program.entry().unwrap();
                 for mode in [Mode::Ast, Mode::Ir] {
+                    // Each example and engine represents a separate CLI invocation.
+                    aevia_rssn::reset();
                     let mut interp = Interp::new(&entry.checked).with_mode(mode);
                     let diagnostics = driver::run_modules(&mut interp, &program);
                     assert!(
@@ -44,7 +56,7 @@ fn dimensioned_math_and_portable_models_work_in_both_engines() {
                             body,
                         } = &declaration.kind
                         {
-                            let outcome = interp.eval(body, &root);
+                            let outcome = interp.eval_source_test(body, &root);
                             assert!(
                                 matches!(outcome, Ok(Value::Bool(true))),
                                 "{name} {mode:?}: {assertion}: {outcome:?}"

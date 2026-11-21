@@ -339,6 +339,7 @@ builtin_ids! {
     Median => "median",
     Mode => "mode",
     Quantile => "quantile",
+    Quantiles => "quantiles",
     Cov => "cov",
     Corr => "corr",
     Skewness => "skewness",
@@ -399,6 +400,7 @@ builtin_ids! {
     Interp1 => "interp1",
     Spline => "spline",
     Interp2 => "interp2",
+    Interp2Batch => "interp2Batch",
     Polyfit => "polyfit",
     ChebyshevFit => "chebyshev_fit",
     Polyval => "polyval",
@@ -482,6 +484,10 @@ builtin_ids! {
     MapNonzero => "map_nonzero",
     Nonzeros => "nonzeros",
     Get => "get",
+    CdfBatch => "cdf_batch",
+    TetrahedronVolume => "tetrahedron_volume",
+    ModPow => "mod_pow",
+    DistQuantile => "dist_quantile",
 }
 
 /// Slots in the per-thread resolution cache. A power of two.

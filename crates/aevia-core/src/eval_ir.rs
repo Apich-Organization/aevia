@@ -32,6 +32,8 @@ use crate::eval::Scalar;
 use crate::eval::SliceValue;
 use crate::eval::plain_scalar_binary;
 use crate::eval::slice_integer;
+use crate::fxhash::FxBuild;
+use crate::fxhash::FxHashMap;
 use crate::value::Closure;
 use crate::value::ClosureBody;
 use crate::value::ClosureEnv;
@@ -55,6 +57,7 @@ use aevia_ir::Function;
 use aevia_ir::Pattern;
 use aevia_ir::Rhs;
 use aevia_ir::Slice;
+use aevia_ir::Slot;
 use aevia_ir::Stmt;
 use aevia_ir::StrPart;
 use aevia_ir::Tail;
@@ -62,6 +65,7 @@ use aevia_syntax::Span;
 use aevia_syntax::ast::BinOp;
 use indexmap::IndexMap;
 use num_traits::ToPrimitive;
+use rssn::kernels::reuse::ScratchPool;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -200,8 +204,8 @@ pub(crate) fn run_closure(
         }
         interp.bindings.clone_from(&bindings);
         #[cfg(feature = "jit")]
-        let compiled_flow = {
-            let remaining = interp.max_tail_calls.saturating_sub(tail_calls);
+        let compiled_flow = if function.jit && interp.cancellation.is_none() {
+            // A cancellable activation needs the interpreter's checkpoints.
             // Host calls can pass values that differ from a source signature.
             // Native specialization is permitted only by an authenticated,
             // fully concrete activation whose parameter/result kinds agree.
@@ -257,80 +261,71 @@ pub(crate) fn run_closure(
                     }
                     kind(result)
                 });
-            let literals = crate::jit::specialization(&function, |number, span| {
-                let number = match number {
-                    | aevia_syntax::ast::NumberLit::Int(value) => {
-                        interp.integer_literal(value, span)
-                    },
-                    | aevia_syntax::ast::NumberLit::Decimal(value) => {
-                        interp.float_literal(value, span)
-                    },
-                }
-                .ok()?;
-                match number {
-                    | crate::value::NumVal {
-                        kind: crate::value::NumKind::Float(value),
-                        dim,
-                        display: None,
-                    } if dim == aevia_dim::Dim::one() => Some(crate::jit::Lit::F(value.to_bits())),
-                    | crate::value::NumVal {
-                        kind: crate::value::NumKind::Int(value),
-                        dim,
-                        display: None,
-                    } if dim == aevia_dim::Dim::one() => value.as_i64().map(crate::jit::Lit::I),
-                    | _ => None,
-                }
+            let outcome = expected.and_then(|expected| {
+                // Only an eligible activation needs literals from the whole body.
+                let literals = crate::jit::specialization(&function, |number, span| {
+                    let number = match number {
+                        | aevia_syntax::ast::NumberLit::Int(value) => {
+                            interp.integer_literal(value, span)
+                        },
+                        | aevia_syntax::ast::NumberLit::Decimal(value) => {
+                            interp.float_literal(value, span)
+                        },
+                    }
+                    .ok()?;
+                    match number {
+                        | crate::value::NumVal {
+                            kind: crate::value::NumKind::Float(value),
+                            dim,
+                            display: None,
+                        } if dim == aevia_dim::Dim::one() => {
+                            Some(crate::jit::Lit::F(value.to_bits()))
+                        },
+                        | crate::value::NumVal {
+                            kind: crate::value::NumKind::Int(value),
+                            dim,
+                            display: None,
+                        } if dim == aevia_dim::Dim::one() => value.as_i64().map(crate::jit::Lit::I),
+                        | _ => None,
+                    }
+                })?;
+                let remaining = interp.max_tail_calls.saturating_sub(tail_calls);
+                crate::jit::run_with(&function, &args, remaining, &literals, expected, |ask| {
+                    let callee_span = match ask {
+                        | crate::jit::Ask::Builtin(name) => {
+                            // The global must reach the builtin: no
+                            // scope, global or class method shadows it.
+                            return env
+                                .scope
+                                .as_ref()
+                                .is_none_or(|scope| scope.lookup(name).is_none())
+                                && !interp.globals.contains_key(name)
+                                && !interp.method_classes.contains_key(name)
+                                && aevia_types::builtins::is_builtin(name);
+                        },
+                        | crate::jit::Ask::IsSelf(span) => span,
+                    };
+                    // Native code may loop only while this name still points to the
+                    // same canonical closure and the actual recursive source call
+                    // preserves every selected generic binding.
+                    let Ok(target) = eval_atom(
+                        interp,
+                        &Atom::Global(function.name.to_string()),
+                        &frame,
+                        &env,
+                        function.span,
+                    ) else {
+                        return false;
+                    };
+                    interp.self_specialization_matches(
+                        &current_closure,
+                        current_instance.as_ref(),
+                        &target,
+                        callee_span,
+                        &args,
+                    )
+                })
             });
-            let outcome = if interp.cancellation.is_some() {
-                None
-            } else {
-                expected
-                    .zip(literals.as_deref())
-                    .and_then(|(expected, literals)| {
-                        crate::jit::run_with(
-                            &function,
-                            &args,
-                            remaining,
-                            literals,
-                            expected,
-                            |ask| {
-                                let callee_span = match ask {
-                                    | crate::jit::Ask::Builtin(name) => {
-                                        // The global must reach the builtin: no
-                                        // scope, global or class method shadows it.
-                                        return env
-                                            .scope
-                                            .as_ref()
-                                            .is_none_or(|scope| scope.lookup(name).is_none())
-                                            && !interp.globals.contains_key(name)
-                                            && !interp.method_classes.contains_key(name)
-                                            && aevia_types::builtins::is_builtin(name);
-                                    },
-                                    | crate::jit::Ask::IsSelf(span) => span,
-                                };
-                                // Native code may loop only while this name still points to the
-                                // same canonical closure and the actual recursive source call
-                                // preserves every selected generic binding.
-                                let Ok(target) = eval_atom(
-                                    interp,
-                                    &Atom::Global(function.name.to_string()),
-                                    &frame,
-                                    &env,
-                                    function.span,
-                                ) else {
-                                    return false;
-                                };
-                                interp.self_specialization_matches(
-                                    &current_closure,
-                                    current_instance.as_ref(),
-                                    &target,
-                                    callee_span,
-                                    &args,
-                                )
-                            },
-                        )
-                    })
-            };
             match outcome {
                 | Some(crate::jit::Outcome::Value(value)) => Some(Flow::Value(value)),
                 | Some(crate::jit::Outcome::Tail { args, span, consumed }) => {
@@ -349,6 +344,8 @@ pub(crate) fn run_closure(
                 },
                 | None => None,
             }
+        } else {
+            None
         };
         #[cfg(not(feature = "jit"))]
         let compiled_flow: Option<Flow> = None;
@@ -774,9 +771,8 @@ fn eval_dictionary_call(
     }
 }
 
-/// Evaluates a call's arguments. `last_use` says the frame is dead once the
-/// arguments are read (a tail call leaving the function), so a slot passed
-/// once is moved into the argument list instead of cloned.
+/// Evaluates a call's arguments. When the frame is dead after the call,
+/// move each local into its last argument position instead of cloning it.
 fn eval_call_args(
     interp: &mut Interp,
     call: &Call,
@@ -784,6 +780,10 @@ fn eval_call_args(
     env: &Rc<IrEnv>,
     last_use: bool,
 ) -> Result<Vec<Value>, EvalError> {
+    // Wide calls can spend more time scanning suffixes than moving values.
+    if last_use && call.args.len() >= 64 {
+        return eval_wide_tail_args(interp, call, frame, env);
+    }
     let mut values = interp.take_buffer(call.args.len());
     for (index, atom) in call.args.iter().enumerate() {
         let span = call.arg_spans.get(index).copied().unwrap_or(call.span);
@@ -793,6 +793,69 @@ fn eval_call_args(
                 .args
                 .get(index.saturating_add(1)..)
                 .is_some_and(|rest| !rest.contains(atom))
+            && let Some(value) = frame.get_mut(*slot as usize)
+        {
+            std::mem::replace(value, Value::Unit)
+        } else {
+            eval_atom(interp, atom, frame, env, span)?
+        };
+        values.push(interp.attach_checked_type(value, span));
+    }
+    Ok(values)
+}
+
+#[expect(
+    clippy::single_call_fn,
+    reason = "keep the last-use index out of the ordinary call stack"
+)]
+#[inline(never)]
+fn eval_wide_tail_args(
+    interp: &mut Interp,
+    call: &Call,
+    frame: &mut [Value],
+    env: &Rc<IrEnv>,
+) -> Result<Vec<Value>, EvalError> {
+    let argc = call.args.len();
+    if frame.len() <= argc.saturating_mul(4) {
+        static LAST_USES: ScratchPool<usize> = ScratchPool::new(8, 64 * 1024);
+        let mut last = LAST_USES.checkout_for(frame.len());
+        last.resize(frame.len(), argc);
+        for (index, atom) in call.args.iter().enumerate() {
+            if let Atom::Local(slot) = atom
+                && let Some(position) = last.get_mut(*slot as usize)
+            {
+                *position = index;
+            }
+        }
+        return read_call_args(interp, call, frame, env, |index, slot| {
+            last.get(slot as usize) == Some(&index)
+        });
+    }
+
+    // A sparse call can refer to slots anywhere in a much larger frame.
+    let mut last = FxHashMap::with_capacity_and_hasher(argc, FxBuild::default());
+    for (index, atom) in call.args.iter().enumerate() {
+        if let Atom::Local(slot) = atom {
+            last.insert(*slot, index);
+        }
+    }
+    read_call_args(interp, call, frame, env, |index, slot| {
+        last.get(&slot) == Some(&index)
+    })
+}
+
+fn read_call_args(
+    interp: &mut Interp,
+    call: &Call,
+    frame: &mut [Value],
+    env: &Rc<IrEnv>,
+    is_last: impl Fn(usize, Slot) -> bool,
+) -> Result<Vec<Value>, EvalError> {
+    let mut values = interp.take_buffer(call.args.len());
+    for (index, atom) in call.args.iter().enumerate() {
+        let span = call.arg_spans.get(index).copied().unwrap_or(call.span);
+        let value = if let Atom::Local(slot) = atom
+            && is_last(index, *slot)
             && let Some(value) = frame.get_mut(*slot as usize)
         {
             std::mem::replace(value, Value::Unit)
@@ -1236,8 +1299,8 @@ fn eval_rhs_rest(
             Ok(Value::string(out))
         },
         | Rhs::Try(atom) => {
-            let value = eval_atom(interp, atom, frame, env, span)?;
-            interp.try_value(&value, span)
+            let mut value = eval_atom(interp, atom, frame, env, span)?;
+            interp.try_value(&mut value, span)
         },
         | Rhs::Factorial { value, double } => {
             let value = eval_atom(interp, value, frame, env, span)?;

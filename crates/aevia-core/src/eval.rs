@@ -1661,6 +1661,23 @@ impl Interp {
         self.eval_expression(expr, env, true)
     }
 
+    /// Evaluates a checked source `test` in its own native-object scope.
+    /// File-scope objects stay available across tests. Objects created by this
+    /// test expire when the expression returns, including on failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns the expression's evaluation error or an RSSN scope error.
+    pub fn eval_source_test(
+        &mut self,
+        expr: &Expr,
+        env: &Rc<Scope>,
+    ) -> Result<Value, EvalError> {
+        aevia_rssn::kernel()
+            .with_native_object_scope(|| self.eval(expr, env))
+            .map_err(|error| EvalError::new("E1001", error).at(expr.span))?
+    }
+
     fn eval_callee(
         &mut self,
         expr: &Expr,
@@ -2191,8 +2208,8 @@ impl Interp {
                 Err(EvalError::new("E0202", "`_` cannot be evaluated outside a call").at(expr.span))
             },
             | ExprKind::Try(inner) => {
-                let value = self.eval(inner, env)?;
-                self.try_value(&value, expr.span)
+                let mut value = self.eval(inner, env)?;
+                self.try_value(&mut value, expr.span)
             },
             | ExprKind::Factorial { expr: inner, double } => {
                 self.eval_factorial(inner, *double, env, expr.span)
@@ -3488,8 +3505,8 @@ impl Interp {
     #[inline(never)]
     fn exact_arithmetic(
         op: BinOp,
-        left: NumVal,
-        right: NumVal,
+        mut left: NumVal,
+        mut right: NumVal,
         dim: Dim,
         span: Span,
     ) -> Result<NumVal, EvalError> {
@@ -3500,15 +3517,16 @@ impl Interp {
             matches!(left.kind, NumKind::Int(_)) && matches!(right.kind, NumKind::Int(_));
         // `Int` arithmetic that stays `Int` needs no rationals: the same
         // answers as the general path below, without a `gcd` per operation.
-        if let (NumKind::Int(a), NumKind::Int(b)) = (&left.kind, &right.kind) {
+        if let (NumKind::Int(a), NumKind::Int(b)) = (&mut left.kind, &mut right.kind) {
+            // These operations finish here and can reuse owned integer storage.
             #[allow(
                 clippy::arithmetic_side_effects,
                 reason = "Int promotes to arbitrary precision when machine arithmetic overflows"
             )]
             let value = match op {
-                | BinOp::Add => Some(a + b),
-                | BinOp::Sub => Some(a - b),
-                | BinOp::Mul => Some(a * b),
+                | BinOp::Add => Some(std::mem::take(a) + std::mem::take(b)),
+                | BinOp::Sub => Some(std::mem::take(a) - std::mem::take(b)),
+                | BinOp::Mul => Some(std::mem::take(a) * std::mem::take(b)),
                 | BinOp::Pow => {
                     b.as_i64()
                         .and_then(|e| u32::try_from(e).ok())

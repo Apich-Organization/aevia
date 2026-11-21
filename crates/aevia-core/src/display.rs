@@ -4,8 +4,10 @@
 //! `Repr` retains Aevia's exact phase and symbol identity; no renderer parses
 //! `Show` text back into an expression to obtain a different layout.
 
+use crate::value::ExactRep;
 use crate::value::MathSyntax;
 use crate::value::NumKind;
+use crate::value::Storage;
 use crate::value::Value;
 use crate::value::{
     self,
@@ -70,9 +72,25 @@ fn pretty(value: &Value) -> Result<String, String> {
                         .ok_or_else(|| "scalar tensor has no element".to_string())?,
                 );
             }
-            let mathematical = (0..logical).all(|index| {
-                matches!(tensor.get_flat(index), Some(Value::Num(number)) if !matches!(number.kind, NumKind::Complex(..)))
-            });
+            // The classification examines the logical prefix. Conversion
+            // separately validates the complete storage length.
+            let mathematical = match &tensor.storage {
+                | Storage::Dense(values) => values.len() >= logical,
+                | Storage::Exact(values) | Storage::TypedExact(values, ExactRep::Real) => {
+                    values.len() >= logical
+                },
+                | Storage::TypedExact(values, ExactRep::Int) => {
+                    values.get(..logical).is_some_and(|values| {
+                        values.iter().all(num_rational::BigRational::is_integer)
+                    })
+                },
+                | Storage::View(_) | Storage::SharedSlice(_) if tensor.dense().is_some() => true,
+                | _ => {
+                    (0..logical).all(|index| {
+                        matches!(tensor.get_flat(index), Some(Value::Num(number)) if !matches!(number.kind, NumKind::Complex(..)))
+                    })
+                },
+            };
             if mathematical {
                 let body = pretty_math(value)?;
                 Ok(with_unit(body, &value::si_unit_text(&tensor.dim)))

@@ -1,0 +1,27 @@
+## Symbolic claims verified by RSSN and decoded as Aevia Booleans.
+let x: Real = symbol("x")
+let plus: Real = symbol("plus")
+let minus: Real = symbol("minus")
+
+fn verify_claim(name: String, args: Tensor<1, Value>, expected: Bool): Bool =
+    match Rssn.typed(name, args, type_rep<Bool>()) with
+    | Ok(value) ->
+        match from_value<Bool>(value) with
+        | Ok(proved) -> proved == expected
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "the two-sided result is a Boolean" =
+    let continuous = verify_claim("verify_limit", [to_value(x), to_value(x), to_value(0), to_value(0)], true)
+    let wrong = verify_claim("verify_limit", [to_value(x), to_value(x), to_value(0), to_value(1 / 1000)], false)
+    continuous && wrong
+
+test "the two sides of a jump are checked separately" =
+    let f = abs(x) / x
+    let right = verify_claim("verify_limit", [to_value(f), to_value(x), to_value(0), to_value(1), to_value(plus)], true)
+    let left = verify_claim("verify_limit", [to_value(f), to_value(x), to_value(0), to_value(-1), to_value(minus)], true)
+    let two_sided = verify_claim("verify_limit", [to_value(f), to_value(x), to_value(0), to_value(1)], false)
+    right && left && two_sided
+
+test "the refuted derivative comes back as a Boolean value" =
+    verify_claim("verify_derivative", [to_value(x), to_value(x), to_value(1 + 1 / 100000000000000)], false)

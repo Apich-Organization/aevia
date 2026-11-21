@@ -829,7 +829,7 @@ impl Package {
             hash: None,
             checksum: None,
         };
-        let mut hashes: BTreeMap<PathBuf, String> = BTreeMap::new();
+        let hashes = hash_path_packages(&graph)?;
         let mut packages = Vec::new();
         for (alias, identity) in &graph.aliases {
             if let Some(node) = graph.registry.get(identity) {
@@ -844,20 +844,18 @@ impl Package {
                 continue;
             }
             let package = graph.package_at(identity)?;
-            let hash = match hashes.get(identity) {
-                | Some(hash) => hash.clone(),
-                | None => {
-                    let hash = hash_package(package)?;
-                    hashes.insert(identity.clone(), hash.clone());
-                    hash
-                },
-            };
+            let hash = hashes.get(identity.as_path()).ok_or_else(|| {
+                ManifestError::new(
+                    "E0607",
+                    format!("no hash for path package `{}`", identity.display()),
+                )
+            })?;
             packages.push(LockedPackage {
                 name: package.manifest.name.clone(),
                 version: package.manifest.version.clone(),
                 import: alias.clone(),
                 source: format!("path+{}", relative_to(&graph.root, identity)),
-                hash: Some(hash),
+                hash: Some(hash.clone()),
                 checksum: None,
             });
         }
@@ -2584,6 +2582,39 @@ fn absolute(path: &Path) -> PathBuf {
         return path.to_path_buf();
     }
     std::env::current_dir().map_or_else(|_| path.to_path_buf(), |cwd| cwd.join(path))
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "separate path package hashing from lock assembly"
+)]
+fn hash_path_packages(graph: &PackageGraph) -> Result<BTreeMap<&Path, String>, ManifestError> {
+    use rayon::prelude::*;
+
+    let mut seen = BTreeSet::new();
+    let paths: Vec<_> = graph
+        .aliases
+        .values()
+        .filter(|path| !graph.registry.contains_key(*path))
+        .map(PathBuf::as_path)
+        .filter(|path| seen.insert(*path))
+        .collect();
+    let hash = |path: &&Path| graph.package_at(path).and_then(hash_package);
+    if aevia_rssn::execution::should_split(paths.len(), 4) {
+        // Indexed collection keeps the first alias's diagnostic even when
+        // another package finishes reading first.
+        let results: Vec<_> = paths.par_iter().map(hash).collect();
+        paths
+            .into_iter()
+            .zip(results)
+            .map(|(path, result)| Ok((path, result?)))
+            .collect()
+    } else {
+        paths
+            .into_iter()
+            .map(|path| Ok((path, hash(&path)?)))
+            .collect()
+    }
 }
 
 /// The package's resolution contract is part of its content: source-only

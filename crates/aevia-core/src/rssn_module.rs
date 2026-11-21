@@ -52,6 +52,7 @@ use aevia_rssn::OpEntry;
 use aevia_rssn::OpKey;
 use aevia_rssn::SigType;
 use aevia_rssn::Val;
+use aevia_rssn::kernel::NativeArgument;
 use aevia_rssn::registry;
 use aevia_syntax::Span;
 use std::collections::HashMap;
@@ -428,11 +429,39 @@ pub(crate) fn call_operator_with_evidence(
         let _ = args.pop();
         args.extend(items);
     }
-    let converted = args
-        .iter()
-        .map(bridge::to_val)
-        .collect::<Result<Vec<_>, _>>()?;
+    let converted = prepare_checked_arguments(&args, Some(entry))?;
     execute_checked(key, entry, &args, &converted, span, expected)
+}
+
+enum PreparedArguments<'a> {
+    Native(Vec<NativeArgument<'a>>),
+    Neutral(Vec<Val>),
+}
+
+fn prepare_checked_arguments<'a>(
+    args: &'a [Value],
+    entry: Option<&OpEntry>,
+) -> Result<PreparedArguments<'a>, EvalError> {
+    if entry.is_some_and(|entry| entry.is_value_native() && entry.source.is_exact()) {
+        return args
+            .iter()
+            .map(|arg| {
+                if let Value::Tensor(tensor) = arg
+                    && let Some(data) = tensor.dense()
+                    && data.len() >= 256
+                    && let Some(borrowed) = NativeArgument::dense_float(&tensor.shape, data)
+                {
+                    return Ok(borrowed);
+                }
+                bridge::to_val(arg).map(NativeArgument::from)
+            })
+            .collect::<Result<_, _>>()
+            .map(PreparedArguments::Native);
+    }
+    args.iter()
+        .map(bridge::to_val)
+        .collect::<Result<_, _>>()
+        .map(PreparedArguments::Neutral)
 }
 
 /// Executes a resolved overload on converted arguments.
@@ -440,7 +469,7 @@ fn execute_checked(
     key: &OpKey,
     entry: &OpEntry,
     args: &[Value],
-    converted: &[Val],
+    converted: &PreparedArguments<'_>,
     span: Span,
     expected: Option<&aevia_types::Type>,
 ) -> Result<Value, EvalError> {
@@ -454,18 +483,19 @@ fn execute_checked(
     } else {
         None
     };
-    let (value, returned_witness) = if entry.is_value_native() && entry.source.is_exact() {
-        let inputs: Vec<_> = args.iter().map(host_dimension_witness).collect();
-        let (value, witness) = aevia_rssn::kernel()
-            .call_key_with_witnesses(key, converted, &inputs)
-            .map_err(|failure| bridge::error(&failure).at(span))?;
-        (value, Some(witness))
-    } else {
-        let value = aevia_rssn::kernel()
-            .call_key(key, converted)
-            .map_err(|failure| bridge::error(&failure).at(span))?;
-        (value, None)
-    };
+    let kernel = aevia_rssn::kernel();
+    let (value, returned_witness) = match converted {
+        | PreparedArguments::Native(converted) => {
+            let inputs: Vec<_> = args.iter().map(host_dimension_witness).collect();
+            kernel
+                .call_key_with_native_arguments(key, converted, &inputs)
+                .map(|(value, witness)| (value, Some(witness)))
+        },
+        | PreparedArguments::Neutral(converted) => {
+            kernel.call_key(key, converted).map(|value| (value, None))
+        },
+    }
+    .map_err(|failure| bridge::error(&failure).at(span))?;
     if let (Some(sig), Some(dimensions)) = (signature, dimensions) {
         if let Some(witness) = &returned_witness {
             verify_result_witness(&sig.ret, witness, &dimensions, span)?;
@@ -482,49 +512,61 @@ fn execute_checked(
 
 /// The source value's dimension is evidence, including for an empty tensor.
 pub(crate) fn host_dimension_witness(value: &Value) -> aevia_rssn::witness::DimensionWitness {
+    use crate::value::Storage;
     use aevia_rssn::witness::DimensionWitness as W;
     match value {
         | Value::KernelValue(value) => value.witness.clone(),
         | Value::Num(_) | Value::Dyn(_) => W::Scalar(crate::value::value_dim(value)),
         | Value::Tensor(tensor) => {
-            let nested = (0..tensor.storage.len()).any(|i| {
-                tensor.get_flat(i).is_some_and(|item| {
-                    matches!(
-                        item,
-                        Value::Tensor(_)
-                            | Value::Record(_)
-                            | Value::KernelValue(_)
-                            | Value::Dyn(_)
-                            | Value::Variant(_)
-                    )
-                })
-            });
-            let elements = if nested {
-                (0..tensor.storage.len())
-                    .filter_map(|i| tensor.get_flat(i))
-                    .map(|v| host_dimension_witness(&v))
-                    .collect()
-            } else {
-                Vec::new()
+            // A primitive buffer cannot contain nested witnesses. Walking it
+            // would only materialize scalar Values, including copied rationals.
+            let (mut element_repr, may_nest) = match tensor.storage.backing() {
+                | Storage::Dense(_) | Storage::View(_) => (Some(SigType::Float), false),
+                | Storage::TypedExact(_, crate::value::ExactRep::Int) => {
+                    (Some(SigType::Int), false)
+                },
+                | Storage::TypedExact(_, crate::value::ExactRep::Real) => {
+                    (Some(SigType::Real), false)
+                },
+                | Storage::Bool(_) => (Some(SigType::Bool), false),
+                | Storage::Exact(_) => (None, false),
+                | _ => (None, true),
             };
-            let mut element_repr = match tensor.storage.backing() {
-                | crate::value::Storage::Dense(_) | crate::value::Storage::View(_) => {
-                    Some(SigType::Float)
-                },
-                | crate::value::Storage::TypedExact(_, crate::value::ExactRep::Int) => {
-                    Some(SigType::Int)
-                },
-                | crate::value::Storage::TypedExact(_, crate::value::ExactRep::Real) => {
-                    Some(SigType::Real)
-                },
-                | crate::value::Storage::Bool(_) => Some(SigType::Bool),
-                | _ => None,
+            let is_nested = |item: &Value| {
+                matches!(
+                    item,
+                    Value::Tensor(_)
+                        | Value::Record(_)
+                        | Value::KernelValue(_)
+                        | Value::Dyn(_)
+                        | Value::Variant(_)
+                )
             };
-            // An empty tensor's element schema cannot be read from its data.
-            // Private tensor provenance can establish it, but only after the
-            // current public shape and storage have been revalidated.
+            let elements = match &tensor.storage {
+                | Storage::Boxed(items) => {
+                    if items.iter().any(is_nested) {
+                        items.iter().map(host_dimension_witness).collect()
+                    } else {
+                        Vec::new()
+                    }
+                },
+                | _ if may_nest
+                    && (0..tensor.storage.len())
+                        .any(|i| tensor.get_flat(i).as_ref().is_some_and(is_nested)) =>
+                {
+                    // Logical windows can change the metadata on a scalar.
+                    // Read only their own elements when building the witness.
+                    (0..tensor.storage.len())
+                        .filter_map(|i| tensor.get_flat(i))
+                        .map(|item| host_dimension_witness(&item))
+                        .collect()
+                },
+                | _ => Vec::new(),
+            };
+            // Boxed storage does not establish a uniform representation.
+            // Reuse the verified element schema after checking shape and storage.
             let mut element = None;
-            if tensor.storage.is_empty()
+            if (element_repr.is_none() || tensor.storage.is_empty())
                 && let Some(schema) = tensor.verified_element.as_deref()
             {
                 let rank = u32::try_from(tensor.shape.len()).ok();
@@ -565,6 +607,172 @@ pub(crate) fn host_dimension_witness(value: &Value) -> aevia_rssn::witness::Dime
             )
         },
         | _ => W::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod tensor_witness_storage_tests {
+    use super::*;
+    use crate::value::ExactRep;
+    use crate::value::RecordValue;
+    use crate::value::Storage;
+    use crate::value::TensorData;
+    use aevia_rssn::witness::DimensionWitness as W;
+    use aevia_types::Type;
+    use num_rational::BigRational;
+
+    fn uniform(
+        dim: &Dim,
+        repr: Option<SigType>,
+    ) -> W {
+        W::Tensor {
+            dimension: Some(dim.clone()),
+            element: None,
+            element_repr: repr,
+            elements: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn primitive_tensors_and_slices_keep_storage_representation() {
+        let length = Dim::base("Length");
+        let dense = TensorData::new(
+            vec![2, 2],
+            Storage::Dense(Rc::new(vec![0.0, 1.0, 2.0, 3.0])),
+            length.clone(),
+            None,
+        );
+        let reversed = dense.transposed_view().unwrap().reversed_view(1).unwrap();
+        for tensor in [dense, reversed] {
+            assert_eq!(
+                host_dimension_witness(&Value::Tensor(Rc::new(tensor))),
+                uniform(&length, Some(SigType::Float))
+            );
+        }
+
+        let ratio = BigRational::new(2.into(), 3.into());
+        let integer = BigRational::from_integer(17.into());
+        for (storage, repr) in [
+            (
+                Storage::TypedExact(vec![integer; 2], ExactRep::Int),
+                Some(SigType::Int),
+            ),
+            (
+                Storage::TypedExact(vec![ratio.clone(); 2], ExactRep::Real),
+                Some(SigType::Real),
+            ),
+            (Storage::Exact(vec![ratio; 2]), None),
+            (Storage::Bool(vec![false, true]), Some(SigType::Bool)),
+        ] {
+            let dim = if repr == Some(SigType::Bool) {
+                Dim::one()
+            } else {
+                length.clone()
+            };
+            let tensor = Rc::new(TensorData::new(vec![2], storage, dim.clone(), None));
+            let tail = tensor.tail_view(1).unwrap();
+            for view in [tensor, tail] {
+                assert_eq!(
+                    host_dimension_witness(&Value::Tensor(view)),
+                    uniform(&dim, repr.clone())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn boxed_slice_collects_the_surviving_nested_witnesses_in_order() {
+        let one = Dim::one();
+        let length = Dim::base("Length");
+        let record = Value::Record(Rc::new(RecordValue {
+            fields: [(
+                "point".to_owned(),
+                Value::Num(crate::value::NumVal::float(4.0, length.clone())),
+            )]
+            .into(),
+        }));
+        let flags = Value::Tensor(Rc::new(TensorData::new(
+            vec![1],
+            Storage::Bool(vec![true]),
+            one.clone(),
+            None,
+        )));
+        let boxed = Rc::new(TensorData::new(
+            vec![3],
+            Storage::Boxed(vec![Value::Unit, record, flags]),
+            one.clone(),
+            None,
+        ));
+        let W::Tensor { elements, .. } = host_dimension_witness(&Value::Tensor(boxed.clone()))
+        else {
+            panic!("expected the recursive witness of the direct tensor");
+        };
+        assert_eq!(elements.len(), 3);
+        assert_eq!(elements.first(), Some(&W::Unknown));
+        let tail = Value::Tensor(boxed.tail_view(1).unwrap());
+        assert_eq!(
+            host_dimension_witness(&tail),
+            W::Tensor {
+                dimension: Some(one.clone()),
+                element: None,
+                element_repr: None,
+                elements: vec![
+                    W::Record(vec![("point".to_owned(), W::Scalar(length))]),
+                    uniform(&one, Some(SigType::Bool)),
+                ],
+            },
+        );
+    }
+
+    #[test]
+    fn boxed_slice_ignores_nested_elements_before_its_window() {
+        let time = Dim::base("Time");
+        let nested = Value::Record(Rc::new(RecordValue {
+            fields: Default::default(),
+        }));
+        let tensor = Rc::new(TensorData::new(
+            vec![3],
+            Storage::Boxed(vec![nested, Value::float(1.0), Value::float(2.0)]),
+            time.clone(),
+            None,
+        ));
+        let W::Tensor { elements, .. } = host_dimension_witness(&Value::Tensor(tensor.clone()))
+        else {
+            panic!("expected a boxed tensor witness");
+        };
+        assert_eq!(elements.len(), 3);
+        let tail = Value::Tensor(tensor.tail_view(1).unwrap());
+        assert_eq!(host_dimension_witness(&tail), uniform(&time, None));
+    }
+
+    #[test]
+    fn checked_empty_tensor_schema_still_requires_matching_extent() {
+        let length = Dim::base("Length");
+        let empty = TensorData::checked(
+            vec![2, 0],
+            Storage::Dense(Rc::new(Vec::new())),
+            length.clone(),
+            None,
+            Type::float(length.clone()),
+        )
+        .unwrap();
+        assert_eq!(
+            host_dimension_witness(&Value::Tensor(Rc::new(empty.clone()))),
+            W::Tensor {
+                dimension: Some(length.clone()),
+                element: Some(Box::new(W::Scalar(length.clone()))),
+                element_repr: Some(SigType::Float),
+                elements: Vec::new(),
+            },
+        );
+        let mut malformed = empty;
+        malformed.shape = vec![2, 1];
+        let malformed = Value::Tensor(Rc::new(malformed));
+        assert_eq!(
+            host_dimension_witness(&malformed),
+            uniform(&length, Some(SigType::Float))
+        );
+        assert_eq!(bridge::to_val(&malformed).unwrap_err().code, "E0809");
     }
 }
 
@@ -663,6 +871,14 @@ fn empty_schema_matches(
                 )
         },
         | (Type::Bool, SigType::Bool, W::Unknown) | (Type::Str, SigType::Str, W::Unknown) => true,
+        | (Type::Adt(id, args), SigType::Variant(cases), W::OptionSchema(proof))
+            if *id == aevia_types::adt::OPTION_ID =>
+        {
+            match (args.as_slice(), aevia_rssn::registry::option_payload(cases)) {
+                | ([expected], Some(payload)) => empty_schema_matches(expected, payload, proof),
+                | _ => false,
+            }
+        },
         | (
             Type::Tensor { shape, elem },
             SigType::Tensor {
@@ -842,6 +1058,14 @@ fn verify_result_witness(
             }
             Ok(())
         },
+        | (SigType::Variant(cases), W::OptionSchema(proof)) => {
+            let Some(payload) = aevia_rssn::registry::option_payload(cases) else {
+                return Err(
+                    EvalError::new("E1004", "kernel returned an invalid Option schema").at(span),
+                );
+            };
+            verify_result_witness(payload, proof, dims, span)
+        },
         | (SigType::Record(fields), W::Record(actual)) => {
             for (name, field) in fields {
                 let Some((_, value)) = actual.iter().find(|(field, _)| field == name) else {
@@ -997,6 +1221,12 @@ fn bind_witness(
                 for (sig, proof) in schema.iter().zip(fields) {
                     bind_witness(sig, proof, dims, span)?;
                 }
+            }
+            Ok(())
+        },
+        | (SigType::Variant(cases), W::OptionSchema(proof)) => {
+            if let Some(payload) = aevia_rssn::registry::option_payload(cases) {
+                bind_witness(payload, proof, dims, span)?;
             }
             Ok(())
         },
@@ -1165,25 +1395,7 @@ fn result_with_dimensions(
         | (
             Val::Tensor { shape, data },
             SigType::Tensor { elem, .. } | SigType::Sparse { elem, .. },
-        ) => {
-            let dim = match &**elem {
-                | SigType::Dim(_, d) | SigType::Point(d) => {
-                    resolve_result_dimension(d, dims, span)?
-                },
-                | _ => Dim::one(),
-            };
-            let mut output = Vec::with_capacity(data.len());
-            for item in data {
-                output.push(result_with_dimensions(item, elem, dims, span)?);
-            }
-            Ok(Value::Tensor(Rc::new(crate::value::TensorData {
-                verified_element: None,
-                shape: shape.clone(),
-                storage: crate::value::Storage::Boxed(output),
-                dim,
-                display: None,
-            })))
-        },
+        ) => result_tensor_with_dimensions(shape, data, elem, sig, dims, span),
         | (_, SigType::Dim(_, dim) | SigType::Point(dim)) => {
             Ok(bridge::from_val(
                 value,
@@ -1192,6 +1404,78 @@ fn result_with_dimensions(
         },
         | _ => Ok(bridge::from_val(value, Dim::one())),
     }
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "preserves uniform Float storage and recursive fallback in one tensor result boundary"
+)]
+fn result_tensor_with_dimensions(
+    shape: &[usize],
+    data: &[Val],
+    elem: &SigType,
+    sig: &SigType,
+    dims: &DimUnifier,
+    span: Span,
+) -> Result<Value, EvalError> {
+    let dim = match elem {
+        | SigType::Dim(_, d) | SigType::Point(d) => resolve_result_dimension(d, dims, span)?,
+        | _ => Dim::one(),
+    };
+    let float_elem = matches!(elem, SigType::Float)
+        || matches!(elem, SigType::Dim(inner, _) if matches!(inner.as_ref(), SigType::Float));
+    let storage = if float_elem {
+        let matching_shape = matches!(
+            sig,
+            SigType::Tensor { rank, shape: declared, .. }
+                if rank.is_none_or(|rank| rank == shape.len())
+                    && declared.as_deref().is_none_or(|declared| declared == shape)
+        );
+        let packed =
+            if matching_shape && crate::value::checked_element_count(shape) == Some(data.len()) {
+                packed_float_storage(data)
+            } else {
+                None
+            };
+        packed.unwrap_or_else(|| {
+            // Both scalar signatures decode each leaf with this same resolved
+            // dimension. Keep the ordinary bridge conversion for mixed and
+            // unit-bearing leaves without resolving the dimension again.
+            crate::value::Storage::Boxed(
+                data.iter()
+                    .map(|item| bridge::from_val(item, dim.clone()))
+                    .collect(),
+            )
+        })
+    } else {
+        let mut output = Vec::with_capacity(data.len());
+        for item in data {
+            output.push(result_with_dimensions(item, elem, dims, span)?);
+        }
+        crate::value::Storage::Boxed(output)
+    };
+    Ok(Value::Tensor(Rc::new(crate::value::TensorData::new(
+        shape.to_vec(),
+        storage,
+        dim,
+        None,
+    ))))
+}
+
+// An explicit Float on every wire element is required. Exact, structured and
+// mixed payloads retain their full values through the recursive fallback.
+fn packed_float_storage(data: &[Val]) -> Option<crate::value::Storage> {
+    if !matches!(data.first(), Some(Val::Num(aevia_rssn::Num::Float(_)))) {
+        return None;
+    }
+    let mut values = Vec::with_capacity(data.len());
+    for item in data {
+        let Val::Num(aevia_rssn::Num::Float(value)) = item else {
+            return None;
+        };
+        values.push(*value);
+    }
+    Some(crate::value::Storage::Dense(Rc::new(values)))
 }
 
 /// The `OpKey` a `Rssn.<name>` call with these argument types denotes.
@@ -1592,11 +1876,8 @@ fn invoke(
         .map(show)
         .ok_or_else(|| EvalError::new("E0315", "`Rssn.invoke` needs a signature hash").at(span))?;
     let values = dynamic_arguments(args.get(2), span)?;
-    let mut converted = Vec::with_capacity(values.len());
-    for value in &values {
-        converted.push(bridge::to_val(value)?);
-    }
     let entry = registry().op(&name);
+    let converted = prepare_checked_arguments(&values, entry)?;
     let Some(key) = entry.and_then(|entry| pinned_key(entry, &hash)) else {
         return Err(EvalError::new(
             "E1005",
@@ -1836,6 +2117,88 @@ mod dimension_contract_tests {
         );
     }
     #[test]
+    fn static_float_tensor_storage_needs_matching_shape_and_explicit_float_leaves() {
+        let dim = Dim::nominal_base("books", "Credit").with_display_name("CustomerCredit");
+        let signature = SigType::Tensor {
+            rank: Some(1),
+            shape: Some(vec![2]),
+            elem: Box::new(SigType::Dim(Box::new(SigType::Float), dim.clone())),
+        };
+        let dims = DimUnifier::new();
+        let first = Val::Num(aevia_rssn::Num::Float(-0.0));
+        let nan = f64::from_bits(0xfff8_0000_0000_0019);
+        let second = Val::Num(aevia_rssn::Num::Float(nan));
+        let decode = |signature: &SigType, shape, data| {
+            let value = Val::Tensor { shape, data };
+            let Value::Tensor(tensor) =
+                result_with_dimensions(&value, signature, &dims, Span::default()).unwrap()
+            else {
+                panic!("expected a tensor")
+            };
+            tensor
+        };
+        let tensor = decode(&signature, vec![2], vec![first.clone(), second.clone()]);
+        assert_eq!(tensor.shape, [2]);
+        assert_eq!(
+            tensor.dim.to_display_si_string(),
+            dim.to_display_si_string()
+        );
+        assert!(tensor.display.is_none());
+        assert!(tensor.verified_element.is_none());
+        let bits = tensor
+            .dense()
+            .unwrap()
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>();
+        assert_eq!(bits, [(-0.0_f64).to_bits(), nan.to_bits()]);
+
+        let malformed = decode(&signature, vec![2], vec![first.clone()]);
+        assert!(matches!(malformed.storage, crate::value::Storage::Boxed(_)));
+        let wrong_rank = decode(&signature, vec![1, 2], vec![first.clone(), second]);
+        assert!(matches!(
+            wrong_rank.storage,
+            crate::value::Storage::Boxed(_)
+        ));
+        let mixed = decode(
+            &signature,
+            vec![2],
+            vec![first, Val::Num(aevia_rssn::Num::Int(17.into()))],
+        );
+        let crate::value::Storage::Boxed(values) = &mixed.storage else {
+            panic!("expected mixed storage");
+        };
+        let integer = values[1].as_num().unwrap();
+        assert!(matches!(integer.kind, crate::value::NumKind::Int(_)));
+        assert_eq!(integer.to_f64(), Some(17.0));
+        assert_eq!(integer.dim, dim);
+        let explicit = Val::Quantity {
+            value: Box::new(Val::Num(aevia_rssn::Num::Float(1.25))),
+            unit: aevia_rssn::UnitVal::linear("credit", dim.clone(), aevia_dim::Scale::one()),
+        };
+        let with_unit = decode(
+            &signature,
+            vec![2],
+            vec![Val::Num(aevia_rssn::Num::Float(-0.0)), explicit],
+        );
+        assert!(matches!(with_unit.storage, crate::value::Storage::Boxed(_)));
+        let number = with_unit.get_flat(1).unwrap();
+        assert_eq!(
+            number.as_num().unwrap().display.as_ref().unwrap().name,
+            "credit"
+        );
+        let mut empty_signature = signature.clone();
+        if let SigType::Tensor { shape, .. } = &mut empty_signature {
+            *shape = Some(vec![0]);
+        }
+        let empty = decode(&empty_signature, vec![0], Vec::new());
+        assert!(
+            matches!(&empty.storage, crate::value::Storage::Boxed(values) if values.is_empty())
+        );
+        assert!(empty.verified_element.is_none());
+    }
+
+    #[test]
     fn explicit_kernel_witness_cannot_be_overwritten_by_the_expected_dimension() {
         use aevia_rssn::witness::DimensionWitness as W;
         let d = Dim::var(2_000_002);
@@ -1877,6 +2240,10 @@ pub(crate) fn value_error(
 }
 
 /// Validates opaque evidence without materializing an Aevia copy of the payload.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keep opaque Value validation available without decoding its payload"
+)]
 pub(crate) fn validate_kernel_value(
     value: &Value,
     expected: &aevia_types::Type,
@@ -2023,16 +2390,26 @@ pub(crate) fn from_kernel_value(
     if let Some(pieces) = kernel_pieces(value, expected) {
         return pieces;
     }
-    validate_kernel_value(value, expected)?;
     let Value::KernelValue(value) = value else {
-        unreachable!()
+        return Err("expected an opaque kernel Value".into());
     };
-    decode_payload(
+    decode_checked_payload(
         &value.payload,
         &value.witness,
         value.host_witness.as_deref(),
         expected,
     )
+}
+
+/// Checks a borrowed kernel packet before converting it to a runtime value.
+pub(crate) fn decode_checked_payload(
+    payload: &Val,
+    witness: &aevia_rssn::witness::DimensionWitness,
+    host: Option<&crate::value::HostWitness>,
+    expected: &aevia_types::Type,
+) -> Result<Value, String> {
+    validate_payload(payload, witness, host, expected)?;
+    decode_payload(payload, witness, host, expected)
 }
 
 // Structural erasure may forget a field/element type without asserting a new
@@ -2064,7 +2441,8 @@ fn erased_schema_compatible(
     }
 }
 
-fn validate_payload(
+/// Checks a kernel packet against the expected runtime schema and evidence.
+pub(crate) fn validate_payload(
     payload: &Val,
     witness: &aevia_rssn::witness::DimensionWitness,
     host: Option<&crate::value::HostWitness>,
@@ -2638,7 +3016,14 @@ fn decode_tensor_payload(
         return Err("validated tensor witness disappeared".into());
     };
     let uniform = dimension.as_ref().map(|d| W::Scalar(d.clone()));
-    let storage = if data.is_empty() {
+    let packed = if matches!(elem, Type::Scalar(Rep::Float, _)) {
+        packed_float_storage(data)
+    } else {
+        None
+    };
+    let storage = if let Some(storage) = packed {
+        storage
+    } else if data.is_empty() {
         match elem {
             | Type::Scalar(Rep::Float, _) => crate::value::Storage::Dense(Rc::new(Vec::new())),
             | Type::Scalar(Rep::Int, _) => {

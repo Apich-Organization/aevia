@@ -1,8 +1,8 @@
-//! The runtime's side of the rssn bridge.
+//! The runtime's side of the RSSN bridge.
 //!
-//! `aevia-core` never names an rssn type. It converts its own values into the
-//! bridge's neutral [`Val`] and back, which keeps the kernel's ABI in one
-//! crate and makes the conversion auditable in one file.
+//! Numeric calls convert between Aevia runtime values and the bridge's
+//! neutral [`Val`]. `aevia-rssn` owns that ABI, and this module implements the
+//! conversion on the Aevia side.
 //!
 //! Two rules from the design drive the shape of this module:
 //!
@@ -30,6 +30,7 @@
 
 use crate::eval::EvalError;
 use crate::sym::Term;
+use crate::value::ExactRep;
 use crate::value::NumKind;
 use crate::value::NumVal;
 use crate::value::RecordValue;
@@ -111,26 +112,40 @@ pub fn to_val(value: &Value) -> Result<Val, EvalError> {
             if tensor.checked_element_count() != Some(len) {
                 return Err(malformed());
             }
+            let float = |item| Val::Num(Num::Float(item));
             let data = if len == 0 {
                 Vec::new()
             } else if let Some(items) = tensor.dense() {
-                items
-                    .iter()
-                    .map(|item| Val::Num(Num::Float(*item)))
-                    .collect()
+                items.iter().copied().map(float).collect()
             } else {
                 match &tensor.storage {
+                    | Storage::View(view) => {
+                        // The wire tensor holds coherent magnitudes. A view
+                        // can emit them in logical order without rebuilding
+                        // host scalars carrying dimensions and display units.
+                        view.map_flat(&tensor.shape, float).ok_or_else(malformed)?
+                    },
                     | Storage::Boxed(items) => {
                         items.iter().map(to_val).collect::<Result<Vec<_>, _>>()?
                     },
                     | Storage::Bool(items) => items.iter().copied().map(Val::Bool).collect(),
-                    | Storage::Exact(items)
-                    | Storage::TypedExact(items, crate::value::ExactRep::Real) => {
+                    | Storage::Exact(items) | Storage::TypedExact(items, ExactRep::Real) => {
                         items
                             .iter()
                             .cloned()
                             .map(|item| Val::Num(Num::Rat(item)))
                             .collect()
+                    },
+                    | Storage::TypedExact(items, ExactRep::Int) => {
+                        items
+                            .iter()
+                            .map(|item| {
+                                if !item.is_integer() {
+                                    return Err(malformed());
+                                }
+                                Ok(Val::Num(Num::Int(item.numer().clone())))
+                            })
+                            .collect::<Result<Vec<_>, _>>()?
                     },
                     | _ => {
                         let mut data = Vec::with_capacity(len);

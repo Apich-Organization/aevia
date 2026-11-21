@@ -17,6 +17,20 @@ test "a portable spatial index returns measured nearest distances" =
         | Err(_) -> false
     | Err(_) -> false
 
+test "a portable spatial index batches nearest queries in input order" =
+    match V.num_kdtree_build([to_value([[0.0 m, 0.0 m], [2.0 m, 0.0 m], [0.0 m, 2.0 m]])]) with
+    | Ok(model) ->
+        match V.num_kdtree_nearest_batch([model, to_value([[1.75 m, 0.0 m], [0.0 m, 1.5 m], [0.25 m, 0.0 m]])]) with
+        | Ok(value) ->
+            match from_value<{ indices: Tensor<1, Int>, distances: Tensor<1, Float[Length]> }>(value) with
+            | Ok(r) ->
+                let indices_match = at(r.indices, 0) == 1 && at(r.indices, 1) == 2 && at(r.indices, 2) == 0
+                let distances_match = at(r.distances, 0) == 0.25 m && at(r.distances, 1) == 0.5 m && at(r.distances, 2) == 0.25 m
+                indices_match && distances_match
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
 test "fitted B-splines keep independent time and length dimensions" =
     match V.num_bspline_build([to_value([0.0 s, 1.0 s, 2.0 s]), to_value([0.0 m, 2.0 m, 4.0 m]), to_value(2)]) with
     | Ok(model) ->

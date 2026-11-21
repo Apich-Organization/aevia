@@ -555,6 +555,12 @@ fn call_inner(
             let b = expect_exact_int(args, 1, name, span)?;
             Ok(exact::common_multiple_or_divisor(&a, &b, name == "lcm"))
         },
+        | B::ModPow => {
+            let base = expect_exact_int(args, 0, name, span)?;
+            let exponent = expect_exact_int(args, 1, name, span)?;
+            let modulus = expect_exact_int(args, 2, name, span)?;
+            exact::modular_power(&base, &exponent, &modulus, span)
+        },
         | B::Factorial | B::DoubleFactorial => {
             let n = expect_int(args, 0, name, span)?;
             let result = crate::eval::factorial(interp, n, name == "double_factorial", span)?;
@@ -948,22 +954,38 @@ fn call_inner(
             if tensor.rank() != 1 {
                 return Err(EvalError::new("E0802", "`par_map` expects a rank-1 tensor").at(span));
             }
-            let inputs: Vec<Value> = tensor.elements();
             // §9.7: on worker replicas when the function and the elements
             // can cross threads; otherwise (and on any worker failure) the
             // sequential map, which gives the same value or the same error.
-            let parallel = interp.par_map_values(&function, &inputs);
-            interp.check_cancelled().map_err(|error| error.at(span))?;
-            let elements = match parallel {
-                | Some(elements) => elements,
-                | None => {
-                    let mut elements = Vec::with_capacity(inputs.len());
-                    for element in inputs {
-                        elements.push(interp.apply(function.clone(), vec![element], span)?);
-                    }
-                    elements
+            let (parallel, inputs) = tensor.dense().map_or_else(
+                || {
+                    let values = tensor.elements();
+                    (
+                        interp.par_map_values(&function, &values, None),
+                        Some(values),
+                    )
                 },
-            };
+                |values| {
+                    (
+                        interp.par_map_dense_values(
+                            &function,
+                            values,
+                            &tensor.dim,
+                            tensor.display.as_deref(),
+                        ),
+                        None,
+                    )
+                },
+            );
+            interp.check_cancelled().map_err(|error| error.at(span))?;
+            if let Some(result) = parallel {
+                return Ok(result);
+            }
+            let inputs = inputs.unwrap_or_else(|| tensor.elements());
+            let mut elements = Vec::with_capacity(inputs.len());
+            for element in inputs {
+                elements.push(interp.apply(function.clone(), vec![element], span)?);
+            }
             let dim = elements
                 .first()
                 .map_or_else(Dim::one, crate::value::value_dim);
@@ -972,6 +994,7 @@ fn call_inner(
         },
         // §8.3: `par_tabulate(n, f)` is `par_map(f, [0, …, n-1])`.
         | B::ParTabulate => {
+            const MAX_OUTPUT: usize = isize::MAX as usize / std::mem::size_of::<Value>();
             let count = expect_num(args, 0, name, span)?;
             let NumKind::Int(count) = &count.kind else {
                 return Err(
@@ -985,21 +1008,19 @@ fn call_inner(
                 .get(1)
                 .cloned()
                 .ok_or_else(|| arity(name, 2, args.len(), span))?;
-            let inputs: Vec<Value> = (0..count)
-                .map(|index| Value::Num(NumVal::int(index)))
-                .collect();
-            let parallel = interp.par_map_values(&function, &inputs);
+            if count > MAX_OUTPUT {
+                return Err(EvalError::new("E0802", "`par_tabulate` output is too large").at(span));
+            }
+            let parallel = interp.par_tabulate_values(&function, count);
             interp.check_cancelled().map_err(|error| error.at(span))?;
-            let elements = match parallel {
-                | Some(elements) => elements,
-                | None => {
-                    let mut elements = Vec::with_capacity(count);
-                    for input in inputs {
-                        elements.push(interp.apply(function.clone(), vec![input], span)?);
-                    }
-                    elements
-                },
-            };
+            if let Some(result) = parallel {
+                return Ok(result);
+            }
+            let mut elements = Vec::with_capacity(count);
+            for index in 0..count {
+                let input = Value::Num(NumVal::int(index));
+                elements.push(interp.apply(function.clone(), vec![input], span)?);
+            }
             let dim = elements
                 .first()
                 .map_or_else(Dim::one, crate::value::value_dim);
@@ -1022,8 +1043,7 @@ fn call_inner(
                     EvalError::new("E0802", "`par_reduce` expects a rank-1 tensor").at(span),
                 );
             }
-            let inputs: Vec<Value> = tensor.elements();
-            interp.par_reduce_values(&function, &zero, &inputs, span)
+            interp.par_reduce_values(&function, &zero, &tensor, span)
         },
         | B::Pure => {
             let value = args
@@ -1106,7 +1126,7 @@ fn call_inner(
                 return Err(EvalError::new("E0802", "map2 expects equal shapes").at(span));
             }
             let mut elements = Vec::with_capacity(a.storage.len());
-            for (x, y) in a.elements().into_iter().zip(b.elements()) {
+            for (x, y) in a.iter_elements().zip(b.iter_elements()) {
                 elements.push(interp.apply(function.clone(), vec![x, y], span)?);
             }
             let dim = elements
@@ -2826,11 +2846,56 @@ fn call_inner(
         },
         | B::PolygonArea => {
             let tensor = expect_tensor(args, 0, name, span)?;
-            let points = tensor_entries(&tensor)?;
+            if !matches!(tensor.shape.as_slice(), [_, 2]) {
+                return Err(EvalError::new(
+                    "E0802",
+                    format!(
+                        "`polygon_area` expects shape [n, 2], found {:?}",
+                        tensor.shape
+                    ),
+                )
+                .at(span));
+            }
+            let points = tensor_entries(&tensor).map_err(|error| error.at(span))?;
             let area = aevia_std::geom::polygon_area(&points);
             Ok(Value::Num(NumVal::float(
                 area,
                 tensor.dim.pow(&BigRational::from_integer(BigInt::from(2))),
+            )))
+        },
+        | B::TetrahedronVolume => {
+            let vertices = expect_tensor(args, 0, name, span)?;
+            if vertices.shape != [4, 3] {
+                return Err(EvalError::new(
+                    "E0802",
+                    format!(
+                        "`tetrahedron_volume` expects shape [4, 3], found {:?}",
+                        vertices.shape
+                    ),
+                )
+                .at(span));
+            }
+            let points = tensor_entries(&vertices).map_err(|error| error.at(span))?;
+            if points.iter().any(|point| !point.is_finite()) {
+                return Err(EvalError::new(
+                    "E0806",
+                    "`tetrahedron_volume` needs finite coordinates",
+                )
+                .at(span));
+            }
+            let volume = aevia_std::geom::tetrahedron_volume(&points);
+            if !volume.is_finite() {
+                return Err(EvalError::new(
+                    "E0806",
+                    "`tetrahedron_volume` could not compute a finite volume",
+                )
+                .at(span));
+            }
+            Ok(Value::Num(NumVal::float(
+                volume,
+                vertices
+                    .dim
+                    .pow(&BigRational::from_integer(BigInt::from(3))),
             )))
         },
         | B::Distance => {
@@ -3195,20 +3260,12 @@ fn call_inner(
         | B::Quantile => {
             let tensor = expect_tensor(args, 0, name, span)?;
             let fraction = expect_num(args, 1, name, span)?;
-            if let (Some(mut exact), Some(q)) = (exact_values(&tensor), fraction.to_rational()) {
-                if !exact.is_sorted() {
-                    exact.to_mut().sort();
-                }
-                let value = aevia_std::stats::quantile_exact(&exact, &q)
-                    .map_err(|error| numeric_error(name, error, span))?;
-                return Ok(exact_number(value, tensor.dim.clone()));
-            }
-            let q = fraction.to_f64().ok_or_else(|| {
-                EvalError::new("E0806", "`quantile` needs a concrete fraction").at(span)
-            })?;
-            let value = aevia_std::stats::quantile(&tensor_entries(&tensor)?, q)
-                .map_err(|error| numeric_error(name, error, span))?;
-            Ok(Value::Num(NumVal::float(value, tensor.dim.clone())))
+            reduction::quantile(&tensor, &fraction, span)
+        },
+        | B::Quantiles => {
+            let tensor = expect_tensor(args, 0, name, span)?;
+            let probabilities = expect_tensor(args, 1, name, span)?;
+            reduction::quantiles(&tensor, &probabilities, span)
         },
         | B::Cov => {
             let left = expect_tensor(args, 0, name, span)?;
@@ -3291,19 +3348,59 @@ fn call_inner(
                 upper.to_f64().unwrap_or(f64::NAN),
             );
             let mut failure = None;
-            let codomain = apply_scalar_value(interp, &function, a, &lower.dim, span, &mut failure);
+            let mut codomain = None;
+            let mut f = |x: f64| {
+                if failure.is_some() {
+                    return f64::NAN;
+                }
+                let value =
+                    apply_scalar_value(interp, &function, x, &lower.dim, span, &mut failure);
+                let Value::Num(number) = value else {
+                    return f64::NAN;
+                };
+                if failure.is_some() {
+                    return f64::NAN;
+                }
+                if codomain.as_ref().is_some_and(|dim| dim != &number.dim) {
+                    failure = Some(
+                        EvalError::new(
+                            "E0401",
+                            "quadrature integrand returned inconsistent dimensions",
+                        )
+                        .at(span),
+                    );
+                    return f64::NAN;
+                }
+                let sample = number.to_f64().unwrap_or(f64::NAN);
+                codomain.get_or_insert(number.dim);
+                sample
+            };
+            let outcome = aevia_std::calc::quadrature(&mut f, a, b);
             if let Some(error) = failure.take() {
                 return Err(error);
             }
-            let mut f =
-                |value: f64| apply_scalar(interp, &function, value, &lower.dim, span, &mut failure);
-            let outcome = aevia_std::calc::quadrature(&mut f, a, b);
-            if let Some(error) = failure {
-                return Err(error);
-            }
-            let dim = crate::value::value_dim(&codomain).mul(&lower.dim);
             Ok(match outcome {
-                | Ok(value) => ok(Value::Num(NumVal::float(value, dim))),
+                | Ok(value) => {
+                    let codomain = if let Some(dim) = codomain {
+                        dim
+                    } else {
+                        // An empty interval has no algorithm nodes. Keep its
+                        // one type witness so the zero has the right dimension.
+                        let sample = apply_scalar_value(
+                            interp,
+                            &function,
+                            a,
+                            &lower.dim,
+                            span,
+                            &mut failure,
+                        );
+                        if let Some(error) = failure {
+                            return Err(error);
+                        }
+                        crate::value::value_dim(&sample)
+                    };
+                    ok(Value::Num(NumVal::float(value, codomain.mul(&lower.dim))))
+                },
                 | Err(error) => err(Value::string(error.to_string())),
             })
         },
@@ -3593,6 +3690,65 @@ fn call_inner(
             };
             Ok(Value::Num(NumVal::float(value, dim)))
         },
+        | B::CdfBatch => {
+            let distribution = distribution_from(args, name, span)?;
+            let points = expect_tensor(args, 1, name, span)?;
+            if points.shape.len() != 1 {
+                return Err(
+                    EvalError::new("E0802", "`cdf_batch` needs a vector of points").at(span),
+                );
+            }
+            let dimension = distribution_dim(args, span)?;
+            if points.dim != dimension {
+                return Err(EvalError::new(
+                    "E0401",
+                    format!(
+                        "`cdf_batch` expects points of dimension {dimension}, found {}",
+                        points.dim
+                    ),
+                )
+                .at(span));
+            }
+            let entries = tensor_entries(&points).map_err(|error| error.at(span))?;
+            let probabilities =
+                rssn::kernels::par::map_slice(&entries, 4096, |point| distribution.cdf(*point));
+            // The kernel checks the parameters even at negative infinity.
+            if probabilities.iter().any(|value| value.is_nan())
+                || (entries.is_empty() && distribution.cdf(f64::NEG_INFINITY).is_nan())
+            {
+                return Err(EvalError::new(
+                    "E0806",
+                    "`cdf_batch` is not defined for these parameters and points",
+                )
+                .at(span));
+            }
+            Ok(float_tensor(
+                points.shape.clone(),
+                probabilities,
+                Dim::one(),
+            ))
+        },
+        | B::DistQuantile => {
+            let distribution = distribution_from(args, name, span)?;
+            let probability = expect_num(args, 1, name, span)?;
+            if probability.dim != Dim::one() {
+                return Err(EvalError::new(
+                    "E0401",
+                    "`dist_quantile` expects a dimensionless probability",
+                )
+                .at(span));
+            }
+            let probability = probability.to_f64().ok_or_else(|| {
+                EvalError::new("E0806", "`dist_quantile` expects a concrete probability").at(span)
+            })?;
+            let value = distribution
+                .quantile(probability)
+                .map_err(|error| numeric_error(name, error, span))?;
+            Ok(Value::Num(NumVal::float(
+                value,
+                distribution_dim(args, span)?,
+            )))
+        },
         | B::Sample => {
             let distribution = distribution_from(args, name, span)?;
             let dim = distribution_dim(args, span)?;
@@ -3684,7 +3840,7 @@ fn call_inner(
         | B::Rfft | B::Rfft2 | B::Rfftn | B::RfftnAxes => {
             let tensor = expect_tensor(args, 0, name, span)?;
             let rank = tensor.shape.len();
-            let signal = tensor_values(&tensor)?;
+            let signal = tensor_entries(&tensor)?;
             let axes = match name {
                 | "rfft" => vec![rank.saturating_sub(1)],
                 | "rfft2" => transform_axes_last_two(rank, name, span)?,
@@ -3821,6 +3977,66 @@ fn call_inner(
             )
             .map_err(|error| numeric_error(name, error, span))?;
             Ok(Value::Num(NumVal::float(value, grid.dim.clone())))
+        },
+        | B::Interp2Batch => {
+            let xs = expect_tensor(args, 0, name, span)?;
+            let ys = expect_tensor(args, 1, name, span)?;
+            let grid = expect_tensor(args, 2, name, span)?;
+            let query_xs = expect_tensor(args, 3, name, span)?;
+            let vertical_queries = expect_tensor(args, 4, name, span)?;
+            let ([nx], [ny], [n], [m]) = (
+                xs.shape.as_slice(),
+                ys.shape.as_slice(),
+                query_xs.shape.as_slice(),
+                vertical_queries.shape.as_slice(),
+            ) else {
+                return Err(EvalError::new(
+                    "E0802",
+                    "`interp2Batch` needs rank-one axes and query tensors",
+                )
+                .at(span));
+            };
+            if n != m {
+                return Err(EvalError::new(
+                    "E0802",
+                    "`interp2Batch` needs equally long query tensors",
+                )
+                .at(span));
+            }
+            if grid.shape.as_slice() != [*ny, *nx] {
+                return Err(EvalError::new(
+                    "E0802",
+                    format!("`interp2Batch` needs a grid with shape [{ny}, {nx}]"),
+                )
+                .at(span));
+            }
+            // Empty tensors may lack their statically known element dimension.
+            if *n != 0 && (query_xs.dim != xs.dim || vertical_queries.dim != ys.dim) {
+                return Err(EvalError::new(
+                    "E0401",
+                    "each `interp2Batch` query tensor must have the dimension of its axis",
+                )
+                .at(span));
+            }
+            let x_nodes = tensor_entries(&xs)?;
+            let y_nodes = tensor_entries(&ys)?;
+            let grid_values = tensor_entries(&grid)?;
+            let prepared = aevia_std::interp::BilinearGrid::new(&x_nodes, &y_nodes, &grid_values)
+                .map_err(|error| numeric_error(name, error, span))?;
+            let x_values = tensor_entries(&query_xs)?;
+            let y_values = tensor_entries(&vertical_queries)?;
+            let mut output = Vec::with_capacity(*n);
+            for (x_chunk, y_chunk) in x_values.chunks(1024).zip(y_values.chunks(1024)) {
+                interp.check_cancelled().map_err(|error| error.at(span))?;
+                for (&x, &y) in x_chunk.iter().zip(y_chunk) {
+                    output.push(
+                        prepared
+                            .eval(x, y)
+                            .map_err(|error| numeric_error(name, error, span))?,
+                    );
+                }
+            }
+            Ok(float_tensor(vec![*n], output, grid.dim.clone()))
         },
         | B::Polyfit | B::ChebyshevFit => {
             let xs = expect_tensor(args, 0, name, span)?;
@@ -4050,14 +4266,33 @@ fn call_inner(
             let initial = field_of("initial")?;
             let outcome = match name {
                 | "solve_heat" => {
-                    aevia_std::pde::solve_heat(&aevia_std::pde::HeatSpec {
+                    let solver = match spec.fields.get("method") {
+                        | None => aevia_std::pde::solve_heat,
+                        | Some(Value::Str(method)) if method.as_ref() == "explicit" => {
+                            aevia_std::pde::solve_heat
+                        },
+                        | Some(Value::Str(method)) if method.as_ref() == "adi" => {
+                            aevia_std::pde::solve_heat_adi
+                        },
+                        | _ => {
+                            return Ok(err(pde_error_value(&aevia_std::NumericError::Domain(
+                                "heat method must be `explicit` or `adi`".into(),
+                            ))));
+                        },
+                    };
+                    solver(&aevia_std::pde::HeatSpec {
                         grid,
                         alpha: number("alpha", 1.0),
                         steps,
                         dt,
                         initial,
                     })
-                    .map(|frames| frames.iter().map(field_value).collect::<Vec<_>>())
+                    .map(|frames| {
+                        frames
+                            .into_iter()
+                            .map(field_value_owned)
+                            .collect::<Vec<_>>()
+                    })
                 },
                 | "solve_wave" => {
                     aevia_std::pde::solve_wave(&aevia_std::pde::WaveSpec {
@@ -4584,45 +4819,17 @@ fn call_inner(
         },
         | B::ToDevice => {
             let tensor = expect_tensor(args, 0, name, span)?;
-            let device = args.get(1).cloned().unwrap_or(Value::Unit);
-            let name_of_device = match &device {
-                | Value::Variant(variant) => variant.name.clone(),
-                | _ => "Cpu".to_string(),
-            };
-            if name_of_device == "Cpu" {
-                return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(
-                    Value::Tensor(tensor),
-                ))));
-            }
-            Err(EvalError::new(
-                "E1001",
-                format!(
-                    "`to_device` needs the `core.gpu` capability, which this build does \
-                     not have (`{name_of_device}`)"
-                ),
-            )
-            .at(span))
+            require_cpu_placement(args.get(1), name, span)?;
+            Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(
+                Value::Tensor(tensor),
+            ))))
         },
         | B::On => {
-            let device = args.first().cloned().unwrap_or(Value::Unit);
             let thunk = args
                 .get(1)
                 .cloned()
                 .ok_or_else(|| arity(name, 2, 1, span))?;
-            let name_of_device = match &device {
-                | Value::Variant(variant) => variant.name.clone(),
-                | _ => "Cpu".to_string(),
-            };
-            if name_of_device != "Cpu" {
-                return Err(EvalError::new(
-                    "E1001",
-                    format!(
-                        "`on` needs the `core.gpu` capability, which this build does \
-                         not have (`{name_of_device}`)"
-                    ),
-                )
-                .at(span));
-            }
+            require_cpu_placement(args.first(), name, span)?;
             let value = interp.apply(thunk, Vec::new(), span)?;
             Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(value))))
         },
@@ -4639,6 +4846,29 @@ fn call_inner(
             .at(span))
         },
     }
+}
+
+fn require_cpu_placement(
+    device: Option<&Value>,
+    operation: &str,
+    span: Span,
+) -> Result<(), EvalError> {
+    let Some(Value::Variant(device)) = device else {
+        return Ok(());
+    };
+    let capability = match device.name.as_str() {
+        | "Cpu" => return Ok(()),
+        | "Distributed" => "core.distributed",
+        | _ => "core.gpu",
+    };
+    Err(EvalError::new(
+        "E1001",
+        format!(
+            "`{operation}` needs the `{capability}` placement capability for `{}`, which the interpreter does not provide",
+            device.name
+        ),
+    )
+    .at(span))
 }
 
 /// Applies a one-argument function to a fresh symbol and returns the variable
@@ -5569,11 +5799,11 @@ fn expect_float(
         })
 }
 
-/// Replaces every tagged-variant statement in `witness` by `Unknown`.
+/// Erases variant tags and declared Option element schemas from `witness`.
 fn forget_variant_witnesses(witness: &mut aevia_rssn::witness::DimensionWitness) {
     use aevia_rssn::witness::DimensionWitness as W;
     match witness {
-        | W::Variant { .. } => *witness = W::Unknown,
+        | W::Variant { .. } | W::OptionSchema(_) => *witness = W::Unknown,
         | W::Tensor {
             element, elements, ..
         } => {
@@ -7950,18 +8180,15 @@ fn sde_ensemble_call(
     let count_int = i64::try_from(count)
         .map_err(|_| EvalError::new("E0802", "the ensemble size is out of range").at(span))?;
     inputs.extend((0..count_int).map(Value::int));
-    let parallel = interp.par_map_values(&member, &inputs);
+    let parallel = interp.par_map_values(&member, &inputs, Some(Dim::one()));
     interp.check_cancelled().map_err(|error| error.at(span))?;
-    let results = match parallel {
-        | Some(results) => results,
-        | None => {
-            let mut results = Vec::with_capacity(count);
-            for input in inputs {
-                results.push(interp.apply(member.clone(), vec![input], span)?);
-            }
-            results
-        },
-    };
+    if let Some(result) = parallel {
+        return Ok(result);
+    }
+    let mut results = Vec::with_capacity(count);
+    for input in inputs {
+        results.push(interp.apply(member.clone(), vec![input], span)?);
+    }
     Ok(build_tensor(results, vec![count], Dim::one()))
 }
 
@@ -8870,6 +9097,10 @@ fn grid_from(
 
 /// A PDE field as a record of grid and values.
 fn field_value(field: &aevia_std::pde::Field) -> Value {
+    field_value_owned(field.clone())
+}
+
+fn field_value_owned(field: aevia_std::pde::Field) -> Value {
     record_of(vec![
         (
             "grid",
@@ -8881,11 +9112,7 @@ fn field_value(field: &aevia_std::pde::Field) -> Value {
         ),
         (
             "values",
-            float_tensor(
-                vec![field.grid.ny, field.grid.nx],
-                field.values.clone(),
-                Dim::one(),
-            ),
+            float_tensor(vec![field.grid.ny, field.grid.nx], field.values, Dim::one()),
         ),
     ])
 }

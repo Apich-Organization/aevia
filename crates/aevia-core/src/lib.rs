@@ -998,27 +998,25 @@ pub fn run(
     {
         return Err(error);
     }
-    let Some(module) = &compilation.module else {
+    let Some(module) = compilation.module else {
         return Err(Diagnostic::error(
             "E0608",
             "no module",
             aevia_syntax::Span::default(),
         ));
     };
-    let mut interp = Interp::new(&compilation.checked).with_buffer();
-    // §9.7: workers recompile the same source, so closures cross by span.
-    let replica_source = source.to_string();
-    let replica_name = name.to_string();
+    let program = std::sync::Arc::new((module, compilation.checked));
+    let mut interp = Interp::new(&program.1).with_buffer();
+    let replica_program = std::sync::Arc::clone(&program);
     interp.set_replica(std::sync::Arc::new(move || {
-        let compilation = compile(&replica_name, &replica_source);
-        let module = compilation.module.as_ref().ok_or("no module")?;
-        let mut replica = Interp::new(&compilation.checked).with_buffer();
+        let (module, checked) = replica_program.as_ref();
+        let mut replica = Interp::new(checked).with_buffer();
         if replica.load(module).has_errors() {
             return Err("the program's top level failed on a worker".to_string());
         }
         Ok(replica)
     }));
-    let load_diagnostics = interp.load(module);
+    let load_diagnostics = interp.load(&program.0);
     if let Some(error) = load_diagnostics
         .items
         .into_iter()

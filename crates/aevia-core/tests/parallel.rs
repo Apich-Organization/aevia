@@ -73,6 +73,34 @@ fn parallel_results_equal_sequential_results() {
 }
 
 #[test]
+fn tabulate_preserves_order_and_units_across_worker_batches() {
+    let source = r#"fn main(): IO Unit = do
+    let scale = 4 m
+    let values = par_tabulate(70, fn (i) => (i + 1) * scale)
+    println([values[0], values[31], values[32], values[69]])
+"#;
+    let expected = "[4 m, 128 m, 132 m, 280 m]\n";
+    assert_eq!(run_with_jobs(source, 1), expected);
+    assert_eq!(run_with_jobs(source, 4), expected);
+}
+
+#[test]
+fn tabulate_rejects_a_count_that_cannot_fit_in_a_value_buffer() {
+    let source = format!("fn main() = par_tabulate({}, fn (i) => i)\n", isize::MAX,);
+    let compilation = aevia_core::compile("par.aev", &source);
+    assert!(!compilation.diagnostics.has_errors());
+    let mut interp = aevia_core::Interp::new(&compilation.checked);
+    assert!(
+        !interp
+            .load(compilation.module.as_ref().expect("parsed"))
+            .has_errors()
+    );
+    let error = interp.run_main().expect_err("the output cannot fit");
+    assert_eq!(error.code, "E0802");
+    assert_eq!(error.message, "`par_tabulate` output is too large");
+}
+
+#[test]
 fn a_task_can_use_a_closure_stored_in_a_top_level_record() {
     let source = r#"let actions = { run = fn () => println("record task") }
 fn main(): IO Unit = do
@@ -164,7 +192,7 @@ fn main(): IO Unit = do
 #[test]
 fn a_reduction_is_independent_of_the_thread_count() {
     let source = r#"fn main(): IO Unit = do
-    let xs = map(fn (i) => 1.0 / (i + 1.0), linspace(0.0, 4999.0, 5000))
+    let xs = map(fn (i) => 1.0 / (i + 1.0), linspace(0.0, 19999.0, 20000))
     println(par_reduce(fn (a, b) => a + b, 0.0, xs))
 "#;
     let one = run_with_jobs(source, 1);

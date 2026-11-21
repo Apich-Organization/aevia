@@ -9,6 +9,7 @@
 
 use aevia_core::EvalError;
 use aevia_core::Interp;
+use aevia_core::Mode;
 use aevia_core::builtins::call_simple;
 use aevia_core::compile;
 use aevia_core::value::NumKind;
@@ -236,6 +237,110 @@ fn statistics_keep_exactness_and_report_shapes() {
         ],
     );
     assert!((as_f64(&correlation) - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn batch_quantiles_keep_query_order_exactness_and_sample_units() {
+    let output = run_value(
+        "let xs: Tensor<1, Real[Length]> = [10 m, 0 m]\nlet output: Tensor<1, Real[Length]> = quantiles(xs, [3/4, 0, 1/4, 3/4, 1])\n",
+        "output",
+    );
+    let result = tensor_of(&output);
+    assert_eq!(result.shape, vec![5]);
+    let values = result.elements();
+    for (value, (numerator, denominator)) in
+        values
+            .iter()
+            .zip([(15, 2), (0, 1), (5, 2), (15, 2), (10, 1)])
+    {
+        let number = num(value);
+        assert_eq!(
+            number.to_rational(),
+            Some(BigRational::new(numerator.into(), denominator.into()))
+        );
+        assert!(!number.dim.is_one());
+        assert!(number.display.is_some());
+    }
+    assert!(matches!(
+        result.storage,
+        Storage::TypedExact(_, aevia_core::value::ExactRep::Real)
+    ));
+
+    let output = run_value(
+        "let xs: Tensor<1, Float[Length]> = [10.0 m, 0.0 m]\nlet qs: Tensor<1, Float> = [1.0, 0.0, 0.75]\nlet output: Tensor<1, Float[Length]> = quantiles(xs[::-1], qs[::-1])\n",
+        "output",
+    );
+    let result = tensor_of(&output);
+    assert!(
+        matches!(&result.storage, Storage::Dense(values) if values.as_slice() == [7.5, 0.0, 10.0])
+    );
+    assert!(!result.dim.is_one());
+    assert!(result.display.is_some());
+
+    let output = run_value(
+        "let output: Tensor<1, Real> = quantiles([10, 0], [1, 0])\n",
+        "output",
+    );
+    assert!(matches!(
+        tensor_of(&output).storage,
+        Storage::TypedExact(_, aevia_core::value::ExactRep::Real)
+    ));
+}
+
+#[test]
+fn batch_quantiles_validate_samples_and_queries() {
+    let singleton = call(
+        "quantiles",
+        vec![tensor(vec![1], vec![7.0]), tensor(vec![2], vec![1.0, 0.25])],
+    );
+    assert!(
+        matches!(&tensor_of(&singleton).storage, Storage::Dense(values) if values.as_slice() == [7.0, 7.0])
+    );
+
+    let sample = tensor(vec![2], vec![f64::MAX, -f64::MAX]);
+    let midpoint = call(
+        "quantiles",
+        vec![sample.clone(), tensor(vec![1], vec![0.5])],
+    );
+    assert_eq!(as_f64(&tensor_of(&midpoint).elements()[0]), 0.0);
+    let empty = call(
+        "quantiles",
+        vec![sample.clone(), tensor(vec![0], Vec::new())],
+    );
+    assert_eq!(tensor_of(&empty).shape, vec![0]);
+    assert!(matches!(&tensor_of(&empty).storage, Storage::Dense(values) if values.is_empty()));
+
+    for invalid in [-0.01, 1.01, f64::NAN] {
+        let error = call_error(
+            "quantiles",
+            vec![sample.clone(), tensor(vec![2], vec![0.5, invalid])],
+        );
+        assert_eq!(error.code, "E0806");
+    }
+    let empty_sample = call_error("quantiles", vec![exact(Vec::new()), exact(Vec::new())]);
+    assert_eq!(empty_sample.code, "E0802");
+    let nonfinite = call_error(
+        "quantiles",
+        vec![tensor(vec![1], vec![f64::INFINITY]), exact(Vec::new())],
+    );
+    assert_eq!(nonfinite.code, "E0806");
+    let matrix_queries = call_error(
+        "quantiles",
+        vec![sample.clone(), tensor(vec![1, 1], vec![0.5])],
+    );
+    assert_eq!(matrix_queries.code, "E0802");
+
+    let timed_query = run_value("let q = [0.5 s]\n", "q");
+    let error = call_error("quantiles", vec![sample, timed_query]);
+    assert_eq!(error.code, "E0401");
+    let wrong_units = compile("test.aev", "let bad = quantiles([0.0 m, 1.0 m], [0.5 s])\n");
+    assert!(
+        wrong_units
+            .diagnostics
+            .items
+            .iter()
+            .any(|diagnostic| diagnostic.code == "E0401")
+    );
 }
 
 #[test]
@@ -988,6 +1093,105 @@ fn complex_number_theory_and_geometry() {
 }
 
 #[test]
+fn tetrahedron_volume_keeps_cubic_units_in_both_evaluators() {
+    let source = "
+open Units.SI
+import Math.Geometry { tetrahedron_volume }
+
+let vertices = [
+    [0.0 cm, 0.0 cm, 0.0 cm],
+    [100.0 cm, 0.0 cm, 0.0 cm],
+    [0.0 cm, 1.0 m, 0.0 cm],
+    [0.0 cm, 0.0 cm, 1.0 m],
+]
+let volume: Real[Length^3] = tetrahedron_volume(vertices)
+let reflected = tetrahedron_volume(vertices[:, ::-1])
+let flat = tetrahedron_volume([
+    [0.0 m, 0.0 m, 0.0 m],
+    [1.0 m, 0.0 m, 0.0 m],
+    [0.0 m, 1.0 m, 0.0 m],
+    [1.0 m, 1.0 m, 0.0 m],
+])
+let repeated = tetrahedron_volume([
+    [0.0 m, 0.0 m, 0.0 m],
+    [1.0 m, 0.0 m, 0.0 m],
+    [0.0 m, 1.0 m, 0.0 m],
+    [0.0 m, 0.0 m, 0.0 m],
+])
+";
+    let path = std::path::Path::new("tetrahedron-volume.aev");
+    let program = aevia_core::driver::load_with_source(path, source);
+    assert!(
+        !program.diagnostics.has_errors(),
+        "{:?}",
+        program.diagnostics.items
+    );
+    let entry = program.entry().expect("entry module");
+    let cubic = aevia_dim::Dim::base("Length").pow(&BigRational::from_integer(3.into()));
+    for mode in [Mode::Ast, Mode::Ir] {
+        let mut interp = Interp::new(&entry.checked).with_mode(mode);
+        let diagnostics = aevia_core::driver::run_modules(&mut interp, &program);
+        assert!(
+            !diagnostics.has_errors(),
+            "{mode:?}: {:?}",
+            diagnostics.items
+        );
+        for (name, expected) in [
+            ("volume", 1.0 / 6.0),
+            ("reflected", 1.0 / 6.0),
+            ("flat", 0.0),
+            ("repeated", 0.0),
+        ] {
+            let result = interp.eval_toplevel(name).expect("evaluated volume");
+            assert_eq!(num(&result).dim, cubic, "{mode:?}: {name}");
+            assert!(
+                (as_f64(&result) - expected).abs() < 1e-14,
+                "{mode:?}: {name}"
+            );
+        }
+    }
+    let wrong_units = source.replace("Real[Length^3]", "Real[Length^2]");
+    let invalid = aevia_core::driver::load_with_source(path, &wrong_units);
+    assert!(
+        invalid
+            .diagnostics
+            .items
+            .iter()
+            .any(|item| item.code == "E0401")
+    );
+}
+
+#[test]
+fn tetrahedron_volume_rejects_wrong_shapes_and_nonfinite_values() {
+    let wrong_shape =
+        "let bad = tetrahedron_volume([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])\n";
+    let checked = compile("tetrahedron-wrong-shape.aev", wrong_shape);
+    assert!(
+        checked
+            .diagnostics
+            .items
+            .iter()
+            .any(|item| item.code == "E0302" && item.message.contains("shape mismatch"))
+    );
+
+    for shape in [[0, 3], [3, 4], [5, 3]] {
+        let vertices = tensor(shape.to_vec(), vec![0.0; shape.iter().product()]);
+        let error = call_error("tetrahedron_volume", vec![vertices]);
+        assert_eq!(error.code, "E0802", "{shape:?}");
+    }
+    for coordinates in [
+        vec![f64::NAN; 12],
+        vec![f64::INFINITY; 12],
+        vec![
+            0.0, 0.0, 0.0, 1e200, 0.0, 0.0, 0.0, 1e200, 0.0, 0.0, 0.0, 1e200,
+        ],
+    ] {
+        let error = call_error("tetrahedron_volume", vec![tensor(vec![4, 3], coordinates)]);
+        assert_eq!(error.code, "E0806");
+    }
+}
+
+#[test]
 fn measurements_and_device_placement() {
     let measurement = call("measure", vec![float(9.8), float(0.1)]);
     assert!((as_f64(&call("value", vec![measurement.clone()])) - 9.8).abs() < 1e-12);
@@ -998,6 +1202,30 @@ fn measurements_and_device_placement() {
     // Placing a tensor on the CPU is the identity.
     let placed = call("to_device", vec![tensor(vec![2], vec![1.0, 2.0]), device]);
     assert!(matches!(placed, Value::Io(_)));
+}
+
+#[test]
+fn unsupported_device_placement_names_the_requested_capability() {
+    let matrix = tensor(vec![2], vec![1.0, 2.0]);
+    let Value::Variant(cpu) = call("device_of", vec![matrix.clone()]) else {
+        panic!("device_of must return a Device variant");
+    };
+    for (index, name, fields, capability) in [
+        (1, "Gpu", vec![int(0)], "core.gpu"),
+        (2, "Distributed", Vec::new(), "core.distributed"),
+    ] {
+        let device = aevia_core::value::make_variant(cpu.adt, index, name, fields);
+        for (operation, args) in [
+            ("to_device", vec![matrix.clone(), device.clone()]),
+            ("on", vec![device, Value::Unit]),
+        ] {
+            let error = call_error(operation, args);
+            assert_eq!(error.code, "E1001");
+            for expected in [operation, capability, name] {
+                assert!(error.message.contains(expected), "{error:?}");
+            }
+        }
+    }
 }
 
 #[test]

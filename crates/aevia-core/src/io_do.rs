@@ -87,13 +87,15 @@ impl DoBlock {
     }
 
     pub(crate) fn cursor(self: &Rc<Self>) -> DoCursor {
-        let slots = match &self.code {
-            | Code::Ast(_) => 0,
-            | Code::Ir { plan, .. } => plan.nslots as usize,
+        let (scope, slots) = match &self.code {
+            | Code::Ast(_) => (Scope::child(&self.scope), 0),
+            // The lowered program writes only cursor-local slots. Its scope
+            // already pins the checked source revision and type bindings.
+            | Code::Ir { plan, .. } => (Rc::clone(&self.scope), plan.nslots as usize),
         };
         DoCursor {
             block: self.clone(),
-            scope: Scope::child(&self.scope),
+            scope,
             slots: vec![Value::Unit; slots],
             index: 0,
             awaiting: None,
@@ -187,7 +189,7 @@ impl DoCursor {
         interp: &mut Interp,
         last: &Value,
     ) -> Result<Step, EvalError> {
-        let block = self.block.clone();
+        let block = &self.block;
         match &block.code {
             | Code::Ast(statements) => {
                 if let Some(index) = self.awaiting.take() {

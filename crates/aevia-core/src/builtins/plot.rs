@@ -1074,6 +1074,28 @@ fn paint_rgba(
             Ok(())
         },
         | Paint::Rect((left, top), (right, bottom)) => {
+            let columns = right.saturating_sub(left).saturating_add(1);
+            if columns >= 8 && right < WIDTH && top <= bottom && bottom < HEIGHT {
+                let row_stride = usize::from(WIDTH).saturating_mul(CHANNELS);
+                let offset = |column, row| {
+                    usize::from(row)
+                        .saturating_mul(row_stride)
+                        .saturating_add(usize::from(column).saturating_mul(CHANNELS))
+                };
+                let start = offset(left, top);
+                let stop = offset(right.saturating_add(1), bottom);
+                if let Some(rows) = buf.get_mut(start..stop) {
+                    let width = usize::from(columns).saturating_mul(CHANNELS);
+                    // Each chunk starts at the same column in the next physical row.
+                    for row in rows.chunks_mut(row_stride) {
+                        let pixels = row
+                            .get_mut(..width)
+                            .ok_or("plot pixel is outside the raster frame")?;
+                        pixels.as_chunks_mut::<CHANNELS>().0.fill(ink);
+                    }
+                    return Ok(());
+                }
+            }
             for y in top..=bottom {
                 for x in left..=right {
                     set_pixel(buf, i32::from(x), i32::from(y), ink)?;
@@ -1388,6 +1410,43 @@ mod tests {
             Some(RED.as_slice())
         );
         assert_eq!(frame.rgba.len(), 800 * 400 * CHANNELS);
+    }
+
+    #[test]
+    fn raster_rectangles_match_pixel_traversal_and_keep_partial_error_writes() {
+        let bytes_per_row = usize::from(WIDTH) * CHANNELS;
+        let frame = bytes_per_row * usize::from(HEIGHT);
+        for (size, rectangles) in [
+            (frame, vec![((0, 0), (799, 399)), ((40, 20), (759, 359))]),
+            (frame, vec![((0, 0), (6, 0)), ((792, 399), (799, 399))]),
+            (frame, vec![((30, 20), (0, 20)), ((0, 30), (30, 20))]),
+            (frame, vec![((790, 0), (800, 0)), ((0, 399), (10, 400))]),
+            (bytes_per_row + 13 * CHANNELS, vec![((3, 0), (25, 1))]),
+            (bytes_per_row + 13 * CHANNELS, vec![((3, 0), (12, 1))]),
+        ] {
+            let mut expected = vec![255; size];
+            let mut actual = vec![255; size];
+            for (index, (from, to)) in rectangles.into_iter().enumerate() {
+                let ink = if index == 0 {
+                    [27, 43, 173, 5]
+                } else {
+                    RED
+                };
+                let reference = (|| {
+                    for y in from.1..=to.1 {
+                        for x in from.0..=to.0 {
+                            set_pixel(&mut expected, i32::from(x), i32::from(y), ink)?;
+                        }
+                    }
+                    Ok(())
+                })();
+                assert_eq!(
+                    paint_rgba(&mut actual, Paint::Rect(from, to), ink),
+                    reference
+                );
+                assert_eq!(actual, expected, "{from:?} to {to:?} in {size} bytes");
+            }
+        }
     }
 
     #[test]

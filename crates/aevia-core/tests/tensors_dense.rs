@@ -412,6 +412,64 @@ fn reductions_agree_with_the_boxed_path() {
     assert_same(&dense, &reference, "sum of one element");
 }
 
+#[test]
+fn strided_scalar_reductions_preserve_logical_order_and_checked_layouts() {
+    let mut interp = session("let raw = [[2.0 km, 3.0 km], [4.0 km, 5.0 km]]\n");
+    for storage in [
+        [1.0e200, 1.0e-200, 1.0e200, 1.0e-200],
+        [1.0e16, 1.0, -1.0e16, -0.0],
+        [f64::INFINITY, -0.0, 1.0, f64::NEG_INFINITY],
+    ] {
+        let backing = TensorData::new(
+            vec![2, 2],
+            Storage::Dense(Rc::new(storage.to_vec())),
+            aevia_dim::Dim::one(),
+            None,
+        );
+        let transpose = backing.transposed_view().unwrap();
+        let reverse = transpose.reversed_view(1).unwrap();
+        for view in [transpose, reverse] {
+            assert!(view.dense().is_none());
+            let logical = Value::Tensor(Rc::new(view.clone()));
+            for name in ["sum", "prod"] {
+                let actual = interp
+                    .call_named(name, vec![logical.clone()], Span::default())
+                    .unwrap();
+                let materialized = interp
+                    .call_named(name, vec![boxed(&logical)], Span::default())
+                    .unwrap();
+                if actual.as_f64().is_some_and(f64::is_nan) {
+                    assert!(materialized.as_f64().is_some_and(f64::is_nan), "{name}");
+                } else {
+                    assert_same(&actual, &materialized, name);
+                }
+            }
+            let mut malformed = view;
+            malformed.shape = vec![4];
+            assert!(malformed.dense_sum().is_none());
+            assert!(malformed.dense_prod().is_none());
+        }
+    }
+
+    let raw = interp.eval_toplevel("raw").unwrap();
+    let one = tensor_of(&raw)
+        .transposed_view()
+        .unwrap()
+        .slice_view(&[(0, 1), (0, 1)])
+        .unwrap();
+    assert!(one.dense().is_none());
+    let logical = Value::Tensor(Rc::new(one));
+    for name in ["sum", "prod"] {
+        let actual = interp
+            .call_named(name, vec![logical.clone()], Span::default())
+            .unwrap();
+        let materialized = interp
+            .call_named(name, vec![boxed(&logical)], Span::default())
+            .unwrap();
+        assert_same(&actual, &materialized, name);
+    }
+}
+
 /// The `@` differential.
 ///
 /// `matrix @ matrix` now runs on `aevia_std::linalg::matmul`, a blocked kernel

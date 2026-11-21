@@ -836,6 +836,7 @@ fn dedupe_diagnostics(diagnostics: &mut Diagnostics) {
     let mut seen = std::collections::HashSet::new();
     diagnostics.items.retain(|item| {
         seen.insert((
+            item.span.file,
             item.code.clone(),
             item.message.clone(),
             item.span.start,
@@ -1018,6 +1019,7 @@ struct Loader {
 #[derive(Default)]
 pub struct CheckCache {
     entries: HashMap<ModuleKey, CacheEntry>,
+    syntax: HashMap<ModuleKey, SyntaxEntry>,
     /// Modules reused from the cache on the most recent load.
     pub reused: usize,
     /// Modules checked on the most recent load.
@@ -1027,8 +1029,25 @@ pub struct CheckCache {
 struct CacheEntry {
     file: FileId,
     fingerprint: u64,
+    interface_fingerprint: u64,
     diagnostics: Diagnostics,
     module: aevia_types::check::CheckedModule,
+}
+
+type Syntax = Result<(Module, Diagnostics), Diagnostics>;
+
+struct SyntaxEntry {
+    file: FileId,
+    source: String,
+    syntax: Syntax,
+}
+
+fn parse_source(
+    file: FileId,
+    source: &str,
+) -> Syntax {
+    let tokens = lex(file, source)?;
+    Ok(parse_module(file, source, &tokens))
 }
 
 impl CheckCache {
@@ -1048,6 +1067,30 @@ impl CheckCache {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    fn parse(
+        &mut self,
+        key: &ModuleKey,
+        file: FileId,
+        source: &str,
+    ) -> Syntax {
+        if let Some(entry) = self.syntax.get(key)
+            && entry.file == file
+            && entry.source == source
+        {
+            return entry.syntax.clone();
+        }
+        let syntax = parse_source(file, source);
+        self.syntax.insert(
+            key.clone(),
+            SyntaxEntry {
+                file,
+                source: source.to_owned(),
+                syntax: syntax.clone(),
+            },
+        );
+        syntax
     }
 }
 
@@ -1130,6 +1173,15 @@ fn load_configured(
     let counters = loader.counters.clone();
     let root = loader.load_entry(entry);
     let files = loader.parsed.len();
+    if let Some(cache) = cache {
+        let mut cache = cache.borrow_mut();
+        cache
+            .entries
+            .retain(|key, _| loader.parsed.contains_key(key));
+        cache
+            .syntax
+            .retain(|key, _| loader.parsed.contains_key(key));
+    }
     let (modules, sources, mut diagnostics, dependencies) = loader.finish(root);
     dedupe_diagnostics(&mut diagnostics);
     let stats = LoadStats {
@@ -1152,10 +1204,6 @@ fn load_configured(
     )
 }
 
-#[expect(
-    clippy::single_call_fn,
-    reason = "hash the complete in-memory check input without mixing it with persistence"
-)]
 fn fingerprint(parts: &[&dyn std::fmt::Debug]) -> u64 {
     use std::hash::Hash as _;
     use std::hash::Hasher as _;
@@ -1396,8 +1444,18 @@ impl Loader {
             self.source_ids.insert(canonical.clone(), file);
             file
         };
-        let lexed = match lex(file, &source) {
-            | Ok(lexed) => lexed,
+        // Each synthetic entry is its own snippet or REPL submission. Keep
+        // reusable syntax for disk entries and imports of any origin.
+        let parsed = self
+            .cache
+            .as_ref()
+            .filter(|_| overlaid.is_none() || !self.stack.is_empty())
+            .map_or_else(
+                || parse_source(file, &source),
+                |cache| cache.borrow_mut().parse(&canonical, file, &source),
+            );
+        let (module, parse_diagnostics) = match parsed {
+            | Ok(parsed) => parsed,
             | Err(errors) => {
                 self.diagnostics.extend(errors);
                 // Remember the failure so a second importer does not report it
@@ -1423,12 +1481,8 @@ impl Loader {
                 return None;
             },
         };
-        let (module, parse_diagnostics) = parse_module(file, &source, &lexed);
         let syntax_failed = parse_diagnostics.has_errors();
         self.diagnostics.extend(parse_diagnostics);
-        if self.diagnostics.has_errors() && self.stack.is_empty() {
-            // The entry file failed to parse; there is nothing to import.
-        }
 
         let path = if let Some((entry, identity)) = &self.entry_identity
             && entry == &canonical
@@ -1665,9 +1719,8 @@ impl Loader {
         let dependencies = std::mem::take(&mut self.dependencies)
             .into_values()
             .collect();
-        let sources = self.sources.clone();
         let Some(root) = root else {
-            return (Vec::new(), sources, self.diagnostics, dependencies);
+            return (Vec::new(), self.sources, self.diagnostics, dependencies);
         };
         // Every prefix each module is imported under, across all importers.
         let mut prefixes: HashMap<ModuleKey, Vec<String>> = HashMap::new();
@@ -1686,6 +1739,8 @@ impl Loader {
         // The interface digest of each module already resolved (`None` when it
         // could not be digested), for the on-disk cache keys.
         let mut digests: HashMap<FileId, Option<Digest>> = HashMap::new();
+        // In-memory interface fingerprints in the same order as `modules`.
+        let mut interface_fingerprints = Vec::new();
         // The checked interfaces of the modules already resolved, in dependency
         // order (§7.4). They carry classes, instances and alias definitions, so
         // an importer can use a class it did not declare and expand an imported
@@ -1721,14 +1776,15 @@ impl Loader {
                     aliases: Vec::new(),
                     imports: Vec::new(),
                 });
+                if self.cache.is_some() {
+                    interface_fingerprints.push(None);
+                }
                 continue;
             }
             // The imports of this module, as the checker wants them: one entry
             // per resolved module, with the prefix its names are reachable
             // under.
-            // Materialised only when the checker (or the in-memory fingerprint)
-            // needs them: a module restored from disk never clones its
-            // dependencies' export tables.
+            // Materialised only when the checker needs them.
             let mut import_specs = Vec::new();
             let mut reexports = Vec::new();
             let mut runtime_imports = Vec::new();
@@ -1806,17 +1862,21 @@ impl Loader {
             }
             // A module sees its dependency closure, never unrelated modules
             // merely checked earlier in the package traversal.
-            let mut reachable = BTreeSet::new();
+            let mut reachable_indices = BTreeSet::new();
             let mut pending: Vec<_> = runtime_imports.iter().map(|import| import.file).collect();
             while let Some(file) = pending.pop() {
                 if let Some(&index) = by_file.get(&file)
-                    && reachable.insert(index)
+                    && reachable_indices.insert(index)
                     && let Some(module) = modules.get(index)
                 {
                     pending.extend(module.imports.iter().map(|import| import.file));
                 }
             }
-            let reachable = || reachable.iter().filter_map(|&index| modules.get(index));
+            let reachable = || {
+                reachable_indices
+                    .iter()
+                    .filter_map(|&index| modules.get(index))
+            };
             let interfaces = OnceCell::<Vec<ModuleInterface>>::new();
             let interfaces = || {
                 interfaces.get_or_init(|| {
@@ -1861,31 +1921,39 @@ impl Loader {
                 self.roots_for(&path)
                     .map(|roots| roots.resolved_module_identity(&parsed.context, &parsed.path))
             };
-            let print = self.cache.as_ref().map(|_| {
+            let print = self.cache.as_ref().and_then(|_| {
+                let closure: Option<Vec<_>> = reachable_indices
+                    .iter()
+                    .map(|&index| interface_fingerprints.get(index).copied().flatten())
+                    .collect();
+                let imports: Vec<_> = runtime_imports.iter().map(|import| import.file).collect();
                 let text = self
                     .sources
                     .file(parsed.file)
                     .map_or("", |file| file.text.as_str());
-                fingerprint(&[
+                Some(fingerprint(&[
                     &text,
                     &parsed.file,
-                    &imports(),
-                    &interfaces(),
+                    &imports,
+                    &closure?,
                     &identity,
                     &bindings,
                     &reexports,
                     &self.options,
-                ])
+                ]))
             });
             let reused = match (&self.cache, print) {
                 | (Some(cache), Some(print)) => {
                     let cache = cache.borrow();
                     cache.entries.get(&path).and_then(|entry| {
                         (entry.file == parsed.file && entry.fingerprint == print).then(|| {
-                            aevia_types::check::CheckResult {
-                                diagnostics: entry.diagnostics.clone(),
-                                module: entry.module.clone(),
-                            }
+                            (
+                                aevia_types::check::CheckResult {
+                                    diagnostics: entry.diagnostics.clone(),
+                                    module: entry.module.clone(),
+                                },
+                                entry.interface_fingerprint,
+                            )
                         })
                     })
                 },
@@ -1920,11 +1988,11 @@ impl Loader {
                 | _ => None,
             };
             let mut own_digest: Option<Digest> = None;
-            let mut from_memory = false;
+            let mut memory_digest = None;
             let mut loaded_from_disk = false;
             let restored = match reused {
-                | Some(checked) => {
-                    from_memory = true;
+                | Some((checked, digest)) => {
+                    memory_digest = Some(digest);
                     Some(checked)
                 },
                 | None => {
@@ -1946,7 +2014,9 @@ impl Loader {
             };
             let checked = match restored {
                 | Some(checked) => {
-                    if from_memory && let Some(cache) = &self.cache {
+                    if memory_digest.is_some()
+                        && let Some(cache) = &self.cache
+                    {
                         let mut cache = cache.borrow_mut();
                         cache.reused = cache.reused.saturating_add(1);
                     }
@@ -1971,14 +2041,16 @@ impl Loader {
                     checked
                 },
             };
+            let interface = OnceCell::new();
+            let interface = || interface.get_or_init(|| checked.module.interface());
             if self.disk.is_some() {
                 if own_digest.is_none() {
-                    own_digest = crate::disk_cache::interface_digest(&checked.module.interface());
+                    own_digest = crate::disk_cache::interface_digest(interface());
                 }
                 digests.insert(parsed.file, own_digest);
                 // Only an error-free check is stored: its diagnostics are
                 // warnings, and every type it declares is complete.
-                if !from_memory
+                if memory_digest.is_none()
                     && !loaded_from_disk
                     && !checked.diagnostics.has_errors()
                     && let (Some(disk), Some(key), Some(digest)) =
@@ -1994,16 +2066,24 @@ impl Loader {
                     Counters::bump(&self.counters.disk_writes);
                 }
             }
-            if !from_memory && let (Some(cache), Some(print)) = (&self.cache, print) {
-                cache.borrow_mut().entries.insert(
-                    path.clone(),
-                    CacheEntry {
-                        file: parsed.file,
-                        fingerprint: print,
-                        diagnostics: checked.diagnostics.clone(),
-                        module: checked.module.clone(),
-                    },
-                );
+            if let Some(cache) = &self.cache {
+                let interface_fingerprint =
+                    memory_digest.unwrap_or_else(|| fingerprint(&[interface()]));
+                if memory_digest.is_none()
+                    && let Some(print) = print
+                {
+                    cache.borrow_mut().entries.insert(
+                        path.clone(),
+                        CacheEntry {
+                            file: parsed.file,
+                            fingerprint: print,
+                            interface_fingerprint,
+                            diagnostics: checked.diagnostics.clone(),
+                            module: checked.module.clone(),
+                        },
+                    );
+                }
+                interface_fingerprints.push(Some(interface_fingerprint));
             }
             self.diagnostics.extend(checked.diagnostics.clone());
             let aliases = prefixes.get(&path).map_or_else(Vec::new, |list| {
@@ -2026,7 +2106,7 @@ impl Loader {
         // The entry file is last in dependency order, which is what `entry`
         // relies on; the walk already guarantees it.
         let _ = root;
-        (modules, sources, self.diagnostics, dependencies)
+        (modules, self.sources, self.diagnostics, dependencies)
     }
 }
 
@@ -2254,11 +2334,7 @@ fn missing_export_note<'a>(
     if let Some(close) = aevia_types::check::closest_name(name, exports) {
         return format!("did you mean `{close}`?");
     }
-    let homes: Vec<String> = aevia_std::stdlib::module_paths()
-        .filter(|path| {
-            let components: Vec<&str> = path.split('/').collect();
-            aevia_std::stdlib::exports(&components).contains(&name)
-        })
+    let homes: Vec<String> = aevia_std::stdlib::modules_exporting(name)
         .map(|path| path.replace('/', "."))
         .take(3)
         .collect();

@@ -28,17 +28,51 @@ use crate::eval::EvalError;
 use aevia_dim::format_rational_decimal;
 use aevia_rssn::Sym;
 use indexmap::IndexMap;
+use indexmap::IndexSet;
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::One;
 use num_traits::Signed;
 use num_traits::ToPrimitive;
 use num_traits::Zero;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::rc::Rc;
+
+enum FreeSymbols<'a> {
+    Small(Vec<String>),
+    Indexed(IndexSet<Cow<'a, str>>),
+}
+
+impl<'a> FreeSymbols<'a> {
+    fn insert(
+        &mut self,
+        name: Cow<'a, str>,
+    ) {
+        match self {
+            | Self::Small(names) => {
+                let spelling = name.as_ref();
+                if names.iter().any(|known| known.as_str() == spelling) {
+                    return;
+                }
+                if names.len() < 32 {
+                    names.push(name.into_owned());
+                } else {
+                    let mut indexed = IndexSet::with_capacity(names.len().saturating_add(1));
+                    indexed.extend(std::mem::take(names).into_iter().map(Cow::Owned));
+                    indexed.insert(name);
+                    *self = Self::Indexed(indexed);
+                }
+            },
+            | Self::Indexed(names) => {
+                names.insert(name);
+            },
+        }
+    }
+}
 
 impl Hash for Term {
     fn hash<H: Hasher>(
@@ -311,9 +345,12 @@ impl Term {
     /// it as "no free symbols" would make a stale handle look like a closed
     /// form and let `fold` answer with a number.
     pub fn try_free_symbols(&self) -> Result<Vec<String>, EvalError> {
-        let mut out = Vec::new();
+        let mut out = FreeSymbols::Small(Vec::new());
         self.collect_symbols(&mut out)?;
-        Ok(out)
+        Ok(match out {
+            | FreeSymbols::Small(names) => names,
+            | FreeSymbols::Indexed(names) => names.into_iter().map(Cow::into_owned).collect(),
+        })
     }
 
     /// The free symbols, empty when a kernel handle cannot be read.
@@ -325,17 +362,13 @@ impl Term {
         self.try_free_symbols().unwrap_or_default()
     }
 
-    fn collect_symbols(
-        &self,
-        out: &mut Vec<String>,
+    fn collect_symbols<'a>(
+        &'a self,
+        out: &mut FreeSymbols<'a>,
     ) -> Result<(), EvalError> {
         match self {
             | Self::Num(_) => {},
-            | Self::Sym(name) => {
-                if !out.contains(name) {
-                    out.push(name.clone());
-                }
-            },
+            | Self::Sym(name) => out.insert(Cow::Borrowed(name)),
             | Self::Add(items) | Self::Mul(items) => {
                 for item in items {
                     item.collect_symbols(out)?;
@@ -352,9 +385,7 @@ impl Term {
                     .try_free_symbols(*sym)
                     .map_err(|failure| crate::kernel::error(&failure))?;
                 for name in names {
-                    if !out.contains(&name) {
-                        out.push(name);
-                    }
+                    out.insert(Cow::Owned(name));
                 }
             },
         }
@@ -2048,6 +2079,44 @@ mod tests {
 
     fn x() -> Term {
         Term::Sym("x".to_string())
+    }
+
+    #[test]
+    fn free_symbols_keep_first_appearance_across_local_and_kernel_terms() {
+        let from_kernel = |name: &str| Term::foreign(crate::kernel::kernel_symbol(name), name);
+        let names: Vec<_> = (0..96)
+            .map(|index| format!("variable_{index:03}"))
+            .collect();
+        let local = Term::Mul(names.iter().cloned().map(Term::Sym).collect());
+        let term = Term::Add(vec![
+            from_kernel("before"),
+            Term::Pow(Box::new(local), BigRational::one()),
+            from_kernel("variable_003"),
+            Term::Sym("before".to_owned()),
+            from_kernel("after"),
+            Term::Sym("after".to_owned()),
+        ]);
+        let expected: Vec<_> = std::iter::once("before".to_owned())
+            .chain(names)
+            .chain(std::iter::once("after".to_owned()))
+            .collect();
+        assert_eq!(term.try_free_symbols().unwrap(), expected);
+    }
+
+    #[test]
+    fn stale_kernel_symbols_still_fail_after_the_ordered_set_is_populated() {
+        let stale = Term::foreign(Sym::new(u64::MAX, 0), "stale");
+        let original = stale.try_free_symbols().unwrap_err();
+        let mut terms: Vec<_> = (0..64)
+            .map(|index| Term::Sym(format!("variable_{index:03}")))
+            .collect();
+        terms.push(stale);
+        terms.push(Term::Sym("unvisited".to_owned()));
+        let term = Term::Add(terms);
+        let error = term.try_free_symbols().unwrap_err();
+        assert_eq!(error.code, original.code);
+        assert_eq!(error.message, original.message);
+        assert!(term.free_symbols().is_empty());
     }
 
     #[test]

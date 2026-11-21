@@ -579,13 +579,9 @@ impl TensorData {
 
     /// The `f64` elements in row-major order, borrowing when possible.
     ///
-    /// This is the boundary every `f64` kernel uses. A contiguous tensor —
-    /// dense, or a view with row-major strides — is borrowed, so the fast path
-    /// costs nothing extra. A strided view is walked once into an owned
-    /// buffer: materialising at the kernel boundary is what keeps a kernel
-    /// that cannot walk strides from computing a wrong value. A *reversed*
-    /// view takes the same owned path even when its strides are otherwise
-    /// row-major, because its elements are not adjacent in the buffer.
+    /// Kernels that require a contiguous slice use this boundary. Dense
+    /// storage and forward row-major views are borrowed. Strided and
+    /// reversed views are materialised in logical order.
     ///
     /// Returns `None` when storage is neither `f64` nor a view of it, when the
     /// storage disagrees with the shape, or when materialisation fails.
@@ -740,9 +736,12 @@ impl TensorData {
     /// The elements in row-major order.
     #[must_use]
     pub fn elements(&self) -> Vec<Value> {
-        (0..self.storage.len())
-            .filter_map(|index| self.get_flat(index))
-            .collect()
+        self.iter_elements().collect()
+    }
+
+    /// Reads each available element in row-major order as it is needed.
+    pub(crate) fn iter_elements(&self) -> impl Iterator<Item = Value> + '_ {
+        (0..self.storage.len()).filter_map(|index| self.get_flat(index))
     }
 
     /// A contiguous copy of this tensor's elements, when they are `f64`.

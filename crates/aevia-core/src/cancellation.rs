@@ -13,6 +13,7 @@
 
 use crate::EvalError;
 use crate::Interp;
+use crate::fxhash::FxHashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::Weak;
@@ -25,7 +26,21 @@ pub const INTERRUPTED: &str = "E0812";
 #[derive(Default, Debug)]
 struct State {
     requested: Arc<AtomicBool>,
-    children: Mutex<Vec<Weak<Self>>>,
+    children: Mutex<FxHashMap<usize, Weak<Self>>>,
+    parent: Option<Weak<Self>>,
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        if let Some(parent) = self.parent.as_ref().and_then(Weak::upgrade) {
+            // Arc keeps this address reserved until the destructor returns.
+            parent
+                .children
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&std::ptr::from_ref(self).addr());
+        }
+    }
 }
 
 thread_local! {
@@ -79,18 +94,20 @@ impl CancellationToken {
 
     /// Requests interruption of this evaluation and all dispatched children.
     pub fn cancel(&self) {
-        self.0.requested.store(true, Ordering::Release);
-        let mut children = self
-            .0
-            .children
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        children.retain(|child| {
-            child.upgrade().is_some_and(|child| {
-                Self(child).cancel();
-                true
-            })
-        });
+        let mut pending = Vec::new();
+        let mut current = Some(self.0.clone());
+        while let Some(state) = current {
+            let children = state
+                .children
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.requested.store(true, Ordering::Release);
+            pending.extend(children.values().filter_map(Weak::upgrade));
+            // The last strong reference to a child unregisters it. Release
+            // the parent lock before processing or dropping a child.
+            drop(children);
+            current = pending.pop();
+        }
     }
 
     /// Clears the foreground request before the host starts new work.
@@ -98,12 +115,14 @@ impl CancellationToken {
         // New foreground work owns a new set of dispatched children. Earlier
         // successful background tasks keep their own request; awaiting one
         // explicitly connects interruption to that task again.
-        self.0
+        let mut children = self
+            .0
             .children
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        children.clear();
         self.0.requested.store(false, Ordering::Release);
+        drop(children);
     }
 
     /// Whether this evaluation has been interrupted.
@@ -113,17 +132,18 @@ impl CancellationToken {
     }
 
     pub(crate) fn child(&self) -> Self {
-        let child = Self::new();
         let mut children = self
             .0
             .children
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        children.retain(|child| child.strong_count() > 0);
-        if self.is_cancelled() {
-            child.cancel();
-        }
-        children.push(Arc::downgrade(&child.0));
+        let child = Self(Arc::new(State {
+            requested: Arc::new(AtomicBool::new(self.is_cancelled())),
+            children: Mutex::default(),
+            parent: Some(Arc::downgrade(&self.0)),
+        }));
+        children.insert(Arc::as_ptr(&child.0).addr(), Arc::downgrade(&child.0));
+        drop(children);
         child
     }
 
@@ -186,6 +206,7 @@ impl Interp {
 mod tests {
     use super::*;
     use aevia_types::check::CheckedModule;
+    use std::sync::Barrier;
 
     #[test]
     fn resetting_the_foreground_does_not_revive_dispatched_children() {
@@ -207,6 +228,74 @@ mod tests {
         foreground.reset();
         foreground.cancel();
         assert!(!previous_task.is_cancelled());
+    }
+
+    #[test]
+    fn retired_children_release_their_registration_immediately() {
+        let parent = CancellationToken::new();
+        let previous = parent.child();
+        parent.reset();
+        let live = parent.child();
+        drop(previous);
+        for _ in 0..1_024 {
+            drop(parent.child());
+        }
+        assert!(parent.0.children.lock().is_ok_and(|live| live.len() == 1));
+        parent.cancel();
+        assert!(live.is_cancelled());
+        drop(live);
+        assert!(parent.0.children.lock().is_ok_and(|live| live.is_empty()));
+        parent.reset();
+        let intermediate = parent.child();
+        let detached = intermediate.child();
+        drop(intermediate);
+        parent.cancel();
+        assert!(!detached.is_cancelled());
+    }
+
+    #[test]
+    fn concurrent_dispatch_release_and_cancellation_reach_live_descendants() {
+        for _ in 0..64 {
+            let parent = CancellationToken::new();
+            let existing = parent.child();
+            let retired = parent.child();
+            let start = Barrier::new(4);
+            std::thread::scope(|scope| {
+                let first = scope.spawn(|| {
+                    start.wait();
+                    parent.child()
+                });
+                let grandchild = scope.spawn(|| {
+                    start.wait();
+                    existing.child()
+                });
+                let release = scope.spawn(|| {
+                    start.wait();
+                    drop(retired);
+                });
+                start.wait();
+                parent.cancel();
+                assert!(first.join().is_ok_and(|child| child.is_cancelled()));
+                assert!(grandchild.join().is_ok_and(|child| child.is_cancelled()));
+                assert!(release.join().is_ok());
+            });
+            assert!(parent.0.children.lock().is_ok_and(|live| live.len() == 1));
+            assert!(existing.is_cancelled());
+            assert!(parent.child().is_cancelled());
+        }
+    }
+
+    #[test]
+    fn cancellation_propagates_through_deep_dispatch_without_recursive_stack_use() {
+        let parent = CancellationToken::new();
+        let mut descendants = Vec::with_capacity(4_096);
+        let mut current = parent.clone();
+        for _ in 0..4_096 {
+            current = current.child();
+            descendants.push(current.clone());
+        }
+        parent.cancel();
+        assert!(descendants.iter().all(CancellationToken::is_cancelled));
     }
 
     #[test]

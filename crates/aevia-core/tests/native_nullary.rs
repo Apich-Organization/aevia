@@ -38,7 +38,7 @@ test "native zero-argument call has a checked result channel" =
                 for declaration in &entry.module.decls {
                     if let DeclKind::Test { body, .. } = &declaration.kind {
                         assert!(
-                            matches!(interp.eval(body, &root), Ok(Value::Bool(true))),
+                            matches!(interp.eval_source_test(body, &root), Ok(Value::Bool(true))),
                             "{mode:?}"
                         );
                     }

@@ -337,6 +337,25 @@ pub(super) fn concat(
     if count == 0 {
         return Ok(empty_tensor_like(left, shape));
     }
+    if let (Some(left_data), Some(right_data)) = (left.dense(), right.dense()) {
+        let mut values = reserve_items(count, span)?;
+        values.extend_from_slice(left_data);
+        values.extend_from_slice(right_data);
+        // Numeric compaction keeps the first display unit from a nonempty input.
+        let display = left
+            .display
+            .as_ref()
+            .filter(|_| !left_data.is_empty())
+            .or_else(|| right.display.as_ref().filter(|_| !right_data.is_empty()))
+            .cloned();
+        let output = Value::Tensor(Rc::new(TensorData::new(
+            shape,
+            Storage::Dense(Rc::new(values)),
+            left.dim.clone(),
+            display,
+        )));
+        return Ok(preserve_tensor_schema(output, left));
+    }
     let mut elements = reserve_items(count, span)?;
     for index in 0..left_count {
         elements.push(tensor_item(left, index, span)?);
@@ -621,6 +640,108 @@ mod tests {
             let order = sorted_indices(&rows, |a, b| float_sequence_order(a, b, nan_last), span)
                 .expect("float order");
             assert_eq!(order, expected);
+        }
+    }
+
+    #[test]
+    fn concat_dense_window_keeps_bits_dimensions_schema_and_display_order() {
+        let span = Span::default();
+        let dim = Dim::base("Length");
+        let metre = Rc::new(aevia_dim::UnitDef::linear(
+            "m",
+            dim.clone(),
+            aevia_dim::Scale::one(),
+        ));
+        let centimetre = Rc::new(aevia_dim::UnitDef::linear(
+            "cm",
+            dim.clone(),
+            aevia_dim::Scale::parse("1/100").unwrap(),
+        ));
+        let element = aevia_types::Type::Scalar(aevia_types::Rep::Float, dim.clone());
+        let nan = f64::from_bits(0x7ff8_0000_0000_002a);
+        let source = TensorData::checked(
+            vec![2, 2],
+            Storage::Dense(Rc::new(vec![99.0, 77.0, -0.0, nan])),
+            dim.clone(),
+            Some(Rc::clone(&metre)),
+            element.clone(),
+        )
+        .unwrap();
+        let left = source.index_view(&[1]).unwrap();
+        let right = TensorData::new(
+            vec![2],
+            Storage::Dense(Rc::new(vec![0.0, f64::INFINITY])),
+            dim.clone(),
+            Some(Rc::clone(&centimetre)),
+        );
+        let joined = concat(&left, &right, span).unwrap();
+        let joined = tensor(&joined);
+        assert_eq!(joined.shape, [4]);
+        assert_eq!(joined.dim, dim);
+        assert_eq!(joined.verified_element.as_deref(), Some(&element));
+        assert!(Rc::ptr_eq(joined.display.as_ref().unwrap(), &metre));
+        let bits: Vec<_> = joined
+            .dense()
+            .unwrap()
+            .iter()
+            .map(|value| value.to_bits())
+            .collect();
+        assert_eq!(bits, [-0.0, nan, 0.0, f64::INFINITY].map(f64::to_bits));
+
+        let mut undisplayed = left;
+        undisplayed.display = None;
+        let mut empty = dense(vec![0], Vec::new());
+        empty.dim = dim;
+        empty.display = Some(metre);
+        for first in [&undisplayed, &empty] {
+            let joined = concat(first, &right, span).unwrap();
+            assert!(Rc::ptr_eq(
+                tensor(&joined).display.as_ref().unwrap(),
+                &centimetre
+            ));
+        }
+        let joined = concat(&undisplayed, &empty, span).unwrap();
+        assert!(tensor(&joined).display.is_none());
+    }
+
+    #[test]
+    fn concat_keeps_exact_promotion_boxed_identity_strides_and_shape_errors() {
+        let span = Span::default();
+        let exact = TensorData::new(
+            vec![1],
+            Storage::TypedExact(
+                vec![num_rational::BigRational::new(3.into(), 2.into())],
+                crate::value::ExactRep::Real,
+            ),
+            Dim::one(),
+            None,
+        );
+        let floats = dense(vec![1], vec![8.0]);
+        let joined = concat(&exact, &floats, span).unwrap();
+        assert_eq!(tensor(&joined).dense().unwrap(), [1.5, 8.0]);
+
+        let boxed = TensorData::new(
+            vec![1],
+            Storage::Boxed(vec![Value::int(3)]),
+            Dim::one(),
+            None,
+        );
+        let joined = concat(&boxed, &floats, span).unwrap();
+        let Storage::Boxed(elements) = &tensor(&joined).storage else {
+            panic!("boxed numeric elements must keep their representation");
+        };
+        assert_eq!(crate::value::repr(&elements[0]), "3");
+        assert_eq!(elements[1].as_f64(), Some(8.0));
+
+        let source = dense(vec![2], vec![1.0, 2.0]);
+        let reversed = flip_axis(&source, 0, span).unwrap();
+        let joined = concat(tensor(&reversed), &floats, span).unwrap();
+        assert_eq!(tensor(&joined).dense().unwrap(), [2.0, 1.0, 8.0]);
+
+        let malformed = dense(vec![2], vec![1.0]);
+        let incompatible = dense(vec![1, 1], vec![1.0]);
+        for input in [&malformed, &incompatible] {
+            assert_eq!(concat(input, &floats, span).unwrap_err().code, "E0802");
         }
     }
 

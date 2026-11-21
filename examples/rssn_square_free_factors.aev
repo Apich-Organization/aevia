@@ -1,0 +1,9 @@
+## Square-free factors over the rationals, grouped by multiplicity.
+## RSSN returns the leading coefficient and a list of factor-multiplicity pairs.
+let x: Real = symbol("x")
+let polynomial = -6 * x^2 * (x^2 + 1)^3
+let decomposition = Rssn.dynamic("square_free_factors", [to_value(polynomial), to_value(x)])
+let constant = Rssn.dynamic("square_free_factors", [to_value(7 / 3), to_value(x)])
+
+let composite_variable = Rssn.dynamic("square_free_factors", [to_value(polynomial), to_value(x + 1)])
+let measured_polynomial = Rssn.dynamic("square_free_factors", [to_value(2 m * x^2), to_value(x)])

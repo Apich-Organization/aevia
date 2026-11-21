@@ -42,7 +42,7 @@ fn adaptive_pde_examples_keep_dimensions_methods_rejection_and_sparse_contracts(
                             body,
                         } = &declaration.kind
                         {
-                            let outcome = interp.eval(body, &root);
+                            let outcome = interp.eval_source_test(body, &root);
                             assert!(
                                 matches!(outcome, Ok(Value::Bool(true))),
                                 "{name} {mode:?}: {assertion}: {outcome:?}"

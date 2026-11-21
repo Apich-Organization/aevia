@@ -156,6 +156,38 @@ fn main(): IO Unit = do
     assert_eq!(output, "400000\n");
 }
 
+#[test]
+fn wide_calls_preserve_aliased_arguments_and_live_frames() {
+    let params = (0..65)
+        .map(|index| format!("a{index}: Int"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let args = (0..65)
+        .map(|index| {
+            match index {
+                | 0 | 32 | 64 => "seed".to_owned(),
+                | _ => format!("seed + {index}"),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let weighted = (0..65)
+        .map(|index| format!("a{index} * {}", index + 1))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let source = format!(
+        "fn relay({params}): Int = {weighted}\n\
+         fn forwarded(seed: Int): Int = relay({args})\n\
+         fn retained(seed: Int): Int = relay({args}) + seed\n\
+         fn main(): IO Unit = do\n    println(forwarded(7))\n    println(retained(7))\n"
+    );
+    for mode in [Mode::Ast, Mode::Ir] {
+        let result = run_with_stack(&source, mode, 16 * 1024 * 1024)
+            .expect("wide calls preserve the values in source order");
+        assert_eq!(result, "101319\n101326\n");
+    }
+}
+
 /// Measurement harness (ignored by default): the wall-clock cost of one
 /// trampoline step, Int and Float.
 ///

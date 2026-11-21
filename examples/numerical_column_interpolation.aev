@@ -1,0 +1,10 @@
+import Rssn_numerical_matrix as N
+
+test "interpolative decomposition returns dimensionless coefficients in input order" =
+    let a = unwrap_or(N.num_linear_array_new([to_value([2, 3]), to_value([1.0, 2.0, 3.0, 2.0, 4.0, 6.0]), to_value(5.0 K)]), to_value(0))
+    match Rssn.dynamic("num_linear_interpolative_decomposition", [a, to_value(1)]) with
+    | Ok(packed) ->
+        match from_value<{columns: Tensor<1, Int>, coefficients: Tensor<2, Float>}>(packed) with
+        | Ok(result) -> result.columns == [2] && approx_eq(result.coefficients[0, 0], 1.0/3.0, 1e-12) && approx_eq(result.coefficients[0, 1], 2.0/3.0, 1e-12) && result.coefficients[0, 2] == 1.0
+        | Err(_) -> false
+    | Err(_) -> false

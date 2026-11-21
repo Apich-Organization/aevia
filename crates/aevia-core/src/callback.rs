@@ -17,8 +17,6 @@
 )]
 use crate::eval::Interp;
 use crate::value::CallbackValue;
-use crate::value::KernelValue;
-use crate::value::Value;
 use aevia_rssn::KernelError;
 use aevia_rssn::Sig;
 use aevia_rssn::Val;
@@ -92,13 +90,8 @@ impl BridgeCallback for Handle {
         }
         let mut converted = Vec::with_capacity(args.len());
         for ((payload, witness), expected) in args.iter().zip(witnesses).zip(parameters) {
-            let opaque = Value::KernelValue(Rc::new(KernelValue {
-                payload: payload.clone(),
-                witness: witness.clone(),
-                host_witness: None,
-            }));
             converted.push(
-                crate::rssn_module::from_kernel_value(&opaque, expected)
+                crate::rssn_module::decode_checked_payload(payload, witness, None, expected)
                     .map_err(|reason| KernelError::new("E1003", reason))?,
             );
         }
@@ -112,12 +105,7 @@ impl BridgeCallback for Handle {
         let payload = crate::kernel::to_val(&result_value)
             .map_err(|error| KernelError::new(error.code, error.message))?;
         let witness = crate::rssn_module::host_dimension_witness(&result_value);
-        let opaque = Value::KernelValue(Rc::new(KernelValue {
-            payload: payload.clone(),
-            witness: witness.clone(),
-            host_witness: None,
-        }));
-        crate::rssn_module::validate_kernel_value(&opaque, result)
+        crate::rssn_module::validate_payload(&payload, &witness, None, result)
             .map_err(|reason| KernelError::new("E1003", reason))?;
         Ok((payload, witness))
     }
@@ -231,6 +219,7 @@ pub fn with_scoped<T>(
 mod tests {
     use super::*;
     use crate::value::NativeFn;
+    use crate::value::Value;
     use aevia_dim::Dim;
     fn callback(
         f: impl Fn(&mut Interp, Vec<Value>, Span) -> Result<Value, crate::eval::EvalError> + 'static
@@ -285,6 +274,61 @@ mod tests {
         })
         .unwrap();
     }
+
+    #[test]
+    fn packet_validation_preserves_argument_and_callback_order() {
+        use std::cell::Cell;
+
+        let length = Dim::base("Length");
+        let time = Dim::base("Time");
+        let calls = Rc::new(Cell::new(0_u32));
+        let wrong_result = Rc::new(Cell::new(false));
+        let seen = Rc::clone(&calls);
+        let poison = Rc::clone(&wrong_result);
+        let callback = Rc::new(CallbackValue {
+            function: Value::Native(Rc::new(NativeFn(Box::new(move |_, args, _| {
+                seen.set(seen.get().saturating_add(1));
+                if poison.get() {
+                    return Ok(Value::string("failed output validation"));
+                }
+                Ok(Value::float(
+                    args[0].as_f64().unwrap() - args[1].as_f64().unwrap(),
+                ))
+            })))),
+            schema: Type::Fn(
+                vec![Type::float(length.clone()), Type::float(time.clone())],
+                Box::new(Type::float(Dim::one())),
+            ),
+        });
+        let mut interp = Interp::new(&aevia_types::CheckedModule::default());
+        let float = |value| Val::Num(aevia_rssn::Num::Float(value));
+        let args = [float(7.0), float(2.0)];
+        let good = [
+            DimensionWitness::Scalar(length.clone()),
+            DimensionWitness::Scalar(time),
+        ];
+        let wrong = [
+            DimensionWitness::Scalar(length.clone()),
+            DimensionWitness::Scalar(length),
+        ];
+        with_scoped(&mut interp, vec![callback], |handles| {
+            let handle = &handles[0];
+            assert_eq!(handle.call(&args, &wrong).unwrap_err().code, "E1003");
+            assert_eq!(calls.get(), 0);
+
+            wrong_result.set(true);
+            assert_eq!(handle.call(&args, &good).unwrap_err().code, "E1003");
+            assert_eq!(calls.get(), 1);
+
+            wrong_result.set(false);
+            let (result, evidence) = handle.call(&args, &good).unwrap();
+            assert_eq!(result, float(5.0));
+            assert_eq!(evidence, DimensionWitness::Scalar(Dim::one()));
+            assert_eq!(calls.get(), 2);
+        })
+        .unwrap();
+    }
+
     #[test]
     fn nested_scopes_work_and_panics_restore_interpreter() {
         let mut interp = Interp::new(&aevia_types::CheckedModule::default());

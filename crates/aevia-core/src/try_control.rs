@@ -25,7 +25,7 @@ use std::rc::Rc;
 impl Interp {
     pub(crate) fn try_value(
         &self,
-        value: &Value,
+        value: &mut Value,
         span: Span,
     ) -> Result<Value, EvalError> {
         let Value::Variant(variant) = value else {
@@ -82,9 +82,15 @@ impl Interp {
                 EvalError::new("E0702", "`?` cannot cross Result/Option families").at(span),
             );
         }
-        // Propagation constructs a new failure in the destination's success
-        // type. Reusing the input Err/None would retain its phantom type.
-        let mut propagated = value::make_variant(*id, variant.index, name, variant.fields.clone());
+        // Propagation replaces the source's phantom type. A unique operand
+        // can keep its payload allocation after discarding the old evidence.
+        let mut propagated = if let Some(owned) = Rc::get_mut(variant) {
+            owned.type_args = None;
+            owned.verified_type = None;
+            std::mem::replace(value, Value::Unit)
+        } else {
+            value::make_variant(*id, variant.index, name, variant.fields.clone())
+        };
         if let Value::Variant(variant) = &mut propagated {
             Rc::make_mut(variant).constructor_origin = true;
         }

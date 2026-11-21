@@ -37,7 +37,7 @@ fn native_option_facade_preserves_dimensions_and_empty_payloads() {
                             body,
                         } = &declaration.kind
                         {
-                            let outcome = interp.eval(body, &root);
+                            let outcome = interp.eval_source_test(body, &root);
                             assert!(
                                 matches!(outcome, Ok(Value::Bool(true))),
                                 "{name} {mode:?}: {assertion}: {outcome:?}"

@@ -128,13 +128,35 @@ impl View {
         if let Some(window) = self.contiguous_slice(shape) {
             return Some(Cow::Borrowed(window));
         }
+        self.map_flat(shape, std::convert::identity).map(Cow::Owned)
+    }
+
+    /// Visit the checked view in logical row-major order without a buffer.
+    pub(super) fn flat_values<'a>(
+        &'a self,
+        shape: &'a [usize],
+    ) -> Option<impl ExactSizeIterator<Item = Option<f64>> + 'a> {
         self.validate(shape)?;
+        Some((0..self.len).map(move |index| {
+            self.position(shape, index)
+                .and_then(|position| self.data.get(position).copied())
+        }))
+    }
+
+    /// Materialise the validated view in row-major order directly into the
+    /// caller's element representation.
+    pub(crate) fn map_flat<T>(
+        &self,
+        shape: &[usize],
+        convert: impl Fn(f64) -> T,
+    ) -> Option<Vec<T>> {
+        let values = self.flat_values(shape)?;
         let mut elements = Vec::new();
-        elements.try_reserve_exact(self.len).ok()?;
-        for index in 0..self.len {
-            elements.push(*self.data.get(self.position(shape, index)?)?);
+        elements.try_reserve_exact(values.len()).ok()?;
+        for value in values {
+            elements.push(convert(value?));
         }
-        Some(Cow::Owned(elements))
+        Some(elements)
     }
 }
 

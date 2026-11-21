@@ -32,7 +32,11 @@ use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::One;
 use num_traits::Zero;
+use rayon::iter::IndexedParallelIterator;
+use rayon::iter::IntoParallelRefMutIterator;
+use rayon::iter::ParallelIterator;
 use std::borrow::Cow;
+use std::cell::OnceCell;
 
 fn square_order(tensor: &TensorData) -> Result<usize, NumericError> {
     let [rows, cols] = tensor.shape.as_slice() else {
@@ -115,6 +119,16 @@ fn real_entries<'a>(
     Ok(Cow::Owned(values))
 }
 
+#[expect(
+    clippy::single_call_fn,
+    reason = "directly tests ambient eligibility without starting a numerical factorization"
+)]
+fn use_ambient_workers(interp: &Interp) -> bool {
+    interp.on_worker
+        && rayon::current_thread_index().is_some()
+        && (2..=interp.jobs).contains(&aevia_rssn::execution::cpu_threads())
+}
+
 /// Forms an upper triangular or reduced matrix and returns its determinant.
 /// A missing pivot denotes a singular system.
 #[allow(
@@ -126,6 +140,14 @@ fn eliminate(
     rows: &mut [Vec<BigRational>],
     reduced: bool,
 ) -> Result<Option<BigRational>, EvalError> {
+    const MIN_PARALLEL_ORDER: usize = 48;
+    const MIN_ROW_BATCH: usize = 4;
+    const MIN_ACTIVE_ROWS: usize = 12;
+    let work_items = rows.len().div_ceil(MIN_ROW_BATCH);
+    let ambient = rows.len() >= MIN_PARALLEL_ORDER && use_ambient_workers(interp);
+    let parallel =
+        rows.len() >= MIN_PARALLEL_ORDER && (ambient || (interp.jobs > 1 && !interp.on_worker));
+    let workers = OnceCell::new();
     let mut determinant = BigRational::one();
     for column in 0..rows.len() {
         interp.check_cancelled()?;
@@ -170,15 +192,51 @@ fn eliminate(
         } else {
             lead
         };
-        for row in previous.iter_mut().filter(|_| reduced).chain(following) {
+        let previous = if reduced { previous } else { &mut [] };
+        let update_row = |row: &mut Vec<BigRational>| {
             let Some(entry) = row.get(column).filter(|entry| !entry.is_zero()) else {
-                continue;
+                return;
             };
             let factor = entry / &scale;
             for (value, coefficient) in row.iter_mut().zip(pivot.iter()).skip(column) {
                 *value -= &factor * coefficient;
             }
+        };
+        if parallel
+            && pivot.len().saturating_sub(column) >= MIN_ROW_BATCH
+            && previous
+                .iter()
+                .chain(following.iter())
+                .filter(|row| row.get(column).is_some_and(|entry| !entry.is_zero()))
+                .take(MIN_ACTIVE_ROWS)
+                .count()
+                == MIN_ACTIVE_ROWS
+        {
+            let pool = if ambient {
+                None
+            } else {
+                workers
+                    .get_or_init(|| crate::parallel::pool(interp.jobs, work_items))
+                    .as_ref()
+            };
+            if ambient || pool.is_some() {
+                // Only the pivot row is shared, and all destination rows are disjoint.
+                let mut update = || {
+                    previous
+                        .par_iter_mut()
+                        .chain(following.par_iter_mut())
+                        .with_min_len(MIN_ROW_BATCH)
+                        .for_each(update_row);
+                };
+                if let Some(pool) = pool {
+                    pool.install(update);
+                } else {
+                    update();
+                }
+                continue;
+            }
         }
+        previous.iter_mut().chain(following).for_each(update_row);
     }
     Ok(Some(determinant))
 }
@@ -304,4 +362,163 @@ pub(super) fn solve(
         linalg::solve(order, order, &values, &rhs).map(|data| float_tensor(vec![order], data, dim)),
         span,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::CancellationToken;
+    use crate::value::Storage;
+    use aevia_dim::Dim;
+    use aevia_types::CheckedModule;
+
+    fn rational(
+        numerator: i64,
+        denominator: i64,
+    ) -> BigRational {
+        BigRational::new(numerator.into(), denominator.into())
+    }
+
+    fn assert_number(
+        value: &Value,
+        expected: BigRational,
+        dimension: &Dim,
+    ) {
+        let Value::Num(number) = value else {
+            panic!("expected a numeric value, got {value:?}");
+        };
+        assert_eq!(number.to_rational(), Some(expected));
+        assert_eq!(&number.dim, dimension);
+    }
+
+    fn solution(result: Value) -> Vec<Value> {
+        let Value::Variant(result) = result else {
+            panic!("expected a Result, got {result:?}");
+        };
+        assert_eq!(result.index, 0);
+        let [Value::Tensor(tensor)] = result.fields.as_slice() else {
+            panic!("expected a tensor payload, got {result:?}");
+        };
+        tensor.elements()
+    }
+
+    #[test]
+    fn wide_exact_factorizations_keep_pivot_sign_values_and_dimensions() {
+        let size = 48;
+        let span = Span::default();
+        let length = Dim::base("Length");
+        let time = Dim::base("Time");
+        let determinant_dim = length.pow(&rational(i64::try_from(size).unwrap(), 1));
+        let inverse_dim = length.inverse();
+        let solution_dim = time.div(&length);
+
+        // I + U/3 with U[:,0] = 0 and all other entries of U equal to 1
+        // has determinant 50/3 and inverse I - U/50. Swapping the first two
+        // rows also puts zero in the first pivot position.
+        let swapped = |index| {
+            match index {
+                | 0 => 1,
+                | 1 => 0,
+                | _ => index,
+            }
+        };
+        let mut values = Vec::new();
+        for row in 0..size {
+            for column in 0..size {
+                let numerator = 3 * i64::from(swapped(row) == column) + i64::from(column != 0);
+                values.push(exact_number(rational(numerator, 3), length.clone()));
+            }
+        }
+        let matrix = TensorData::new(vec![size, size], Storage::Boxed(values), length, None);
+        let rhs = TensorData::new(
+            vec![size],
+            Storage::Boxed(vec![exact_number(rational(1, 1), time.clone()); size]),
+            time,
+            None,
+        );
+
+        let mut interp = Interp::new(&CheckedModule::default());
+        for jobs in [1, 2] {
+            interp.set_jobs(jobs);
+            let determinant = determinant(&interp, &matrix, span).unwrap();
+            assert_number(&determinant, rational(-50, 3), &determinant_dim);
+
+            let entries = solution(inverse(&interp, &matrix, span).unwrap());
+            assert_eq!(entries.len(), size * size);
+            for (flat, entry) in entries.iter().enumerate() {
+                let column = swapped(flat % size);
+                let numerator = 50 * i64::from(flat / size == column) - i64::from(column != 0);
+                assert_number(entry, rational(numerator, 50), &inverse_dim);
+            }
+
+            let entries = solution(solve(&interp, &matrix, &rhs, span).unwrap());
+            assert_eq!(entries.len(), size);
+            for entry in &entries {
+                assert_number(entry, rational(3, 50), &solution_dim);
+            }
+        }
+    }
+
+    #[test]
+    fn wide_elimination_keeps_no_pivot_and_interruption_distinct() {
+        let mut interp = Interp::new(&CheckedModule::default());
+        interp.set_jobs(2);
+        let token = CancellationToken::new();
+        interp.set_cancellation_token(token.clone());
+        let mut rows = vec![vec![rational(1, 3); 48]; 48];
+        assert_eq!(eliminate(&interp, &mut rows.clone(), false).unwrap(), None);
+
+        token.cancel();
+        let error = eliminate(&interp, &mut rows, false).unwrap_err();
+        assert_eq!(error.code, crate::cancellation::INTERRUPTED);
+        assert!(rows.iter().flatten().all(|value| *value == rational(1, 3)));
+    }
+    #[test]
+    fn wide_exact_determinant_uses_only_eligible_ambient_workers() {
+        let case = |jobs, expected_ambient| {
+            let mut interp = Interp::new(&CheckedModule::default());
+            interp.set_jobs(jobs);
+            interp.on_worker = true;
+            assert_eq!(use_ambient_workers(&interp), expected_ambient);
+
+            let size: usize = 48;
+            let length = Dim::base("Length");
+            // The rank-one perturbation I + eeᵀ/3 activates the dense pivot path.
+            let entries = (0..size * size)
+                .map(|entry| {
+                    let diagonal = entry / size == entry % size;
+                    exact_number(rational(if diagonal { 4 } else { 1 }, 3), length.clone())
+                })
+                .collect();
+            let matrix = TensorData::new(
+                vec![size, size],
+                Storage::Boxed(entries),
+                length.clone(),
+                None,
+            );
+            let result = determinant(&interp, &matrix, Span::default()).unwrap();
+            let dimension = length.pow(&rational(i64::try_from(size).unwrap(), 1));
+            assert_number(&result, rational(17, 1), &dimension);
+        };
+
+        // A worker marker alone does not authorize dispatch on the global pool.
+        assert!(rayon::current_thread_index().is_none());
+        case(4, false);
+
+        let one = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        one.install(|| case(1, false));
+
+        let two = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+        two.install(|| {
+            case(2, true);
+            case(1, false); // Preserve a deliberately narrower host policy.
+            rayon::join(|| case(2, true), || case(2, true));
+        });
+    }
 }

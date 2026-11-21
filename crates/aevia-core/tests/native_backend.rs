@@ -37,7 +37,7 @@ fn native_backend_handles_preserve_compiled_programs_and_mixed_units() {
                             body,
                         } = &declaration.kind
                         {
-                            let outcome = interp.eval(body, &root);
+                            let outcome = interp.eval_source_test(body, &root);
                             assert!(
                                 matches!(outcome, Ok(Value::Bool(true))),
                                 "{name} {mode:?}: {assertion}: {outcome:?}"

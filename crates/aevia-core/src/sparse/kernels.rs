@@ -446,8 +446,20 @@ pub(super) fn transpose<T: Clone>(
     a: &Entries<T>,
     cols: usize,
 ) -> R<Entries<T>> {
-    if a.rank != 2 {
+    if a.rank != 2 || !matches_rank(a) {
         return Err(invalid_layout());
+    }
+    let (coords, _) = a.coords.as_chunks::<2>();
+    if let Some(order) = transpose_order(coords, cols)? {
+        let mut out = Entries::empty(2);
+        out.coords = reserved(a.coords.len())?;
+        out.vals = reserved(a.vals.len())?;
+        for index in order {
+            let &[row, col] = coords.get(index).ok_or_else(invalid_layout)?;
+            let value = a.vals.get(index).ok_or_else(invalid_layout)?;
+            out.push(&[col, row], value.clone());
+        }
+        return Ok(out);
     }
     let mut transposed = reserved(a.len())?;
     for (coord, value) in stored_entries(a)? {
@@ -467,6 +479,44 @@ pub(super) fn transpose<T: Clone>(
         out.push(&coord, value.clone());
     }
     Ok(out)
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "keep the counting strategy and its scratch bounds together"
+)]
+fn transpose_order(
+    coords: &[[usize; 2]],
+    cols: usize,
+) -> R<Option<Vec<usize>>> {
+    // Canonical source rows yield sorted indices within each destination row.
+    // Bound the column workspace by the number of stored entries.
+    if coords.len() < 64 || cols > coords.len() || coords.array_windows::<2>().any(|[a, b]| a >= b)
+    {
+        return Ok(None);
+    }
+    let Ok(mut starts) = filled(cols, 0_usize) else {
+        return Ok(None);
+    };
+    let Ok(mut order) = filled(coords.len(), 0_usize) else {
+        return Ok(None);
+    };
+    for &[_, col] in coords {
+        let count = starts.get_mut(col).ok_or_else(invalid_layout)?;
+        *count = count.saturating_add(1);
+    }
+    let mut end = 0_usize;
+    for count in &mut starts {
+        let next = end.saturating_add(*count);
+        *count = end;
+        end = next;
+    }
+    for (index, &[_, col]) in coords.iter().enumerate() {
+        let next = starts.get_mut(col).ok_or_else(invalid_layout)?;
+        *order.get_mut(*next).ok_or_else(invalid_layout)? = index;
+        *next = next.saturating_add(1);
+    }
+    Ok(Some(order))
 }
 
 /// CSR arrays of a rank-2 entry list.
@@ -1223,6 +1273,72 @@ pub(super) fn csr_parts<T: Store>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn counted_transpose_matches_sorted_transpose_with_exact_ieee_payloads() -> R<()> {
+        let mut floats = Entries::empty(2);
+        let mut integers = Entries::empty(2);
+        for row in 0..32_usize {
+            for col in 0..8_usize {
+                if (row + col) % 3 == 0 {
+                    continue;
+                }
+                let value = match (row + col) % 4 {
+                    | 0 => -0.0,
+                    | 1 => f64::from_bits(0x7ff8_0000_0000_0050),
+                    | 2 => f64::INFINITY,
+                    | _ => 1.25,
+                };
+                floats.push(&[row, col], value);
+                integers.push(&[row, col], u128::MAX - (row * 8 + col) as u128);
+            }
+        }
+        let coords = floats.coords.as_chunks::<2>().0;
+        assert!(transpose_order(coords, 8)?.is_some());
+        assert!(transpose_order(coords, usize::MAX)?.is_none());
+        let counted = transpose(&floats, 8)?;
+        let sorted = transpose(&floats, usize::MAX)?;
+        assert_eq!(counted.coords, sorted.coords);
+        assert!(
+            counted
+                .vals
+                .into_iter()
+                .zip(sorted.vals)
+                .all(|(a, b)| a.to_bits() == b.to_bits())
+        );
+
+        let counted = transpose(&integers, 8)?;
+        let sorted = transpose(&integers, usize::MAX)?;
+        assert_eq!(counted.coords, sorted.coords);
+        assert_eq!(counted.vals, sorted.vals);
+        Ok(())
+    }
+
+    #[test]
+    fn transpose_preserves_noncanonical_order_fallback_and_invalid_layout_errors() -> R<()> {
+        let empty = transpose(&Entries::<f64>::empty(2), 0)?;
+        assert!(empty.coords.is_empty() && empty.vals.is_empty());
+        let mut entries = Entries::empty(2);
+        for row in 1..65_usize {
+            entries.push(&[row, row % 8], row);
+        }
+        entries.push(&[0, 0], 99);
+        let order = transpose_order(entries.coords.as_chunks::<2>().0, 8)?;
+        assert!(order.is_none());
+        let fallback = transpose(&entries, 8)?;
+        assert_eq!(fallback.coords.get(..2), Some([0, 0].as_slice()));
+        assert_eq!(fallback.vals.first(), Some(&99));
+
+        let mut malformed = Entries::empty(2);
+        for row in 0..65_usize {
+            malformed.push(&[row, 8], row);
+        }
+        assert_eq!(
+            transpose(&malformed, 8).err().map(|error| error.code),
+            Some("E0802")
+        );
+        Ok(())
+    }
 
     #[test]
     fn flat_offsets_reject_wrong_rank_bounds_and_overflow() {

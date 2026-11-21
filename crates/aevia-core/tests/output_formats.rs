@@ -8,6 +8,7 @@ use aevia_core::compile;
 use aevia_core::display::Format;
 use aevia_core::display::render;
 use aevia_core::sym::Term;
+use aevia_core::value::ExactRep;
 use aevia_core::value::NumVal;
 use aevia_core::value::RecordValue;
 use aevia_core::value::Storage;
@@ -82,6 +83,68 @@ fn sliced_and_reversed_matrix_views_keep_mathematical_layout() {
         assert!(pretty.contains('⎛') && pretty.contains('⎠'), "{pretty}");
         assert_eq!(pretty.lines().count(), 2, "{pretty}");
     }
+}
+
+#[test]
+fn packed_math_matches_boxed_and_keeps_storage_errors() {
+    let length = Dim::base("Length");
+    let make = |storage| {
+        Value::Tensor(Rc::new(TensorData::new(
+            vec![2, 2],
+            storage,
+            length.clone(),
+            None,
+        )))
+    };
+    let fractions = vec![
+        rational(1, 3),
+        rational(-2, 7),
+        rational(4, 1),
+        rational(0, 1),
+    ];
+    let integers = vec![
+        rational(9_007_199_254_740_993, 1),
+        rational(-2, 1),
+        rational(4, 1),
+        rational(0, 1),
+    ];
+    for storage in [
+        Storage::Dense(Rc::new(vec![-0.0, 2.0, f64::INFINITY, 4.0])),
+        Storage::Exact(fractions.clone()),
+        Storage::TypedExact(fractions.clone(), ExactRep::Real),
+        Storage::TypedExact(integers, ExactRep::Int),
+    ] {
+        let packed = make(storage);
+        let Value::Tensor(tensor) = &packed else {
+            unreachable!()
+        };
+        let boxed = make(Storage::Boxed(tensor.elements()));
+        assert_eq!(
+            render(&packed, Format::Pretty).unwrap(),
+            render(&boxed, Format::Pretty).unwrap(),
+        );
+    }
+
+    for malformed in [
+        make(Storage::Dense(Rc::new(vec![1.0, 2.0, 3.0]))),
+        make(Storage::TypedExact(fractions, ExactRep::Int)),
+        make(Storage::Boxed(vec![
+            Value::float(1.0),
+            Value::string("ordinary"),
+            Value::float(3.0),
+            Value::float(4.0),
+        ])),
+    ] {
+        assert_eq!(
+            render(&malformed, Format::Pretty),
+            render(&malformed, Format::Show)
+        );
+    }
+    let oversized = make(Storage::Dense(Rc::new(vec![1.0, 2.0, 3.0, 4.0, 5.0])));
+    assert_eq!(
+        render(&oversized, Format::Pretty).unwrap_err(),
+        "tensor shape and storage disagree"
+    );
 }
 
 #[test]

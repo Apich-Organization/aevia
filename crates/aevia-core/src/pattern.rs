@@ -23,8 +23,12 @@ use aevia_syntax::ast::PatKind;
 use aevia_syntax::ast::PatLit;
 use aevia_types::adt;
 use aevia_types::adt::AdtId;
+use num_bigint::BigInt;
 use num_rational::BigRational;
+use num_traits::FromPrimitive;
 use num_traits::One;
+use num_traits::ToPrimitive;
+use std::borrow::Cow;
 use std::rc::Rc;
 
 #[derive(Clone, Copy)]
@@ -37,8 +41,8 @@ enum Target<'a> {
     Slot(u32),
 }
 enum Work<'a> {
-    Match(Node<'a>, Value),
-    Bind(Target<'a>, Value),
+    Match(Node<'a>, Cow<'a, Value>),
+    Bind(Target<'a>, Cow<'a, Value>),
 }
 pub enum Binding {
     Name(String, Value),
@@ -86,15 +90,6 @@ fn constructor<'a>(
         .then_some(value)
 }
 
-fn rational_matches_integer(
-    actual: &BigRational,
-    expected: &num_bigint::BigInt,
-) -> bool {
-    if actual.denom().is_one() {
-        return actual.numer() == expected;
-    }
-    actual == &BigRational::from_integer(expected.clone())
-}
 fn literal(
     literal: &PatLit,
     value: &Value,
@@ -103,10 +98,15 @@ fn literal(
         | (PatLit::Int(expected), Value::Num(number)) => {
             match &number.kind {
                 | NumKind::Int(actual) => actual == expected,
-                | NumKind::Exact(actual) => rational_matches_integer(actual, expected),
-                | NumKind::Float(actual) => {
-                    BigRational::from_float(*actual)
-                        .is_some_and(|ratio| rational_matches_integer(&ratio, expected))
+                | NumKind::Exact(actual) if actual.denom().is_one() => actual.numer() == expected,
+                | NumKind::Exact(actual) => {
+                    actual.as_ref() == &BigRational::from_integer(expected.clone())
+                },
+                | NumKind::Float(actual) if actual.fract() == 0.0 => {
+                    expected.to_i64().map_or_else(
+                        || BigInt::from_f64(*actual).as_ref() == Some(expected),
+                        |expected| actual.to_i64() == Some(expected),
+                    )
                 },
                 | _ => false,
             }
@@ -142,14 +142,15 @@ fn execute(
     value: &Value,
     constructors: &crate::evidence::SpanMap<(AdtId, usize)>,
 ) -> Option<Vec<Binding>> {
-    let mut pending = vec![Work::Match(node, value.clone())];
+    let mut first = Some(Work::Match(node, Cow::Borrowed(value)));
+    let mut pending = Vec::new();
     let mut bindings = Vec::new();
-    while let Some(work) = pending.pop() {
+    while let Some(work) = first.take().or_else(|| pending.pop()) {
         let (node, value) = match work {
             | Work::Bind(target, value) => {
                 bindings.push(match target {
-                    | Target::Name(name) => Binding::Name(name.to_string(), value),
-                    | Target::Slot(slot) => Binding::Slot(slot, value),
+                    | Target::Name(name) => Binding::Name(name.to_string(), value.into_owned()),
+                    | Target::Slot(slot) => Binding::Slot(slot, value.into_owned()),
                 });
                 continue;
             },
@@ -160,29 +161,32 @@ fn execute(
                 match &pattern.kind {
                     | PatKind::Error => return None,
                     | PatKind::Wildcard => {},
-                    | PatKind::Var(name) => pending.push(Work::Bind(Target::Name(name), value)),
+                    | PatKind::Var(name) => {
+                        bindings.push(Binding::Name(name.clone(), value.into_owned()));
+                    },
                     | PatKind::Lit(expected) => {
-                        if !literal(expected, &value) {
+                        if !literal(expected, value.as_ref()) {
                             return None;
                         }
                     },
                     | PatKind::Ctor { name, args } => {
                         let value = constructor(
-                            &value,
+                            value.as_ref(),
                             name,
                             constructors.get(&pattern.span).copied(),
                             args.len(),
                         )?;
                         for (pattern, field) in args.iter().zip(&value.fields).rev() {
-                            pending.push(Work::Match(Node::Ast(pattern), field.clone()));
+                            pending
+                                .push(Work::Match(Node::Ast(pattern), Cow::Owned(field.clone())));
                         }
                     },
                     | PatKind::Record(fields) => {
-                        let Value::Record(value) = value else {
+                        let Value::Record(value) = value.as_ref() else {
                             return None;
                         };
                         for (name, pattern) in fields.iter().rev() {
-                            let field = value.fields.get(name)?.clone();
+                            let field = Cow::Owned(value.fields.get(name)?.clone());
                             pending.push(match pattern {
                                 | Some(pattern) => Work::Match(Node::Ast(pattern), field),
                                 | None => Work::Bind(Target::Name(name), field),
@@ -190,7 +194,7 @@ fn execute(
                         }
                     },
                     | PatKind::Tuple(items) => {
-                        let Value::Record(value) = value else {
+                        let Value::Record(value) = value.as_ref() else {
                             return None;
                         };
                         if value.fields.len() != items.len() {
@@ -199,20 +203,23 @@ fn execute(
                         for (index, pattern) in items.iter().enumerate().rev() {
                             pending.push(Work::Match(
                                 Node::Ast(pattern),
-                                value.fields.get(&index.to_string())?.clone(),
+                                Cow::Owned(value.fields.get(&index.to_string())?.clone()),
                             ));
                         }
                     },
                     | PatKind::Tensor { items, rest } => {
-                        let tensor = tensor(&value, items.len(), rest.is_some())?;
+                        let tensor = tensor(value.as_ref(), items.len(), rest.is_some())?;
                         if let Some(name) = rest {
                             pending.push(Work::Bind(
                                 Target::Name(name),
-                                Value::Tensor(tensor.tail_view(items.len())?),
+                                Cow::Owned(Value::Tensor(tensor.tail_view(items.len())?)),
                             ));
                         }
                         for (index, pattern) in items.iter().enumerate().rev() {
-                            pending.push(Work::Match(Node::Ast(pattern), tensor.get_flat(index)?));
+                            pending.push(Work::Match(
+                                Node::Ast(pattern),
+                                Cow::Owned(tensor.get_flat(index)?),
+                            ));
                         }
                     },
                     | PatKind::As { pattern, name } => {
@@ -229,35 +236,37 @@ fn execute(
                     | aevia_ir::Pattern::Error => return None,
                     | aevia_ir::Pattern::Wildcard => {},
                     | aevia_ir::Pattern::Bind { slot, inner } => {
-                        pending.push(Work::Bind(Target::Slot(*slot), value.clone()));
                         if let Some(inner) = inner {
+                            pending.push(Work::Bind(Target::Slot(*slot), value.clone()));
                             pending.push(Work::Match(Node::Ir(inner), value));
+                        } else {
+                            bindings.push(Binding::Slot(*slot, value.into_owned()));
                         }
                     },
                     | aevia_ir::Pattern::Lit(expected) => {
-                        if !literal(expected, &value) {
+                        if !literal(expected, value.as_ref()) {
                             return None;
                         }
                     },
                     | aevia_ir::Pattern::Ctor { name, identity, args } => {
-                        let value = constructor(&value, name, *identity, args.len())?;
+                        let value = constructor(value.as_ref(), name, *identity, args.len())?;
                         for (pattern, field) in args.iter().zip(&value.fields).rev() {
-                            pending.push(Work::Match(Node::Ir(pattern), field.clone()));
+                            pending.push(Work::Match(Node::Ir(pattern), Cow::Owned(field.clone())));
                         }
                     },
                     | aevia_ir::Pattern::Record(fields) => {
-                        let Value::Record(value) = value else {
+                        let Value::Record(value) = value.as_ref() else {
                             return None;
                         };
                         for (name, pattern) in fields.iter().rev() {
                             pending.push(Work::Match(
                                 Node::Ir(pattern),
-                                value.fields.get(name)?.clone(),
+                                Cow::Owned(value.fields.get(name)?.clone()),
                             ));
                         }
                     },
                     | aevia_ir::Pattern::Tuple(items) => {
-                        let Value::Record(value) = value else {
+                        let Value::Record(value) = value.as_ref() else {
                             return None;
                         };
                         if value.fields.len() != items.len() {
@@ -266,20 +275,23 @@ fn execute(
                         for (index, pattern) in items.iter().enumerate().rev() {
                             pending.push(Work::Match(
                                 Node::Ir(pattern),
-                                value.fields.get(&index.to_string())?.clone(),
+                                Cow::Owned(value.fields.get(&index.to_string())?.clone()),
                             ));
                         }
                     },
                     | aevia_ir::Pattern::Tensor { items, rest } => {
-                        let tensor = tensor(&value, items.len(), rest.is_some())?;
+                        let tensor = tensor(value.as_ref(), items.len(), rest.is_some())?;
                         if let Some(slot) = rest {
                             pending.push(Work::Bind(
                                 Target::Slot(*slot),
-                                Value::Tensor(tensor.tail_view(items.len())?),
+                                Cow::Owned(Value::Tensor(tensor.tail_view(items.len())?)),
                             ));
                         }
                         for (index, pattern) in items.iter().enumerate().rev() {
-                            pending.push(Work::Match(Node::Ir(pattern), tensor.get_flat(index)?));
+                            pending.push(Work::Match(
+                                Node::Ir(pattern),
+                                Cow::Owned(tensor.get_flat(index)?),
+                            ));
                         }
                     },
                 }
