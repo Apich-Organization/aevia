@@ -17,7 +17,13 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
+use std::fs;
+use std::io;
+use std::io::Read as _;
 use std::path::Path;
+
+use super::file_error;
+use super::regular_files;
 
 /// Longest description kept per name; the sources are embedded in the binary
 /// and parsed on import.
@@ -29,7 +35,8 @@ const MAX_DESCRIPTION: usize = 1400;
 /// is read for rustdoc.
 ///
 /// # Errors
-/// Returns an error when a standard-library declaration is missing or undocumented.
+/// Returns an error when the Rust documentation sources cannot be read or a
+/// standard-library declaration is missing or undocumented.
 #[allow(dead_code)]
 #[allow(
     clippy::single_call_fn,
@@ -39,7 +46,8 @@ pub fn module_sources(
     spec: &str,
     crates_dir: &Path,
 ) -> Result<Vec<(String, String)>, String> {
-    let rust = scan_rustdoc(&crates_dir.join("aevia-std/src"));
+    let rust =
+        scan_rustdoc(&crates_dir.join("aevia-std/src")).map_err(|error| error.to_string())?;
     let registry = aevia_rssn::registry();
     aevia_stdlib_model::stdlib::try_spec_module_sources_with_docs(
         spec,
@@ -313,25 +321,27 @@ fn dim_rule(rule: &impl std::fmt::Debug) -> String {
 /// Every documented public free function of the crate sources under `src`,
 /// `name -> [doc]`. Only `pub fn` items with a `///` block count; a name
 /// documented twice is ambiguous and the caller will skip it.
+///
+/// # Errors
+/// Returns the source path with any directory or file read failure.
 #[allow(
     clippy::single_call_fn,
     reason = "shared source scanner is directly exercised by tests"
 )]
-pub fn scan_rustdoc(src: &Path) -> BTreeMap<String, Vec<String>> {
+pub fn scan_rustdoc(src: &Path) -> io::Result<BTreeMap<String, Vec<String>>> {
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut files = Vec::new();
-    collect(src, &mut files);
-    files.sort();
-    for file in files {
-        let Ok(text) = std::fs::read_to_string(&file) else {
-            continue;
-        };
-        let mut pending: Vec<String> = Vec::new();
+    let mut text = String::new();
+    for file in regular_files(src, "rs")? {
+        text.clear();
+        fs::File::open(&file)
+            .and_then(|mut source| source.read_to_string(&mut text))
+            .map_err(|error| file_error("cannot read Rust documentation source", &file, &error))?;
+        let mut pending = Vec::new();
         for raw in text.lines() {
             let line = raw.trim_start();
             if let Some(rest) = line.strip_prefix("///") {
                 if !rest.starts_with('/') {
-                    pending.push(rest.strip_prefix(' ').unwrap_or(rest).to_owned());
+                    pending.push(rest.strip_prefix(' ').unwrap_or(rest));
                 }
                 continue;
             }
@@ -349,7 +359,7 @@ pub fn scan_rustdoc(src: &Path) -> BTreeMap<String, Vec<String>> {
                     .collect();
                 let mut kept: Vec<&str> = Vec::new();
                 let mut fenced = false;
-                for doc_line in &pending {
+                for &doc_line in &pending {
                     if doc_line.trim_start().starts_with("```") {
                         fenced = !fenced;
                     } else if fenced && (doc_line.trim() == "#" || doc_line.starts_with("# ")) {
@@ -365,22 +375,36 @@ pub fn scan_rustdoc(src: &Path) -> BTreeMap<String, Vec<String>> {
             pending.clear();
         }
     }
-    out
+    Ok(out)
 }
 
-fn collect(
-    dir: &Path,
-    files: &mut Vec<std::path::PathBuf>,
-) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.filter_map(Result::ok) {
-        let path = entry.path();
-        if path.is_dir() {
-            collect(&path, files);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            files.push(path);
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unreadable_rustdoc_inputs_report_the_source_path() -> io::Result<()> {
+        let directory =
+            std::env::temp_dir().join(format!("aevia-stdlib-gen-rustdoc-{}", std::process::id()));
+        fs::create_dir(&directory)?;
+        let result = (|| {
+            let missing = directory.join("missing");
+            let error = scan_rustdoc(&missing).err().ok_or_else(|| {
+                io::Error::other("expected an error for a missing Rust source tree")
+            })?;
+            assert_eq!(error.kind(), io::ErrorKind::NotFound);
+            assert!(error.to_string().contains("missing"));
+
+            let malformed = directory.join("malformed.rs");
+            fs::write(&malformed, [0xff])?;
+            let error = scan_rustdoc(&directory)
+                .err()
+                .ok_or_else(|| io::Error::other("expected an error for malformed Rust source"))?;
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(error.to_string().contains("malformed.rs"));
+            Ok(())
+        })();
+        let cleanup = fs::remove_dir_all(directory);
+        result.and(cleanup)
     }
 }
