@@ -259,11 +259,10 @@ pub fn verify_checksum(
 ///
 /// `E_TARBALL` when the archive does not decompress or holds an unsafe path.
 pub fn entries(bytes: &[u8]) -> Result<Vec<String>> {
-    let mut out = Vec::new();
-    for entry in walk(bytes)? {
-        out.push(entry.0);
-    }
-    Ok(out)
+    Ok(walk(bytes, drop)?
+        .into_iter()
+        .map(|(name, ())| name)
+        .collect())
 }
 
 /// The UTF-8 text files of an archive, by entry name.
@@ -275,13 +274,10 @@ pub fn entries(bytes: &[u8]) -> Result<Vec<String>> {
 ///
 /// `E_TARBALL` when the archive is malformed or holds an unsafe path.
 pub fn text_files(bytes: &[u8]) -> Result<Vec<(String, String)>> {
-    let mut out = Vec::new();
-    for (name, data) in walk(bytes)? {
-        if let Ok(text) = String::from_utf8(data) {
-            out.push((name, text));
-        }
-    }
-    Ok(out)
+    Ok(walk(bytes, |data| String::from_utf8(data).ok())?
+        .into_iter()
+        .filter_map(|(name, text)| text.map(|text| (name, text)))
+        .collect())
 }
 
 /// Unpacks an archive into `dest`, refusing anything that escapes it.
@@ -295,7 +291,7 @@ pub fn unpack(
     dest: &Path,
 ) -> Result<Vec<String>> {
     let mut written = Vec::new();
-    for (name, data) in walk(bytes)? {
+    for (name, data) in walk(bytes, std::convert::identity)? {
         let relative = safe_relative(&name)?;
         let target = dest.join(&relative);
         if let Some(parent) = target.parent() {
@@ -314,8 +310,11 @@ pub fn unpack(
     Ok(written)
 }
 
-/// Reads every regular file of an archive into memory, in order.
-fn walk(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>> {
+/// Validates the complete archive and projects each regular file in order.
+fn walk<T>(
+    bytes: &[u8],
+    mut project: impl FnMut(Vec<u8>) -> T,
+) -> Result<Vec<(String, T)>> {
     // Bound headers, padding and extended metadata as well as file payloads.
     const MAX_TAR_BYTES: u64 = MAX_UNPACKED_BYTES + 8 * 1024 * 1024;
     if bytes.len() as u64 > MAX_ARCHIVE_BYTES {
@@ -379,7 +378,7 @@ fn walk(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>> {
         entry
             .read_to_end(&mut data)
             .map_err(|error| Error::new(E_TARBALL, format!("cannot read `{path}`: {error}")))?;
-        out.push((path, data));
+        out.push((path, project(data)));
     }
     if out.is_empty() {
         return Err(Error::new(E_TARBALL, "the archive is empty"));
@@ -538,6 +537,60 @@ mod tests {
         assert!(written.contains(&"src/main.aev".to_string()));
         let text = std::fs::read_to_string(out.path().join("src/main.aev")).expect("read");
         assert!(text.contains("The demo entry."));
+    }
+
+    #[test]
+    fn projections_keep_archive_order_and_validate_the_footer() {
+        let dir = package();
+        let binary = vec![0xff; 512 * 1024];
+        std::fs::write(dir.path().join("src/blob.bin"), &binary).expect("binary source asset");
+        let manifest = PackageManifest::load(dir.path()).expect("manifest");
+        let archive = pack_dir(dir.path(), &manifest).expect("pack");
+        let names = entries(&archive).expect("entries");
+        let expected: Vec<_> = names
+            .iter()
+            .filter(|name| name.as_str() != "src/blob.bin")
+            .collect();
+        let rendered = text_files(&archive).expect("text files");
+        assert_eq!(
+            rendered.iter().map(|(name, _)| name).collect::<Vec<_>>(),
+            expected
+        );
+        assert!(names.iter().any(|name| name == "src/blob.bin"));
+
+        let out = tempfile::tempdir().expect("tempdir");
+        assert_eq!(unpack(&archive, out.path()).expect("unpack"), names);
+        assert_eq!(
+            std::fs::read(out.path().join("src/blob.bin")).expect("binary asset"),
+            binary
+        );
+
+        let truncated = archive
+            .get(..archive.len().saturating_sub(2))
+            .expect("footer prefix");
+        let out = tempfile::tempdir().expect("tempdir");
+        assert_eq!(
+            entries(truncated).expect_err("list validates footer").code,
+            E_TARBALL
+        );
+        assert_eq!(
+            text_files(truncated)
+                .expect_err("text validates footer")
+                .code,
+            E_TARBALL
+        );
+        assert_eq!(
+            unpack(truncated, out.path())
+                .expect_err("unpack validates footer")
+                .code,
+            E_TARBALL
+        );
+        assert!(
+            std::fs::read_dir(out.path())
+                .expect("read output")
+                .next()
+                .is_none()
+        );
     }
 
     #[test]

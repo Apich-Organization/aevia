@@ -19,6 +19,7 @@
 
 use crate::error::Error;
 use crate::error::Result;
+use serde::Deserialize as _;
 
 /// Where a client finds the index and the archives.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -83,7 +84,7 @@ pub fn deps_from_json(value: &serde_json::Value) -> Vec<IndexDependency> {
     value.as_array().map_or_default(|items| {
         items
             .iter()
-            .filter_map(|item| serde_json::from_value::<IndexDependency>(item.clone()).ok())
+            .filter_map(|item| IndexDependency::deserialize(item).ok())
             .collect()
     })
 }
@@ -146,6 +147,24 @@ impl IndexRecord {
             .map_err(|error| Error::json("cannot serialise an index record", &error))
     }
 
+    /// Appends the encoded record and its newline to an existing JSONL buffer.
+    /// The bytes of the record are identical to [`Self::to_line`].
+    ///
+    /// # Errors
+    /// Returns `E_JSON` if serialisation fails and leaves `body` unchanged.
+    pub fn append_line(
+        &self,
+        body: &mut Vec<u8>,
+    ) -> Result<()> {
+        let start = body.len();
+        if let Err(error) = serde_json::to_writer(&mut *body, self) {
+            body.truncate(start);
+            return Err(Error::json("cannot serialise an index record", &error));
+        }
+        body.push(b'\n');
+        Ok(())
+    }
+
     /// Parses one index line.
     ///
     /// # Errors
@@ -199,6 +218,26 @@ mod tests {
     }
 
     #[test]
+    fn appending_lines_preserves_the_existing_wire_encoding() {
+        let first = record();
+        let mut second = first.clone();
+        second.vers = "0.2.1-beta.5".to_owned();
+        second.yanked = true;
+        second.signature.signature.push_str("\r\n二\t\"\n");
+        let mut body = b"existing\n".to_vec();
+        for record in [&first, &second] {
+            record.append_line(&mut body).expect("appends");
+        }
+        let expected = format!(
+            "existing\n{}\n{}\n",
+            first.to_line().expect("first line"),
+            second.to_line().expect("second line"),
+        );
+        assert_eq!(body, expected.as_bytes());
+        assert_eq!(body.iter().filter(|&&byte| byte == b'\n').count(), 3);
+    }
+
+    #[test]
     fn the_default_import_is_not_written() {
         let line = record().to_line().expect("serialises");
         assert!(line.contains("\"import\":\"Charts\""), "{line}");
@@ -212,11 +251,32 @@ mod tests {
         let stored = serde_json::json!([
             {"import": "Old", "path": "../old"},
             {"package": "apich/units", "req": "^1"},
+            {"package": "apich/bad", "req": "^3", "import": 42},
+            {"package": "apich/plot", "req": "^2", "import": "Charts", "other": {"notes": ["unused"]}},
+            {"package": "apich/fft", "req": "^4", "import": null},
             "nonsense",
         ]);
         let deps = deps_from_json(&stored);
-        assert_eq!(deps.len(), 1);
-        assert_eq!(deps[0].package, "apich/units");
+        assert_eq!(
+            deps,
+            [
+                IndexDependency {
+                    package: "apich/units".into(),
+                    req: "^1".into(),
+                    import: None,
+                },
+                IndexDependency {
+                    package: "apich/plot".into(),
+                    req: "^2".into(),
+                    import: Some("Charts".into()),
+                },
+                IndexDependency {
+                    package: "apich/fft".into(),
+                    req: "^4".into(),
+                    import: None,
+                },
+            ],
+        );
         assert!(deps_from_json(&serde_json::json!(null)).is_empty());
     }
 

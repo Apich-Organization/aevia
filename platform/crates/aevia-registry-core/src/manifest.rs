@@ -1,15 +1,12 @@
-//! `aevia.toml`, read with the toolchain's own rules.
+//! Registry package metadata and dependencies in `aevia.toml`.
 //!
-//! # Why this is a re-implementation
+//! # The registry's manifest subset
 //!
-//! `aevia_core::manifest` owns the real parser, but `aevia-core` links the RSSN
-//! kernel: a registry that depended on it would build three million lines of
-//! symbolic algebra to read package metadata. So the subset is duplicated here —
-//! and deliberately duplicated *exactly*, including its refusals. The toolchain
-//! rejects an unknown key in `[package]` with `E0605`; this reader rejects it
-//! too, which is what makes "the registry accepted it" mean "`aevia check`
-//! accepts it". A registry that quietly tolerates metadata the toolchain
-//! refuses would let an author publish a package nobody can build.
+//! The registry reads `[package]` and `[dependencies]` without linking the
+//! RSSN kernel. It shares dependency identities and version requirements
+//! with the toolchain through `aevia-resolve`. The toolchain validates
+//! `[lints]` settings and supports its own `[lib]` table. Registry publication
+//! uses `[package] entry` or its default, `src/main.aev`.
 //!
 //! `aevia.toml` carries Cargo-style package metadata under `[package]`
 //! (`edition`, `authors`, `description`, `license`, `license-file`, `readme`,
@@ -17,6 +14,8 @@
 //! `aevia-pkg.toml` (`RegistryMeta`) and publish CLI flags remain supported as
 //! overrides.
 
+use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::fmt::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
@@ -107,7 +106,7 @@ impl PackageManifest {
         text: &str,
         origin: &str,
     ) -> Result<Self> {
-        let mut table = String::new();
+        let mut table = "";
         let mut name = None;
         let mut version = None;
         let mut edition = None;
@@ -122,7 +121,7 @@ impl PackageManifest {
         let mut documentation = None;
         let mut keywords = Vec::new();
         let mut categories = Vec::new();
-        let mut dependencies = Vec::new();
+        let mut dependencies = BTreeMap::new();
         for (index, raw) in text.lines().enumerate() {
             let number = index.saturating_add(1);
             let line = strip_comment(raw.trim_end_matches('\r')).trim();
@@ -138,13 +137,13 @@ impl PackageManifest {
                     ));
                 };
                 match header.trim() {
-                    | "package" | "dependencies" | "lints" => table = header.trim().to_string(),
+                    | known @ ("package" | "dependencies" | "lints") => table = known,
                     | other => {
                         return Err(fail(
                             origin,
                             number,
                             format!(
-                                "unknown table `[{other}]`; the toolchain reads `[package]`, \
+                                "unknown table `[{other}]`; the registry reads `[package]`, \
                                  `[dependencies]` and `[lints]` only"
                             ),
                         ));
@@ -161,7 +160,7 @@ impl PackageManifest {
             };
             let key = key.trim();
             let value = value.trim();
-            match table.as_str() {
+            match table {
                 | "package" => {
                     match key {
                         | "authors" | "keywords" | "categories" => {
@@ -217,13 +216,10 @@ impl PackageManifest {
                             ),
                         ));
                     }
-                    if dependencies
-                        .iter()
-                        .any(|held: &ManifestDependency| held.import == key)
-                    {
+                    let Entry::Vacant(entry) = dependencies.entry(key) else {
                         return Err(fail(origin, number, format!("`{key}` is declared twice")));
-                    }
-                    dependencies.push(parse_dependency(key, value, origin, number)?);
+                    };
+                    entry.insert(parse_dependency(key, value, origin, number)?);
                 },
                 | "lints" => {
                     // Validated by the compiler toolchain (`aevia-core` / `aevia-lint`).
@@ -262,7 +258,6 @@ impl PackageManifest {
                 ),
             ));
         }
-        dependencies.sort_by(|left, right| left.import.cmp(&right.import));
         Ok(Self {
             name,
             version,
@@ -278,7 +273,7 @@ impl PackageManifest {
             documentation,
             keywords,
             categories,
-            dependencies,
+            dependencies: dependencies.into_values().collect(),
         })
     }
 
@@ -1347,6 +1342,31 @@ mod tests {
             assert_eq!(error.code, E_MANIFEST, "{lines}");
             assert!(error.message.contains(needle), "{lines}: {}", error.message);
         }
+    }
+
+    #[test]
+    fn dependency_tables_preserve_sorted_roots_and_duplicate_error_precedence() {
+        let text = with_dependencies(
+            "Zebra = \"^1\"\n[lints]\n[dependencies]\nAlpha = \"^2\"\nDelta = \"^3\"\n",
+        );
+        let manifest = PackageManifest::parse(&text, "aevia.toml").expect("parses");
+        let imports: Vec<_> = manifest
+            .dependencies
+            .iter()
+            .map(|dep| dep.import.as_str())
+            .collect();
+        assert_eq!(imports, ["Alpha", "Delta", "Zebra"]);
+
+        let repeated = format!("{text}[dependencies]\nZebra = 42\n");
+        let error = PackageManifest::parse(&repeated, "aevia.toml").expect_err("duplicate root");
+        assert_eq!(error.code, E_MANIFEST);
+        assert_eq!(
+            error.message,
+            format!(
+                "aevia.toml:{}: `Zebra` is declared twice",
+                repeated.lines().count()
+            ),
+        );
     }
 
     #[test]
