@@ -9,7 +9,7 @@
 //! longer one it prefixes). The specification says build metadata does not
 //! affect precedence, but a total order must agree with `Eq`, and `1.0.0+a` and
 //! `1.0.0+b` are different values, so build metadata is compared as the final
-//! tie-break with the same identifier rules. Nothing in the resolver depends on
+//! tie-break using the stored identifier order. Nothing in the resolver depends on
 //! that tie-break: the registry refuses to publish two versions that differ
 //! only in build metadata (see [`Version::precedence_key`]).
 //!
@@ -26,9 +26,10 @@ use std::str::FromStr;
 /// One dot-separated identifier of a pre-release or of build metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Identifier {
-    /// All digits, no leading zero (except `0` itself).
+    /// A canonical decimal identifier that fits in `u64`.
     Numeric(u64),
-    /// Anything else: ASCII alphanumerics and `-`.
+    /// A textual identifier, including decimals too large for `Numeric` or
+    /// padded build identifiers.
     Alpha(String),
 }
 
@@ -201,7 +202,7 @@ impl Version {
             ));
         }
         let pre = match pre {
-            | Some(pre) => parse_identifiers(input, pre, "pre-release", true)?,
+            | Some(pre) => parse_prerelease(input, pre)?,
             | None => Vec::new(),
         };
         let build = match build {
@@ -295,6 +296,14 @@ fn parse_number(
         .map_err(|_| ParseError::new(input, format!("the {what} number `{part}` is too large")))
 }
 
+/// Parse pre-release identifiers after splitting off the numeric version.
+pub(crate) fn parse_prerelease(
+    input: &str,
+    pre: &str,
+) -> Result<Vec<Identifier>, ParseError> {
+    parse_identifiers(input, pre, "pre-release", true)
+}
+
 fn parse_identifiers(
     input: &str,
     text: &str,
@@ -331,9 +340,8 @@ fn parse_identifiers(
             }
             match part.parse::<u64>() {
                 | Ok(number) if !padded => out.push(Identifier::Numeric(number)),
-                // A build identifier such as `007` (or one too large for a
-                // `u64`) is legal and stays text, so it renders back exactly as
-                // written.
+                // An oversized decimal or a padded build identifier stays
+                // text, so it renders back exactly as written.
                 | _ => out.push(Identifier::Alpha(part.to_string())),
             }
         } else {
@@ -346,14 +354,42 @@ fn parse_identifiers(
 fn compare_identifiers(
     left: &[Identifier],
     right: &[Identifier],
+    compare: impl Fn(&Identifier, &Identifier) -> Ordering,
 ) -> Ordering {
     for (a, b) in left.iter().zip(right) {
-        let order = a.cmp(b);
+        let order = compare(a, b);
         if order != Ordering::Equal {
             return order;
         }
     }
     left.len().cmp(&right.len())
+}
+
+fn overflowing_decimal(text: &str) -> bool {
+    const MAX: &str = "18446744073709551615";
+    (text.len() > MAX.len() || (text.len() == MAX.len() && text > MAX))
+        && !text.starts_with('0')
+        && text.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "prerelease ordering classifies overflowing decimal storage separately from build metadata"
+)]
+fn compare_prerelease_identifier(
+    left: &Identifier,
+    right: &Identifier,
+) -> Ordering {
+    let (Identifier::Alpha(a), Identifier::Alpha(b)) = (left, right) else {
+        // Every stored Numeric fits in u64 and precedes an overflowing decimal.
+        return left.cmp(right);
+    };
+    match (overflowing_decimal(a), overflowing_decimal(b)) {
+        | (true, true) => a.len().cmp(&b.len()).then_with(|| a.cmp(b)),
+        | (true, false) => Ordering::Less,
+        | (false, true) => Ordering::Greater,
+        | (false, false) => a.cmp(b),
+    }
 }
 
 impl Version {
@@ -368,7 +404,9 @@ impl Version {
                 | (true, true) => Ordering::Equal,
                 | (true, false) => Ordering::Greater,
                 | (false, true) => Ordering::Less,
-                | (false, false) => compare_identifiers(&self.pre, &other.pre),
+                | (false, false) => {
+                    compare_identifiers(&self.pre, &other.pre, compare_prerelease_identifier)
+                },
             }
         })
     }
@@ -380,7 +418,7 @@ impl Ord for Version {
         other: &Self,
     ) -> Ordering {
         self.cmp_precedence(other)
-            .then_with(|| compare_identifiers(&self.build, &other.build))
+            .then_with(|| compare_identifiers(&self.build, &other.build, Ord::cmp))
     }
 }
 
@@ -485,6 +523,63 @@ mod tests {
         assert!(v("1.0.0-2") < v("1.0.0-10"));
         assert!(v("1.0.0-9") < v("1.0.0-a"));
         assert!(v("1.0.0-1.2") > v("1.0.0-1"));
+    }
+
+    #[test]
+    fn oversized_prerelease_identifiers_use_numeric_precedence() {
+        let chain = [
+            "1.2.3-18446744073709551615",
+            "1.2.3-18446744073709551616",
+            "1.2.3-99999999999999999999",
+            "1.2.3-100000000000000000000",
+            "1.2.3-100000000000000000000.0",
+            "1.2.3-1-x",
+            "1.2.3-alpha",
+            "1.2.3",
+        ];
+        let versions = chain.map(v);
+        for (index, current) in versions.iter().enumerate() {
+            assert_eq!(current.to_string(), chain[index]);
+            for later in &versions[index + 1..] {
+                assert!(current.cmp_precedence(later).is_lt(), "{current} < {later}");
+                assert!(current < later, "{current} < {later}");
+            }
+        }
+        assert_eq!(
+            versions[1].pre,
+            vec![Identifier::Alpha("18446744073709551616".into())]
+        );
+    }
+
+    #[test]
+    fn wide_prereleases_preserve_build_order_and_key_identity() {
+        use std::collections::BTreeSet;
+        use std::collections::HashSet;
+
+        let first = v("1.2.3-18446744073709551616+100000000000000000000");
+        let second = v("1.2.3-18446744073709551616+99999999999999999999");
+        assert_eq!(first.cmp_precedence(&second), Ordering::Equal);
+        assert_eq!(first.precedence_key(), second.precedence_key());
+        assert!(
+            first < second,
+            "build identifiers keep their stored text ordering"
+        );
+
+        let mut manual = v("1.2.3-18446744073709551615");
+        manual.pre = vec![Identifier::Alpha("18446744073709551615".into())];
+        let numeric = v("1.2.3-18446744073709551615");
+        let mut padded = numeric.clone();
+        padded.pre = vec![Identifier::Alpha("0000000000000000000001".into())];
+        let versions = [first.clone(), second, numeric, manual, padded, first];
+        for left in &versions {
+            for right in &versions {
+                assert_eq!(left.cmp(right).is_eq(), left == right);
+            }
+        }
+        assert_eq!(
+            versions.iter().cloned().collect::<HashSet<_>>().len(),
+            versions.iter().cloned().collect::<BTreeSet<_>>().len()
+        );
     }
 
     #[test]

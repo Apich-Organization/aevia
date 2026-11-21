@@ -1,8 +1,8 @@
 //! Version requirements: `^1.2`, `~1.2.3`, `>=1.2, <2`, `1.*`, `=1.2.3`, `*`.
 //!
-//! A requirement is a comma-separated conjunction of comparators. The grammar
-//! and the meaning of every operator follow Cargo's, which is what most people
-//! who write `^1.2` already expect:
+//! A requirement is a comma-separated conjunction using Cargo-style comparator
+//! notation. Aevia applies the intervals below and then checks pre-release
+//! eligibility:
 //!
 //! | written      | means                                        |
 //! |--------------|----------------------------------------------|
@@ -24,7 +24,9 @@
 //! requirement names a pre-release of the *same* `major.minor.patch`
 //! (`>=1.0.0-rc.1` accepts `1.0.0-rc.2`; `^1` never accepts `2.0.0-rc.1`, and
 //! `*` never accepts any pre-release). This is the rule that stops
-//! `aevia update` from silently adopting a release candidate.
+//! `aevia update` from silently adopting a release candidate. The interval
+//! endpoints apply before this rule, so `^1, >=1.0.0-alpha` excludes
+//! `1.0.0-beta`, which precedes the `^1` floor of `1.0.0`.
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -33,6 +35,7 @@ use std::str::FromStr;
 use crate::version::Identifier;
 use crate::version::ParseError;
 use crate::version::Version;
+use crate::version::parse_prerelease;
 
 /// A comparison operator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -448,7 +451,13 @@ impl VersionReq {
         &self,
         version: &Version,
     ) -> bool {
-        self.interval().contains(version) && self.permits_prerelease(version)
+        // Membership is conjunctive. Only callers needing the bounds have
+        // to construct their intersection.
+        self.permits_prerelease(version)
+            && self
+                .comparators
+                .iter()
+                .all(|comparator| comparator.interval().contains(version))
     }
 
     /// Applies the pre-release rule after the version interval has matched.
@@ -506,14 +515,17 @@ fn parse_comparator(
     let mut minor = None;
     let mut patch = None;
     let mut wildcard = false;
-    let fields: Vec<&str> = numbers.split('.').collect();
-    if fields.len() > 3 {
+    // Read one component beyond the maximum so excess fields have the
+    // same diagnostic precedence without collecting the whole input.
+    let mut components = numbers.split('.');
+    let fields = [components.next(), components.next(), components.next()];
+    if components.next().is_some() {
         return Err(ParseError::new(
             input,
             format!("`{part}` has more than three numbers"),
         ));
     }
-    for (index, field) in fields.iter().enumerate() {
+    for (index, field) in fields.into_iter().flatten().enumerate() {
         let field = field.trim();
         if matches!(field, "*" | "x" | "X") {
             if index == 0 {
@@ -559,10 +571,10 @@ fn parse_comparator(
                     format!("`{part}`: a pre-release needs a full `major.minor.patch`"),
                 ));
             }
-            // Reuse the version parser for the identifier rules.
-            let parsed = Version::parse(&format!("0.0.0-{pre}"))
-                .map_err(|error| ParseError::new(input, format!("`{part}`: {}", error.reason)))?;
-            parsed.pre
+            parse_prerelease(input, pre).map_err(|mut error| {
+                error.reason = format!("`{part}`: {}", error.reason);
+                error
+            })?
         },
     };
     let op = match (op, wildcard) {
@@ -840,6 +852,40 @@ mod tests {
     }
 
     #[test]
+    fn excess_components_report_before_individual_field_errors() {
+        let text = format!(">=1, ^01.{}.7", "two.".repeat(2048));
+        let error = VersionReq::parse(&text).unwrap_err();
+        assert_eq!(error.input, text);
+        assert!(error.reason.ends_with("has more than three numbers"));
+        for text in ["^01.two.3.4", "^.2.3.", "^*.1.2.3"] {
+            assert_eq!(
+                VersionReq::parse(text).unwrap_err().reason,
+                format!("`{text}` has more than three numbers")
+            );
+        }
+    }
+
+    #[test]
+    fn prerelease_identifiers_share_version_parsing_and_comparator_errors() {
+        let text = "  >= 1 . 2 . 3-alpha.10.X-7 , <2  ";
+        let parsed = r(text);
+        assert_eq!(parsed.comparators[0].pre, v("1.2.3-alpha.10.X-7").pre);
+        assert_eq!(parsed.to_string(), ">=1.2.3-alpha.10.X-7, <2");
+        assert!(parsed.matches(&v("1.2.3-alpha.10.X-7+pkg.001")));
+        for suffix in ["", "alpha..7", "alpha.007", "alpha_1", " alpha"] {
+            let version = format!("1.2.3-{suffix}");
+            let reason = Version::parse(&version).unwrap_err().reason;
+            let single = format!(">={version}");
+            let conjunction = format!("{single}, <2");
+            assert_eq!(VersionReq::parse(&single).unwrap_err().reason, reason);
+            assert_eq!(
+                VersionReq::parse(&conjunction).unwrap_err().reason,
+                format!("`{single}`: {reason}")
+            );
+        }
+    }
+
+    #[test]
     fn matches_agrees_with_the_interval_on_releases_for_random_requirements() {
         let mut rng = crate::testing::Rng::new(99);
         for _ in 0..300 {
@@ -854,6 +900,55 @@ mod tests {
                     interval.contains(&version),
                     "`{req}` vs {version}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn matching_agrees_with_the_intersection_at_prerelease_and_overflow_boundaries() {
+        let max = u64::MAX;
+        let comparators = [
+            ">=1.0.0-rc.1".to_owned(),
+            "<1.0.0".to_owned(),
+            "<=1.0.0-rc.2".to_owned(),
+            ">1.0.0-rc.2".to_owned(),
+            "=1.0.0-rc.1".to_owned(),
+            "^1.0".to_owned(),
+            "1.2.*".to_owned(),
+            "~1.2.0-alpha".to_owned(),
+            format!(">{max}.{max}"),
+            format!("<{max}.{max}.{max}"),
+            format!("^{max}.{max}.{max}-preview.0"),
+            format!("^0.0.{max}"),
+        ];
+        let versions = [
+            v("0.0.0-alpha"),
+            v("0.0.0"),
+            v("1.0.0-beta.2"),
+            v("1.0.0-rc.1+rebuild.9"),
+            v("1.0.0-rc.2"),
+            v("1.0.0-rc.10"),
+            v("1.0.0+rebuild.9"),
+            v("1.1.1-rc.1"),
+            v("1.2.0-alpha"),
+            v("1.2.0"),
+            v("2.0.0"),
+            v(&format!("0.0.{max}-preview.1")),
+            v(&format!("0.0.{max}")),
+            v(&format!("{max}.{max}.{max}-preview.1")),
+            v(&format!("{max}.{max}.{max}+rebuild.1")),
+        ];
+        for first in &comparators {
+            for second in &comparators {
+                let req = r(&format!("{first}, {second}"));
+                let interval = req.interval();
+                for version in &versions {
+                    assert_eq!(
+                        req.matches(version),
+                        interval.contains(version) && req.permits_prerelease(version),
+                        "`{req}` vs {version}"
+                    );
+                }
             }
         }
     }

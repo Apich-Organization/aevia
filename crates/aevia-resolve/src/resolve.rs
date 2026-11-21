@@ -39,7 +39,9 @@
 //!   with the fewest selectable versions, so dead ends surface early and
 //!   forced choices are made before free ones. A binary search in the sorted
 //!   catalogue narrows each scan to the requirement's version interval before
-//!   applying pre-release, yank and occupied-slot rules.
+//!   applying pre-release, yank and occupied-slot rules. A shared queue keeps
+//!   these scores until the corresponding package's slots change and restores
+//!   affected requirements when a candidate is rolled back.
 //!
 //! The explanation of a failure is the derivation tree of the failed search:
 //! which requirement could not be met, which candidate versions were tried for
@@ -399,6 +401,7 @@ fn quoted(
 }
 
 const EXPLAIN_DEPTH: usize = 10;
+const EXPLAIN_CANDIDATES: usize = 12;
 
 fn render(
     failure: &Failure,
@@ -589,8 +592,9 @@ struct Pending {
     from: Origin,
     dep: Rc<Dependency>,
     /// Counts depend only on the immutable index and lock until a slot for this
-    /// package is occupied. Cloning the pending queue preserves this work.
+    /// package is occupied.
     unoccupied_choices: Option<usize>,
+    state: PendingState,
 }
 
 impl Pending {
@@ -602,6 +606,180 @@ impl Pending {
             from,
             dep: Rc::new(dependency.clone()),
             unoccupied_choices: None,
+            state: PendingState::Unranked,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PendingState {
+    Unranked,
+    Ranked(usize),
+    Detached,
+}
+
+impl PendingState {
+    fn detach(
+        &mut self,
+        position: usize,
+        unranked: &mut Unranked,
+        ranked: &mut BTreeSet<(usize, usize)>,
+    ) {
+        match std::mem::replace(self, Self::Detached) {
+            | Self::Unranked => {
+                unranked.remove(position);
+            },
+            | Self::Ranked(count) => {
+                ranked.remove(&(count, position));
+            },
+            | Self::Detached => {},
+        }
+    }
+}
+
+/// Keep a singleton frontier inline. The remaining positions stay in
+/// declaration order, including when rollback restores an earlier one.
+#[derive(Default)]
+struct Unranked {
+    first: Option<usize>,
+    later: BTreeSet<usize>,
+}
+
+impl Unranked {
+    fn insert(
+        &mut self,
+        position: usize,
+    ) {
+        match self.first {
+            | None => self.first = Some(position),
+            | Some(first) if position < first => {
+                self.first = Some(position);
+                self.later.insert(first);
+            },
+            | Some(first) if first == position => {},
+            | Some(_) => {
+                self.later.insert(position);
+            },
+        }
+    }
+
+    fn remove(
+        &mut self,
+        position: usize,
+    ) {
+        if self.first == Some(position) {
+            self.pop_first();
+        } else {
+            self.later.remove(&position);
+        }
+    }
+
+    fn pop_first(&mut self) -> Option<usize> {
+        std::mem::replace(&mut self.first, self.later.pop_first())
+    }
+}
+
+/// Outstanding requirements keep their insertion positions across rollback.
+/// Only a package whose slots changed can invalidate a previously scored entry.
+#[derive(Default)]
+struct PendingQueue {
+    items: Vec<Pending>,
+    /// Constructed when an activation first needs to inspect other requirements.
+    by_package: Option<HashMap<String, Vec<usize>>>,
+    unranked: Unranked,
+    ranked: BTreeSet<(usize, usize)>,
+}
+
+impl PendingQueue {
+    fn push(
+        &mut self,
+        pending: Pending,
+    ) {
+        let position = self.items.len();
+        if let Some(by_package) = &mut self.by_package {
+            by_package
+                .entry(pending.dep.package.clone())
+                .or_default()
+                .push(position);
+        }
+        self.unranked.insert(position);
+        self.items.push(pending);
+    }
+
+    fn restore(
+        &mut self,
+        position: usize,
+    ) {
+        if let Some(pending) = self.items.get_mut(position) {
+            pending.state = PendingState::Unranked;
+            self.unranked.insert(position);
+        }
+    }
+
+    fn refresh_package(
+        &mut self,
+        package: &str,
+        selected: Option<&Version>,
+    ) -> Vec<usize> {
+        let mut satisfied = Vec::new();
+        if self.ranked.is_empty() && self.unranked.first.is_none() {
+            return satisfied;
+        }
+        let by_package = self.by_package.get_or_insert_with(|| {
+            let mut by_package: HashMap<String, Vec<usize>> = HashMap::new();
+            for (position, pending) in self.items.iter().enumerate() {
+                by_package
+                    .entry(pending.dep.package.clone())
+                    .or_default()
+                    .push(position);
+            }
+            by_package
+        });
+        for &position in by_package.get(package).into_iter().flatten() {
+            let Some(pending) = self.items.get_mut(position) else {
+                continue;
+            };
+            if matches!(pending.state, PendingState::Detached) {
+                continue;
+            }
+            if selected.is_some_and(|version| pending.dep.req.matches(version)) {
+                pending
+                    .state
+                    .detach(position, &mut self.unranked, &mut self.ranked);
+                satisfied.push(position);
+            } else if let PendingState::Ranked(count) = pending.state {
+                self.ranked.remove(&(count, position));
+                self.unranked.insert(position);
+                pending.state = PendingState::Unranked;
+            }
+        }
+        satisfied
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "rollback removes both priority indices before reusing positions"
+    )]
+    fn truncate(
+        &mut self,
+        length: usize,
+    ) {
+        while self.items.len() > length {
+            let Some(mut pending) = self.items.pop() else {
+                break;
+            };
+            pending
+                .state
+                .detach(self.items.len(), &mut self.unranked, &mut self.ranked);
+            let package = &pending.dep.package;
+            if let Some(by_package) = &mut self.by_package
+                && let Some(positions) = by_package.get_mut(package)
+            {
+                positions.pop();
+                if positions.is_empty() {
+                    by_package.remove(package);
+                }
+            }
         }
     }
 }
@@ -650,8 +828,11 @@ enum Availability {
 struct Classified {
     /// Selectable candidates, in preference order.
     free: Vec<Rc<Summary>>,
-    /// Matching candidates whose series is already taken: (candidate, occupant).
+    /// Newest matching candidates whose series is already taken: (candidate, occupant).
     taken: Vec<(Rc<Summary>, usize)>,
+    taken_count: usize,
+    /// All blockers can affect backjumping, including the ones omitted from the explanation.
+    occupants: BTreeSet<usize>,
     /// Matching yanked versions that are not locked.
     yanked: Vec<Version>,
 }
@@ -661,17 +842,51 @@ struct Activation {
     summary: Rc<Summary>,
     key: Series,
     level: usize,
+    queue_length: usize,
+    satisfied: Vec<usize>,
 }
 
 struct Decision {
+    position: usize,
     chosen: Pending,
     summaries: Summaries,
-    remaining: Vec<Pending>,
     options: std::vec::IntoIter<Rc<Summary>>,
     class: Classified,
     accumulated: BTreeSet<usize>,
-    tried: Vec<(Rc<Summary>, Failure)>,
+    tried: FailedOptions,
     activation: Option<Activation>,
+}
+
+#[derive(Default)]
+struct FailedOptions {
+    /// Locks change the order of attempts, so retain detail by version order.
+    newest: BTreeMap<Version, Failure>,
+    total: usize,
+}
+
+impl FailedOptions {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "retention is independent of the order candidates were tried"
+    )]
+    fn record(
+        &mut self,
+        version: &Version,
+        failure: Failure,
+    ) {
+        self.total = self.total.saturating_add(1);
+        if self.newest.len() == EXPLAIN_CANDIDATES {
+            if self
+                .newest
+                .first_key_value()
+                .is_some_and(|(oldest, _)| version <= oldest)
+            {
+                return;
+            }
+            self.newest.pop_first();
+        }
+        self.newest.insert(version.clone(), failure);
+    }
 }
 
 /// Bound retained conflict trees at the depth the formatter can display.
@@ -799,7 +1014,6 @@ impl Solver<'_> {
     fn choice_count(
         &mut self,
         pending: &mut Pending,
-        limit: usize,
     ) -> usize {
         let dep = &pending.dep;
         let occupied = self
@@ -820,15 +1034,11 @@ impl Solver<'_> {
                 Availability::Free
             )
         });
-        if occupied {
-            // A tie cannot displace the earlier requirement. Counts reaching
-            // the current best only need to serve as a lower bound.
-            free.take(limit).count()
-        } else {
-            let count = free.count();
+        let count = free.count();
+        if !occupied {
             pending.unoccupied_choices = Some(count);
-            count
         }
+        count
     }
 
     #[allow(
@@ -841,21 +1051,33 @@ impl Solver<'_> {
     ) -> (Summaries, Classified) {
         let summaries = self.summaries(&dep.package);
         let slots = self.slots.get(&dep.package);
-        let mut free = Vec::new();
-        let mut taken = Vec::new();
-        let mut yanked = Vec::new();
+        let mut result = Classified {
+            free: Vec::new(),
+            taken: Vec::new(),
+            taken_count: 0,
+            occupants: BTreeSet::new(),
+            yanked: Vec::new(),
+        };
         for summary in matching_summaries(&summaries, &dep.req).rev() {
             match self.availability(&dep.package, summary, slots) {
-                | Availability::Free => free.push(Rc::clone(summary)),
-                | Availability::Taken(occupant) => taken.push((Rc::clone(summary), occupant)),
-                | Availability::Yanked => yanked.push(summary.version.clone()),
+                | Availability::Free => result.free.push(Rc::clone(summary)),
+                | Availability::Taken(occupant) => {
+                    result.taken_count = result.taken_count.saturating_add(1);
+                    result.occupants.insert(occupant);
+                    if result.taken.len() < EXPLAIN_CANDIDATES {
+                        result.taken.push((Rc::clone(summary), occupant));
+                    }
+                },
+                | Availability::Yanked => result.yanked.push(summary.version.clone()),
             }
         }
         // Newest first within each group, with locked versions tried first.
         if let Some(locked) = self.options.locked.get(&dep.package) {
-            free.sort_by_key(|summary| !locked.contains(&summary.version));
+            result
+                .free
+                .sort_by_key(|summary| !locked.contains(&summary.version));
         }
-        (summaries, Classified { free, taken, yanked })
+        (summaries, result)
     }
 
     fn name_of(
@@ -915,40 +1137,52 @@ impl Solver<'_> {
     )]
     fn decision(
         &mut self,
-        pending: Vec<Pending>,
+        queue: &mut PendingQueue,
     ) -> Result<Option<Decision>, ()> {
-        let mut remaining: Vec<Pending> = pending
-            .into_iter()
-            .filter(|pending| !self.satisfied(&pending.dep))
-            .collect();
-        let mut best: Option<(usize, usize)> = None;
-        for (position, pending) in remaining.iter_mut().enumerate() {
-            let limit = best.map_or(usize::MAX, |(_, count)| count);
-            let count = self.choice_count(pending, limit);
-            if self.abort.is_some() {
-                return Err(());
+        let position = if queue.ranked.is_empty() && queue.unranked.later.is_empty() {
+            // A chain often has just one outstanding requirement. Its
+            // candidate classification already reads the index and applies the slot rules.
+            queue.unranked.pop_first()
+        } else {
+            while let Some(position) = queue.unranked.first {
+                // Earlier unscored requirements still need to be read before a
+                // zero-choice requirement. This preserves lazy index error order.
+                if queue
+                    .ranked
+                    .first()
+                    .is_some_and(|&(count, first)| count == 0 && first < position)
+                {
+                    break;
+                }
+                let pending = queue.items.get_mut(position).ok_or(())?;
+                let count = self.choice_count(pending);
+                if self.abort.is_some() {
+                    return Err(());
+                }
+                queue.unranked.pop_first();
+                queue.ranked.insert((count, position));
+                pending.state = PendingState::Ranked(count);
             }
-            if best.is_none() || count < limit {
-                best = Some((position, count));
-            }
-            if count == 0 {
-                break;
-            }
+            queue.ranked.pop_first().map(|(_, position)| position)
+        };
+        let Some(position) = position else {
+            return Ok(None);
+        };
+        let chosen = queue.items.get_mut(position).ok_or(())?;
+        chosen.state = PendingState::Detached;
+        let (summaries, mut class) = self.classify(&chosen.dep);
+        if self.abort.is_some() {
+            return Err(());
         }
-        // The position came from enumerating this same, unmodified vector.
-        Ok(best.map(|(position, _)| {
-            let chosen = remaining.remove(position);
-            let (summaries, mut class) = self.classify(&chosen.dep);
-            Decision {
-                chosen,
-                summaries,
-                remaining,
-                options: std::mem::take(&mut class.free).into_iter(),
-                class,
-                accumulated: BTreeSet::new(),
-                tried: Vec::new(),
-                activation: None,
-            }
+        Ok(Some(Decision {
+            position,
+            chosen: chosen.clone(),
+            summaries,
+            options: std::mem::take(&mut class.free).into_iter(),
+            class,
+            accumulated: BTreeSet::new(),
+            tried: FailedOptions::default(),
+            activation: None,
         }))
     }
 
@@ -960,11 +1194,11 @@ impl Solver<'_> {
     )]
     fn solve(
         &mut self,
-        mut pending: Vec<Pending>,
+        mut queue: PendingQueue,
     ) -> Result<(), Fail> {
         let mut stack: Vec<Decision> = Vec::new();
         'requirements: loop {
-            let mut failure = match self.decision(pending).map_err(|()| Self::aborted())? {
+            let mut failure = match self.decision(&mut queue).map_err(|()| Self::aborted())? {
                 | Some(decision) => {
                     stack.push(decision);
                     None
@@ -987,8 +1221,14 @@ impl Solver<'_> {
                     if let Some(slots) = self.slots.get_mut(&decision.chosen.dep.package) {
                         slots.remove(&activation.key);
                     }
+                    queue.truncate(activation.queue_length);
+                    queue.refresh_package(&decision.chosen.dep.package, None);
+                    for position in activation.satisfied {
+                        queue.restore(position);
+                    }
                     if !failed.blame.contains(&activation.level) {
                         // No alternative for this decision can address the failure.
+                        queue.restore(decision.position);
                         failure = Some(failed);
                         continue;
                     }
@@ -998,7 +1238,9 @@ impl Solver<'_> {
                             .into_iter()
                             .filter(|level| *level != activation.level),
                     );
-                    decision.tried.push((activation.summary, failed.failure));
+                    decision
+                        .tried
+                        .record(&activation.summary.version, failed.failure);
                 }
                 if let Some(summary) = decision.options.next() {
                     if self.steps >= self.options.max_activations {
@@ -1019,25 +1261,28 @@ impl Solver<'_> {
                         .entry(package.clone())
                         .or_default()
                         .insert(key.clone(), level);
-                    pending = if decision.options.len() == 0 {
-                        std::mem::take(&mut decision.remaining)
-                    } else {
-                        decision.remaining.clone()
-                    };
-                    pending.extend(
-                        summary
-                            .dependencies
-                            .iter()
-                            .map(|dependency| Pending::new(Origin::Active(level), dependency)),
-                    );
-                    decision.activation = Some(Activation { summary, key, level });
+                    let queue_length = queue.items.len();
+                    let satisfied = queue.refresh_package(package, Some(&summary.version));
+                    for dependency in &summary.dependencies {
+                        if !self.satisfied(dependency) {
+                            queue.push(Pending::new(Origin::Active(level), dependency));
+                        }
+                    }
+                    decision.activation = Some(Activation {
+                        summary,
+                        key,
+                        level,
+                        queue_length,
+                        satisfied,
+                    });
                     stack.push(decision);
                     continue 'requirements;
                 }
+                queue.restore(decision.position);
                 failure = Some(self.exhausted(
                     &decision.chosen,
                     &decision.summaries,
-                    &decision.class,
+                    decision.class,
                     decision.accumulated,
                     decision.tried,
                 ));
@@ -1054,17 +1299,14 @@ impl Solver<'_> {
         &self,
         chosen: &Pending,
         summaries: &[Rc<Summary>],
-        class: &Classified,
+        class: Classified,
         mut blame: BTreeSet<usize>,
-        tried: Vec<(Rc<Summary>, Failure)>,
+        tried: FailedOptions,
     ) -> Fail {
-        const KEEP: usize = 12;
         if let Origin::Active(index) = chosen.from {
             blame.insert(index);
         }
-        for (_, occupant) in &class.taken {
-            blame.insert(*occupant);
-        }
+        blame.extend(class.occupants);
         let dep = &chosen.dep;
         let reason = if summaries.is_empty() {
             if self.unknown.contains(&dep.package) {
@@ -1072,38 +1314,57 @@ impl Solver<'_> {
             } else {
                 Reason::NoVersions
             }
-        } else if tried.is_empty() && class.taken.is_empty() {
+        } else if tried.total == 0 && class.taken_count == 0 {
             Reason::NoMatch {
                 available: summaries
                     .iter()
                     .filter(|summary| !summary.yanked)
                     .map(|summary| summary.version.clone())
                     .collect(),
-                yanked: class.yanked.clone(),
+                yanked: class.yanked,
             }
         } else {
+            enum Rejected {
+                Tried(Failure),
+                Taken(usize),
+            }
+
+            let mut rejected: Vec<_> = tried
+                .newest
+                .into_iter()
+                .map(|(version, failure)| (version, Rejected::Tried(failure)))
+                .chain(class.taken.into_iter().map(|(summary, occupant)| {
+                    (summary.version.clone(), Rejected::Taken(occupant))
+                }))
+                .collect();
+            rejected.sort_by(|(left, _), (right, _)| right.cmp(left));
             let mut entries: Vec<Entry> = Vec::new();
-            for (candidate, mut failure) in tried {
-                retain_conflict_depth(&mut failure, EXPLAIN_DEPTH);
-                entries.push(Entry {
-                    version: candidate.version.clone(),
-                    cause: Cause::Failed(Box::new(failure)),
-                });
-            }
-            for (candidate, occupant) in &class.taken {
-                if let Some(active) = self.active.get(*occupant) {
-                    entries.push(Entry {
-                        version: candidate.version.clone(),
-                        cause: Cause::Taken {
+            let mut wanted_by = HashMap::new();
+            for (version, rejected) in rejected.into_iter().take(EXPLAIN_CANDIDATES) {
+                let cause = match rejected {
+                    | Rejected::Tried(mut failure) => {
+                        retain_conflict_depth(&mut failure, EXPLAIN_DEPTH);
+                        Cause::Failed(Box::new(failure))
+                    },
+                    | Rejected::Taken(occupant) => {
+                        let Some(active) = self.active.get(occupant) else {
+                            continue;
+                        };
+                        Cause::Taken {
                             selected: active.summary.version.clone(),
-                            wanted_by: self.wanted_by(active),
-                        },
-                    });
-                }
+                            wanted_by: wanted_by
+                                .entry(occupant)
+                                .or_insert_with(|| self.wanted_by(active))
+                                .clone(),
+                        }
+                    },
+                };
+                entries.push(Entry { version, cause });
             }
-            entries.sort_by(|left, right| right.version.cmp(&left.version));
-            let omitted = entries.len().saturating_sub(KEEP);
-            entries.truncate(KEEP);
+            let omitted = tried
+                .total
+                .saturating_add(class.taken_count)
+                .saturating_sub(entries.len());
             Reason::Candidates { entries, omitted }
         };
         Fail {
@@ -1277,7 +1538,7 @@ pub fn resolve(
         steps: 0,
         abort: None,
     };
-    let mut pending = Vec::new();
+    let mut pending = PendingQueue::default();
     for (position, root) in roots.iter().enumerate() {
         for dependency in &root.dependencies {
             pending.push(Pending::new(Origin::Root(position), dependency));

@@ -592,26 +592,30 @@ impl SparseIndex {
         Ok(())
     }
 
-    /// Adds (or replaces) one package's parsed records.
+    /// Adds (or replaces) one package's parsed records. Records with the same
+    /// version keep their input order.
     pub fn insert_records(
         &mut self,
         package: &str,
-        records: Vec<SparseRecord>,
+        mut records: Vec<SparseRecord>,
     ) {
+        records.sort_by(|left, right| left.version.cmp(&right.version));
         self.packages.insert(package.to_ascii_lowercase(), records);
     }
 
-    /// The record of one version.
+    /// The record of one exact version, including its build metadata. For
+    /// duplicate records supplied by [`Self::insert_records`], returns the first.
     #[must_use]
     pub fn record(
         &self,
         package: &str,
         version: &Version,
     ) -> Option<&SparseRecord> {
-        self.packages
-            .get(&package.to_ascii_lowercase())?
-            .iter()
-            .find(|record| &record.version == version)
+        let records = self.records(package)?;
+        let first = records.partition_point(|record| &record.version < version);
+        records
+            .get(first)
+            .filter(|record| &record.version == version)
     }
 
     /// All records of a package, ascending.
@@ -620,9 +624,12 @@ impl SparseIndex {
         &self,
         package: &str,
     ) -> Option<&[SparseRecord]> {
-        self.packages
-            .get(&package.to_ascii_lowercase())
-            .map(Vec::as_slice)
+        let records = if package.bytes().any(|byte| byte.is_ascii_uppercase()) {
+            self.packages.get(&package.to_ascii_lowercase())
+        } else {
+            self.packages.get(package)
+        };
+        records.map(Vec::as_slice)
     }
 
     /// The package keys held, sorted.
@@ -637,8 +644,7 @@ impl Index for SparseIndex {
         package: &str,
     ) -> Result<Vec<Summary>, IndexError> {
         let records = self
-            .packages
-            .get(&package.to_ascii_lowercase())
+            .records(package)
             .ok_or_else(|| IndexError::missing(package))?;
         Ok(records
             .iter()
@@ -779,6 +785,62 @@ mod tests {
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].version, Version::new(1, 0, 0));
         assert!(records[1].yanked);
+    }
+
+    #[test]
+    fn parsed_catalogue_keeps_the_first_exact_record_for_a_locked_build() {
+        let record = |version, checksum, yanked| {
+            parse_line(&format!(
+                r#"{{"name":"o/a","vers":"{version}","cksum":"{checksum}","yanked":{yanked}}}"#
+            ))
+            .expect("valid record")
+        };
+        let locked = Version::parse("1.0.0+ci").expect("lock version");
+        let mut index = SparseIndex::new();
+        index.insert_records(
+            "O/A",
+            vec![
+                record("1.0.0+next", "sha256:next", false),
+                record("1.0.0+ci", "sha256:locked", true),
+                record("1.0.0-rc.1", "sha256:prerelease", false),
+                record("1.0.0+ci", "sha256:duplicate", false),
+                record("1.0.0", "sha256:release", false),
+            ],
+        );
+        let versions: Vec<_> = index
+            .records("o/a")
+            .expect("catalogue")
+            .iter()
+            .map(|record| record.version.to_string())
+            .collect();
+        assert_eq!(
+            versions,
+            ["1.0.0-rc.1", "1.0.0", "1.0.0+ci", "1.0.0+ci", "1.0.0+next"]
+        );
+        assert!(
+            index
+                .record("o/a", &Version::parse("1.0.0+missing").unwrap())
+                .is_none()
+        );
+
+        let roots = [Root {
+            id: "app".into(),
+            dependencies: vec![Dependency::new("o/a", VersionReq::parse("^1").unwrap())],
+        }];
+        let mut options = Options::default();
+        options
+            .locked
+            .entry("o/a".into())
+            .or_default()
+            .insert(locked.clone());
+        let resolution = resolve(&roots, &index, &options).expect("yanked build stays locked");
+        let selected = &resolution.packages[0].version;
+        assert_eq!(selected, &locked);
+        let metadata = index
+            .record("O/a", selected)
+            .expect("metadata for the exact build");
+        assert_eq!(metadata.checksum, "sha256:locked");
+        assert!(metadata.yanked);
     }
 
     #[test]

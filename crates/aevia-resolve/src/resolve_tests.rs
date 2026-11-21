@@ -10,8 +10,11 @@ use crate::index::IndexError;
 use crate::index::MemoryIndex;
 use crate::index::Summary;
 use crate::req::VersionReq;
+use crate::resolve::Cause;
+use crate::resolve::Failure;
 use crate::resolve::Node;
 use crate::resolve::Options;
+use crate::resolve::Reason;
 use crate::resolve::Resolution;
 use crate::resolve::ResolveError;
 use crate::resolve::Root;
@@ -65,6 +68,22 @@ fn the_highest_compatible_version_wins() {
     assert_eq!(chosen(&resolution, "o/foo"), ["1.9.3"]);
     let resolution = run(&index, &[("o/foo", "*")]).expect("resolves");
     assert_eq!(chosen(&resolution, "o/foo"), ["2.0.0"]);
+}
+
+#[test]
+fn catalogue_prunes_and_orders_wide_numeric_prereleases_numerically() {
+    let mut index = MemoryIndex::new();
+    for release in [
+        "1.0.0-99999999999999999999",
+        "1.0.0",
+        "1.0.0-100000000000000000000",
+        "1.0.0-18446744073709551615",
+    ] {
+        index.add("o/foo", release, &[]);
+    }
+    let selected = run(&index, &[("o/foo", ">=1.0.0-99999999999999999999, <1.0.0")])
+        .expect("wide prerelease range resolves");
+    assert_eq!(chosen(&selected, "o/foo"), ["1.0.0-100000000000000000000"]);
 }
 
 #[test]
@@ -251,6 +270,44 @@ fn occupying_a_series_updates_the_pending_requirement_priority() {
 }
 
 #[test]
+fn rolling_back_a_candidate_restores_requirements_it_had_satisfied() {
+    let mut index = MemoryIndex::new();
+    index
+        .add("o/x", "1.0.0", &[])
+        .add("o/x", "2.0.0", &[("o/missing", "*")])
+        .add("o/x", "3.0.0", &[])
+        .add("o/x", "4.0.0", &[]);
+    let resolution = run(&index, &[("o/x", ">=1, <3"), ("o/x", ">=2, <5")])
+        .expect("the older choice restores the second root requirement");
+    assert_eq!(chosen(&resolution, "o/x"), ["1.0.0", "4.0.0"]);
+    assert_eq!(resolution.edges.len(), 2);
+}
+
+#[test]
+fn rollback_reuses_pending_positions_after_the_first_branch_of_a_chain() {
+    let mut index = MemoryIndex::new();
+    index
+        .add("o/start", "1.0.0", &[("o/next", "*")])
+        .add("o/next", "1.0.0", &[("o/branch", "*")])
+        .add("o/branch", "1.1.0", &[("o/left", "*"), ("o/right", "*")])
+        .add("o/left", "1.0.0", &[("o/shared", "=1.0.0")])
+        .add("o/right", "1.0.0", &[("o/shared", "=1.1.0")])
+        .add(
+            "o/branch",
+            "1.0.0",
+            &[("o/replacement", "*"), ("o/shared", "=1.1.0")],
+        )
+        .add("o/replacement", "1.0.0", &[("o/shared", "^1")])
+        .add("o/shared", "1.0.0", &[])
+        .add("o/shared", "1.1.0", &[]);
+    let resolution = run(&index, &[("o/start", "*")]).expect("the earlier branch works");
+    assert_eq!(chosen(&resolution, "o/branch"), ["1.0.0"]);
+    assert_eq!(chosen(&resolution, "o/shared"), ["1.1.0"]);
+    assert_eq!(resolution.packages.len(), 5);
+    assert_eq!(resolution.edges.len(), 6);
+}
+
+#[test]
 fn only_yanked_matches_are_explained_as_such() {
     let mut index = MemoryIndex::new();
     index
@@ -403,6 +460,33 @@ fn an_unavailable_index_stops_the_search_and_names_the_package() {
 }
 
 #[test]
+fn an_earlier_impossible_requirement_leaves_later_index_entries_unread() {
+    struct PartialIndex;
+
+    impl Index for PartialIndex {
+        fn summaries(
+            &self,
+            package: &str,
+        ) -> Result<Vec<Summary>, IndexError> {
+            if package == "o/missing" {
+                Err(IndexError::missing(package))
+            } else {
+                Err(IndexError::unavailable(package, "not fetched yet"))
+            }
+        }
+    }
+
+    let options = Options::default();
+    let missing_first = root(&[("o/missing", "*"), ("o/offline", "*")]);
+    let missing = resolve(&[missing_first], &PartialIndex, &options).expect_err("missing");
+    assert!(matches!(missing, ResolveError::Unsatisfiable(_)));
+
+    let offline_first = root(&[("o/offline", "*"), ("o/missing", "*")]);
+    let offline = resolve(&[offline_first], &PartialIndex, &options).expect_err("offline");
+    assert_eq!(offline.unavailable_package(), Some("o/offline"));
+}
+
+#[test]
 fn the_search_budget_is_enforced() {
     let mut index = MemoryIndex::new();
     index
@@ -467,6 +551,85 @@ fn identical_failures_fold_into_a_range_in_the_explanation() {
     assert!(text.contains("(6 versions)"), "{text}");
     assert!(text.contains("not in the index"), "{text}");
     assert!(text.lines().count() < 12, "stays short:\n{text}");
+}
+
+#[test]
+fn conflict_retains_the_newest_attempts_and_taken_versions_even_with_a_lock() {
+    let mut index = MemoryIndex::new();
+    index.add("o/x", "2.0.0-rc.1", &[]);
+    for minor in 0..20 {
+        index.add("o/x", &format!("1.{minor}.0"), &[("o/ghost", "*")]);
+    }
+    for minor in 0..8 {
+        index.add("o/x", &format!("2.{minor}.0"), &[]);
+    }
+    let mut options = Options::default();
+    options
+        .locked
+        .insert("o/x".into(), BTreeSet::from([v("1.0.0")]));
+    let error = resolve(
+        &[root(&[("o/x", "=2.0.0-rc.1"), ("o/x", "*")])],
+        &index,
+        &options,
+    )
+    .expect_err("every candidate is taken or has a missing dependency");
+    let ResolveError::Unsatisfiable(conflict) = error else {
+        panic!("unexpected resolver error: {error}");
+    };
+    let Failure::Unsatisfied {
+        reason: Reason::Candidates { entries, .. },
+        ..
+    } = conflict.failure
+    else {
+        panic!("expected candidate details for the exact prerelease");
+    };
+    let Cause::Failed(inner) = &entries.first().expect("prerelease candidate").cause else {
+        panic!("expected prerelease candidate to have a nested conflict");
+    };
+    let Failure::Unsatisfied {
+        reason: Reason::Candidates { entries, omitted },
+        ..
+    } = &**inner
+    else {
+        panic!("expected explanation for the wildcard");
+    };
+    assert_eq!(*omitted, 16);
+    let expected: Vec<_> = (0..8)
+        .rev()
+        .map(|minor| Version::new(2, minor, 0))
+        .chain((16..20).rev().map(|minor| Version::new(1, minor, 0)))
+        .collect();
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| &entry.version)
+            .collect::<Vec<_>>(),
+        expected.iter().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_taken_version_omitted_from_diagnostics_still_guides_backtracking() {
+    let mut index = MemoryIndex::new();
+    index
+        .add("o/x", "1.0.0", &[])
+        .add("o/x", "1.1.0", &[])
+        .add("o/x", "3.0.0-rc.1", &[]);
+    for minor in 0..16 {
+        index.add("o/x", &format!("3.{minor}.0"), &[]);
+    }
+    let mut options = Options::default();
+    options
+        .locked
+        .insert("o/x".into(), BTreeSet::from([v("1.0.0")]));
+    let requirements = [
+        ("o/x", "=3.0.0-rc.1"),
+        ("o/x", "^1"),
+        ("o/x", ">=1.1.0, <4"),
+    ];
+    let resolution = resolve(&[root(&requirements)], &index, &options)
+        .expect("the older blocked candidate points to the choice that can change");
+    assert_eq!(chosen(&resolution, "o/x"), ["1.1.0", "3.0.0-rc.1"]);
 }
 
 #[test]
