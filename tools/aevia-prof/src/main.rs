@@ -16,7 +16,8 @@
 //! ```
 //!
 //! Environment: `AEVIA_PROF_TOP` (rows printed, default 45),
-//! `AEVIA_PROF_INTERVAL_US` (sampling interval, default 1000).
+//! `AEVIA_PROF_INTERVAL_US` (sampling interval, default 1000), and
+//! `AEVIA_PROF_FOLDED` (optional new file for `FlameGraph` folded stacks).
 
 #![deny(
     missing_docs,
@@ -28,6 +29,9 @@
     clippy::single_call_fn,
     clippy::unwrap_used
 )]
+
+#[cfg(any(test, all(windows, target_arch = "x86_64")))]
+mod report;
 
 #[cfg(not(all(windows, target_arch = "x86_64")))]
 fn main() {
@@ -44,8 +48,8 @@ fn main() {
 #[allow(unsafe_code, reason = "Win32 handles and DbgHelp require FFI calls")]
 mod windows {
     use std::collections::HashMap;
-    use std::collections::HashSet;
     use std::ffi::c_void;
+    use std::io::Write as _;
     use std::time::Duration;
     use std::time::Instant;
     use windows_sys::Win32::Foundation::CloseHandle;
@@ -85,6 +89,8 @@ mod windows {
     use windows_sys::Win32::System::Threading::THREAD_QUERY_INFORMATION;
     use windows_sys::Win32::System::Threading::THREAD_SUSPEND_RESUME;
 
+    use crate::report::Profile;
+
     #[repr(C, align(16))]
     struct AlignedContext(CONTEXT);
 
@@ -94,16 +100,6 @@ mod windows {
     const CONTEXT_CONTROL_AMD64: u32 = CONTEXT_AMD64 | 0x1;
     const CONTEXT_INTEGER_AMD64: u32 = CONTEXT_AMD64 | 0x2;
     const SYMBOL_NAME_LEN: usize = 1024;
-    const IDLE_SYMBOLS: &[&str] = &[
-        "Wait",
-        "ZwDelay",
-        "NtDelay",
-        "Sleep",
-        "ZwRemoveIo",
-        "NtRemoveIo",
-        "RtlUserThreadStart",
-    ];
-
     fn record_size<T>() -> u32 {
         u32::try_from(std::mem::size_of::<T>()).unwrap_or_default()
     }
@@ -123,50 +119,43 @@ mod windows {
         }
     }
 
-    struct Symbols {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "each unique address is resolved through DbgHelp"
+    )]
+    fn symbol_name(
         process: HANDLE,
-        names: HashMap<u64, String>,
-    }
-
-    impl Symbols {
-        fn name(
-            &mut self,
-            address: u64,
-        ) -> String {
-            if let Some(name) = self.names.get(&address) {
-                return name.clone();
-            }
-            // SAFETY: The Windows C record is plain integer/array data and
-            // zero is valid. repr(C) gives the header the required alignment.
-            let mut buffer: SymbolBuffer = unsafe { std::mem::zeroed() };
-            buffer.header.SizeOfStruct = record_size::<SYMBOL_INFO>();
-            buffer.header.MaxNameLen = u32::try_from(SYMBOL_NAME_LEN).unwrap_or_default();
-            let symbol = (&raw mut buffer).cast::<SYMBOL_INFO>();
-            // SAFETY: DbgHelp receives a live process handle and storage for
-            // the header and MaxNameLen bytes. The name slice stays in that storage.
-            let name = unsafe {
-                let mut displacement = 0u64;
-                if SymFromAddr(self.process, address, &raw mut displacement, symbol) != 0 {
-                    let len = (*symbol).NameLen as usize;
-                    let ptr = std::ptr::addr_of!((*symbol).Name).cast::<u8>();
-                    let bytes = std::slice::from_raw_parts(ptr, len.min(SYMBOL_NAME_LEN));
-                    simplify(&String::from_utf8_lossy(bytes))
-                } else {
-                    if std::env::var_os("AEVIA_PROF_DEBUG").is_some() {
-                        eprintln!(
-                            "SymFromAddr 0x{address:x} failed: {}",
-                            windows_sys::Win32::Foundation::GetLastError()
-                        );
-                    }
-                    format!("0x{address:x}")
+        address: u64,
+        debug: bool,
+    ) -> String {
+        // SAFETY: The Windows C record is plain integer/array data and
+        // zero is valid. repr(C) gives the header the required alignment.
+        let mut buffer: SymbolBuffer = unsafe { std::mem::zeroed() };
+        buffer.header.SizeOfStruct = record_size::<SYMBOL_INFO>();
+        buffer.header.MaxNameLen = u32::try_from(SYMBOL_NAME_LEN).unwrap_or_default();
+        let symbol = (&raw mut buffer).cast::<SYMBOL_INFO>();
+        // SAFETY: DbgHelp receives a live process handle and storage for
+        // the header and MaxNameLen bytes. The name slice stays in that storage.
+        unsafe {
+            let mut displacement = 0u64;
+            if SymFromAddr(process, address, &raw mut displacement, symbol) != 0 {
+                let len = (*symbol).NameLen as usize;
+                let ptr = std::ptr::addr_of!((*symbol).Name).cast::<u8>();
+                let bytes = std::slice::from_raw_parts(ptr, len.min(SYMBOL_NAME_LEN));
+                simplify(&String::from_utf8_lossy(bytes))
+            } else {
+                if debug {
+                    eprintln!(
+                        "SymFromAddr 0x{address:x} failed: {}",
+                        windows_sys::Win32::Foundation::GetLastError()
+                    );
                 }
-            };
-            self.names.insert(address, name.clone());
-            name
+                format!("0x{address:x}")
+            }
         }
     }
 
-    /// Drops generic arguments and hash suffixes so one function is one row.
+    /// Collapses generic arguments so monomorphizations can share a row.
     #[allow(
         clippy::single_call_fn,
         reason = "symbol normalization is separate from Win32 lookup"
@@ -460,59 +449,33 @@ mod windows {
                 }
             }
         }
-        let mut symbols = Symbols {
-            process,
-            names: HashMap::new(),
-        };
-        let mut self_counts: HashMap<String, u64> = HashMap::new();
-        let mut total_counts: HashMap<String, u64> = HashMap::new();
-        let mut samples = 0u64;
-        for (frames, count) in &stacks {
-            let names: Vec<String> = frames.iter().map(|&pc| symbols.name(pc)).collect();
-            let Some(leaf) = names.first() else {
-                continue;
-            };
-            if IDLE_SYMBOLS.iter().any(|symbol| leaf.contains(symbol)) {
-                continue;
-            }
-            samples = samples.saturating_add(*count);
-            let self_count = self_counts.entry(leaf.clone()).or_default();
-            *self_count = self_count.saturating_add(*count);
-            let mut seen = HashSet::new();
-            for name in names {
-                if seen.insert(name.clone()) {
-                    let total = total_counts.entry(name).or_default();
-                    *total = total.saturating_add(*count);
-                }
-            }
-        }
+        let folded = std::env::var_os("AEVIA_PROF_FOLDED")
+            .filter(|path| !path.is_empty())
+            .map(std::path::PathBuf::from);
+        let profile = Profile::aggregate(
+            &stacks,
+            |pc| symbol_name(process, pc, debug),
+            folded.is_some(),
+        );
         // SAFETY: The DbgHelp session and the process handle have no remaining users.
         unsafe {
             SymCleanup(process);
             CloseHandle(process);
         }
-        let print = |title: &str, counts: &HashMap<String, u64>| {
-            let mut rows: Vec<_> = counts.iter().collect();
-            rows.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
-            eprintln!(
-                "\n== {title} ({samples} busy samples, {:.2}s wall)",
-                wall.as_secs_f64()
-            );
-            for (name, count) in rows.into_iter().take(top) {
-                #[allow(
-                    clippy::cast_precision_loss,
-                    reason = "displayed percentages are rounded to two decimal places"
-                )]
-                let pct = 100.0 * (*count as f64) / (samples.max(1) as f64);
-                let mut name = name.clone();
-                if name.len() > 150 {
-                    name.truncate(name.floor_char_boundary(150));
-                }
-                eprintln!("{pct:6.2}% {count:7}  {name}");
+        let _ = profile.write_summary(std::io::stderr().lock(), wall, top);
+        if let Some(path) = folded {
+            let written = std::fs::File::create_new(&path).and_then(|file| {
+                let mut output = std::io::BufWriter::new(file);
+                profile.write_folded(&mut output)?;
+                output.flush()
+            });
+            if let Err(error) = written {
+                eprintln!(
+                    "aevia-prof: cannot write folded profile `{}`: {error}",
+                    path.display()
+                );
             }
-        };
-        print("self", &self_counts);
-        print("inclusive", &total_counts);
+        }
         status
     }
 }
