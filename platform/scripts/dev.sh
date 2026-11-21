@@ -8,7 +8,7 @@
 #
 # The container is named `aevia-dev-db` and is reused: `up` after `up` prints
 # the exports again instead of failing, and `down` on a machine with no
-# container is a no-op. Nothing outside this container and `target/` is touched.
+# container is a no-op. The runner uses a loopback listener by default.
 #
 # The port is 55432, not 5432, so a real PostgreSQL on the host keeps working.
 set -eu
@@ -74,17 +74,24 @@ configure() {
     AEVIA_SESSION_SECRET=${AEVIA_SESSION_SECRET:-$(openssl rand -hex 32)}
     AEVIA_STORAGE_DIR=$root/target/packages
     AEVIA_SPEC_DIR=$(CDPATH= cd -- "$root/.." && pwd)/spec
-    AEVIA_BASE_URL=http://127.0.0.1:8080
-    export DATABASE_URL AEVIA_SESSION_SECRET AEVIA_STORAGE_DIR AEVIA_SPEC_DIR AEVIA_BASE_URL
+    AEVIA_BIND=${AEVIA_BIND:-127.0.0.1:8080}
+    AEVIA_BASE_URL=${AEVIA_BASE_URL:-http://127.0.0.1:8080}
+    export DATABASE_URL AEVIA_SESSION_SECRET AEVIA_STORAGE_DIR AEVIA_SPEC_DIR AEVIA_BIND AEVIA_BASE_URL
+}
+
+print_export() {
+    printf "export %s='" "$1"
+    printf '%s\n' "$2" | sed "s/'/'\\\\''/g; \$s/\$/'/"
 }
 
 print_exports() {
     echo "dev.sh: exports for this database:"
-    printf "export DATABASE_URL='%s'\n" "$DATABASE_URL"
-    printf "export AEVIA_SESSION_SECRET='%s'\n" "$AEVIA_SESSION_SECRET"
-    printf "export AEVIA_STORAGE_DIR='%s'\n" "$AEVIA_STORAGE_DIR"
-    printf "export AEVIA_SPEC_DIR='%s'\n" "$AEVIA_SPEC_DIR"
-    printf "export AEVIA_BASE_URL='%s'\n" "$AEVIA_BASE_URL"
+    print_export DATABASE_URL "$DATABASE_URL"
+    print_export AEVIA_SESSION_SECRET "$AEVIA_SESSION_SECRET"
+    print_export AEVIA_STORAGE_DIR "$AEVIA_STORAGE_DIR"
+    print_export AEVIA_SPEC_DIR "$AEVIA_SPEC_DIR"
+    print_export AEVIA_BIND "$AEVIA_BIND"
+    print_export AEVIA_BASE_URL "$AEVIA_BASE_URL"
 }
 
 up() {
@@ -124,7 +131,7 @@ reset_schema() {
         exit 1
     fi
     run_cmd "$engine" exec "$container" \
-        psql --username aevia --dbname aevia --set ON_ERROR_STOP=1 \
+        psql --username aevia --dbname aevia --set ON_ERROR_STOP=1 --single-transaction \
         --command 'DROP SCHEMA IF EXISTS public CASCADE' \
         --command 'CREATE SCHEMA public'
     echo "dev.sh: schema dropped; the server applies the migrations on start"

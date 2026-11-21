@@ -2,18 +2,16 @@
 #
 # aevia-registry — the aevia.apich.org service binary.
 #
-# Build context is the platform repository root (this file lives in infra/):
+# Build from the checkout's platform/ directory:
 #
 #   podman build -f infra/Containerfile.server \
 #       --build-context lang=../crates \
 #       -t localhost/aevia/registry:0.1.0 .
 #
-# The extra `lang` context is mandatory, not a convenience. The workspace's
-# crates depend on `../crates/aevia-doc`, `../crates/aevia-syntax`, and
-# `../crates/aevia-resolve`, i.e. on the language repository that is checked out
-# *next to* this one. Paths outside the main context cannot be COPYed, so the
-# language crates/ tree is supplied as a second, read-only context. compose.yaml
-# (additional_contexts) and deploy.sh pass it for you.
+# The platform workspace depends on the parent workspace's documentation,
+# syntax, formatting, dimension and resolution crates. The `lang` build
+# context exposes that crates/ directory. compose.yaml and deploy.sh supply
+# it from the same checkout.
 #
 # Multi-arch: the image is built for the host's own architecture. On the aarch64
 # host that is a native build; on x86_64 use `--platform linux/arm64` with qemu

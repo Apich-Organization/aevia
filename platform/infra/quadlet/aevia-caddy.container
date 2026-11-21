@@ -11,7 +11,7 @@ Image=docker.io/library/caddy:2
 # and ACME issues; picking them up unattended is worth more than the churn.
 AutoUpdate=registry
 Network=aevia.network
-EnvironmentFile=-%h/.config/aevia/caddy.env
+Environment=AEVIA_DOMAIN AEVIA_ACME_EMAIL
 
 PublishPort=80:80
 PublishPort=443:443
@@ -27,6 +27,8 @@ Volume=%h/.local/share/aevia/caddy/config:/config:Z
 LogDriver=journald
 
 [Service]
+# systemd supports an optional file; pass the declared values to Podman above.
+EnvironmentFile=-%h/.config/aevia/caddy.env
 Restart=always
 
 [Install]

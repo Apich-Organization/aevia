@@ -32,6 +32,10 @@ curl -fsSI https://aevia.apich.org/book
 
 `/healthz` reports whether PostgreSQL can answer. The registry reports HTTP 503 while the database is unavailable. `./deploy.sh logs db` and `./deploy.sh logs registry` show the underlying errors.
 
+Registry instances sharing a database serialize startup migrations with a PostgreSQL advisory lock. The registry checks the recorded SQLx migration checksums before accepting requests. If startup reports `cannot apply the schema`, check the registry log for the failing migration and correct the database condition before retrying. A checksum mismatch requires matching the binary to the installed migration history or restoring a compatible backup.
+
+Schedule a maintenance window for a schema-changing upgrade. Migration `0003_pg18_features` holds an `ACCESS EXCLUSIVE` lock on `versions` until its transaction ends. This blocks reads and writes to that table. Pause registry traffic when applying this migration to an existing database.
+
 ## Configure sign-in
 
 Enable GitHub, ORCID or both. Readers can browse without an identity provider. Publishers need an account and a bound signing key.
@@ -119,9 +123,9 @@ A fenced `aevia,run` example in a book chapter becomes editable when a worker is
 
 ## Back up, restore, and upgrade
 
-Use `./deploy.sh stop registry` for a backup with a stable catalogue and archive tree. Run `./deploy.sh backup` with PostgreSQL running. Copy the two timestamp-matched files from `backups/` off the host. The database alone cannot reconstruct published archives.
+Run `./deploy.sh stop registry` before taking a backup so the catalogue and archive tree stay stable. Keep PostgreSQL running, then run `./deploy.sh backup`. It creates the compressed SQL dump and archive snapshot concurrently and publishes them after both succeed. Copy both timestamp-matched files from `backups/` off the host to retain the catalogue and the published archives.
 
-Restore into a matching deployment with the registry stopped and PostgreSQL running. Restore the matching SQL and archive pair, then start the registry. The SQL restore replaces catalogue objects in one transaction. Keep a copy of the current data before restoring. `./deploy.sh restore` requires confirmation, or `AEVIA_RESTORE_YES=1` for an unattended restore.
+Restore into a matching deployment with the registry stopped and PostgreSQL running. Restore the matching SQL and archive pair, then start the registry. The script decompresses the entire SQL dump to a private temporary file before replacing catalogue objects in one transaction. Set `TMPDIR` to a filesystem with space for the uncompressed dump if needed. Keep a copy of the current data before restoring. `./deploy.sh restore` requires confirmation, or `AEVIA_RESTORE_YES=1` for an unattended restore.
 
 ```sh
 ./deploy.sh stop registry

@@ -29,6 +29,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import zipfile
 
 options = sys.argv[1:]
 mode = os.environ["FIXTURE_MODE"]
@@ -63,8 +64,20 @@ elif options[:2] == ["release", "download"]:
     )
     tag_prefix = "aevia-" + tag.removeprefix("v") + "-"
     assert archive.startswith(tag_prefix), archive
-    shutil.copyfile(fixtures / archive, Path(dest) / archive)
-    digest = hashlib.sha256((fixtures / archive).read_bytes()).hexdigest()
+    source = fixtures / archive
+    download = Path(dest) / archive
+    if mode in {"missing_bundle", "missing_executable", "empty_executable"}:
+        with zipfile.ZipFile(source) as original, zipfile.ZipFile(download, "w") as changed:
+            for entry in original.infolist():
+                relative = Path(entry.filename)
+                if mode == "missing_executable" and relative.name == "aevia-pkg.exe":
+                    continue
+                name = f"other-bundle/{relative.name}" if mode == "missing_bundle" else entry.filename
+                content = b"" if mode == "empty_executable" and relative.name == "aevia-lsp.exe" else original.read(entry)
+                changed.writestr(name, content)
+    else:
+        shutil.copyfile(source, download)
+    digest = hashlib.sha256(download.read_bytes()).hexdigest()
     if mode == "bad_hash":
         digest = "1" * 64
     checksum_name = "some-other-name" if mode == "wrong_name" else archive
@@ -192,7 +205,8 @@ def prepare(root):
 
 
 def run_case(root, env, target, name, selector=(), *, tag=None, channel=None,
-             message=None, mode="valid", configure_shell=False, no_activate=False):
+             message=None, mode="valid", configure_shell=False, no_activate=False,
+             installer_home=None, verify_asset=False):
     scratch = root / name
     scratch.mkdir()
     prefix = scratch / "Aevia with spaces and an 'apostrophe"
@@ -203,7 +217,7 @@ def run_case(root, env, target, name, selector=(), *, tag=None, channel=None,
     args = list(selector)
     if WINDOWS:
         command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                   "-File", str(ROOT / "install.ps1"), "-HomeDirectory", str(prefix)]
+                   "-File", str(ROOT / "install.ps1"), "-HomeDirectory", installer_home or str(prefix)]
         args = [value.replace("--channel", "-Channel").replace("--version", "-Version") for value in args]
         if not configure_shell:
             args.append("-NoPath")
@@ -254,7 +268,9 @@ def run_case(root, env, target, name, selector=(), *, tag=None, channel=None,
 
     calls = [json.loads(line) for line in ghrc.read_text().splitlines()] if ghrc.exists() else []
     actual_checks = [args for args in calls if args[:2] == ["release", "verify-asset"] and args[-1] == REPO]
-    assert len(actual_checks) == int(tag is not None or mode == "bad_attestation"), calls
+    assert len(actual_checks) == int(tag is not None or mode == "bad_attestation" or verify_asset), calls
+    if installer_home is not None:
+        assert not calls, calls
     if channel == "exact":
         assert all(args[0] != "api" for args in calls), calls
     print(f"{name}: passed", flush=True)
@@ -309,10 +325,19 @@ def main():
         run_case(root, env, target, "invalid-semver", ("--version", "2.0.0-01"), message="invalid release version")
         run_case(root, env, target, "invalid-date", ("--version", "nightly-2026-00-14"),
                  message="invalid release version")
+        run_case(root, env, target, "multiline-version", ("--version", "1.2.3\n../etc"),
+                 message="invalid release version")
+        if WINDOWS:
+            run_case(root, env, target, "wrong-provider", installer_home="Env:AEVIA_FIXTURE_INSTALL",
+                     message="installation path must resolve to the filesystem")
+            run_case(root, env, target, "missing-bundle", mode="missing_bundle",
+                     message="invalid archive directory", verify_asset=True)
+            run_case(root, env, target, "missing-executable", mode="missing_executable",
+                     message="invalid executable: aevia-pkg.exe", verify_asset=True)
+            run_case(root, env, target, "empty-executable", mode="empty_executable",
+                     message="invalid executable: aevia-lsp.exe", verify_asset=True)
         if not WINDOWS:
             run_case(root, env, target, "shell-setup", tag=LATEST, channel="stable", configure_shell=True)
-            run_case(root, env, target, "multiline-version", ("--version", "1.2.3\n../etc"),
-                     message="invalid release version")
         if options.aevia:
             verify_real_cli(root, env, target, options.aevia.resolve())
 

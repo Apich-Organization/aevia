@@ -140,7 +140,14 @@ if (-not $HomeDirectory) {
     if (-not $HomeDirectory) { $HomeDirectory = $env:AEVIA_INSTALL_DIR }
     if (-not $HomeDirectory) { $HomeDirectory = Join-Path $env:LOCALAPPDATA 'aevia' }
 }
-$prefix = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($HomeDirectory)
+$provider = $null
+$drive = $null
+$prefix = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+    $HomeDirectory, [ref]$provider, [ref]$drive
+)
+if ($provider.Name -ne 'FileSystem') {
+    throw 'The installation path must resolve to the filesystem.'
+}
 if (-not $NoPath -and -not $NoActivate -and $prefix -match '[;\r\n]') {
     throw 'Use -NoPath with a semicolon or newline in the installation path.'
 }
@@ -191,13 +198,13 @@ try {
 
     $unpacked = Join-Path $tmpDir 'unpacked'
     Expand-Archive -LiteralPath $path -DestinationPath $unpacked
-    $source = Get-Item -LiteralPath (Join-Path $unpacked $bundle) -Force
-    if (-not $source.PSIsContainer -or ($source.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    $source = Get-Item -LiteralPath (Join-Path $unpacked $bundle) -Force -ErrorAction SilentlyContinue
+    if ($null -eq $source -or -not $source.PSIsContainer -or ($source.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
         throw "Invalid archive directory: $bundle."
     }
     foreach ($executable in 'aevia.exe', 'aevia-lsp.exe', 'aevia-pkg.exe') {
-        $file = Get-Item -LiteralPath (Join-Path $source.FullName $executable) -Force
-        if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $file.Length -eq 0) {
+        $file = Get-Item -LiteralPath (Join-Path $source.FullName $executable) -Force -ErrorAction SilentlyContinue
+        if ($null -eq $file -or $file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $file.Length -eq 0) {
             throw "Invalid executable: $executable."
         }
     }

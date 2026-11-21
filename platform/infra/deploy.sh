@@ -145,44 +145,71 @@ cmd_ps() {
 	run compose ps
 }
 
+require_registry_stopped() {
+	running=$(compose ps --quiet --status running registry)
+	[ -z "$running" ] || die "stop the registry with 'stop registry' before $1"
+}
+
+cleanup_backup() {
+	if [ -n "$archive_job" ]; then
+		wait "$archive_job" || :
+	fi
+	if [ "$published" -eq 0 ]; then
+		# Only undo links to our own staged files. A different backup may have
+		# published the same timestamp while our copies were being prepared.
+		[ ! "$sql" -ef "$saved_sql" ] || rm -f -- "$saved_sql"
+		[ ! "$tarball" -ef "$saved_tarball" ] || rm -f -- "$saved_tarball"
+	fi
+	rm -rf -- "$staging"
+}
+
 cmd_backup() {
 	require_env
 	detect_compose
+	require_registry_stopped "taking a backup"
+	vol=$(archive_volume)
 
 	umask 077
 	mkdir -p "$BACKUP_DIR"
 	stamp=$(date -u +%Y%m%dT%H%M%SZ)
 	staging=$(mktemp -d "$BACKUP_DIR/.backup-$stamp.XXXXXX")
-	trap 'rm -rf -- "$staging"' EXIT
-	trap 'exit 1' INT HUP TERM
-	sql="$staging/aevia-db-$stamp.sql"
+	sql="$staging/aevia-db-$stamp.sql.gz"
 	tarball="$staging/aevia-data-$stamp.tar.gz"
-
-	# Dump to a file first, not into a pipe: POSIX sh has no pipefail, so a
-	# failing pg_dump inside `pg_dump | gzip` would still leave a valid, empty
-	# .sql.gz behind. The -s check below catches that.
-	printf '+ pg_dump (db) > %s\n' "$sql" >&2
-	compose exec -T db sh -c \
-		'pg_dump --no-owner --clean --if-exists -U "$POSTGRES_USER" -d "$POSTGRES_DB"' >"$sql"
-
-	if [ ! -s "$sql" ]; then
-		rm -f "$sql"
-		die "pg_dump produced no output; is the db container running?"
-	fi
-	run gzip -9 "$sql"
-
-	vol=$(archive_volume)
+	saved_sql="$BACKUP_DIR/${sql##*/}"
+	saved_tarball="$BACKUP_DIR/${tarball##*/}"
+	archive_job=''
+	published=0
+	trap cleanup_backup EXIT
+	trap 'exit 1' INT HUP TERM
 
 	# A throwaway container is the only way to read a volume that no host path
 	# points at. --user 0:0 because the archives are owned by uid 10001.
 	printf '+ tar volume %s > %s\n' "$vol" "$tarball" >&2
 	podman run --rm --network=none --user 0:0 --volume "$vol:/data:ro" \
 		--entrypoint /usr/bin/tar "$IMAGE_REGISTRY" \
-		--exclude='*.partial' -czf - -C /data . >"$tarball"
+		--exclude='*.partial' -czf - -C /data . >"$tarball" &
+	archive_job=$!
 
-	mv -- "$sql.gz" "$tarball" "$BACKUP_DIR/"
+	# PostgreSQL can compress plain SQL itself. Both commands move bytes into
+	# compressed files directly, with no intermediate SQL file or pipeline.
+	printf '+ pg_dump (db) > %s\n' "$sql" >&2
+	compose exec -T db sh -c \
+		'pg_dump --format=plain --compress=gzip:9 --no-owner --clean --if-exists -U "$POSTGRES_USER" -d "$POSTGRES_DB"' >"$sql" ||
+		die "pg_dump failed; no backup was published"
 
-	printf 'backup written:\n  %s\n  %s\n' "$BACKUP_DIR/${sql##*/}.gz" "$BACKUP_DIR/${tarball##*/}" >&2
+	archive_status=0
+	wait "$archive_job" || archive_status=$?
+	archive_job=''
+	[ "$archive_status" -eq 0 ] || die "archive snapshot failed; no backup was published"
+	[ -s "$sql" ] || die "pg_dump produced no output; is the db container running?"
+	[ -s "$tarball" ] || die "archive snapshot produced no output"
+
+	# The staging directory is on the same volume as the destination. Links
+	# give each name an atomic create and preserve any existing backup pair.
+	ln -T -- "$sql" "$saved_sql" || die "could not publish $saved_sql"
+	ln -T -- "$tarball" "$saved_tarball" || die "could not publish $saved_tarball"
+	published=1
+	printf 'backup written:\n  %s\n  %s\n' "$saved_sql" "$saved_tarball" >&2
 }
 
 cmd_restore() {
@@ -192,8 +219,7 @@ cmd_restore() {
 	[ "$#" -eq 1 ] || die "usage: deploy.sh restore <backup.sql.gz|backup.tar.gz>"
 	file=$1
 	[ -f "$file" ] || die "$file does not exist"
-	running=$(compose ps --quiet --status running registry)
-	[ -z "$running" ] || die "stop the registry with 'stop registry' before restoring"
+	require_registry_stopped restoring
 
 	if [ "${AEVIA_RESTORE_YES:-}" != "1" ]; then
 		printf 'This overwrites the live database and/or archives. Type "yes" to continue: ' >&2
@@ -203,10 +229,17 @@ cmd_restore() {
 
 	case $file in
 		*.sql.gz)
-			gzip -t -- "$file"
-			printf '+ psql < %s\n' "$file" >&2
-			gunzip -c "$file" | compose exec -T db sh -c \
-				'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" --single-transaction --file=-'
+			umask 077
+			sql=$(mktemp "${TMPDIR:-/tmp}/aevia-restore.XXXXXX")
+			trap 'rm -f -- "$sql"' EXIT
+			trap 'exit 1' HUP INT TERM
+			# psql must see a complete input before it can commit the restore.
+			# An upstream gzip failure in a pipe would look like ordinary EOF.
+			gzip -dc -- "$file" >"$sql" || die "could not decompress the SQL backup"
+			[ -s "$sql" ] || die "the SQL backup is empty"
+			printf '+ restore verified SQL from %s\n' "$file" >&2
+			compose exec -T db sh -c \
+				'psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" --single-transaction --file=-' <"$sql"
 			;;
 		*.tar.gz)
 			vol=$(archive_volume)

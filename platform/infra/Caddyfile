@@ -1,11 +1,8 @@
 # Aevia registry — edge proxy.
 #
-# Caddy terminates TLS here for two reasons. First, automatic ACME: no
-# certificate file to renew, no cron job to forget, and HTTP/3 for free. Second,
-# blast radius: the registry binds a plaintext listener on loopback inside the
-# compose network, so exactly one process holds the keys and exactly one process
-# needs ports 80/443. If TLS is ever misconfigured, the service itself is still
-# healthy and reachable for debugging.
+# Caddy manages certificates and terminates public TLS on ports 80 and 443.
+# The registry listens on the container network. Its host port is published
+# on loopback for local health checks.
 {
 	# The admin API is unused at run time and would expose an unauthenticated
 	# configuration endpoint on the container network.
@@ -20,15 +17,12 @@
 	# No `tls` directive: with a public DNS name Caddy provisions and renews a
 	# Let's Encrypt certificate on first start and redirects :80 to :443.
 
-	# zstd first: current browsers all prefer it and it beats gzip noticeably on
-	# the HTML and JSON this site serves. gzip stays for older clients.
+	# Offer zstd and gzip to clients according to their accepted encodings.
 	encode zstd gzip
 
 	header {
-		# The site is HTTPS-only by construction (Caddy owns :80 and redirects),
-		# so the year-long max-age cannot lock anyone out of a plaintext origin.
-		# includeSubDomains is safe: no other apich.org host is served over HTTP.
-		# No `preload`: that is a one-way commitment to a browser-vendor list.
+		# Caddy redirects HTTP to HTTPS. This header covers the configured
+		# host and its subdomains.
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		# The registry supplies its browser policies for all deployment modes.
 		-Server

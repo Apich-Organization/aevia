@@ -32,6 +32,10 @@ curl -fsSI https://aevia.apich.org/book
 
 `/healthz` 检查 PostgreSQL 是否响应。数据库不可用时返回 HTTP 503。可用 `./deploy.sh logs db` 和 `./deploy.sh logs registry` 排查原因。
 
+共享数据库的注册中心实例通过 PostgreSQL advisory lock 依次执行启动迁移。开放服务前，注册中心会校验 SQLx 记录的迁移校验和。如果启动时报告 `cannot apply the schema`，请在注册中心日志中定位失败的迁移，修复数据库问题后再重试。若校验和不一致，请使用与现有迁移历史匹配的二进制，或恢复与部署版本兼容的备份。
+
+涉及数据库结构变更的升级应安排维护窗口。迁移 `0003_pg18_features` 会在事务结束前一直持有 `versions` 表的 `ACCESS EXCLUSIVE` 锁，阻塞对该表的读写。对现有数据库应用此迁移时，请先暂停注册中心流量。
+
 ## 配置登录
 
 可以只启用 GitHub 或 ORCID，也可以同时启用。浏览无需登录。发布者需要账户和已绑定的签名密钥。
@@ -119,9 +123,9 @@ journalctl --user -u aevia-playground.service -f
 
 ## 备份、恢复与升级
 
-先运行 `./deploy.sh stop registry`，使备份期间目录数据和归档稳定。保持 PostgreSQL 运行，再调用 `./deploy.sh backup`。将 `backups/` 中时间戳相同的两个文件复制到其他主机。恢复已发布包时，SQL 和归档缺一不可。
+先运行 `./deploy.sh stop registry`，使备份期间目录数据和归档稳定。保持 PostgreSQL 运行，再调用 `./deploy.sh backup`。脚本并行生成压缩 SQL 转储和归档快照，待两项均成功后保存文件。将 `backups/` 中时间戳相同的两个文件复制到其他主机，保留目录数据和已发布归档。
 
-恢复时使用匹配的部署环境，保持注册中心停止、PostgreSQL 运行，恢复成对的 SQL 和归档后再启动应用。SQL 恢复在一个事务中替换目录数据。恢复之前请保留现有数据的备份。`./deploy.sh restore` 会提示确认，自动恢复可以设置 `AEVIA_RESTORE_YES=1`。
+恢复时使用匹配的部署环境，保持注册中心停止、PostgreSQL 运行，恢复成对的 SQL 和归档后再启动应用。脚本先将整个 SQL 转储解压到私有临时文件，再在一个事务中替换目录数据。如需更换临时目录，可将 `TMPDIR` 设为能够容纳未压缩转储的文件系统。恢复之前请保留现有数据的备份。`./deploy.sh restore` 会提示确认，自动恢复可以设置 `AEVIA_RESTORE_YES=1`。
 
 ```sh
 ./deploy.sh stop registry

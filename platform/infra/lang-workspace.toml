@@ -1,18 +1,17 @@
-# Mirror of the language workspace root (`../Cargo.toml` in the language
-# repository), reduced to the five crates pulled from the language repo:
+# Subset of the repository root Cargo.toml for the five language crates used
+# by the platform:
 # aevia-doc -> aevia-syntax, aevia-fmt; aevia-fmt -> aevia-syntax, aevia-dim;
 # aevia-syntax -> aevia-dim; and aevia-resolve (version/dependency resolution).
 #
 # It exists because those crates inherit `version`/`edition`/`rust-version`/
 # `license`/`repository` and their external dependencies via `.workspace = true`,
 # and cargo refuses to load a crate whose workspace root it cannot find. The
-# real root sits above `crates/`, outside both build contexts, so the Containerfile
-# copies this file to /build/Cargo.toml instead.
+# real root sits above `crates/`, outside both build contexts, so
+# Containerfile.server copies this manifest to /build/Cargo.toml.
 #
-# Keep the two tables below in step with the language repository. If it adds a
-# `.workspace = true` dependency to one of these four crates, add the key here
-# too — cargo fails with "dependency `<name>` was not found in `workspace.dependencies`"
-# until you do.
+# Keep the inherited package fields, dependency declarations and lint settings
+# aligned with the repository root. Run sh platform/infra/check-lang-workspace.sh
+# from the repository root after changing those settings or the member list.
 
 [workspace]
 resolver = "3"
