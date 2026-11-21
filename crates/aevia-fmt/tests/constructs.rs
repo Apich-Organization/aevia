@@ -216,6 +216,77 @@ fn a_comment_inside_an_expression_is_moved_but_kept() {
 }
 
 #[test]
+fn interpolation_comments_survive_with_their_literals_unchanged() {
+    let literal = r#""{1 #- 保留注释 -# +2}""#;
+    let source = format!("let  total={literal} # outside\n");
+    let actual = round_trip(&source);
+    assert!(
+        actual.contains(&format!("let total = {literal}\n")),
+        "{actual}"
+    );
+    assert!(actual.contains("# outside"), "{actual}");
+
+    let multiline =
+        "\"\"\"\r\n    你好 {1 # comment in interpolation\r\n         +2}\r\n    \"\"\"";
+    let source = format!("let  greeting={multiline}\r\n");
+    assert_eq!(
+        round_trip(&source),
+        format!("let greeting = {multiline}\r\n")
+    );
+
+    let source = r##"@doc(title="{1 #- explanation -# +2}")
+let  record=1
+"##;
+    assert!(round_trip(source).contains(r#"@doc(title = "{1 #- explanation -# +2}")"#));
+}
+
+#[test]
+fn quoted_hashes_inside_interpolation_do_not_disable_formatting() {
+    let source = r##"let  nested = "{  r"#文字"  }"
+"##;
+    let expected = r##"let nested = "{"#文字"}"
+"##;
+    assert_eq!(round_trip(source), expected);
+}
+
+#[test]
+fn source_sensitive_interpolations_allow_surrounding_formatting() {
+    let nested_braces = r#""{ r"{text}" }""#;
+    let multiline_decimal = "\"\"\"\n    value {1.25}\n    \"\"\"";
+    for literal in [nested_braces, multiline_decimal] {
+        assert_eq!(
+            round_trip(&format!("let  result={literal}\n")),
+            format!("let result = {literal}\n")
+        );
+    }
+}
+
+#[test]
+fn empty_and_unattached_documentation_lines_survive() {
+    let source = "##\r## introduction\r##\rlet  answer=42\r## unattached\r# ordinary\r";
+    let expected = "##\r## introduction\r##\rlet answer = 42\r## unattached\r# ordinary\r";
+    assert_eq!(round_trip(source), expected);
+    assert_eq!(
+        round_trip("##\n## notes\n# third\n"),
+        "##\n## notes\n# third\n"
+    );
+}
+
+#[test]
+fn bare_cr_preserves_comments_blank_lines_and_the_shebang() {
+    let source = "#!/usr/bin/env aevia\rmodule Example\rfn f()=\r    let x=1 # trailing\r\r    #- first line\r      continuation -#\r    let y=2\r    x+y\r";
+    let formatted = round_trip(source);
+    assert!(!formatted.contains('\n'), "{formatted:?}");
+    assert!(formatted.starts_with("#!/usr/bin/env aevia\rmodule Example\r"));
+    assert!(formatted.contains("let x = 1\r\r"), "{formatted:?}");
+    assert!(formatted.contains("# trailing\r"), "{formatted:?}");
+    assert!(formatted.contains("#- first line\r      continuation -#"));
+    assert!(formatted.ends_with("    x + y\r"));
+    let err = format_source("let x = 1\rlet y = 2\r`\r").unwrap_err();
+    assert!(err.message.starts_with("line 3:"), "{}", err.message);
+}
+
+#[test]
 fn a_slice_step_round_trips() {
     // A step is written in the `a:b:s` spelling, which is the only one that
     // carries one; the fingerprint includes it, so a printer that dropped it

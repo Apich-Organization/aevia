@@ -11,6 +11,8 @@
 //! a gap here is a reported failure, never a silent rewrite.
 
 use crate::comments::Comment;
+use crate::comments::physical_lines;
+use aevia_syntax::Span;
 use aevia_syntax::ast::BinOp;
 use aevia_syntax::ast::BlockStmt;
 use aevia_syntax::ast::Decl;
@@ -101,6 +103,9 @@ pub struct Printer {
     error: Option<String>,
     /// The original text, so a blank line between statements can be kept.
     source: Option<String>,
+    /// Complete source tokens for strings with source-sensitive interpolations.
+    preserved_strings: Vec<Span>,
+    line_ending: &'static str,
     /// The declaration being printed, for the failure message.
     subject: String,
 }
@@ -117,6 +122,8 @@ impl Printer {
             next_comment: 0,
             error: None,
             source: None,
+            preserved_strings: Vec::new(),
+            line_ending: "\n",
             subject: "the file".to_string(),
         }
     }
@@ -133,6 +140,20 @@ impl Printer {
         self
     }
 
+    #[allow(
+        clippy::single_call_fn,
+        reason = "configures the source-layout details used by the file formatter"
+    )]
+    pub(crate) fn with_source_layout(
+        mut self,
+        line_ending: &'static str,
+        preserved_strings: Vec<Span>,
+    ) -> Self {
+        self.line_ending = line_ending;
+        self.preserved_strings = preserved_strings;
+        self
+    }
+
     /// Whether the source has a blank line between byte offsets `from` and `to`.
     fn blank_between(
         &self,
@@ -145,7 +166,7 @@ impl Printer {
         // The first piece is the rest of the previous statement's line and
         // the last one is the indentation before the next statement; any
         // piece between them that is whitespace only is a blank line.
-        let mut lines = text.split('\n');
+        let mut lines = physical_lines(text);
         lines.next();
         lines.next_back();
         lines.any(|line| line.trim().is_empty())
@@ -244,13 +265,17 @@ impl Printer {
         if text.is_empty() {
             return;
         }
+        self.begin_text();
+        self.out.push_str(text);
+    }
+
+    fn begin_text(&mut self) {
         if self.at_line_start {
             for _ in 0..self.indent {
                 self.out.push_str(UNIT);
             }
             self.at_line_start = false;
         }
-        self.out.push_str(text);
     }
 
     fn newline(&mut self) {
@@ -258,7 +283,7 @@ impl Printer {
         while self.out.ends_with(' ') {
             self.out.pop();
         }
-        self.out.push('\n');
+        self.out.push_str(self.line_ending);
         self.at_line_start = true;
     }
 
@@ -292,8 +317,12 @@ impl Printer {
 
     fn blank(&mut self) {
         self.end_line();
-        if !self.out.is_empty() && !self.out.ends_with("\n\n") {
-            self.out.push('\n');
+        let already_blank = self
+            .out
+            .strip_suffix(self.line_ending)
+            .is_some_and(|text| text.ends_with(self.line_ending));
+        if !self.out.is_empty() && !already_blank {
+            self.out.push_str(self.line_ending);
         }
         self.at_line_start = true;
     }
@@ -317,8 +346,9 @@ impl Printer {
             if comment.start >= offset {
                 break;
             }
-            let indent = UNIT.repeat(self.indent);
-            let text = comment.render(&indent);
+            // The opening marker follows the surrounding layout. Later
+            // lines are the comment's own text and keep their indentation.
+            let text = comment.render_with("", self.line_ending);
             self.push(&text);
             self.end_line();
             self.next_comment = self.next_comment.saturating_add(1);
@@ -338,7 +368,7 @@ impl Printer {
         self.flush_comments(usize::try_from(decl.span.start).unwrap_or(0));
         self.subject = describe(decl);
         if let Some(doc) = &decl.doc {
-            for line in doc.lines() {
+            for line in doc.split('\n') {
                 if line.trim().is_empty() {
                     self.line("##");
                 } else {
@@ -347,27 +377,26 @@ impl Printer {
             }
         }
         for attr in &decl.attrs {
-            let mut text = format!("@{}", attr.name);
+            self.push("@");
+            self.push(&attr.name);
             if !attr.args.is_empty() {
-                text.push('(');
+                self.push("(");
                 for (index, arg) in attr.args.iter().enumerate() {
                     if index > 0 {
-                        text.push_str(", ");
+                        self.push(", ");
                     }
                     if let Some(name) = &arg.name {
-                        let _ = write!(text, "{name} = ");
+                        self.push(name);
+                        self.push(" = ");
                     }
-                    match Self::new(Vec::new()).expression(&arg.value) {
-                        | Ok(rendered) => text.push_str(&rendered),
-                        | Err(error) => {
-                            self.fail(format!("an attribute argument cannot be printed: {error}"));
-                            return;
-                        },
+                    self.expr(&arg.value, Ctx::tail());
+                    if self.error.is_some() {
+                        return;
                     }
                 }
-                text.push(')');
+                self.push(")");
             }
-            self.line(&text);
+            self.end_line();
         }
         if decl.private {
             self.push("private ");
@@ -683,7 +712,7 @@ impl Printer {
             | ExprKind::Bool(value) => self.push(if *value { "true" } else { "false" }),
             | ExprKind::Int(value) => self.push(&value.to_string()),
             | ExprKind::Float(text) => self.push(text),
-            | ExprKind::Str(pieces) => self.string(pieces),
+            | ExprKind::Str(pieces) => self.string(expr.span, pieces),
             | ExprKind::Quantity { value, unit } => {
                 match value {
                     | NumberLit::Int(value) => self.push(&value.to_string()),
@@ -1050,15 +1079,25 @@ impl Printer {
 
     fn string(
         &mut self,
+        span: Span,
         pieces: &[StrPiece],
     ) {
+        if self.preserved_strings.binary_search(&span).is_ok() {
+            self.begin_text();
+            if let (Ok(start), Ok(end), Some(source)) = (
+                usize::try_from(span.start),
+                usize::try_from(span.end),
+                &self.source,
+            ) && let Some(text) = source.get(start..end)
+            {
+                self.out.push_str(text);
+                return;
+            }
+        }
         self.push("\"");
         for piece in pieces {
             match piece {
-                | StrPiece::Text(text) => {
-                    let escaped = escape(text);
-                    self.push(&escaped);
-                },
+                | StrPiece::Text(text) => escape_into(&mut self.out, text),
                 | StrPiece::Expr(inner) => {
                     self.push("{");
                     self.expr(inner, Ctx::bracketed());
@@ -1659,7 +1698,15 @@ fn scale_into(
 /// Escapes a string's contents for a single-line `"…"` literal.
 #[must_use]
 pub fn escape(text: &str) -> String {
-    let mut out = String::new();
+    let mut out = String::with_capacity(text.len());
+    escape_into(&mut out, text);
+    out
+}
+
+fn escape_into(
+    out: &mut String,
+    text: &str,
+) {
     for c in text.chars() {
         match c {
             | '\\' => out.push_str("\\\\"),
@@ -1676,7 +1723,6 @@ pub fn escape(text: &str) -> String {
             | c => out.push(c),
         }
     }
-    out
 }
 
 fn quote(text: &str) -> String {
