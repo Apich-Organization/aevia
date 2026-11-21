@@ -24,6 +24,7 @@ use num_traits::ToPrimitive;
 use num_traits::Zero;
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::LazyLock;
 
 /// An exact scale: `rat * pi^pi_exp`.
 ///
@@ -567,7 +568,7 @@ impl fmt::Display for UnitError {
 impl std::error::Error for UnitError {}
 
 /// The SI prefixes of §5.1.4, longest symbol first so matching is greedy.
-const PREFIXES: &[(&str, i32)] = &[
+const PREFIXES: [(&str, i32); 25] = [
     ("da", 1),
     ("Q", 30),
     ("R", 27),
@@ -594,6 +595,16 @@ const PREFIXES: &[(&str, i32)] = &[
     ("r", -27),
     ("q", -30),
 ];
+
+static PREFIX_SCALES: LazyLock<[(&str, Scale); PREFIXES.len()]> = LazyLock::new(|| {
+    let ten = BigRational::from_integer(BigInt::from(10));
+    PREFIXES.map(|(prefix, exponent)| (prefix, Scale::rational(pow_int(&ten, exponent))))
+});
+
+enum UnitMatch<'a> {
+    Exact(&'a UnitDef),
+    Prefixed { base: &'a UnitDef, scale: Scale },
+}
 
 /// The registry of units visible to a compilation.
 #[derive(
@@ -979,39 +990,49 @@ impl UnitTable {
         &self,
         name: &str,
     ) -> Option<UnitDef> {
-        if let Some(index) = self.index.get(name) {
-            return self.defs.get(*index).cloned();
+        match self.match_unit(name)? {
+            | UnitMatch::Exact(unit) => Some(unit.clone()),
+            | UnitMatch::Prefixed { base, scale } => {
+                Some(UnitDef {
+                    name: name.to_string(),
+                    aliases: Vec::new(),
+                    dim: base.dim.clone(),
+                    scale,
+                    offset: None,
+                    prefixable: false,
+                    affine: false,
+                    display: name.to_string(),
+                    category: base.category.clone(),
+                })
+            },
         }
-        for (prefix, exponent) in PREFIXES {
+    }
+
+    fn match_unit(
+        &self,
+        name: &str,
+    ) -> Option<UnitMatch<'_>> {
+        if let Some(index) = self.index.get(name) {
+            return self.defs.get(*index).map(UnitMatch::Exact);
+        }
+        for (prefix, factor) in PREFIX_SCALES.iter() {
             let Some(rest) = name.strip_prefix(*prefix) else {
                 continue;
             };
             if rest.is_empty() {
                 continue;
             }
+            // The remainder must be a registered name or alias, which
+            // prevents stacked prefixes such as `kkm`.
             let Some(base) = self.index.get(rest).and_then(|&index| self.defs.get(index)) else {
                 continue;
             };
             if !base.prefixable {
                 continue;
             }
-            // Stacked prefixes are impossible here: `rest` must be an exact
-            // unit name, and a prefixed spelling such as `km` is not in the
-            // index, so `kkm` fails the lookup above.
-            let factor = Scale::rational(pow_int(
-                &BigRational::from_integer(BigInt::from(10)),
-                *exponent,
-            ));
-            return Some(UnitDef {
-                name: name.to_string(),
-                aliases: Vec::new(),
-                dim: base.dim.clone(),
-                scale: base.scale.checked_mul(&factor)?,
-                offset: None,
-                prefixable: false,
-                affine: false,
-                display: name.to_string(),
-                category: base.category.clone(),
+            return Some(UnitMatch::Prefixed {
+                base,
+                scale: base.scale.checked_mul(factor)?,
             });
         }
         None
@@ -1023,7 +1044,7 @@ impl UnitTable {
         &self,
         name: &str,
     ) -> bool {
-        self.lookup_si(name).is_some()
+        self.match_unit(name).is_some()
     }
 
     /// Resolves a single name to a resolved unit, keeping affine information.
@@ -1052,14 +1073,27 @@ impl UnitTable {
             | _ => name,
         };
         let unit = self
-            .lookup_si(local)
+            .match_unit(local)
             .ok_or_else(|| UnitError::Unknown(name.to_string()))?;
-        Ok(ResolvedUnit {
-            name: unit.display.clone(),
-            dim: unit.dim,
-            scale: unit.scale,
-            offset: unit.offset,
-            affine: unit.affine,
+        Ok(match unit {
+            | UnitMatch::Exact(unit) => {
+                ResolvedUnit {
+                    name: unit.display.clone(),
+                    dim: unit.dim.clone(),
+                    scale: unit.scale.clone(),
+                    offset: unit.offset.clone(),
+                    affine: unit.affine,
+                }
+            },
+            | UnitMatch::Prefixed { base, scale } => {
+                ResolvedUnit {
+                    name: local.to_string(),
+                    dim: base.dim.clone(),
+                    scale,
+                    offset: None,
+                    affine: false,
+                }
+            },
         })
     }
 
@@ -1174,6 +1208,35 @@ mod tests {
         assert_eq!(table.lookup("MHz").unwrap().scale.to_f64(), 1e6);
         assert!(table.lookup("kkm").is_none());
         assert!(table.lookup("nope").is_none());
+    }
+
+    #[test]
+    fn names_and_prefixed_aliases_share_exact_registry_resolution() {
+        let mut table = UnitTable::empty();
+        let length = Dim::base("Length");
+        let unit = UnitDef::linear("span", length.clone(), Scale::rational(ratio(3, 7)))
+            .prefixable()
+            .with_alias("alias")
+            .category("distance");
+        table.insert(unit).unwrap();
+
+        let alias = table.resolve_name("Units.SI.alias").unwrap();
+        assert_eq!(alias.name, "span");
+        assert_eq!(alias.scale, Scale::rational(ratio(3, 7)));
+        assert_eq!(alias.dim, length);
+
+        for prefix in ["µ", "μ"] {
+            let name = format!("{prefix}alias");
+            let def = table.lookup_si(&name).unwrap();
+            let resolved = table.resolve_name(&format!("Units.SI.{name}")).unwrap();
+            assert!(table.contains(&name));
+            assert_eq!(def.category, "distance");
+            assert_eq!(resolved.name, name);
+            assert_eq!(resolved.dim, def.dim);
+            assert_eq!(resolved.scale, def.scale);
+            assert_eq!(resolved.scale, Scale::rational(ratio(3, 7_000_000)));
+        }
+        assert!(!table.contains("kµalias"));
     }
 
     #[test]

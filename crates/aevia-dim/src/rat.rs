@@ -10,6 +10,7 @@ use num_traits::One;
 use num_traits::Signed;
 use num_traits::ToPrimitive;
 use num_traits::Zero;
+use std::borrow::Cow;
 use std::str::FromStr;
 
 /// Builds a rational from a numerator/denominator pair.
@@ -36,7 +37,11 @@ pub fn ratio(
     reason = "the mantissa and decimal factor use arbitrary-precision integers"
 )]
 pub fn parse_decimal(text: &str) -> Option<BigRational> {
-    let cleaned: String = text.chars().filter(|c| *c != '_').collect();
+    let cleaned = if text.contains('_') {
+        Cow::Owned(text.replace('_', ""))
+    } else {
+        Cow::Borrowed(text)
+    };
     let cleaned = cleaned.trim();
     if cleaned.is_empty() {
         return None;
@@ -53,23 +58,27 @@ pub fn parse_decimal(text: &str) -> Option<BigRational> {
         | Some((int_part, frac_part)) => (int_part, frac_part),
         | None => (mantissa, ""),
     };
-    if int_part.is_empty() && frac_part.is_empty() {
+    let scale = exponent.checked_sub(i64::try_from(frac_part.len()).ok()?)?;
+    if scale.unsigned_abs() > 10_000 {
         return None;
     }
-    let digits: String = format!("{int_part}{frac_part}");
-    if !digits.chars().all(|c| c.is_ascii_digit()) {
+    let digits = match (int_part, frac_part) {
+        | ("", "") => return None,
+        | (digits, "") | ("", digits) => Cow::Borrowed(digits),
+        | _ => Cow::Owned([int_part, frac_part].concat()),
+    };
+    if !digits.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
     let mut value = BigInt::from_str(&digits).ok()?;
     if negative {
         value = -value;
     }
-    let scale = exponent.checked_sub(i64::try_from(frac_part.len()).ok()?)?;
-    if scale.unsigned_abs() > 10_000 {
-        return None;
+    if scale == 0 || value.is_zero() {
+        return Some(BigRational::from_integer(value));
     }
     let factor = BigInt::from(10).pow(u32::try_from(scale.unsigned_abs()).ok()?);
-    let result = if scale >= 0 {
+    let result = if scale > 0 {
         BigRational::from_integer(value * factor)
     } else {
         BigRational::new(value, factor)
@@ -207,6 +216,23 @@ mod tests {
         assert_eq!(parse_decimal("abc"), None);
         assert_eq!(parse_decimal("1e-9223372036854775808"), None);
         assert_eq!(parse_decimal("1.5e-9223372036854775808"), None);
+    }
+
+    #[test]
+    fn decimal_fast_paths_preserve_literal_boundaries() {
+        for (literal, value) in [
+            ("5.", ratio(5, 1)),
+            ("+.5", ratio(1, 2)),
+            ("_  -2_5.e+_0_  _", ratio(-25, 1)),
+            ("0.5e1", ratio(5, 1)),
+            ("-0.00e10002", ratio(0, 1)),
+            ("-0e-10000", ratio(0, 1)),
+        ] {
+            assert_eq!(parse_decimal(literal), Some(value), "{literal:?}");
+        }
+        for literal in ["_", ".", "1..", "1e", "1.２", "1.0e-10000", "0e10001"] {
+            assert_eq!(parse_decimal(literal), None, "{literal:?}");
+        }
     }
 
     #[test]

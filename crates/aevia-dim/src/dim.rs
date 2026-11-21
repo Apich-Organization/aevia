@@ -366,11 +366,13 @@ impl Dim {
     }
 
     fn from_map(map: BTreeMap<Atom, BigRational>) -> Self {
-        if map.is_empty() {
-            return Self { factors: None };
-        }
+        Self::from_sorted(map.into_iter().collect())
+    }
+
+    /// Builds from canonical factors whose ordering and exponents are known.
+    fn from_sorted(factors: Vec<(Atom, BigRational)>) -> Self {
         Self {
-            factors: Some(map.into_iter().collect::<Vec<_>>().into()),
+            factors: (!factors.is_empty()).then(|| factors.into()),
         }
     }
 
@@ -410,21 +412,50 @@ impl Dim {
     fn combine(
         &self,
         other: &Self,
-        sign: i8,
+        subtract: bool,
     ) -> Self {
-        let mut factors: BTreeMap<Atom, BigRational> = self.slice().iter().cloned().collect();
-        for (atom, exponent) in other.slice() {
-            let entry = factors
-                .entry(atom.clone())
-                .or_insert_with(BigRational::zero);
-            if sign > 0 {
-                *entry += exponent;
+        use std::cmp::Ordering;
+
+        let rhs_power = |exponent: &BigRational| {
+            if subtract {
+                -exponent
             } else {
-                *entry -= exponent;
+                exponent.clone()
+            }
+        };
+        let mut factors =
+            Vec::with_capacity(self.slice().len().saturating_add(other.slice().len()));
+        let mut left = self.slice().iter().peekable();
+        let mut right = other.slice().iter().peekable();
+        while let (Some((left_atom, left_power)), Some((right_atom, right_power))) =
+            (left.peek(), right.peek())
+        {
+            match left_atom.cmp(right_atom) {
+                | Ordering::Less => {
+                    factors.push((left_atom.clone(), left_power.clone()));
+                    left.next();
+                },
+                | Ordering::Greater => {
+                    factors.push((right_atom.clone(), rhs_power(right_power)));
+                    right.next();
+                },
+                | Ordering::Equal => {
+                    let power = if subtract {
+                        left_power - right_power
+                    } else {
+                        left_power + right_power
+                    };
+                    if !power.is_zero() {
+                        factors.push((left_atom.clone(), power));
+                    }
+                    left.next();
+                    right.next();
+                },
             }
         }
-        factors.retain(|_, exponent| !exponent.is_zero());
-        Self::from_map(factors)
+        factors.extend(left.cloned());
+        factors.extend(right.map(|(atom, power)| (atom.clone(), rhs_power(power))));
+        Self::from_sorted(factors)
     }
 
     /// The dimensionless dimension `1`.
@@ -543,7 +574,7 @@ impl Dim {
         if self.is_one() {
             return other.clone();
         }
-        self.memoized(other, DimOp::Mul, || self.combine(other, 1))
+        self.memoized(other, DimOp::Mul, || self.combine(other, false))
     }
 
     /// Divides two dimensions (exponents subtract).
@@ -558,7 +589,7 @@ impl Dim {
         if self == other {
             return Self::one();
         }
-        self.memoized(other, DimOp::Div, || self.combine(other, -1))
+        self.memoized(other, DimOp::Div, || self.combine(other, true))
     }
 
     /// Raises the dimension to a rational power.
@@ -577,11 +608,12 @@ impl Dim {
         if exponent.is_one() {
             return self.clone();
         }
-        let factors = self
-            .slice()
-            .iter()
-            .map(|(atom, value)| (atom.clone(), value * exponent));
-        Self::from_factors(factors)
+        Self::from_sorted(
+            self.slice()
+                .iter()
+                .map(|(atom, value)| (atom.clone(), value * exponent))
+                .collect(),
+        )
     }
 
     /// The inverse dimension.
@@ -642,6 +674,10 @@ impl Dim {
     /// Unmapped variables are left in place; the caller decides whether that
     /// is an error.
     #[must_use]
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "powers use arbitrary-precision rational arithmetic"
+    )]
     pub fn substitute<F>(
         &self,
         mut lookup: F,
@@ -652,24 +688,36 @@ impl Dim {
         if self.is_concrete() {
             return self.clone();
         }
-        let mut result = Self::one();
-        for (atom, exponent) in self.slice() {
-            match atom {
-                | Atom::Base(_) | Atom::Nominal(_) => {
-                    result = result.mul(&Self::from_factors([(atom.clone(), exponent.clone())]));
+        if let [(Atom::Var(id), exponent)] = self.slice() {
+            return lookup(*id).map_or_else(|| self.clone(), |value| value.pow(exponent));
+        }
+        let mut factors = BTreeMap::<Atom, BigRational>::new();
+        let mut add = |atom: &Atom, power| {
+            use std::collections::btree_map::Entry;
+            match factors.entry(atom.clone()) {
+                | Entry::Vacant(entry) => {
+                    entry.insert(power);
                 },
-                | Atom::Var(id) => {
-                    match lookup(*id) {
-                        | Some(replacement) => result = result.mul(&replacement.pow(exponent)),
-                        | None => {
-                            result = result
-                                .mul(&Self::from_factors([(Atom::Var(*id), exponent.clone())]));
-                        },
+                | Entry::Occupied(mut entry) => {
+                    *entry.get_mut() += power;
+                    if entry.get().is_zero() {
+                        entry.remove();
                     }
                 },
             }
+        };
+        for (atom, exponent) in self.slice() {
+            if let Atom::Var(id) = atom
+                && let Some(replacement) = lookup(*id)
+            {
+                for (atom, power) in replacement.slice() {
+                    add(atom, power * exponent);
+                }
+            } else {
+                add(atom, exponent.clone());
+            }
         }
-        result
+        Self::from_map(factors)
     }
 
     /// True when the dimension has no variables (a concrete dimension).
@@ -1381,37 +1429,53 @@ impl DimUnifier {
         &self,
         dim: &Dim,
     ) -> Dim {
-        self.resolve_depth(dim, 0)
-    }
-
-    fn resolve_depth(
-        &self,
-        dim: &Dim,
-        depth: u32,
-    ) -> Dim {
-        if depth > 64 {
-            // A cycle here can only come from a bug in `bind`; returning the
-            // unexpanded form keeps the checker from looping forever.
+        let mut dim = dim;
+        // Whole-expression aliases carry no factors to combine. Follow them
+        // directly, including long chains formed during tensor inference.
+        while let [(Atom::Var(id), power)] = dim.slice()
+            && power.is_one()
+        {
+            let Some(value) = self.subst.get(id) else {
+                return dim.clone();
+            };
+            dim = value;
+        }
+        if self.subst.is_empty() || dim.is_concrete() {
             return dim.clone();
         }
-        dim.substitute(|id| {
-            // Follow a chain of variable-to-variable bindings without
-            // spending depth: a literal with many quantity elements unifies
-            // that many fresh variables in a line.
-            let mut value = self.subst.get(&id)?;
-            for _ in 0..=self.subst.len() {
-                let mut factors = value.factors();
-                let next = match (factors.next(), factors.next()) {
-                    | (Some((Atom::Var(next), exponent)), None) if exponent.is_one() => *next,
-                    | _ => break,
-                };
-                match self.subst.get(&next) {
-                    | Some(further) => value = further,
-                    | None => break,
+
+        // Bind rejects cycles. Resolve reachable bindings in dependency
+        // order, reusing their expansions within this request.
+        let mut resolved = HashMap::<u32, Dim>::new();
+        let mut stack = Vec::new();
+        for (atom, _) in dim.slice() {
+            let Atom::Var(id) = atom else { continue };
+            let Some(value) = self.subst.get(id).filter(|_| !resolved.contains_key(id)) else {
+                continue;
+            };
+            stack.push((*id, value, value.slice().iter()));
+            while let Some((id, value, children)) = stack.last_mut() {
+                let pending = children.find_map(|(atom, _)| {
+                    if let Atom::Var(child) = atom
+                        && !resolved.contains_key(child)
+                    {
+                        return self.subst.get(child).map(|value| (*child, value));
+                    }
+                    None
+                });
+                if let Some((child, value)) = pending {
+                    stack.push((child, value, value.slice().iter()));
+                } else {
+                    let value = value.substitute(|child| resolved.get(&child).cloned());
+                    resolved.insert(*id, value);
+                    stack.pop();
                 }
             }
-            Some(self.resolve_depth(value, depth.saturating_add(1)))
-        })
+        }
+        if resolved.is_empty() {
+            return dim.clone();
+        }
+        dim.substitute(|id| resolved.get(&id).cloned())
     }
 
     /// Binds a variable to a dimension, checking for self-reference.
@@ -1459,7 +1523,9 @@ impl DimUnifier {
         right: &Dim,
     ) -> Result<(), DimMismatch> {
         for _ in 0..256 {
-            let quotient = self.resolve(left).div(&self.resolve(right));
+            let resolved_left = self.resolve(left);
+            let resolved_right = self.resolve(right);
+            let quotient = resolved_left.div(&resolved_right);
             if quotient.is_one() {
                 return Ok(());
             }
@@ -1470,10 +1536,8 @@ impl DimUnifier {
                 }
             });
             let Some((id, exponent)) = variable else {
-                let resolved_left = self.resolve(left);
-                let resolved_right = self.resolve(right);
                 return Err(DimMismatch {
-                    difference: resolved_left.difference(&resolved_right),
+                    difference: quotient,
                     left: resolved_left,
                     right: resolved_right,
                 });
@@ -1482,10 +1546,8 @@ impl DimUnifier {
             // v^r = rest^-1  =>  v = rest^(-1/r)
             let solution = rest.pow(&(-exponent).recip());
             if solution.contains_var(id) {
-                let resolved_left = self.resolve(left);
-                let resolved_right = self.resolve(right);
                 return Err(DimMismatch {
-                    difference: resolved_left.difference(&resolved_right),
+                    difference: quotient,
                     left: resolved_left,
                     right: resolved_right,
                 });
@@ -1578,6 +1640,70 @@ mod tests {
             env.parse("Energy").unwrap(),
             env.parse("M*L^2/T^2").unwrap()
         );
+    }
+
+    #[test]
+    fn canonical_arithmetic_keeps_exact_exponents_and_left_hand_aliases() {
+        let named = Dim::nominal_base("tests:pricing", "Credit");
+        let left = named.with_display_name("CustomerCredit");
+        let right = named.with_display_name("CreditAlias");
+        let seconds = Dim::base("Time");
+        let product = left.pow(&ratio(2, 3)).mul(&right.pow(&ratio(3, 5)));
+        assert_eq!(product, named.pow(&ratio(19, 15)));
+        assert_eq!(product.to_plain_string(), "CustomerCredit^(19/15)");
+        assert_eq!(product.div(&left.pow(&ratio(19, 15))), Dim::one());
+        assert_eq!(seconds.div(&right), right.inverse().mul(&seconds));
+
+        let substituted = left.mul(&Dim::var(0)).mul(&Dim::var(1));
+        let result = substituted.substitute(|id| {
+            match id {
+                | 0 => Some(named.inverse()),
+                | 1 => Some(right.clone()),
+                | _ => None,
+            }
+        });
+        assert_eq!(result, named);
+        assert_eq!(result.to_plain_string(), "CreditAlias");
+    }
+
+    #[test]
+    fn unification_resolves_deep_compound_chains_without_admitting_cycles() {
+        let mut unifier = DimUnifier::new();
+        let length = Dim::base("Length");
+        let time = Dim::base("Time");
+        let depth = 513;
+        for id in 0..depth {
+            unifier.bind(id, length.div(&Dim::var(id + 1))).unwrap();
+        }
+        let first = Dim::var(0);
+        assert_eq!(unifier.resolve(&first), length.div(&Dim::var(depth)));
+        assert!(unifier.bind(depth, first.clone()).is_err());
+        assert_eq!(unifier.len(), depth as usize);
+
+        unifier.bind(depth, time.clone()).unwrap();
+        assert_eq!(unifier.resolve(&first), length.div(&time));
+        assert_eq!(unifier.resolve(&Dim::var(1)), time);
+    }
+
+    #[test]
+    fn shared_bindings_expand_exactly_after_additional_variables_are_bound() {
+        let mut unifier = DimUnifier::new();
+        let root = Dim::var(0);
+        let length = Dim::base("Length");
+        let time = Dim::base("Time");
+        let velocity = length.div(&time);
+        let shared = Dim::var(3);
+        let pending = Dim::var(4);
+        unifier.bind(0, Dim::var(1).mul(&Dim::var(2))).unwrap();
+        unifier.bind(1, shared.pow(&ratio(2, 3))).unwrap();
+        unifier
+            .bind(2, shared.pow(&ratio(1, 3)).mul(&pending))
+            .unwrap();
+        unifier.bind(3, velocity.clone()).unwrap();
+
+        assert_eq!(unifier.resolve(&root), velocity.mul(&pending));
+        unifier.bind(4, time).unwrap();
+        assert_eq!(unifier.resolve(&root), length);
     }
 
     #[test]

@@ -25,6 +25,7 @@
 //! untouched: they are not in the span of the SI bases.
 
 use crate::Dim;
+use crate::SI_BASE_DIMENSIONS;
 use crate::Scale;
 use crate::dim::Atom;
 use num_bigint::BigInt;
@@ -32,17 +33,6 @@ use num_rational::BigRational;
 use num_traits::One;
 use num_traits::ToPrimitive;
 use num_traits::Zero;
-
-/// The SI bases, in the order the decomposition uses.
-const BASES: [&str; 7] = [
-    "Length",
-    "Mass",
-    "Time",
-    "Current",
-    "Temperature",
-    "Amount",
-    "Luminosity",
-];
 
 /// One quantity a system sets to one.
 #[derive(
@@ -137,7 +127,7 @@ impl Reduction {
     }
 }
 
-type Vector = [BigRational; 7];
+type Vector = [BigRational; SI_BASE_DIMENSIONS.len()];
 
 fn zero() -> Vector {
     std::array::from_fn(|_| BigRational::zero())
@@ -149,7 +139,7 @@ fn split(dim: &Dim) -> (Vector, Vec<(Atom, BigRational)>) {
     let mut rest = Vec::new();
     for (atom, exponent) in dim.factors() {
         if let Atom::Base(name) = atom
-            && let Some((_, slot)) = BASES
+            && let Some((_, slot)) = SI_BASE_DIMENSIONS
                 .iter()
                 .zip(&mut si)
                 .find(|(base, _)| **base == &**name)
