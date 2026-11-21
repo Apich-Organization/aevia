@@ -19,6 +19,9 @@
 //! public half.
 
 use std::path::Path;
+use std::time::Duration;
+
+use tokio::time::Instant;
 
 use crate::App;
 use crate::config::Config;
@@ -26,7 +29,7 @@ use crate::error::CliError;
 use crate::keys;
 
 /// How long to poll when the server does not say when the code dies.
-const FALLBACK_LIFETIME_SECONDS: i64 = 900;
+const FALLBACK_LIFETIME_SECONDS: u64 = 900;
 
 /// `aevia-pkg login`: bind a key to an account.
 ///
@@ -87,25 +90,43 @@ pub async fn login(
         eprintln!("aevia-pkg: waiting for approval…");
     }
 
-    let deadline = chrono::DateTime::parse_from_rfc3339(&start.expires_at).map_or_else(
-        |_| {
-            let now = chrono::Utc::now();
-            now.checked_add_signed(chrono::Duration::seconds(FALLBACK_LIFETIME_SECONDS))
-                .unwrap_or(now)
+    // Convert the reported wall-clock expiry once, then use the same
+    // monotonic deadline for both the wait interval and the network request.
+    let remaining = chrono::DateTime::parse_from_rfc3339(&start.expires_at).map_or(
+        Duration::from_secs(FALLBACK_LIFETIME_SECONDS),
+        |expires| {
+            expires
+                .signed_duration_since(chrono::Utc::now())
+                .to_std()
+                .unwrap_or_default()
         },
-        |expires| expires.with_timezone(&chrono::Utc),
     );
+    let now = Instant::now();
+    let deadline = now.checked_add(remaining).unwrap_or(now);
+    let interval = start.interval();
+    let expired = || {
+        CliError::new(format!(
+            "the device code expired before it was approved at {}",
+            start.verification_uri
+        ))
+        .with_next_step("run `aevia-pkg login` again for a fresh code")
+    };
 
     let publisher = loop {
-        if chrono::Utc::now() >= deadline {
-            return Err(CliError::new(format!(
-                "the device code expired before it was approved at {}",
-                start.verification_uri
-            ))
-            .with_next_step("run `aevia-pkg login` again for a fresh code"));
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(expired());
         }
-        tokio::time::sleep(start.interval()).await;
-        let poll = app.client.device_poll(&start.device_code).await?;
+        let wake = now
+            .checked_add(interval)
+            .map_or(deadline, |next| next.min(deadline));
+        tokio::time::sleep_until(wake).await;
+        if Instant::now() >= deadline {
+            return Err(expired());
+        }
+        let poll = tokio::time::timeout_at(deadline, app.client.device_poll(&start.device_code))
+            .await
+            .map_err(|_| expired())??;
         match poll.status.as_str() {
             | "approved" => {
                 break poll.publisher.ok_or_else(|| {

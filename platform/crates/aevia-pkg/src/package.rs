@@ -1,13 +1,11 @@
 //! The package in the current directory: finding it, packing it, naming it.
 //!
-//! # Why the manifest is read through `aevia-registry-core`
+//! # The registry manifest reader
 //!
-//! `aevia_core::manifest` owns the real parser, but that crate links the RSSN
-//! kernel. `aevia-registry-core` re-implements the same subset — same keys,
-//! same refusals — precisely so a registry client can read `aevia.toml` without
-//! building a computer-algebra system. This module uses that reader, which
-//! means `aevia-pkg` accepts exactly the manifests `aevia check` accepts: a
-//! package that publishes here is a package that builds there.
+//! This client uses [`PackageManifest`] to read package metadata and
+//! dependencies without linking the RSSN kernel. Publication uses
+//! `[package] entry` or its default, `src/main.aev`. The toolchain also reads
+//! `[lib]` and validates lint settings when it checks the package.
 //!
 //! # Why the archive is built by `aevia-registry-core` too
 //!
