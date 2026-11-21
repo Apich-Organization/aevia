@@ -4,6 +4,7 @@
 //! value and calls these helpers. `abs` is deliberately absent: §8.15 says the
 //! modulus of a complex number is `magnitude`, because `abs : Complex[d] ->
 //! Real[d]` would collide with `abs : Scalar<ρ,d> -> Scalar<ρ,d>`.
+//! The principal square root uses the shared [`crate::Complex::sqrt`] method.
 
 pub use rssn::kernels::complex_scalar::arg;
 pub use rssn::kernels::complex_scalar::complex;
@@ -33,6 +34,19 @@ mod tests {
         let root = Complex::new(-1.0, 0.0).sqrt();
         assert!(close(root.re, 0.0));
         assert!(close(root.im, 1.0));
+    }
+
+    #[test]
+    fn the_principal_square_root_keeps_tiny_components_on_either_side() {
+        let tiny = 5e-151_f64;
+        for sign in [1.0, -1.0] {
+            let positive = Complex::new(1e300, sign).sqrt();
+            assert!((positive.re / 1e150 - 1.0).abs() <= f64::EPSILON);
+            assert!((positive.im / (sign * tiny) - 1.0).abs() <= f64::EPSILON);
+            let negative = Complex::new(-1e300, sign).sqrt();
+            assert!((negative.re / tiny - 1.0).abs() <= f64::EPSILON);
+            assert!((negative.im / (sign * 1e150) - 1.0).abs() <= f64::EPSILON);
+        }
     }
 
     #[test]

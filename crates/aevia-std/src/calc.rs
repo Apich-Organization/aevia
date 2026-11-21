@@ -178,8 +178,8 @@ where
 ///
 /// # Errors
 ///
-/// [`NumericError::NotConverged`] when neither method finds a sign change or a
-/// stationary point.
+/// [`NumericError::NotConverged`] when the search finds neither a sign change
+/// nor a tangential root distinguishable at the sampled precision.
 pub fn root<F>(
     f: &mut F,
     guess: f64,

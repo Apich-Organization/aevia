@@ -4,20 +4,31 @@
 //! (§8.8). The other conventions are reachable through [`fft_norm`], which is
 //! what `fft_norm(x, Norm.Unitary)` needs.
 //!
-//! RSSN owns transforms and their numerical dependencies; this module only
-//! converts the public complex representation and preserves result layouts.
+//! RSSN owns transforms and their numerical dependencies. This module converts
+//! the public complex representation and preserves result layouts.
 
 use crate::Complex;
 use rssn::kernels::fft::Complex64;
+use rssn::kernels::reuse::fft_scratch_for;
 
 /// Kernel FFT normalization conventions.
 pub use rssn::kernels::fft::Norm;
 
-fn to_internal(input: &[Complex]) -> Vec<Complex64> {
-    input
-        .iter()
-        .map(|value| Complex64::new(value.re, value.im))
-        .collect()
+const POOLED_COMPLEX_INPUT_MIN: usize = 256;
+
+fn with_internal<T>(
+    input: &[Complex],
+    run: impl FnOnce(&[Complex64]) -> T,
+) -> T {
+    let components = input.iter().map(|value| Complex64::new(value.re, value.im));
+    if input.len() < POOLED_COMPLEX_INPUT_MIN {
+        return run(&components.collect::<Vec<_>>());
+    }
+
+    // Lease larger buffers from the same bounded pool as the FFT kernel.
+    let mut converted = fft_scratch_for(input.len());
+    converted.extend(components);
+    run(&converted)
 }
 
 fn from_internal(input: Vec<Complex64>) -> Vec<Complex> {
@@ -30,13 +41,13 @@ fn from_internal(input: Vec<Complex64>) -> Vec<Complex> {
 /// The unnormalised forward transform.
 #[must_use]
 pub fn fft(input: &[Complex]) -> Vec<Complex> {
-    from_internal(rssn::kernels::fft::fft(&to_internal(input)))
+    from_internal(with_internal(input, rssn::kernels::fft::fft))
 }
 
 /// The inverse transform, scaled by `1/N`.
 #[must_use]
 pub fn ifft(input: &[Complex]) -> Vec<Complex> {
-    from_internal(rssn::kernels::fft::ifft(&to_internal(input)))
+    from_internal(with_internal(input, rssn::kernels::fft::ifft))
 }
 
 /// The forward transform under a chosen normalisation.
@@ -48,7 +59,9 @@ pub fn fft_norm(
     input: &[Complex],
     norm: Norm,
 ) -> Vec<Complex> {
-    from_internal(rssn::kernels::fft::fft_norm(&to_internal(input), norm))
+    from_internal(with_internal(input, |data| {
+        rssn::kernels::fft::fft_norm(data, norm)
+    }))
 }
 
 /// The inverse transform under a chosen normalisation: `Backward` scales by
@@ -58,7 +71,9 @@ pub fn ifft_norm(
     input: &[Complex],
     norm: Norm,
 ) -> Vec<Complex> {
-    from_internal(rssn::kernels::fft::ifft_norm(&to_internal(input), norm))
+    from_internal(with_internal(input, |data| {
+        rssn::kernels::fft::ifft_norm(data, norm)
+    }))
 }
 
 /// The transform over `axes` of a row-major tensor of the given `shape`,
@@ -75,14 +90,19 @@ pub fn fft_axes(
     inverse: bool,
     norm: Norm,
 ) -> Result<Vec<Complex>, String> {
-    rssn::kernels::fft::fft_axes(&to_internal(input), shape, axes, inverse, norm).map(from_internal)
+    with_internal(input, |data| {
+        rssn::kernels::fft::fft_axes(data, shape, axes, inverse, norm)
+    })
+    .map(from_internal)
 }
 
-/// The half-spectrum transform of a real tensor over `axes`: the last listed
-/// axis keeps `n/2 + 1` bins. Returns the data and its shape.
+/// The half-spectrum transform of a real tensor over `axes`. The last listed
+/// axis keeps `n/2 + 1` bins. The kernel reads the row-major input by reference.
+/// Returns the data and its shape, including when another axis makes the tensor
+/// empty.
 ///
 /// # Errors
-/// As [`fft_axes`], and an empty `axes`.
+/// As [`fft_axes`], or when `axes` is empty or its last axis has zero extent.
 pub fn rfft_axes(
     input: &[f64],
     shape: &[usize],
@@ -97,14 +117,17 @@ pub fn rfft_axes(
 /// result (`2 * (m - 1)` when the original was even).
 ///
 /// # Errors
-/// As [`fft_axes`], and an `n_last` the half spectrum cannot belong to.
+/// As [`fft_axes`], or when `axes` is empty, `n_last` is incompatible with
+/// the half spectrum, or the reconstructed tensor cannot fit in memory.
 pub fn irfft_axes(
     input: &[Complex],
     shape: &[usize],
     axes: &[usize],
     n_last: usize,
 ) -> Result<(Vec<f64>, Vec<usize>), String> {
-    rssn::kernels::fft::irfft_axes(&to_internal(input), shape, axes, n_last)
+    with_internal(input, |data| {
+        rssn::kernels::fft::irfft_axes(data, shape, axes, n_last)
+    })
 }
 
 /// Where each element goes under `fftshift` (`inverse = false`) or
@@ -112,7 +135,8 @@ pub fn irfft_axes(
 /// element `permutation[i]`.
 ///
 /// # Errors
-/// An axis out of range or repeated.
+/// An axis out of range or repeated, or a shape too large to represent the
+/// permutation.
 pub fn shift_permutation(
     shape: &[usize],
     axes: &[usize],
@@ -144,7 +168,7 @@ pub fn irfft(
     input: &[Complex],
     n: usize,
 ) -> Vec<f64> {
-    rssn::kernels::fft::irfft(&to_internal(input), n)
+    with_internal(input, |data| rssn::kernels::fft::irfft(data, n))
 }
 
 /// The sample frequencies of a length-`n` transform with spacing `d`.
@@ -165,7 +189,7 @@ pub fn fft2(
     rows: usize,
     cols: usize,
 ) -> Result<Vec<Complex>, String> {
-    rssn::kernels::fft::fft2(&to_internal(input), rows, cols).map(from_internal)
+    with_internal(input, |data| rssn::kernels::fft::fft2(data, rows, cols)).map(from_internal)
 }
 
 /// 2D inverse FFT of a row-major `rows × cols` complex array.
@@ -177,7 +201,7 @@ pub fn ifft2(
     rows: usize,
     cols: usize,
 ) -> Result<Vec<Complex>, String> {
-    rssn::kernels::fft::ifft2(&to_internal(input), rows, cols).map(from_internal)
+    with_internal(input, |data| rssn::kernels::fft::ifft2(data, rows, cols)).map(from_internal)
 }
 
 /// N-D forward FFT over all axes of a row-major tensor of `shape`.
@@ -188,19 +212,19 @@ pub fn fftn(
     input: &[Complex],
     shape: &[usize],
 ) -> Result<Vec<Complex>, String> {
-    rssn::kernels::fft::fftn(&to_internal(input), shape).map(from_internal)
+    with_internal(input, |data| rssn::kernels::fft::fftn(data, shape)).map(from_internal)
 }
 
 /// Shifts zero-frequency component to the center of a 1D slice.
 #[must_use]
 pub fn fftshift(input: &[Complex]) -> Vec<Complex> {
-    from_internal(rssn::kernels::fft::fftshift(&to_internal(input)))
+    from_internal(with_internal(input, rssn::kernels::fft::fftshift))
 }
 
 /// Inverse of [`fftshift`] on a 1D slice.
 #[must_use]
 pub fn ifftshift(input: &[Complex]) -> Vec<Complex> {
-    from_internal(rssn::kernels::fft::ifftshift(&to_internal(input)))
+    from_internal(with_internal(input, rssn::kernels::fft::ifftshift))
 }
 
 /// Orthonormal Type-II Discrete Cosine Transform (`rssn::kernels::signal::dct`).
@@ -498,6 +522,22 @@ mod tests {
     }
 
     #[test]
+    fn real_forward_axes_preserve_the_nonnegative_bins_and_validate_empty_shapes() {
+        // This four-point impulse is shifted by one sample, so its bins are
+        // exp(-2*pi*i*k/4), including the Nyquist coefficient.
+        let (bins, shape) = rfft_axes(&[0.0, 1.0, 0.0, 0.0], &[4], &[0]).unwrap();
+        assert_eq!(shape, [3]);
+        for (bin, (re, im)) in bins.iter().zip([(1.0, 0.0), (0.0, -1.0), (-1.0, 0.0)]) {
+            assert!(close(bin.re, re) && close(bin.im, im), "{bin:?}");
+        }
+        let (empty, shape) = rfft_axes(&[], &[0, 4], &[1]).unwrap();
+        assert!(empty.is_empty());
+        assert_eq!(shape, [0, 3]);
+        assert!(rfft_axes(&[], &[0, 4], &[0]).is_err());
+        assert!(rfft_axes(&[], &[0, 4], &[1, 1]).is_err());
+    }
+
+    #[test]
     fn shifting_moves_zero_frequency_to_the_middle_and_back() {
         let even = shift_permutation(&[4], &[0], false).unwrap();
         assert_eq!(even, vec![2, 3, 0, 1]);
@@ -571,6 +611,95 @@ mod tests {
                 .is_empty()
         );
     }
+    #[test]
+    fn identity_and_shifts_preserve_ieee_components_at_each_buffer_size() {
+        let samples = [
+            Complex::new(-0.0, 0.0),
+            Complex::new(f64::from_bits(0x7ff8_0123_4567_89ab), f64::NEG_INFINITY),
+            Complex::new(f64::INFINITY, -0.0),
+            Complex::new(2.5, -3.75),
+        ];
+        let bits = |sample: &Complex| (sample.re.to_bits(), sample.im.to_bits());
+
+        for len in [0_usize, 1, 16, 32, 255, 256, 257, 4097] {
+            let input = samples
+                .iter()
+                .copied()
+                .cycle()
+                .take(len)
+                .collect::<Vec<_>>();
+            let expected = input.iter().map(bits).collect::<Vec<_>>();
+            let shape = if len == 1 {
+                vec![]
+            } else {
+                vec![len]
+            };
+            for inverse in [false, true] {
+                let output = fft_axes(&input, &shape, &[], inverse, Norm::Unitary).unwrap();
+                assert_eq!(output.iter().map(bits).collect::<Vec<_>>(), expected);
+            }
+            let shifted = fftshift(&input);
+            let shift_start = len.div_ceil(2);
+            let expected_order = (0..len)
+                .map(|index| expected[(index + shift_start) % len])
+                .collect::<Vec<_>>();
+            assert_eq!(shifted.iter().map(bits).collect::<Vec<_>>(), expected_order);
+            assert_eq!(
+                ifftshift(&shifted).iter().map(bits).collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn real_axes_keep_the_last_listed_axis_even_when_it_is_strided() {
+        let shape = [22, 5, 4];
+        let axes = [2, 1];
+        let input = (0..440)
+            .map(|index| f64::from(index % 17) - 1.5 * f64::from(index % 3))
+            .collect::<Vec<_>>();
+        let (actual, half_shape) = rfft_axes(&input, &shape, &axes).unwrap();
+        assert_eq!(half_shape, [22, 3, 4]);
+        let expected = input
+            .chunks_exact(20)
+            .flat_map(|slab| naive_dft2(&complexes(slab), 5, 4).into_iter().take(12))
+            .collect::<Vec<_>>();
+        assert_eq!(actual.len(), expected.len());
+        for (a, b) in actual.iter().zip(expected) {
+            assert!(close(a.re, b.re) && close(a.im, b.im), "{a:?} vs {b:?}");
+        }
+
+        let (rebuilt, full_shape) = irfft_axes(&actual, &half_shape, &axes, shape[1]).unwrap();
+        assert_eq!(full_shape, shape);
+        assert_eq!(rebuilt.len(), input.len());
+        for (a, b) in input.into_iter().zip(rebuilt) {
+            assert!(close(a, b), "{a} vs {b}");
+        }
+
+        let (empty, empty_shape) = rfft_axes(&[], &[0, 5, 4], &axes).unwrap();
+        assert!(empty.is_empty());
+        assert_eq!(empty_shape, [0, 3, 4]);
+        let (rebuilt, full_shape) = irfft_axes(&empty, &empty_shape, &axes, 5).unwrap();
+        assert!(rebuilt.is_empty());
+        assert_eq!(full_shape, [0, 5, 4]);
+    }
+
+    #[test]
+    fn axis_errors_keep_validation_order() {
+        let input = vec![Complex::new(0.0, 0.0); 257];
+        let bad_shape = fft_axes(&input, &[16, 16], &[32], false, Norm::Backward).unwrap_err();
+        assert!(bad_shape.contains("does not match"), "{bad_shape}");
+        let empty_axes = irfft_axes(&input, &[16, 16], &[], 0).unwrap_err();
+        assert!(empty_axes.contains("at least one axis"), "{empty_axes}");
+        let repeated = irfft_axes(&input, &[257], &[0, 0], 0).unwrap_err();
+        assert!(repeated.contains("listed twice"), "{repeated}");
+        let wrong_length = irfft_axes(&input, &[257], &[0], 3).unwrap_err();
+        assert!(
+            wrong_length.contains("cannot come from a length-3"),
+            "{wrong_length}"
+        );
+    }
+
     #[test]
     fn savitzky_golay_coefficients_preserve_polynomial_moments() {
         let coefficients = rssn::kernels::signal::savgol_coeffs(21, 8);

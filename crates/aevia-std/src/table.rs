@@ -13,7 +13,6 @@
 
 use crate::NumericError;
 use std::fmt::Write as _;
-use std::iter::Peekable;
 use std::str::Chars;
 
 /// A parsed CSV table.
@@ -86,7 +85,8 @@ impl Table {
 /// Parses CSV text with a header row and optional column units.
 ///
 /// Unquoted fields are trimmed. Quoted fields preserve whitespace, embedded
-/// line breaks, and doubled quotation marks.
+/// line breaks, and escaped quotation marks. Records can end with LF, CRLF,
+/// or CR. Whitespace-only records without separators are skipped.
 ///
 /// # Errors
 /// [`NumericError::Empty`] when there is no header,
@@ -108,7 +108,7 @@ fn parse_delimited(
     text: &str,
     delimiter: char,
 ) -> Result<Table, NumericError> {
-    let mut records = text.trim_start_matches('\u{feff}').chars().peekable();
+    let mut records = text.trim_start_matches('\u{feff}').chars();
     let header = next_csv_record(&mut records, delimiter)?.ok_or(NumericError::Empty)?;
     let (columns, units): (Vec<_>, Vec<_>) = header
         .into_iter()
@@ -160,7 +160,41 @@ fn finish_csv_field(
 }
 
 fn next_csv_record(
-    characters: &mut Peekable<Chars<'_>>,
+    characters: &mut Chars<'_>,
+    delimiter: char,
+) -> Result<Option<Vec<String>>, NumericError> {
+    loop {
+        let remaining = characters.as_str();
+        if remaining.is_empty() {
+            return Ok(None);
+        }
+        // A quote before the first line ending may continue onto another line.
+        let line_end = remaining.find(['\r', '\n', '"']).unwrap_or(remaining.len());
+        let (line, ending) = remaining.split_at(line_end);
+        if ending.starts_with('"') {
+            return next_quoted_csv_record(characters, delimiter);
+        }
+        let following = ending
+            .strip_prefix("\r\n")
+            .or_else(|| ending.strip_prefix(['\r', '\n']))
+            .unwrap_or(ending);
+        *characters = following.chars();
+        if !line.trim().is_empty() || line.contains(delimiter) {
+            return Ok(Some(
+                line.split(delimiter)
+                    .map(|field| field.trim().to_owned())
+                    .collect(),
+            ));
+        }
+    }
+}
+
+#[expect(
+    clippy::single_call_fn,
+    reason = "keeps quoted records and embedded line breaks in the CSV state machine"
+)]
+fn next_quoted_csv_record(
+    characters: &mut Chars<'_>,
     delimiter: char,
 ) -> Result<Option<Vec<String>>, NumericError> {
     let mut cells = Vec::new();
@@ -170,8 +204,11 @@ fn next_csv_record(
 
     while let Some(character) = characters.next() {
         if quoting == CsvQuoting::Quoted {
-            if character != '"' || characters.next_if_eq(&'"').is_some() {
+            if character != '"' {
                 field.push(character);
+            } else if let Some(following) = characters.as_str().strip_prefix('"') {
+                *characters = following.chars();
+                field.push('"');
             } else {
                 quoting = CsvQuoting::Closed;
             }
@@ -190,8 +227,10 @@ fn next_csv_record(
                 nonblank = true;
             },
             | '\r' | '\n' => {
-                if character == '\r' {
-                    characters.next_if_eq(&'\n');
+                if character == '\r'
+                    && let Some(following) = characters.as_str().strip_prefix('\n')
+                {
+                    *characters = following.chars();
                 }
                 if nonblank {
                     cells.push(finish_csv_field(field, quoting));
@@ -254,13 +293,18 @@ fn write_csv_field(
     cell: &str,
     out: &mut String,
 ) {
-    if cell.is_empty() || cell.trim().len() != cell.len() || cell.contains([',', '"', '\r', '\n']) {
+    if cell.is_empty()
+        || cell.trim().len() != cell.len()
+        || cell
+            .bytes()
+            .any(|byte| matches!(byte, b',' | b'"' | b'\r' | b'\n'))
+    {
         out.push('"');
-        for character in cell.chars() {
-            if character == '"' {
-                out.push('"');
-            }
-            out.push(character);
+        let mut pieces = cell.split('"');
+        out.push_str(pieces.next().unwrap_or_default());
+        for piece in pieces {
+            out.push_str("\"\"");
+            out.push_str(piece);
         }
         out.push('"');
     } else {
@@ -444,14 +488,20 @@ impl JsonParser<'_> {
             let Some((prefix, rest)) = self.rest.split_at_checked(index) else {
                 return Err(self.error("invalid JSON string boundary"));
             };
-            out.push_str(prefix);
             self.rest = rest;
             if self.take("\"") {
+                // Plain strings can allocate exactly their decoded length.
+                // Reserve a growing buffer only after the first escape.
+                if out.is_empty() {
+                    return Ok(prefix.to_owned());
+                }
+                out.push_str(prefix);
                 return Ok(out);
             }
             if !self.take("\\") {
                 return Err(self.error("unescaped control character"));
             }
+            out.push_str(prefix);
             out.push(self.escape()?);
         }
     }
@@ -591,20 +641,37 @@ fn write_json_string(
     text: &str,
     out: &mut String,
 ) {
+    const CONTROL_ESCAPES: [&str; 32] = [
+        "\\u0000", "\\u0001", "\\u0002", "\\u0003", "\\u0004", "\\u0005", "\\u0006", "\\u0007",
+        "\\u0008", "\\t", "\\n", "\\u000b", "\\u000c", "\\r", "\\u000e", "\\u000f", "\\u0010",
+        "\\u0011", "\\u0012", "\\u0013", "\\u0014", "\\u0015", "\\u0016", "\\u0017", "\\u0018",
+        "\\u0019", "\\u001a", "\\u001b", "\\u001c", "\\u001d", "\\u001e", "\\u001f",
+    ];
     out.push('"');
-    for character in text.chars() {
-        match character {
-            | '"' => out.push_str("\\\""),
-            | '\\' => out.push_str("\\\\"),
-            | '\n' => out.push_str("\\n"),
-            | '\r' => out.push_str("\\r"),
-            | '\t' => out.push_str("\\t"),
-            | other if other < '\u{20}' => {
-                let _ = write!(out, "\\u{:04x}", u32::from(other));
-            },
-            | other => out.push(other),
+    let mut start = 0;
+    let escapes = text
+        .bytes()
+        .enumerate()
+        .filter(|&(_, byte)| byte < b' ' || matches!(byte, b'"' | b'\\'));
+    for (end, byte) in escapes {
+        // Escape bytes are ASCII, so both sides of each escape are UTF-8 boundaries.
+        if start != end {
+            out.push_str(text.get(start..end).unwrap_or_default());
         }
+        let escape = match byte {
+            | b'"' => "\\\"",
+            | b'\\' => "\\\\",
+            | control => {
+                CONTROL_ESCAPES
+                    .get(usize::from(control))
+                    .copied()
+                    .unwrap_or_default()
+            },
+        };
+        out.push_str(escape);
+        start = end.saturating_add(1);
     }
+    out.push_str(text.get(start..).unwrap_or_default());
     out.push('"');
 }
 
@@ -646,6 +713,50 @@ pub fn write_npy(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn csv_writing_preserves_plain_and_quoted_utf8_fields() {
+        let table = Table {
+            columns: vec!["time".into(), "note,\"lab\"".into(), "observer".into()],
+            units: vec![Some("s".into()), None, None],
+            rows: vec![
+                vec!["0.125".into(), "Δ\"値\"\r\n🙂".into(), "O'Reilly".into()],
+                vec!["-0.0".into(), " ".into(), String::new()],
+                vec!["2".into(), "α,β".into(), "plain".into()],
+            ],
+        };
+        let written = write_csv(&table);
+        assert_eq!(
+            written,
+            concat!(
+                "time [s],\"note,\"\"lab\"\"\",observer\n",
+                "0.125,\"Δ\"\"値\"\"\r\n🙂\",O'Reilly\n",
+                "-0.0,\" \",\"\"\n",
+                "2,\"α,β\",plain\n",
+            )
+        );
+        assert_eq!(parse_csv(&written), Ok(table));
+    }
+
+    #[test]
+    fn json_writing_keeps_all_ascii_control_escapes_and_adjacent_utf8() {
+        let controls: String = (0_u8..32).map(char::from).collect();
+        let source = Json::Object(vec![(
+            "key'\"🙂".into(),
+            Json::String(format!("α/値'\"\\{controls}🙂\u{2028}")),
+        )]);
+        let written = write_json(&source);
+        assert_eq!(
+            written,
+            concat!(
+                r#"{"key'\"🙂":"α/値'\"\\"#,
+                r#"\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\u0008\t\n\u000b\u000c\r\u000e\u000f"#,
+                r#"\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f"#,
+                "🙂\u{2028}\"}",
+            )
+        );
+        assert_eq!(parse_json(&written), Ok(source));
+    }
 
     #[test]
     fn csv_headers_carry_units() {
@@ -691,6 +802,52 @@ mod tests {
         assert_eq!(table.numeric_column("length").unwrap(), [2.0]);
         assert_eq!(table.column("label").unwrap(), ["x,y\t z"]);
         assert_eq!(table.column("comment").unwrap(), [""]);
+    }
+
+    #[test]
+    fn simple_and_quoted_records_share_whitespace_and_newline_rules() {
+        let csv = concat!(
+            "\u{feff}\u{feff}\u{2003}\r\nid [m],label,last\r\n",
+            "  1  , \u{2003}alpha\u{202f}, \r\n",
+            "\u{2002}\r",
+            "\u{2003}\"2\"\u{202f},\" keep ,\n spacing \",z\r",
+            ",,\n",
+            "3,tail,x"
+        );
+        let table = parse_csv(csv).unwrap();
+        assert_eq!(table.columns, ["id", "label", "last"]);
+        assert_eq!(table.units, [Some("m".to_owned()), None, None]);
+        assert_eq!(
+            table.rows,
+            [
+                ["1", "alpha", ""],
+                ["2", " keep ,\n spacing ", "z"],
+                ["", "", ""],
+                ["3", "tail", "x"],
+            ]
+        );
+
+        let tsv = concat!(
+            "\u{2003}\r\nid [s]\tlabel\tlast\r",
+            "\t\t\r\n",
+            " 2 \t\"a\tb\"\u{202f}\t z"
+        );
+        let table = parse_tsv(tsv).unwrap();
+        assert_eq!(table.columns, ["id", "label", "last"]);
+        assert_eq!(table.units, [Some("s".to_owned()), None, None]);
+        assert_eq!(table.rows, [["", "", ""], ["2", "a\tb", "z"]]);
+    }
+
+    #[test]
+    fn a_quoted_record_reports_lexical_errors_before_its_width() {
+        for (field, expected) in [
+            ("x\"y", "unexpected quote in CSV field"),
+            ("\"x\"y", "unexpected text after quoted CSV field"),
+            ("\"x\r\ny", "unterminated quoted CSV field"),
+        ] {
+            let text = format!("left,right\r\n1,2\r\n{field}");
+            assert_eq!(parse_csv(&text), Err(NumericError::Domain(expected.into())));
+        }
     }
 
     #[test]
@@ -744,11 +901,66 @@ mod tests {
     }
 
     #[test]
+    fn json_string_fields_keep_order_empty_strings_and_unicode() {
+        let value = parse_json(
+            r#"{"":"", "é😀":"\uD83D\uDE00\/\\\"\u0000\b\f\n\r\t","é😀":"👩‍💻─é","numbers":[-0,5e-324]}"#,
+        )
+        .expect("valid JSON");
+        let Json::Object(fields) = &value else {
+            panic!("expected an object");
+        };
+        assert_eq!(fields[0], (String::new(), Json::String(String::new())));
+        assert_eq!(
+            fields[1],
+            (
+                "é😀".into(),
+                Json::String("😀/\\\"\0\u{8}\u{c}\n\r\t".into())
+            ),
+        );
+        assert_eq!(fields[2], ("é😀".into(), Json::String("👩‍💻─é".into())));
+        let Json::Array(numbers) = &fields[3].1 else {
+            panic!("expected an array");
+        };
+        let [Json::Number(zero), Json::Number(subnormal)] = numbers.as_slice() else {
+            panic!("expected two numbers");
+        };
+        assert_eq!(zero.to_bits(), (-0.0f64).to_bits());
+        assert_eq!(subnormal.to_bits(), 1);
+        assert_eq!(parse_json(&write_json(&value)).expect("round trip"), value);
+    }
+
+    #[test]
+    fn json_string_errors_keep_the_original_byte_offsets() {
+        for (input, reason, offset) in [
+            ("\"é😀\u{1f}\"", "unescaped control character", 7),
+            ("\"é😀", "unterminated JSON string", 1),
+            ("\"é\\n😀", "unterminated JSON string", 5),
+            ("\"é😀\\β\"", "invalid string escape", 8),
+            (r#""é😀\q""#, "invalid string escape", 9),
+            (r#""é\ud800""#, "invalid UTF-16 surrogate pair", 9),
+            (r#""é\ud800\u00q1""#, "invalid Unicode escape", 11),
+        ] {
+            assert_eq!(
+                parse_json(input),
+                Err(NumericError::Domain(format!("{reason} at offset {offset}"))),
+                "{input:?}",
+            );
+        }
+    }
+
+    #[test]
     fn json_checks_number_syntax_and_nesting() {
         for invalid in ["01", "1.", "-.1", "1e+", "1e999", "\u{a0}0", "\"\u{1f}\""] {
             assert!(parse_json(invalid).is_err(), "accepted {invalid:?}");
         }
-        assert!(parse_json(&format!("{}0{}", "[".repeat(129), "]".repeat(129))).is_err());
+        let nested = |depth: usize| format!("{}\"猫\"{}", "[".repeat(depth), "]".repeat(depth));
+        assert!(parse_json(&nested(128)).is_ok());
+        assert_eq!(
+            parse_json(&nested(129)),
+            Err(NumericError::Domain(
+                "JSON nesting exceeds 128 levels at offset 128".into()
+            )),
+        );
         assert_eq!(write_json(&Json::Number(f64::INFINITY)), "null");
     }
 

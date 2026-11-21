@@ -165,7 +165,11 @@ impl Distribution {
         self.to_rssn().variance()
     }
 
-    /// Inverts the cumulative distribution at probability `u`.
+    /// Returns the quantile at probability `u`.
+    ///
+    /// At `0` and `1`, returns the lower and upper support endpoints, which
+    /// may be infinite. For a discrete distribution and an interior `u`,
+    /// returns the smallest support point whose cumulative probability reaches `u`.
     ///
     /// # Errors
     /// Rejects invalid distribution parameters or probabilities outside `[0, 1]`.

@@ -12,6 +12,7 @@
 
 use crate::NumericError;
 use rssn::kernels::interp_ext;
+use rssn::kernels::interpolate::MultilinearGrid;
 
 mod extended;
 pub use extended::BSpline;
@@ -61,13 +62,14 @@ pub fn spline(
     interp_ext::spline(xs, ys, x).map_err(extended::map_err)
 }
 
-/// Bilinear interpolation on a regular grid.
+/// Bilinear interpolation on a rectilinear grid.
 ///
-/// `grid` is `ny × nx` in row-major order, covering `xs × ys`.
-///
+/// `grid` is `ny × nx` in row-major order, with `xs` varying fastest.
+/// Finite queries outside the grid are clamped to its nearest edge.
+/// Use [`BilinearGrid`] to reuse validation across multiple queries.
 /// # Errors
-///
-/// [`NumericError::ShapeMismatch`] when the grid does not match the axes.
+/// Rejects invalid or empty axes, mismatched storage, and non-finite
+/// grid values or queries.
 pub fn interp2(
     xs: &[f64],
     ys: &[f64],
@@ -76,6 +78,86 @@ pub fn interp2(
     y: f64,
 ) -> Result<f64, NumericError> {
     interp_ext::interp2(xs, ys, grid, x, y).map_err(extended::map_err)
+}
+
+/// A borrowed rectilinear grid for repeated clamped bilinear interpolation.
+///
+/// Store grid values in row-major order, with the x coordinate varying
+/// fastest. Validation runs once, and a query searches only the two axes.
+#[derive(Debug)]
+pub struct BilinearGrid<'grid> {
+    grid: MultilinearGrid<'grid>,
+    x_bounds: (f64, f64),
+    y_bounds: (f64, f64),
+}
+
+impl<'grid> BilinearGrid<'grid> {
+    /// Prepares a grid containing `ys.len() * xs.len()` values.
+    /// # Errors
+    /// Rejects empty axes, mismatched storage, axes with fewer than two knots,
+    /// unordered knots, or non-finite knots and values.
+    pub fn new(
+        xs: &'grid [f64],
+        ys: &'grid [f64],
+        values: &'grid [f64],
+    ) -> Result<Self, NumericError> {
+        let (Some((&xmin, &xmax)), Some((&ymin, &ymax))) =
+            (xs.first().zip(xs.last()), ys.first().zip(ys.last()))
+        else {
+            return Err(NumericError::Empty);
+        };
+        let (nx, ny) = (xs.len(), ys.len());
+        if nx.checked_mul(ny) != Some(values.len()) {
+            return Err(NumericError::ShapeMismatch(format!(
+                "interp2 needs a {ny}x{nx} grid, found {} values",
+                values.len(),
+            )));
+        }
+        if nx < 2 || ny < 2 {
+            return Err(NumericError::Domain(
+                "interp2 needs at least two points per axis".into(),
+            ));
+        }
+        let grid = MultilinearGrid::new([xs, ys], values).map_err(NumericError::Domain)?;
+        Ok(Self {
+            grid,
+            x_bounds: (xmin, xmax),
+            y_bounds: (ymin, ymax),
+        })
+    }
+
+    /// Interpolates one point, clamping each coordinate independently.
+    /// # Errors
+    /// Rejects non-finite coordinates.
+    pub fn eval(
+        &self,
+        x: f64,
+        y: f64,
+    ) -> Result<f64, NumericError> {
+        if !x.is_finite() || !y.is_finite() {
+            return Err(NumericError::Domain(
+                "grid and queries must be finite".into(),
+            ));
+        }
+        let x = x.clamp(self.x_bounds.0, self.x_bounds.1);
+        let y = y.clamp(self.y_bounds.0, self.y_bounds.1);
+        self.grid.evaluate(&[x, y]).map_err(NumericError::Domain)
+    }
+
+    /// Interpolates a batch of `(x, y)` pairs in input order.
+    /// Duplicate points are valid, and an empty batch gives an empty result.
+    /// # Errors
+    /// Rejects any non-finite point.
+    pub fn eval_many(
+        &self,
+        points: &[(f64, f64)],
+    ) -> Result<Vec<f64>, NumericError> {
+        let mut results = Vec::with_capacity(points.len());
+        for &(x, y) in points {
+            results.push(self.eval(x, y)?);
+        }
+        Ok(results)
+    }
 }
 
 /// The coefficients of the least-squares polynomial of `degree`, ascending.
@@ -158,6 +240,94 @@ mod tests {
         let grid = [0.0, 2.0, 3.0, 5.0];
         assert!(close(interp2(&xs, &ys, &grid, 0.5, 0.5).unwrap(), 2.5));
         assert!(close(interp2(&xs, &ys, &grid, 0.25, 0.75).unwrap(), 2.75));
+    }
+
+    #[test]
+    fn bilinear_interpolation_handles_finite_extreme_axes() {
+        let extreme = [-f64::MAX, f64::MAX];
+        let ordinary = [0.0, 4.0];
+        let values = [0.0, 2.0, 6.0, 8.0];
+        assert!(close(
+            interp2(&extreme, &ordinary, &values, 0.0, 2.0).unwrap(),
+            4.0
+        ));
+        assert!(close(
+            interp2(&ordinary, &extreme, &values, 2.0, 0.0).unwrap(),
+            4.0
+        ));
+        assert!(close(
+            interp2(&extreme, &extreme, &values, 0.0, 0.0).unwrap(),
+            4.0
+        ));
+        assert!(close(
+            interp2(&extreme, &ordinary, &values, f64::MAX / 2.0, 2.0).unwrap(),
+            4.5,
+        ));
+        let tiny = [0.0, f64::from_bits(2)];
+        let prepared = BilinearGrid::new(&tiny, &ordinary, &values).unwrap();
+        assert!(close(prepared.eval(f64::from_bits(1), 2.0).unwrap(), 4.0));
+    }
+
+    #[test]
+    fn prepared_bilinear_grids_preserve_layout_clamping_and_batch_order() {
+        let xs = [0.0, 2.0, 5.0];
+        let ys = [-1.0, 3.0];
+        let f = |x, y| 1.0 + 2.0 * x + 3.0 * y + 0.25 * x * y;
+        let values: Vec<_> = ys
+            .iter()
+            .flat_map(|&y| xs.iter().map(move |&x| f(x, y)))
+            .collect();
+        let grid = BilinearGrid::new(&xs, &ys, &values).unwrap();
+        let batch = grid
+            .eval_many(&[(1.0, 2.0), (8.0, -4.0), (1.0, 2.0), (-6.0, 5.0), (2.0, 3.0)])
+            .unwrap();
+        let expected = [
+            f(1.0, 2.0),
+            f(5.0, -1.0),
+            f(1.0, 2.0),
+            f(0.0, 3.0),
+            f(2.0, 3.0),
+        ];
+        assert_eq!(batch.len(), expected.len());
+        assert!(
+            batch
+                .iter()
+                .zip(expected)
+                .all(|(&actual, expected)| close(actual, expected))
+        );
+        assert!(grid.eval_many(&[]).unwrap().is_empty());
+        assert!(matches!(
+            grid.eval_many(&[(1.0, 2.0), (1.0, f64::INFINITY)]),
+            Err(NumericError::Domain(_)),
+        ));
+    }
+
+    #[test]
+    fn prepared_bilinear_grids_reject_invalid_axes_and_storage() {
+        let axis = [0.0, 1.0];
+        let values = [0.0; 4];
+        assert!(matches!(
+            BilinearGrid::new(&[], &axis, &[]),
+            Err(NumericError::Empty)
+        ));
+        assert!(matches!(
+            BilinearGrid::new(&axis, &axis, &[0.0; 3]),
+            Err(NumericError::ShapeMismatch(_)),
+        ));
+        assert!(matches!(
+            BilinearGrid::new(&axis, &[0.0], &[0.0; 2]),
+            Err(NumericError::Domain(_)),
+        ));
+        for invalid in [[0.0, 0.0], [1.0, 0.0], [0.0, f64::NAN]] {
+            assert!(matches!(
+                BilinearGrid::new(&axis, &invalid, &values),
+                Err(NumericError::Domain(_)),
+            ));
+        }
+        assert!(matches!(
+            BilinearGrid::new(&axis, &axis, &[0.0, 1.0, f64::INFINITY, 2.0]),
+            Err(NumericError::Domain(_)),
+        ));
     }
 
     #[test]

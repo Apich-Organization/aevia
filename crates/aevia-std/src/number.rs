@@ -5,7 +5,7 @@
 //! approximation of them.
 
 use num_bigint::BigInt;
-#[cfg(test)]
+use num_bigint::Sign;
 use num_traits::One;
 #[cfg(test)]
 use num_traits::Zero;
@@ -49,6 +49,38 @@ pub fn mod_pow(
     modulus: i64,
 ) -> Result<i64, crate::NumericError> {
     rssn::kernels::number_ext::mod_pow(base, exponent, modulus).map_err(map_num_err)
+}
+
+/// Exact modular exponentiation for arbitrary-size integers.
+///
+/// Computes the residue in `[0, modulus)` without building the full power.
+/// With exponent zero the result is `1 mod modulus`.
+///
+/// # Errors
+/// Returns a domain error for a negative exponent or a nonpositive modulus.
+pub fn mod_pow_exact(
+    base: &BigInt,
+    exponent: &BigInt,
+    modulus: &BigInt,
+) -> Result<BigInt, crate::NumericError> {
+    let exponent_sign = exponent.sign();
+    if exponent_sign == Sign::Minus {
+        return Err(crate::NumericError::Domain(
+            "mod_pow requires a nonnegative exponent".into(),
+        ));
+    }
+    if modulus.sign() != Sign::Plus {
+        return Err(crate::NumericError::Domain(
+            "mod_pow requires a positive modulus".into(),
+        ));
+    }
+    if modulus.is_one() {
+        return Ok(BigInt::ZERO);
+    }
+    if exponent_sign == Sign::NoSign {
+        return Ok(BigInt::one());
+    }
+    Ok(base.modpow(exponent, modulus))
 }
 
 /// The modular multiplicative inverse of `a` modulo `modulus`, in `[0, modulus)`.
@@ -214,6 +246,27 @@ mod tests {
         assert_eq!((3 * inv) % 11, 1);
         assert_eq!(mod_inv(-3, 11).unwrap(), 7);
         assert!(mod_inv(6, 9).is_err());
+    }
+
+    #[test]
+    fn exact_modular_powers_preserve_large_negative_bases_and_residues() {
+        let base: BigInt = "-12554203470773361527671578846415332832204710888928069035668"
+            .parse()
+            .unwrap();
+        let exponent: BigInt = "340282366920938463463374607431768223801".parse().unwrap();
+        let modulus: BigInt = "170141183460469231731687303715884105727".parse().unwrap();
+        let result = mod_pow_exact(&base, &exponent, &modulus).unwrap();
+        assert_eq!(result.to_string(), "5156499469602237965128690280193276443");
+        assert_eq!(
+            mod_pow_exact(&base, &BigInt::zero(), &modulus).unwrap(),
+            BigInt::one()
+        );
+        assert_eq!(
+            mod_pow_exact(&base, &exponent, &BigInt::one()).unwrap(),
+            BigInt::zero()
+        );
+        assert!(mod_pow_exact(&base, &(-exponent.clone()), &modulus).is_err());
+        assert!(mod_pow_exact(&base, &exponent, &BigInt::zero()).is_err());
     }
 
     #[test]

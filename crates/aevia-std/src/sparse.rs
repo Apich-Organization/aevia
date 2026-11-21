@@ -131,7 +131,7 @@ pub fn krylov_precond(
     .map_err(Into::into)
 }
 
-fn to_rssn_csr(a: &Csr<'_>) -> Result<rssn::kernels::krylov::Csr, NumericError> {
+fn validate_csr(a: &Csr<'_>) -> Result<(), NumericError> {
     if a.rows.checked_add(1) != Some(a.row_ptr.len())
         || a.col_idx.len() != a.values.len()
         || a.row_ptr.first() != Some(&0)
@@ -146,6 +146,11 @@ fn to_rssn_csr(a: &Csr<'_>) -> Result<rssn::kernels::krylov::Csr, NumericError> 
             "sparse matrix contains non-finite entries".into(),
         ));
     }
+    Ok(())
+}
+
+fn to_rssn_csr(a: &Csr<'_>) -> Result<rssn::kernels::krylov::Csr, NumericError> {
+    validate_csr(a)?;
     Ok(rssn::kernels::krylov::Csr {
         rows: a.rows,
         cols: a.cols,
@@ -155,17 +160,10 @@ fn to_rssn_csr(a: &Csr<'_>) -> Result<rssn::kernels::krylov::Csr, NumericError> 
     })
 }
 
-/// Minimal Residual (MINRES) method for symmetric indefinite systems `A x = b`
-/// starting from zero (Paige–Saunders algorithm).
-///
-/// # Errors
-/// [`NumericError::NotSquare`] and [`NumericError::ShapeMismatch`].
-pub fn minres(
+fn prepare_iterative_system(
     a: &Csr<'_>,
     b: &[f64],
-    tolerance: f64,
-    max_iterations: usize,
-) -> Result<CgResult, NumericError> {
+) -> Result<Option<rssn::kernels::krylov::Csr>, NumericError> {
     if a.rows != a.cols {
         return Err(NumericError::NotSquare);
     }
@@ -177,14 +175,37 @@ pub fn minres(
         )));
     }
     if a.rows == 0 {
-        return Ok(CgResult {
-            x: Vec::new(),
-            iterations: 0,
-            residual: 0.0,
-            converged: true,
-        });
+        validate_csr(a)?;
+        return Ok(None);
     }
-    let csr = to_rssn_csr(a)?;
+    to_rssn_csr(a).map(Some)
+}
+
+const fn empty_iterative_solution() -> CgResult {
+    CgResult {
+        x: Vec::new(),
+        iterations: 0,
+        residual: 0.0,
+        converged: true,
+    }
+}
+
+/// Minimal Residual (MINRES) method for symmetric indefinite systems `A x = b`
+/// starting from zero (Paige–Saunders algorithm).
+///
+/// # Errors
+/// [`NumericError::NotSquare`] for a rectangular matrix,
+/// [`NumericError::ShapeMismatch`] for malformed CSR storage or an incompatible
+/// right-hand side, and [`NumericError::Domain`] for non-finite matrix values.
+pub fn minres(
+    a: &Csr<'_>,
+    b: &[f64],
+    tolerance: f64,
+    max_iterations: usize,
+) -> Result<CgResult, NumericError> {
+    let Some(csr) = prepare_iterative_system(a, b)? else {
+        return Ok(empty_iterative_solution());
+    };
     let result = rssn::kernels::krylov_ext::minres(
         |x, y| csr.matvec(x, y),
         |x, y| y.copy_from_slice(x),
@@ -382,25 +403,9 @@ pub fn amg_solve(
     tolerance: f64,
     max_cycles: usize,
 ) -> Result<CgResult, NumericError> {
-    if a.rows != a.cols {
-        return Err(NumericError::NotSquare);
-    }
-    if b.len() != a.rows {
-        return Err(NumericError::ShapeMismatch(format!(
-            "matrix has {} rows, right-hand side has {} entries",
-            a.rows,
-            b.len()
-        )));
-    }
-    if a.rows == 0 {
-        return Ok(CgResult {
-            x: Vec::new(),
-            iterations: 0,
-            residual: 0.0,
-            converged: true,
-        });
-    }
-    let csr = to_rssn_csr(a)?;
+    let Some(csr) = prepare_iterative_system(a, b)? else {
+        return Ok(empty_iterative_solution());
+    };
     let opts = rssn::kernels::multigrid::AmgOptions::default();
     let amg = rssn::kernels::multigrid::Amg::build(&csr, &opts)
         .map_err(|_| NumericError::NotPositiveDefinite)?;
@@ -426,25 +431,9 @@ pub fn amg_general_solve(
     tolerance: f64,
     max_cycles: usize,
 ) -> Result<CgResult, NumericError> {
-    if a.rows != a.cols {
-        return Err(NumericError::NotSquare);
-    }
-    if b.len() != a.rows {
-        return Err(NumericError::ShapeMismatch(format!(
-            "matrix has {} rows, right-hand side has {} entries",
-            a.rows,
-            b.len()
-        )));
-    }
-    if a.rows == 0 {
-        return Ok(CgResult {
-            x: Vec::new(),
-            iterations: 0,
-            residual: 0.0,
-            converged: true,
-        });
-    }
-    let csr = to_rssn_csr(a)?;
+    let Some(csr) = prepare_iterative_system(a, b)? else {
+        return Ok(empty_iterative_solution());
+    };
     let opts = rssn::kernels::amg_general::AmgGeneralOptions::default();
     let amg = rssn::kernels::amg_general::AmgGeneral::build(&csr, &opts)
         .map_err(|_| NumericError::Domain("AMG setup requires positive diagonal".to_string()))?;
@@ -469,25 +458,9 @@ pub fn cg_amg(
     tolerance: f64,
     max_iterations: usize,
 ) -> Result<CgResult, NumericError> {
-    if a.rows != a.cols {
-        return Err(NumericError::NotSquare);
-    }
-    if b.len() != a.rows {
-        return Err(NumericError::ShapeMismatch(format!(
-            "matrix has {} rows, right-hand side has {} entries",
-            a.rows,
-            b.len()
-        )));
-    }
-    if a.rows == 0 {
-        return Ok(CgResult {
-            x: Vec::new(),
-            iterations: 0,
-            residual: 0.0,
-            converged: true,
-        });
-    }
-    let csr = to_rssn_csr(a)?;
+    let Some(csr) = prepare_iterative_system(a, b)? else {
+        return Ok(empty_iterative_solution());
+    };
     let opts = rssn::kernels::multigrid::AmgOptions::default();
     let amg = rssn::kernels::multigrid::Amg::build(&csr, &opts)
         .map_err(|_| NumericError::NotPositiveDefinite)?;
@@ -505,6 +478,136 @@ pub fn cg_amg(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    type IterativeSolver = fn(&Csr<'_>, &[f64], f64, usize) -> Result<CgResult, NumericError>;
+
+    const ITERATIVE_SOLVERS: [(&str, IterativeSolver); 4] = [
+        ("minres", minres),
+        ("amg_solve", amg_solve),
+        ("amg_general_solve", amg_general_solve),
+        ("cg_amg", cg_amg),
+    ];
+
+    #[test]
+    fn empty_iterative_systems_require_canonical_csr_storage() {
+        let empty = Csr {
+            rows: 0,
+            cols: 0,
+            row_ptr: &[0],
+            col_idx: &[],
+            values: &[],
+        };
+        let malformed = [
+            Csr {
+                row_ptr: &[],
+                ..empty
+            },
+            Csr {
+                row_ptr: &[1],
+                ..empty
+            },
+            Csr {
+                row_ptr: &[0, 0],
+                ..empty
+            },
+            Csr {
+                col_idx: &[0],
+                ..empty
+            },
+            Csr {
+                values: &[f64::NAN],
+                ..empty
+            },
+            Csr {
+                row_ptr: &[1],
+                col_idx: &[0],
+                values: &[1.0],
+                ..empty
+            },
+        ];
+        for (name, solve) in ITERATIVE_SOLVERS {
+            let report = solve(&empty, &[], 1e-10, 0).unwrap();
+            assert!(
+                report.x.is_empty() && report.converged,
+                "{name}: {report:?}"
+            );
+            assert_eq!(report.iterations, 0, "{name}");
+            assert_eq!(report.residual.to_bits(), 0.0_f64.to_bits(), "{name}");
+            for bad in malformed {
+                let error = solve(&bad, &[], 1e-10, 0).unwrap_err();
+                assert_eq!(error, bad.matvec(&[]).unwrap_err(), "{name}: {bad:?}");
+                assert!(
+                    matches!(error, NumericError::ShapeMismatch(_)),
+                    "{name}: {bad:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn iterative_systems_preserve_preflight_error_order() {
+        let malformed = Csr {
+            rows: 0,
+            cols: 0,
+            row_ptr: &[],
+            col_idx: &[],
+            values: &[],
+        };
+        let rectangular = Csr { cols: 1, ..malformed };
+        let non_finite = Csr {
+            rows: 1,
+            cols: 1,
+            row_ptr: &[0, 1],
+            col_idx: &[0],
+            values: &[f64::INFINITY],
+        };
+        for (name, solve) in ITERATIVE_SOLVERS {
+            assert_eq!(
+                solve(&rectangular, &[1.0], 1e-10, 1).unwrap_err(),
+                NumericError::NotSquare,
+                "{name}"
+            );
+            assert_eq!(
+                solve(&malformed, &[1.0], 1e-10, 1).unwrap_err(),
+                NumericError::ShapeMismatch(
+                    "matrix has 0 rows, right-hand side has 1 entries".into()
+                ),
+                "{name}"
+            );
+            assert!(
+                matches!(
+                    solve(&non_finite, &[1.0], 1e-10, 1),
+                    Err(NumericError::Domain(_))
+                ),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn iterative_diagonal_solves_match_componentwise_reference() {
+        let diagonal = [2.0, 4.0, 8.0, 16.0];
+        let a = Csr {
+            rows: 4,
+            cols: 4,
+            row_ptr: &[0, 1, 2, 3, 4],
+            col_idx: &[0, 1, 2, 3],
+            values: &diagonal,
+        };
+        let b = [2.0, -8.0, 4.0, 64.0];
+        for (name, solve) in ITERATIVE_SOLVERS {
+            let report = solve(&a, &b, 1e-10, 30).unwrap();
+            assert!(report.converged, "{name}: {report:?}");
+            assert_eq!(report.x.len(), b.len(), "{name}");
+            for ((value, rhs), scale) in report.x.iter().zip(b).zip(diagonal) {
+                let expected = rhs / scale;
+                assert!(
+                    (value - expected).abs() < 1e-9,
+                    "{name}: {value} vs {expected}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn kernel_validates_borrowed_csr_before_indexing_and_zero_block_hints() {

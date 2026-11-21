@@ -13,6 +13,13 @@ fn check_finite_interval(
             "quadrature requires finite bounds with a representable interval length".to_string(),
         ));
     }
+    check_interval_order(a, b)
+}
+
+fn check_interval_order(
+    a: f64,
+    b: f64,
+) -> Result<(), NumericError> {
     if b < a {
         return Err(NumericError::Domain(
             "quadrature requires a <= b".to_string(),
@@ -89,6 +96,9 @@ where
 
 /// Adaptive 15-point Gauss–Kronrod (G7–K15) quadrature of `f` over `[a, b]`.
 ///
+/// The RSSN rule accepts finite, ordered bounds even when their full width
+/// overflows. The result and the error estimate must remain finite.
+///
 /// # Errors
 /// [`NumericError::Domain`] or [`NumericError::NotConverged`].
 pub fn quad_gauss_kronrod<F>(
@@ -101,13 +111,18 @@ where
     F: FnMut(f64) -> f64,
 {
     check_tol(tol)?;
-    check_finite_interval(a, b)?;
+    if !a.is_finite() || !b.is_finite() {
+        return Err(NumericError::Domain(
+            "Gauss–Kronrod quadrature requires finite bounds".into(),
+        ));
+    }
+    check_interval_order(a, b)?;
     if a >= b {
         return Ok(0.0);
     }
     let cell = RefCell::new(f);
     let res = kquad::integrate(|x| (cell.borrow_mut())(x), a, b, tol.max(1e-14));
-    if res.converged && res.value.is_finite() {
+    if res.converged && res.value.is_finite() && res.error.is_finite() {
         Ok(res.value)
     } else {
         Err(NumericError::NotConverged)
@@ -246,5 +261,61 @@ where
         Ok(res.value)
     } else {
         Err(NumericError::NotConverged)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gauss_kronrod_uses_the_rssn_half_width_when_the_full_width_overflows() {
+        let limit = 1.7e308_f64;
+        let sample = 1e-308_f64;
+        let mut calls = 0;
+        let mut callback = |x: f64| {
+            assert!(x.is_finite() && x > -limit && x < limit);
+            calls += 1;
+            sample
+        };
+        let value = quad_gauss_kronrod(&mut callback, -limit, limit, 1e-12).unwrap();
+        assert!((value - (2.0 * sample) * limit).abs() < 1e-12);
+        assert_eq!(calls, 15);
+
+        let mut never = |_| panic!("invalid or empty interval sampled");
+        assert!(quad_gauss_legendre(&mut never, -limit, limit, 4).is_err());
+        assert!(quad_gauss_kronrod(&mut never, limit, -limit, 1e-12).is_err());
+        let empty = quad_gauss_kronrod(&mut never, 3.0, 3.0, 1e-12).unwrap();
+        assert_eq!(empty.to_bits(), 0);
+    }
+
+    #[test]
+    fn adaptive_steps_match_the_native_rule_and_analytic_integral() {
+        let step = |x: f64| if x < 0.375 { 1.0 } else { 3.0 };
+        let mut adapted = Vec::new();
+        let mut native = Vec::new();
+        let value = quad_gauss_kronrod(
+            &mut |x| {
+                adapted.push(x.to_bits());
+                step(x)
+            },
+            0.0,
+            1.0,
+            1e-12,
+        )
+        .unwrap();
+        let nodes = RefCell::new(&mut native);
+        let reference = kquad::integrate(
+            |x| {
+                nodes.borrow_mut().push(x.to_bits());
+                step(x)
+            },
+            0.0,
+            1.0,
+            1e-12,
+        );
+        assert_eq!(value.to_bits(), reference.value.to_bits());
+        assert!((value - 2.25).abs() < 1e-12);
+        assert_eq!(adapted, native);
     }
 }

@@ -1,5 +1,7 @@
-//! Root-finding and polynomial root kernels: thin adapters over
-//! `rssn::kernels::rootfind`.
+//! Root-finding and polynomial root kernels backed by RSSN.
+//!
+//! The explicit Brent adapter uses the caller's interval and budget. The
+//! nearby-root solver used by Solve searches for its own interval in RSSN.
 
 use crate::Complex;
 use crate::NumericError;
@@ -131,4 +133,70 @@ pub fn poly_roots(coeffs: &[f64]) -> Result<Vec<Complex>, NumericError> {
         .into_iter()
         .map(|(re, im)| Complex::new(re, im))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::root;
+    use super::NumericError;
+
+    #[test]
+    fn nearby_root_search_keeps_tiny_residual_signs_and_its_probe_order() {
+        let mut visited = Vec::new();
+        let result = root(
+            &mut |x| {
+                visited.push(x);
+                (x - 2.5) * 1e-200
+            },
+            0.0,
+        )
+        .unwrap();
+        assert_eq!(result.to_bits(), 2.5_f64.to_bits());
+        assert_eq!(
+            &visited[5..],
+            &[-1.0, 1.0, -2.0, 2.0, -4.0, 4.0, 0.0, 2.0, 3.0, 2.5],
+        );
+    }
+
+    #[test]
+    fn nearby_root_search_handles_exact_endpoints_and_invalid_interiors() {
+        let mut visited = Vec::new();
+        let result = root(
+            &mut |x| {
+                visited.push(x);
+                (x - 2.0) * 1e-200
+            },
+            0.0,
+        )
+        .unwrap();
+        assert_eq!(result.to_bits(), 2.0_f64.to_bits());
+        assert_eq!(&visited[5..], &[-1.0, 1.0, -2.0, 2.0]);
+
+        let mut blocked = |x: f64| {
+            if x.to_bits() == 3.0_f64.to_bits() {
+                f64::NAN
+            } else {
+                (x - 2.5) * 1e-200
+            }
+        };
+        assert_eq!(
+            root(&mut blocked, 0.0),
+            Err(NumericError::Domain("invalid root-finding input".into())),
+        );
+    }
+
+    #[test]
+    fn a_nonfinite_difference_sample_cannot_report_a_converged_zero_step() {
+        let bad_probe = (f64::EPSILON.cbrt() * 0.5).to_bits();
+        let mut residual = |x: f64| {
+            assert!(x.is_finite());
+            if x.to_bits() == bad_probe {
+                f64::INFINITY
+            } else {
+                x - 0.25
+            }
+        };
+        let result = root(&mut residual, 0.0).unwrap();
+        assert_eq!(result.to_bits(), 0.25_f64.to_bits());
+    }
 }

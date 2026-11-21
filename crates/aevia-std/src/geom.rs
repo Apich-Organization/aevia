@@ -4,7 +4,9 @@
 //! evaluated by RSSN in floating-point, and both carry the dimension of
 //! their arguments (`L` and `L^2`), which the caller attaches.
 
-/// The non-negative area of a flat `[x0, y0, x1, y1, ...]` polygon.
+/// The non-negative area of ordered, flat `[x0, y0, x1, y1, ...]` vertices.
+/// Fewer than three vertices give zero. RSSN evaluates the area at the input
+/// coordinates' scale, including a polygon translated far from the origin.
 #[must_use]
 pub fn polygon_area(points: &[f64]) -> f64 {
     rssn::kernels::geometry::polygon_area(points)

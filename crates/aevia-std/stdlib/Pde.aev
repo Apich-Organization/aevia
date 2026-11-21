@@ -16,15 +16,16 @@ module Pde
 ##
 ## *Source: Aevia standard library guide.*
 let solve_advection = solve_advection
-## Solves the heat (diffusion) equation on a regular grid by finite differences, returning the field at each time step as Ok(fields), or Err(PdeError) for an unstable time step or mismatched grid.
+## Solves heat diffusion on a regular 2D grid and returns the initial field and every time step.
 ##
 ## **Signature:** `solve_heat : HeatSpec -> Result<Tensor<1, Field>, PdeError>`
 ##
-## See the Pde module for the record fields.
+## The edges keep their initial values. Set method to "adi" for implicit stepping beyond the explicit stability limit. The default "explicit" requires alpha * dt / h^2 <= 1/4.
 ##
 ## **Examples:**
 ## ```text
-## let solver = solve_heat
+## import Pde { solve_heat }
+## solve_heat({ grid = { nx = 3, ny = 3, h = 1.0 }, alpha = 1.0, dt = 2.0, steps = 1, method = "adi", initial = [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0]] })
 ## ```
 ##
 ## *Source: Aevia standard library guide.*

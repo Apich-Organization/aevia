@@ -58,6 +58,43 @@ pub fn quantile(
     rssn::kernels::descriptive::quantile(values, q).map_err(Into::into)
 }
 
+/// Type-7 quantiles of a sorted exact sample in probability order.
+///
+/// # Errors
+///
+/// Returns [`NumericError::Empty`] for an empty sample or
+/// [`NumericError::Domain`] for a probability outside `[0, 1]`.
+pub fn quantiles_exact(
+    sorted: &[BigRational],
+    probabilities: &[BigRational],
+) -> Result<Vec<BigRational>, NumericError> {
+    if sorted.is_empty() {
+        return Err(NumericError::Empty);
+    }
+    probabilities
+        .iter()
+        .map(|probability| quantile_exact(sorted, probability))
+        .collect()
+}
+
+/// Type-7 quantiles of a finite sample in probability order.
+///
+/// Multiple probabilities share one ordered copy of the observations.
+/// Repeated probabilities are retained. An empty probability vector yields
+/// an empty result when the sample is valid.
+///
+/// # Errors
+///
+/// Returns [`NumericError::Empty`] for an empty sample or
+/// [`NumericError::Domain`] for non-finite observations and for probabilities
+/// outside `[0, 1]`.
+pub fn quantiles(
+    values: &[f64],
+    probabilities: &[f64],
+) -> Result<Vec<f64>, NumericError> {
+    rssn::kernels::descriptive::quantiles(values, probabilities).map_err(Into::into)
+}
+
 /// The arithmetic mean of a float sample.
 ///
 /// Non-finite inputs follow IEEE addition in sample order.

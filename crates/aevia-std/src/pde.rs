@@ -7,9 +7,8 @@
 //! (an unstable time step, a grid that does not match the field) is an error,
 //! never a silently wrong field.
 //!
-//! Every solver uses zero Dirichlet data on the boundary, which is what "no
-//! boundary condition given" means for a first implementation; a spec carries
-//! its own initial or source field and the interior is what changes.
+//! The short heat solvers hold the edges of the initial field fixed. The
+//! boundary-aware interfaces accept explicit face conditions.
 
 use crate::NumericError;
 
@@ -114,6 +113,44 @@ pub fn solve_poisson(spec: &PoissonSpec) -> Result<Field, NumericError> {
 /// Rejects invalid grid, field shape, boundary data, or unstable time stepping.
 pub fn solve_heat(spec: &HeatSpec) -> Result<Vec<Field>, NumericError> {
     rssn::sim::fdm_nd::solve_heat(spec).map_err(map_fdm_err)
+}
+
+/// Solves heat diffusion by 2D alternating-direction implicit stepping.
+///
+/// Each edge keeps its initial values, including nonconstant profiles. The
+/// returned snapshots start at the initial field and include the final step.
+///
+/// # Errors
+/// Rejects invalid grids, field shapes, time or diffusion coefficients, and
+/// snapshots that cannot be represented with finite values.
+pub fn solve_heat_adi(spec: &HeatSpec) -> Result<Vec<Field>, NumericError> {
+    const MAX_FRAMES: usize = isize::MAX.unsigned_abs() / std::mem::size_of::<Field>();
+    if spec.steps >= MAX_FRAMES {
+        return Err(NumericError::Domain("too many heat snapshots".into()));
+    }
+    let Grid { nx, ny, .. } = spec.grid;
+    let initial = &spec.initial;
+    let boundary = if nx != 0 && ny != 0 && nx.checked_mul(ny) == Some(initial.len()) {
+        let mut rows = initial.chunks_exact(nx);
+        Boundary2D {
+            left: BoundaryCondition::DirichletProfile(
+                rows.clone()
+                    .filter_map(|row| row.first().copied())
+                    .collect(),
+            ),
+            right: BoundaryCondition::DirichletProfile(
+                rows.clone().filter_map(|row| row.last().copied()).collect(),
+            ),
+            bottom: BoundaryCondition::DirichletProfile(
+                rows.clone().next().unwrap_or_default().to_vec(),
+            ),
+            top: BoundaryCondition::DirichletProfile(rows.next_back().unwrap_or_default().to_vec()),
+        }
+    } else {
+        // Let the shared solver diagnose the grid and field before applying faces.
+        Boundary2D::uniform(BoundaryCondition::Dirichlet(0.0))
+    };
+    solve_heat_with_bc(spec, &boundary, TimeStepping::Adi)
 }
 
 /// Solves the wave equation on the specified 2D grid.
@@ -681,6 +718,86 @@ pub use rssn::sim::pde_api::adaptive::fem_heat_source_adaptive;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_heat_adi_validates_shape_and_snapshot_capacity() {
+        let mut spec = HeatSpec {
+            grid: Grid { nx: 3, ny: 3, h: 1.0 },
+            alpha: 1.0,
+            dt: 2.0,
+            steps: 0,
+            initial: vec![4.0, 5.0, 6.0, 5.0, 7.0, 7.0, 6.0, 7.0, 8.0],
+        };
+        let snapshots = solve_heat_adi(&spec).unwrap();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].values, spec.initial);
+
+        spec.steps = usize::MAX;
+        assert!(matches!(
+            solve_heat_adi(&spec),
+            Err(NumericError::Domain(_))
+        ));
+        spec.steps = 1;
+        spec.initial.pop();
+        assert!(matches!(
+            solve_heat_adi(&spec),
+            Err(NumericError::ShapeMismatch(_))
+        ));
+        spec.grid.nx = 0;
+        assert!(matches!(
+            solve_heat_adi(&spec),
+            Err(NumericError::Domain(_))
+        ));
+
+        spec.grid.nx = 3;
+        spec.initial = vec![f64::MAX; 9];
+        assert!(matches!(solve_heat_adi(&spec), Err(NumericError::Singular)));
+    }
+
+    #[test]
+    fn fixed_heat_adi_matches_directional_modes_on_a_rectangular_grid() {
+        let grid = Grid { nx: 7, ny: 5, h: 0.5 };
+        let shape = |index, count| {
+            if index == 0 || index + 1 == count {
+                0.0
+            } else {
+                (std::f64::consts::PI * index as f64 / (count - 1) as f64).sin()
+            }
+        };
+        let background = |x, y| 2.0 + x as f64 - 2.0 * y as f64;
+        let mode = |x, y| shape(x, grid.nx) * shape(y, grid.ny);
+        let initial = (0..grid.ny)
+            .flat_map(|y| (0..grid.nx).map(move |x| background(x, y) + mode(x, y)))
+            .collect();
+        let alpha = 0.4;
+        let dt = 2.0;
+        let r = alpha * dt / (grid.h * grid.h);
+        let factor = |n: usize| {
+            let damping = 2.0 * r * (std::f64::consts::FRAC_PI_2 / (n - 1) as f64).sin().powi(2);
+            (1.0 - damping) / (1.0 + damping)
+        };
+        let amplification = factor(grid.nx) * factor(grid.ny);
+        let snapshots = solve_heat_adi(&HeatSpec {
+            grid,
+            alpha,
+            dt,
+            steps: 4,
+            initial,
+        })
+        .unwrap();
+        assert_eq!(snapshots.len(), 5);
+        let mut amplitude = 1.0;
+        for frame in snapshots {
+            assert_eq!(frame.grid, grid);
+            for y in 0..grid.ny {
+                for x in 0..grid.nx {
+                    let expected = background(x, y) + amplitude * mode(x, y);
+                    assert!((frame.values[y * grid.nx + x] - expected).abs() < 8e-13);
+                }
+            }
+            amplitude *= amplification;
+        }
+    }
 
     fn close(
         a: f64,
