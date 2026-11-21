@@ -8,12 +8,11 @@
 //!
 //! # Why the schema is applied by the binary
 //!
-//! `sqlx::migrate!` embeds the `.sql` files at compile time and applies them at
-//! start-up, inside an advisory lock. That means a deployment has no separate
-//! migration step to forget, no `psql` in the runtime image, and no version
-//! skew between the schema and the binary that expects it. The database is a
-//! container with no host access; the only thing that ever touches it is this
-//! process.
+//! `sqlx::migrate!` embeds the `.sql` files at compile time. At startup the
+//! registry validates the applied history and runs pending migrations under a
+//! PostgreSQL advisory lock. Each successful session returns to the pool.
+//! An unsuccessful or cancelled migration retires its session so another
+//! startup can acquire the lock after PostgreSQL closes the session.
 
 #![forbid(unsafe_code)]
 #![cfg_attr(
@@ -35,6 +34,9 @@ pub mod repo;
 use std::time::Duration;
 
 use sqlx::PgPool;
+use sqlx::Postgres;
+use sqlx::migrate::MigrateError;
+use sqlx::pool::PoolConnection;
 use sqlx::postgres::PgPoolOptions;
 
 use aevia_registry_core::Error;
@@ -47,6 +49,23 @@ pub const E_CONFLICT: &str = "E_CONFLICT";
 
 /// `E_NOT_FOUND`: the row does not exist.
 pub const E_NOT_FOUND: &str = "E_NOT_FOUND";
+
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
+struct MigrationSession {
+    connection: PoolConnection<Postgres>,
+    succeeded: bool,
+}
+
+impl Drop for MigrationSession {
+    fn drop(&mut self) {
+        if !self.succeeded {
+            // SQLx releases the session advisory lock on its success path.
+            // Close a failed or cancelled session before the pool reuses it.
+            self.connection.close_on_drop();
+        }
+    }
+}
 
 /// Opens the pool and applies the migrations.
 ///
@@ -76,11 +95,20 @@ pub async fn connect(
 ///
 /// `E_DB` when a migration fails.
 pub async fn migrate(pool: &PgPool) -> Result<(), Error> {
-    sqlx::migrate!("./migrations")
-        .run(pool)
+    let schema_error =
+        |error: MigrateError| Error::new(E_DB, format!("cannot apply the schema: {error}"));
+    let connection = pool
+        .acquire()
         .await
-        .map_err(|error| Error::new(E_DB, format!("cannot apply the schema: {error}")))?;
-    Ok(())
+        .map_err(MigrateError::from)
+        .map_err(schema_error)?;
+    let mut session = MigrationSession {
+        connection,
+        succeeded: false,
+    };
+    let result = MIGRATOR.run(&mut *session.connection).await;
+    session.succeeded = result.is_ok();
+    result.map_err(schema_error)
 }
 
 /// Maps a `sqlx` failure to the registry's error type.

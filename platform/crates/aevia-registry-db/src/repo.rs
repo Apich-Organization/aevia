@@ -19,6 +19,7 @@ use sqlx::PgPool;
 use sqlx::Row as _;
 
 use aevia_registry_core::Error;
+use aevia_registry_core::vm::LogEntryView;
 use aevia_registry_core::vm::ModuleLink;
 use aevia_registry_core::vm::SiteStats;
 
@@ -28,6 +29,7 @@ use crate::models::DocsJob;
 use crate::models::DocsPage;
 use crate::models::GithubOrganisation;
 use crate::models::LogEntry;
+use crate::models::LogHead;
 use crate::models::NewVersion;
 use crate::models::Package;
 use crate::models::PackageSummary;
@@ -1762,6 +1764,69 @@ pub async fn log_head(pool: &PgPool) -> Result<Option<LogEntry>, Error> {
         .fetch_optional(pool)
         .await
         .map_err(|error| sql_error("cannot read the log head", error))
+}
+
+#[derive(sqlx::FromRow)]
+struct LogPageRow {
+    is_head: bool,
+    seq: i64,
+    kind: String,
+    summary: String,
+    prev_hash: String,
+    entry_hash: String,
+    created_at: DateTime<Utc>,
+}
+
+/// Reads a page of log summaries and the chain head from one database snapshot.
+///
+/// Entries start at `from_seq` inclusive and continue in ascending order up
+/// to `limit`. The head is available even if the requested page is empty.
+///
+/// # Errors
+///
+/// `E_DB` when the query fails.
+pub async fn log_page(
+    pool: &PgPool,
+    from_seq: i64,
+    limit: i64,
+) -> Result<(Vec<LogEntryView>, Option<LogHead>), Error> {
+    // The head marker is independent of ordering. PostgreSQL can merge the
+    // bounded index scans when only the sequence controls the output order.
+    let rows = sqlx::query_as::<_, LogPageRow>(
+        "(SELECT true AS is_head, seq, kind, summary, prev_hash, entry_hash, created_at
+          FROM publish_log ORDER BY seq DESC LIMIT 1)
+         UNION ALL
+         (SELECT false AS is_head, seq, kind, summary, prev_hash, entry_hash, created_at
+          FROM publish_log WHERE seq >= $1 ORDER BY seq ASC LIMIT $2)
+         ORDER BY seq ASC",
+    )
+    .bind(from_seq)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(|error| sql_error("cannot read the log", error))?;
+
+    let mut head = None;
+    let mut entries = Vec::with_capacity(rows.len().saturating_sub(1));
+    for row in rows {
+        if row.is_head {
+            head = Some(LogHead {
+                seq: row.seq,
+                entry_hash: row.entry_hash,
+                created_at: row.created_at,
+            });
+        } else {
+            entries.push(LogEntryView {
+                seq: row.seq,
+                kind: row.kind,
+                summary: row.summary,
+                hash: row.entry_hash,
+                prev: row.prev_hash,
+                at: row.created_at.to_rfc3339(),
+            });
+        }
+    }
+    Ok((entries, head))
 }
 
 // --------------------------------------------------------------------- stats

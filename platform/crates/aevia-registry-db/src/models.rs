@@ -236,6 +236,17 @@ pub struct LogEntry {
     pub created_at: DateTime<Utc>,
 }
 
+/// The newest transparency log entry's cursor and digest.
+#[derive(Clone, Debug)]
+pub struct LogHead {
+    /// The entry's sequence number.
+    pub seq: i64,
+    /// The hash of the newest entry.
+    pub entry_hash: String,
+    /// When it was appended.
+    pub created_at: DateTime<Utc>,
+}
+
 /// A package as a list shows it: with its owner and its newest version.
 #[derive(Clone, Debug, sqlx::FromRow)]
 pub struct PackageSummary {
