@@ -115,7 +115,7 @@ The geometric distribution: the number of failures before the first success, eac
 type Distribution<d>
 ```
 
-A probability distribution, built with one of its constructors, for example Normal({ mu = 0.0, sigma = 1.0 }). Pass it to pdf, cdf, sample and sample_n. Parameters carry dimensions, so a Normal of lengths has mu and sigma in metres and its density is per metre.
+A probability distribution, built with one of its constructors, for example Normal({ mu = 0.0, sigma = 1.0 }). Pass it to pdf, cdf, cdf_batch, dist_quantile, sample or sample_n. Parameters carry dimensions, so a Normal of lengths has mu and sigma in metres and its density is per metre.
 ## `let cdf`
 
 ```aevia
@@ -129,12 +129,50 @@ cdf(dist, x) is the probability that a draw from the distribution is at most x: 
 **Kernel signature** (derived):
 - `cdf : (Dyn<term>, Dyn<term>) -> Dyn<term>`
 
-**Dimensions:** kernel rule `Custom("")`
+**Dimensions:** kernel rule `CompatibleDimensionless`
 
 **Examples:**
 ```text
 import Stats.Distributions { Normal }
 cdf(Normal({ mu = 0.0, sigma = 1.0 }), 0.0)
+```
+
+*Source: Aevia standard library guide.*
+## `let cdf_batch`
+
+```aevia
+let cdf_batch = cdf_batch
+```
+
+Evaluates cumulative probabilities for a vector of points in the distribution's dimension.
+
+**Signature:** `cdf_batch : (Distribution<d>, Tensor<1, Real[d]>) -> Tensor<1, Real[1]>`
+
+The results are dimensionless and retain point order and repetitions. A valid distribution and an empty input give an empty result. Invalid parameters or a NaN point raise a domain error.
+
+**Examples:**
+```text
+import Stats.Distributions { cdf_batch, Normal }
+cdf_batch(Normal({ mu = 0.0, sigma = 1.0 }), [-1.0, 0.0, 1.0])
+```
+
+*Source: Aevia standard library guide.*
+## `let dist_quantile`
+
+```aevia
+let dist_quantile = dist_quantile
+```
+
+Returns the quantile of a distribution at a dimensionless probability in [0, 1].
+
+**Signature:** `dist_quantile : (Distribution<d>, Real[1]) -> Real[d]`
+
+The result has the distribution's dimension. At probabilities 0 and 1 it returns the lower and upper support endpoints, which can be infinite. Invalid parameters and probabilities raise a domain error.
+
+**Examples:**
+```text
+import Stats.Distributions { Normal, dist_quantile }
+dist_quantile(Normal({ mu = 2.0 m, sigma = 0.5 m }), 0.975)
 ```
 
 *Source: Aevia standard library guide.*

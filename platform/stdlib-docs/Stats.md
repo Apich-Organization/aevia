@@ -191,6 +191,24 @@ quantile([1.0, 2.0, 3.0, 4.0], 0.25)
 ```
 
 *Source: Aevia standard library guide.*
+## `let quantiles`
+
+```aevia
+let quantiles = quantiles
+```
+
+Compute Type-7 quantiles for a vector of dimensionless probabilities in [0, 1].
+
+**Signature:** `quantiles : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,1>>) -> Tensor<1, Scalar<div_rep(ρ),d>>`
+
+The batch shares one ordered sample and keeps the sample dimension and query order, including duplicates. Exact inputs use rational interpolation. The sample must be finite and nonempty. An empty probability vector returns an empty result.
+
+**Examples:**
+```text
+quantiles([4.0 m, 1.0 m, 3.0 m, 2.0 m], [0.75, 0.25, 0.5])
+```
+
+*Source: Aevia standard library guide.*
 ## `let skewness`
 
 ```aevia

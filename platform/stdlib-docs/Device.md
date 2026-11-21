@@ -26,11 +26,11 @@ device_of([[1.0, 2.0], [3.0, 4.0]])
 let on = on
 ```
 
-on(device, thunk) runs the computation thunk() on a device and returns its result.
+Runs the zero-argument function thunk on the requested CPU device.
 
 **Signature:** `on : (Device, () -> a) -> IO a`
 
-It is an IO action.
+This IO action currently supports Cpu. Requests for Gpu or Distributed produce E1001.
 
 **Examples:**
 ```text
@@ -44,11 +44,11 @@ fn run_here(m: Tensor<2, Float>): IO Int = on(device_of(m), fn () => 1 + 1)
 let to_device = to_device
 ```
 
-Moves a matrix to a compute device and returns it.
+Places a tensor on the requested CPU device and returns it.
 
 **Signature:** `to_device : (Tensor<n,τ>, Device) -> IO (Tensor<n,τ>)`
 
-A Device is Cpu, Gpu(index) or Distributed, and you can obtain the one a matrix already lives on with device_of. It is an IO action. Without GPU support in the build, asking for a Gpu device is a runtime error.
+This IO action currently supports Cpu. Use device_of to query the tensor location. Gpu and Distributed placement produce E1001 even if the RSSN host can discover a GPU.
 
 **Examples:**
 ```text

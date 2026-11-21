@@ -96,6 +96,25 @@ lcm(4, 6)
 ```
 
 *Source: Aevia standard library guide.*
+## `let mod_pow`
+
+```aevia
+let mod_pow = mod_pow
+```
+
+Computes the exact residue of base raised to exponent modulo modulus.
+
+**Signature:** `mod_pow : (Int, Int, Int) -> Int`
+
+The result lies in [0, modulus). All arguments support arbitrary-size integers. The exponent must be nonnegative and the modulus positive.
+
+**Examples:**
+```text
+mod_pow(-3, 3, 7)
+mod_pow(2, 1000000, 97)
+```
+
+*Source: Aevia standard library guide.*
 ## `let primes`
 
 ```aevia

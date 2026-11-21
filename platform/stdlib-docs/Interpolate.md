@@ -46,13 +46,33 @@ interp1([0.0, 1.0, 2.0], [0.0, 10.0, 40.0], 1.5)
 let interp2 = interp2
 ```
 
-Bilinear interpolation on a grid: interp2(xs, ys, table, x, y) where table[i][j] is the value at (xs[i], ys[j]).
+Bilinear interpolation at (x, y) on a grid.
 
 **Signature:** `interp2 : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<2, Scalar<ρ,f>>, Scalar<ρ,d>, Scalar<ρ,e>) -> Scalar<ρ,f>`
+
+Store the sample at (xs[i], ys[j]) in table[j][i]. Finite queries outside the grid are clamped to its edges.
 
 **Examples:**
 ```text
 interp2([0.0, 1.0], [0.0, 1.0], [[0.0, 1.0], [2.0, 3.0]], 0.5, 0.5)
+```
+
+*Source: Aevia standard library guide.*
+## `let interp2Batch`
+
+```aevia
+let interp2Batch = interp2Batch
+```
+
+Bilinear interpolation for paired samples.
+
+**Signature:** `interp2Batch : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<2, Scalar<ρ,f>>, Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Tensor<1, Float[f]>`
+
+Use increasing axes and place the sample at (xs[i], ys[j]) in table[j][i]. Supply two equally long query tensors with the dimensions of their respective axes. Finite queries clamp to the edges. Float results keep the input order and the table's dimension.
+
+**Examples:**
+```text
+interp2Batch([0.0, 1.0], [0.0, 1.0], [[0.0, 1.0], [2.0, 3.0]], [0.5, 0.0], [0.5, 1.0])
 ```
 
 *Source: Aevia standard library guide.*

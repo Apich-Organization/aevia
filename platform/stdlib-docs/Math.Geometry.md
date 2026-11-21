@@ -42,3 +42,22 @@ polygon_area([[0.0 m, 0.0 m], [2.0 m, 0.0 m], [2.0 m, 3.0 m]])
 ```
 
 *Source: Aevia standard library guide.*
+## `let tetrahedron_volume`
+
+```aevia
+let tetrahedron_volume = tetrahedron_volume
+```
+
+Computes the nonnegative volume from four rows of three finite coordinates.
+
+**Signature:** `tetrahedron_volume : Tensor<[4, 3], Real[d]> -> Real[d^3]`
+
+It cubes the coordinate dimension and is independent of vertex order. Coplanar or repeated vertices give zero. Non-finite coordinates or a non-finite computed volume raise a domain error.
+
+**Examples:**
+```text
+import Math.Geometry { tetrahedron_volume }
+tetrahedron_volume([[0.0 m, 0.0 m, 0.0 m], [1.0 m, 0.0 m, 0.0 m], [0.0 m, 1.0 m, 0.0 m], [0.0 m, 0.0 m, 1.0 m]])
+```
+
+*Source: Aevia standard library guide.*
