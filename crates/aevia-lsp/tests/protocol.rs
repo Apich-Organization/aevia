@@ -536,6 +536,62 @@ fn run_json(messages: Vec<Value>) -> (Exit, Vec<Value>) {
     run(&borrowed)
 }
 
+#[test]
+fn semantic_token_ranges_keep_partial_tokens_and_follow_utf16_edits() {
+    use serde_json::json;
+
+    let uri = "untitled:viewport.aev";
+    let source = "\r\nlet purple = \"😀\"\r\nlet result = (\"😀\", purple)\r\nlet after = 1\r\n";
+    let range = |line, start, end| json!({"start":{"line":line,"character":start},"end":{"line":line,"character":end}});
+    let request = |id, range| {
+        json!({"jsonrpc":"2.0","id":id,"method":"textDocument/semanticTokens/range",
+            "params":{"textDocument":{"uri":uri},"range":range}})
+    };
+    let change = |version, range, text| {
+        json!({"jsonrpc":"2.0","method":"textDocument/didChange","params":{
+            "textDocument":{"uri":uri,"version":version},"contentChanges":[{"range":range,"text":text}]}})
+    };
+    let (_, replies) = run_json(vec![
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{
+            "textDocument":{"uri":uri,"version":1,"text":source}}}),
+        request(2, range(2, 21, 22)),
+        request(3, range(2, 19, 20)),
+        request(4, range(2, 21, 21)),
+        request(5, range(2, 30, 35)),
+        request(6, range(2, 22, 21)),
+        request(7, range(20, 0, 1)),
+        change(2, range(2, 16, 17), "broken"),
+        request(8, range(2, 21, 22)),
+        change(2, range(2, 15, 17), "a"),
+        request(9, range(2, 20, 21)),
+        json!({"jsonrpc":"2.0","id":10,"method":"shutdown"}),
+        json!({"jsonrpc":"2.0","method":"exit"}),
+    ]);
+    assert_eq!(
+        reply(&replies, 1)["result"]["capabilities"]["semanticTokensProvider"]["range"],
+        true
+    );
+    for id in [2, 8] {
+        assert_eq!(
+            reply(&replies, id)["result"]["data"],
+            json!([2, 20, 6, 5, 0]),
+            "{replies:#?}"
+        );
+    }
+    for id in [3, 4, 5] {
+        assert_eq!(reply(&replies, id)["result"]["data"], json!([]));
+    }
+    for id in [6, 7] {
+        assert_eq!(reply(&replies, id)["error"]["code"], -32602);
+    }
+    assert_eq!(
+        reply(&replies, 9)["result"]["data"],
+        json!([2, 19, 6, 5, 0])
+    );
+    assert_eq!(published(&replies, uri).len(), 2);
+}
+
 /// A package whose `B` imports `A`, and the URIs/positions a client would use.
 fn imported_package(name: &str) -> (TempPackage, String, String) {
     let package = TempPackage::new(name);
@@ -1285,6 +1341,61 @@ fn rename_uses_unsaved_import_ranges_and_open_document_versions() {
     assert!(new_b.contains("A.renamed()"), "{new_b}");
 }
 
+#[cfg(unix)]
+#[test]
+fn imports_and_rename_share_the_winning_open_alias_revision() {
+    use serde_json::json;
+
+    let package = TempPackage::new("open-alias-revision");
+    let primary = "module A\n\nfn value(): Int = 1\n";
+    let alias_text = "module A\n\n## Editable overlay.\n\nfn value(): Int = 2\n";
+    let changed_alias = "module A\n\n## Edited overlay.\n\n\nfn value(): Float = 2.0\n";
+    let importer = "module B\nimport A\nlet got = A.value()\n";
+    let file = package.write("src/A.aev", primary);
+    let alias = package.path("src/Alias.aev");
+    std::os::unix::fs::symlink(&file, &alias).unwrap();
+    let primary_uri = aevia_lsp::protocol::uri_from_path(&file);
+    let alias_uri = aevia_lsp::protocol::uri_from_path(&alias);
+    let importer_uri = aevia_lsp::protocol::uri_from_path(&package.write("src/B.aev", importer));
+    let open = |uri: &str, version, text: &str| json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri,"version":version,"text":text}}});
+    let change = |uri: &str, version, text: &str| json!({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":uri,"version":version},"contentChanges":[{"text":text}]}});
+    let query = |id, method| {
+        json!({"jsonrpc":"2.0","id":id,"method":method,"params":{"textDocument":{"uri":importer_uri},
+            "position":position_of(importer,"value",1),"newName":"renamed"}})
+    };
+    let (_, replies) = run_json(vec![
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+        open(&primary_uri, 4, primary),
+        open(&alias_uri, 8, alias_text),
+        open(&importer_uri, 5, importer),
+        change(&primary_uri, 5, "module A\n\nfn value(): Bool = true\n"),
+        query(2, "textDocument/hover"),
+        change(&alias_uri, 9, changed_alias),
+        query(3, "textDocument/hover"),
+        query(4, "textDocument/rename"),
+        json!({"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":alias_uri}}}),
+        query(5, "textDocument/hover"),
+        json!({"jsonrpc":"2.0","id":6,"method":"shutdown"}),
+        json!({"jsonrpc":"2.0","method":"exit"}),
+    ]);
+    for (id, expected) in [(2, "Int"), (3, "Float"), (5, "Bool")] {
+        assert!(
+            reply(&replies, id)["result"].to_string().contains(expected),
+            "{replies:#?}"
+        );
+    }
+    let edits = reply(&replies, 4)["result"]["documentChanges"]
+        .as_array()
+        .unwrap();
+    let changed = edits
+        .iter()
+        .find(|edit| edit["textDocument"]["uri"] == alias_uri)
+        .unwrap_or_else(|| panic!("{edits:#?}"));
+    assert_eq!(changed["textDocument"]["version"], 9);
+    let renamed = apply_changes(changed_alias, changed["edits"].as_array().unwrap());
+    assert!(renamed.contains("fn renamed(): Float = 2.0"), "{renamed}");
+}
+
 #[test]
 fn module_queries_follow_exact_owner_edges_and_rename_the_correct_dependency() {
     let package = TempPackage::new("owner-import-edges");
@@ -1435,6 +1546,15 @@ fn filesystem_notifications_refresh_closed_dependencies_without_a_hover_request(
             .unwrap()
             .is_empty()
     );
+    // Opening enough other files evicts the checked importer from the program
+    // cache. The watcher still has to remember what triggered its load.
+    for index in 0..aevia_analysis::cache::CAPACITY {
+        let spare = "let spare = 0\n";
+        let path = package.write(&format!("src/Spare{index}.aev"), spare);
+        let uri = aevia_lsp::protocol::uri_from_path(&path);
+        server.handle(serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri,"version":1,"text":spare}}}));
+    }
+    assert_eq!(messages.try_iter().count(), aevia_analysis::cache::CAPACITY);
     std::fs::write(&a, "module A\nfn value(): Bool = true\n").unwrap();
     server.handle(serde_json::json!({"jsonrpc":"2.0","method":"workspace/didChangeWatchedFiles","params":{"changes":[{"uri":a_uri,"type":2}]}}));
     let changed: Vec<Value> = messages.try_iter().collect();

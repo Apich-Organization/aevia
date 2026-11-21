@@ -25,11 +25,14 @@ use aevia_analysis::canonical_source_path as canonical_path;
 use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::rc::Weak;
 use std::sync::mpsc::Sender;
 
 /// What the caller should do after a message.
@@ -84,6 +87,7 @@ const DOCUMENT_REQUESTS: &[&str] = &[
     "textDocument/codeAction",
     "textDocument/codeLens",
     "textDocument/semanticTokens/full",
+    "textDocument/semanticTokens/range",
     "textDocument/typeDefinition",
     "textDocument/references",
     "textDocument/documentHighlight",
@@ -106,13 +110,28 @@ pub struct Server {
     overlays: RefCell<Option<OverlaySnapshot>>,
     /// Import candidates as well as read files, retained even after an LRU
     /// program eviction so an edit refreshes all affected open documents.
-    dependencies: RefCell<BTreeMap<String, Vec<(PathBuf, PathBuf)>>>,
+    dependencies: RefCell<BTreeMap<String, DependencySnapshot>>,
     commands: Vec<command::Task>,
 }
 
 struct OverlaySnapshot {
-    paths: Vec<PathBuf>,
+    buffers: Vec<OverlayBuffer>,
+    /// An imported physical file uses the last open buffer for its path.
+    active_by_path: HashMap<PathBuf, usize>,
     sources: Rc<SourceOverlays>,
+}
+
+struct OverlayBuffer {
+    uri: String,
+    physical: PathBuf,
+    version: i64,
+}
+
+struct DependencySnapshot {
+    // On a cache hit, the program's observations are already in `paths`.
+    // A weak reference preserves its identity without keeping an evicted program alive.
+    program: Weak<dyn Any>,
+    paths: Vec<(PathBuf, PathBuf)>,
 }
 
 impl Server {
@@ -300,6 +319,9 @@ impl Server {
                 RpcError::new(INVALID_PARAMS, "the position is outside the document")
             })
         };
+        if method == "textDocument/semanticTokens/range" {
+            return self.semantic_tokens_range(document, params);
+        }
         let analysis = self.analysis_for(document, &self.overlays());
         Ok(match method {
             | "textDocument/hover" => {
@@ -373,6 +395,33 @@ impl Server {
             },
             | _ => Value::Null,
         })
+    }
+
+    /// Validates a viewport before loading the current source snapshot.
+    fn semantic_tokens_range(
+        &self,
+        document: &Document,
+        params: &Value,
+    ) -> Result<Value, RpcError> {
+        let range = params
+            .get("range")
+            .and_then(crate::protocol::range)
+            .filter(|range| range.start <= range.end)
+            .ok_or_else(|| RpcError::new(INVALID_PARAMS, "no valid `range`"))?;
+        let (Some(start), Some(end)) = (document.offset(range.start), document.offset(range.end))
+        else {
+            return Err(RpcError::new(
+                INVALID_PARAMS,
+                "the range is outside the document",
+            ));
+        };
+        if start == end {
+            return Ok(crate::protocol::semantic_tokens_json(&[]));
+        }
+        let range = document.range_of(start, end);
+        let analysis = self.analysis_for(document, &self.overlays());
+        let tokens = crate::protocol::tokens_in_range(analysis.highlighted_tokens(), range);
+        Ok(crate::protocol::semantic_tokens_json(tokens))
     }
 
     /// Handles a notification.
@@ -455,7 +504,7 @@ impl Server {
         &mut self,
         params: &Value,
     ) {
-        let Some(uri) = text_document_uri(params).map(str::to_string) else {
+        let Some(uri) = text_document_uri(params) else {
             return;
         };
         let Some(version) = params
@@ -468,7 +517,7 @@ impl Server {
         let Some(changes) = params.get("contentChanges").and_then(Value::as_array) else {
             return;
         };
-        let Some(document) = self.documents.get(&uri) else {
+        let Some(document) = self.documents.get_mut(uri) else {
             return;
         };
         if version <= document.version() {
@@ -492,14 +541,22 @@ impl Server {
         }
         // Invalid batches retain both text and version; a later full
         // replacement can resynchronize without exposing a half-applied source.
-        let Some(doc) = self.documents.get_mut(&uri) else {
-            return;
+        let result = if edits.len() == 1
+            && let Some(edit) = edits.pop()
+        {
+            if edit.range.is_none() {
+                document.replace(edit.text, version);
+                Ok(())
+            } else {
+                document.apply(&edit, version)
+            }
+        } else {
+            document.apply_batch(&edits, version)
         };
-        if doc.apply_batch(&edits, version).is_err() {
+        if result.is_err() {
             return;
         }
-        self.overlays.get_mut().take();
-        self.publish_affected([uri.as_str()]);
+        self.publish_affected([uri]);
     }
 
     /// `textDocument/didClose`.
@@ -547,6 +604,7 @@ impl Server {
             .map(|path| canonical_path(path))
             .collect::<BTreeSet<_>>();
         let dependencies = self.dependencies.borrow();
+        let mut changed_targets = HashMap::<&Path, bool>::new();
         let documents: Vec<&Document> = self
             .documents
             .iter()
@@ -555,9 +613,11 @@ impl Server {
                     || changes.contains(document.name())
                     || (!physical.is_empty()
                         && dependencies.get(document.name()).is_some_and(|inputs| {
-                            inputs.iter().any(|(logical, old_physical)| {
+                            inputs.paths.iter().any(|(logical, old_physical)| {
                                 physical.contains(old_physical)
-                                    || physical.contains(&canonical_path(logical))
+                                    || *changed_targets.entry(logical).or_insert_with(|| {
+                                        physical.contains(&canonical_path(logical))
+                                    })
                             })
                         }))
             })
@@ -798,6 +858,14 @@ impl Server {
         focused: &Document,
     ) -> Value {
         let mut result = crate::protocol::rename_json(edits);
+        let snapshot = self.overlays.borrow();
+        let buffers = snapshot
+            .as_ref()
+            .map_or_default(|snapshot| snapshot.buffers.as_slice());
+        let focused_path = buffers
+            .iter()
+            .find(|buffer| buffer.uri == focused.name())
+            .map(|buffer| &buffer.physical);
         if let Some(changes) = result
             .get_mut("documentChanges")
             .and_then(Value::as_array_mut)
@@ -809,34 +877,30 @@ impl Server {
                 else {
                     continue;
                 };
-                if let Some(uri) = target.get("uri").and_then(Value::as_str)
-                    && let Some(document) = self.documents.get(uri)
-                {
-                    target.insert("version".into(), Value::from(document.version()));
-                    continue;
-                }
-                let Some(path) = target
-                    .get("uri")
-                    .and_then(Value::as_str)
-                    .and_then(crate::protocol::path_from_uri)
-                else {
+                let Some(uri) = target.get("uri").and_then(Value::as_str) else {
                     continue;
                 };
-                let physical = canonical_path(&path);
-                let same_file = |document: &&Document| {
-                    crate::protocol::path_from_uri(document.name())
-                        .is_some_and(|path| canonical_path(&path) == physical)
-                };
-                let open = self.documents.iter().filter(same_file).last();
-                let focused_matches = crate::protocol::path_from_uri(focused.name())
-                    .is_some_and(|path| canonical_path(&path) == physical);
-                if let Some(document) = if focused_matches {
-                    Some(focused)
+                let open = if uri == focused.name() {
+                    Some((focused.name(), focused.version()))
+                } else if let Some(path) = crate::protocol::path_from_uri(uri) {
+                    let physical = canonical_path(&path);
+                    if focused_path == Some(&physical) {
+                        Some((focused.name(), focused.version()))
+                    } else {
+                        snapshot
+                            .as_ref()
+                            .and_then(|snapshot| snapshot.active_by_path.get(&physical))
+                            .and_then(|&index| buffers.get(index))
+                            .map(|buffer| (buffer.uri.as_str(), buffer.version))
+                    }
                 } else {
-                    open
-                } {
-                    target.insert("uri".into(), Value::String(document.name().to_owned()));
-                    target.insert("version".into(), Value::from(document.version()));
+                    self.documents
+                        .get(uri)
+                        .map(|document| (document.name(), document.version()))
+                };
+                if let Some((uri, version)) = open {
+                    target.insert("uri".into(), Value::String(uri.to_owned()));
+                    target.insert("version".into(), Value::from(version));
                 }
             }
         }
@@ -862,19 +926,30 @@ impl Server {
             overlays,
         );
         if let Some(program) = &program {
-            self.dependencies.borrow_mut().insert(
-                document.name().to_owned(),
-                program
-                    .dependencies
-                    .iter()
-                    .map(|input| {
-                        (
-                            input.path().to_path_buf(),
-                            input.physical_path().to_path_buf(),
-                        )
-                    })
-                    .collect(),
-            );
+            let mut dependencies = self.dependencies.borrow_mut();
+            let owner = Rc::downgrade(program);
+            let owner: Weak<dyn Any> = owner;
+            if dependencies
+                .get(document.name())
+                .is_none_or(|snapshot| !Weak::ptr_eq(&snapshot.program, &owner))
+            {
+                dependencies.insert(
+                    document.name().to_owned(),
+                    DependencySnapshot {
+                        program: owner,
+                        paths: program
+                            .dependencies
+                            .iter()
+                            .map(|input| {
+                                (
+                                    input.path().to_path_buf(),
+                                    input.physical_path().to_path_buf(),
+                                )
+                            })
+                            .collect(),
+                    },
+                );
+            }
         }
         match program {
             | Some(program) => self.cache.borrow().analyze_program(document, program),
@@ -888,27 +963,53 @@ impl Server {
             .iter()
             .filter_map(|document| {
                 let path = crate::protocol::path_from_uri(document.name())?;
-                Some((canonical_path(&path), document.text()))
+                Some((canonical_path(&path), document))
             })
             .collect::<Vec<_>>();
         let mut cached = self.overlays.borrow_mut();
-        if let Some(snapshot) = cached.as_ref()
+        if let Some(snapshot) = cached.as_mut()
             && snapshot
-                .paths
+                .buffers
                 .iter()
-                .eq(buffers.iter().map(|(path, _)| path))
+                .map(|buffer| (&buffer.physical, buffer.uri.as_str()))
+                .eq(buffers
+                    .iter()
+                    .map(|(path, document)| (path, document.name())))
         {
+            for (index, ((path, document), buffer)) in
+                buffers.iter().zip(&mut snapshot.buffers).enumerate()
+            {
+                let version = document.version();
+                if buffer.version != version {
+                    buffer.version = version;
+                    if snapshot.active_by_path.get(path) == Some(&index) {
+                        Rc::make_mut(&mut snapshot.sources).insert(path, document.text());
+                    }
+                }
+            }
             return Rc::clone(&snapshot.sources);
         }
         let mut overlays = SourceOverlays::new();
-        let mut paths = Vec::with_capacity(buffers.len());
-        for (path, text) in buffers {
-            overlays.insert(&path, text);
-            paths.push(path);
+        let mut resolved = Vec::with_capacity(buffers.len());
+        let active_by_path = buffers
+            .iter()
+            .enumerate()
+            .map(|(index, (path, _))| (path.clone(), index))
+            .collect::<HashMap<_, _>>();
+        for (index, (physical, document)) in buffers.into_iter().enumerate() {
+            if active_by_path.get(&physical) == Some(&index) {
+                overlays.insert(&physical, document.text());
+            }
+            resolved.push(OverlayBuffer {
+                uri: document.name().to_owned(),
+                physical,
+                version: document.version(),
+            });
         }
         let sources = Rc::new(overlays);
         *cached = Some(OverlaySnapshot {
-            paths,
+            buffers: resolved,
+            active_by_path,
             sources: Rc::clone(&sources),
         });
         sources

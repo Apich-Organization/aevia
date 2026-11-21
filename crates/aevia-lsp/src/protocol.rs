@@ -523,6 +523,29 @@ pub fn semantic_tokens_json(tokens: &[SemanticToken]) -> Value {
     json!({ "data": data })
 }
 
+/// Selects tokens overlapping a half-open viewport from the ordered,
+/// non-overlapping list returned by analysis. A token crossing either edge
+/// stays whole. The caller encodes the subset starting from the document origin.
+#[must_use]
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "use the ordered token invariant for binary bounds"
+    )
+)]
+pub(crate) fn tokens_in_range(
+    tokens: &[SemanticToken],
+    range: Range,
+) -> &[SemanticToken] {
+    if range.start >= range.end {
+        return &[];
+    }
+    let start = tokens.partition_point(|token| token.range.end <= range.start);
+    let end = tokens.partition_point(|token| token.range.start < range.end);
+    tokens.get(start..end).unwrap_or_default()
+}
+
 /// Formats code lenses for `textDocument/codeLens`.
 #[must_use]
 pub fn code_lens_json(lenses: &[CodeLens]) -> Value {
@@ -583,7 +606,7 @@ pub fn capabilities() -> Value {
                 "tokenModifiers": [],
             },
             "full": true,
-            "range": false,
+            "range": true,
         },
         // Not protocol vocabulary the client acts on: a statement of what the
         // server does, so a client author can tell why an unsaved buffer keeps
@@ -744,6 +767,7 @@ mod tests {
             serde_json::json!([","])
         );
         assert_eq!(capabilities["semanticTokensProvider"]["full"], true);
+        assert_eq!(capabilities["semanticTokensProvider"]["range"], true);
         assert_eq!(
             capabilities["semanticTokensProvider"]["legend"]["tokenTypes"],
             serde_json::json!(TOKEN_TYPES)

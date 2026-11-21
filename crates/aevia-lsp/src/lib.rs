@@ -43,9 +43,12 @@
 //! candidates and package resolution are unchanged. It scans no unrelated
 //! directories and notices same-size edits even with restored mtimes.
 //! Opening, editing or closing an imported buffer republishes diagnostics for
-//! its open dependents. Rename edits carry open buffer versions and positions
-//! from the same unsaved snapshot. `workspace/symbol` answers from all
-//! open documents' loaded modules, with each declaration's own file and range.
+//! its open dependents. Incremental edits reuse the text of unaffected buffers.
+//! If two open URIs name one physical file, the last opened buffer supplies
+//! imports, while each focused entry uses its own text. Rename edits carry the
+//! versions and positions of the buffers used by analysis. `workspace/symbol`
+//! answers from all open documents' loaded modules, with each declaration's own
+//! file and range.
 //! Formatting operates directly on the buffer's syntax.
 //!
 //! # Navigation beyond a single name
@@ -59,6 +62,10 @@
 //! overloads, `Rssn` operator overloads, class methods — and completion offers
 //! a record's fields after `.` and expression-starting keywords. Each of these
 //! is claimed in `initialize` only because a handler and a test exist.
+//!
+//! Semantic highlighting supports both full-document and viewport requests.
+//! A viewport response encodes only overlapping tokens and keeps their ranges
+//! intact when the viewport starts or ends inside a token.
 //!
 //! # Concurrency
 //!
