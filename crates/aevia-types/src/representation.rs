@@ -20,6 +20,7 @@
 )]
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fmt;
 
 use crate::ty::LiteralKind;
@@ -62,6 +63,31 @@ pub enum NumericConstraint {
 }
 
 impl NumericConstraint {
+    /// Visits only the variables that connect numeric decisions.
+    pub(crate) fn visit_numeric_variables(
+        &self,
+        mut visit: impl FnMut(u32),
+    ) {
+        match self {
+            | Self::Literal { ty, .. } => ty.visit_numeric_variables(visit),
+            | Self::DefaultLiteral { ty, inputs, .. } => {
+                ty.visit_numeric_variables(&mut visit);
+                for rep in inputs {
+                    if let Rep::Var(id) = rep {
+                        visit(*id);
+                    }
+                }
+            },
+            | Self::Relation(relation) => {
+                for rep in relation.operands().into_iter().flatten() {
+                    if let Rep::Var(id) = rep {
+                        visit(id);
+                    }
+                }
+            },
+        }
+    }
+
     /// Returns the types and representation operands carrying free variables.
     #[must_use]
     pub fn types(&self) -> Vec<Type> {
@@ -401,6 +427,8 @@ pub fn propagate(
     relations: &[RepRelation],
     mut resolve: impl FnMut(Rep) -> Rep,
 ) -> Result<RepDomains, RepConflict> {
+    const MIN_INDEXED_RELATIONS: usize = 64;
+    const INITIAL_SWEEPS: usize = 4;
     let relations: Vec<_> = relations
         .iter()
         .map(|relation| relation.map(&mut resolve))
@@ -413,29 +441,93 @@ pub fn propagate(
             }
         }
     }
+    let mut sweeps = 0usize;
     loop {
         let mut changed = false;
         for relation in &relations {
-            let operands = relation.operands();
-            let masks = operands
-                .map(|rep| rep.map_or(RepDomain::singleton(Rep::Int), |rep| domains.domain(rep)));
-            let supported = supported_values(*relation, operands, masks);
-            if supported.iter().any(|domain| domain.is_empty()) {
-                return Err(RepConflict { relation: *relation });
-            }
-            for (operand, support) in operands.into_iter().zip(supported) {
-                if let Some(Rep::Var(id)) = operand {
-                    let domain = domains.variables.entry(id).or_insert(RepDomain::ALL);
-                    let next = domain.intersection(support);
-                    changed |= next != *domain;
-                    *domain = next;
-                }
-            }
+            refine_relation(*relation, &mut domains, |_| changed = true)?;
         }
         if !changed {
             return Ok(domains);
         }
+        sweeps = sweeps.saturating_add(1);
+        if sweeps == INITIAL_SWEEPS && relations.len() >= MIN_INDEXED_RELATIONS {
+            propagate_changed(&relations, &mut domains)?;
+            return Ok(domains);
+        }
     }
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "schedule relations that another relation has narrowed"
+    )
+)]
+fn propagate_changed(
+    relations: &[RepRelation],
+    domains: &mut RepDomains,
+) -> Result<(), RepConflict> {
+    let mut affected = BTreeMap::<u32, Vec<usize>>::new();
+    for (index, relation) in relations.iter().enumerate() {
+        for operand in relation.operands().into_iter().flatten() {
+            if let Rep::Var(id) = operand {
+                let watchers = affected.entry(id).or_default();
+                if watchers.last() != Some(&index) {
+                    watchers.push(index);
+                }
+            }
+        }
+    }
+
+    let mut pending = (0..relations.len()).collect::<BTreeSet<_>>();
+    let mut deferred = BTreeSet::new();
+    while !pending.is_empty() {
+        while let Some(index) = pending.pop_first() {
+            if let Some(&relation) = relations.get(index) {
+                refine_relation(relation, domains, |id| {
+                    if let Some(watchers) = affected.get(&id) {
+                        for &watcher in watchers {
+                            // Keep sweep order so the first reported conflict is stable.
+                            if watcher <= index {
+                                deferred.insert(watcher);
+                            } else {
+                                pending.insert(watcher);
+                            }
+                        }
+                    }
+                })?;
+            }
+        }
+        std::mem::swap(&mut pending, &mut deferred);
+    }
+    Ok(())
+}
+
+fn refine_relation(
+    relation: RepRelation,
+    domains: &mut RepDomains,
+    mut changed: impl FnMut(u32),
+) -> Result<(), RepConflict> {
+    let operands = relation.operands();
+    let masks =
+        operands.map(|rep| rep.map_or(RepDomain::singleton(Rep::Int), |rep| domains.domain(rep)));
+    let supported = supported_values(relation, operands, masks);
+    if supported.iter().any(|domain| domain.is_empty()) {
+        return Err(RepConflict { relation });
+    }
+    for (operand, support) in operands.into_iter().zip(supported) {
+        if let Some(Rep::Var(id)) = operand {
+            let domain = domains.variables.entry(id).or_insert(RepDomain::ALL);
+            let next = domain.intersection(support);
+            if next != *domain {
+                *domain = next;
+                changed(id);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg_attr(
@@ -477,6 +569,101 @@ fn supported_values(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn full_sweeps(relations: &[RepRelation]) -> (Result<RepDomains, RepConflict>, usize) {
+        let mut domains = RepDomains::default();
+        let mut sweeps = 0;
+        loop {
+            sweeps += 1;
+            let mut changed = false;
+            for relation in relations {
+                let operands = relation.operands();
+                let masks = operands.map(|rep| {
+                    rep.map_or(RepDomain::singleton(Rep::Int), |rep| domains.domain(rep))
+                });
+                let support = supported_values(*relation, operands, masks);
+                if support.iter().any(|domain| domain.is_empty()) {
+                    return (Err(RepConflict { relation: *relation }), sweeps);
+                }
+                for (operand, support) in operands.into_iter().zip(support) {
+                    if let Some(Rep::Var(id)) = operand {
+                        let domain = domains.variables.entry(id).or_insert(RepDomain::ALL);
+                        let next = domain.intersection(support);
+                        changed |= next != *domain;
+                        *domain = next;
+                    }
+                }
+            }
+            if !changed {
+                return (Ok(domains), sweeps);
+            }
+        }
+    }
+
+    #[test]
+    fn scheduled_fixpoint_preserves_domains_and_the_first_delayed_conflict() {
+        let width = 72;
+        let other = 1_000;
+        let independent = 2_000;
+        let mut relations = Vec::new();
+        // Both seeds travel backwards, despite opposite orderings of their
+        // operands. Repeated positions in a third relation share one variable.
+        for i in 0..width {
+            relations.push(RepRelation::AtLeast {
+                upper: Rep::Var(i),
+                lower: Rep::Var(i + 1),
+            });
+            relations.push(RepRelation::AtLeast {
+                upper: Rep::Var(other + i + 1),
+                lower: Rep::Var(other + i),
+            });
+        }
+        relations.extend([
+            RepRelation::Domain {
+                rep: Rep::Var(width),
+                allowed: RepDomain::singleton(Rep::Complex),
+            },
+            RepRelation::Domain {
+                rep: Rep::Var(other + width),
+                allowed: RepDomain::singleton(Rep::Int),
+            },
+            RepRelation::Join {
+                left: Rep::Var(independent),
+                right: Rep::Real,
+                result: Rep::Var(independent),
+            },
+        ]);
+        let (expected, sweeps) = full_sweeps(&relations);
+        assert!(sweeps > 4);
+        let actual = propagate(&relations, |rep| rep);
+        assert_eq!(actual, expected);
+        let domains = actual.unwrap();
+        assert_eq!(domains.domain(Rep::Var(0)).unique(), Some(Rep::Complex));
+        assert_eq!(domains.domain(Rep::Var(other)).unique(), Some(Rep::Int));
+        assert_eq!(
+            domains.domain(Rep::Var(independent)),
+            RepDomain::from_reps([Rep::Real, Rep::Complex])
+        );
+
+        let left = RepRelation::AtLeast {
+            upper: Rep::Var(other),
+            lower: Rep::Var(0),
+        };
+        let right = RepRelation::AtLeast {
+            upper: Rep::Var(other + 1),
+            lower: Rep::Var(1),
+        };
+        for tail in [[left, right], [right, left]] {
+            let mut conflict = relations.clone();
+            conflict.extend(tail);
+            let (expected, sweeps) = full_sweeps(&conflict);
+            assert!(
+                expected.is_err() && sweeps > 4,
+                "{expected:?} after {sweeps}"
+            );
+            assert_eq!(propagate(&conflict, |rep| rep), expected);
+        }
+    }
 
     #[test]
     fn joins_follow_the_existing_exact_and_complex_paths() {

@@ -1,8 +1,10 @@
 //! Static RSSN dimensions are instantiated and constrained per call.
 use aevia_dim::Dim;
+use aevia_dim::ratio;
 use aevia_rssn::Sig;
 use aevia_rssn::SigType;
 use aevia_types::infer::Infer;
+use aevia_types::infer::UnifyError;
 use aevia_types::rssn_resolve::instantiate_dimensions;
 use aevia_types::ty::Shape;
 use aevia_types::ty::Type;
@@ -67,4 +69,36 @@ fn shared_dimensions_reject_incompatible_arguments() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn variadic_dimensions_bind_the_result_and_check_each_tail_argument() {
+    let d = Dim::var(321);
+    let half = ratio(1, 2);
+    let sig = Sig {
+        params: vec![SigType::Bool],
+        ret: SigType::Dim(Box::new(SigType::Real), d.pow(&half)),
+        variadic: Some((1, Some(2), param(d))),
+    };
+    let length = Dim::base("Length");
+    let time = Dim::base("Time");
+    let area = length.pow(&ratio(2, 1));
+    let mut infer = Infer::new();
+    for dimension in [area.clone(), time.clone()] {
+        let result = instantiate_dimensions(
+            &sig,
+            &[
+                Type::Bool,
+                vector(dimension.clone()),
+                vector(dimension.clone()),
+            ],
+            &mut infer,
+        )
+        .unwrap();
+        assert_eq!(result, Some(Type::real(dimension.pow(&half))));
+    }
+    assert!(matches!(
+        instantiate_dimensions(&sig, &[Type::Bool, vector(area), vector(time)], &mut infer),
+        Err(UnifyError::Dim(_))
+    ));
 }

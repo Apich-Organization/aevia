@@ -43,14 +43,15 @@ impl Checker {
         &mut self,
         ty: &Ty,
     ) -> Type {
-        let params = self.type_params.clone();
-        self.convert_type_with_params(ty, &params)
+        // An instance head may append implicit parameters while converting.
+        // Named lookup uses the lexical prefix present when conversion began.
+        self.convert_scoped_type(ty, self.type_params.len())
     }
 
-    fn convert_type_with_params(
+    fn convert_scoped_type(
         &mut self,
         ty: &Ty,
-        params: &[(String, Type)],
+        prefix_len: usize,
     ) -> Type {
         match &ty.kind {
             | TyKind::Int | TyKind::NatArg(_) | TyKind::ShapeArg(_) => Type::int(),
@@ -64,28 +65,28 @@ impl Checker {
             | TyKind::Point(dim) => Type::Point(self.convert_dim(dim, ty.span)),
             | TyKind::UnitOf(dim) => Type::UnitOf(self.convert_dim(dim, ty.span)),
             | TyKind::Tensor { shape, elem } => {
-                self.convert_tensor_type(shape, elem, params, ty.span)
+                self.convert_tensor_type(shape, elem, prefix_len, ty.span)
             },
             | TyKind::Matrix { rows, cols, elem } => {
                 let shape = Shape::Refined(vec![
                     Some(self.convert_nat(rows, ty.span)),
                     Some(self.convert_nat(cols, ty.span)),
                 ]);
-                Type::tensor(shape, self.convert_type_with_params(elem, params))
+                Type::tensor(shape, self.convert_scoped_type(elem, prefix_len))
             },
             | TyKind::Sparse { format, shape, elem } => {
-                self.convert_sparse_type(format, shape, elem, params, ty.span)
+                self.convert_sparse_type(format, shape, elem, prefix_len, ty.span)
             },
-            | TyKind::Row(items) => self.convert_row_sum(items, params),
-            | TyKind::Option(inner) => Type::option(self.convert_type_with_params(inner, params)),
+            | TyKind::Row(items) => self.convert_row_sum(items, prefix_len),
+            | TyKind::Option(inner) => Type::option(self.convert_scoped_type(inner, prefix_len)),
             | TyKind::Result(ok, err) => {
                 Type::result(
-                    self.convert_type_with_params(ok, params),
-                    self.convert_type_with_params(err, params),
+                    self.convert_scoped_type(ok, prefix_len),
+                    self.convert_scoped_type(err, prefix_len),
                 )
             },
             | TyKind::Set(inner) => {
-                let inner = self.convert_type_with_params(inner, params);
+                let inner = self.convert_scoped_type(inner, prefix_len);
                 // §3.8.4: `Set<a>` needs `TotalOrd a`; `Set<Float>` is not
                 // legal because `Float` has no total order (NaN).
                 self.require_instance("TotalOrd", &inner, ty.span);
@@ -98,7 +99,7 @@ impl Checker {
                         params: vec!["r".to_string()],
                         ctors: Vec::new(),
                     }),
-                    vec![self.convert_type_with_params(inner, params)],
+                    vec![self.convert_scoped_type(inner, prefix_len)],
                 )
             },
             | TyKind::Dyn(rep) => {
@@ -110,11 +111,11 @@ impl Checker {
                 })
             },
             | TyKind::RateOf(inner) => {
-                let inner = self.convert_type_with_params(inner, params);
+                let inner = self.convert_scoped_type(inner, prefix_len);
                 self.rate_of(&inner, ty.span)
             },
             | TyKind::DiffusionOf(inner) => {
-                let inner = self.convert_type_with_params(inner, params);
+                let inner = self.convert_scoped_type(inner, prefix_len);
                 self.diffusion_of(&inner, ty.span)
             },
             | TyKind::SymFun(domain, codomain) => {
@@ -122,17 +123,17 @@ impl Checker {
                 let codomain = self.convert_dim(codomain, ty.span);
                 Type::func(vec![Type::real(domain)], Type::real(codomain))
             },
-            | TyKind::Io(inner) => Type::io(self.convert_type_with_params(inner, params)),
+            | TyKind::Io(inner) => Type::io(self.convert_scoped_type(inner, prefix_len)),
             | TyKind::Fn(args, ret) => {
                 Type::func(
                     args.iter()
-                        .map(|arg| self.convert_type_with_params(arg, params))
+                        .map(|arg| self.convert_scoped_type(arg, prefix_len))
                         .collect(),
-                    self.convert_type_with_params(ret, params),
+                    self.convert_scoped_type(ret, prefix_len),
                 )
             },
             | TyKind::Record { fields, rest } => {
-                self.convert_record_type(fields, rest.as_deref(), params)
+                self.convert_record_type(fields, rest.as_deref(), prefix_len)
             },
             | TyKind::Tuple(items) => {
                 Type::record(
@@ -140,14 +141,14 @@ impl Checker {
                         .iter()
                         .enumerate()
                         .map(|(index, ty)| {
-                            (index.to_string(), self.convert_type_with_params(ty, params))
+                            (index.to_string(), self.convert_scoped_type(ty, prefix_len))
                         })
                         .collect::<Vec<_>>(),
                 )
             },
-            | TyKind::Named { path, args } => self.convert_named_type(path, args, params, ty.span),
-            | TyKind::Var(name) => self.convert_type_variable(name, params, ty.span),
-            | TyKind::Forall(_, body) => self.convert_type_with_params(body, params),
+            | TyKind::Named { path, args } => self.convert_named(path, args, prefix_len, ty.span),
+            | TyKind::Var(name) => self.convert_type_variable(name, prefix_len, ty.span),
+            | TyKind::Forall(_, body) => self.convert_scoped_type(body, prefix_len),
         }
     }
 
@@ -155,10 +156,10 @@ impl Checker {
         &mut self,
         shape: &ShapeAst,
         elem: &Ty,
-        params: &[(String, Type)],
+        prefix_len: usize,
         span: Span,
     ) -> Type {
-        let element = self.convert_type_with_params(elem, params);
+        let element = self.convert_scoped_type(elem, prefix_len);
         self.convert_shape(shape, span)
             .map_or(Type::Error, |shape| Type::tensor(shape, element))
     }
@@ -172,10 +173,10 @@ impl Checker {
         format: &str,
         shape: &ShapeAst,
         elem: &Ty,
-        params: &[(String, Type)],
+        prefix_len: usize,
         span: Span,
     ) -> Type {
-        let dense = self.convert_tensor_type(shape, elem, params, span);
+        let dense = self.convert_tensor_type(shape, elem, prefix_len, span);
         if dense.is_error() {
             return dense;
         }
@@ -202,11 +203,11 @@ impl Checker {
     fn convert_row_sum(
         &mut self,
         items: &[Ty],
-        params: &[(String, Type)],
+        prefix_len: usize,
     ) -> Type {
         let mut merged = Vec::new();
         for item in items {
-            match self.convert_type_with_params(item, params) {
+            match self.convert_scoped_type(item, prefix_len) {
                 | Type::Record(row) => merged.extend(row.fields()),
                 | other => return other,
             }
@@ -222,11 +223,11 @@ impl Checker {
         &mut self,
         fields: &[(String, Ty)],
         rest: Option<&str>,
-        params: &[(String, Type)],
+        prefix_len: usize,
     ) -> Type {
         let mut fields: Vec<_> = fields
             .iter()
-            .map(|(name, ty)| (name.clone(), self.convert_type_with_params(ty, params)))
+            .map(|(name, ty)| (name.clone(), self.convert_scoped_type(ty, prefix_len)))
             .collect();
         let Some(rest) = rest else {
             return Type::record(fields);
@@ -255,21 +256,18 @@ impl Checker {
         clippy::single_call_fn,
         reason = "preserves the namespace search order for alias, nominal, and built-in types"
     )]
-    fn convert_named_type(
+    fn convert_named(
         &mut self,
         path: &[String],
         args: &[Ty],
-        params: &[(String, Type)],
+        prefix_len: usize,
         span: Span,
     ) -> Type {
         let name = path.join(".");
         if args.is_empty()
-            && let Some((_, parameter)) = params
-                .iter()
-                .rev()
-                .find(|(parameter, _)| parameter == &name)
+            && let Some(parameter) = self.lexical_type_parameter(&name, prefix_len)
         {
-            return parameter.clone();
+            return parameter;
         }
         if self.declaring_alias.as_deref() == Some(name.as_str()) {
             self.error_help(
@@ -304,7 +302,7 @@ impl Checker {
                 match kind {
                     | adt::ParamKind::Type => {
                         let value = match args.get(index) {
-                            | Some(arg) => self.convert_type_with_params(arg, params),
+                            | Some(arg) => self.convert_scoped_type(arg, prefix_len),
                             | None => self.infer.fresh_type(),
                         };
                         converted.push(value);
@@ -327,6 +325,18 @@ impl Checker {
         Type::Error
     }
 
+    fn lexical_type_parameter(
+        &self,
+        name: &str,
+        prefix_len: usize,
+    ) -> Option<Type> {
+        self.type_params
+            .iter()
+            .take(prefix_len)
+            .rfind(|(parameter, _)| parameter == name)
+            .map(|(_, ty)| ty.clone())
+    }
+
     #[allow(
         clippy::single_call_fn,
         reason = "resolves a written variable through its lexical or implicit binder"
@@ -334,15 +344,14 @@ impl Checker {
     fn convert_type_variable(
         &mut self,
         name: &str,
-        params: &[(String, Type)],
+        prefix_len: usize,
         span: Span,
     ) -> Type {
-        if let Some((_, ty)) = params.iter().rev().find(|(param, _)| param == name) {
-            return ty.clone();
+        if let Some(ty) = self.lexical_type_parameter(name, prefix_len) {
+            return ty;
         }
         if self.implicit_params {
-            // The parameter snapshot predates this traversal. Reuse a
-            // variable first seen in an earlier part of the same head.
+            // Reuse an implicit variable introduced earlier in this head.
             if let Some((_, ty)) = self
                 .type_params
                 .iter()

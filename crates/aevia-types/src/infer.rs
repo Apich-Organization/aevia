@@ -1,10 +1,10 @@
 //! Unification, instantiation, generalisation and defaulting.
 //!
-//! Types, dimensions and rows are solved by one engine because they are
-//! entangled: `Real[L/T]` can only be unified once its dimension variable is
-//! solved, and a record field type can itself be a dimensioned scalar. The
-//! dimension half delegates to [`aevia_dim::DimUnifier`], which implements the
-//! abelian-group unification of §4.3.
+//! One engine solves types, dimensions, record rows and tensor extents. Record
+//! fields can contain dimensioned scalars or tensors, and these constraints are
+//! resolved along with the field types. Dimensional equations delegate to
+//! [`aevia_dim::DimUnifier`], which implements the abelian-group unification of
+//! §4.3. Deferred extent equations are retried when their variables are bound.
 //!
 //! Generalisation uses levels rather than a free-variable scan over the
 //! environment: a variable created at level `l` may be quantified when the
@@ -49,7 +49,6 @@ use num_traits::Zero;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::VecDeque;
 
 /// Why two types could not be made equal.
 #[derive(Clone, Debug)]
@@ -313,10 +312,8 @@ fn exact_nat_quotient(
 
 /// What solving one Nat equation did.
 enum NatStep {
-    /// The equation held with no variable left.
+    /// The equation held or established a binding.
     Consumed,
-    /// A variable was bound; pending equations are worth retrying.
-    Solved,
     /// Nothing could be solved yet.
     Residual(NatLinear),
 }
@@ -366,10 +363,10 @@ pub struct Infer {
     nat_subst: HashMap<u32, Nat>,
     /// Level of each type-level natural-number variable, for generalisation.
     nat_levels: HashMap<u32, u32>,
-    /// Linear equations that mention two or more Nat variables. They cannot be
-    /// solved yet; after every new binding they are retried. This is what lets
-    /// `n + 1 ~ 3` and `2 * n ~ 6` work without a full decision procedure.
-    nat_pending: Vec<NatLinear>,
+    /// Equations that cannot yet be solved, indexed by their current variables.
+    nat_pending: crate::numeric_index::NumericIndex<NatLinear>,
+    #[cfg(test)]
+    nat_retries: usize,
     /// Source names of type-level variables, for diagnostics.
     nat_names: HashMap<u32, String>,
     /// Declared (`fn f<n>`) type-level variables: never merged with each other.
@@ -414,7 +411,9 @@ impl Infer {
             lacks: HashMap::new(),
             nat_subst: HashMap::new(),
             nat_levels: HashMap::new(),
-            nat_pending: Vec::new(),
+            nat_pending: crate::numeric_index::NumericIndex::default(),
+            #[cfg(test)]
+            nat_retries: 0,
             nat_names: HashMap::new(),
             nat_rigid: HashSet::new(),
             next: 0,
@@ -576,8 +575,7 @@ impl Infer {
         constraint: &NumericConstraint,
     ) -> bool {
         let constraint = self.resolve_numeric(constraint);
-        let mut dependencies: Vec<_> = Self::numeric_variables(&constraint).into_iter().collect();
-        dependencies.sort_unstable();
+        let dependencies = Self::numeric_variables(&constraint);
         self.numeric.equivalent(&dependencies, |existing| {
             let existing = self.resolve_numeric(existing);
             match (&existing, &constraint) {
@@ -623,7 +621,7 @@ impl Infer {
         constraint: &NumericConstraint,
     ) {
         let constraint = self.resolve_numeric(constraint);
-        let dependencies = Self::numeric_variables(&constraint).into_iter().collect();
+        let dependencies = Self::numeric_variables(&constraint);
         self.cache_numeric_transfer(&constraint);
         self.numeric.insert(constraint, dependencies);
         #[cfg(test)]
@@ -642,9 +640,7 @@ impl Infer {
                 continue;
             };
             let constraint = self.resolve_numeric(&constraint);
-            let mut dependencies: Vec<u32> =
-                Self::numeric_variables(&constraint).into_iter().collect();
-            dependencies.sort_unstable();
+            let dependencies = Self::numeric_variables(&constraint);
             // Merging two variables can make constraints identical: the N
             // element literals of a tensor literal all become `Literal { ty:
             // root, kind }`. A conjunction is idempotent, so the duplicate is
@@ -1228,21 +1224,14 @@ impl Infer {
     ) -> Result<bool, UnifyError> {
         self.propagate_numeric()?;
         let mut changed = false;
-        let defaults: HashSet<u32> = constraints
-            .iter()
-            .filter_map(|constraint| {
-                match self.resolve_numeric(constraint) {
-                    | NumericConstraint::DefaultLiteral { ty, .. } => {
-                        Some(Self::numeric_variables(&NumericConstraint::Literal {
-                            ty,
-                            kind: LiteralKind::Int,
-                        }))
-                    },
-                    | _ => None,
-                }
-            })
-            .flatten()
-            .collect();
+        let mut defaults = HashSet::new();
+        for constraint in constraints {
+            if let NumericConstraint::DefaultLiteral { ty, .. } = constraint {
+                self.resolve(ty).visit_numeric_variables(|id| {
+                    defaults.insert(id);
+                });
+            }
+        }
         let computed: HashSet<u32> = constraints
             .iter()
             .filter_map(|constraint| {
@@ -1264,15 +1253,14 @@ impl Infer {
                 continue;
             };
             let ty = self.resolve(ty);
-            let free = Self::numeric_variables(&NumericConstraint::Literal {
-                ty: ty.clone(),
-                kind: *kind,
+            let mut unresolved = false;
+            let mut protected_reading = false;
+            ty.visit_numeric_variables(|id| {
+                unresolved = true;
+                protected_reading |=
+                    protected.contains(&id) || defaults.contains(&id) || computed.contains(&id);
             });
-            if free.is_empty()
-                || free.iter().any(|id| {
-                    protected.contains(id) || defaults.contains(id) || computed.contains(id)
-                })
-            {
+            if !unresolved || protected_reading {
                 continue;
             }
             let preferred = self.literal_kind(&ty).unwrap_or(*kind);
@@ -1307,17 +1295,12 @@ impl Infer {
         Ok(changed)
     }
 
-    fn numeric_variables(constraint: &NumericConstraint) -> HashSet<u32> {
-        let mut free = crate::TypeSubstitution::default();
-        let mut names = Self::new();
-        for ty in constraint.types() {
-            free.register_variables(&ty, &mut names);
-        }
-        free.types
-            .keys()
-            .chain(free.representations.keys())
-            .copied()
-            .collect()
+    fn numeric_variables(constraint: &NumericConstraint) -> Vec<u32> {
+        let mut ids = Vec::new();
+        constraint.visit_numeric_variables(|id| ids.push(id));
+        ids.sort_unstable();
+        ids.dedup();
+        ids
     }
 
     /// Keep precisely the connected numeric contract, including existential
@@ -1336,19 +1319,17 @@ impl Infer {
                     .flat_map(|constraint| constraint.args.iter()),
             )
         {
-            roots.extend(Self::numeric_variables(&NumericConstraint::Literal {
-                ty: self.resolve(ty),
-                kind: LiteralKind::Int,
-            }));
+            self.resolve(ty).visit_numeric_variables(|id| {
+                roots.insert(id);
+            });
         }
         // Inference allocates all kinds from one identity space, but only
         // type/representation variables connect numeric decisions. Dimensions,
         // extents and rows still travel in each clause's complete type schema.
         for id in &scheme.vars {
-            roots.extend(Self::numeric_variables(&NumericConstraint::Literal {
-                ty: self.resolve(&Type::Var(*id)),
-                kind: LiteralKind::Int,
-            }));
+            self.resolve(&Type::Var(*id)).visit_numeric_variables(|id| {
+                roots.insert(id);
+            });
             if let Rep::Var(id) = self.resolve_rep(Rep::Var(*id)) {
                 roots.insert(id);
             }
@@ -1593,6 +1574,32 @@ impl Infer {
         Some(bound)
     }
 
+    /// Shortens alias-only paths before publishing a batch of inferred types.
+    ///
+    /// The final variable and its binding stay in place, preserving the chosen
+    /// representation, lexical levels and all dependencies on that variable.
+    pub(crate) fn compress_type_aliases(&mut self) {
+        let aliases = self
+            .subst
+            .iter()
+            .filter_map(|(&id, ty)| matches!(ty, Type::Var(_)).then_some(id))
+            .collect::<Vec<_>>();
+        let mut path = Vec::new();
+        for alias in aliases {
+            let mut root = alias;
+            // Binding links distinct resolved variables, so alias paths are acyclic.
+            while let Some(Type::Var(parent)) = self.subst.get(&root) {
+                path.push(root);
+                root = *parent;
+            }
+            while let Some(child) = path.pop() {
+                if let Some(Type::Var(parent)) = self.subst.get_mut(&child) {
+                    *parent = root;
+                }
+            }
+        }
+    }
+
     /// Resolves a row through substitutions.
     #[must_use]
     pub fn resolve_row(
@@ -1697,21 +1704,19 @@ impl Infer {
         match nat {
             | Nat::Lit(value) => Nat::Lit(*value),
             | Nat::Var(id) => {
-                let Some(mut bound) = self.nat_subst.get(id).cloned() else {
+                let Some(mut bound) = self.nat_subst.get(id) else {
                     return nat.clone();
                 };
                 for _ in 0..=self.nat_subst.len() {
-                    match &bound {
-                        | Nat::Var(next) => {
-                            match self.nat_subst.get(next) {
-                                | Some(further) => bound = further.clone(),
-                                | None => break,
-                            }
-                        },
-                        | _ => break,
-                    }
+                    let Nat::Var(next) = bound else {
+                        break;
+                    };
+                    let Some(further) = self.nat_subst.get(next) else {
+                        return Nat::Var(*next);
+                    };
+                    bound = further;
                 }
-                self.resolve_nat_depth(&bound, depth.saturating_add(1))
+                self.resolve_nat_depth(bound, depth.saturating_add(1))
             },
             | Nat::Add(left, right) => {
                 let left = self.resolve_nat_depth(left, depth.saturating_add(1));
@@ -1831,17 +1836,28 @@ impl Infer {
     /// Substitutes the current solution into a stored polynomial.
     fn reduce_nat(
         &self,
-        equation: &NatLinear,
+        mut equation: NatLinear,
     ) -> NatLinear {
-        let mut out = NatLinear::constant(BigInt::ZERO);
-        for (monomial, coefficient) in &equation.terms {
-            let mut term = NatLinear::constant(coefficient.clone());
-            for id in monomial {
-                term = term.mul(&Self::nat_poly(&self.resolve_nat(&Nat::Var(*id))));
+        // `resolve_nat` bounds the depth of one traversal. Repeat as needed so
+        // a deferred fact is indexed by its unbound variables even when the
+        // substitution chain is deeper than one traversal can resolve.
+        while equation
+            .terms
+            .keys()
+            .flatten()
+            .any(|id| self.nat_subst.contains_key(id))
+        {
+            let mut out = NatLinear::constant(BigInt::ZERO);
+            for (monomial, coefficient) in equation.terms {
+                let mut term = NatLinear::constant(coefficient);
+                for id in monomial {
+                    term = term.mul(&Self::nat_poly(&self.resolve_nat(&Nat::Var(id))));
+                }
+                out = out.add(term);
             }
-            out = out.add(term);
+            equation = out;
         }
-        out
+        equation
     }
 
     /// `lhs = rhs` for an equation `lhs - rhs = 0`, for diagnostics.
@@ -1943,7 +1959,7 @@ impl Infer {
     /// is eliminated against any expression of the others (`a ~ n + 1` =>
     /// `a = n + 1`, `a ~ b` => `a = b`); products of variables are opaque
     /// monomials that cancel when they match (`n * m ~ m * n`); what remains
-    /// stays pending and is retried after every later binding. A form with no
+    /// stays pending until one of its variables is bound. A form with no
     /// variable either holds or is inconsistent.
     ///
     /// # Errors
@@ -1961,46 +1977,58 @@ impl Infer {
         if left == right {
             return Ok(());
         }
-        let equation = Self::nat_poly(&left).sub(Self::nat_poly(&right));
-        let (shown_left, shown_right) = (self.render_nat(&left), self.render_nat(&right));
-        self.apply_nat_equation(equation).map_err(|error| {
+        let equation = self.reduce_nat(Self::nat_poly(&left).sub(Self::nat_poly(&right)));
+        let step = self.step_nat_equation(equation).map_err(|error| {
             match error {
                 | UnifyError::NatMismatch { .. } => {
                     UnifyError::NatMismatch {
-                        left: shown_left,
-                        right: shown_right,
+                        left: self.render_nat_prec(&left, 0),
+                        right: self.render_nat_prec(&right, 0),
                     }
                 },
                 | other => other,
             }
-        })
+        })?;
+        if let NatStep::Residual(equation) = step {
+            let variables = equation.variables();
+            self.nat_pending.insert_waiting(equation, variables);
+        }
+        self.propagate_nat_equations()
     }
 
-    /// Applies one equation and every pending one until nothing more can be
-    /// solved; what is left is kept pending.
-    fn apply_nat_equation(
-        &mut self,
-        equation: NatLinear,
-    ) -> Result<(), UnifyError> {
-        let mut queue = VecDeque::new();
-        queue.push_back(equation);
-        queue.extend(std::mem::take(&mut self.nat_pending));
-        let mut kept = VecDeque::new();
-        while let Some(equation) = queue.pop_front() {
-            let equation = self.reduce_nat(&equation);
+    /// Retries affected facts until no binding can trigger more work.
+    fn propagate_nat_equations(&mut self) -> Result<(), UnifyError> {
+        while let Some(id) = self.nat_pending.take_dirty_fact() {
+            let Some(previous) = self.nat_pending.get(id) else {
+                continue;
+            };
+            #[cfg(test)]
+            {
+                self.nat_retries += 1;
+            }
+            let equation = self.reduce_nat(previous.clone());
             match self.step_nat_equation(equation) {
-                | Ok(NatStep::Consumed) => {},
-                | Ok(NatStep::Solved) => queue.append(&mut kept),
-                | Ok(NatStep::Residual(equation)) => kept.push_back(equation),
+                | Ok(NatStep::Consumed) => self.nat_pending.retire(id),
+                | Ok(NatStep::Residual(equation)) => {
+                    let variables = equation.variables();
+                    self.nat_pending.replace_waiting(id, equation, variables);
+                },
                 | Err(error) => {
-                    kept.append(&mut queue);
-                    self.nat_pending = kept.into();
+                    self.nat_pending.retire(id);
                     return Err(error);
                 },
             }
         }
-        self.nat_pending = kept.into();
         Ok(())
+    }
+
+    fn bind_nat(
+        &mut self,
+        id: u32,
+        expression: Nat,
+    ) {
+        self.nat_subst.insert(id, expression);
+        self.nat_pending.wake_dependents(id);
     }
 
     fn nat_mismatch(
@@ -2033,8 +2061,8 @@ impl Infer {
             let Some(value) = value else {
                 return Err(self.nat_mismatch(&equation));
             };
-            self.nat_subst.insert(*id, Nat::Lit(value));
-            return Ok(NatStep::Solved);
+            self.bind_nat(*id, Nat::Lit(value));
+            return Ok(NatStep::Consumed);
         }
         // An inference variable that appears only linearly is eliminated
         // against the rest (`a - b = 0` => `a = b`; `a - n - 1 = 0` =>
@@ -2068,8 +2096,8 @@ impl Infer {
                 let entry = self.nat_levels.entry(var).or_insert(level);
                 *entry = (*entry).min(level);
             }
-            self.nat_subst.insert(id, expression);
-            return Ok(NatStep::Solved);
+            self.bind_nat(id, expression);
+            return Ok(NatStep::Consumed);
         }
         // Two declared extents that are not the same variable.
         if let [(left_id, left_coefficient), (right_id, right_coefficient)] = linear.as_slice()
@@ -2097,11 +2125,10 @@ impl Infer {
     /// `lhs = rhs`; the checker reports each at the end of a declaration
     /// (§3.10.2 rule 6).
     pub fn take_unsolved_nat_equations(&mut self) -> Vec<UnsolvedNat> {
-        let pending = std::mem::take(&mut self.nat_pending);
-        pending
-            .iter()
+        self.nat_pending
+            .drain()
             .map(|equation| {
-                let (left, right) = self.describe_nat_equation(equation);
+                let (left, right) = self.describe_nat_equation(&equation);
                 UnsolvedNat {
                     text: format!("{left} = {right}"),
                     linear: equation.is_linear(),
@@ -3888,6 +3915,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn numeric_dependencies_include_only_type_and_representation_variables() {
+        let ty = Type::func(
+            vec![
+                Type::tensor(
+                    Shape::Refined(vec![Some(Nat::Var(9))]),
+                    Type::Scalar(Rep::Var(5), Dim::var(10)),
+                ),
+                Type::Record(Row::Extend {
+                    label: "field".to_owned(),
+                    ty: Box::new(Type::Io(Box::new(Type::Dyn(Rep::Var(4))))),
+                    tail: Box::new(Row::Var(11)),
+                }),
+                Type::Point(Dim::var(12)),
+            ],
+            Type::Adt(
+                0,
+                vec![
+                    Type::FromValueIntrinsic(Some(Box::new(Type::Var(2)))),
+                    Type::TypeRepIntrinsic(Some(Box::new(Type::Var(2)))),
+                    Type::TensorIntrinsic(crate::ty::TensorIntrinsicType {
+                        kind: crate::ty::TensorIntrinsic::Fill,
+                        element: Some(Rep::Var(3)),
+                    }),
+                    Type::Param(13),
+                ],
+            ),
+        );
+        let literal = NumericConstraint::Literal {
+            ty: ty.clone(),
+            kind: LiteralKind::Int,
+        };
+        let default = NumericConstraint::DefaultLiteral {
+            ty,
+            kind: LiteralKind::Decimal,
+            inputs: vec![Rep::Var(6), Rep::Float, Rep::Var(4)],
+        };
+        let relation = NumericConstraint::Relation(RepRelation::Join {
+            left: Rep::Var(7),
+            right: Rep::Var(7),
+            result: Rep::Var(8),
+        });
+        assert_eq!(Infer::numeric_variables(&literal), [2, 3, 4, 5]);
+        assert_eq!(Infer::numeric_variables(&default), [2, 3, 4, 5, 6]);
+        assert_eq!(Infer::numeric_variables(&relation), [7, 8]);
+    }
+
+    #[test]
     fn quantified_numeric_inputs_keep_stable_variable_order() {
         let mut infer = Infer::new();
         infer.enter_level();
@@ -3915,6 +3989,102 @@ mod tests {
         assert_eq!(infer.unsolved_nat_equations(), 1);
         assert!(infer.unify_nat(&Nat::lit(1), &Nat::lit(2)).is_err());
         assert_eq!(infer.unsolved_nat_equations(), 1);
+    }
+
+    #[test]
+    fn unrelated_nat_equations_are_not_retried() {
+        let mut infer = Infer::new();
+        let mut extents = Vec::new();
+        for _ in 0..1024 {
+            let a = infer.fresh_nat();
+            let b = infer.fresh_nat();
+            infer.name_nat(&a, "a", true);
+            infer.name_nat(&b, "b", true);
+            infer
+                .unify_nat(&a.clone().add(b.clone()), &Nat::lit(7))
+                .unwrap();
+            extents.push((a, b));
+        }
+        let independent = infer.fresh_nat();
+        infer.unify_nat(&independent, &Nat::lit(8)).unwrap();
+        assert_eq!(infer.nat_retries, 0);
+
+        let (a, b) = &extents[511];
+        infer.unify_nat(a, &Nat::lit(1)).unwrap();
+        assert_eq!(infer.nat_retries, 1);
+        assert_eq!(infer.resolve_nat(b), Nat::lit(6));
+        assert_eq!(infer.unsolved_nat_equations(), 1023);
+    }
+
+    #[test]
+    fn pending_nat_dependencies_follow_aliases_and_trigger_later_bindings() {
+        let mut infer = Infer::new();
+        let alias = infer.fresh_nat();
+        let x = infer.fresh_nat();
+        let y = infer.fresh_nat();
+        let z = infer.fresh_nat();
+        infer.name_nat(&y, "y", true);
+        infer.name_nat(&z, "z", true);
+        let first = Nat::lit(2).mul(x.clone()).add(y.clone());
+        infer.unify_nat(&first, &Nat::lit(7)).unwrap();
+        infer
+            .unify_nat(&y.clone().add(z.clone()), &Nat::lit(9))
+            .unwrap();
+        assert_eq!(infer.nat_retries, 0);
+
+        infer.unify_nat(&x, &alias).unwrap();
+        assert_eq!(infer.nat_retries, 1);
+        infer.unify_nat(&alias, &Nat::lit(3)).unwrap();
+        assert_eq!(infer.nat_retries, 3);
+        assert_eq!(infer.resolve_nat(&y), Nat::lit(1));
+        assert_eq!(infer.resolve_nat(&z), Nat::lit(8));
+        assert_eq!(infer.unsolved_nat_equations(), 0);
+    }
+
+    #[test]
+    fn a_deferred_nat_error_identifies_the_inconsistent_equation() {
+        let mut infer = Infer::new();
+        let a = infer.fresh_nat();
+        let b = infer.fresh_nat();
+        let c = infer.fresh_nat();
+        infer.name_nat(&a, "a", true);
+        infer.name_nat(&b, "b", true);
+        infer.name_nat(&c, "c", true);
+        let first = Nat::lit(2).mul(a).add(b.clone());
+        infer.unify_nat(&first, &Nat::lit(3)).unwrap();
+        infer
+            .unify_nat(&b.clone().add(c.clone()), &Nat::lit(5))
+            .unwrap();
+
+        let error = infer.unify_nat(&b, &Nat::lit(2)).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "type-level equation has no solution: 2 * a = 1"
+        );
+        assert_eq!(infer.unsolved_nat_equations(), 1);
+
+        let independent = infer.fresh_nat();
+        infer.unify_nat(&independent, &Nat::lit(8)).unwrap();
+        assert_eq!(infer.resolve_nat(&c), Nat::lit(3));
+        assert_eq!(infer.unsolved_nat_equations(), 0);
+    }
+
+    #[test]
+    fn pending_nat_fact_indexes_leaves_beyond_the_resolution_depth() {
+        let mut infer = Infer::new();
+        let chain: Vec<_> = (0..=384).map(|_| infer.fresh_nat()).collect();
+        for pair in chain.windows(2).rev() {
+            infer
+                .unify_nat(&pair[1], &pair[0].clone().add(Nat::lit(1)))
+                .unwrap();
+        }
+        let other = infer.fresh_nat();
+        let equation = chain.last().unwrap().clone().add(other.clone());
+        infer.unify_nat(&equation, &Nat::lit(500)).unwrap();
+        assert_eq!(infer.unsolved_nat_equations(), 1);
+        infer.unify_nat(&chain[0], &Nat::lit(3)).unwrap();
+        assert_eq!(infer.resolve_nat(&other), Nat::lit(113));
+        assert_eq!(infer.unsolved_nat_equations(), 0);
     }
 
     #[test]
@@ -4423,6 +4593,34 @@ mod tests {
         infer.unify(&alias, &Type::Scalar(rep, Dim::one())).unwrap();
         assert!(!infer.representation_domain(rep).unwrap().contains(Rep::Int));
         assert!(infer.unify_rep(rep, Rep::Int).is_err());
+    }
+
+    #[test]
+    fn compressed_type_aliases_keep_the_same_live_root_and_numeric_domain() {
+        let mut infer = Infer::new();
+        let vars = (0..256).map(|_| infer.fresh_type()).collect::<Vec<_>>();
+        infer.mark_literal(&vars[0], LiteralKind::Decimal);
+        for pair in vars.windows(2) {
+            infer.unify(&pair[0], &pair[1]).unwrap();
+        }
+        let root = vars.last().unwrap();
+        infer.compress_type_aliases();
+        for alias in &vars {
+            assert_eq!(&infer.resolve(alias), root);
+            if let Type::Var(id) = alias
+                && alias != root
+            {
+                assert_eq!(infer.subst.get(id), Some(root));
+            }
+        }
+        let rep = infer.fresh_rep();
+        infer.unify(root, &Type::Scalar(rep, Dim::one())).unwrap();
+        assert!(!infer.representation_domain(rep).unwrap().contains(Rep::Int));
+        infer.unify_rep(rep, Rep::Float).unwrap();
+        assert!(
+            vars.iter()
+                .all(|ty| infer.resolve(ty) == Type::float(Dim::one()))
+        );
     }
 
     #[test]

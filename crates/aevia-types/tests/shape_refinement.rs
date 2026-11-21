@@ -72,6 +72,15 @@ fn a_solved_factor_turns_a_product_into_a_linear_equation() {
 }
 
 #[test]
+fn a_later_axis_can_disprove_an_earlier_extent_equation() {
+    fails(
+        "fn f<n, m>(a: Tensor<[2 * n + m, m], Float>): Tensor<[3, 2], Float> = a\n",
+        "E0302",
+        "type-level equation has no solution: 2 * n = 1",
+    );
+}
+
+#[test]
 fn broadcasting_follows_the_one_extent_rule() {
     ok("fn f(a: Tensor<[3, 1], Float>, b: Tensor<[1, 4], Float>): Tensor<[3, 4], Float> = a + b\n");
     ok("fn f(a: Tensor<[3, 1], Float>, b: Tensor<[1, 4], Float>): Tensor<[3, 4], Float> = a * b\n");

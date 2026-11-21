@@ -23,8 +23,8 @@ use crate::Infer;
 use crate::Nat;
 use crate::Rep;
 use crate::Row;
-use crate::Shape;
 use crate::Type;
+use crate::ty::TypeVariableRef;
 use aevia_dim::Dim;
 use std::collections::HashMap;
 
@@ -114,22 +114,31 @@ impl TypeSubstitution {
     }
 
     /// Rewrites row tails and the types of extended fields.
+    /// The field chain is walked iteratively, including any mapped tail.
     #[must_use]
     pub fn row(
         &self,
         row: &Row,
     ) -> Row {
-        match row {
-            | Row::Empty => Row::Empty,
-            | Row::Var(id) => self.rows.get(id).cloned().unwrap_or_else(|| row.clone()),
-            | Row::Extend { label, ty, tail } => {
-                Row::Extend {
-                    label: label.clone(),
-                    ty: Box::new(self.apply(ty)),
-                    tail: Box::new(self.row(tail)),
-                }
-            },
+        if let Row::Var(id) = row
+            && self.rows.is_empty()
+        {
+            return Row::Var(*id);
         }
+        let mut result = Row::Empty;
+        let (tail, id) = append_row_fields(&mut result, row, |ty| self.apply(ty));
+        if let Some(id) = id {
+            if let Some(replacement) = self.rows.get(&id) {
+                // A replacement already belongs to the target universe.
+                let (tail, id) = append_row_fields(tail, replacement, Type::clone);
+                if let Some(id) = id {
+                    *tail = Row::Var(id);
+                }
+            } else {
+                *tail = Row::Var(id);
+            }
+        }
+        result
     }
 
     /// Freshen every kind, retaining a map back to the original body variables.
@@ -148,101 +157,36 @@ impl TypeSubstitution {
         ty: &Type,
         infer: &mut Infer,
     ) {
-        match ty {
-            | Type::Var(id) => {
-                self.types.entry(*id).or_insert_with(|| infer.fresh_type());
-            },
-            | Type::Scalar(rep, dim) => {
-                self.fresh_rep(*rep, infer);
-                self.fresh_dim(dim, infer);
-            },
-            | Type::Dyn(rep) => self.fresh_rep(*rep, infer),
-            | Type::Point(dim) | Type::UnitOf(dim) => self.fresh_dim(dim, infer),
-            | Type::Tensor { shape, elem } => {
-                if let Shape::Refined(items) = shape {
+        ty.visit_variables(&mut |variable| {
+            match variable {
+                | TypeVariableRef::Type(id) => {
+                    self.types.entry(id).or_insert_with(|| infer.fresh_type());
+                },
+                | TypeVariableRef::Representation(Rep::Var(id)) => {
+                    self.representations
+                        .entry(id)
+                        .or_insert_with(|| infer.fresh_rep());
+                },
+                | TypeVariableRef::Representation(_) => {},
+                | TypeVariableRef::Dimension(dim) => {
+                    for id in dim.vars() {
+                        self.dimensions
+                            .entry(id)
+                            .or_insert_with(|| infer.fresh_dim());
+                    }
+                },
+                | TypeVariableRef::Extents(items) => {
                     for nat in items.iter().flatten() {
                         for id in nat.vars() {
                             self.naturals.entry(id).or_insert_with(|| infer.fresh_nat());
                         }
                     }
-                }
-                self.register_variables(elem, infer);
-            },
-            | Type::Fn(args, ret) => {
-                for arg in args {
-                    self.register_variables(arg, infer);
-                }
-                self.register_variables(ret, infer);
-            },
-            | Type::Record(row) => self.fresh_row(row, infer),
-            | Type::Adt(_, args) => {
-                for arg in args {
-                    self.register_variables(arg, infer);
-                }
-            },
-            | Type::Io(value)
-            | Type::TypeRepIntrinsic(Some(value))
-            | Type::FromValueIntrinsic(Some(value)) => {
-                self.register_variables(value, infer);
-            },
-            | Type::TensorIntrinsic(intrinsic) => {
-                if let Some(rep) = intrinsic.element {
-                    self.fresh_rep(rep, infer);
-                }
-            },
-            | Type::TypeRepIntrinsic(None)
-            | Type::FromValueIntrinsic(None)
-            | Type::Bool
-            | Type::Prop
-            | Type::Str
-            | Type::Unit
-            | Type::Param(_)
-            | Type::Error
-            | Type::WriteNpyIntrinsic
-            | Type::ReadNpyIntrinsic(_)
-            | Type::ToCallbackIntrinsic => {},
-        }
-    }
-
-    fn fresh_rep(
-        &mut self,
-        rep: Rep,
-        infer: &mut Infer,
-    ) {
-        if let Rep::Var(id) = rep {
-            self.representations
-                .entry(id)
-                .or_insert_with(|| infer.fresh_rep());
-        }
-    }
-
-    fn fresh_dim(
-        &mut self,
-        dim: &Dim,
-        infer: &mut Infer,
-    ) {
-        for id in dim.vars() {
-            self.dimensions
-                .entry(id)
-                .or_insert_with(|| infer.fresh_dim());
-        }
-    }
-
-    fn fresh_row(
-        &mut self,
-        row: &Row,
-        infer: &mut Infer,
-    ) {
-        match row {
-            | Row::Empty => {},
-            | Row::Var(id) => {
-                self.rows.entry(*id).or_insert_with(|| infer.fresh_row());
-            },
-            | Row::Extend { ty, tail, .. } => {
-                self.register_variables(ty, infer);
-                self.fresh_row(tail, infer);
-            },
-        }
+                },
+                | TypeVariableRef::Row(id) => {
+                    self.rows.entry(id).or_insert_with(|| infer.fresh_row());
+                },
+            }
+        });
     }
 
     /// Resolves each target value against the current inference state.
@@ -315,9 +259,35 @@ impl TypeSubstitution {
         }
     }
 }
+fn append_row_fields<'a>(
+    mut output: &'a mut Row,
+    mut input: &Row,
+    map: impl Fn(&Type) -> Type,
+) -> (&'a mut Row, Option<u32>) {
+    while let Row::Extend { label, ty, tail } = input {
+        *output = Row::Extend {
+            label: label.clone(),
+            ty: Box::new(map(ty)),
+            tail: Box::new(Row::Empty),
+        };
+        let Row::Extend { tail: written, .. } = output else {
+            break;
+        };
+        output = written;
+        input = tail;
+    }
+    let id = if let Row::Var(id) = input {
+        Some(*id)
+    } else {
+        None
+    };
+    (output, id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Shape;
 
     #[test]
     fn substitutions_cross_variable_universes_only_once() {
@@ -385,5 +355,112 @@ mod tests {
                 Type::record([("name".into(), Type::Str)])
             )
         );
+    }
+
+    fn extend(
+        label: &str,
+        ty: Type,
+        tail: Row,
+    ) -> Row {
+        Row::Extend {
+            label: label.to_owned(),
+            ty: Box::new(ty),
+            tail: Box::new(tail),
+        }
+    }
+
+    #[test]
+    fn appending_a_replacement_preserves_order_and_the_target_universe() {
+        let mut substitution = TypeSubstitution::default();
+        substitution.types.insert(0, Type::Str);
+        substitution.rows.insert(1, Row::Empty);
+        let target = extend("same", Type::Var(0), Row::Var(1));
+        substitution.rows.insert(0, target.clone());
+
+        let source = extend("same", Type::Var(0), Row::Var(0));
+        assert_eq!(substitution.row(&source), extend("same", Type::Str, target));
+        assert_eq!(substitution.row(&Row::Empty), Row::Empty);
+        assert_eq!(substitution.row(&Row::Var(9)), Row::Var(9));
+        assert_eq!(TypeSubstitution::default().row(&Row::Var(9)), Row::Var(9));
+    }
+
+    #[test]
+    fn fresh_variables_keep_their_first_occurrence_order() {
+        let row = extend(
+            "first",
+            Type::Var(41),
+            extend(
+                "second",
+                Type::Point(Dim::var(12)),
+                extend(
+                    "third",
+                    Type::tensor(Shape::Refined(vec![Some(Nat::Var(77))]), Type::Var(41)),
+                    Row::Var(55),
+                ),
+            ),
+        );
+        let mut actual = Infer::new();
+        let mut substitution = TypeSubstitution::default();
+        let _ = substitution.freshen(&Type::Record(row), &mut actual);
+
+        let mut expected = Infer::new();
+        assert_eq!(substitution.types[&41], expected.fresh_type());
+        assert_eq!(substitution.dimensions[&12], expected.fresh_dim());
+        assert_eq!(substitution.naturals[&77], expected.fresh_nat());
+        assert_eq!(substitution.rows[&55], expected.fresh_row());
+        assert_eq!(actual.fresh_type(), expected.fresh_type());
+    }
+
+    #[test]
+    fn wide_source_rows_and_mapped_tails_only_need_a_small_stack() {
+        fn wide(
+            width: usize,
+            tail: Row,
+        ) -> Row {
+            (0..width).fold(tail, |tail, _| extend("field", Type::Var(10), tail))
+        }
+        // Release each node explicitly to isolate the stack used by substitution.
+        fn consume(mut row: Row) -> (usize, Option<u32>) {
+            let mut count = 0;
+            while let Row::Extend { tail, .. } = row {
+                count += 1;
+                row = *tail;
+            }
+            (
+                count,
+                if let Row::Var(id) = row {
+                    Some(id)
+                } else {
+                    None
+                },
+            )
+        }
+
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let width = 8192;
+                let mut substitution = TypeSubstitution::default();
+                let input = Type::Record(wide(width, Row::Var(99)));
+                let Type::Record(fresh) = substitution.freshen(&input, &mut Infer::new()) else {
+                    panic!("expected a record");
+                };
+                let Type::Record(source) = input else {
+                    panic!("expected a record");
+                };
+                assert_eq!(consume(source), (width, Some(99)));
+                assert_eq!(consume(fresh).0, width);
+
+                substitution.rows.insert(7, wide(width, Row::Var(7)));
+                let replaced = substitution.row(&Row::Var(7));
+                assert_eq!(consume(replaced), (width, Some(7)));
+                assert_eq!(
+                    consume(substitution.rows.remove(&7).unwrap()),
+                    (width, Some(7))
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

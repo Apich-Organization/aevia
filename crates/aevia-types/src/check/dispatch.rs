@@ -359,6 +359,11 @@ impl Checker {
                     .filter_map(|index| entry.signatures.get(*index))
                     .map(aevia_rssn::Sig::render)
                     .collect();
+                let help = if args.is_empty() {
+                    "use `Rssn.dynamic` with an empty argument list to request the kernel result"
+                } else {
+                    "annotate an argument so one overload wins"
+                };
                 self.diagnostics.push(
                     Diagnostic::error(
                         "E1002",
@@ -367,7 +372,7 @@ impl Checker {
                     )
                     .with_primary_label("several overloads match equally well")
                     .with_note(format!("candidates: {}", rendered.join("; ")))
-                    .with_help("annotate an argument so one overload wins"),
+                    .with_help(help),
                 );
                 Type::Error
             },
@@ -377,16 +382,22 @@ impl Checker {
                     .iter()
                     .map(aevia_rssn::Sig::render)
                     .collect();
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        "E1003",
-                        format!("no overload of `Rssn.{name}` accepts these arguments"),
-                        span,
-                    )
-                    .with_primary_label("no candidate accepts this argument list")
-                    .with_note(format!("overloads: {}", rendered.join("; ")))
-                    .with_help("use `Rssn.dynamic` for a signature-free call"),
-                );
+                let diagnostic = Diagnostic::error(
+                    "E1003",
+                    format!("no overload of `Rssn.{name}` accepts these arguments"),
+                    span,
+                )
+                .with_primary_label("no candidate accepts this argument list")
+                .with_note(format!("overloads: {}", rendered.join("; ")));
+                let argument = crate::rssn_resolve::symbol_argument_mismatch(entry, &classified)
+                    .and_then(|index| args.get(index));
+                self.diagnostics.push(if let Some(argument) = argument {
+                    diagnostic
+                        .with_label(argument.span, "the kernel requires a free symbol here")
+                        .with_help("create a free symbol with `symbol`, pass it through `to_value`, and use `Rssn.typed` with a result type witness")
+                } else {
+                    diagnostic.with_help("use `Rssn.dynamic` for a signature-free call")
+                });
                 Type::Error
             },
             | crate::rssn_resolve::Resolution::Unknown => {

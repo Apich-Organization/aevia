@@ -24,7 +24,9 @@ use crate::keys::AdtKey;
 use crate::keys::ModulePath;
 pub use crate::ty::AdtId;
 use crate::ty::Type;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::RwLock;
@@ -58,30 +60,19 @@ pub fn is_native_ad_var_type(ty: &Type) -> bool {
     *ty == native_ad_var_type()
 }
 
-/// The defining module of each user-allocated type.
-///
-/// The module is kept beside the registry rather than inside [`Adt`] because
-/// `Adt` is constructed structurally by consumers (the runtime interns the
-/// opaque value types) and those constructors have no module. An entry exists
-/// only for a type allocated by a compilation unit ([`allocate_in`]); a
-/// built-in/opaque type is in the prelude scope.
-fn modules() -> &'static RwLock<HashMap<AdtId, ModulePath>> {
-    static MODULES: OnceLock<RwLock<HashMap<AdtId, ModulePath>>> = OnceLock::new();
-    MODULES.get_or_init(|| RwLock::new(HashMap::new()))
-}
-
 /// The symbolic key of a registered type: `(defining module, name)`.
-///
 /// This is the identity that may leave the process (an interface file, a
 /// diagnostic); the [`AdtId`] never does.
 #[must_use]
 pub fn key_of(id: AdtId) -> AdtKey {
-    let module = modules()
-        .read()
-        .ok()
-        .and_then(|table| table.get(&id).cloned())
-        .unwrap_or_default();
-    let mut key = AdtKey::new(module, name_of(id));
+    let (module, name) = if let Ok(table) = registry().read()
+        && let Some(adt) = table.definition(id)
+    {
+        (table.module(id), adt.name.clone())
+    } else {
+        (ModulePath::prelude(), format!("Adt#{id}"))
+    };
+    let mut key = AdtKey::new(module, name);
     if !key.module.is_prelude() {
         key.schema = schema_of(id);
     }
@@ -91,15 +82,9 @@ pub fn key_of(id: AdtId) -> AdtKey {
 /// The stable lexical origin of an allocated declaration.
 #[must_use]
 pub fn module_of(id: AdtId) -> ModulePath {
-    modules()
+    registry()
         .read()
-        .ok()
-        .and_then(|table| table.get(&id).cloned())
-        .unwrap_or_default()
-}
-fn completed() -> &'static RwLock<std::collections::HashSet<AdtId>> {
-    static COMPLETE: OnceLock<RwLock<std::collections::HashSet<AdtId>>> = OnceLock::new();
-    COMPLETE.get_or_init(|| RwLock::new(PRELUDE_IDS.into_iter().collect()))
+        .map_or_else(|_| ModulePath::prelude(), |table| table.module(id))
 }
 fn schemas() -> &'static RwLock<HashMap<AdtId, crate::DeclarationSchemaKey>> {
     static SCHEMAS: OnceLock<RwLock<HashMap<AdtId, crate::DeclarationSchemaKey>>> = OnceLock::new();
@@ -111,23 +96,35 @@ fn schemas() -> &'static RwLock<HashMap<AdtId, crate::DeclarationSchemaKey>> {
 /// schema.
 #[must_use]
 pub fn find_complete(key: &AdtKey) -> Option<AdtId> {
-    let candidates: Vec<AdtId> = {
-        let guard = registry().read().ok()?;
-        let identities = modules().read().ok()?;
-        guard
-            .iter()
-            .enumerate()
-            .filter(|(_, adt)| adt.name == key.name)
-            .filter_map(|(index, _)| u32::try_from(index).ok())
-            .filter(|id| identities.get(id) == Some(&key.module))
-            .collect()
-    };
-    candidates
-        .into_iter()
-        .find(|id| is_complete(*id) && key_of(*id) == *key)
+    let candidates = registry().read().ok()?.complete_candidates(key);
+    candidates.into_iter().find(|id| key_of(*id) == *key)
 }
+#[allow(
+    clippy::single_call_fn,
+    reason = "the interface encoder persists finalization without accessing the registry directly"
+)]
 pub(crate) fn is_complete(id: AdtId) -> bool {
-    completed().read().is_ok_and(|table| table.contains(&id))
+    registry()
+        .read()
+        .is_ok_and(|table| table.complete.contains(&id))
+}
+
+/// Captures the declaration and its defining module at the same point as
+/// finalization so the schema builder cannot observe unfinished constructors.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the schema builder needs an atomic view of registry state"
+)]
+pub(crate) fn schema_snapshot(id: AdtId) -> Option<(Arc<Adt>, ModulePath)> {
+    let table = registry().read().ok()?;
+    let definition = table.definition(id)?;
+    let module = table.module(id);
+    if !module.is_prelude() && !table.complete.contains(&id) {
+        return None;
+    }
+    let snapshot = (Arc::clone(definition), module);
+    drop(table);
+    Some(snapshot)
 }
 /// A collision-free declaration identity; incomplete declarations have no schema.
 #[must_use]
@@ -166,11 +163,26 @@ pub fn set_module(
     id: AdtId,
     module: ModulePath,
 ) {
-    if let Ok(finalized) = completed().read()
-        && !finalized.contains(&id)
-        && let Ok(mut table) = modules().write()
+    if let Ok(mut table) = registry().write()
+        && !table.complete.contains(&id)
     {
-        table.insert(id, module);
+        let table = &mut *table;
+        if let Some(definition) = usize::try_from(id)
+            .ok()
+            .and_then(|index| table.definitions.get(index))
+            && table.origins.get(&id).is_none_or(ModulePath::is_prelude) != module.is_prelude()
+        {
+            let name = &definition.name;
+            if module.is_prelude() {
+                add_witness(&mut table.hosts, name, id);
+            } else if let Some(ids) = table.hosts.get_mut(name) {
+                ids.remove(&id);
+                if ids.is_empty() {
+                    table.hosts.remove(name);
+                }
+            }
+        }
+        table.origins.insert(id, module);
     }
 }
 
@@ -206,8 +218,8 @@ pub fn set_param_kinds(
     id: AdtId,
     kinds: Vec<ParamKind>,
 ) {
-    if let Ok(finalized) = completed().read()
-        && !finalized.contains(&id)
+    if let Ok(table) = registry().read()
+        && !table.complete.contains(&id)
         && let Ok(mut table) = param_kinds().write()
     {
         table.insert(id, kinds);
@@ -263,9 +275,186 @@ pub struct Adt {
     pub ctors: Vec<Ctor>,
 }
 
-fn registry() -> &'static RwLock<Vec<Arc<Adt>>> {
-    static REGISTRY: OnceLock<RwLock<Vec<Arc<Adt>>>> = OnceLock::new();
-    REGISTRY.get_or_init(|| RwLock::new(prelude_adts().into_iter().map(Arc::new).collect()))
+#[derive(Default)]
+struct CompleteCache {
+    present: HashMap<ModulePath, HashMap<String, BTreeSet<AdtId>>>,
+    // Repeated unresolved lookups benefit too, without retaining unrelated
+    // missing names from the lifetime of the process.
+    last_missing: Option<(ModulePath, String)>,
+}
+
+impl CompleteCache {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "provides a shared-read lookup of the memoized candidates"
+    )]
+    fn get(
+        &self,
+        key: &AdtKey,
+    ) -> Option<Vec<AdtId>> {
+        if let Some(ids) = self
+            .present
+            .get(&key.module)
+            .and_then(|types| types.get(&key.name))
+        {
+            return Some(ids.iter().copied().collect());
+        }
+        self.last_missing
+            .as_ref()
+            .filter(|(module, name)| module == &key.module && name == &key.name)
+            .map(|_| Vec::new())
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "records a discovered candidate group without keeping the registry read path exclusive"
+    )]
+    fn store(
+        &mut self,
+        key: &AdtKey,
+        candidates: &[AdtId],
+    ) {
+        if candidates.is_empty() {
+            self.last_missing = Some((key.module.clone(), key.name.clone()));
+            return;
+        }
+        let ids = candidates.iter().copied().collect();
+        if let Some(types) = self.present.get_mut(&key.module) {
+            types.insert(key.name.clone(), ids);
+            return;
+        }
+        self.present
+            .insert(key.module.clone(), HashMap::from([(key.name.clone(), ids)]));
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "updates only lookup keys already known before the declaration finished"
+    )]
+    fn finalized(
+        &mut self,
+        module: &ModulePath,
+        name: &str,
+        id: AdtId,
+    ) {
+        if let Some(ids) = self
+            .present
+            .get_mut(module)
+            .and_then(|types| types.get_mut(name))
+        {
+            ids.insert(id);
+        }
+        if self
+            .last_missing
+            .as_ref()
+            .is_some_and(|(last_module, last_name)| last_module == module && last_name == name)
+        {
+            self.last_missing = None;
+        }
+    }
+}
+
+#[derive(Default)]
+struct Registry {
+    definitions: Vec<Arc<Adt>>,
+    // Keep the structural public Adt independent of the source identity.
+    origins: HashMap<AdtId, ModulePath>,
+    complete: HashSet<AdtId>,
+    hosts: HashMap<String, BTreeSet<AdtId>>,
+    completed_names: RwLock<CompleteCache>,
+}
+
+impl Registry {
+    fn with_prelude() -> Self {
+        let mut registry = Self::default();
+        for (id, adt) in PRELUDE_IDS.into_iter().zip(prelude_adts()) {
+            registry.push(id, adt, true);
+            registry.complete.insert(id);
+        }
+        registry
+    }
+
+    fn module(
+        &self,
+        id: AdtId,
+    ) -> ModulePath {
+        self.origins.get(&id).cloned().unwrap_or_default()
+    }
+
+    fn definition(
+        &self,
+        id: AdtId,
+    ) -> Option<&Arc<Adt>> {
+        self.definitions.get(usize::try_from(id).ok()?)
+    }
+
+    fn push(
+        &mut self,
+        id: AdtId,
+        adt: Adt,
+        host: bool,
+    ) {
+        if host {
+            add_witness(&mut self.hosts, &adt.name, id);
+        }
+        self.definitions.push(Arc::new(adt));
+    }
+
+    fn host_type(
+        &self,
+        name: &str,
+    ) -> Option<AdtId> {
+        self.hosts.get(name)?.first().copied()
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "keeps the registry's lookup and activation policy together"
+    )]
+    fn complete_candidates(
+        &self,
+        key: &AdtKey,
+    ) -> Vec<AdtId> {
+        // Small registries are cheap to scan. A large registry remembers only
+        // the requested declaration so isolated restores do no index build.
+        const MIN_DEFINITIONS: usize = 128;
+        let use_cache = self.definitions.len() >= MIN_DEFINITIONS;
+        if use_cache
+            && let Ok(index) = self.completed_names.read()
+            && let Some(candidates) = index.get(key)
+        {
+            return candidates;
+        }
+        let matches: Vec<AdtId> = self
+            .definitions
+            .iter()
+            .enumerate()
+            .filter(|(_, adt)| adt.name == key.name)
+            .filter_map(|(index, _)| AdtId::try_from(index).ok())
+            .filter(|id| self.origins.get(id) == Some(&key.module) && self.complete.contains(id))
+            .collect();
+        if use_cache && let Ok(mut index) = self.completed_names.write() {
+            index.store(key, &matches);
+        }
+        matches
+    }
+}
+
+fn add_witness(
+    table: &mut HashMap<String, BTreeSet<AdtId>>,
+    name: &str,
+    id: AdtId,
+) {
+    if let Some(ids) = table.get_mut(name) {
+        ids.insert(id);
+    } else {
+        table.insert(name.into(), BTreeSet::from([id]));
+    }
+}
+
+fn registry() -> &'static RwLock<Registry> {
+    static REGISTRY: OnceLock<RwLock<Registry>> = OnceLock::new();
+    REGISTRY.get_or_init(|| RwLock::new(Registry::with_prelude()))
 }
 
 /// `Option`, `Result` and `Ordering`: the registry's first three entries.
@@ -338,20 +527,24 @@ fn writable<T>(table: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
     reason = "the infallible AdtId API cannot issue an alias when its 32-bit address space is exhausted"
 )]
 fn register(
-    mut entries: RwLockWriteGuard<'_, Vec<Arc<Adt>>>,
+    mut entries: RwLockWriteGuard<'_, Registry>,
     adt: Adt,
     module: Option<ModulePath>,
 ) -> AdtId {
-    let Ok(id) = AdtId::try_from(entries.len()) else {
+    let Ok(id) = AdtId::try_from(entries.definitions.len()) else {
         drop(entries);
         panic!("the nominal type identifier space is exhausted");
     };
-    if let Some(module) = module {
-        writable(modules()).insert(id, module);
-    }
+    let host = if let Some(module) = module {
+        let is_prelude = module.is_prelude();
+        entries.origins.insert(id, module);
+        is_prelude
+    } else {
+        entries.origins.get(&id).is_none_or(ModulePath::is_prelude)
+    };
     // Keep the registry lock across publication of the source identity.
     // Concurrent interning must never see a source type without its origin.
-    entries.push(Arc::new(adt));
+    entries.push(id, adt, host);
     drop(entries);
     id
 }
@@ -372,22 +565,15 @@ pub fn intern(adt: Adt) -> AdtId {
 }
 
 pub(crate) fn intern_with_status(adt: Adt) -> (AdtId, bool) {
-    let entries = writable(registry());
-    // A same-named source declaration cannot serve as an opaque host type.
-    let existing = {
-        let origins = modules();
-        let identities = origins.read().unwrap_or_else(|poisoned| {
-            origins.clear_poison();
-            poisoned.into_inner()
-        });
-        entries.iter().enumerate().find_map(|(index, entry)| {
-            let id = AdtId::try_from(index).ok()?;
-            (entry.name == adt.name && identities.get(&id).is_none_or(ModulePath::is_prelude))
-                .then_some(id)
-        })
-    };
-    if let Some(id) = existing {
-        drop(entries);
+    let registry = registry();
+    if let Ok(entries) = registry.read()
+        && let Some(id) = entries.host_type(&adt.name)
+    {
+        return (id, false);
+    }
+    let entries = writable(registry);
+    // Another thread may have interned the type after the first lookup.
+    if let Some(id) = entries.host_type(&adt.name) {
         return (id, false);
     }
     (register(entries, adt, None), true)
@@ -440,15 +626,23 @@ pub fn set_ctors(
     id: AdtId,
     ctors: Vec<Ctor>,
 ) {
-    if let Ok(mut guard) = registry().write()
-        && let Ok(mut finalized) = completed().write()
-        && !finalized.contains(&id)
-        && let Some(entry) = usize::try_from(id)
-            .ok()
-            .and_then(|index| guard.get_mut(index))
+    if let Ok(mut table) = registry().write()
+        && !table.complete.contains(&id)
     {
-        Arc::make_mut(entry).ctors = ctors;
-        finalized.insert(id);
+        let table = &mut *table;
+        if let Some(entry) = usize::try_from(id)
+            .ok()
+            .and_then(|index| table.definitions.get_mut(index))
+        {
+            Arc::make_mut(entry).ctors = ctors;
+            table.complete.insert(id);
+            if let Ok(index) = table.completed_names.get_mut()
+                && (!index.present.is_empty() || index.last_missing.is_some())
+                && let Some(module) = table.origins.get(&id)
+            {
+                index.finalized(module, &entry.name, id);
+            }
+        }
     }
 }
 
@@ -473,7 +667,7 @@ pub fn set_id() -> AdtId {
 #[must_use]
 pub fn get(id: AdtId) -> Option<Arc<Adt>> {
     let guard = registry().read().ok()?;
-    guard.get(usize::try_from(id).ok()?).cloned()
+    guard.definition(id).cloned()
 }
 
 /// The name of a registered type, or `Adt#n` when the id is unknown.
@@ -502,7 +696,7 @@ pub fn find_prelude_ctor(name: &str) -> Option<(AdtId, usize, Adt)> {
     let (id, position, adt) = {
         let entries = registry().read().ok()?;
         PRELUDE_IDS.into_iter().find_map(|id| {
-            let entry = entries.get(usize::try_from(id).ok()?)?;
+            let entry = entries.definitions.get(usize::try_from(id).ok()?)?;
             let position = entry.ctors.iter().position(|ctor| ctor.name == name)?;
             Some((id, position, Arc::clone(entry)))
         })
@@ -515,10 +709,14 @@ pub fn find_prelude_ctor(name: &str) -> Option<(AdtId, usize, Adt)> {
 pub fn find_ctor(name: &str) -> Option<(AdtId, usize, Adt)> {
     let (id, position, adt) = {
         let entries = registry().read().ok()?;
-        entries.iter().enumerate().find_map(|(index, entry)| {
-            let position = entry.ctors.iter().position(|ctor| ctor.name == name)?;
-            Some((AdtId::try_from(index).ok()?, position, Arc::clone(entry)))
-        })
+        entries
+            .definitions
+            .iter()
+            .enumerate()
+            .find_map(|(index, entry)| {
+                let position = entry.ctors.iter().position(|ctor| ctor.name == name)?;
+                Some((AdtId::try_from(index).ok()?, position, Arc::clone(entry)))
+            })
     }?;
     Some((id, position, (*adt).clone()))
 }
@@ -526,7 +724,7 @@ pub fn find_ctor(name: &str) -> Option<(AdtId, usize, Adt)> {
 /// The number of registered types, for tests.
 #[must_use]
 pub fn count() -> usize {
-    registry().read().map_or(0, |guard| guard.len())
+    registry().read().map_or(0, |guard| guard.definitions.len())
 }
 
 /// Resets the registry to the prelude types.
@@ -537,14 +735,8 @@ pub fn reset() {
     if let Ok(mut table) = schemas().write() {
         table.clear();
     }
-    if let Ok(mut table) = completed().write() {
-        table.retain(|id| PRELUDE_IDS.contains(id));
-    }
     if let Ok(mut guard) = registry().write() {
-        guard.truncate(3);
-    }
-    if let Ok(mut table) = modules().write() {
-        table.clear();
+        *guard = Registry::with_prelude();
     }
     if let Ok(mut table) = param_kinds().write() {
         table.clear();

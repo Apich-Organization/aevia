@@ -32,6 +32,7 @@ pub struct NumericIndex<C> {
     variable_free: BTreeSet<usize>,
     dirty: BTreeSet<usize>,
     next: usize,
+    live: usize,
 }
 impl<C> Default for NumericIndex<C> {
     fn default() -> Self {
@@ -42,13 +43,14 @@ impl<C> Default for NumericIndex<C> {
             variable_free: BTreeSet::new(),
             dirty: BTreeSet::new(),
             next: 0,
+            live: 0,
         }
     }
 }
 impl<C> NumericIndex<C> {
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.facts.len()
+    pub(crate) const fn len(&self) -> usize {
+        // `BTreeMap::len` cannot be called from the public const accessor.
+        self.live
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &C> {
@@ -96,6 +98,17 @@ impl<C> NumericIndex<C> {
         fact: C,
         dependencies: Vec<u32>,
     ) -> usize {
+        let id = self.insert_waiting(fact, dependencies);
+        self.dirty.insert(id);
+        id
+    }
+
+    /// Tracks an already checked fact until a dependency changes.
+    pub(crate) fn insert_waiting(
+        &mut self,
+        fact: C,
+        dependencies: Vec<u32>,
+    ) -> usize {
         let id = loop {
             let id = self.next;
             self.next = id.wrapping_add(1);
@@ -104,8 +117,8 @@ impl<C> NumericIndex<C> {
                 break id;
             }
         };
+        self.live = self.live.saturating_add(1);
         self.link(id, dependencies);
-        self.dirty.insert(id);
         id
     }
 
@@ -115,13 +128,25 @@ impl<C> NumericIndex<C> {
         fact: C,
         dependencies: Vec<u32>,
     ) {
+        if self.replace_waiting(id, fact, dependencies) {
+            self.dirty.insert(id);
+        }
+    }
+
+    /// Updates a checked fact and its dependency links without assigning a new ID.
+    pub(crate) fn replace_waiting(
+        &mut self,
+        id: usize,
+        fact: C,
+        dependencies: Vec<u32>,
+    ) -> bool {
         if !self.facts.contains_key(&id) {
-            return;
+            return false;
         }
         self.unlink(id);
         self.facts.insert(id, fact);
         self.link(id, dependencies);
-        self.dirty.insert(id);
+        true
     }
 
     pub(crate) fn retire(
@@ -129,7 +154,9 @@ impl<C> NumericIndex<C> {
         id: usize,
     ) {
         self.unlink(id);
-        self.facts.remove(&id);
+        if self.facts.remove(&id).is_some() {
+            self.live = self.live.saturating_sub(1);
+        }
         self.dirty.remove(&id);
     }
 
@@ -216,6 +243,26 @@ impl<C> NumericIndex<C> {
             self.dirty.remove(id);
         }
         Some(component)
+    }
+
+    /// Schedules only the facts that still depend on this variable.
+    pub(crate) fn wake_dependents(
+        &mut self,
+        variable: u32,
+    ) {
+        if let Some(facts) = self.variables.get(&variable) {
+            self.dirty.extend(facts.iter().copied());
+        }
+    }
+
+    /// Takes the scheduled fact with the lowest ID without gathering its component.
+    pub(crate) fn take_dirty_fact(&mut self) -> Option<usize> {
+        self.dirty.pop_first()
+    }
+
+    /// Removes all facts in ID order, clearing their dependency links.
+    pub(crate) fn drain(&mut self) -> impl Iterator<Item = C> + use<C> {
+        std::mem::take(self).facts.into_values()
     }
 
     pub(crate) fn retry(

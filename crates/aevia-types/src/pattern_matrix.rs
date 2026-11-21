@@ -200,12 +200,20 @@ fn matrix(
     if rows.is_empty() {
         return false;
     }
-    if rows.iter().any(|row| {
-        row.len() == types.len() && row.iter().all(|node| matches!(normalize(*node), Node::Any))
-    }) {
-        return true;
+    let mut common_defaults = types.len();
+    for row in rows {
+        let leading_defaults = row
+            .iter()
+            .take_while(|node| matches!(normalize(**node), Node::Any))
+            .count();
+        if row.len() == types.len() && leading_defaults == row.len() {
+            return true;
+        }
+        common_defaults = common_defaults.min(leading_defaults);
     }
-    let Some((ty, tail_types)) = types.split_first() else {
+    // All rows agree on this prefix. Specializing a wildcard column would
+    // replicate the same suffix for each constructor, including recursive ones.
+    let Some((ty, tail_types)) = types.get(common_defaults..).and_then(<[_]>::split_first) else {
         return true;
     };
     let Some(remaining) = budget.checked_sub(1).filter(|_| depth < DEPTH) else {
@@ -213,21 +221,22 @@ fn matrix(
     };
     *budget = remaining;
     let next_depth = depth.saturating_add(1);
+    let suffixes = || {
+        rows.iter()
+            .filter_map(|row| row.get(common_defaults..)?.split_first())
+    };
     let alternatives = cases(ty, infer);
     if alternatives.is_empty() {
         // Finite literal arms cannot cover an infinite or opaque domain.
-        let defaults = rows
-            .iter()
-            .filter_map(|row| {
-                let (first, tail) = row.split_first()?;
-                matches!(normalize(*first), Node::Any).then(|| tail.to_vec())
-            })
+        let defaults = suffixes()
+            .filter(|(first, _)| matches!(normalize(**first), Node::Any))
+            .map(|(_, tail)| tail.to_vec())
             .collect::<Vec<_>>();
         return matrix(&defaults, tail_types, infer, budget, next_depth);
     }
     for case in alternatives {
         let mut specialized = Vec::new();
-        for (first, tail) in rows.iter().filter_map(|row| row.split_first()) {
+        for (first, tail) in suffixes() {
             if let Some(mut fields) = fields(*first, &case) {
                 fields.extend_from_slice(tail);
                 specialized.push(fields);

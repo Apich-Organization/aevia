@@ -33,9 +33,10 @@ pub fn closest_name<'a>(
         | 0 => return None,
         | 1..=3 => 1,
         | 4..=6 => 2,
-        | _ => 3,
+        | _ => MAX_EDITS,
     };
     let mut best: Option<(usize, &'a str)> = None;
+    let mut other = Vec::new();
     for candidate in candidates {
         if candidate == name
             || candidate.is_empty()
@@ -44,29 +45,12 @@ pub fn closest_name<'a>(
         {
             continue;
         }
-        let other: Vec<char> = candidate.chars().collect();
-        if other.len().abs_diff(target.len()) > limit {
+        let limit = best.map_or(limit, |(distance, _)| distance);
+        let Some(limit) = candidate_chars(candidate, &target, limit, &mut other) else {
             continue;
-        }
+        };
         let distance = osa_distance(&target, &other, limit);
         if distance > limit || distance >= other.len() {
-            continue;
-        }
-        // Beyond one edit the first letter must agree (ignoring case): a
-        // reader misspells the middle of a name, and `Normal` -> `format`
-        // is two edits away but no help at all.
-        if distance > 1
-            && !name
-                .chars()
-                .next()
-                .into_iter()
-                .flat_map(char::to_lowercase)
-                .eq(candidate
-                    .chars()
-                    .next()
-                    .into_iter()
-                    .flat_map(char::to_lowercase))
-        {
             continue;
         }
         let better = match best {
@@ -117,34 +101,24 @@ pub fn closest_unit<'a>(
         | 0 => return None,
         | 1..=3 => 1,
         | 4..=6 => 2,
-        | _ => 3,
+        | _ => MAX_EDITS,
     };
     let mut best: Option<((usize, bool, bool), &'a str)> = None;
+    let mut other = Vec::new();
     for candidate in candidates {
         if candidate == name || candidate.is_empty() || candidate.contains([':', '@', '$', '#']) {
             continue;
         }
-        let other: Vec<char> = candidate.chars().collect();
-        if other.len().abs_diff(target.len()) > limit {
+        let limit = best.map_or(limit, |((distance, _, _), _)| distance);
+        let Some(limit) = candidate_chars(candidate, &target, limit, &mut other) else {
+            continue;
+        };
+        let distance = osa_distance(&target, &other, limit);
+        if distance > limit {
             continue;
         }
         let contained = is_subsequence(&other, &target) || is_subsequence(&target, &other);
-        let distance = osa_distance(&target, &other, limit);
-        if distance > limit || (distance >= other.len() && !contained) {
-            continue;
-        }
-        if distance > 1
-            && !name
-                .chars()
-                .next()
-                .into_iter()
-                .flat_map(char::to_lowercase)
-                .eq(candidate
-                    .chars()
-                    .next()
-                    .into_iter()
-                    .flat_map(char::to_lowercase))
-        {
+        if distance >= other.len() && !contained {
             continue;
         }
         let key = (distance, !contained, !COMMON_UNITS.contains(&candidate));
@@ -161,58 +135,90 @@ pub fn closest_unit<'a>(
     best.map(|(_, candidate)| candidate)
 }
 
+const MAX_EDITS: usize = 3;
+const BAND_WIDTH: usize = MAX_EDITS.saturating_mul(2).saturating_add(1);
+
+fn candidate_chars(
+    candidate: &str,
+    target: &[char],
+    mut limit: usize,
+    other: &mut Vec<char>,
+) -> Option<usize> {
+    // Beyond one edit the first letter must agree, ignoring case.
+    if limit > 1
+        && !target
+            .first()?
+            .to_lowercase()
+            .eq(candidate.chars().next()?.to_lowercase())
+    {
+        limit = 1;
+    }
+    let min = target.len().saturating_sub(limit);
+    let max = target.len().saturating_add(limit);
+    // A UTF-8 character occupies one to four bytes.
+    if !(min..=max.saturating_mul(4)).contains(&candidate.len()) {
+        return None;
+    }
+    other.clear();
+    other.extend(candidate.chars().take(max.saturating_add(1)));
+    (min..=max).contains(&other.len()).then_some(limit)
+}
+
 // Compute only cells within `limit` edits of the diagonal. Every accepted
 // path stays in that band, and transposition needs at most two previous rows.
+// Suggestion cutoffs are bounded by MAX_EDITS, including when the best result
+// so far or the first-letter rule tightens the band.
 fn osa_distance(
     a: &[char],
     b: &[char],
     limit: usize,
 ) -> usize {
     let outside = limit.saturating_add(1);
-    let lookup = |row: &(usize, Vec<usize>), column: usize| {
+    let lookup = |row: &(usize, [usize; BAND_WIDTH]), column: usize| {
         column
             .checked_sub(row.0)
             .and_then(|offset| row.1.get(offset).copied())
             .unwrap_or(outside)
     };
-    let mut transposition = (0, Vec::new());
-    let mut previous = (0, (0..=limit.min(b.len())).collect());
-    let mut current = (0, Vec::new());
+    let mut rows = [(0, [outside; BAND_WIDTH]); 3];
+    let [older, last, next] = &mut rows;
+    let (mut transposition, mut previous, mut current) = (older, last, next);
+    for (column, cell) in (0..=limit.min(b.len())).zip(&mut previous.1) {
+        *cell = column;
+    }
     for (prefix, character) in a.iter().enumerate() {
         let length = prefix.saturating_add(1);
         current.0 = length.saturating_sub(limit);
-        current.1.clear();
-        for column in current.0..=length.saturating_add(limit).min(b.len()) {
+        current.1.fill(outside);
+        let mut left = outside;
+        let end = length.saturating_add(limit).min(b.len());
+        for (column, cell) in (current.0..=end).zip(&mut current.1) {
             let Some(other_index) = column.checked_sub(1) else {
-                current.1.push(length);
+                *cell = length;
+                left = length;
                 continue;
             };
             let Some(other) = b.get(other_index) else {
                 break;
             };
-            let deletion = lookup(&previous, column).saturating_add(1);
-            let insertion = current
-                .1
-                .last()
-                .copied()
-                .unwrap_or(outside)
-                .saturating_add(1);
+            let deletion = lookup(previous, column).saturating_add(1);
+            let insertion = left.saturating_add(1);
             let replacement =
-                lookup(&previous, other_index).saturating_add(usize::from(character != other));
+                lookup(previous, other_index).saturating_add(usize::from(character != other));
             let mut value = deletion.min(insertion).min(replacement).min(outside);
             if let (Some(before), Some(other_before)) =
                 (prefix.checked_sub(1), other_index.checked_sub(1))
                 && a.get(before) == Some(other)
                 && b.get(other_before) == Some(character)
             {
-                value = value.min(lookup(&transposition, other_before).saturating_add(1));
+                value = value.min(lookup(transposition, other_before).saturating_add(1));
             }
-            current.1.push(value);
+            *cell = value;
+            left = value;
         }
-        std::mem::swap(&mut transposition, &mut previous);
-        std::mem::swap(&mut current, &mut previous);
+        (transposition, previous, current) = (previous, current, transposition);
     }
-    lookup(&previous, b.len())
+    lookup(previous, b.len())
 }
 
 #[cfg(test)]
@@ -262,5 +268,64 @@ mod suggestion_tests {
             closest_name("value", ["valeu", "Show@Int::show"]),
             Some("valeu")
         );
+    }
+
+    #[test]
+    fn tightening_the_band_keeps_name_and_unit_ties() {
+        assert_eq!(closest_name("pllint", ["pllintx", "pllin"]), Some("pllin"));
+        assert_eq!(closest_name("pllint", ["pllin", "pllintx"]), Some("pllin"));
+        assert_eq!(closest_unit("kmm", ["klm", "km"]), Some("km"));
+        assert_eq!(closest_name("Δeltaxx", ["δeltayx"]), Some("δeltayx"));
+        assert_eq!(closest_name("Ωmega", ["Σmega"]), Some("Σmega"));
+        assert_eq!(closest_name("İstanbxx", ["istanbul"]), None);
+    }
+
+    fn full_distance(
+        a: &[char],
+        b: &[char],
+    ) -> usize {
+        let mut cells = vec![vec![0; b.len() + 1]; a.len() + 1];
+        for (i, row) in cells.iter_mut().enumerate() {
+            row[0] = i;
+        }
+        for (j, cell) in cells[0].iter_mut().enumerate() {
+            *cell = j;
+        }
+        for i in 1..=a.len() {
+            for j in 1..=b.len() {
+                let mut best = (cells[i - 1][j] + 1)
+                    .min(cells[i][j - 1] + 1)
+                    .min(cells[i - 1][j - 1] + usize::from(a[i - 1] != b[j - 1]));
+                if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                    best = best.min(cells[i - 2][j - 2] + 1);
+                }
+                cells[i][j] = best;
+            }
+        }
+        cells[a.len()][b.len()]
+    }
+
+    #[test]
+    fn every_cutoff_matches_an_independent_full_matrix() {
+        let letters = ['a', 't', 'İ', 'δ', 'é', '時', '\u{307}'];
+        let mut state = 0xd9da_736b_617a_bb91_u64;
+        let mut word = |len| {
+            (0..len)
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    letters[state as usize % letters.len()]
+                })
+                .collect::<Vec<_>>()
+        };
+        for case in 0..2048 {
+            let a = word(case % 13);
+            let b = word((case / 13) % 13);
+            let expected = full_distance(&a, &b);
+            for limit in 0..=super::MAX_EDITS {
+                assert_eq!(osa_distance(&a, &b, limit), expected.min(limit + 1));
+            }
+        }
     }
 }

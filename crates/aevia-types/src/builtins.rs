@@ -1138,6 +1138,9 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 Type::int(),
             ))]
         },
+        | "mod_pow" => {
+            vec![scheme(0, 0, 0, func(vec![Type::int(); 3], Type::int()))]
+        },
         | "factorial" | "double_factorial" => {
             vec![Scheme::mono(func(vec![Type::int()], Type::int()))]
         },
@@ -3164,6 +3167,20 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             )]
         },
+        | "quantiles" => {
+            vec![scheme(
+                1,
+                1,
+                0,
+                func(
+                    vec![
+                        tensor(1, scalar(rep_var(0), dim_var(0))),
+                        tensor(1, scalar(rep_var(0), one())),
+                    ],
+                    tensor(1, scalar(rep_var(0).div_rep(), dim_var(0))),
+                ),
+            )]
+        },
         | "cov" => {
             vec![scheme(
                 1,
@@ -3239,6 +3256,25 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 func(vec![var(0), Type::real(dim_var(0))], Type::real(one())),
             )]
         },
+        | "cdf_batch" => {
+            vec![scheme(
+                1,
+                1,
+                0,
+                func(
+                    vec![var(0), list(Type::real(dim_var(0)))],
+                    list(Type::real(one())),
+                ),
+            )]
+        },
+        | "dist_quantile" => {
+            vec![scheme(
+                1,
+                1,
+                0,
+                func(vec![var(0), Type::real(one())], Type::real(dim_var(0))),
+            )]
+        },
         | "sample" => {
             vec![scheme(
                 1,
@@ -3289,6 +3325,23 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                         scalar(rep_var(0), dim_var(1)),
                     ],
                     scalar(rep_var(0), dim_var(2)),
+                ),
+            )]
+        },
+        | "interp2Batch" => {
+            vec![scheme(
+                1,
+                3,
+                0,
+                func(
+                    vec![
+                        tensor(1, scalar(rep_var(0), dim_var(0))),
+                        tensor(1, scalar(rep_var(0), dim_var(1))),
+                        tensor(2, scalar(rep_var(0), dim_var(2))),
+                        tensor(1, scalar(rep_var(0), dim_var(0))),
+                        tensor(1, scalar(rep_var(0), dim_var(1))),
+                    ],
+                    tensor(1, Type::float(dim_var(2))),
                 ),
             )]
         },
@@ -3857,6 +3910,20 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             )]
         },
+        | "tetrahedron_volume" => {
+            vec![scheme(
+                0,
+                1,
+                0,
+                func(
+                    vec![Type::tensor(
+                        Shape::refined([Some(4), Some(3)]),
+                        Type::real(dim_var(0)),
+                    )],
+                    Type::real(dim_var(0).pow(&BigRational::from_integer(3.into()))),
+                ),
+            )]
+        },
         | "distance" => {
             vec![scheme(
                 0,
@@ -4019,6 +4086,7 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "quot",
     "gcd",
     "lcm",
+    "mod_pow",
     "factorial",
     "double_factorial",
     "to_float",
@@ -4262,6 +4330,7 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "least_squares",
     "median",
     "quantile",
+    "quantiles",
     "cov",
     "corr",
     "skewness",
@@ -4270,6 +4339,8 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "mode",
     "pdf",
     "cdf",
+    "cdf_batch",
+    "dist_quantile",
     "sample",
     "sample_n",
     "fft",
@@ -4307,6 +4378,7 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "interp1",
     "spline",
     "interp2",
+    "interp2Batch",
     "polyfit",
     "chebyshev_fit",
     "polyval",
@@ -4360,6 +4432,7 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "binomial",
     "permutations",
     "polygon_area",
+    "tetrahedron_volume",
     "distance",
     "simulate",
     "to_device",

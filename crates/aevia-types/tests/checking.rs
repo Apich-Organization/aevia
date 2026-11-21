@@ -809,6 +809,32 @@ fn a_rssn_call_is_resolved_and_pinned() {
 }
 
 #[test]
+fn a_manifest_variadic_rssn_call_uses_the_tail_representation() {
+    let module = expect_ok("let result = Rssn.add(1, 2, 3)\n");
+    let [call] = module.rssn_calls.as_slice() else {
+        panic!("expected one pinned RSSN call");
+    };
+    let entry = aevia_rssn::registry().op("add").unwrap();
+    let signature = &entry.signatures[call.overload];
+    assert!(matches!(
+        signature.variadic,
+        Some((0, None, aevia_rssn::SigType::Real))
+    ));
+    assert_eq!(call.key, *entry.key(call.overload).unwrap());
+    assert_eq!(
+        scheme_of(&module, "result").ty,
+        Type::real(aevia_dim::Dim::one())
+    );
+}
+
+#[test]
+fn a_manifest_rssn_variadic_tail_checks_types_and_requires_the_fixed_prefix() {
+    expect_ok("let result = Rssn.and(true, false, true)\n");
+    expect_error("let result = Rssn.and(true, false, 1)\n", "E1003");
+    expect_error("let result = Rssn.and(true)\n", "E1003");
+}
+
+#[test]
 fn an_overloaded_rssn_name_is_not_a_value() {
     // `Rssn.<op>` outside call position is `E0303` unless every
     // overload has one type.

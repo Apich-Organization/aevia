@@ -29,7 +29,9 @@ use aevia_dim::Dim;
 use num_traits::One;
 use num_traits::Signed;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::hash_map::Entry;
 use std::fmt;
 
 /// Identifier of a nominal algebraic data type.
@@ -661,17 +663,60 @@ impl Row {
                     current = tail;
                 },
                 | Self::Empty | Self::Var(_) => {
-                    let prior_tail = std::mem::replace(current, Self::Empty);
-                    *current = Self::Extend {
-                        label: label.to_string(),
-                        ty: Box::new(ty),
-                        tail: Box::new(prior_tail),
-                    };
+                    current.insert_before_tail(label, ty);
                     break;
                 },
             }
         }
         self
+    }
+
+    /// Updates fields in input order using one traversal of the original row.
+    /// The callback receives the open tail only when the label is new.
+    #[allow(
+        clippy::single_call_fn,
+        reason = "keeps the mutable row representation and its indexing private to the type layer"
+    )]
+    pub(crate) fn update_many<'a, T>(
+        &'a mut self,
+        fields: impl ExactSizeIterator<Item = (&'a str, T)>,
+        mut field_type: impl FnMut(&str, T, Option<u32>) -> Type,
+    ) {
+        let mut slots = HashMap::with_capacity(fields.len());
+        let mut end = self;
+        while let Self::Extend { label, ty, tail } = end {
+            slots.entry(label.as_str()).or_insert_with(|| ty.as_mut());
+            end = tail.as_mut();
+        }
+        let tail_var = match end {
+            | Self::Var(id) => Some(*id),
+            | _ => None,
+        };
+        for (label, value) in fields {
+            match slots.entry(label) {
+                | Entry::Occupied(mut slot) => **slot.get_mut() = field_type(label, value, None),
+                | Entry::Vacant(slot) => {
+                    end.insert_before_tail(label, field_type(label, value, tail_var));
+                    if let Self::Extend { ty, tail, .. } = end {
+                        slot.insert(ty.as_mut());
+                        end = tail.as_mut();
+                    }
+                },
+            }
+        }
+    }
+
+    fn insert_before_tail(
+        &mut self,
+        label: &str,
+        ty: Type,
+    ) {
+        let prior_tail = std::mem::replace(self, Self::Empty);
+        *self = Self::Extend {
+            label: label.to_string(),
+            ty: Box::new(ty),
+            tail: Box::new(prior_tail),
+        };
     }
 }
 
@@ -811,6 +856,14 @@ pub enum Type {
     Param(u32),
     /// The type of an expression that already failed to check.
     Error,
+}
+
+pub(crate) enum TypeVariableRef<'a> {
+    Type(u32),
+    Representation(Rep),
+    Dimension(&'a Dim),
+    Extents(&'a [Option<Nat>]),
+    Row(u32),
 }
 
 impl<C: bincode_next::config::Config> bincode_next::Fingerprint<C> for Row {
@@ -999,6 +1052,82 @@ impl<'de, Context> bincode_next::BorrowDecode<'de, Context> for Type {
 }
 
 impl Type {
+    /// Visits variable-bearing parts in freshening order without cloning the type.
+    pub(crate) fn visit_variables(
+        &self,
+        visit: &mut impl FnMut(TypeVariableRef<'_>),
+    ) {
+        match self {
+            | Self::Var(id) => visit(TypeVariableRef::Type(*id)),
+            | Self::Scalar(rep, dim) => {
+                visit(TypeVariableRef::Representation(*rep));
+                visit(TypeVariableRef::Dimension(dim));
+            },
+            | Self::Dyn(rep) => visit(TypeVariableRef::Representation(*rep)),
+            | Self::Point(dim) | Self::UnitOf(dim) => visit(TypeVariableRef::Dimension(dim)),
+            | Self::Tensor { shape, elem } => {
+                if let Shape::Refined(items) = shape {
+                    visit(TypeVariableRef::Extents(items));
+                }
+                elem.visit_variables(visit);
+            },
+            | Self::Fn(args, ret) => {
+                for arg in args {
+                    arg.visit_variables(visit);
+                }
+                ret.visit_variables(visit);
+            },
+            | Self::Record(row) => {
+                let mut current = row;
+                while let Row::Extend { ty, tail, .. } = current {
+                    ty.visit_variables(visit);
+                    current = tail;
+                }
+                if let Row::Var(id) = current {
+                    visit(TypeVariableRef::Row(*id));
+                }
+            },
+            | Self::Adt(_, args) => {
+                for arg in args {
+                    arg.visit_variables(visit);
+                }
+            },
+            | Self::Io(value)
+            | Self::TypeRepIntrinsic(Some(value))
+            | Self::FromValueIntrinsic(Some(value)) => value.visit_variables(visit),
+            | Self::TensorIntrinsic(intrinsic) => {
+                if let Some(rep) = intrinsic.element {
+                    visit(TypeVariableRef::Representation(rep));
+                }
+            },
+            | Self::TypeRepIntrinsic(None)
+            | Self::FromValueIntrinsic(None)
+            | Self::Bool
+            | Self::Prop
+            | Self::Str
+            | Self::Unit
+            | Self::Param(_)
+            | Self::Error
+            | Self::WriteNpyIntrinsic
+            | Self::ReadNpyIntrinsic(_)
+            | Self::ToCallbackIntrinsic => {},
+        }
+    }
+
+    /// Visits type and representation variables that connect numeric constraints.
+    pub(crate) fn visit_numeric_variables(
+        &self,
+        mut visit: impl FnMut(u32),
+    ) {
+        self.visit_variables(&mut |variable| {
+            if let TypeVariableRef::Type(id) | TypeVariableRef::Representation(Rep::Var(id)) =
+                variable
+            {
+                visit(id);
+            }
+        });
+    }
+
     /// `Int`, that is `Scalar<Int, 1>`.
     #[must_use]
     pub fn int() -> Self {

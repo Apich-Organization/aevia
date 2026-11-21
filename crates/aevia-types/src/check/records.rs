@@ -31,6 +31,9 @@ use num_bigint::Sign;
 use num_traits::ToPrimitive;
 use std::collections::HashSet;
 
+// A small update can walk the row without allocating a field index.
+const INDEXED_UPDATE_THRESHOLD: usize = 16;
+
 impl Checker {
     pub(super) fn synth_record(
         &mut self,
@@ -67,18 +70,42 @@ impl Checker {
                 Row::Empty
             },
         };
-        for (name, value) in fields {
-            let ty = self.synth(value);
-            // §3.6.2: adding a field requires its absence from the base tail.
-            if row.field(name).is_none()
-                && let Some(tail) = row.tail_var()
-                && let Err(error) = self.infer.require_lacks(tail, name)
-            {
-                self.report_unify(error, value.span);
+        if fields.len() >= INDEXED_UPDATE_THRESHOLD {
+            row.update_many(
+                fields.iter().map(|(name, value)| (name.as_str(), value)),
+                |name, value, tail| {
+                    let ty = self.synth(value);
+                    self.check_record_update_lacks(tail, name, value.span);
+                    ty
+                },
+            );
+        } else {
+            for (name, value) in fields {
+                let ty = self.synth(value);
+                let tail = if row.field(name).is_some() {
+                    None
+                } else {
+                    row.tail_var()
+                };
+                self.check_record_update_lacks(tail, name, value.span);
+                row = row.update(name, ty);
             }
-            row = row.update(name, ty);
         }
         Type::Record(row)
+    }
+
+    fn check_record_update_lacks(
+        &mut self,
+        tail: Option<u32>,
+        name: &str,
+        span: Span,
+    ) {
+        // §3.6.2: adding a field requires its absence from the base tail.
+        if let Some(tail) = tail
+            && let Err(error) = self.infer.require_lacks(tail, name)
+        {
+            self.report_unify(error, span);
+        }
     }
 
     pub(super) fn field_type(
@@ -192,6 +219,12 @@ impl Checker {
                         } else {
                             self.report_unify(error, item.span);
                         }
+                    }
+                    if matches!(existing_resolved, Type::Var(_)) {
+                        // Consecutive literal variables bind left to right.
+                        // Keep the current alias instead of revisiting the
+                        // first element's growing chain on every iteration.
+                        elem = Some(existing_resolved);
                     }
                 },
             }

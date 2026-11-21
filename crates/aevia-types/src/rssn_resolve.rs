@@ -6,7 +6,8 @@
 //! 1. filter by arity;
 //! 2. classify each argument, take the *weakest* score;
 //! 3. the unique maximum wins;
-//! 4. a tie is `E1002`, no match is `E1003`.
+//! 4. pin the term contract for an eligible fixed-nullary derived pair;
+//! 5. any other tie is `E1002`, no match is `E1003`.
 //!
 //! Resolution is a *type-level* decision, made once, at the call site; the
 //! runtime executes the key it produced.
@@ -30,6 +31,9 @@ use crate::ty::Rep;
 use crate::ty::Shape;
 use crate::ty::Type;
 use aevia_dim::Dim;
+use aevia_rssn::Sig;
+use aevia_rssn::SigType;
+use std::cmp::Ordering;
 
 /// How well one argument matches one parameter.
 ///
@@ -82,58 +86,110 @@ pub enum Resolution {
 #[must_use]
 pub fn resolve(
     entry: &aevia_rssn::OpEntry,
-    args: &[aevia_rssn::SigType],
+    args: &[SigType],
 ) -> Resolution {
-    let mut scored: Vec<(usize, Score)> = Vec::new();
-    for (index, signature) in entry.signatures.iter().enumerate() {
-        if signature.params.len() != args.len()
-            && !signature.variadic.as_ref().is_some_and(|(min, max, _)| {
-                args.len() >= *min && max.is_none_or(|max| args.len() <= max)
-            })
-        {
+    let mut best_score = Score::No;
+    let mut best_index = 0;
+    let mut tied = Vec::new();
+    'overloads: for (index, signature) in entry.signatures.iter().enumerate() {
+        if !accepts_arity(signature, args.len()) {
             continue;
         }
         let mut worst = Score::Exact;
-        let mut ok = true;
-        for (position, got) in args.iter().enumerate() {
-            let Some(param) = signature.params.get(position) else {
-                // Beyond the fixed parameters: the variadic tail, when there is
-                // one, is `[α]` and accepts anything.
-                if signature.variadic.is_some() {
-                    worst = worst.min(Score::Generic);
-                    continue;
-                }
-                ok = false;
-                break;
-            };
+        for (param, got) in signature_parameters(signature).zip(args) {
             let score = score_type(param, got);
             if !score.accepted() {
-                ok = false;
-                break;
+                continue 'overloads;
             }
             worst = worst.min(score);
         }
-        if ok {
-            scored.push((index, worst));
+        match worst.cmp(&best_score) {
+            | Ordering::Greater => {
+                best_score = worst;
+                best_index = index;
+                tied.clear();
+            },
+            | Ordering::Equal => {
+                if tied.is_empty() {
+                    tied.push(best_index);
+                }
+                tied.push(index);
+            },
+            | Ordering::Less => {},
         }
     }
-    let Some(top) = scored.iter().map(|(_, score)| *score).max() else {
-        return Resolution::None;
-    };
-    let tied: Vec<usize> = scored
-        .iter()
-        .filter(|(_, score)| *score == top)
-        .map(|(index, _)| *index)
-        .collect();
-    match tied.as_slice() {
-        | [only] => {
-            Resolution::Unique {
-                index: *only,
-                score: top,
-            }
-        },
-        | _ => Resolution::Ambiguous { candidates: tied },
+    if !best_score.accepted() {
+        Resolution::None
+    } else if tied.is_empty() {
+        Resolution::Unique {
+            index: best_index,
+            score: best_score,
+        }
+    } else if args.is_empty()
+        && let Some(index) = entry.derived_nullary_term_index()
+        && tied.len() == 2
+        && tied.contains(&index)
+    {
+        Resolution::Unique {
+            index,
+            score: best_score,
+        }
+    } else {
+        Resolution::Ambiguous { candidates: tied }
     }
+}
+
+fn accepts_arity(
+    signature: &Sig,
+    count: usize,
+) -> bool {
+    let Some(extra) = count.checked_sub(signature.params.len()) else {
+        return false;
+    };
+    match &signature.variadic {
+        | Some((min, max, _)) => extra >= *min && max.is_none_or(|max| extra <= max),
+        | None => extra == 0,
+    }
+}
+
+/// Finds the first argument that needs a free symbol for an otherwise applicable overload.
+#[allow(
+    clippy::single_call_fn,
+    reason = "diagnoses the boundary without changing which calls resolve"
+)]
+pub(crate) fn symbol_argument_mismatch(
+    entry: &aevia_rssn::OpEntry,
+    args: &[SigType],
+) -> Option<usize> {
+    'overloads: for signature in &entry.signatures {
+        if !accepts_arity(signature, args.len()) {
+            continue;
+        }
+        let mut first_symbol = None;
+        for (index, (param, got)) in signature_parameters(signature).zip(args).enumerate() {
+            if score_type(param, got).accepted() {
+                continue;
+            }
+            if matches!((param, got), (SigType::Symbol, SigType::Real)) {
+                first_symbol.get_or_insert(index);
+            } else {
+                continue 'overloads;
+            }
+        }
+        if first_symbol.is_some() {
+            return first_symbol;
+        }
+    }
+    None
+}
+
+fn signature_parameters(signature: &Sig) -> impl Iterator<Item = &SigType> {
+    signature.params.iter().chain(
+        signature
+            .variadic
+            .iter()
+            .flat_map(|(_, max, elem)| std::iter::repeat_n(elem, max.unwrap_or(usize::MAX))),
+    )
 }
 
 /// The score of one argument against one parameter.
@@ -602,6 +658,71 @@ mod tests {
             ));
         }
     }
+
+    #[test]
+    fn variadic_limits_and_element_scoring_follow_the_fixed_parameters() {
+        use SigType as S;
+        let mut entry = aevia_rssn::registry().op("sin").unwrap().clone();
+        entry.signatures = vec![Sig {
+            params: vec![S::Bool],
+            ret: S::Real,
+            variadic: Some((1, Some(2), S::Real)),
+        }];
+
+        for invalid in [
+            &[][..],
+            &[S::Bool][..],
+            &[S::Real, S::Real][..],
+            &[S::Bool, S::Str][..],
+            &[S::Bool, S::Real, S::Real, S::Real][..],
+        ] {
+            assert_eq!(resolve(&entry, invalid), Resolution::None, "{invalid:?}");
+        }
+        assert_eq!(
+            resolve(&entry, &[S::Bool, S::Real]),
+            Resolution::Unique {
+                index: 0,
+                score: Score::Exact
+            }
+        );
+        assert_eq!(
+            resolve(&entry, &[S::Bool, S::Real, S::Int]),
+            Resolution::Unique {
+                index: 0,
+                score: Score::Widened
+            }
+        );
+    }
+
+    #[test]
+    fn equal_best_overloads_retain_manifest_order() {
+        use SigType as S;
+        let mut entry = aevia_rssn::registry().op("sin").unwrap().clone();
+        entry.signatures = [S::Dyn, S::Dyn, S::Real, S::Int, S::Dyn, S::Int]
+            .into_iter()
+            .map(|param| {
+                Sig {
+                    params: vec![param],
+                    ret: S::Bool,
+                    variadic: None,
+                }
+            })
+            .collect();
+        assert_eq!(
+            resolve(&entry, &[S::Int]),
+            Resolution::Ambiguous {
+                candidates: vec![3, 5]
+            }
+        );
+        entry.signatures.pop();
+        assert_eq!(
+            resolve(&entry, &[S::Int]),
+            Resolution::Unique {
+                index: 3,
+                score: Score::Exact
+            }
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -648,12 +769,14 @@ pub fn invoke_result(
 /// Instantiates a signature against the argument dimensions.
 ///
 /// Representation widening has already been decided by the overload lattice.
+/// The fixed parameters, variadic arguments, and return share one fresh
+/// substitution. Arity is checked when the overload is selected.
 ///
 /// # Errors
 ///
 /// Returns the first dimension or inferred type conflict against the signature.
 pub fn instantiate_dimensions(
-    signature: &aevia_rssn::Sig,
+    signature: &Sig,
     actual: &[Type],
     infer: &mut crate::infer::Infer,
 ) -> Result<Option<Type>, crate::infer::UnifyError> {
@@ -718,7 +841,7 @@ pub fn instantiate_dimensions(
         }
     }
     let mut dims = std::collections::HashMap::new();
-    for (param, got) in signature.params.iter().zip(actual) {
+    for (param, got) in signature_parameters(signature).zip(actual) {
         constrain(param, got, infer, &mut dims)?;
     }
     Ok(sig_type_to_type(&signature.ret, infer, &mut dims).map(|ret| infer.resolve(&ret)))
@@ -751,10 +874,7 @@ fn map_dim(
     infer: &mut crate::infer::Infer,
     dims: &mut std::collections::HashMap<u32, Dim>,
 ) -> Dim {
-    for id in dim.vars() {
-        dims.entry(id).or_insert_with(|| infer.fresh_dim());
-    }
-    dim.substitute(|id| dims.get(&id).cloned())
+    dim.substitute(|id| Some(dims.entry(id).or_insert_with(|| infer.fresh_dim()).clone()))
 }
 
 /// Maps a manifest result type to the checker's type, or `None` when the

@@ -3912,6 +3912,7 @@ impl Checker {
         let recorded: HashMap<Span, Type> =
             std::mem::take(&mut self.expr_types).into_iter().collect();
         self.expression_indices.clear();
+        self.infer.compress_type_aliases();
         self.default_unbound_literals(&recorded, lexical);
         let resolved_expr_types: HashMap<Span, Type> = recorded
             .into_iter()
@@ -8086,18 +8087,15 @@ impl Checker {
         span: Span,
     ) -> Type {
         let ty = self.synth_call_inner(callee, args, span);
-        if !args
-            .iter()
-            .any(|arg| matches!(arg.kind, ExprKind::Placeholder))
+        if let Some(materializations) = self.call_materializations.get(&callee.span)
+            && !materializations.is_empty()
+            && !args
+                .iter()
+                .any(|arg| matches!(arg.kind, ExprKind::Placeholder))
         {
-            let materializations = self
-                .call_materializations
-                .get(&callee.span)
-                .cloned()
-                .unwrap_or_default();
             let protected = self.lexical_numeric_variables();
             for ty in materializations {
-                self.infer.weaken_materialized(&ty, &protected);
+                self.infer.weaken_materialized(ty, &protected);
             }
         }
         ty
@@ -12039,6 +12037,76 @@ mod builtin_arity_tests {
 }
 
 #[cfg(test)]
+mod call_materialization_tests {
+    use super::*;
+
+    #[test]
+    fn a_call_materialization_respects_lexical_generics() {
+        let mut checker = Checker::new(0, CheckOptions::default());
+        let Type::Var(protected) = checker.infer.fresh_type() else {
+            panic!("expected a fresh type variable");
+        };
+        let Type::Var(local) = checker.infer.fresh_type() else {
+            panic!("expected a fresh type variable");
+        };
+        checker
+            .type_params
+            .push(("Parameter".to_owned(), Type::Var(protected)));
+
+        let mut scheme = Scheme::mono(Type::func(Vec::new(), Type::Bool));
+        scheme.materializations = vec![Type::Var(protected), Type::Var(local)];
+        checker.globals.insert("stored".to_owned(), scheme);
+        let callee = Expr::new(ExprKind::Var("stored".to_owned()), Span::new(0, 0, 6));
+        let result = checker.synth_call(&callee, &[], Span::new(0, 0, 8));
+
+        assert_eq!(result, Type::Bool);
+        assert_eq!(
+            checker.call_materializations[&callee.span],
+            [Type::Var(protected), Type::Var(local)]
+        );
+        assert!(!checker.infer.is_weak(protected));
+        assert!(checker.infer.is_weak(local));
+    }
+
+    #[test]
+    fn source_call_materializations_keep_their_literal_types() {
+        let source = r#"fn plain(x: Bool): Bool = x
+fn produce(): Int = 42
+fn caller<a>(x: a): a =
+    let flag = plain(true)
+    let number: Int = produce()
+    x
+let answer = caller(true)
+"#;
+        let tokens = aevia_syntax::lex(0, source).unwrap();
+        let (module, parsed) = aevia_syntax::parse_module(0, source, &tokens);
+        assert!(!parsed.has_errors(), "{:?}", parsed.items);
+        let checked = check_module(0, &module);
+        assert!(
+            !checked.diagnostics.has_errors(),
+            "{:?}",
+            checked.diagnostics.items
+        );
+        let exports = &checked.module.exports;
+        let Export::Value { scheme: plain, .. } = &exports["plain"] else {
+            panic!("expected a value scheme");
+        };
+        let Export::Value {
+            scheme: materialized, ..
+        } = &exports["produce"]
+        else {
+            panic!("expected a value scheme");
+        };
+        let Export::Value { scheme: answer, .. } = &exports["answer"] else {
+            panic!("expected a value scheme");
+        };
+        assert!(plain.materializations.is_empty());
+        assert_eq!(materialized.materializations, [Type::int()]);
+        assert_eq!(answer.ty, Type::Bool);
+    }
+}
+
+#[cfg(test)]
 mod literal_region_tests {
     use super::*;
 
@@ -12110,6 +12178,35 @@ mod literal_region_tests {
             .join()
             .unwrap();
     }
+
+    #[test]
+    fn tensor_literal_keeps_concrete_evidence_for_each_scalar() {
+        let items = 1024;
+        let source = format!("let samples = [1{}]\n", ", 2".repeat(items - 1));
+        let lexed = aevia_syntax::lex(0, &source).unwrap();
+        let (module, diagnostics) = aevia_syntax::parse_module(0, &source, &lexed);
+        assert!(!diagnostics.has_errors());
+        let result = check_module(0, &module);
+        assert!(!result.diagnostics.has_errors());
+        let expected = Type::int();
+        assert_eq!(
+            result
+                .module
+                .expr_types
+                .values()
+                .filter(|ty| **ty == expected)
+                .count(),
+            items
+        );
+        let Some(Export::Value { scheme, .. }) = result.module.exports.get("samples") else {
+            panic!("missing tensor export");
+        };
+        assert_eq!(
+            scheme.ty,
+            Type::tensor(Shape::refined([Some(items)]), expected)
+        );
+    }
+
     #[test]
     fn mixed_literal_spines_are_iterative_and_keep_separate_domains() {
         std::thread::Builder::new()

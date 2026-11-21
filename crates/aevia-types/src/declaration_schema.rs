@@ -329,11 +329,7 @@ pub fn build(root: adt::AdtId) -> Option<DeclarationSchemaKey> {
         if !visited.insert(id) {
             continue;
         }
-        let declaration = adt::get(id)?;
-        let module = adt::module_of(id);
-        if !module.is_prelude() && !adt::is_complete(id) {
-            return None;
-        }
+        let (declaration, module) = adt::schema_snapshot(id)?;
         if !module.is_prelude() {
             for ctor in &declaration.ctors {
                 for field in &ctor.fields {

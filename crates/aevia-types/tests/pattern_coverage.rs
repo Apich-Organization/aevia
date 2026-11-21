@@ -48,6 +48,53 @@ fn diagonal_products_do_not_cover_the_crossed_values() {
         "fn f(p: (Bool, Bool)): Int = match p with\n| (true, _) -> 1\n| (false, true) -> 2\n| (false, false) -> 3\n",
     );
 }
+
+#[test]
+fn irrelevant_columns_preserve_wide_match_coverage_and_usefulness() {
+    let fields = (0..48)
+        .map(|index| format!("unused{index:02}: Bool"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let header =
+        format!("fn choose(p: {{ {fields}, zstate: Bool, ztag: Bool }}): Int = match p with\n");
+    let covering = format!("{header}| {{ zstate = true }} -> 1\n| {{ zstate = false }} -> 0\n");
+    accepted(&covering);
+
+    let redundant = diagnostics(&format!("{covering}| _ -> 2\n"));
+    assert!(!redundant.has_errors(), "{:?}", redundant.items);
+    assert_eq!(
+        redundant
+            .items
+            .iter()
+            .filter(|item| item.code == "W0201")
+            .count(),
+        1,
+        "{:?}",
+        redundant.items
+    );
+
+    rejected(
+        &format!("{header}| {{ zstate = true }} -> 1\n| {{ zstate = false }} if true -> 0\n"),
+        "E0309",
+    );
+    rejected(
+        &format!(
+            "{header}| {{ zstate = true, ztag = true }} -> 1\n\
+             | {{ zstate = false, ztag = false }} -> 0\n"
+        ),
+        "E0309",
+    );
+}
+
+#[test]
+fn unconstrained_recursive_fields_do_not_expand_into_infinite_constructors() {
+    accepted(
+        "type Chain = | ChainEnd | ChainNext(Chain)\n\
+         fn choose(p: { chain: Chain, items: Tensor<1, Int>, state: Bool }): Int = match p with\n\
+         | { state = true } -> 1\n\
+         | { state = false } -> 0\n",
+    );
+}
 #[test]
 fn vector_nil_and_cons_cover_every_length_without_a_wildcard() {
     accepted(
