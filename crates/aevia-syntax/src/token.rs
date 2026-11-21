@@ -287,11 +287,12 @@ impl fmt::Display for Punct {
 pub enum StringPart {
     /// Literal text, with escapes already decoded.
     Text(String),
-    /// `{expr}`: the raw source of the embedded expression.
+    /// `{expr}`: the source of the embedded expression and its original range.
     Interpolation {
-        /// The expression source, without the braces.
+        /// The expression source, excluding the enclosing braces and any
+        /// backslashes that protect a quote or brace in the expression.
         source: String,
-        /// The span of the source, so sub-lexing reports correct positions.
+        /// The original byte range between the interpolation's braces.
         span: Span,
     },
 }

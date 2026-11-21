@@ -44,7 +44,8 @@ use crate::ast::UnOp;
 use crate::diagnostic::Diagnostic;
 use crate::diagnostic::Diagnostics;
 use crate::lexer::LexOutput;
-use crate::lexer::lex_inline;
+use crate::lexer::interpolation_identifier;
+use crate::lexer::lex_interpolation;
 use crate::span::FileId;
 use crate::span::Span;
 use crate::token::DocComment;
@@ -59,6 +60,7 @@ use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::ToPrimitive;
 use num_traits::Zero;
+use std::collections::HashSet;
 
 /// A name or dotted name can receive explicit type arguments. This is a
 /// syntactic check only; the checker resolves the path and callable identity.
@@ -68,6 +70,18 @@ fn is_named_type_callee(expr: &Expr) -> bool {
         | ExprKind::Field { base, .. } => is_named_type_callee(base),
         | _ => false,
     }
+}
+
+fn bare_name_expr(
+    name: String,
+    span: Span,
+) -> Expr {
+    let kind = if name == "_" {
+        ExprKind::Placeholder
+    } else {
+        ExprKind::Var(name)
+    };
+    Expr::new(kind, span)
 }
 
 /// Parses a lexed file into a module.
@@ -242,12 +256,10 @@ impl<'a> Parser<'a> {
         matches!(self.kind(), TokenKind::Ident(text) if text == name)
     }
 
-    fn bump(&mut self) -> Token {
-        let token = self.token().clone();
+    fn bump(&mut self) {
         if !self.at_eof() {
             self.pos = self.pos.saturating_add(1);
         }
-        token
     }
 
     fn eat_punct(
@@ -416,31 +428,36 @@ impl<'a> Parser<'a> {
     /// An unclosed delimiter suppresses lexer NEWLINE tokens. Recover a
     /// subsequent declaration from its physical source line in that case.
     fn physical_declaration_boundary(&self) -> bool {
-        let declaration = match self.kind() {
-            | TokenKind::Keyword(Keyword::Let) => !self.let_has_in(),
-            | TokenKind::Keyword(Keyword::Fn) => self.is_fn_decl_start(),
-            | TokenKind::Keyword(
-                Keyword::Type
-                | Keyword::Unit
-                | Keyword::Dimension
-                | Keyword::Import
-                | Keyword::Open
-                | Keyword::Test
-                | Keyword::Class
-                | Keyword::Instance
-                | Keyword::Derive
-                | Keyword::Private,
-            ) => true,
-            | _ => false,
+        let TokenKind::Keyword(
+            keyword @ (Keyword::Let
+            | Keyword::Fn
+            | Keyword::Type
+            | Keyword::Unit
+            | Keyword::Dimension
+            | Keyword::Import
+            | Keyword::Open
+            | Keyword::Test
+            | Keyword::Class
+            | Keyword::Instance
+            | Keyword::Derive
+            | Keyword::Private),
+        ) = self.kind()
+        else {
+            return false;
         };
-        if !declaration || self.pos == 0 {
+        if self.pos == 0 {
             return false;
         }
         let previous = self.previous_span().end as usize;
         let current = self.span().start as usize;
         self.source
             .get(previous..current)
-            .is_some_and(|between| between.contains('\n'))
+            .is_some_and(|between| between.contains(['\r', '\n']))
+            && match keyword {
+                | Keyword::Let => !self.let_has_in(),
+                | Keyword::Fn => self.is_fn_decl_start(),
+                | _ => true,
+            }
     }
 
     /// Synchronize a failed item locally, preserving a comma, an owning
@@ -503,19 +520,19 @@ impl<'a> Parser<'a> {
         &mut self,
         before: u32,
     ) -> Option<String> {
-        let mut text: Option<String> = None;
-        while let Some(doc) = self.docs.get(self.doc_cursor) {
-            if doc.span.end <= before {
-                text = Some(match text {
-                    | Some(previous) => format!("{previous}\n{}", doc.text),
-                    | None => doc.text.clone(),
-                });
-                self.doc_cursor = self.doc_cursor.saturating_add(1);
-            } else {
-                break;
-            }
+        let mut docs = self
+            .docs
+            .get(self.doc_cursor..)?
+            .iter()
+            .take_while(|doc| doc.span.end <= before);
+        let mut text = docs.next()?.text.clone();
+        self.doc_cursor = self.doc_cursor.saturating_add(1);
+        for doc in docs {
+            text.push('\n');
+            text.push_str(&doc.text);
+            self.doc_cursor = self.doc_cursor.saturating_add(1);
         }
-        text
+        Some(text)
     }
 
     // ----- module and declarations --------------------------------------
@@ -2537,11 +2554,7 @@ impl<'a> Parser<'a> {
             | TokenKind::Keyword(Keyword::Do) => self.do_expr(),
             | TokenKind::Ident(name) => {
                 self.bump();
-                if name == "_" {
-                    Expr::new(ExprKind::Placeholder, start)
-                } else {
-                    Expr::new(ExprKind::Var(name), start)
-                }
+                bare_name_expr(name, start)
             },
             | TokenKind::UpperIdent(name) => {
                 self.bump();
@@ -2601,9 +2614,21 @@ impl<'a> Parser<'a> {
         source: &str,
         span: Span,
     ) -> Expr {
-        let file_source: &'a str = self.source;
-        let lexed = lex_inline(self.file, source, usize::try_from(span.start).unwrap_or(0));
-        let mut parser = Parser::new(&lexed.tokens, &lexed.docs, self.file, file_source);
+        // An ordinary leaf expression enters both `expr` and `unary_expr`.
+        if self.depth.saturating_add(2) <= MAX_DEPTH
+            && let Some((name, location)) = interpolation_identifier(span, source)
+        {
+            return bare_name_expr(name.to_owned(), location);
+        }
+        let lexed = match lex_interpolation(span, self.text_of(span), source) {
+            | Ok(lexed) => lexed,
+            | Err(diagnostics) => {
+                self.diagnostics.extend(diagnostics);
+                return Expr::new(ExprKind::Error, span);
+            },
+        };
+        let mut parser = Parser::new(&lexed.tokens, &lexed.docs, self.file, self.source);
+        parser.depth = self.depth;
         let expr = parser.expr();
         parser.skip_newlines();
         if parser.diagnostics.has_errors() {
@@ -2784,18 +2809,11 @@ impl<'a> Parser<'a> {
     }
 
     fn field_inits(&mut self) -> Vec<(String, Expr)> {
-        let mut fields: Vec<(String, Expr)> = Vec::new();
+        let mut fields = Vec::new();
+        let mut names = HashSet::new();
         while !self.at_punct(Punct::RBrace) && !self.at_eof() {
-            let name_span = self.span();
-            let name = match self.kind().clone() {
-                | TokenKind::Ident(name) => {
-                    self.bump();
-                    name
-                },
-                | _ => {
-                    self.unexpected("a field name");
-                    break;
-                },
+            let Some((name, name_span)) = self.record_field_name() else {
+                break;
             };
             let value = if self.eat_punct(Punct::Equals) {
                 let before = self.diagnostics.items.len();
@@ -2806,23 +2824,36 @@ impl<'a> Parser<'a> {
                 value
             } else {
                 let span = self.span();
-                Expr::new(ExprKind::Var(name.clone()), span)
+                Expr::new(ExprKind::Var(name.to_owned()), span)
             };
             // §2.3.8: a record is a set of fields, so a repeated one has no
             // meaning — report it rather than silently keeping the last.
-            if fields.iter().any(|(existing, _)| *existing == name) {
+            if !names.insert(name) {
                 self.error(
                     "E0208",
                     format!("duplicate field `{name}` in record"),
                     name_span,
                 );
             }
-            fields.push((name, value));
+            fields.push((name.to_owned(), value));
             if !self.eat_punct(Punct::Comma) {
                 break;
             }
         }
         fields
+    }
+
+    /// Borrows the normalized name from the token stream so duplicate checks
+    /// can share it while the AST keeps ownership of its field names.
+    fn record_field_name(&mut self) -> Option<(&'a str, Span)> {
+        let token = self.tokens.get(self.pos)?;
+        if let TokenKind::Ident(name) = &token.kind {
+            self.bump();
+            Some((name, token.span))
+        } else {
+            self.unexpected("a field name");
+            None
+        }
     }
 
     // ----- patterns ------------------------------------------------------
@@ -3170,7 +3201,8 @@ impl<'a> Parser<'a> {
             },
             | TokenKind::Punct(Punct::LBrace) => {
                 self.bump();
-                let mut fields: Vec<(String, Ty)> = Vec::new();
+                let mut fields = Vec::new();
+                let mut names = HashSet::new();
                 let mut rest = None;
                 while !self.at_punct(Punct::RBrace) && !self.at_eof() {
                     if self.eat_punct(Punct::Ellipsis) {
@@ -3180,28 +3212,20 @@ impl<'a> Parser<'a> {
                         }
                         break;
                     }
-                    let name_span = self.span();
-                    let name = match self.kind().clone() {
-                        | TokenKind::Ident(name) => {
-                            self.bump();
-                            name
-                        },
-                        | _ => {
-                            self.unexpected("a field name");
-                            break;
-                        },
+                    let Some((name, name_span)) = self.record_field_name() else {
+                        break;
                     };
                     self.expect_punct(Punct::Colon);
                     let ty = self.ty();
                     // §2.3.8: a record type is a set of fields.
-                    if fields.iter().any(|(existing, _)| *existing == name) {
+                    if !names.insert(name) {
                         self.error(
                             "E0208",
                             format!("duplicate field `{name}` in record type"),
                             name_span,
                         );
                     }
-                    fields.push((name, ty));
+                    fields.push((name.to_owned(), ty));
                     if !self.eat_punct(Punct::Comma) {
                         break;
                     }
@@ -3531,8 +3555,20 @@ impl<'a> Parser<'a> {
     fn nat_atom(&mut self) -> NatAst {
         match self.kind().clone() {
             | TokenKind::Int(value) => {
+                let span = self.span();
                 self.bump();
-                NatAst::Lit(value.to_usize().unwrap_or(0))
+                let Some(value) = value.to_usize() else {
+                    self.error(
+                        "E0202",
+                        format!(
+                            "type-level natural literal exceeds the supported maximum of {}",
+                            usize::MAX
+                        ),
+                        span,
+                    );
+                    return NatAst::Lit(0);
+                };
+                NatAst::Lit(value)
             },
             | TokenKind::Ident(name) | TokenKind::UpperIdent(name) => {
                 self.bump();

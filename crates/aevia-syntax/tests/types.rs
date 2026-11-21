@@ -134,6 +134,29 @@ fn a_natural_number_type_argument_keeps_its_kind() {
 }
 
 #[test]
+fn type_level_natural_literals_check_the_supported_range() {
+    let supported = format!("let x: Foo<{}> = 0\n", usize::MAX);
+    let TyKind::Named { args, .. } = annotation(&supported).kind else {
+        panic!("expected a named type");
+    };
+    assert!(matches!(args[0].kind, TyKind::NatArg(NatAst::Lit(value)) if value == usize::MAX));
+
+    let too_large = format!("{}0", usize::MAX);
+    for source in [
+        format!("let x: Foo<{too_large}> = 0\nlet after = 1\n"),
+        format!("let x: Tensor<[{too_large}], Float> = []\nlet after = 1\n"),
+    ] {
+        let parsed = support::parse(&source);
+        assert_eq!(support::codes(&parsed.diagnostics), ["E0202"]);
+        assert_eq!(
+            support::span_text(&source, &parsed.diagnostics.items[0]),
+            too_large
+        );
+        assert_eq!(parsed.module.decls.len(), 2);
+    }
+}
+
+#[test]
 fn a_shape_type_argument_keeps_its_kind() {
     let ty = annotation("let x: Foo<[3, ?]> = 0\n");
     let TyKind::Named { args, .. } = &ty.kind else {

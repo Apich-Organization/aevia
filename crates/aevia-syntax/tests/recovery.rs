@@ -164,3 +164,20 @@ fn a_type_application_on_a_non_name_is_e0207() {
     // A named callee is the supported spelling.
     expect_clean("fn f(a: Int): Int = a\nlet g = f<Int>(1)\n");
 }
+
+#[test]
+fn missing_closer_recovery_keeps_declarations_after_every_line_ending() {
+    for line_end in ["\n", "\r\n", "\r"] {
+        let source = ["let first = f(1 +", "let second = @", "let good = 7", ""].join(line_end);
+        let parsed = parse(&source);
+        assert_eq!(
+            codes(&parsed.diagnostics),
+            ["E0202", "E0202"],
+            "{line_end:?}"
+        );
+        let DeclKind::Let { pattern, .. } = &parsed.module.decls.last().unwrap().kind else {
+            panic!("expected a let");
+        };
+        assert!(matches!(&pattern.kind, PatKind::Var(name) if name == "good"));
+    }
+}

@@ -135,6 +135,33 @@ fn a_file_ending_in_a_newline_does_not_get_a_second_one() {
 }
 
 #[test]
+fn comments_and_shebang_end_at_every_supported_line_ending() {
+    for line_end in ["\n", "\r\n", "\r"] {
+        let source = [
+            "#!/usr/bin/env aevia",
+            "## First line",
+            "##",
+            "## Second line",
+            "let first = 1 # trailing comment",
+            "  #- nested #- block",
+            "  -# -# let second = 2",
+            "## Third line",
+            "let third = 3",
+        ]
+        .join(line_end);
+        let module = expect_clean(&source);
+        assert_eq!(module.decls.len(), 3, "{line_end:?}");
+        assert_eq!(
+            module.decls[0].doc.as_deref(),
+            Some("First line\n\nSecond line"),
+            "{line_end:?}"
+        );
+        assert_eq!(module.decls[1].doc, None, "{line_end:?}");
+        assert_eq!(module.decls[2].doc.as_deref(), Some("Third line"));
+    }
+}
+
+#[test]
 fn a_block_that_loses_its_dedent_is_reported() {
     // The inner `let` is followed by a line at the *same* indent, so the block
     // has no tail expression; the parser must not silently steal the outer
