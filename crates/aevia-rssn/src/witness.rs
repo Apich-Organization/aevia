@@ -31,6 +31,8 @@ pub enum DimensionWitness {
     },
     /// Named field witnesses of a structured result.
     Record(Vec<(String, Self)>),
+    /// Declared payload schema of a native Option element with no observed tag.
+    OptionSchema(Box<Self>),
     /// Actual tagged payload witnesses; tags do not establish nominal ADT identity.
     Variant {
         /// Actual payload tag.
@@ -54,6 +56,13 @@ fn representation(ty: &TypeExpr) -> Option<SigType> {
         | TypeExpr::String => Some(SigType::Str),
         | TypeExpr::Opaque(kind) if crate::registry::native_object_kind(kind) => {
             Some(SigType::Opaque(kind.clone()))
+        },
+        | TypeExpr::Variant(cases) => {
+            let payload = representation(crate::registry::option_payload(cases)?)?;
+            Some(SigType::Variant(vec![
+                ("None".into(), vec![]),
+                ("Some".into(), vec![payload]),
+            ]))
         },
         | TypeExpr::Tensor {
             rank: rssn::kernel::signature::NatExpr::Lit(rank),
@@ -129,6 +138,11 @@ fn schema(
                     .collect(),
             )
         },
+        | TypeExpr::Variant(cases) if trusted => {
+            crate::registry::option_payload(cases).map_or(DimensionWitness::Unknown, |payload| {
+                DimensionWitness::OptionSchema(Box::new(schema(payload, trusted)))
+            })
+        },
         | _ => DimensionWitness::Unknown,
     }
 }
@@ -160,10 +174,13 @@ pub fn extract(
             // Numeric tensors have a uniform element schema; keep only
             // contradictory explicit witnesses rather than allocating one
             // witness per scalar. Nested structures still need each child.
+            let native_option = matches!(&t.elem, TypeExpr::Variant(cases) if crate::registry::option_payload(cases).is_some());
             let elements = dimension.as_ref().map_or_else(
                 || {
                     t.data.iter().map(|value| {
-                        extract(value, trusted && matches!(value, Value::Tensor(_) | Value::Record(_)))
+                        let structured = matches!(value, Value::Tensor(_) | Value::Record(_))
+                            || (native_option && matches!(value, Value::Variant(_)));
+                        extract(value, trusted && structured)
                     }).collect()
                 },
                 |expected| {
@@ -362,6 +379,13 @@ fn evidenced_type(
         | (SigType::Str, W::Scalar(dim)) if dim.is_one() => Some(TypeExpr::String),
         | (SigType::Opaque(kind), W::Unknown) if crate::registry::native_object_kind(kind) => {
             Some(TypeExpr::Opaque(kind.clone()))
+        },
+        | (SigType::Variant(cases), W::OptionSchema(proof)) => {
+            let payload = evidenced_type(crate::registry::option_payload(cases)?, proof)?;
+            Some(TypeExpr::Variant(vec![
+                ("None".into(), vec![]),
+                ("Some".into(), vec![payload]),
+            ]))
         },
         | (SigType::Record(schema), W::Record(fields)) if schema.len() == fields.len() => {
             let mut names = std::collections::BTreeSet::new();
@@ -587,12 +611,15 @@ fn attach_dynamic(
 mod dynamic_input_evidence_tests {
     use super::DimensionWitness as W;
     use super::attach;
+    use super::extract;
     use crate::SigType as S;
     use aevia_dim::Dim;
+    use rssn::kernel::signature::RepExpr;
     use rssn::kernel::signature::TypeExpr;
     use rssn::kernel::value::RecordValue;
     use rssn::kernel::value::TensorValue;
     use rssn::kernel::value::Value;
+    use rssn::kernel::value::VariantValue;
     fn tensor(data: Vec<Value>) -> Value {
         Value::Tensor(TensorValue {
             shape: vec![data.len()],
@@ -694,5 +721,63 @@ mod dynamic_input_evidence_tests {
             elements: vec![],
         };
         assert!(attach(&mut empty, &bad, &S::Dyn).is_err());
+    }
+
+    #[test]
+    fn optional_tensor_payloads_keep_only_declared_numeric_evidence() {
+        let elem = TypeExpr::Variant(vec![
+            ("None".into(), vec![]),
+            ("Some".into(), vec![TypeExpr::Float]),
+        ]);
+        let wrapped = |elem| {
+            Value::Tensor(TensorValue {
+                shape: vec![1],
+                elem,
+                data: vec![Value::Variant(VariantValue {
+                    tag: "Some".into(),
+                    payload: vec![Value::Float(2.0)],
+                })],
+            })
+        };
+        let payload = |value, trusted| {
+            let W::Tensor { elements, .. } = extract(&value, trusted) else {
+                panic!()
+            };
+            let [W::Variant { fields, .. }] = elements.as_slice() else {
+                panic!()
+            };
+            fields[0].clone()
+        };
+        assert_eq!(payload(wrapped(elem.clone()), true), W::Scalar(Dim::one()));
+        assert_eq!(payload(wrapped(elem.clone()), false), W::Unknown);
+        let dynamic = TypeExpr::Dyn(RepExpr {
+            repr: "term".into(),
+            dim: None,
+        });
+        assert_eq!(payload(wrapped(dynamic), true), W::Unknown);
+
+        let empty = Value::Tensor(TensorValue {
+            shape: vec![0],
+            data: vec![],
+            elem: elem.clone(),
+        });
+        let proof = extract(&empty, true);
+        let W::Tensor {
+            element: Some(schema),
+            ..
+        } = &proof
+        else {
+            panic!()
+        };
+        assert_eq!(
+            schema.as_ref(),
+            &W::OptionSchema(Box::new(W::Scalar(Dim::one())))
+        );
+        let mut represented = tensor(vec![]);
+        attach(&mut represented, &proof, &S::Dyn).unwrap();
+        let Value::Tensor(restored) = represented else {
+            panic!()
+        };
+        assert_eq!(restored.elem, elem);
     }
 }

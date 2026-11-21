@@ -97,6 +97,7 @@ sig invmod(a: Int, m: Int) -> Result<Int, OpError>
 sig powmod(base: Int, exponent: Int, m: Int) -> Result<Int, OpError>
 sig egcd(a: Int, b: Int) -> Result<Tensor<1, Int>, OpError>
 sig crt(residues: Tensor<1, Int>, moduli: Tensor<1, Int>) -> Result<Int, OpError>
+sig crt_general(residues: Tensor<1, Int>, moduli: Tensor<1, Int>) -> Result<Tensor<1, Int>, OpError>
 sig lincong(a: Int, b: Int, m: Int) -> Result<Tensor<1, Int>, OpError>
 sig dlog(base: Int, target: Int, m: Int) -> Result<Int, OpError>
 sig sqrtmod(a: Int, p: Int) -> Result<Int, OpError>
@@ -309,9 +310,13 @@ sig idwt2(ll: Tensor<2, Float>, lh: Tensor<2, Float>, hl: Tensor<2, Float>, hh: 
 sig wavelet_packet(xs: Tensor<1, Float>, wavelet: Real, levels: Int) -> Result<Tensor<2, Float>, OpError>
 sig inverse_wavelet_packet(bands: Tensor<2, Float>, wavelet: Real) -> Result<Tensor<1, Float>, OpError>
 sig coherence(xs: Tensor<1, Float>, ys: Tensor<1, Float>, window: Tensor<1, Float>, hop: Int, sample_rate: Float) -> Result<Tensor<1, Float>, OpError>
+sig bootstrap_basic_ci(xs: Tensor<1, Float>, statistic: Real, alpha: Float, resamples: Int, seed: Int) -> Result<Tensor<1, Float>, OpError>
 sig bootstrap_ci(xs: Tensor<1, Float>, statistic: Real, alpha: Float, resamples: Int, seed: Int) -> Result<Tensor<1, Float>, OpError>
 sig sparse_solve(entries: Tensor<2, Float>, b: Tensor<1, Float>, tol: Float, method: Real) -> Result<Tensor<1, Float>, OpError>
 sig amg_solve(entries: Tensor<2, Float>, b: Tensor<1, Float>, tol: Float, kind: Real) -> Result<Tensor<1, Float>, OpError>
+# Positive dimensionless radial Bessel roots, numbered from one.
+sig bessel_zero(order: Float, rank: Int) -> Result<Float, OpError>
+sig bessel_root(order: Float, robin: Float, rank: Int) -> Result<Float, OpError>
 # The finite-difference solvers are dimension free in the kernel: the space
 # dimension is the nesting depth of the field (a line, a plane, a cube). An Aevia
 # signature has one literal rank, so one kernel operator carries one signature per

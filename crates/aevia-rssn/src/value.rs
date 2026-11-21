@@ -111,7 +111,9 @@ impl Num {
     pub fn to_number(&self) -> Number {
         match self {
             | Self::Int(value) => Number::Int(value.clone()),
-            | Self::Rat(value) if value.is_integer() => Number::Int(value.to_integer()),
+            // An integral ratio has denominator one, so the numerator is
+            // already the exact integer.
+            | Self::Rat(value) if value.is_integer() => Number::Int(value.numer().clone()),
             | Self::Rat(value) => Number::Rat(value.clone()),
             | Self::Float(value) => Number::Float(*value),
         }
@@ -714,5 +716,64 @@ impl fmt::Display for Val {
         f: &mut fmt::Formatter<'_>,
     ) -> fmt::Result {
         f.write_str(&self.text())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rssn::kernel::signature::TypeExpr;
+
+    #[test]
+    fn integer_rationals_cross_as_exact_integer_tensor_elements() {
+        let wide = (BigInt::one() << 4096usize) + BigInt::from(13);
+        let integers = [BigInt::from(0), BigInt::from(-1), wide.clone(), -wide];
+        let data = integers
+            .iter()
+            .map(|value| Val::Num(Num::Rat(BigRational::from_integer(value.clone()))))
+            .collect();
+        let matrix = Val::Tensor {
+            shape: vec![2, 2],
+            data,
+        };
+        let Value::Tensor(tensor) = matrix.to_rssn(SessionId(1)).unwrap() else {
+            panic!("expected a tensor");
+        };
+        assert_eq!(tensor.shape, [2, 2]);
+        assert_eq!(tensor.elem, TypeExpr::Int);
+        assert_eq!(tensor.data, integers.map(Value::Int));
+    }
+
+    #[test]
+    fn fractional_values_keep_their_exact_numerator_and_denominator() {
+        let numerator = -((BigInt::one() << 2048usize) + BigInt::from(13));
+        let fraction = BigRational::new(numerator, BigInt::from(97));
+        assert!(!fraction.is_integer());
+        let value = Val::Num(Num::Rat(fraction.clone()));
+        assert_eq!(
+            value.to_rssn(SessionId(1)),
+            Ok(Value::Real(Number::Rat(fraction))),
+        );
+    }
+
+    #[test]
+    fn arbitrary_precision_integral_rationals_compute_integer_gcd() {
+        let session = rssn::api::Session::new();
+        let scale = BigInt::from(21);
+        let power = BigInt::one() << 1024usize;
+        // Consecutive integers are coprime, so scaling both by 21 gives gcd 21.
+        let inputs = [&power * &scale, -((&power + BigInt::one()) * &scale)];
+        let inputs = inputs.map(|value| {
+            Val::Num(Num::Rat(BigRational::from_integer(value)))
+                .to_rssn(session.id())
+                .unwrap()
+        });
+        let output = session
+            .call_value("gcd", &inputs, &rssn::kernel::CallCtx::new())
+            .unwrap();
+        assert_eq!(
+            Val::from_rssn(&output, session.id()),
+            Ok(Val::Num(Num::Int(scale))),
+        );
     }
 }

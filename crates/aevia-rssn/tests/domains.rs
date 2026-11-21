@@ -86,6 +86,7 @@ fn a_domain_module_is_found_by_the_driver_hook() {
         .expect("Rssn_NumberTheory resolves");
     assert!(source.contains("module Rssn_NumberTheory"));
     assert!(source.contains("fn invmod("));
+    assert!(source.contains("fn crt_general("));
     // The old rule-set namespaces still resolve.
     assert!(aevia_rssn::codegen::namespace_source(registry, "Rssn_number_theory").is_some());
 }

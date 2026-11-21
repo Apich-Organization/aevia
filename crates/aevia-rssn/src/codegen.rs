@@ -98,16 +98,15 @@ pub fn operators(registry: &Registry) -> String {
     );
     let catalog = crate::bindings::catalog(registry);
     let mut current = String::new();
-    for op in registry.ops() {
+    for rows in catalog.chunk_by(|left, right| std::ptr::eq(left.op, right.op)) {
+        let Some(op) = rows.first().map(|row| row.op) else {
+            continue;
+        };
         if op.rule_set != current {
             let _ = writeln!(out, "\n# {}.", op.rule_set);
             current.clone_from(&op.rule_set);
         }
-        let rows: Vec<_> = catalog
-            .iter()
-            .filter(|row| std::ptr::eq(row.op, op))
-            .collect();
-        let _ = writeln!(out, "{}", declaration(op, &rows));
+        let _ = writeln!(out, "{}", declaration(op, rows));
     }
     out
 }
@@ -236,12 +235,12 @@ fn namespace_render(
         module,
         &format!("Kernel rule set: {group}."),
     );
-    for op in registry.ops().filter(|op| op.rule_set == group) {
-        let rows: Vec<_> = catalog
-            .iter()
-            .filter(|row| std::ptr::eq(row.op, op))
-            .collect();
-        let _ = writeln!(out, "{}", declaration(op, &rows));
+    for rows in catalog.chunk_by(|left, right| std::ptr::eq(left.op, right.op)) {
+        if let Some(op) = rows.first().map(|row| row.op)
+            && op.rule_set == group
+        {
+            let _ = writeln!(out, "{}", declaration(op, rows));
+        }
     }
     out
 }
@@ -545,7 +544,7 @@ fn constant_value(constant: &crate::registry::ConstantInfo) -> String {
 )]
 fn declaration(
     op: &OpEntry,
-    rows: &[&crate::bindings::Binding<'_>],
+    rows: &[crate::bindings::Binding<'_>],
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(
@@ -1296,7 +1295,7 @@ mod nullary_tests {
                 coverage: Coverage::Typed,
                 typed_callback_name: None,
             };
-            let source = declaration(&op, &[&row]);
+            let source = declaration(&op, &[row]);
             assert!(
                 source.contains("let pure_graph_fixture: Int = Rssn.invoke("),
                 "{source}"
@@ -1315,7 +1314,7 @@ mod nullary_tests {
                 coverage: Coverage::Typed,
                 typed_callback_name: None,
             };
-            let source = declaration(&op, &[&row]);
+            let source = declaration(&op, &[row]);
             assert!(
                 source.contains("fn pure_graph_fixture(): Result<Int, OpError> ="),
                 "{source}"

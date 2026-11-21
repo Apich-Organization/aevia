@@ -12,6 +12,7 @@ use rssn::kernel::signature::Exp;
 use rssn::kernel::signature::NatExpr;
 use rssn::kernel::signature::TypeExpr;
 use std::collections::BTreeSet;
+use std::sync::OnceLock;
 
 /// How much of an overload can be expressed and called from Aevia.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,7 +41,9 @@ pub struct Binding<'a> {
 }
 
 /// Build a complete, deterministic catalog directly from the live manifest.
+///
 /// Every operator contributes at least one row, including unsigned operators.
+/// Rows for an operator are contiguous and in overload order.
 #[must_use]
 pub fn catalog(registry: &Registry) -> Vec<Binding<'_>> {
     let mut used = BTreeSet::new();
@@ -117,6 +120,13 @@ pub fn catalog(registry: &Registry) -> Vec<Binding<'_>> {
         }
     }
     result
+}
+
+/// Returns the process-wide binding catalog for the bundled kernel registry.
+#[must_use]
+pub fn live_catalog() -> &'static [Binding<'static>] {
+    static CATALOG: OnceLock<Vec<Binding<'static>>> = OnceLock::new();
+    CATALOG.get_or_init(|| catalog(crate::registry()))
 }
 
 #[allow(

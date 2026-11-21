@@ -476,32 +476,46 @@ pub fn classify<'a>(
     registry: &'a Registry,
     overlay: &'a Overlay,
 ) -> Vec<Placement<'a>> {
-    registry
-        .ops()
-        .map(|op| {
-            let domain = overlay
-                .families
-                .iter()
-                .find(|family| {
-                    family.rule_set == op.rule_set && glob_matches(&family.glob, &op.name)
-                })
-                .and_then(|family| overlay.domains.iter().find(|d| d.name == family.domain));
-            let status = if domain.is_none() {
-                Status::Unclassified
-            } else if let Some(reason) = overlay.excluded.get(&op.name) {
-                Status::Excluded(reason.clone())
-            } else if overlay.sigs.contains_key(&op.name) {
-                Status::Typed
-            } else if !overlay.accepted_dynamic.contains_key(&op.name)
-                && !witnessed_sigs(op).is_empty()
-            {
-                Status::Witnessed
-            } else {
-                Status::Dynamic(overlay.accepted_dynamic.get(&op.name).cloned())
-            };
-            Placement { op, domain, status }
-        })
-        .collect()
+    classify_placements(registry, overlay, None)
+}
+
+fn classify_placements<'a>(
+    registry: &'a Registry,
+    overlay: &'a Overlay,
+    only_domain: Option<&str>,
+) -> Vec<Placement<'a>> {
+    let capacity = if only_domain.is_none() {
+        registry.op_count()
+    } else {
+        0
+    };
+    let mut placements = Vec::with_capacity(capacity);
+    for op in registry.ops() {
+        let domain = overlay
+            .families
+            .iter()
+            .find(|family| family.rule_set == op.rule_set && glob_matches(&family.glob, &op.name))
+            .and_then(|family| overlay.domains.iter().find(|d| d.name == family.domain));
+        // The first matching family still wins. Skip the type and witness
+        // checks only after establishing that the operator is in another domain.
+        if only_domain.is_some_and(|name| domain.is_none_or(|d| d.name != name)) {
+            continue;
+        }
+        let status = if domain.is_none() {
+            Status::Unclassified
+        } else if let Some(reason) = overlay.excluded.get(&op.name) {
+            Status::Excluded(reason.clone())
+        } else if overlay.sigs.contains_key(&op.name) {
+            Status::Typed
+        } else if !overlay.accepted_dynamic.contains_key(&op.name) && !witnessed_sigs(op).is_empty()
+        {
+            Status::Witnessed
+        } else {
+            Status::Dynamic(overlay.accepted_dynamic.get(&op.name).cloned())
+        };
+        placements.push(Placement { op, domain, status });
+    }
+    placements
 }
 
 /// The coverage check. An empty result means the overlay and the manifest
@@ -676,25 +690,25 @@ pub fn domain_source(
     registry: &Registry,
     module: &str,
 ) -> Option<String> {
+    let name = module.strip_prefix(MODULE_PREFIX)?;
     let overlay = overlay();
-    let domain = overlay
-        .domains
-        .iter()
-        .find(|d| module_name(&d.name) == module)?;
-    Some(render(registry, overlay, domain))
+    let domain = overlay.domains.iter().find(|d| d.name == name)?;
+    let placements = classify_placements(registry, overlay, Some(name));
+    Some(render(registry, overlay, domain, &placements))
 }
 
 /// Every domain module as `(file name, source)`.
 #[must_use]
 pub fn domain_files(registry: &Registry) -> Vec<(String, String)> {
     let overlay = overlay();
+    let placements = classify(registry, overlay);
     overlay
         .domains
         .iter()
         .map(|d| {
             (
                 format!("{}.aev", module_name(&d.name)),
-                render(registry, overlay, d),
+                render(registry, overlay, d, &placements),
             )
         })
         .collect()
@@ -739,6 +753,7 @@ fn render(
     registry: &Registry,
     overlay: &Overlay,
     domain: &Domain,
+    placements: &[Placement<'_>],
 ) -> String {
     let mut out = String::new();
     let module = module_name(&domain.name);
@@ -773,7 +788,7 @@ fn render(
             used.insert(name.trim().to_string());
         }
     }
-    for placement in classify(registry, overlay) {
+    for placement in placements {
         if placement.domain.is_none_or(|d| d.name != domain.name) {
             continue;
         }
@@ -1337,5 +1352,79 @@ mod witnessed_names {
         unique.dedup();
         assert_eq!(unique.len(), got.len());
         assert!(names(&[]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod domain_rendering {
+    use super::*;
+
+    #[test]
+    fn batch_and_individual_sources_match_in_declaration_order() {
+        let registry = crate::registry::registry();
+        let files = domain_files(registry);
+        let modules = module_names();
+        assert_eq!(files.len(), modules.len());
+        for (module, (file, source)) in modules.iter().zip(&files) {
+            assert_eq!(file, &format!("{module}.aev"));
+            assert_eq!(domain_source(registry, module).as_ref(), Some(source));
+        }
+        for name in ["NumberTheory", "Rssn_", "Rssn_number_theory"] {
+            assert!(domain_source(registry, name).is_none());
+        }
+    }
+
+    #[test]
+    fn first_matching_family_wins_even_if_its_domain_is_missing() {
+        let registry = crate::registry::registry();
+        let op = registry
+            .ops()
+            .find(|op| op.name == "invmod")
+            .expect("number theory operator");
+        let mut overlay = Overlay::parse(&format!(
+            "domain Wanted | test domain\nfamily Missing {}:{}\nfamily Wanted {}:*",
+            op.rule_set, op.name, op.rule_set,
+        ));
+        let is_invmod = |p: &Placement<'_>| std::ptr::eq(p.op, op);
+        assert!(
+            !classify_placements(registry, &overlay, Some("Wanted"))
+                .iter()
+                .any(is_invmod)
+        );
+        let placements = classify(registry, &overlay);
+        assert_eq!(
+            placements.iter().find(|p| is_invmod(p)).unwrap().status,
+            Status::Unclassified,
+        );
+        overlay.families.swap(0, 1);
+        assert!(
+            classify_placements(registry, &overlay, Some("Wanted"))
+                .iter()
+                .any(is_invmod)
+        );
+    }
+
+    #[test]
+    fn generation_uses_the_supplied_registry_snapshot() {
+        let registry = crate::registry::registry();
+        let source = domain_source(registry, "Rssn_NumberTheory").expect("default domain");
+        let mut manifest = crate::kernel::kernel().manifest().as_ref().clone();
+        let marker = "an alternate registry fixture for invmod";
+        let operator = manifest
+            .ops
+            .iter_mut()
+            .find(|op| op.name == "invmod")
+            .expect("number theory operator");
+        operator.doc = marker.to_owned();
+        let alternate = Registry::from_manifest(&manifest);
+        let changed = domain_source(&alternate, "Rssn_NumberTheory").expect("alternate domain");
+        assert!(!source.contains(marker));
+        assert!(changed.contains(marker));
+        assert!(
+            domain_files(&alternate)
+                .iter()
+                .any(|(file, text)| file == "Rssn_NumberTheory.aev" && text == &changed)
+        );
+        assert_eq!(domain_source(registry, "Rssn_NumberTheory"), Some(source));
     }
 }

@@ -22,6 +22,7 @@ pub use rssn::backend::device::DeviceKind;
 pub use rssn::backend::device::Dtype;
 use rssn::backend::device::KernelIr;
 use rssn::backend::device::map_columns;
+use rssn::backend::device::preferred_dtype;
 use rssn::backend::device::registry;
 use rssn::backend::tape::Inst;
 use rssn::backend::tape::Reg;
@@ -151,6 +152,23 @@ impl BatchProgram {
         if columns.len() != self.ir.inputs {
             return None;
         }
+        if let [column] = columns
+            && self.ir.outputs.len() == 1
+        {
+            // The single input is already in upload order, and the download
+            // can fill the only output column directly.
+            let rows = column.len();
+            let dtype = preferred_dtype(device.info());
+            let kernel = device.compile(&self.ir).ok()?;
+            let input = device.upload(column, dtype).ok()?;
+            let mut output = device.alloc(rows, dtype).ok()?;
+            device
+                .launch(&*kernel, rows, &input, &[], &mut output)
+                .ok()?;
+            let mut host = vec![0.0; rows];
+            device.download(&output, &mut host).ok()?;
+            return Some(vec![host]);
+        }
         let rows = columns.first().map_or(0, |c| c.len());
         if columns.iter().any(|c| c.len() != rows) {
             return None;
@@ -162,6 +180,11 @@ impl BatchProgram {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rssn::backend::device::Buffer;
+    use rssn::backend::device::CompiledKernel;
+    use rssn::backend::device::DeviceError;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
 
     fn square_plus_one() -> BatchProgram {
         // out = x * x + 1
@@ -228,5 +251,132 @@ mod tests {
         assert!(program.run(&*cpu, &[]).is_none());
         assert!(program.run(&*cpu, &[&[1.0], &[2.0]]).is_none());
         assert_eq!(program.run(&*cpu, &[&[]]).unwrap(), vec![Vec::<f64>::new()]);
+    }
+
+    #[test]
+    fn direct_batches_preserve_every_float_bit_on_both_cpu_devices() {
+        let identity = BatchProgram::new(vec![Inst::Input(0)], 1, vec![0]).unwrap();
+        let samples = [
+            0.0,
+            -0.0,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::from_bits(1),
+            f64::from_bits(0x7ff8_0000_0000_1234),
+            -37.5,
+        ];
+        for selector in [Selector::Cpu, Selector::CpuParallel] {
+            let device = resolve(selector).unwrap();
+            for rows in [0, 1, 129, 4097] {
+                let data: Vec<f64> = samples.iter().copied().cycle().take(rows).collect();
+                let columns = [data.as_slice()];
+                let reference = map_columns(&*device, identity.kernel(), &columns, &[]).unwrap();
+                let direct = identity.run(&*device, &columns).unwrap();
+                assert_eq!(direct.len(), 1);
+                assert_eq!(direct[0].len(), rows);
+                for ((input, expected), actual) in data.iter().zip(&reference[0]).zip(&direct[0]) {
+                    assert_eq!(actual.to_bits(), expected.to_bits());
+                    assert_eq!(actual.to_bits(), input.to_bits());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn multiple_columns_keep_their_order_and_require_equal_lengths() {
+        let program = BatchProgram::new(
+            vec![Inst::Input(0), Inst::Input(1), Inst::Sub(0, 1)],
+            2,
+            vec![2, 0],
+        )
+        .unwrap();
+        for selector in [Selector::Cpu, Selector::CpuParallel] {
+            let device = resolve(selector).unwrap();
+            assert_eq!(
+                program.run(&*device, &[&[2.0, -1.0], &[5.0, -4.0]]),
+                Some(vec![vec![-3.0, 3.0], vec![2.0, -1.0]]),
+            );
+            assert!(program.run(&*device, &[&[2.0], &[]]).is_none());
+        }
+    }
+
+    struct RefusesLaunch {
+        info: DeviceInfo,
+        cpu: Arc<dyn Device>,
+        upload_address: usize,
+        launched: AtomicBool,
+    }
+
+    impl Device for RefusesLaunch {
+        fn info(&self) -> &DeviceInfo {
+            &self.info
+        }
+
+        fn uid(&self) -> u64 {
+            self.cpu.uid()
+        }
+
+        fn alloc(
+            &self,
+            len: usize,
+            dtype: Dtype,
+        ) -> Result<Buffer, DeviceError> {
+            assert_eq!(dtype, Dtype::F32);
+            self.cpu.alloc(len, Dtype::F64)
+        }
+
+        fn upload(
+            &self,
+            host: &[f64],
+            dtype: Dtype,
+        ) -> Result<Buffer, DeviceError> {
+            assert_eq!(host.as_ptr().addr(), self.upload_address);
+            assert_eq!(dtype, Dtype::F32);
+            self.cpu.upload(host, Dtype::F64)
+        }
+
+        fn download(
+            &self,
+            _buffer: &Buffer,
+            _output: &mut [f64],
+        ) -> Result<(), DeviceError> {
+            panic!("a failed launch must not be downloaded");
+        }
+
+        fn compile(
+            &self,
+            ir: &KernelIr,
+        ) -> Result<Arc<dyn CompiledKernel>, DeviceError> {
+            self.cpu.compile(ir)
+        }
+
+        fn launch(
+            &self,
+            _kernel: &dyn CompiledKernel,
+            _rows: usize,
+            _input: &Buffer,
+            _params: &[f64],
+            _output: &mut Buffer,
+        ) -> Result<(), DeviceError> {
+            self.launched.store(true, Ordering::Relaxed);
+            Err(DeviceError::Unsupported("test launch".into()))
+        }
+    }
+
+    #[test]
+    fn a_direct_batch_borrows_its_column_and_propagates_a_launch_error() {
+        // Exercise an F32-only device's dtype negotiation without probing hardware.
+        let cpu = resolve(Selector::Cpu).unwrap();
+        let mut info = cpu.info().clone();
+        info.dtypes = vec![Dtype::F32];
+        let input = [1.0, 2.0];
+        let device = RefusesLaunch {
+            info,
+            cpu,
+            upload_address: input.as_ptr().addr(),
+            launched: AtomicBool::new(false),
+        };
+        assert!(square_plus_one().run(&device, &[&input]).is_none());
+        assert!(device.launched.load(Ordering::Relaxed));
     }
 }

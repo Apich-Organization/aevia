@@ -62,7 +62,7 @@ fn run(path: &Path) -> (usize, Vec<String>) {
     let mut failures = Vec::new();
     for decl in &entry.module.decls {
         if let DeclKind::Test { name, body } = &decl.kind {
-            match interp.eval(body, &root) {
+            match interp.eval_source_test(body, &root) {
                 | Ok(Value::Bool(true)) => passed += 1,
                 | Ok(other) => {
                     failures.push(format!(

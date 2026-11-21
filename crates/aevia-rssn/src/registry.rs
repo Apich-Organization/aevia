@@ -286,6 +286,36 @@ impl OpEntry {
         self.keys.get(index)
     }
 
+    /// The conservative source overload for a fixed-nullary derived pair.
+    ///
+    /// RSSN derives a scalar result from the evaluator and publishes a term
+    /// contract for the same registration. A dimensionless or dimensionally
+    /// polymorphic result can use the term contract without assigning units
+    /// to a physical constant whose dimensions require separate evidence.
+    #[must_use]
+    pub fn derived_nullary_term_index(&self) -> Option<usize> {
+        let [scalar, symbolic] = self.raw.as_slice() else {
+            return None;
+        };
+        if self.source == Source::Derived
+            && self.arity == (0, Some(0))
+            && self.witnessed.is_empty()
+            && matches!(
+                self.dim_rule,
+                Some(
+                    rssn::kernel::signature::DimRuleInfo::Dimensionless
+                        | rssn::kernel::signature::DimRuleInfo::Any
+                )
+            )
+            && matches!(scalar.ret, TypeExpr::Real | TypeExpr::Bool)
+            && *scalar == Signature::new(Vec::new(), scalar.ret.clone())
+            && *symbolic == Signature::new(Vec::new(), rssn::kernel::infer::term())
+        {
+            return Some(1);
+        }
+        None
+    }
+
     /// Whether the operator accepts `count` arguments.
     #[must_use]
     pub fn accepts(
@@ -320,18 +350,23 @@ impl OpEntry {
     ///
     /// This is `kernel::overload`'s lattice, applied to types instead of
     /// values: arity first, then the weakest per-argument match, then the
-    /// unique maximum. A tie is `E1002`; nothing accepted is `E1003`. The
-    /// checker calls this so that what it types is what the runtime executes
-    /// .
+    /// unique maximum. A dimensionless or dimensionally polymorphic
+    /// fixed-nullary derived scalar-and-term pair selects its term contract.
     ///
     /// # Errors
     ///
-    /// `E1002` for a tie, `E1003` when no overload accepts the arguments.
+    /// `E1002` for other ties, `E1003` when no overload accepts the arguments.
     pub fn resolve_by_type(
         &self,
         arg_types: &[rssn::kernel::signature::TypeExpr],
     ) -> Result<rssn::kernel::signature::OpKey, KernelError> {
         use rssn::kernel::overload::Match;
+        if arg_types.is_empty()
+            && let Some(index) = self.derived_nullary_term_index()
+            && let Some(key) = self.key(index)
+        {
+            return Ok(key.clone());
+        }
         let scored: Vec<(usize, Match)> =
             self.raw
                 .iter()
@@ -686,14 +721,12 @@ pub struct ConstantInfo {
 /// The manifest, indexed for lookup.
 #[derive(Debug)]
 pub struct Registry {
-    /// Every spelling (name and aliases) mapped to the operator it denotes.
-    ops: BTreeMap<String, OpEntry>,
-    /// One entry per operator in `manifest.ops`, in name order.
-    ///
-    /// Iteration is over this and not over `ops`: the map is keyed by spelling,
-    /// so it also holds one entry per alias, and counting or generating from it
-    /// would over-report operators and emit a second declaration for one.
+    /// Every spelling (name and aliases) indexes the same canonical entries.
+    ops: BTreeMap<String, usize>,
+    /// One entry per operator, in manifest order.
     canonical: Vec<OpEntry>,
+    /// Canonical entry indices in stable name order.
+    name_order: Vec<usize>,
     /// Every base dimension the kernel knows.
     pub base_dimensions: Vec<String>,
     /// Units, sorted by name.
@@ -725,7 +758,7 @@ impl Registry {
     pub fn from_manifest(manifest: &KernelManifest) -> Self {
         let mut ops = BTreeMap::new();
         let mut canonical = Vec::with_capacity(manifest.ops.len());
-        for op in &manifest.ops {
+        for (index, op) in manifest.ops.iter().enumerate() {
             let entry = OpEntry {
                 name: op.name.clone(),
                 rule_set: op.rule_set.clone(),
@@ -776,20 +809,21 @@ impl Registry {
                 "`{}` must keep its two overload views index-aligned",
                 op.name
             );
-            // An alias resolves to the same entry; a name that two rule sets
-            // both register keeps the first, which is what the dynamic ABI
-            // does as well.
+            // Preserve manifest precedence: the first claim for an alias
+            // wins, while an explicit canonical spelling takes priority.
             for alias in &op.aliases {
-                ops.entry(alias.clone()).or_insert_with(|| entry.clone());
+                ops.entry(alias.clone()).or_insert(index);
             }
-            ops.insert(op.name.clone(), entry.clone());
+            ops.insert(op.name.clone(), index);
             canonical.push(entry);
         }
-        canonical.sort_by(|left, right| left.name.cmp(&right.name));
+        let mut name_order: Vec<_> = (0..canonical.len()).collect();
+        name_order.sort_by_key(|&index| canonical.get(index).map(|entry| entry.name.as_str()));
         let features = &manifest.features;
         Self {
             ops,
             canonical,
+            name_order,
             base_dimensions: manifest
                 .base_dimensions
                 .iter()
@@ -840,12 +874,14 @@ impl Registry {
         &self,
         name: &str,
     ) -> Option<&OpEntry> {
-        self.ops.get(name)
+        self.canonical.get(*self.ops.get(name)?)
     }
 
     /// Every operator, in name order, once per operator.
     pub fn ops(&self) -> impl Iterator<Item = &OpEntry> {
-        self.canonical.iter()
+        self.name_order
+            .iter()
+            .filter_map(|&index| self.canonical.get(index))
     }
 
     /// How many operators the manifest registers.
@@ -881,9 +917,8 @@ impl Registry {
 
     /// The overload of `name` that `arg_types` belong to.
     ///
-    /// This is the function the checker calls at a `Rssn.<op>` call site: it
-    /// returns the `OpKey` to pin, and it is the *only* place the choice is
-    /// made. The runtime executes that key without resolving again.
+    /// Returns the `OpKey` to pin when resolving from bridge signature types.
+    /// The runtime executes that key without resolving again.
     ///
     /// # Errors
     ///

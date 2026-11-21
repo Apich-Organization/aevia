@@ -8,7 +8,6 @@ for family in contracts structured bindings codecs; do
     cargo run --manifest-path "$kernel_root/tools/rssn-api-gen/Cargo.toml" -- "--$family-write"
 done
 cd "$root"
-cargo run -p rssn-api-audit -- --write
-cargo run -p rssn-api-audit -- --coverage-check
+cargo run -p rssn-api-audit -- --write-checked
 cargo run -p aevia-stdlib-gen -- --write
 AEVIA_BLESS=1 cargo test -p aevia-rssn --test domains
