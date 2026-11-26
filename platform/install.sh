@@ -13,8 +13,10 @@ The default channel is stable. dev and nightly select the newest published
 daily build for this machine. VERSION can be a SemVer release (with or without
 the v prefix), a prerelease such as 0.1.0-beta.1, or nightly-YYYY-MM-DD.
 
-Requires GitHub CLI with release verify-asset and 'gh auth login'.
-AEVIA_HOME overrides the default installation directory (~/.aevia).
+Downloads over HTTPS. Release metadata is read with python3, or with the
+GitHub CLI when python3 is absent; with 'gh' installed the release attestation
+is verified in addition to the SHA-256 checksum. AEVIA_HOME overrides the
+default installation directory (~/.aevia).
 --no-path skips shell PATH and completion changes.
 --no-activate keeps the active toolchain and shell configuration as they are.
 HELP
@@ -91,9 +93,29 @@ esac
 printf '%s\n' "$repo" | LC_ALL=C grep -Eq '^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*$' ||
     fail "AEVIA_GITHUB_REPO must be OWNER/REPO"
 export GH_PROMPT_DISABLED=1
-command -v gh >/dev/null 2>&1 || fail "install GitHub CLI (gh) and run 'gh auth login' first"
-gh release verify-asset --help >/dev/null 2>&1 ||
-    fail "update GitHub CLI to a version with 'gh release verify-asset'"
+# GitHub CLI is optional. The release metadata comes from the public REST API
+# (through python3 when it is present, otherwise through `gh api`), and the
+# archive from a plain HTTPS download. `gh`, when installed, adds attestation
+# verification on top of the SHA-256 checksum.
+have_gh=no
+if command -v gh >/dev/null 2>&1 && gh release verify-asset --help >/dev/null 2>&1; then
+    have_gh=yes
+fi
+have_python=no
+if command -v python3 >/dev/null 2>&1; then
+    have_python=yes
+fi
+have_curl=no
+if command -v curl >/dev/null 2>&1; then
+    have_curl=yes
+fi
+have_wget=no
+if command -v wget >/dev/null 2>&1; then
+    have_wget=yes
+fi
+if [ "$have_curl" = no ] && [ "$have_wget" = no ] && [ "$have_gh" = no ]; then
+    fail "need curl, wget or the GitHub CLI to download the release"
+fi
 
 cpu=$(uname -m)
 case "$cpu" in
@@ -109,25 +131,87 @@ case "$os" in
 esac
 suffix=-$target.tar.gz
 
+# Prints the newest tag for the channel, one per line, newest last.
+release_tags() {
+    channel=$1
+    if [ "$have_python" = yes ]; then
+        python3 - "$repo" "$channel" "$suffix" <<'PY'
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.request
+
+repo, channel, suffix = sys.argv[1], sys.argv[2], sys.argv[3]
+nightly = re.compile(r"^nightly-\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$")
+token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+
+def fetch(url):
+    request = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
+    if token:
+        request.add_header("Authorization", "Bearer " + token)
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.load(response)
+
+base = "https://api.github.com/repos/" + repo
+try:
+    if channel == "stable":
+        items = [fetch(base + "/releases/latest")]
+    else:
+        items = []
+        for page in (1, 2, 3):
+            batch = fetch(base + "/releases?per_page=100&page=" + str(page))
+            if not batch:
+                break
+            items.extend(batch)
+except (urllib.error.URLError, ValueError) as error:
+    print("release lookup failed: " + str(error), file=sys.stderr)
+    sys.exit(1)
+
+tags = []
+for item in items:
+    if item.get("draft") or not item.get("immutable"):
+        continue
+    tag = item.get("tag_name") or ""
+    if channel == "stable":
+        if item.get("prerelease") or not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
+            continue
+        tags.append(tag)
+    else:
+        if not item.get("prerelease") or not nightly.match(tag):
+            continue
+        archive = "aevia-" + tag + suffix
+        names = {a.get("name") for a in item.get("assets", []) if a.get("state") == "uploaded"}
+        if archive in names and archive + ".sha256" in names:
+            tags.append(tag)
+print("\n".join(sorted(tags)))
+PY
+        return $?
+    fi
+    if [ "$have_gh" = yes ]; then
+        if [ "$channel" = stable ]; then
+            gh api --hostname github.com "repos/$repo/releases/latest" \
+                --jq 'select(.draft == false and .prerelease == false and .immutable == true) | .tag_name'
+        else
+            gh api --hostname github.com --paginate "repos/$repo/releases?per_page=100" \
+                --jq '.[] | select(.draft == false and .prerelease == true and .immutable == true) | select(.tag_name | test("^'"$nightly"'$")) | ("aevia-" + .tag_name + "'"$suffix"'") as $archive | select(any(.assets[]; .name == $archive and .state == "uploaded")) | select(any(.assets[]; .name == ($archive + ".sha256") and .state == "uploaded")) | .tag_name'
+        fi
+        return $?
+    fi
+    printf 'release lookup needs python3 or GitHub CLI\n' >&2
+    return 1
+}
+
 if [ "$channel" = stable ]; then
-    query='select(.draft == false and .prerelease == false and .immutable == true) | .tag_name'
-    tag=$(gh api --hostname github.com "repos/$repo/releases/latest" --jq "$query") ||
-        fail "could not look up the latest stable release; run 'gh auth login' or pass --version"
-    case "$tag" in
-        ''|*[!v0-9.]*) fail "no immutable stable release found; use --version or --channel nightly" ;;
-    esac
-    printf '%s\n' "$tag" | LC_ALL=C grep -Eq "^v$core\$" ||
+    tags=$(release_tags stable) ||
+        fail "could not look up the latest stable release; pass --version instead"
+    tag=$(printf '%s\n' "$tags" | LC_ALL=C grep -E "^v$core\$" | LC_ALL=C sort | tail -n 1)
+    [ -n "$tag" ] ||
         fail "no immutable stable release found; use --version or --channel nightly"
 elif [ "$channel" = nightly ]; then
-    query='
-        .[] | select(.draft == false and .prerelease == true and .immutable == true)
-        | select(.tag_name | test("^'"$nightly"'$"))
-        | ("aevia-" + .tag_name + "'"$suffix"'") as $archive
-        | select(any(.assets[]; .name == $archive and .state == "uploaded"))
-        | select(any(.assets[]; .name == ($archive + ".sha256") and .state == "uploaded"))
-        | .tag_name'
-    tags=$(gh api --hostname github.com --paginate "repos/$repo/releases?per_page=100" --jq "$query") ||
-        fail "could not look up nightly releases; run 'gh auth login' or pass --version"
+    tags=$(release_tags nightly) ||
+        fail "could not look up nightly releases; pass --version instead"
     tag=$(printf '%s\n' "$tags" | LC_ALL=C grep -E "^$nightly\$" | LC_ALL=C sort | tail -n 1)
     [ -n "$tag" ] || fail "no immutable nightly release with an archive for $target"
 fi
@@ -148,7 +232,16 @@ trap 'rm -rf "$tmp_dir"' 0
 trap 'exit 1' 1 2 15
 archive=aevia-${tag#v}$suffix
 printf 'Downloading Aevia %s (%s)\n' "$tag" "$target"
-gh release download "$tag" --repo "github.com/$repo" --pattern "$archive" --pattern "$archive.sha256" --dir "$tmp_dir" ||
+download_asset() {
+    name=$1
+    if [ "$have_curl" = yes ]; then
+        curl -fsSL --retry 3 --retry-delay 2 -o "$tmp_dir/$name" \
+            "https://github.com/$repo/releases/download/$tag/$name"
+    else
+        gh release download "$tag" --repo "github.com/$repo" --pattern "$name" --dir "$tmp_dir"
+    fi
+}
+download_asset "$archive" && download_asset "$archive.sha256" ||
     fail "could not download $archive and its checksum from $repo/$tag"
 
 expected=$(LC_ALL=C awk -v name="$archive" '
@@ -165,8 +258,12 @@ else
     fail "required command not found: sha256sum or shasum"
 fi
 [ "${actual%% *}" = "$expected" ] || fail "SHA-256 mismatch for $archive"
-gh release verify-asset "$tag" "$tmp_dir/$archive" --repo "github.com/$repo" ||
-    fail "GitHub release attestation verification failed for $archive"
+if [ "$have_gh" = yes ]; then
+    gh release verify-asset "$tag" "$tmp_dir/$archive" --repo "github.com/$repo" ||
+        fail "GitHub release attestation verification failed for $archive"
+else
+    printf 'note: checksum verified; install GitHub CLI to also verify the release attestation\n' >&2
+fi
 
 mkdir "$tmp_dir/unpacked"
 tar -xzf "$tmp_dir/$archive" -C "$tmp_dir/unpacked"

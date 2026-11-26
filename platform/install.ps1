@@ -2,8 +2,10 @@
 .SYNOPSIS
     Bootstrap a verified Windows toolchain from an immutable GitHub release.
 .DESCRIPTION
-    Requires GitHub CLI with release verify-asset and 'gh auth login'.
-    The default installation directory is %LOCALAPPDATA%\aevia, or $env:AEVIA_HOME.
+    Downloads over HTTPS. With GitHub CLI installed the release attestation is
+    verified in addition to the SHA-256 checksum; without it the checksum is
+    still enforced. The default installation directory is %LOCALAPPDATA%\aevia,
+    or $env:AEVIA_HOME.
 .PARAMETER Channel
     stable (default), nightly, or dev (an alias for nightly).
 .PARAMETER Version
@@ -55,26 +57,28 @@ function Resolve-Tag {
     }
 
     if ($SelectedChannel -eq 'stable') {
-        $query = 'select(.draft == false and .prerelease == false and .immutable == true) | .tag_name'
-        $latest = & $gh api --hostname github.com "repos/$Repo/releases/latest" --jq $query
-        if ($LASTEXITCODE -ne 0) {
-            throw "Could not look up the latest stable release. Run 'gh auth login' or pass -Version."
+        try {
+            $latest = Get-Release 'releases/latest'
+        } catch {
+            throw "Could not look up the latest stable release. Pass -Version instead."
         }
-        if ($latest -isnot [string] -or $latest -cnotmatch "\Av$core\z") {
+        if ($latest.draft -ne $false -or $latest.prerelease -ne $false -or $latest.immutable -ne $true) {
             throw 'No immutable stable release found. Use -Version or -Channel nightly.'
         }
-        return $latest
+        $tagName = $latest.tag_name
+        if ($tagName -isnot [string] -or $tagName -cnotmatch "\Av$core\z") {
+            throw 'No immutable stable release found. Use -Version or -Channel nightly.'
+        }
+        return $tagName
     }
 
-    # Parse each page returned by gh as one JSON array to avoid the quoting
-    # differences for embedded jq literals between Windows PowerShell and pwsh.
     $tag = $null
     for ($page = 1; ; $page++) {
-        $body = & $gh api --hostname github.com --method GET "repos/$Repo/releases" --field per_page=100 --field "page=$page"
-        if ($LASTEXITCODE -ne 0) {
-            throw "Could not look up nightly releases. Run 'gh auth login' or pass -Version."
+        try {
+            $releases = @(Get-Release "releases?per_page=100&page=$page")
+        } catch {
+            throw "Could not look up nightly releases. Pass -Version instead."
         }
-        $releases = @(($body -join "`n") | ConvertFrom-Json)
         if ($releases.Count -eq 1 -and $releases[0] -is [array]) {
             $releases = $releases[0]
         }
@@ -156,11 +160,22 @@ $Repo = if ($env:AEVIA_GITHUB_REPO) { $env:AEVIA_GITHUB_REPO } else { 'Apich-Org
 if ($Repo -cnotmatch '\A[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*\z') {
     throw 'AEVIA_GITHUB_REPO must be OWNER/REPO.'
 }
-$gh = (Get-Command gh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
-if (-not $gh) { throw "Install GitHub CLI (gh) and run 'gh auth login' first." }
-& $gh release verify-asset --help > $null
-if ($LASTEXITCODE -ne 0) {
-    throw "Update GitHub CLI to a version with 'gh release verify-asset'."
+# GitHub CLI is optional: metadata comes from the public REST API and the
+# archive from a plain HTTPS download. `gh`, when present, adds attestation
+# verification on top of the SHA-256 checksum.
+$gh = $null
+$candidate = (Get-Command gh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1)
+if ($candidate) {
+    & $candidate.Source release verify-asset --help > $null
+    if ($LASTEXITCODE -eq 0) { $gh = $candidate.Source }
+}
+$apiHeaders = @{ Accept = 'application/vnd.github+json' }
+if ($env:GITHUB_TOKEN) { $apiHeaders['Authorization'] = "Bearer $($env:GITHUB_TOKEN)" }
+
+function Get-Release {
+    param([string]$Path)
+    $uri = "https://api.github.com/repos/$Repo/$Path"
+    Invoke-RestMethod -Uri $uri -Headers $apiHeaders -Method Get -ErrorAction Stop
 }
 
 try {
@@ -183,8 +198,14 @@ $tmpDir = Join-Path ([IO.Path]::GetTempPath()) ("aevia-install-" + [Guid]::NewGu
 New-Item -ItemType Directory -Path $tmpDir | Out-Null
 try {
     Write-Host "Downloading Aevia $tag ($target)"
-    & $gh release download $tag --repo "github.com/$Repo" --pattern $archive --pattern "$archive.sha256" --dir $tmpDir
-    if ($LASTEXITCODE -ne 0) { throw "Could not download $archive and its checksum from $Repo/$tag." }
+    foreach ($name in @($archive, "$archive.sha256")) {
+        $uri = "https://github.com/$Repo/releases/download/$tag/$name"
+        try {
+            Invoke-WebRequest -Uri $uri -OutFile (Join-Path $tmpDir $name) -UseBasicParsing -ErrorAction Stop
+        } catch {
+            throw "Could not download $name from $Repo/$tag."
+        }
+    }
 
     $path = Join-Path $tmpDir $archive
     $checksum = Get-Content -LiteralPath "$path.sha256" -Raw
@@ -193,8 +214,12 @@ try {
     if ((Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash -ine $Matches[1]) {
         throw "SHA-256 mismatch for $archive."
     }
-    & $gh release verify-asset $tag $path --repo "github.com/$Repo"
-    if ($LASTEXITCODE -ne 0) { throw "GitHub release attestation verification failed for $archive." }
+    if ($gh) {
+        & $gh release verify-asset $tag $path --repo "github.com/$Repo"
+        if ($LASTEXITCODE -ne 0) { throw "GitHub release attestation verification failed for $archive." }
+    } else {
+        Write-Warning 'Checksum verified; install GitHub CLI to also verify the release attestation.'
+    }
 
     $unpacked = Join-Path $tmpDir 'unpacked'
     Expand-Archive -LiteralPath $path -DestinationPath $unpacked
