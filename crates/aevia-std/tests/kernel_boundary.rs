@@ -2,7 +2,7 @@
 #[test]
 fn numerical_backends_do_not_return_to_the_language_runtime_dependencies() {
     let manifest = include_str!("../Cargo.toml");
-    let backends = ["nalgebra", "faer", "rustfft", "statrs", "argmin"];
+    let backends = ["nalgebra", "faer", "rustfft", "statrs", "basin"];
     let mut runtime = false;
     for line in manifest.lines() {
         let line = line.trim();

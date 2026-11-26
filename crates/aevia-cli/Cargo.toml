@@ -12,7 +12,7 @@ name = "aevia"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["jit", "gpu-wgpu", "npy"]
 jit = ["aevia-core/jit"]
 gpu-wgpu = ["aevia-core/gpu-wgpu"]
 npy = ["aevia-core/npy"]

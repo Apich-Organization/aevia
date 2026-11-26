@@ -48,8 +48,8 @@ aevia-types = { path = "crates/aevia-types" }
 aevia-stdlib-model = { path = "crates/aevia-stdlib-model" }
 aevia-ir = { path = "crates/aevia-ir" }
 aevia-resolve = { path = "crates/aevia-resolve" }
-aevia-core = { path = "crates/aevia-core" }
-aevia-rssn = { path = "crates/aevia-rssn" }
+aevia-core = { path = "crates/aevia-core", default-features = false }
+aevia-rssn = { path = "crates/aevia-rssn", default-features = false }
 aevia-fmt = { path = "crates/aevia-fmt" }
 aevia-doc = { path = "crates/aevia-doc" }
 aevia-analysis = { path = "crates/aevia-analysis" }

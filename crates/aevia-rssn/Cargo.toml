@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = []
+default = ["jit", "gpu-wgpu", "npy"]
 jit = ["rssn/jit"]
 gpu-wgpu = ["rssn/gpu-wgpu"]
 npy = ["rssn/npy"]
@@ -26,9 +26,10 @@ rssn ={ path = "../../../rssn", default-features = false }
 workspace = true
 
 [dev-dependencies]
-# Native kernel conformance tests share the kernel solver types.
-argmin = { version = "0.11", features = ["serde", "serde1"] }
-ndarray = { version = "0.16", features = ["serde"] }
+# Native kernel conformance tests share the kernel array type. The optimizer
+# moved from `argmin` to `basin`, whose solvers are reached through
+# `rssn::kernels::optimize`, so no solver crate is needed here.
+ndarray = { version = "0.17", features = ["serde"] }
 num-traits.workspace = true
 rayon = "1"
 # Test-only edge: the conformance test feeds the generated modules back through
