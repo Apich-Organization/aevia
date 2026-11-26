@@ -53,22 +53,44 @@ pub fn fmt(
         | Ok(paths) => paths,
         | Err(code) => return code,
     };
-    let mut changed = 0usize;
-    let mut failed = 0usize;
-    for path in &paths {
+    enum FormatOutcome {
+        Unchanged,
+        Formatted(String),
+        ReadError(String),
+        FormatError(String),
+    }
+    let mut outcomes: Vec<(usize, FormatOutcome)> = (0..paths.len())
+        .map(|index| (index, FormatOutcome::Unchanged))
+        .collect();
+    let mode = aevia_rssn::execution::default_execution_mode();
+    let format_one = |index: usize| -> FormatOutcome {
+        let Some(path) = paths.get(index) else {
+            return FormatOutcome::Unchanged;
+        };
         let source = match std::fs::read_to_string(path) {
             | Ok(source) => source,
-            | Err(error) => {
-                eprintln!("aevia fmt: cannot read `{}`: {error}", path.display());
-                failed = failed.saturating_add(1);
-                continue;
-            },
+            | Err(error) => return FormatOutcome::ReadError(error.to_string()),
         };
         match aevia_fmt::format_source(&source) {
-            | Ok(formatted) => {
-                if formatted == source {
-                    continue;
-                }
+            | Ok(formatted) if formatted == source => FormatOutcome::Unchanged,
+            | Ok(formatted) => FormatOutcome::Formatted(formatted),
+            | Err(error) => FormatOutcome::FormatError(error.to_string()),
+        }
+    };
+    aevia_rssn::par_for_chunks_mut_in_mode(&mut outcomes, 1, 4, mode, |_, chunk| {
+        for (index, outcome) in chunk.iter_mut() {
+            *outcome = format_one(*index);
+        }
+    });
+    let mut changed = 0usize;
+    let mut failed = 0usize;
+    for (index, outcome) in outcomes {
+        let Some(path) = paths.get(index) else {
+            continue;
+        };
+        match outcome {
+            | FormatOutcome::Unchanged => {},
+            | FormatOutcome::Formatted(formatted) => {
                 changed = changed.saturating_add(1);
                 if check {
                     println!("would reformat {}", path.display());
@@ -82,7 +104,11 @@ pub fn fmt(
                     }
                 }
             },
-            | Err(error) => {
+            | FormatOutcome::ReadError(error) => {
+                eprintln!("aevia fmt: cannot read `{}`: {error}", path.display());
+                failed = failed.saturating_add(1);
+            },
+            | FormatOutcome::FormatError(error) => {
                 // The file is left exactly as it was; the message names the
                 // construct that could not be printed.
                 eprintln!("aevia fmt: {}: {error}", path.display());
