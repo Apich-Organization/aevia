@@ -297,7 +297,7 @@ fn lint_all(
     files: &[String],
     fix: bool,
     format: OutputFormat,
-    _no_cache: bool,
+    no_cache: bool,
 ) -> ExitCode {
     if let Some(extra) = files.first() {
         eprintln!(
@@ -341,10 +341,18 @@ fn lint_all(
         run_extra_lints: true,
     };
 
-    let (program, _) = driver::load_all_with_roots(
+    let disk = (!no_cache)
+        .then(|| {
+            paths
+                .first()
+                .map(|entry| aevia_core::disk_cache::DiskCache::beside(entry))
+        })
+        .flatten();
+    let (program, _) = driver::load_all_with_roots_and_disk_cache(
         &paths,
         roots.clone(),
         &aevia_types::check::CheckOptions::default(),
+        disk.as_ref(),
     );
     let root_ids = collect_root_ids(&program, &paths);
     let mut report = Driver::run_program(&program, store, &config, Some(&root_ids));

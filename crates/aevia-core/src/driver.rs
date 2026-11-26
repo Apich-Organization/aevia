@@ -790,6 +790,19 @@ pub fn load_all_with_roots(
     roots: Roots,
     options: &CheckOptions,
 ) -> (Program, LoadStats) {
+    load_all_with_roots_and_disk_cache(entries, roots, options, None)
+}
+
+/// Loads every file in `entries` together, optionally consulting and updating
+/// an on-disk `.aevi` cache so multi-entry commands (`aevia check --all`,
+/// `aevia lint --all`) share both the in-process graph and cached modules.
+#[must_use]
+pub fn load_all_with_roots_and_disk_cache(
+    entries: &[PathBuf],
+    roots: Roots,
+    options: &CheckOptions,
+    disk: Option<&crate::disk_cache::DiskCache>,
+) -> (Program, LoadStats) {
     let mut roots = roots;
     for entry in entries {
         if let Some(dir) = entry.parent() {
@@ -799,8 +812,10 @@ pub fn load_all_with_roots(
     let mut loader = Loader {
         roots: Some(roots),
         options: options.clone(),
+        disk: disk.cloned(),
         ..Loader::default()
     };
+    let counters = loader.counters.clone();
     let mut root = None;
     for entry in entries {
         let loaded_entry = loader.load_entry(entry);
@@ -815,10 +830,10 @@ pub fn load_all_with_roots(
         entries: entries.len(),
         files,
         modules: modules.len(),
-        checks: modules.len(),
+        checks: Counters::get(&counters.checked),
         diagnostics: diagnostics.items.len(),
-        disk_hits: 0,
-        disk_writes: 0,
+        disk_hits: Counters::get(&counters.disk_hits),
+        disk_writes: Counters::get(&counters.disk_writes),
     };
     (
         Program {
@@ -1745,150 +1760,295 @@ impl Loader {
         // order (§7.4). They carry classes, instances and alias definitions, so
         // an importer can use a class it did not declare and expand an imported
         // alias instead of treating it as opaque.
+        // Partition topological `self.order` into dependency-free waves while
+        // preserving the exact original order: a new wave starts only when a
+        // module imports another module in the current wave. Every module in
+        // a wave depends exclusively on modules from strictly earlier waves,
+        // so cache-miss modules within a wave can be typechecked in parallel
+        // without changing module order, FileIds, or diagnostics.
+        let mut waves: Vec<Vec<ModuleKey>> = Vec::new();
+        let mut wave_keys: HashSet<ModuleKey> = HashSet::new();
         for path in std::mem::take(&mut self.order) {
-            let Some(parsed) = self.parsed.remove(&path) else {
-                continue;
-            };
-            by_path.insert(path.clone(), modules.len());
-            by_file.insert(parsed.file, modules.len());
-            if self.skip_malformed_checks
-                && (parsed.syntax_failed
-                    || parsed
-                        .imports
-                        .iter()
-                        .any(|import| syntax_blocked.contains(&import.target)))
-            {
-                syntax_blocked.insert(path);
-                let checked = CheckedModule {
-                    name: parsed.module.name.clone(),
-                    anonymous_file: parsed.file,
-                    errors: 1,
-                    ..CheckedModule::default()
-                };
-                // Retain the recovered AST and its slot in dependency order,
-                // but do not cache or type-check a syntax-recovery program.
-                modules.push(LoadedModule {
-                    path: parsed.path,
-                    file: parsed.file,
-                    source: parsed.context,
-                    module: parsed.module,
-                    checked,
-                    aliases: Vec::new(),
-                    imports: Vec::new(),
-                });
-                if self.cache.is_some() {
-                    interface_fingerprints.push(None);
-                }
-                continue;
+            let depends_on_wave = self.parsed.get(&path).is_some_and(|parsed| {
+                parsed
+                    .imports
+                    .iter()
+                    .any(|import| wave_keys.contains(&import.target))
+            });
+            if depends_on_wave || waves.is_empty() {
+                waves.push(Vec::new());
+                wave_keys.clear();
             }
-            // The imports of this module, as the checker wants them: one entry
-            // per resolved module, with the prefix its names are reachable
-            // under.
-            // Materialised only when the checker needs them.
-            let mut import_specs = Vec::new();
-            let mut reexports = Vec::new();
-            let mut runtime_imports = Vec::new();
-            let mut bindings = Vec::new();
-            for import in &parsed.imports {
-                let ParsedImport {
-                    target,
-                    path: import_path,
-                    prefix,
-                    names,
-                    export,
-                    span,
-                } = import;
-                let Some(other) = by_path.get(target).and_then(|&index| modules.get(index)) else {
+            wave_keys.insert(path.clone());
+            if let Some(current) = waves.last_mut() {
+                current.push(path);
+            }
+        }
+
+        let exec_mode = aevia_rssn::execution::default_execution_mode();
+        for wave in waves {
+            // Prepare every module in this wave against already-committed
+            // earlier waves, then typecheck all cache misses in parallel when
+            // the wave has at least two independent misses.
+            enum WaveItem {
+                SyntaxBlocked {
+                    path: ModuleKey,
+                    parsed: Parsed,
+                },
+                Ready {
+                    path: ModuleKey,
+                    parsed: Parsed,
+                    runtime_imports: Vec<ResolvedImport>,
+                    print: Option<u64>,
+                    disk_key: Option<crate::disk_cache::Key>,
+                    memory_digest: Option<u64>,
+                    own_digest: Option<Digest>,
+                    loaded_from_disk: bool,
+                    checked: aevia_types::check::CheckResult,
+                },
+                NeedsCheck {
+                    path: ModuleKey,
+                    parsed: Parsed,
+                    runtime_imports: Vec<ResolvedImport>,
+                    print: Option<u64>,
+                    disk_key: Option<crate::disk_cache::Key>,
+                    identity: Option<aevia_types::ModulePath>,
+                    bindings: Vec<InterfaceBinding>,
+                    reexports: BTreeMap<Span, aevia_types::ModulePath>,
+                    imports: Vec<Import>,
+                    interfaces: Vec<ModuleInterface>,
+                },
+            }
+
+            let mut prepared: Vec<WaveItem> = Vec::with_capacity(wave.len());
+            for path in wave {
+                let Some(parsed) = self.parsed.remove(&path) else {
                     continue;
                 };
-                let exports = &other.checked.exports;
-                if let Some(selected) = names {
-                    // `import A.B { a, b }` brings only those names in, and a
-                    // name the module does not export is an error rather than
-                    // a silent no-op.
-                    for name in selected {
-                        if !exports.contains_key(name) {
-                            let note =
-                                missing_export_note(name, exports.keys().map(String::as_str));
-                            self.diagnostics.push(
-                                Diagnostic::error(
-                                    "E0301",
-                                    format!(
-                                        "module `{}` does not export `{name}`",
-                                        import_path.join(".")
-                                    ),
-                                    *span,
-                                )
-                                .with_note(note),
-                            );
-                        }
-                    }
+                if self.skip_malformed_checks
+                    && (parsed.syntax_failed
+                        || parsed
+                            .imports
+                            .iter()
+                            .any(|import| syntax_blocked.contains(&import.target)))
+                {
+                    prepared.push(WaveItem::SyntaxBlocked { path, parsed });
+                    continue;
                 }
-                let module = other.checked.module_path();
-                if *export {
-                    reexports.push((*span, module.clone()));
-                }
-                bindings.push(InterfaceBinding {
-                    module,
-                    prefix: prefix.clone(),
-                    names: names.clone(),
-                });
-                let runtime_names = names.as_ref().map(|names| {
-                    let selected: HashSet<_> = names.iter().filter_map(|name| {
-                        match other.checked.exports.get(name) {
-                            | Some(aevia_types::Export::Type { adt } | aevia_types::Export::TypeCtor { adt, .. }) => Some(*adt),
-                            | _ => None,
-                        }
-                    }).collect();
-                    let mut expanded = names.clone();
-                    if !selected.is_empty() {
-                        for (name, export) in &other.checked.exports {
-                            if matches!(export, aevia_types::Export::Ctor { adt, .. } | aevia_types::Export::TypeCtor { adt, .. } if selected.contains(adt))
-                                && !expanded.contains(name)
-                            {
-                                expanded.push(name.clone());
+                let mut import_specs = Vec::new();
+                let mut reexports = Vec::new();
+                let mut runtime_imports = Vec::new();
+                let mut bindings = Vec::new();
+                for import in &parsed.imports {
+                    let ParsedImport {
+                        target,
+                        path: import_path,
+                        prefix,
+                        names,
+                        export,
+                        span,
+                    } = import;
+                    let Some(other) = by_path.get(target).and_then(|&index| modules.get(index))
+                    else {
+                        continue;
+                    };
+                    let exports = &other.checked.exports;
+                    if let Some(selected) = names {
+                        for name in selected {
+                            if !exports.contains_key(name) {
+                                let note =
+                                    missing_export_note(name, exports.keys().map(String::as_str));
+                                self.diagnostics.push(
+                                    Diagnostic::error(
+                                        "E0301",
+                                        format!(
+                                            "module `{}` does not export `{name}`",
+                                            import_path.join(".")
+                                        ),
+                                        *span,
+                                    )
+                                    .with_note(note),
+                                );
                             }
                         }
                     }
-                    expanded
-                });
-                runtime_imports.push(ResolvedImport {
-                    file: other.file,
-                    prefix: prefix.clone(),
-                    names: runtime_names,
-                    export: *export,
-                });
-                import_specs.push((import, &other.checked));
-            }
-            // A module sees its dependency closure, never unrelated modules
-            // merely checked earlier in the package traversal.
-            let mut reachable_indices = BTreeSet::new();
-            let mut pending: Vec<_> = runtime_imports.iter().map(|import| import.file).collect();
-            while let Some(file) = pending.pop() {
-                if let Some(&index) = by_file.get(&file)
-                    && reachable_indices.insert(index)
-                    && let Some(module) = modules.get(index)
-                {
-                    pending.extend(module.imports.iter().map(|import| import.file));
+                    let module = other.checked.module_path();
+                    if *export {
+                        reexports.push((*span, module.clone()));
+                    }
+                    bindings.push(InterfaceBinding {
+                        module,
+                        prefix: prefix.clone(),
+                        names: names.clone(),
+                    });
+                    let runtime_names = names.as_ref().map(|names| {
+                        let selected: HashSet<_> = names
+                            .iter()
+                            .filter_map(|name| {
+                                match other.checked.exports.get(name) {
+                                    | Some(
+                                        aevia_types::Export::Type { adt }
+                                        | aevia_types::Export::TypeCtor { adt, .. },
+                                    ) => Some(*adt),
+                                    | _ => None,
+                                }
+                            })
+                            .collect();
+                        let mut expanded = names.clone();
+                        if !selected.is_empty() {
+                            for (name, export) in &other.checked.exports {
+                                if matches!(export, aevia_types::Export::Ctor { adt, .. } | aevia_types::Export::TypeCtor { adt, .. } if selected.contains(adt))
+                                    && !expanded.contains(name)
+                                {
+                                    expanded.push(name.clone());
+                                }
+                            }
+                        }
+                        expanded
+                    });
+                    runtime_imports.push(ResolvedImport {
+                        file: other.file,
+                        prefix: prefix.clone(),
+                        names: runtime_names,
+                        export: *export,
+                    });
+                    import_specs.push((import, &other.checked));
                 }
-            }
-            let reachable = || {
-                reachable_indices
-                    .iter()
-                    .filter_map(|&index| modules.get(index))
-            };
-            let interfaces = OnceCell::<Vec<ModuleInterface>>::new();
-            let interfaces = || {
-                interfaces.get_or_init(|| {
-                    reachable()
+                let mut reachable_indices = BTreeSet::new();
+                let mut pending: Vec<_> =
+                    runtime_imports.iter().map(|import| import.file).collect();
+                while let Some(file) = pending.pop() {
+                    if let Some(&index) = by_file.get(&file)
+                        && reachable_indices.insert(index)
+                        && let Some(module) = modules.get(index)
+                    {
+                        pending.extend(module.imports.iter().map(|import| import.file));
+                    }
+                }
+                let reachable = || {
+                    reachable_indices
+                        .iter()
+                        .filter_map(|&index| modules.get(index))
+                };
+                let identity = if let Some(identity) = self.source_identities.get(&path) {
+                    Some(identity.clone())
+                } else if let Some((entry, identity)) = &self.entry_identity
+                    && entry == &path
+                {
+                    Some(identity.module_path(parsed.module.name.as_deref()))
+                } else if self.stdlib.contains_key(&path.path)
+                    || self.kernel_modules.contains_key(&path.path)
+                {
+                    None
+                } else {
+                    self.roots_for(&path)
+                        .map(|roots| roots.resolved_module_identity(&parsed.context, &parsed.path))
+                };
+                let print = self.cache.as_ref().and_then(|_| {
+                    let closure: Option<Vec<_>> = reachable_indices
+                        .iter()
+                        .map(|&index| interface_fingerprints.get(index).copied().flatten())
+                        .collect();
+                    let imports: Vec<_> =
+                        runtime_imports.iter().map(|import| import.file).collect();
+                    let text = self
+                        .sources
+                        .file(parsed.file)
+                        .map_or("", |file| file.text.as_str());
+                    Some(fingerprint(&[
+                        &text,
+                        &parsed.file,
+                        &imports,
+                        &closure?,
+                        &identity,
+                        &bindings,
+                        &reexports,
+                        &self.options,
+                    ]))
+                });
+                let reused = match (&self.cache, print) {
+                    | (Some(cache), Some(print)) => {
+                        let cache = cache.borrow();
+                        cache.entries.get(&path).and_then(|entry| {
+                            (entry.file == parsed.file && entry.fingerprint == print).then(|| {
+                                (
+                                    aevia_types::check::CheckResult {
+                                        diagnostics: entry.diagnostics.clone(),
+                                        module: entry.module.clone(),
+                                    },
+                                    entry.interface_fingerprint,
+                                )
+                            })
+                        })
+                    },
+                    | _ => None,
+                };
+                let disk_key = match &self.disk {
+                    | Some(disk) if !self.kernel_modules.contains_key(&path.path) => {
+                        let closure: Option<Vec<Digest>> = reachable()
+                            .map(|module| digests.get(&module.file).copied().flatten())
+                            .collect();
+                        closure.and_then(|closure| {
+                            let text = self
+                                .sources
+                                .file(parsed.file)
+                                .map_or("", |file| file.text.as_str());
+                            disk.key(&KeyInputs {
+                                text,
+                                file: parsed.file,
+                                path: &parsed.path,
+                                identity: &identity,
+                                bindings: &bindings,
+                                reexports: &reexports,
+                                options: &self.options,
+                                interfaces: &closure,
+                            })
+                        })
+                    },
+                    | _ => None,
+                };
+                let mut own_digest: Option<Digest> = None;
+                let mut memory_digest = None;
+                let mut loaded_from_disk = false;
+                let restored = match reused {
+                    | Some((checked, digest)) => {
+                        memory_digest = Some(digest);
+                        Some(checked)
+                    },
+                    | None => {
+                        match (&self.disk, &disk_key) {
+                            | (Some(disk), Some(key)) => {
+                                disk.load(key, parsed.file).map(|hit| {
+                                    own_digest = Some(hit.interface);
+                                    loaded_from_disk = true;
+                                    Counters::bump(&self.counters.disk_hits);
+                                    aevia_types::check::CheckResult {
+                                        diagnostics: hit.diagnostics,
+                                        module: hit.module,
+                                    }
+                                })
+                            },
+                            | _ => None,
+                        }
+                    },
+                };
+                if let Some(checked) = restored {
+                    prepared.push(WaveItem::Ready {
+                        path,
+                        parsed,
+                        runtime_imports,
+                        print,
+                        disk_key,
+                        memory_digest,
+                        own_digest,
+                        loaded_from_disk,
+                        checked,
+                    });
+                } else {
+                    let interfaces: Vec<ModuleInterface> = reachable()
                         .map(|module| module.checked.interface())
-                        .collect()
-                })
-            };
-            let imports = OnceCell::<Vec<Import>>::new();
-            let imports = || {
-                imports.get_or_init(|| {
-                    import_specs
+                        .collect();
+                    let imports: Vec<Import> = import_specs
                         .iter()
                         .map(|(import, checked)| {
                             let exports = match &import.names {
@@ -1904,204 +2064,266 @@ impl Loader {
                             };
                             (import.prefix.clone(), exports)
                         })
-                        .collect()
-                })
-            };
-            let identity = if let Some(identity) = self.source_identities.get(&path) {
-                Some(identity.clone())
-            } else if let Some((entry, identity)) = &self.entry_identity
-                && entry == &path
-            {
-                Some(identity.module_path(parsed.module.name.as_deref()))
-            } else if self.stdlib.contains_key(&path.path)
-                || self.kernel_modules.contains_key(&path.path)
-            {
-                None
-            } else {
-                self.roots_for(&path)
-                    .map(|roots| roots.resolved_module_identity(&parsed.context, &parsed.path))
-            };
-            let print = self.cache.as_ref().and_then(|_| {
-                let closure: Option<Vec<_>> = reachable_indices
-                    .iter()
-                    .map(|&index| interface_fingerprints.get(index).copied().flatten())
-                    .collect();
-                let imports: Vec<_> = runtime_imports.iter().map(|import| import.file).collect();
-                let text = self
-                    .sources
-                    .file(parsed.file)
-                    .map_or("", |file| file.text.as_str());
-                Some(fingerprint(&[
-                    &text,
-                    &parsed.file,
-                    &imports,
-                    &closure?,
-                    &identity,
-                    &bindings,
-                    &reexports,
-                    &self.options,
-                ]))
-            });
-            let reused = match (&self.cache, print) {
-                | (Some(cache), Some(print)) => {
-                    let cache = cache.borrow();
-                    cache.entries.get(&path).and_then(|entry| {
-                        (entry.file == parsed.file && entry.fingerprint == print).then(|| {
-                            (
-                                aevia_types::check::CheckResult {
-                                    diagnostics: entry.diagnostics.clone(),
-                                    module: entry.module.clone(),
-                                },
-                                entry.interface_fingerprint,
-                            )
-                        })
-                    })
-                },
-                | _ => None,
-            };
-            // The on-disk key (§9.11). Generated kernel namespaces depend on
-            // the live manifest rather than on a source file, so they are
-            // never cached; a module whose dependency interfaces cannot all
-            // be digested is simply not cacheable.
-            let disk_key = match &self.disk {
-                | Some(disk) if !self.kernel_modules.contains_key(&path.path) => {
-                    let closure: Option<Vec<Digest>> = reachable()
-                        .map(|module| digests.get(&module.file).copied().flatten())
                         .collect();
-                    closure.and_then(|closure| {
-                        let text = self
-                            .sources
-                            .file(parsed.file)
-                            .map_or("", |file| file.text.as_str());
-                        disk.key(&KeyInputs {
-                            text,
-                            file: parsed.file,
-                            path: &parsed.path,
-                            identity: &identity,
-                            bindings: &bindings,
-                            reexports: &reexports,
-                            options: &self.options,
-                            interfaces: &closure,
-                        })
-                    })
-                },
-                | _ => None,
-            };
-            let mut own_digest: Option<Digest> = None;
-            let mut memory_digest = None;
-            let mut loaded_from_disk = false;
-            let restored = match reused {
-                | Some((checked, digest)) => {
-                    memory_digest = Some(digest);
-                    Some(checked)
-                },
-                | None => {
-                    match (&self.disk, &disk_key) {
-                        | (Some(disk), Some(key)) => {
-                            disk.load(key, parsed.file).map(|hit| {
-                                own_digest = Some(hit.interface);
-                                loaded_from_disk = true;
-                                Counters::bump(&self.counters.disk_hits);
-                                aevia_types::check::CheckResult {
-                                    diagnostics: hit.diagnostics,
-                                    module: hit.module,
-                                }
-                            })
-                        },
-                        | _ => None,
-                    }
-                },
-            };
-            let checked = match restored {
-                | Some(checked) => {
-                    if memory_digest.is_some()
-                        && let Some(cache) = &self.cache
-                    {
-                        let mut cache = cache.borrow_mut();
-                        cache.reused = cache.reused.saturating_add(1);
-                    }
-                    checked
-                },
-                | None => {
-                    let checked = check_module_with_resolved_imports(
-                        parsed.file,
-                        &parsed.module,
-                        imports(),
-                        interfaces(),
-                        &self.options,
+                    prepared.push(WaveItem::NeedsCheck {
+                        path,
+                        parsed,
+                        runtime_imports,
+                        print,
+                        disk_key,
                         identity,
-                        &bindings,
-                        &reexports.into_iter().collect(),
-                    );
-                    Counters::bump(&self.counters.checked);
-                    if let Some(cache) = &self.cache {
-                        let mut cache = cache.borrow_mut();
-                        cache.checked = cache.checked.saturating_add(1);
-                    }
-                    checked
-                },
-            };
-            let interface = OnceCell::new();
-            let interface = || interface.get_or_init(|| checked.module.interface());
-            if self.disk.is_some() {
-                if own_digest.is_none() {
-                    own_digest = crate::disk_cache::interface_digest(interface());
-                }
-                digests.insert(parsed.file, own_digest);
-                // Only an error-free check is stored: its diagnostics are
-                // warnings, and every type it declares is complete.
-                if memory_digest.is_none()
-                    && !loaded_from_disk
-                    && !checked.diagnostics.has_errors()
-                    && let (Some(disk), Some(key), Some(digest)) =
-                        (&self.disk, &disk_key, own_digest)
-                    && disk.store(
-                        key,
-                        parsed.file,
-                        digest,
-                        &checked.diagnostics,
-                        &checked.module,
-                    )
-                {
-                    Counters::bump(&self.counters.disk_writes);
+                        bindings,
+                        reexports: reexports.into_iter().collect(),
+                        imports,
+                        interfaces,
+                    });
                 }
             }
-            if let Some(cache) = &self.cache {
-                let interface_fingerprint =
-                    memory_digest.unwrap_or_else(|| fingerprint(&[interface()]));
-                if memory_digest.is_none()
-                    && let Some(print) = print
-                {
-                    cache.borrow_mut().entries.insert(
-                        path.clone(),
-                        CacheEntry {
+
+            let miss_count = prepared
+                .iter()
+                .filter(|item| matches!(item, WaveItem::NeedsCheck { .. }))
+                .count();
+            let options_ref = &self.options;
+            let checked_results: Vec<Option<aevia_types::check::CheckResult>> =
+                if miss_count >= 2 && aevia_rssn::should_split_for_mode(miss_count, 2, exec_mode) {
+                    use rayon::prelude::*;
+                    aevia_rssn::run_in_mode(exec_mode, || {
+                        prepared
+                            .par_iter()
+                            .map(|item| {
+                                let WaveItem::NeedsCheck {
+                                    parsed,
+                                    identity,
+                                    bindings,
+                                    reexports,
+                                    imports,
+                                    interfaces,
+                                    ..
+                                } = item
+                                else {
+                                    return None;
+                                };
+                                Some(check_module_with_resolved_imports(
+                                    parsed.file,
+                                    &parsed.module,
+                                    imports,
+                                    interfaces,
+                                    options_ref,
+                                    identity.clone(),
+                                    bindings,
+                                    reexports,
+                                ))
+                            })
+                            .collect()
+                    })
+                } else {
+                    prepared
+                        .iter()
+                        .map(|item| {
+                            let WaveItem::NeedsCheck {
+                                parsed,
+                                identity,
+                                bindings,
+                                reexports,
+                                imports,
+                                interfaces,
+                                ..
+                            } = item
+                            else {
+                                return None;
+                            };
+                            Some(check_module_with_resolved_imports(
+                                parsed.file,
+                                &parsed.module,
+                                imports,
+                                interfaces,
+                                options_ref,
+                                identity.clone(),
+                                bindings,
+                                reexports,
+                            ))
+                        })
+                        .collect()
+                };
+
+            for (item, fresh) in prepared.into_iter().zip(checked_results) {
+                match item {
+                    | WaveItem::SyntaxBlocked { path, parsed } => {
+                        by_path.insert(path.clone(), modules.len());
+                        by_file.insert(parsed.file, modules.len());
+                        syntax_blocked.insert(path);
+                        let checked = CheckedModule {
+                            name: parsed.module.name.clone(),
+                            anonymous_file: parsed.file,
+                            errors: 1,
+                            ..CheckedModule::default()
+                        };
+                        modules.push(LoadedModule {
+                            path: parsed.path,
                             file: parsed.file,
-                            fingerprint: print,
-                            interface_fingerprint,
-                            diagnostics: checked.diagnostics.clone(),
-                            module: checked.module.clone(),
-                        },
-                    );
+                            source: parsed.context,
+                            module: parsed.module,
+                            checked,
+                            aliases: Vec::new(),
+                            imports: Vec::new(),
+                        });
+                        if self.cache.is_some() {
+                            interface_fingerprints.push(None);
+                        }
+                    },
+                    | WaveItem::Ready {
+                        path,
+                        parsed,
+                        runtime_imports,
+                        print,
+                        disk_key,
+                        memory_digest,
+                        mut own_digest,
+                        loaded_from_disk,
+                        checked,
+                    } => {
+                        by_path.insert(path.clone(), modules.len());
+                        by_file.insert(parsed.file, modules.len());
+                        if memory_digest.is_some()
+                            && let Some(cache) = &self.cache
+                        {
+                            let mut cache = cache.borrow_mut();
+                            cache.reused = cache.reused.saturating_add(1);
+                        }
+                        let interface = OnceCell::new();
+                        let interface = || interface.get_or_init(|| checked.module.interface());
+                        if self.disk.is_some() {
+                            if own_digest.is_none() {
+                                own_digest = crate::disk_cache::interface_digest(interface());
+                            }
+                            digests.insert(parsed.file, own_digest);
+                            if memory_digest.is_none()
+                                && !loaded_from_disk
+                                && !checked.diagnostics.has_errors()
+                                && let (Some(disk), Some(key), Some(digest)) =
+                                    (&self.disk, &disk_key, own_digest)
+                                && disk.store(
+                                    key,
+                                    parsed.file,
+                                    digest,
+                                    &checked.diagnostics,
+                                    &checked.module,
+                                )
+                            {
+                                Counters::bump(&self.counters.disk_writes);
+                            }
+                        }
+                        if let Some(cache) = &self.cache {
+                            let interface_fingerprint =
+                                memory_digest.unwrap_or_else(|| fingerprint(&[interface()]));
+                            if memory_digest.is_none()
+                                && let Some(print) = print
+                            {
+                                cache.borrow_mut().entries.insert(
+                                    path.clone(),
+                                    CacheEntry {
+                                        file: parsed.file,
+                                        fingerprint: print,
+                                        interface_fingerprint,
+                                        diagnostics: checked.diagnostics.clone(),
+                                        module: checked.module.clone(),
+                                    },
+                                );
+                            }
+                            interface_fingerprints.push(Some(interface_fingerprint));
+                        }
+                        self.diagnostics.extend(checked.diagnostics.clone());
+                        let aliases = prefixes.get(&path).map_or_else(Vec::new, |list| {
+                            let path = parsed.path.join(".");
+                            list.iter()
+                                .filter(|prefix| **prefix != path)
+                                .cloned()
+                                .collect()
+                        });
+                        modules.push(LoadedModule {
+                            path: parsed.path,
+                            file: parsed.file,
+                            source: parsed.context,
+                            module: parsed.module,
+                            checked: checked.module,
+                            aliases,
+                            imports: runtime_imports,
+                        });
+                    },
+                    | WaveItem::NeedsCheck {
+                        path,
+                        parsed,
+                        runtime_imports,
+                        print,
+                        disk_key,
+                        ..
+                    } => {
+                        let Some(checked) = fresh else {
+                            continue;
+                        };
+                        by_path.insert(path.clone(), modules.len());
+                        by_file.insert(parsed.file, modules.len());
+                        Counters::bump(&self.counters.checked);
+                        if let Some(cache) = &self.cache {
+                            let mut cache = cache.borrow_mut();
+                            cache.checked = cache.checked.saturating_add(1);
+                        }
+                        let interface = OnceCell::new();
+                        let interface = || interface.get_or_init(|| checked.module.interface());
+                        if self.disk.is_some() {
+                            let own_digest = crate::disk_cache::interface_digest(interface());
+                            digests.insert(parsed.file, own_digest);
+                            if !checked.diagnostics.has_errors()
+                                && let (Some(disk), Some(key), Some(digest)) =
+                                    (&self.disk, &disk_key, own_digest)
+                                && disk.store(
+                                    key,
+                                    parsed.file,
+                                    digest,
+                                    &checked.diagnostics,
+                                    &checked.module,
+                                )
+                            {
+                                Counters::bump(&self.counters.disk_writes);
+                            }
+                        }
+                        if let Some(cache) = &self.cache {
+                            let interface_fingerprint = fingerprint(&[interface()]);
+                            if let Some(print) = print {
+                                cache.borrow_mut().entries.insert(
+                                    path.clone(),
+                                    CacheEntry {
+                                        file: parsed.file,
+                                        fingerprint: print,
+                                        interface_fingerprint,
+                                        diagnostics: checked.diagnostics.clone(),
+                                        module: checked.module.clone(),
+                                    },
+                                );
+                            }
+                            interface_fingerprints.push(Some(interface_fingerprint));
+                        }
+                        self.diagnostics.extend(checked.diagnostics.clone());
+                        let aliases = prefixes.get(&path).map_or_else(Vec::new, |list| {
+                            let path = parsed.path.join(".");
+                            list.iter()
+                                .filter(|prefix| **prefix != path)
+                                .cloned()
+                                .collect()
+                        });
+                        modules.push(LoadedModule {
+                            path: parsed.path,
+                            file: parsed.file,
+                            source: parsed.context,
+                            module: parsed.module,
+                            checked: checked.module,
+                            aliases,
+                            imports: runtime_imports,
+                        });
+                    },
                 }
-                interface_fingerprints.push(Some(interface_fingerprint));
             }
-            self.diagnostics.extend(checked.diagnostics.clone());
-            let aliases = prefixes.get(&path).map_or_else(Vec::new, |list| {
-                let path = parsed.path.join(".");
-                list.iter()
-                    .filter(|prefix| **prefix != path)
-                    .cloned()
-                    .collect()
-            });
-            modules.push(LoadedModule {
-                path: parsed.path,
-                file: parsed.file,
-                source: parsed.context,
-                module: parsed.module,
-                checked: checked.module,
-                aliases,
-                imports: runtime_imports,
-            });
         }
         // The entry file is last in dependency order, which is what `entry`
         // relies on; the walk already guarantees it.

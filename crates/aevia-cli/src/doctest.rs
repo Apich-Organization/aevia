@@ -54,6 +54,9 @@ pub fn run(
     let mut passed = 0usize;
     let mut failed = 0usize;
     let mut checked = 0usize;
+    // Share one incremental check cache across files so stdlib and package
+    // dependencies are checked once rather than once per file.
+    let shared_cache = Rc::new(RefCell::new(CheckCache::new()));
     for path in &paths {
         let shown = path.display().to_string();
         if let Some(pattern) = filter
@@ -106,12 +109,11 @@ pub fn run(
         let roots = package
             .and_then(|package| package.map_or_else(|| Ok(Roots::adjacent(path)), |p| p.roots()))
             .map_err(|error| error.render());
-        let cache = Rc::new(RefCell::new(CheckCache::new()));
         for doctest in &doctests {
             checked = checked.saturating_add(1);
             let (outcome, compilation) = match &roots {
                 | Ok(roots) => {
-                    let (outcome, compilation) = check(doctest, roots.clone(), &cache);
+                    let (outcome, compilation) = check(doctest, roots.clone(), &shared_cache);
                     (outcome, Some(compilation))
                 },
                 | Err(message) => (Outcome::Fail(message.clone()), None),
