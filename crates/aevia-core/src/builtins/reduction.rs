@@ -81,6 +81,29 @@ pub(super) fn sum_axis(
         return Ok(Value::Tensor(tensor.clone()));
     }
     if let Some(values) = tensor.dense_flat() {
+        let mode = interp.execution_mode();
+        if aevia_rssn::should_split_for_mode(values.len(), 65_536, mode) && count >= 64 {
+            let mut sums = reserve_items(count, span)?;
+            sums.resize(count, 0.0);
+            let source = values.as_ref();
+            aevia_rssn::par_for_chunks_mut_in_mode(&mut sums, 64, 64, mode, |base, chunk| {
+                for (local, slot) in chunk.iter_mut().enumerate() {
+                    let idx = base.saturating_add(local);
+                    let block_idx = idx.checked_div(stride).unwrap_or(0);
+                    let offset = idx.checked_rem(stride).unwrap_or(0);
+                    let block_start = block_idx.saturating_mul(block_len);
+                    let block_end = block_start.saturating_add(block_len);
+                    if let Some(sequence) = source
+                        .get(block_start..block_end)
+                        .and_then(|block| block.get(offset..))
+                    {
+                        *slot = compensated_sum(sequence.iter().step_by(stride).copied());
+                    }
+                }
+            });
+            interp.check_cancelled()?;
+            return Ok(float_tensor(shape, sums, tensor.dim.clone()));
+        }
         let mut sums = reserve_items(count, span)?;
         for block in values.chunks_exact(block_len) {
             interp.check_cancelled()?;

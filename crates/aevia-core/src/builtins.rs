@@ -743,7 +743,7 @@ fn call_inner(
             // §9.13: a dense buffer folds without boxing a `Value` per step.
             // The fold is the compensated one (§6.6.6), and the boxed `Float`
             // path uses the same fold so the class stays unobservable.
-            if let Some(num) = tensor.dense_sum() {
+            if let Some(num) = tensor.dense_sum_in_mode(interp.execution_mode()) {
                 return Ok(Value::Num(num));
             }
             let elements = tensor.elements();
@@ -851,29 +851,39 @@ fn call_inner(
             } else {
                 2
             };
+            let mode = interp.execution_mode();
             let norm = match tensor.dense_flat() {
-                | Some(values) => norm_of(&values, order),
+                | Some(values) => norm_of_in_mode(&values, order, mode),
                 | None => {
                     let values: Vec<f64> = tensor
                         .elements()
                         .iter()
                         .map(|element| element.as_f64().unwrap_or(f64::NAN))
                         .collect();
-                    norm_of(&values, order)
+                    norm_of_in_mode(&values, order, mode)
                 },
             };
             Ok(Value::Num(NumVal::float(norm, tensor.dim.clone())))
         },
         | B::Normalize => {
             let tensor = expect_tensor(args, 0, name, span)?;
-            let norm = tensor
-                .elements()
+            let mode = interp.execution_mode();
+            if let Some(data) = tensor.dense_flat() {
+                if data.is_empty() {
+                    return Ok(float_tensor(tensor.shape.clone(), Vec::new(), Dim::one()));
+                }
+                let norm = aevia_rssn::par_norm2_f64_in_mode(&data, mode);
+                let normalized =
+                    aevia_rssn::par_map_f64_slice(&data, 32_768, mode, |value| value / norm);
+                return Ok(float_tensor(tensor.shape.clone(), normalized, Dim::one()));
+            }
+            let raw = tensor.elements();
+            let norm = raw
                 .iter()
                 .map(|element| element.as_f64().unwrap_or(0.0).powi(2))
                 .sum::<f64>()
                 .sqrt();
-            let elements = tensor
-                .elements()
+            let elements = raw
                 .iter()
                 .map(|element| {
                     Value::Num(NumVal::float(
@@ -928,6 +938,26 @@ fn call_inner(
         },
         | B::Flatten => {
             let tensor = expect_tensor(args, 0, name, span)?;
+            if let Storage::Dense(buffer) = &tensor.storage
+                && tensor.checked_element_count() == Some(buffer.len())
+            {
+                let result = Value::Tensor(Rc::new(TensorData::new(
+                    vec![buffer.len()],
+                    Storage::Dense(Rc::clone(buffer)),
+                    tensor.dim.clone(),
+                    tensor.display.clone(),
+                )));
+                return Ok(crate::host_witness::preserve_tensor_schema(result, &tensor));
+            }
+            if let Some(data) = tensor.dense_flat() {
+                let result = Value::Tensor(Rc::new(TensorData::new(
+                    vec![data.len()],
+                    Storage::Dense(Rc::new(data.into_owned())),
+                    tensor.dim.clone(),
+                    tensor.display.clone(),
+                )));
+                return Ok(crate::host_witness::preserve_tensor_schema(result, &tensor));
+            }
             let elements = tensor.elements();
             let len = elements.len();
             let result = build_tensor(elements, vec![len], tensor.dim.clone());
@@ -953,6 +983,10 @@ fn call_inner(
             let tensor = expect_tensor(args, 1, name, span)?;
             if tensor.rank() != 1 {
                 return Err(EvalError::new("E0802", "`par_map` expects a rank-1 tensor").at(span));
+            }
+            if let Some(result) = dense_builtin_map(&function, &tensor, interp.execution_mode()) {
+                interp.check_cancelled().map_err(|error| error.at(span))?;
+                return Ok(result);
             }
             // §9.7: on worker replicas when the function and the elements
             // can cross threads; otherwise (and on any worker failure) the
@@ -1084,6 +1118,12 @@ fn call_inner(
                 .ok_or_else(|| arity(name, 2, 0, span))?;
             match args.get(1) {
                 | Some(Value::Tensor(tensor)) => {
+                    if let Some(result) =
+                        dense_builtin_map(&function, tensor, interp.execution_mode())
+                    {
+                        interp.check_cancelled().map_err(|error| error.at(span))?;
+                        return Ok(result);
+                    }
                     let mut elements = Vec::with_capacity(tensor.storage.len());
                     for element in tensor.elements() {
                         elements.push(interp.apply(function.clone(), vec![element], span)?);
@@ -1369,10 +1409,15 @@ fn call_inner(
         | B::Centroid => {
             let tensor = expect_tensor(args, 0, name, span)?;
             let count = tensor.storage.len();
-            let mut total = 0.0;
-            for element in tensor.elements() {
-                total += element.as_f64().unwrap_or(f64::NAN);
-            }
+            let total = if let Some(data) = tensor.dense_flat() {
+                data.iter().copied().sum::<f64>()
+            } else {
+                tensor
+                    .elements()
+                    .iter()
+                    .map(|element| element.as_f64().unwrap_or(f64::NAN))
+                    .sum::<f64>()
+            };
             Ok(Value::Num(NumVal::float(
                 total / count.max(1) as f64,
                 tensor.dim.clone(),
@@ -3711,7 +3756,9 @@ fn call_inner(
             }
             let entries = tensor_entries(&points).map_err(|error| error.at(span))?;
             let probabilities =
-                rssn::kernels::par::map_slice(&entries, 4096, |point| distribution.cdf(*point));
+                aevia_rssn::par_map_f64_slice(&entries, 4096, interp.execution_mode(), |point| {
+                    distribution.cdf(point)
+                });
             // The kernel checks the parameters even at negative infinity.
             if probabilities.iter().any(|value| value.is_nan())
                 || (entries.is_empty() && distribution.cdf(f64::NEG_INFINITY).is_nan())
@@ -6795,7 +6842,10 @@ fn gif_animation_from_value(value: &Value) -> Result<rssn::io::GifAnimation, Str
         frames.push(rssn::io::GifFrame {
             width,
             height,
+            left: 0,
+            top: 0,
             delay_cs,
+            dispose: rssn::io::GifDisposal::Any,
             rgba,
         });
     }
@@ -6803,6 +6853,7 @@ fn gif_animation_from_value(value: &Value) -> Result<rssn::io::GifAnimation, Str
         width,
         height,
         loop_count,
+        comment: None,
         frames,
     })
 }
@@ -9662,18 +9713,83 @@ fn tuple(items: Vec<Value>) -> Value {
 ///
 /// The arithmetic is the same expression the boxed loop used, so a dense
 /// tensor and its boxed mirror produce the same bits.
-fn norm_of(
+fn dense_builtin_map(
+    function: &Value,
+    tensor: &TensorData,
+    mode: aevia_rssn::execution::ExecutionMode,
+) -> Option<Value> {
+    let Value::Ctor(ctor) = function else {
+        return None;
+    };
+    if ctor.arity != usize::MAX || !ctor.args.is_empty() || tensor.display.is_some() {
+        return None;
+    }
+    let values = tensor.dense_flat()?;
+    if values.is_empty() {
+        return None;
+    }
+    const GRAIN: usize = 16_384;
+    if ctor.name == "abs" {
+        let out = aevia_rssn::par_map_f64_slice(&values, GRAIN, mode, f64::abs);
+        return Some(float_tensor(tensor.shape.clone(), out, tensor.dim.clone()));
+    }
+    if !tensor.dim.is_one() {
+        return None;
+    }
+    let op: fn(f64) -> f64 = match ctor.name.as_str() {
+        | "sin" => f64::sin,
+        | "cos" => f64::cos,
+        | "tan" => f64::tan,
+        | "sinh" => f64::sinh,
+        | "cosh" => f64::cosh,
+        | "tanh" => f64::tanh,
+        | "atan" => f64::atan,
+        | "exp" => f64::exp,
+        | "cbrt" => f64::cbrt,
+        | "sqrt" => {
+            if !values.iter().all(|v| v.is_finite() && *v >= 0.0) {
+                return None;
+            }
+            f64::sqrt
+        },
+        | "ln" => {
+            if !values.iter().all(|v| v.is_finite() && *v > 0.0) {
+                return None;
+            }
+            f64::ln
+        },
+        | "log10" => {
+            if !values.iter().all(|v| v.is_finite() && *v > 0.0) {
+                return None;
+            }
+            f64::log10
+        },
+        | "log2" => {
+            if !values.iter().all(|v| v.is_finite() && *v > 0.0) {
+                return None;
+            }
+            f64::log2
+        },
+        | _ => return None,
+    };
+    if !matches!(ctor.name.as_str(), "sqrt" | "ln" | "log10" | "log2")
+        && !values.iter().all(|v| v.is_finite())
+    {
+        return None;
+    }
+    let out = aevia_rssn::par_map_f64_slice(&values, GRAIN, mode, op);
+    Some(float_tensor(tensor.shape.clone(), out, Dim::one()))
+}
+
+fn norm_of_in_mode(
     values: &[f64],
     order: i64,
+    mode: aevia_rssn::execution::ExecutionMode,
 ) -> f64 {
     match order {
-        | 1 => values.iter().copied().map(f64::abs).sum::<f64>(),
-        | i64::MAX => {
-            values
-                .iter()
-                .fold(0.0_f64, |acc, value| acc.max(value.abs()))
-        },
-        | _ => values.iter().map(|value| value * value).sum::<f64>().sqrt(),
+        | 1 => aevia_rssn::simd::l1_norm_f64(values),
+        | i64::MAX => aevia_rssn::simd::linf_norm_f64(values),
+        | _ => aevia_rssn::par_norm2_f64_in_mode(values, mode),
     }
 }
 
@@ -10776,4 +10892,140 @@ fn direct_approx(
     value
         .is_finite()
         .then(|| ok(Value::Num(NumVal::float(value, dim))))
+}
+
+#[cfg(test)]
+mod dense_and_execution_upgrade_tests {
+    use super::*;
+
+    fn float_val(x: f64) -> Value {
+        Value::Num(NumVal::float(x, Dim::one()))
+    }
+
+    #[test]
+    fn normalize_dense_and_view_paths_match_boxed_reference() {
+        let checked = aevia_types::CheckedModule::default();
+        let mut interp = Interp::new(&checked);
+        let span = Span::default();
+
+        let dense = Value::Tensor(Rc::new(TensorData::new(
+            vec![3],
+            Storage::Dense(Rc::new(vec![3.0, 4.0, 12.0])),
+            Dim::one(),
+            None,
+        )));
+        let boxed = Value::Tensor(Rc::new(TensorData::new(
+            vec![3],
+            Storage::Boxed(vec![float_val(3.0), float_val(4.0), float_val(12.0)]),
+            Dim::one(),
+            None,
+        )));
+        let norm_dense = call(&mut interp, "normalize", vec![dense], span).unwrap();
+        let norm_boxed = call(&mut interp, "normalize", vec![boxed], span).unwrap();
+        let Value::Tensor(nd) = norm_dense else {
+            panic!("expected tensor");
+        };
+        let Value::Tensor(nb) = norm_boxed else {
+            panic!("expected tensor");
+        };
+        assert_eq!(nd.dense(), nb.dense());
+
+        let matrix = TensorData::new(
+            vec![2, 2],
+            Storage::Dense(Rc::new(vec![1.0, 2.0, 3.0, 4.0])),
+            Dim::one(),
+            None,
+        );
+        let view = Value::Tensor(Rc::new(matrix.transposed_view().unwrap()));
+        let Value::Tensor(norm_view) = call(&mut interp, "normalize", vec![view], span).unwrap()
+        else {
+            panic!("expected tensor");
+        };
+        assert_eq!(norm_view.shape, [2, 2]);
+        assert!(matches!(norm_view.storage, Storage::Dense(_)));
+
+        let empty = Value::Tensor(Rc::new(TensorData::new(
+            vec![0],
+            Storage::Dense(Rc::new(Vec::new())),
+            Dim::one(),
+            None,
+        )));
+        let Value::Tensor(norm_empty) = call(&mut interp, "normalize", vec![empty], span).unwrap()
+        else {
+            panic!("expected tensor");
+        };
+        assert_eq!(norm_empty.dense(), Some([].as_slice()));
+    }
+
+    #[test]
+    fn flatten_and_centroid_preserve_dense_storage_and_values() {
+        let checked = aevia_types::CheckedModule::default();
+        let mut interp = Interp::new(&checked);
+        let span = Span::default();
+
+        let buf = Rc::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        let matrix = Value::Tensor(Rc::new(TensorData::new(
+            vec![2, 3],
+            Storage::Dense(Rc::clone(&buf)),
+            Dim::one(),
+            None,
+        )));
+        let Value::Tensor(flat) = call(&mut interp, "flatten", vec![matrix.clone()], span).unwrap()
+        else {
+            panic!("expected tensor");
+        };
+        assert_eq!(flat.shape, [6]);
+        let Storage::Dense(flat_buf) = &flat.storage else {
+            panic!("expected shared Dense buffer");
+        };
+        assert!(Rc::ptr_eq(&buf, flat_buf));
+
+        let cent_dense = call(&mut interp, "centroid", vec![matrix], span).unwrap();
+        let boxed = Value::Tensor(Rc::new(TensorData::new(
+            vec![2, 3],
+            Storage::Boxed((1..=6).map(|i| float_val(f64::from(i))).collect()),
+            Dim::one(),
+            None,
+        )));
+        let cent_boxed = call(&mut interp, "centroid", vec![boxed], span).unwrap();
+        assert_eq!(cent_dense.as_f64(), cent_boxed.as_f64());
+        assert_eq!(cent_dense.as_f64(), Some(3.5));
+    }
+
+    #[test]
+    fn cdf_batch_matches_under_serial_and_parallel_job_budgets() {
+        let checked = aevia_types::CheckedModule::default();
+        let mut interp = Interp::new(&checked);
+        let span = Span::default();
+        let mut fields = IndexMap::new();
+        fields.insert("mu".to_string(), float_val(0.0));
+        fields.insert("sigma".to_string(), float_val(1.0));
+        let dist = Value::Record(Rc::new(RecordValue { fields }));
+        let points = Value::Tensor(Rc::new(TensorData::new(
+            vec![5000],
+            Storage::Dense(Rc::new(
+                (0..5000).map(|i| (f64::from(i) - 2500.0) * 0.002).collect(),
+            )),
+            Dim::one(),
+            None,
+        )));
+
+        interp.set_jobs(1);
+        let Value::Tensor(serial) = call(
+            &mut interp,
+            "cdf_batch",
+            vec![dist.clone(), points.clone()],
+            span,
+        )
+        .unwrap() else {
+            panic!("expected tensor");
+        };
+        interp.set_jobs(2);
+        let Value::Tensor(parallel) =
+            call(&mut interp, "cdf_batch", vec![dist, points], span).unwrap()
+        else {
+            panic!("expected tensor");
+        };
+        assert_eq!(serial.dense(), parallel.dense());
+    }
 }

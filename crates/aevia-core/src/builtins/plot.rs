@@ -1141,7 +1141,10 @@ fn render_plot_rgba_frame(
     Ok(GifFrame {
         width: WIDTH,
         height: HEIGHT,
+        left: 0,
+        top: 0,
         delay_cs,
+        dispose: rssn::io::GifDisposal::Any,
         rgba,
     })
 }
@@ -1191,6 +1194,7 @@ pub(super) fn render_animation(
         width: WIDTH,
         height: HEIGHT,
         loop_count: 0,
+        comment: None,
         frames,
     })
 }

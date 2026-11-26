@@ -3201,7 +3201,9 @@ impl Interp {
                 // §9.13: a dense buffer of floats and a float scalar stay in
                 // the buffer. Anything that would promote to `Real` falls
                 // through to the boxed loop.
-                if let Some(value) = tensor.dense_scalar(op, num, flipped) {
+                if let Some(value) =
+                    tensor.dense_scalar_in_mode(op, num, flipped, self.execution_mode())
+                {
                     return Ok(value);
                 }
                 let mut elements = Vec::with_capacity(tensor.storage.len());
@@ -3820,7 +3822,7 @@ impl Interp {
         // §9.13: two dense operands of the same shape are one `f64` loop.
         // Broadcasting, mixed storage and empty buffers stay on the boxed
         // path, which is the reference for the result.
-        if let Some(value) = left.dense_binary(op, right) {
+        if let Some(value) = left.dense_binary_in_mode(op, right, self.execution_mode()) {
             return Ok(value);
         }
         if left.shape.len() != right.shape.len() {
@@ -3898,7 +3900,7 @@ impl Interp {
         let (Value::Tensor(a), Value::Tensor(b)) = (left, right) else {
             return Err(EvalError::new("E0302", "`@` expects two tensors").at(span));
         };
-        if let Some(value) = a.dense_matmul(b) {
+        if let Some(value) = a.dense_matmul_in_mode(b, self.execution_mode()) {
             return Ok(value);
         }
         let (rows, inner, other_inner, cols, output_shape, label) =

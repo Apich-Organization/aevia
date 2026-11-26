@@ -28,11 +28,63 @@ use rssn::kernel::value::SessionId;
 use rssn::kernel::value::TensorValue;
 use rssn::kernel::value::TermRef;
 use rssn::kernel::value::Value;
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-/// An argument to a pinned native call, optionally borrowing a host buffer.
+const SCRATCH_VALUE_POOL_CAP: usize = 8;
+const SCRATCH_VALUE_ELEMS_CAP: usize = 256;
+
+std::thread_local! {
+    static VALUE_SCRATCH_POOL: RefCell<Vec<Vec<Value>>> = const { RefCell::new(Vec::new()) };
+}
+
+struct ValueScratchGuard(Vec<Value>);
+
+impl ValueScratchGuard {
+    fn with_capacity(min_capacity: usize) -> Self {
+        let mut buf = VALUE_SCRATCH_POOL
+            .try_with(|pool| pool.try_borrow_mut().ok().and_then(|mut guard| guard.pop()))
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        buf.clear();
+        buf.reserve(min_capacity);
+        Self(buf)
+    }
+}
+
+impl Drop for ValueScratchGuard {
+    fn drop(&mut self) {
+        let mut buf = std::mem::take(&mut self.0);
+        buf.clear();
+        if buf.capacity() > 0 && buf.capacity() <= SCRATCH_VALUE_ELEMS_CAP {
+            let _ = VALUE_SCRATCH_POOL.try_with(|pool| {
+                if let Ok(mut guard) = pool.try_borrow_mut()
+                    && guard.len() < SCRATCH_VALUE_POOL_CAP
+                {
+                    guard.push(buf);
+                }
+            });
+        }
+    }
+}
+
+fn coherent_tensor_len(
+    shape: &[usize],
+    len: usize,
+) -> bool {
+    let Some(expected) = shape
+        .iter()
+        .try_fold(1_usize, |acc, &extent| acc.checked_mul(extent))
+    else {
+        return false;
+    };
+    len != 0 && expected == len
+}
+
+/// An argument to a pinned or dynamic native call, optionally borrowing a host buffer.
 pub struct NativeArgument<'a>(NativeArgumentData<'a>);
 
 #[allow(
@@ -41,7 +93,14 @@ pub struct NativeArgument<'a>(NativeArgumentData<'a>);
 )]
 enum NativeArgumentData<'a> {
     Value(Val),
-    DenseFloat { shape: &'a [usize], data: &'a [f64] },
+    DenseFloat {
+        shape: &'a [usize],
+        data: Cow<'a, [f64]>,
+    },
+    DenseBool {
+        shape: &'a [usize],
+        data: &'a [bool],
+    },
 }
 
 impl<'a> NativeArgument<'a> {
@@ -54,17 +113,50 @@ impl<'a> NativeArgument<'a> {
         shape: &'a [usize],
         data: &'a [f64],
     ) -> Option<Self> {
-        let len = shape
-            .iter()
-            .try_fold(1_usize, |len, &extent| len.checked_mul(extent))?;
-        (!data.is_empty() && len == data.len())
+        Self::dense_float_cow(shape, Cow::Borrowed(data))
+    }
+
+    /// Passes a nonempty, coherent Float tensor (borrowed contiguous slice or
+    /// logical row-major buffer) without building an intermediate `Val::Tensor`.
+    #[must_use]
+    pub fn dense_float_cow(
+        shape: &'a [usize],
+        data: Cow<'a, [f64]>,
+    ) -> Option<Self> {
+        coherent_tensor_len(shape, data.len())
             .then_some(Self(NativeArgumentData::DenseFloat { shape, data }))
+    }
+
+    /// Borrows a nonempty, coherent Bool tensor without building an
+    /// intermediate `Val::Tensor`.
+    #[must_use]
+    pub fn dense_bool(
+        shape: &'a [usize],
+        data: &'a [bool],
+    ) -> Option<Self> {
+        coherent_tensor_len(shape, data.len())
+            .then_some(Self(NativeArgumentData::DenseBool { shape, data }))
     }
 }
 
 impl From<Val> for NativeArgument<'_> {
     fn from(value: Val) -> Self {
         Self(NativeArgumentData::Value(value))
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ArgumentSlice<'b, 'a> {
+    Neutral(&'b [Val]),
+    Native(&'b [NativeArgument<'a>]),
+}
+
+impl ArgumentSlice<'_, '_> {
+    const fn len(self) -> usize {
+        match self {
+            | Self::Neutral(args) => args.len(),
+            | Self::Native(args) => args.len(),
+        }
     }
 }
 
@@ -505,6 +597,106 @@ fn ordinary_input_schema_proves(
         | _ => false,
     }
 }
+#[allow(
+    clippy::single_call_fn,
+    clippy::cognitive_complexity,
+    reason = "validates ordinary callback arguments including native dense Float/Bool tensors in O(1)"
+)]
+fn validate_ordinary_callback_arg(
+    arg: &NativeArgument<'_>,
+    witness: &crate::witness::DimensionWitness,
+    sig: &crate::SigType,
+) -> Result<(), KernelError> {
+    use crate::SigType as S;
+    use crate::witness::DimensionWitness as W;
+    let missing = || {
+        KernelError::new(
+            "E1001",
+            "callback input lacks matching type or dimension evidence",
+        )
+    };
+    match &arg.0 {
+        | NativeArgumentData::Value(value) => validate_ordinary_callback_input(value, witness, sig),
+        | NativeArgumentData::DenseFloat { shape, data } => {
+            match sig {
+                | S::Dyn => Ok(()),
+                | S::Tensor {
+                    rank: Some(rank),
+                    shape: expected_shape,
+                    elem,
+                } => {
+                    let W::Tensor {
+                        dimension, elements, ..
+                    } = witness
+                    else {
+                        return Err(missing());
+                    };
+                    if shape.len() != *rank
+                        || expected_shape
+                            .as_ref()
+                            .is_some_and(|expected| expected != shape)
+                    {
+                        return Err(missing());
+                    }
+                    if matches!(elem.as_ref(), S::Dyn) {
+                        return if elements.is_empty() || elements.len() == data.len() {
+                            Ok(())
+                        } else {
+                            Err(missing())
+                        };
+                    }
+                    let valid_float_elem = match elem.as_ref() {
+                        | S::Float => true,
+                        | S::Dim(inner, _) => matches!(inner.as_ref(), S::Float),
+                        | _ => false,
+                    };
+                    if !valid_float_elem {
+                        return Err(missing());
+                    }
+                    let dim = dimension.as_ref().ok_or_else(missing)?;
+                    let proof = W::Scalar(dim.clone());
+                    if !ordinary_input_dimension(elem, &proof) {
+                        return Err(missing());
+                    }
+                    if !elements.is_empty()
+                        && (elements.len() != data.len()
+                            || elements.iter().any(|item| item != &proof))
+                    {
+                        return Err(missing());
+                    }
+                    Ok(())
+                },
+                | _ => Err(missing()),
+            }
+        },
+        | NativeArgumentData::DenseBool { shape, data } => {
+            match sig {
+                | S::Dyn => Ok(()),
+                | S::Tensor {
+                    rank: Some(rank),
+                    shape: expected_shape,
+                    elem,
+                } => {
+                    let W::Tensor { elements, .. } = witness else {
+                        return Err(missing());
+                    };
+                    if shape.len() != *rank
+                        || expected_shape
+                            .as_ref()
+                            .is_some_and(|expected| expected != shape)
+                        || !matches!(elem.as_ref(), S::Bool | S::Dyn)
+                        || (!elements.is_empty() && elements.len() != data.len())
+                    {
+                        return Err(missing());
+                    }
+                    Ok(())
+                },
+                | _ => Err(missing()),
+            }
+        },
+    }
+}
+
 #[allow(
     clippy::too_many_lines,
     reason = "Checks each concrete input shape against its runtime witness"
@@ -1202,14 +1394,90 @@ impl Kernel {
     ///
     /// Returns a bridge error if the operator is unavailable, the arguments
     /// or dimension witnesses fail validation, or the kernel call fails.
-    #[allow(
-        clippy::too_many_lines,
-        reason = "Keeps witness validation, plugin lookup and dispatch in call order"
-    )]
     pub fn call_with_witnesses(
         &self,
         name: &str,
         args: &[Val],
+        witnesses: &[crate::witness::DimensionWitness],
+    ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
+        self.call_with_witnesses_inner(name, ArgumentSlice::Neutral(args), witnesses)
+    }
+
+    /// Calls the dynamic ABI with checked, optionally borrowed native inputs
+    /// while preserving explicit input and output witnesses.
+    ///
+    /// # Errors
+    ///
+    /// Reports the same capability, witness, conversion, and kernel errors as
+    /// [`Self::call_with_witnesses`].
+    pub fn call_with_native_arguments(
+        &self,
+        name: &str,
+        args: &[NativeArgument<'_>],
+        witnesses: &[crate::witness::DimensionWitness],
+    ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
+        self.call_with_witnesses_inner(name, ArgumentSlice::Native(args), witnesses)
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "shared dynamic conversion path for both neutral Val and native dense buffers"
+    )]
+    fn convert_native_argument(
+        &self,
+        name: &str,
+        arg: &NativeArgument<'_>,
+    ) -> Result<Value, KernelError> {
+        match &arg.0 {
+            | NativeArgumentData::Value(value) => self.one(name, value),
+            | NativeArgumentData::DenseFloat { shape, data } => {
+                Ok(Value::Tensor(TensorValue {
+                    shape: shape.to_vec(),
+                    elem: TypeExpr::Float,
+                    data: data.iter().copied().map(Value::Float).collect(),
+                }))
+            },
+            | NativeArgumentData::DenseBool { shape, data } => {
+                Ok(Value::Tensor(TensorValue {
+                    shape: shape.to_vec(),
+                    elem: TypeExpr::Bool,
+                    data: data.iter().copied().map(Value::Bool).collect(),
+                }))
+            },
+        }
+    }
+
+    fn convert_slice_into(
+        &self,
+        name: &str,
+        args: ArgumentSlice<'_, '_>,
+        out: &mut Vec<Value>,
+    ) -> Result<(), KernelError> {
+        out.clear();
+        out.reserve(args.len());
+        match args {
+            | ArgumentSlice::Neutral(vals) => {
+                for val in vals {
+                    out.push(self.one(name, val)?);
+                }
+            },
+            | ArgumentSlice::Native(native_args) => {
+                for arg in native_args {
+                    out.push(self.convert_native_argument(name, arg)?);
+                }
+            },
+        }
+        Ok(())
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keeps witness validation, plugin lookup and dispatch in call order"
+    )]
+    fn call_with_witnesses_inner(
+        &self,
+        name: &str,
+        args: ArgumentSlice<'_, '_>,
         witnesses: &[crate::witness::DimensionWitness],
     ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
         if args.len() != witnesses.len() {
@@ -1225,8 +1493,16 @@ impl Kernel {
             // plugin registered in *this session* afterwards (§13.5.2) is
             // still callable by name; it carries no dimension witness.
             if self.session.manifest().ops.iter().any(|op| op.name == name) {
-                let value = self.call(name, args)?;
-                return Ok((value, crate::witness::DimensionWitness::Unknown));
+                let mut converted = ValueScratchGuard::with_capacity(args.len());
+                self.convert_slice_into(name, args, &mut converted.0)?;
+                let value = self
+                    .session
+                    .call_value(name, &converted.0, &CallCtx::new())
+                    .map_err(|error| from_op_error(&error).at_operator(name))?;
+                return Ok((
+                    Val::from_rssn(&value, self.id)?,
+                    crate::witness::DimensionWitness::Unknown,
+                ));
             }
             return Err(KernelError::new(
                 "E1003",
@@ -1234,11 +1510,12 @@ impl Kernel {
             ));
         };
         registry.capabilities.require_op(entry)?;
-        let mut converted = self.convert(name, args)?;
+        let mut converted = ValueScratchGuard::with_capacity(args.len());
+        self.convert_slice_into(name, args, &mut converted.0)?;
         if entry.source.is_exact()
             && let [signature] = entry.signatures.as_slice()
         {
-            for (index, (value, witness)) in converted.iter_mut().zip(witnesses).enumerate() {
+            for (index, (value, witness)) in converted.0.iter_mut().zip(witnesses).enumerate() {
                 if let Some(param) = signature
                     .params
                     .get(index)
@@ -1407,7 +1684,7 @@ impl Kernel {
         }
         let raw = self
             .session
-            .call_value(name, &converted, &CallCtx::new())
+            .call_value(name, &converted.0, &CallCtx::new())
             .map_err(|error| from_op_error(&error).at_operator(name))?;
         self.refuse_declined(name, &raw)?;
         let trusted = (entry.source.is_exact() && entry.is_value_native())
@@ -1602,9 +1879,7 @@ impl Kernel {
         args: &[Val],
         witnesses: &[crate::witness::DimensionWitness],
     ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
-        self.call_key_attaching_witnesses(key, args.len(), witnesses, || {
-            self.convert(&key.name, args)
-        })
+        self.call_key_attaching_witnesses(key, ArgumentSlice::Neutral(args), witnesses)
     }
 
     /// Calls the pinned native overload with checked, optionally borrowed input.
@@ -1619,32 +1894,16 @@ impl Kernel {
         args: &[NativeArgument<'_>],
         witnesses: &[crate::witness::DimensionWitness],
     ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
-        self.call_key_attaching_witnesses(key, args.len(), witnesses, || {
-            args.iter()
-                .map(|arg| {
-                    match &arg.0 {
-                        | NativeArgumentData::Value(value) => self.one(&key.name, value),
-                        | NativeArgumentData::DenseFloat { shape, data } => {
-                            Ok(Value::Tensor(TensorValue {
-                                shape: shape.to_vec(),
-                                elem: TypeExpr::Float,
-                                data: data.iter().copied().map(Value::Float).collect(),
-                            }))
-                        },
-                    }
-                })
-                .collect()
-        })
+        self.call_key_attaching_witnesses(key, ArgumentSlice::Native(args), witnesses)
     }
 
     fn call_key_attaching_witnesses(
         &self,
         key: &OpKey,
-        arg_count: usize,
+        args: ArgumentSlice<'_, '_>,
         witnesses: &[crate::witness::DimensionWitness],
-        convert: impl FnOnce() -> Result<Vec<Value>, KernelError>,
     ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
-        if arg_count != witnesses.len() {
+        if args.len() != witnesses.len() {
             return Err(KernelError::new(
                 "E0899",
                 "kernel argument witness count differs from argument count",
@@ -1661,8 +1920,9 @@ impl Kernel {
             .signatures
             .get(index)
             .ok_or_else(|| KernelError::new("E0899", "kernel signature is missing"))?;
-        let mut converted = convert()?;
-        for (index, (value, witness)) in converted.iter_mut().zip(witnesses).enumerate() {
+        let mut converted = ValueScratchGuard::with_capacity(args.len());
+        self.convert_slice_into(&key.name, args, &mut converted.0)?;
+        for (index, (value, witness)) in converted.0.iter_mut().zip(witnesses).enumerate() {
             if let Some(param) = signature
                 .params
                 .get(index)
@@ -1673,7 +1933,7 @@ impl Kernel {
         }
         let raw = self
             .session
-            .call_key(key, &converted, &CallCtx::new())
+            .call_key(key, &converted.0, &CallCtx::new())
             .map_err(|error| from_op_error(&error).at_operator(&key.name))?;
         self.refuse_declined(&key.name, &raw)?;
         let witness = crate::witness::extract(&raw, entry.source.is_exact());
@@ -1725,7 +1985,36 @@ impl Kernel {
         witnesses: &[crate::witness::DimensionWitness],
         callbacks: &[Arc<dyn BridgeCallback>],
     ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
-        self.call_ho_scoped_inner(name, None, args, witnesses, callbacks)
+        self.call_ho_scoped_inner(
+            name,
+            None,
+            ArgumentSlice::Neutral(args),
+            witnesses,
+            callbacks,
+        )
+    }
+
+    /// Calls a higher-order operator with explicitly scoped callbacks,
+    /// physical input/output witnesses, and optionally borrowed native buffers.
+    ///
+    /// # Errors
+    ///
+    /// Reports the same capability, witness, callback, and kernel errors as
+    /// [`Self::call_ho_scoped`].
+    pub fn call_ho_scoped_native(
+        &self,
+        name: &str,
+        args: &[NativeArgument<'_>],
+        witnesses: &[crate::witness::DimensionWitness],
+        callbacks: &[Arc<dyn BridgeCallback>],
+    ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
+        self.call_ho_scoped_inner(
+            name,
+            None,
+            ArgumentSlice::Native(args),
+            witnesses,
+            callbacks,
+        )
     }
 
     /// Calls exactly the manifest-pinned higher-order overload with scoped callbacks.
@@ -1739,14 +2028,47 @@ impl Kernel {
         witnesses: &[crate::witness::DimensionWitness],
         callbacks: &[Arc<dyn BridgeCallback>],
     ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
-        self.call_ho_scoped_inner(&key.name, Some(key), args, witnesses, callbacks)
+        self.call_ho_scoped_inner(
+            &key.name,
+            Some(key),
+            ArgumentSlice::Neutral(args),
+            witnesses,
+            callbacks,
+        )
     }
 
+    /// Calls exactly the manifest-pinned higher-order overload with scoped
+    /// callbacks and optionally borrowed native buffers.
+    ///
+    /// # Errors
+    ///
+    /// Reports the same stale-key, witness, callback, or kernel execution errors
+    /// as [`Self::call_ho_scoped_key`].
+    pub fn call_ho_scoped_key_native(
+        &self,
+        key: &OpKey,
+        args: &[NativeArgument<'_>],
+        witnesses: &[crate::witness::DimensionWitness],
+        callbacks: &[Arc<dyn BridgeCallback>],
+    ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
+        self.call_ho_scoped_inner(
+            &key.name,
+            Some(key),
+            ArgumentSlice::Native(args),
+            witnesses,
+            callbacks,
+        )
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps higher-order callback registration, argument validation, and kernel invocation in call order"
+    )]
     fn call_ho_scoped_inner(
         &self,
         name: &str,
         key: Option<&OpKey>,
-        args: &[Val],
+        args: ArgumentSlice<'_, '_>,
         witnesses: &[crate::witness::DimensionWitness],
         callbacks: &[Arc<dyn BridgeCallback>],
     ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
@@ -1789,11 +2111,23 @@ impl Kernel {
             )
             .at_operator(name));
         }
-        for ((value, witness), param) in args.iter().zip(witnesses).zip(ordinary.clone()) {
-            validate_ordinary_callback_input(value, witness, param)?;
+        match args {
+            | ArgumentSlice::Neutral(vals) => {
+                for ((value, witness), param) in vals.iter().zip(witnesses).zip(ordinary.clone()) {
+                    validate_ordinary_callback_input(value, witness, param)?;
+                }
+            },
+            | ArgumentSlice::Native(native_args) => {
+                for ((arg, witness), param) in
+                    native_args.iter().zip(witnesses).zip(ordinary.clone())
+                {
+                    validate_ordinary_callback_arg(arg, witness, param)?;
+                }
+            },
         }
-        let mut converted = self.convert(name, args)?;
-        for ((value, witness), param) in converted.iter_mut().zip(witnesses).zip(ordinary) {
+        let mut converted = ValueScratchGuard::with_capacity(args.len());
+        self.convert_slice_into(name, args, &mut converted.0)?;
+        for ((value, witness), param) in converted.0.iter_mut().zip(witnesses).zip(ordinary) {
             crate::witness::attach(value, witness, param)?;
         }
         let mut ctx = CallCtx::new();
@@ -1818,28 +2152,34 @@ impl Kernel {
                     .map_err(|e| from_op_error(&e))?,
             );
         }
-        // The kernel's host call_ho API appends handles. Use the exact
-        // manifest positions here so leading and interleaved callbacks work.
-        let mut values = converted.into_iter();
-        let mut handles = handles.into_iter();
-        let combined = signature
-            .params
-            .iter()
-            .map(|param| {
-                if matches!(param, crate::SigType::Func(..)) {
+        let raw = if handles.is_empty() {
+            key.map_or_else(
+                || self.session.call_value(name, &converted.0, &ctx),
+                |key| self.session.call_key(key, &converted.0, &ctx),
+            )
+        } else {
+            // The kernel's host call_ho API appends handles. Use the exact
+            // manifest positions here so leading and interleaved callbacks work.
+            let mut values = converted.0.drain(..);
+            let mut handles = handles.into_iter();
+            let mut combined = ValueScratchGuard::with_capacity(signature.params.len());
+            for param in &signature.params {
+                let next = if matches!(param, crate::SigType::Func(..)) {
                     handles.next().map(Value::Function)
                 } else {
                     values.next()
-                }
-            })
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| KernelError::new("E0899", "missing validated kernel argument"))?;
-        let raw = key
-            .map_or_else(
-                || self.session.call_value(name, &combined, &ctx),
-                |key| self.session.call_key(key, &combined, &ctx),
+                };
+                let item = next.ok_or_else(|| {
+                    KernelError::new("E0899", "missing validated kernel argument")
+                })?;
+                combined.0.push(item);
+            }
+            key.map_or_else(
+                || self.session.call_value(name, &combined.0, &ctx),
+                |key| self.session.call_key(key, &combined.0, &ctx),
             )
-            .map_err(|e| from_op_error(&e).at_operator(name))?;
+        }
+        .map_err(|e| from_op_error(&e).at_operator(name))?;
         let witness = crate::witness::extract(&raw, true);
         Ok((Val::from_rssn(&raw, self.id)?, witness))
     }
@@ -2524,7 +2864,7 @@ mod graph_result_witness_tests {
             .call_key_with_witnesses(key, &[neutral], std::slice::from_ref(&proof))
             .unwrap();
         let new = kernel
-            .call_key_with_native_arguments(key, &[native], &[proof])
+            .call_key_with_native_arguments(key, &[native], std::slice::from_ref(&proof))
             .unwrap();
         assert_eq!(old, new);
         assert!(NativeArgument::dense_float(&[3], &raw).is_none());
@@ -2538,6 +2878,71 @@ mod graph_result_witness_tests {
             )
             .unwrap_err();
         assert_eq!(no_witness.code, "E0899");
+
+        // Dynamic native call and Cow::Owned buffer preserve exact value & witness.
+        let owned =
+            NativeArgument::dense_float_cow(&shape, std::borrow::Cow::Owned(raw.to_vec())).unwrap();
+        let dyn_native = kernel
+            .call_with_native_arguments("num_l1_norm", &[owned], std::slice::from_ref(&proof))
+            .unwrap();
+        assert_eq!(old, dyn_native);
+
+        // Consecutive calls reuse TLS scratch without changing results.
+        for _ in 0..4 {
+            let borrowed = NativeArgument::dense_float(&shape, &raw).unwrap();
+            let repeated = kernel
+                .call_with_native_arguments(
+                    "num_l1_norm",
+                    &[borrowed],
+                    std::slice::from_ref(&proof),
+                )
+                .unwrap();
+            assert_eq!(old, repeated);
+        }
+    }
+
+    #[test]
+    fn callback_validation_accepts_dense_float_and_bool_native_arguments() {
+        use crate::SigType as S;
+        let floats = [1.5, -2.5];
+        let shape = [2];
+        let proof = W::Tensor {
+            dimension: Some(Dim::base("Length")),
+            element: None,
+            element_repr: Some(S::Float),
+            elements: Vec::new(),
+        };
+        let float_sig = S::Tensor {
+            rank: Some(1),
+            shape: Some(vec![2]),
+            elem: Box::new(S::Dim(Box::new(S::Float), Dim::base("Length"))),
+        };
+        let float_arg = NativeArgument::dense_float(&shape, &floats).unwrap();
+        assert!(super::validate_ordinary_callback_arg(&float_arg, &proof, &float_sig).is_ok());
+
+        let int_sig = S::Tensor {
+            rank: Some(1),
+            shape: Some(vec![2]),
+            elem: Box::new(S::Int),
+        };
+        assert!(super::validate_ordinary_callback_arg(&float_arg, &proof, &int_sig).is_err());
+
+        let bools = [true, false];
+        let bool_arg = NativeArgument::dense_bool(&shape, &bools).unwrap();
+        assert!(NativeArgument::dense_bool(&[3], &bools).is_none());
+        let bool_proof = W::Tensor {
+            dimension: Some(Dim::one()),
+            element: None,
+            element_repr: Some(S::Bool),
+            elements: Vec::new(),
+        };
+        let bool_sig = S::Tensor {
+            rank: Some(1),
+            shape: Some(vec![2]),
+            elem: Box::new(S::Bool),
+        };
+        assert!(super::validate_ordinary_callback_arg(&bool_arg, &bool_proof, &bool_sig).is_ok());
+        assert!(super::validate_ordinary_callback_arg(&bool_arg, &bool_proof, &float_sig).is_err());
     }
 
     #[test]

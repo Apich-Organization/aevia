@@ -1135,11 +1135,7 @@ pub(crate) fn pool(
 /// The number of worker threads to use when the host does not say.
 #[must_use]
 pub fn default_jobs() -> usize {
-    std::env::var("AEVIA_JOBS")
-        .ok()
-        .and_then(|text| text.parse().ok())
-        .unwrap_or_else(aevia_rssn::execution::default_cpu_threads)
-        .max(1)
+    aevia_rssn::default_worker_threads().clamp(1, rayon::max_num_threads())
 }
 
 /// Inputs below this size are mapped sequentially: the replica round trip
@@ -1309,8 +1305,18 @@ impl Interp {
         self.jobs = jobs.max(1);
     }
 
+    /// Effective execution mode for this interpreter's job budget, worker
+    /// nesting context, and host `rssn::execution` policy.
+    #[must_use]
+    pub(crate) fn execution_mode(&self) -> aevia_rssn::execution::ExecutionMode {
+        aevia_rssn::execution_mode_for_budget(self.jobs, self.on_worker)
+    }
+
     fn parallel_replica(&self) -> Option<Replica> {
-        if self.jobs <= 1 {
+        if matches!(
+            self.execution_mode(),
+            aevia_rssn::execution::ExecutionMode::Serial
+        ) {
             return None;
         }
         self.replica.clone()
@@ -2246,6 +2252,34 @@ mod tests {
         assert_eq!(
             crate::value::show(&Value::Tensor(restored)),
             crate::value::show(&value)
+        );
+    }
+
+    #[test]
+    fn execution_mode_and_default_jobs_honor_worker_budget_and_nesting() {
+        let jobs = default_jobs();
+        assert!((1..=rayon::max_num_threads()).contains(&jobs));
+
+        let mut interp = Interp::new(&CheckedModule::default());
+        interp.set_jobs(1);
+        assert_eq!(
+            interp.execution_mode(),
+            aevia_rssn::execution::ExecutionMode::Serial
+        );
+        assert!(interp.parallel_replica().is_none());
+
+        interp.set_jobs(4);
+        interp.on_worker = true;
+        assert_eq!(
+            interp.execution_mode(),
+            aevia_rssn::execution::ExecutionMode::Serial
+        );
+        assert!(interp.parallel_replica().is_none());
+
+        interp.on_worker = false;
+        assert_eq!(
+            interp.execution_mode(),
+            aevia_rssn::execution_mode_for_budget(4, false)
         );
     }
 }

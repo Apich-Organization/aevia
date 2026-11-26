@@ -126,6 +126,10 @@ fn real_entries<'a>(
 fn use_ambient_workers(interp: &Interp) -> bool {
     interp.on_worker
         && rayon::current_thread_index().is_some()
+        && !matches!(
+            aevia_rssn::execution::default_execution_mode(),
+            aevia_rssn::execution::ExecutionMode::Serial
+        )
         && (2..=interp.jobs).contains(&aevia_rssn::execution::cpu_threads())
 }
 
@@ -145,8 +149,12 @@ fn eliminate(
     const MIN_ACTIVE_ROWS: usize = 12;
     let work_items = rows.len().div_ceil(MIN_ROW_BATCH);
     let ambient = rows.len() >= MIN_PARALLEL_ORDER && use_ambient_workers(interp);
-    let parallel =
-        rows.len() >= MIN_PARALLEL_ORDER && (ambient || (interp.jobs > 1 && !interp.on_worker));
+    let parallel = rows.len() >= MIN_PARALLEL_ORDER
+        && (ambient
+            || !matches!(
+                interp.execution_mode(),
+                aevia_rssn::execution::ExecutionMode::Serial
+            ));
     let workers = OnceCell::new();
     let mut determinant = BigRational::one();
     for column in 0..rows.len() {

@@ -54,10 +54,104 @@ use aevia_rssn::SigType;
 use aevia_rssn::Val;
 use aevia_rssn::kernel::NativeArgument;
 use aevia_rssn::registry;
+use aevia_rssn::witness::DimensionWitness;
 use aevia_syntax::Span;
+use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::rc::Rc;
+
+const RSSN_SCRATCH_POOL_CAP: usize = 8;
+const RSSN_SCRATCH_ELEMS_CAP: usize = 128;
+
+std::thread_local! {
+    static WITNESS_SCRATCH_POOL: RefCell<Vec<Vec<DimensionWitness>>> = const { RefCell::new(Vec::new()) };
+    static VAL_SCRATCH_POOL: RefCell<Vec<Vec<Val>>> = const { RefCell::new(Vec::new()) };
+}
+
+struct WitnessScratchGuard(Vec<DimensionWitness>);
+
+impl WitnessScratchGuard {
+    fn with_capacity(min_capacity: usize) -> Self {
+        let mut buf = WITNESS_SCRATCH_POOL
+            .try_with(|pool| pool.try_borrow_mut().ok().and_then(|mut guard| guard.pop()))
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        buf.clear();
+        buf.reserve(min_capacity);
+        Self(buf)
+    }
+}
+
+impl Drop for WitnessScratchGuard {
+    fn drop(&mut self) {
+        let mut buf = std::mem::take(&mut self.0);
+        buf.clear();
+        if buf.capacity() > 0 && buf.capacity() <= RSSN_SCRATCH_ELEMS_CAP {
+            let _ = WITNESS_SCRATCH_POOL.try_with(|pool| {
+                if let Ok(mut guard) = pool.try_borrow_mut()
+                    && guard.len() < RSSN_SCRATCH_POOL_CAP
+                {
+                    guard.push(buf);
+                }
+            });
+        }
+    }
+}
+
+struct ValScratchGuard(Vec<Val>);
+
+impl ValScratchGuard {
+    fn with_capacity(min_capacity: usize) -> Self {
+        let mut buf = VAL_SCRATCH_POOL
+            .try_with(|pool| pool.try_borrow_mut().ok().and_then(|mut guard| guard.pop()))
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        buf.clear();
+        buf.reserve(min_capacity);
+        Self(buf)
+    }
+}
+
+impl Drop for ValScratchGuard {
+    fn drop(&mut self) {
+        let mut buf = std::mem::take(&mut self.0);
+        buf.clear();
+        if buf.capacity() > 0 && buf.capacity() <= RSSN_SCRATCH_ELEMS_CAP {
+            let _ = VAL_SCRATCH_POOL.try_with(|pool| {
+                if let Ok(mut guard) = pool.try_borrow_mut()
+                    && guard.len() < RSSN_SCRATCH_POOL_CAP
+                {
+                    guard.push(buf);
+                }
+            });
+        }
+    }
+}
+
+fn fill_host_witnesses(
+    values: &[Value],
+    out: &mut Vec<DimensionWitness>,
+) {
+    out.clear();
+    out.reserve(values.len());
+    out.extend(values.iter().map(host_dimension_witness));
+}
+
+fn fill_neutral_vals(
+    values: &[Value],
+    out: &mut Vec<Val>,
+) -> Result<(), EvalError> {
+    out.clear();
+    out.reserve(values.len());
+    for value in values {
+        out.push(bridge::to_val(value)?);
+    }
+    Ok(())
+}
 
 /// Calls `Rssn.<name>`.
 ///
@@ -422,12 +516,13 @@ pub(crate) fn call_operator_with_evidence(
     // Checked variadic callers pack the final argument as a rank-one list.
     // Flatten once so the bridge and dimension witnesses see the same inputs.
     if entry.is_variadic()
-        && let Some(last @ Value::Tensor(tensor)) = args.last()
-        && tensor.rank() == 1
+        && matches!(args.last(), Some(Value::Tensor(tensor)) if tensor.rank() == 1)
+        && let Some(last) = args.pop()
     {
-        let items = dynamic_arguments(Some(last), span)?;
-        let _ = args.pop();
-        args.extend(items);
+        match dynamic_arguments(Some(&last), span)? {
+            | Cow::Borrowed(items) => args.extend(items.iter().cloned()),
+            | Cow::Owned(items) => args.extend(items),
+        }
     }
     let converted = prepare_checked_arguments(&args, Some(entry))?;
     execute_checked(key, entry, &args, &converted, span, expected)
@@ -435,7 +530,30 @@ pub(crate) fn call_operator_with_evidence(
 
 enum PreparedArguments<'a> {
     Native(Vec<NativeArgument<'a>>),
-    Neutral(Vec<Val>),
+    Neutral(ValScratchGuard),
+}
+
+fn prepare_native_arguments(args: &[Value]) -> Result<Vec<NativeArgument<'_>>, EvalError> {
+    let mut converted = Vec::with_capacity(args.len());
+    for arg in args {
+        if let Value::Tensor(tensor) = arg {
+            if let Some(data) = tensor.dense_flat()
+                && let Some(borrowed) = NativeArgument::dense_float_cow(&tensor.shape, data)
+            {
+                converted.push(borrowed);
+                continue;
+            }
+            if let crate::value::Storage::Bool(items) = &tensor.storage
+                && tensor.checked_element_count() == Some(items.len())
+                && let Some(borrowed) = NativeArgument::dense_bool(&tensor.shape, items)
+            {
+                converted.push(borrowed);
+                continue;
+            }
+        }
+        converted.push(NativeArgument::from(bridge::to_val(arg)?));
+    }
+    Ok(converted)
 }
 
 fn prepare_checked_arguments<'a>(
@@ -443,25 +561,11 @@ fn prepare_checked_arguments<'a>(
     entry: Option<&OpEntry>,
 ) -> Result<PreparedArguments<'a>, EvalError> {
     if entry.is_some_and(|entry| entry.is_value_native() && entry.source.is_exact()) {
-        return args
-            .iter()
-            .map(|arg| {
-                if let Value::Tensor(tensor) = arg
-                    && let Some(data) = tensor.dense()
-                    && data.len() >= 256
-                    && let Some(borrowed) = NativeArgument::dense_float(&tensor.shape, data)
-                {
-                    return Ok(borrowed);
-                }
-                bridge::to_val(arg).map(NativeArgument::from)
-            })
-            .collect::<Result<_, _>>()
-            .map(PreparedArguments::Native);
+        return prepare_native_arguments(args).map(PreparedArguments::Native);
     }
-    args.iter()
-        .map(bridge::to_val)
-        .collect::<Result<_, _>>()
-        .map(PreparedArguments::Neutral)
+    let mut neutral = ValScratchGuard::with_capacity(args.len());
+    fill_neutral_vals(args, &mut neutral.0)?;
+    Ok(PreparedArguments::Neutral(neutral))
 }
 
 /// Executes a resolved overload on converted arguments.
@@ -486,13 +590,16 @@ fn execute_checked(
     let kernel = aevia_rssn::kernel();
     let (value, returned_witness) = match converted {
         | PreparedArguments::Native(converted) => {
-            let inputs: Vec<_> = args.iter().map(host_dimension_witness).collect();
+            let mut inputs = WitnessScratchGuard::with_capacity(args.len());
+            fill_host_witnesses(args, &mut inputs.0);
             kernel
-                .call_key_with_native_arguments(key, converted, &inputs)
+                .call_key_with_native_arguments(key, converted, &inputs.0)
                 .map(|(value, witness)| (value, Some(witness)))
         },
         | PreparedArguments::Neutral(converted) => {
-            kernel.call_key(key, converted).map(|value| (value, None))
+            kernel
+                .call_key(key, &converted.0)
+                .map(|value| (value, None))
         },
     }
     .map_err(|failure| bridge::error(&failure).at(span))?;
@@ -1658,10 +1765,10 @@ fn call_ho_with_interp(
         return call_ho(args, span);
     }
     let callbacks: Vec<_> = callbacks
-        .into_iter()
+        .iter()
         .map(|value| {
             match value {
-                | Value::Callback(callback) => Ok(callback),
+                | Value::Callback(callback) => Ok(callback.clone()),
                 | other => {
                     Err(EvalError::new(
                         "E0302",
@@ -1689,18 +1796,23 @@ fn call_ho_with_interp(
         None
     };
     let values = dynamic_arguments(Some(values), span)?;
-    let mut converted = Vec::with_capacity(values.len());
-    for value in &values {
-        match bridge::to_val(value) {
-            | Ok(value) => converted.push(value),
-            | Err(error) => return Ok(err(value_error(error.code, error.message))),
-        }
-    }
-    let witnesses: Vec<_> = values.iter().map(host_dimension_witness).collect();
+    let converted = match prepare_native_arguments(&values) {
+        | Ok(converted) => converted,
+        | Err(error) => return Ok(err(value_error(error.code, error.message))),
+    };
+    let mut witnesses = WitnessScratchGuard::with_capacity(values.len());
+    fill_host_witnesses(&values, &mut witnesses.0);
     let result = crate::callback::with_scoped(interp, callbacks, |handles| {
         key.as_ref().map_or_else(
-            || aevia_rssn::kernel().call_ho_scoped(&name, &converted, &witnesses, handles),
-            |key| aevia_rssn::kernel().call_ho_scoped_key(key, &converted, &witnesses, handles),
+            || aevia_rssn::kernel().call_ho_scoped_native(&name, &converted, &witnesses.0, handles),
+            |key| {
+                aevia_rssn::kernel().call_ho_scoped_key_native(
+                    key,
+                    &converted,
+                    &witnesses.0,
+                    handles,
+                )
+            },
         )
     })
     .and_then(|result| result);
@@ -1761,15 +1873,13 @@ fn forward(
     values: &[Value],
     caller: Option<&str>,
 ) -> Value {
-    let mut converted = Vec::with_capacity(values.len());
-    for value in values {
-        match bridge::to_val(value) {
-            | Ok(value) => converted.push(value),
-            | Err(error) => return err(value_error(error.code, error.message)),
-        }
-    }
-    let witnesses: Vec<_> = values.iter().map(host_dimension_witness).collect();
-    match aevia_rssn::kernel().call_with_witnesses(name, &converted, &witnesses) {
+    let converted = match prepare_native_arguments(values) {
+        | Ok(converted) => converted,
+        | Err(error) => return err(value_error(error.code, error.message)),
+    };
+    let mut witnesses = WitnessScratchGuard::with_capacity(values.len());
+    fill_host_witnesses(values, &mut witnesses.0);
+    match aevia_rssn::kernel().call_with_native_arguments(name, &converted, &witnesses.0) {
         | Ok((payload, witness)) => {
             ok(Value::KernelValue(Rc::new(crate::value::KernelValue {
                 payload,
@@ -1798,10 +1908,6 @@ fn call_key(
         EvalError::new("E0315", "`Rssn.call_key` needs a signature hash").at(span)
     })?;
     let values = dynamic_arguments(args.get(2), span)?;
-    let mut converted = Vec::with_capacity(values.len());
-    for value in &values {
-        converted.push(bridge::to_val(value)?);
-    }
     let entry = registry().op(&name);
     // §10.0: `call_key` executes the key it is given. A key that no longer
     // names a live overload means the module was generated against a different
@@ -1820,10 +1926,14 @@ fn call_key(
     };
     let kernel = aevia_rssn::kernel();
     let result = if entry.is_value_native() && entry.source.is_exact() {
-        let witnesses: Vec<_> = values.iter().map(host_dimension_witness).collect();
-        kernel.call_key_with_witnesses(&key, &converted, &witnesses)
+        let converted = prepare_native_arguments(&values)?;
+        let mut witnesses = WitnessScratchGuard::with_capacity(values.len());
+        fill_host_witnesses(&values, &mut witnesses.0);
+        kernel.call_key_with_native_arguments(&key, &converted, &witnesses.0)
     } else {
         use aevia_rssn::witness::DimensionWitness as W;
+        let mut converted = ValScratchGuard::with_capacity(values.len());
+        fill_neutral_vals(&values, &mut converted.0)?;
         let safe = values.iter().all(|v| {
             match host_dimension_witness(v) {
                 | W::Scalar(d)
@@ -1841,7 +1951,7 @@ fn call_key(
             )));
         }
         kernel
-            .call_key(&key, &converted)
+            .call_key(&key, &converted.0)
             .map(|value| (value, W::Unknown))
     };
     match result {
@@ -1917,12 +2027,10 @@ fn resolve(
         .map(show)
         .ok_or_else(|| EvalError::new("E0315", "`Rssn.resolve_overload` needs a name").at(span))?;
     let values = dynamic_arguments(args.get(1), span)?;
-    let mut converted = Vec::with_capacity(values.len());
-    for value in &values {
-        converted.push(bridge::to_val(value)?);
-    }
+    let mut converted = ValScratchGuard::with_capacity(values.len());
+    fill_neutral_vals(&values, &mut converted.0)?;
     let kernel = aevia_rssn::kernel();
-    match kernel.resolve(&name, &converted) {
+    match kernel.resolve(&name, &converted.0) {
         | Ok(key) => {
             Ok(ok(Value::string(format!(
                 "{}.{}@{}",
@@ -1971,11 +2079,11 @@ fn overloads(
     })))
 }
 
-/// The argument list of a dynamic call.
+/// The argument list of a dynamic call, borrowing boxed rank-1 lists directly.
 fn dynamic_arguments(
     value: Option<&Value>,
     span: Span,
-) -> Result<Vec<Value>, EvalError> {
+) -> Result<Cow<'_, [Value]>, EvalError> {
     match value {
         | Some(Value::Tensor(tensor)) => {
             let [count] = tensor.shape.as_slice() else {
@@ -1986,12 +2094,16 @@ fn dynamic_arguments(
             if *count != tensor.storage.len() {
                 return Err(malformed());
             }
+            if let crate::value::Storage::Boxed(items) = &tensor.storage {
+                return Ok(Cow::Borrowed(items.as_slice()));
+            }
             (0..*count)
                 .map(|index| tensor.get_flat(index))
                 .collect::<Option<Vec<_>>>()
+                .map(Cow::Owned)
                 .ok_or_else(malformed)
         },
-        | Some(Value::Unit) | None => Ok(Vec::new()),
+        | Some(Value::Unit) | None => Ok(Cow::Borrowed(&[])),
         | Some(other) => {
             Err(EvalError::new(
                 "E0302",
@@ -3528,5 +3640,80 @@ mod nested_erased_value_tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn dynamic_arguments_and_native_marshaling_borrow_dense_and_boxed_buffers() {
+        use crate::value::Storage;
+        use crate::value::TensorData;
+        use std::borrow::Cow;
+
+        let span = Span::default();
+        let unit_args = dynamic_arguments(Some(&Value::Unit), span).unwrap();
+        assert!(matches!(unit_args, Cow::Borrowed([])));
+
+        let boxed_list = Value::Tensor(Rc::new(TensorData::new(
+            vec![2],
+            Storage::Boxed(vec![Value::int(1), Value::int(2)]),
+            Dim::one(),
+            None,
+        )));
+        let borrowed = dynamic_arguments(Some(&boxed_list), span).unwrap();
+        assert!(matches!(borrowed, Cow::Borrowed([_, _])));
+
+        let dense_list = Value::Tensor(Rc::new(TensorData::new(
+            vec![2],
+            Storage::Dense(Rc::new(vec![1.0, 2.0])),
+            Dim::one(),
+            None,
+        )));
+        let owned = dynamic_arguments(Some(&dense_list), span).unwrap();
+        assert!(matches!(owned, Cow::Owned(_)));
+
+        // Small dense float, larger dense float (>= 256), contiguous slice, and strided view
+        // all execute cleanly through both pinned `execute_checked` and dynamic `forward`.
+        let entry = registry().op("num_l1_norm").unwrap();
+        let key = entry.key(0).unwrap();
+        for len in [4usize, 300usize] {
+            let values: Vec<f64> = (1..=len).map(|i| -(i as f64)).collect();
+            let expected_sum: f64 = values.iter().map(|v| v.abs()).sum();
+            let dense = Rc::new(TensorData::new(
+                vec![len],
+                Storage::Dense(Rc::new(values)),
+                Dim::one(),
+                None,
+            ));
+            let slice = Rc::new(dense.tail_view(1).unwrap());
+            let reversed = Rc::new(dense.reversed_view(0).unwrap());
+
+            for (tensor, expect_val) in [
+                (dense, expected_sum),
+                (slice, expected_sum - 1.0),
+                (reversed, expected_sum),
+            ] {
+                let args = [Value::Tensor(tensor)];
+                let converted = prepare_checked_arguments(&args, Some(entry)).unwrap();
+                assert!(matches!(converted, PreparedArguments::Native(_)));
+                let checked_val =
+                    execute_checked(key, entry, &args, &converted, span, None).unwrap();
+                assert_eq!(checked_val.as_f64(), Some(expect_val));
+
+                let dyn_res = forward("num_l1_norm", &args, None);
+                let Value::Variant(variant) = dyn_res else {
+                    panic!("expected Result variant from forward");
+                };
+                assert_eq!(variant.name, "Ok");
+            }
+        }
+
+        // Malformed shape still fails with `E0809` via fallback `bridge::to_val`.
+        let malformed = Value::Tensor(Rc::new(TensorData::new(
+            vec![5],
+            Storage::Dense(Rc::new(vec![1.0, 2.0])),
+            Dim::one(),
+            None,
+        )));
+        let err = prepare_checked_arguments(&[malformed], Some(entry)).unwrap_err();
+        assert_eq!(err.code, "E0809");
     }
 }

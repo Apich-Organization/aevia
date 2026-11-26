@@ -149,6 +149,25 @@ pub(super) fn set(
     if count != tensor.storage.len() {
         return Err(unreadable());
     }
+    if let Value::Num(NumVal {
+        kind: NumKind::Float(scalar),
+        dim,
+        ..
+    }) = &value
+        && *dim == tensor.dim
+        && let Some(dense) = tensor.dense_flat()
+    {
+        let mut values = dense.into_owned();
+        let target = values.get_mut(flat).ok_or_else(unreadable)?;
+        *target = *scalar;
+        let result = dense_output(
+            values,
+            tensor.shape.clone(),
+            tensor.dim.clone(),
+            tensor.display.clone(),
+        );
+        return Ok(crate::host_witness::preserve_tensor_schema(result, tensor));
+    }
     let mut elements = output_buffer(count, span)?;
     for index in 0..count {
         elements.push(tensor.get_flat(index).ok_or_else(unreadable)?);
@@ -182,9 +201,15 @@ pub(super) fn transpose(
     span: Span,
 ) -> Result<Value, EvalError> {
     if tensor.rank() < 2 {
-        return Err(
-            EvalError::new("E0802", "transpose expects a tensor of rank 2 or more").at(span),
-        );
+        return Err(EvalError::new(
+            "E0802",
+            format!(
+                "transpose expects a tensor of rank 2 or more, got rank {} with shape {:?}",
+                tensor.rank(),
+                tensor.shape
+            ),
+        )
+        .at(span));
     }
     let count = validated_len(tensor, span)?;
     if count == 0 {
@@ -227,13 +252,36 @@ pub(super) fn trace(
     span: Span,
 ) -> Result<Value, EvalError> {
     let [rows, columns] = tensor.shape.as_slice() else {
-        return Err(EvalError::new("E0802", "trace expects a rank-2 tensor").at(span));
+        return Err(EvalError::new(
+            "E0802",
+            format!(
+                "trace expects a rank-2 tensor, got rank {} with shape {:?}",
+                tensor.rank(),
+                tensor.shape
+            ),
+        )
+        .at(span));
     };
     if validated_len(tensor, span)? == 0 {
         return Ok(zero_like(tensor));
     }
     let diagonal_len = *rows.min(columns);
     let step = columns.saturating_add(1);
+    if let Some(dense) = tensor.dense_flat() {
+        let mut sum = 0.0_f64;
+        for index in 0..diagonal_len {
+            let offset = index
+                .checked_mul(step)
+                .ok_or_else(|| invalid_tensor(span))?;
+            let &entry = dense.get(offset).ok_or_else(|| invalid_tensor(span))?;
+            sum += entry;
+        }
+        return Ok(Value::Num(NumVal {
+            kind: NumKind::Float(sum),
+            dim: tensor.dim.clone(),
+            display: tensor.display.clone(),
+        }));
+    }
     let get = |index| tensor.get_flat(index).ok_or_else(|| invalid_tensor(span));
     (1..diagonal_len).try_fold(get(0)?, |sum, index| {
         let offset = index
@@ -357,6 +405,16 @@ pub(super) fn fill(
     span: Span,
 ) -> Result<Value, EvalError> {
     let count = checked_element_count(&shape, span)?;
+    if let Value::Num(NumVal {
+        kind: NumKind::Float(scalar),
+        dim,
+        display,
+    }) = value
+    {
+        let mut values = output_buffer(count, span)?;
+        values.resize(count, scalar);
+        return Ok(dense_output(values, shape, dim, display));
+    }
     let mut values = output_buffer(count, span)?;
     let dim = value_dim(&value);
     values.resize(count, value);
