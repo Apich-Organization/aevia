@@ -49,6 +49,7 @@ use num_traits::Zero;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 /// Why two types could not be made equal.
 #[derive(Clone, Debug)]
@@ -330,7 +331,8 @@ pub struct UnsolvedNat {
 /// The inference engine state for one module.
 #[derive(Clone, Debug)]
 pub struct Infer {
-    subst: HashMap<u32, Type>,
+    subst: HashMap<u32, Arc<Type>>,
+    unified_vars: HashSet<(u32, u32)>,
     rep_subst: HashMap<u32, Rep>,
     dims: DimUnifier,
     row_subst: HashMap<u32, Row>,
@@ -387,6 +389,7 @@ impl Infer {
     pub fn new() -> Self {
         Self {
             subst: HashMap::new(),
+            unified_vars: HashSet::new(),
             rep_subst: HashMap::new(),
             dims: DimUnifier::new(),
             row_subst: HashMap::new(),
@@ -1561,7 +1564,7 @@ impl Infer {
         &self,
         id: u32,
     ) -> Option<&Type> {
-        let mut bound = self.subst.get(&id)?;
+        let mut bound = self.subst.get(&id)?.as_ref();
         for _ in 0..self.subst.len() {
             let Type::Var(next) = bound else {
                 break;
@@ -1569,9 +1572,83 @@ impl Infer {
             let Some(further) = self.subst.get(next) else {
                 break;
             };
-            bound = further;
+            bound = further.as_ref();
         }
         Some(bound)
+    }
+
+    /// Follows a variable binding chain, compressing alias-only hops and
+    /// returning the root variable id alongside any non-variable `Arc` binding.
+    fn follow_type_arc(
+        &mut self,
+        id: u32,
+    ) -> (u32, Option<Arc<Type>>) {
+        let Some(first) = self.subst.get(&id) else {
+            return (id, None);
+        };
+        let Type::Var(next1) = first.as_ref() else {
+            return (id, Some(Arc::clone(first)));
+        };
+        let next1 = *next1;
+        let Some(second) = self.subst.get(&next1) else {
+            return (next1, None);
+        };
+        let Type::Var(next2) = second.as_ref() else {
+            return (next1, Some(Arc::clone(second)));
+        };
+        let mut chain = vec![id, next1];
+        let mut curr = *next2;
+        let mut resolved = None;
+        for _ in 0..=self.subst.len() {
+            let Some(bound) = self.subst.get(&curr) else {
+                break;
+            };
+            if let Type::Var(next) = bound.as_ref() {
+                chain.push(curr);
+                curr = *next;
+            } else {
+                resolved = Some(Arc::clone(bound));
+                break;
+            }
+        }
+        let target = Arc::new(Type::Var(curr));
+        for alias in chain {
+            self.subst.insert(alias, Arc::clone(&target));
+        }
+        (curr, resolved)
+    }
+
+    /// Returns the root `Type::Var` if `ty` still resolves to an unbound type variable.
+    #[must_use]
+    #[allow(
+        clippy::single_call_fn,
+        reason = "advances tensor literal element aliases without eager full-tree resolution"
+    )]
+    pub(crate) fn unbound_var_alias(
+        &mut self,
+        ty: &Type,
+    ) -> Option<Type> {
+        let Type::Var(id) = ty else {
+            return None;
+        };
+        let (root, bound) = self.follow_type_arc(*id);
+        bound.is_none().then_some(Type::Var(root))
+    }
+
+    /// Resolves only the outermost head to read a tensor's resolved shape without cloning element trees.
+    #[must_use]
+    pub(crate) fn outer_tensor_shape(
+        &self,
+        ty: &Type,
+    ) -> Option<Shape> {
+        let head = match ty {
+            | Type::Var(id) => self.follow_type(*id)?,
+            | other => other,
+        };
+        let Type::Tensor { shape, .. } = head else {
+            return None;
+        };
+        Some(self.resolve_shape_depth(shape, 1))
     }
 
     /// Shortens alias-only paths before publishing a batch of inferred types.
@@ -1582,19 +1659,22 @@ impl Infer {
         let aliases = self
             .subst
             .iter()
-            .filter_map(|(&id, ty)| matches!(ty, Type::Var(_)).then_some(id))
+            .filter_map(|(&id, ty)| matches!(ty.as_ref(), Type::Var(_)).then_some(id))
             .collect::<Vec<_>>();
         let mut path = Vec::new();
         for alias in aliases {
             let mut root = alias;
             // Binding links distinct resolved variables, so alias paths are acyclic.
-            while let Some(Type::Var(parent)) = self.subst.get(&root) {
+            while let Some(bound) = self.subst.get(&root)
+                && let Type::Var(parent) = bound.as_ref()
+            {
                 path.push(root);
                 root = *parent;
             }
-            while let Some(child) = path.pop() {
-                if let Some(Type::Var(parent)) = self.subst.get_mut(&child) {
-                    *parent = root;
+            if !path.is_empty() {
+                let compressed = Arc::new(Type::Var(root));
+                while let Some(child) = path.pop() {
+                    self.subst.insert(child, Arc::clone(&compressed));
                 }
             }
         }
@@ -2156,90 +2236,490 @@ impl Infer {
         left: &Type,
         right: &Type,
     ) -> Result<(), UnifyError> {
-        self.unify_inner(left, right)?;
-        self.propagate_numeric()
+        if std::ptr::eq(left, right) {
+            return self.propagate_numeric();
+        }
+        if let (Type::Var(a), Type::Var(b)) = (left, right)
+            && (a == b || self.unified_vars.contains(&canonical_pair(*a, *b)))
+        {
+            return self.propagate_numeric();
+        }
+        let mut memo = UnifyMemo::new();
+        self.unify_pair_rec(&mut memo, left, right, 0)?;
+        self.propagate_numeric()?;
+        self.unified_vars.extend(memo.verified_var_pairs);
+        Ok(())
     }
 
-    fn unify_inner(
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        reason = "structural match across Type variants with iterative single-child loop"
+    )]
+    fn unify_pair_rec(
+        &mut self,
+        memo: &mut UnifyMemo,
+        left: &Type,
+        right: &Type,
+        depth: u32,
+    ) -> Result<(), UnifyError> {
+        if std::ptr::eq(left, right) || left.is_error() || right.is_error() {
+            return Ok(());
+        }
+        if depth >= 64 {
+            return self.unify_trampoline(memo, left, right);
+        }
+        let mut cur_l = left;
+        let mut cur_r = right;
+        loop {
+            if std::ptr::eq(cur_l, cur_r) || cur_l.is_error() || cur_r.is_error() {
+                return Ok(());
+            }
+            if matches!(cur_l, Type::Var(_)) || matches!(cur_r, Type::Var(_)) {
+                break;
+            }
+            match (cur_l, cur_r) {
+                | (Type::Tensor { shape: sa, elem: ea }, Type::Tensor { shape: sb, elem: eb }) => {
+                    let key_l = NodeKey::Ptr(std::ptr::from_ref(cur_l).addr());
+                    let key_r = NodeKey::Ptr(std::ptr::from_ref(cur_r).addr());
+                    if !memo.visited.insert((key_l, key_r)) {
+                        return Ok(());
+                    }
+                    self.unify_shape_memo(memo, sa, sb)?;
+                    cur_l = ea;
+                    cur_r = eb;
+                },
+                | (Type::Io(a), Type::Io(b))
+                | (Type::TypeRepIntrinsic(Some(a)), Type::TypeRepIntrinsic(Some(b)))
+                | (Type::FromValueIntrinsic(Some(a)), Type::FromValueIntrinsic(Some(b))) => {
+                    let key_l = NodeKey::Ptr(std::ptr::from_ref(cur_l).addr());
+                    let key_r = NodeKey::Ptr(std::ptr::from_ref(cur_r).addr());
+                    if !memo.visited.insert((key_l, key_r)) {
+                        return Ok(());
+                    }
+                    cur_l = a;
+                    cur_r = b;
+                },
+                | (Type::Fn(pa, ra), Type::Fn(pb, rb)) => {
+                    let key_l = NodeKey::Ptr(std::ptr::from_ref(cur_l).addr());
+                    let key_r = NodeKey::Ptr(std::ptr::from_ref(cur_r).addr());
+                    if !memo.visited.insert((key_l, key_r)) {
+                        return Ok(());
+                    }
+                    if pa.len() != pb.len() {
+                        return Err(UnifyError::Mismatch {
+                            left: self.resolve(cur_l),
+                            right: self.resolve(cur_r),
+                        });
+                    }
+                    for (a, b) in pa.iter().zip(pb.iter()) {
+                        self.unify_pair_rec(memo, a, b, depth.saturating_add(1))?;
+                    }
+                    cur_l = ra;
+                    cur_r = rb;
+                },
+                | (Type::Adt(ia, aa), Type::Adt(ib, ab)) => {
+                    let key_l = NodeKey::Ptr(std::ptr::from_ref(cur_l).addr());
+                    let key_r = NodeKey::Ptr(std::ptr::from_ref(cur_r).addr());
+                    if !memo.visited.insert((key_l, key_r)) {
+                        return Ok(());
+                    }
+                    if !crate::adt::same_type(*ia, *ib) || aa.len() != ab.len() {
+                        return Err(UnifyError::Mismatch {
+                            left: self.resolve(cur_l),
+                            right: self.resolve(cur_r),
+                        });
+                    }
+                    if aa.len() == 1
+                        && let (Some(a), Some(b)) = (aa.first(), ab.first())
+                    {
+                        cur_l = a;
+                        cur_r = b;
+                        continue;
+                    }
+                    for (a, b) in aa.iter().zip(ab.iter()) {
+                        self.unify_pair_rec(memo, a, b, depth.saturating_add(1))?;
+                    }
+                    return Ok(());
+                },
+                | (Type::Record(ra), Type::Record(rb)) => {
+                    let key_l = NodeKey::Ptr(std::ptr::from_ref(cur_l).addr());
+                    let key_r = NodeKey::Ptr(std::ptr::from_ref(cur_r).addr());
+                    if !memo.visited.insert((key_l, key_r)) {
+                        return Ok(());
+                    }
+                    return self.unify_row_memo(memo, ra, rb, depth.saturating_add(1));
+                },
+                | _ => return self.unify_leaf_types(cur_l, cur_r),
+            }
+        }
+        match (cur_l, cur_r) {
+            | (Type::Var(id_l), Type::Var(id_r)) => {
+                if let Some((arc_l, arc_r)) = self.unify_var_pair(memo, *id_l, *id_r)? {
+                    return self.unify_pair_rec(
+                        memo,
+                        arc_l.as_ref(),
+                        arc_r.as_ref(),
+                        depth.saturating_add(1),
+                    );
+                }
+                Ok(())
+            },
+            | (Type::Var(id), other) => self.unify_var_with_non_var(memo, *id, other, true, depth),
+            | (other, Type::Var(id)) => self.unify_var_with_non_var(memo, *id, other, false, depth),
+            | _ => Ok(()),
+        }
+    }
+
+    fn unify_var_pair(
+        &mut self,
+        memo: &mut UnifyMemo,
+        id_l: u32,
+        id_r: u32,
+    ) -> Result<Option<(Arc<Type>, Arc<Type>)>, UnifyError> {
+        let (root_l, opt_arc_l) = self.follow_type_arc(id_l);
+        let (root_r, opt_arc_r) = self.follow_type_arc(id_r);
+        if root_l == root_r {
+            return Ok(None);
+        }
+        let var_pair = canonical_pair(root_l, root_r);
+        if self.unified_vars.contains(&var_pair) {
+            return Ok(None);
+        }
+        match (opt_arc_l, opt_arc_r) {
+            | (None, None) => {
+                self.bind_var_alias(root_l, root_r);
+                Ok(None)
+            },
+            | (None, Some(arc_r)) => {
+                if !arc_r.is_error() {
+                    self.bind_var_non_var(root_l, BindTarget::Arc(arc_r))?;
+                }
+                Ok(None)
+            },
+            | (Some(arc_l), None) => {
+                if !arc_l.is_error() {
+                    self.bind_var_non_var(root_r, BindTarget::Arc(arc_l))?;
+                }
+                Ok(None)
+            },
+            | (Some(arc_l), Some(arc_r)) => {
+                if Arc::ptr_eq(&arc_l, &arc_r) {
+                    memo.verified_var_pairs.push(var_pair);
+                    return Ok(None);
+                }
+                if !memo
+                    .visited
+                    .insert((NodeKey::Var(root_l), NodeKey::Var(root_r)))
+                {
+                    return Ok(None);
+                }
+                memo.verified_var_pairs.push(var_pair);
+                Ok(Some((arc_l, arc_r)))
+            },
+        }
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "shared variable-against-structure handler called from left and right match arms"
+    )]
+    fn unify_var_with_non_var(
+        &mut self,
+        memo: &mut UnifyMemo,
+        id: u32,
+        other: &Type,
+        var_on_left: bool,
+        depth: u32,
+    ) -> Result<(), UnifyError> {
+        if other.is_error() {
+            return Ok(());
+        }
+        let (root, opt_arc) = self.follow_type_arc(id);
+        let Some(arc) = opt_arc else {
+            return self.bind_var_non_var(root, BindTarget::Borrowed(other));
+        };
+        if std::ptr::eq(arc.as_ref(), other) {
+            return Ok(());
+        }
+        let other_ptr = std::ptr::from_ref(other).addr();
+        let key = if var_on_left {
+            (NodeKey::Var(root), NodeKey::Ptr(other_ptr))
+        } else {
+            (NodeKey::Ptr(other_ptr), NodeKey::Var(root))
+        };
+        if !memo.visited.insert(key) {
+            return Ok(());
+        }
+        let (l, r) = if var_on_left {
+            (arc.as_ref(), other)
+        } else {
+            (other, arc.as_ref())
+        };
+        self.unify_pair_rec(memo, l, r, depth.saturating_add(1))
+    }
+
+    fn unify_leaf_types(
         &mut self,
         left: &Type,
         right: &Type,
     ) -> Result<(), UnifyError> {
-        let left = self.resolve(left);
-        let right = self.resolve(right);
-        if left == right {
-            return Ok(());
-        }
-        if left.is_error() || right.is_error() {
-            return Ok(());
-        }
-        match (&left, &right) {
-            | (Type::Var(id), other) | (other, Type::Var(id)) => self.bind_var(*id, other),
+        match (left, right) {
             | (Type::Scalar(rep_a, dim_a), Type::Scalar(rep_b, dim_b)) => {
-                self.unify_rep(*rep_a, *rep_b)?;
+                self.unify_rep_inner(*rep_a, *rep_b)?;
                 self.unify_dim(dim_a, dim_b)
             },
-            | (Type::Tensor { shape: sa, elem: ea }, Type::Tensor { shape: sb, elem: eb }) => {
-                self.unify_shape(sa, sb)?;
-                self.unify(ea, eb)
-            },
-            | (Type::TensorIntrinsic(a), Type::TensorIntrinsic(b))
-                if a.kind != crate::ty::TensorIntrinsic::Fill
-                    && b.kind != crate::ty::TensorIntrinsic::Fill =>
-            {
-                match (a.element, b.element) {
-                    | (Some(left), Some(right)) => self.unify_rep(left, right),
-                    | (None, None) => Ok(()),
-                    | _ => {
-                        Err(UnifyError::Mismatch {
-                            left: left.clone(),
-                            right: right.clone(),
-                        })
-                    },
+            | (Type::TensorIntrinsic(a), Type::TensorIntrinsic(b)) => {
+                if a == b {
+                    Ok(())
+                } else if a.kind != crate::ty::TensorIntrinsic::Fill
+                    && b.kind != crate::ty::TensorIntrinsic::Fill
+                {
+                    match (a.element, b.element) {
+                        | (Some(l), Some(r)) => self.unify_rep_inner(l, r),
+                        | (None, None) => Ok(()),
+                        | _ => {
+                            Err(UnifyError::Mismatch {
+                                left: self.resolve(left),
+                                right: self.resolve(right),
+                            })
+                        },
+                    }
+                } else {
+                    Err(UnifyError::Mismatch {
+                        left: self.resolve(left),
+                        right: self.resolve(right),
+                    })
                 }
             },
-            | (Type::TypeRepIntrinsic(Some(a)), Type::TypeRepIntrinsic(Some(b)))
-            | (Type::FromValueIntrinsic(Some(a)), Type::FromValueIntrinsic(Some(b))) => {
-                self.unify(a, b)
-            },
-            | (Type::Fn(pa, ra), Type::Fn(pb, rb)) => {
-                if pa.len() != pb.len() {
-                    return Err(UnifyError::Mismatch {
-                        left: left.clone(),
-                        right: right.clone(),
-                    });
-                }
-                for (a, b) in pa.iter().zip(pb.iter()) {
-                    self.unify(a, b)?;
-                }
-                self.unify(ra, rb)
-            },
-            | (Type::Record(ra), Type::Record(rb)) => self.unify_row(ra, rb),
-            | (Type::Adt(ia, aa), Type::Adt(ib, ab)) => {
-                if !crate::adt::same_type(*ia, *ib) || aa.len() != ab.len() {
-                    return Err(UnifyError::Mismatch {
-                        left: left.clone(),
-                        right: right.clone(),
-                    });
-                }
-                for (a, b) in aa.iter().zip(ab.iter()) {
-                    self.unify(a, b)?;
-                }
-                Ok(())
-            },
-            | (Type::Io(a), Type::Io(b)) => self.unify(a, b),
             | (Type::Point(a), Type::Point(b)) | (Type::UnitOf(a), Type::UnitOf(b)) => {
                 self.unify_dim(a, b)
             },
-            | (Type::Dyn(a), Type::Dyn(b)) => self.unify_rep(*a, *b),
+            | (Type::Dyn(a), Type::Dyn(b)) => self.unify_rep_inner(*a, *b),
+            | (Type::Bool, Type::Bool)
+            | (Type::Prop, Type::Prop)
+            | (Type::Str, Type::Str)
+            | (Type::Unit, Type::Unit)
+            | (Type::WriteNpyIntrinsic, Type::WriteNpyIntrinsic)
+            | (Type::ToCallbackIntrinsic, Type::ToCallbackIntrinsic)
+            | (Type::TypeRepIntrinsic(None), Type::TypeRepIntrinsic(None))
+            | (Type::FromValueIntrinsic(None), Type::FromValueIntrinsic(None)) => Ok(()),
+            | (Type::ReadNpyIntrinsic(a), Type::ReadNpyIntrinsic(b)) if a == b => Ok(()),
             | (Type::Param(a), Type::Param(b)) if a == b => Ok(()),
             | _ => {
                 Err(UnifyError::Mismatch {
-                    left: left.clone(),
-                    right: right.clone(),
+                    left: self.resolve(left),
+                    right: self.resolve(right),
                 })
             },
         }
+    }
+
+    #[allow(
+        clippy::cognitive_complexity,
+        clippy::single_call_fn,
+        clippy::too_many_lines,
+        reason = "iterative fallback avoids stack overflow for arbitrarily deep or DAG-shaped types"
+    )]
+    fn unify_trampoline(
+        &mut self,
+        memo: &mut UnifyMemo,
+        left: &Type,
+        right: &Type,
+    ) -> Result<(), UnifyError> {
+        let mut work = vec![(memo.to_flat_side(left), memo.to_flat_side(right))];
+        while let Some((raw_l, raw_r)) = work.pop() {
+            let side_l = memo.unwrap_flat_var(raw_l);
+            let side_r = memo.unwrap_flat_var(raw_r);
+            match (side_l, side_r) {
+                | (FlatSide::Var(id_l), FlatSide::Var(id_r)) => {
+                    if let Some((arc_l, arc_r)) = self.unify_var_pair(memo, id_l, id_r)? {
+                        work.push((
+                            memo.to_flat_side(arc_l.as_ref()),
+                            memo.to_flat_side(arc_r.as_ref()),
+                        ));
+                    }
+                },
+                | (FlatSide::Var(id), FlatSide::Node(tree, idx)) => {
+                    if tree.is_error(idx) {
+                        continue;
+                    }
+                    let (root, opt_arc) = self.follow_type_arc(id);
+                    match opt_arc {
+                        | Some(arc) => {
+                            let ptr_r = tree.ptr(idx);
+                            if Arc::as_ptr(&arc).addr() == ptr_r
+                                || !memo
+                                    .visited
+                                    .insert((NodeKey::Var(root), NodeKey::Ptr(ptr_r)))
+                            {
+                                continue;
+                            }
+                            work.push((memo.to_flat_side(arc.as_ref()), FlatSide::Node(tree, idx)));
+                        },
+                        | None => {
+                            let ty = unflatten_type(&tree, idx);
+                            self.bind_var_non_var(root, BindTarget::Borrowed(&ty))?;
+                        },
+                    }
+                },
+                | (FlatSide::Node(tree, idx), FlatSide::Var(id)) => {
+                    if tree.is_error(idx) {
+                        continue;
+                    }
+                    let (root, opt_arc) = self.follow_type_arc(id);
+                    match opt_arc {
+                        | Some(arc) => {
+                            let ptr_l = tree.ptr(idx);
+                            if Arc::as_ptr(&arc).addr() == ptr_l
+                                || !memo
+                                    .visited
+                                    .insert((NodeKey::Ptr(ptr_l), NodeKey::Var(root)))
+                            {
+                                continue;
+                            }
+                            work.push((FlatSide::Node(tree, idx), memo.to_flat_side(arc.as_ref())));
+                        },
+                        | None => {
+                            let ty = unflatten_type(&tree, idx);
+                            self.bind_var_non_var(root, BindTarget::Borrowed(&ty))?;
+                        },
+                    }
+                },
+                | (FlatSide::Node(tl, mut il), FlatSide::Node(tr, mut ir)) => {
+                    loop {
+                        let ptr_l = tl.ptr(il);
+                        let ptr_r = tr.ptr(ir);
+                        if ptr_l == ptr_r || tl.is_error(il) || tr.is_error(ir) {
+                            break;
+                        }
+                        if tl.is_var(il) || tr.is_var(ir) {
+                            work.push((FlatSide::Node(tl, il), FlatSide::Node(tr, ir)));
+                            break;
+                        }
+                        let (Some(nl), Some(nr)) = (tl.nodes.get(il), tr.nodes.get(ir)) else {
+                            break;
+                        };
+                        match (nl, nr) {
+                            | (
+                                FlatType::Tensor { shape: sa, elem: ea },
+                                FlatType::Tensor { shape: sb, elem: eb },
+                            ) => {
+                                if !memo
+                                    .visited
+                                    .insert((NodeKey::Ptr(ptr_l), NodeKey::Ptr(ptr_r)))
+                                {
+                                    break;
+                                }
+                                self.unify_shape_memo(memo, sa, sb)?;
+                                il = *ea;
+                                ir = *eb;
+                            },
+                            | (FlatType::Io(a), FlatType::Io(b))
+                            | (FlatType::TypeRep(a), FlatType::TypeRep(b))
+                            | (FlatType::FromValue(a), FlatType::FromValue(b)) => {
+                                if !memo
+                                    .visited
+                                    .insert((NodeKey::Ptr(ptr_l), NodeKey::Ptr(ptr_r)))
+                                {
+                                    break;
+                                }
+                                il = *a;
+                                ir = *b;
+                            },
+                            | (
+                                FlatType::Fn { params: pa, ret: ra },
+                                FlatType::Fn { params: pb, ret: rb },
+                            ) => {
+                                if !memo
+                                    .visited
+                                    .insert((NodeKey::Ptr(ptr_l), NodeKey::Ptr(ptr_r)))
+                                {
+                                    break;
+                                }
+                                if pa.len() != pb.len() {
+                                    return Err(UnifyError::Mismatch {
+                                        left: self.resolve(&unflatten_type(&tl, il)),
+                                        right: self.resolve(&unflatten_type(&tr, ir)),
+                                    });
+                                }
+                                if pa.is_empty() {
+                                    il = *ra;
+                                    ir = *rb;
+                                    continue;
+                                }
+                                work.push((
+                                    FlatSide::Node(Arc::clone(&tl), *ra),
+                                    FlatSide::Node(Arc::clone(&tr), *rb),
+                                ));
+                                for (&a, &b) in pa.iter().zip(pb.iter()).rev() {
+                                    work.push((
+                                        FlatSide::Node(Arc::clone(&tl), a),
+                                        FlatSide::Node(Arc::clone(&tr), b),
+                                    ));
+                                }
+                                break;
+                            },
+                            | (
+                                FlatType::Adt { id: ia, args: aa },
+                                FlatType::Adt { id: ib, args: ab },
+                            ) => {
+                                if !memo
+                                    .visited
+                                    .insert((NodeKey::Ptr(ptr_l), NodeKey::Ptr(ptr_r)))
+                                {
+                                    break;
+                                }
+                                if !crate::adt::same_type(*ia, *ib) || aa.len() != ab.len() {
+                                    return Err(UnifyError::Mismatch {
+                                        left: self.resolve(&unflatten_type(&tl, il)),
+                                        right: self.resolve(&unflatten_type(&tr, ir)),
+                                    });
+                                }
+                                if aa.len() == 1
+                                    && let (Some(&a), Some(&b)) = (aa.first(), ab.first())
+                                {
+                                    il = a;
+                                    ir = b;
+                                    continue;
+                                }
+                                for (&a, &b) in aa.iter().zip(ab.iter()).rev() {
+                                    work.push((
+                                        FlatSide::Node(Arc::clone(&tl), a),
+                                        FlatSide::Node(Arc::clone(&tr), b),
+                                    ));
+                                }
+                                break;
+                            },
+                            | (
+                                FlatType::Direct(Type::Record(ra)),
+                                FlatType::Direct(Type::Record(rb)),
+                            ) => {
+                                if !memo
+                                    .visited
+                                    .insert((NodeKey::Ptr(ptr_l), NodeKey::Ptr(ptr_r)))
+                                {
+                                    break;
+                                }
+                                self.unify_row_memo(memo, ra, rb, 64)?;
+                                break;
+                            },
+                            | (FlatType::Direct(la), FlatType::Direct(rb)) => {
+                                self.unify_leaf_types(la, rb)?;
+                                break;
+                            },
+                            | _ => {
+                                return Err(UnifyError::Mismatch {
+                                    left: self.resolve(&unflatten_type(&tl, il)),
+                                    right: self.resolve(&unflatten_type(&tr, ir)),
+                                });
+                            },
+                        }
+                    }
+                },
+            }
+        }
+        Ok(())
     }
 
     /// Unifies two dimensions.
@@ -2498,41 +2978,66 @@ impl Infer {
         Ok(())
     }
 
-    fn bind_var(
+    #[allow(
+        clippy::single_call_fn,
+        reason = "binds two unbound root type variables while preserving literal/weak invariants"
+    )]
+    /// Lowers the level recorded for a representation variable.
+    fn lower_rep_levels(
+        &mut self,
+        rep: Rep,
+        level: u32,
+    ) {
+        if let Rep::Var(id) = rep {
+            let entry = self.rep_levels.entry(id).or_insert(level);
+            *entry = (*entry).min(level);
+        }
+    }
+
+    fn bind_var_alias(
         &mut self,
         id: u32,
-        ty: &Type,
-    ) -> Result<(), UnifyError> {
-        let ty = self.resolve(ty);
-        if let Type::Var(other) = ty {
-            if other == id {
-                return Ok(());
-            }
-            if let Some(kind) = self.literals.get(&id).copied() {
-                self.literals.entry(other).or_insert(kind);
-            }
-            if self.weak.contains(&id) {
-                self.weak.insert(other);
-            }
-            let level = self.levels.get(&id).copied().unwrap_or(0);
-            self.lower_levels(&Type::Var(other), level);
-            self.subst.insert(id, Type::Var(other));
-            self.numeric_changed(id);
-            return Ok(());
+        other: u32,
+    ) {
+        if other == id {
+            return;
         }
-        if self.occurs(id, Occurrence::Type(&ty)) {
+        if let Some(kind) = self.literals.get(&id).copied() {
+            self.literals.entry(other).or_insert(kind);
+        }
+        if self.weak.contains(&id) {
+            self.weak.insert(other);
+        }
+        let level = self.levels.get(&id).copied().unwrap_or(0);
+        let entry = self.levels.entry(other).or_insert(level);
+        *entry = (*entry).min(level);
+        self.subst.insert(id, Arc::new(Type::Var(other)));
+        self.numeric_changed(id);
+    }
+
+    fn bind_var_non_var(
+        &mut self,
+        id: u32,
+        target: BindTarget<'_>,
+    ) -> Result<(), UnifyError> {
+        let ty = target.as_type();
+        if self.occurs(id, Occurrence::Type(ty)) {
             return Err(UnifyError::Occurs(id));
         }
         if let Some(kind) = self.literals.get(&id).copied() {
-            match &ty {
+            match ty {
                 | Type::Scalar(rep, dim) => {
                     if !kind.is_quantity() && !dim.is_one() {
+                        let resolved_dim = self.dims.resolve(dim);
                         // A bare literal is dimensionless: an unknown dimension
                         // is forced to 1, a concrete one is an error.
-                        if dim.is_concrete() || self.dims.unify(dim, &Dim::one()).is_err() {
+                        if !resolved_dim.is_one()
+                            && (resolved_dim.is_concrete()
+                                || self.dims.unify(&resolved_dim, &Dim::one()).is_err())
+                        {
                             return Err(UnifyError::LiteralMismatch {
                                 kind,
-                                requested: ty.clone(),
+                                requested: self.resolve(ty),
                             });
                         }
                     }
@@ -2542,22 +3047,30 @@ impl Infer {
                     } else if !kind.accepts_rep(rep) {
                         return Err(UnifyError::LiteralMismatch {
                             kind,
-                            requested: ty.clone(),
+                            requested: self.resolve(ty),
                         });
                     }
                 },
                 | _ => {
                     return Err(UnifyError::LiteralMismatch {
                         kind,
-                        requested: ty.clone(),
+                        requested: self.resolve(ty),
                     });
                 },
             }
         }
         let level = self.levels.get(&id).copied().unwrap_or(0);
-        self.lower_levels(&ty, level);
-        self.lower_numeric_levels(&ty, level);
-        self.subst.insert(id, ty);
+        let mut numeric_roots = HashSet::new();
+        self.lower_levels_iter(Occurrence::Type(ty), level, Some(&mut numeric_roots));
+        if !numeric_roots.is_empty() {
+            let constraints = self.numeric_component(numeric_roots);
+            for constraint in constraints {
+                for related in constraint.types() {
+                    self.lower_levels_iter(Occurrence::Type(&related), level, None);
+                }
+            }
+        }
+        self.subst.insert(id, target.into_arc());
         self.numeric_changed(id);
         Ok(())
     }
@@ -2580,7 +3093,7 @@ impl Infer {
                     if visited.insert((false, *other))
                         && let Some(bound) = self.subst.get(other)
                     {
-                        pending.push(Occurrence::Type(bound));
+                        pending.push(Occurrence::Type(bound.as_ref()));
                     }
                 },
                 | Occurrence::Row(Row::Var(other)) => {
@@ -2608,7 +3121,7 @@ impl Infer {
                 },
                 | Occurrence::Type(Type::Record(row)) => pending.push(Occurrence::Row(row)),
                 | Occurrence::Type(Type::Scalar(_, dim) | Type::Point(dim) | Type::UnitOf(dim))
-                    if self.resolve_dim(dim).contains_var(id) =>
+                    if !dim.is_concrete() && self.resolve_dim(dim).contains_var(id) =>
                 {
                     return true;
                 },
@@ -2622,107 +3135,217 @@ impl Infer {
         false
     }
 
-    fn lower_levels(
+    #[allow(
+        clippy::cognitive_complexity,
+        reason = "iterative DAG-safe level lowering across Type, Row, Rep, Dim and Nat tables"
+    )]
+    fn lower_levels_iter(
         &mut self,
-        ty: &Type,
+        root: Occurrence<'_>,
         level: u32,
+        mut collect_numeric: Option<&mut HashSet<u32>>,
     ) {
-        match ty {
-            | Type::Var(id) => {
-                if let Some(existing) = self.levels.get_mut(id) {
-                    *existing = (*existing).min(level);
-                } else {
-                    self.levels.insert(*id, level);
-                }
-            },
-            | Type::Scalar(rep, dim) => {
-                self.lower_rep_levels(*rep, level);
-                for id in dim.vars() {
-                    let entry = self.dim_levels.entry(id).or_insert(level);
-                    *entry = (*entry).min(level);
-                }
-            },
-            | Type::Tensor { shape, elem } => {
-                if let Shape::Refined(extents) = shape {
-                    for extent in extents.iter().flatten() {
-                        for id in extent.vars() {
-                            let entry = self.nat_levels.entry(id).or_insert(level);
-                            *entry = (*entry).min(level);
+        let subst = &self.subst;
+        let row_subst = &self.row_subst;
+        let rep_subst = &self.rep_subst;
+        let dims = &self.dims;
+        let nat_subst = &self.nat_subst;
+        let levels = &mut self.levels;
+        let rep_levels = &mut self.rep_levels;
+        let dim_levels = &mut self.dim_levels;
+        let nat_levels = &mut self.nat_levels;
+        let row_levels = &mut self.row_levels;
+
+        let mut pending = vec![root];
+        let mut visited_vars = HashSet::new();
+        let mut visited_ptrs = HashSet::new();
+        let mut visited_nats = HashSet::new();
+        let mut pending_nats = Vec::new();
+
+        while let Some(node) = pending.pop() {
+            match node {
+                | Occurrence::Type(ty) => {
+                    let mut current = ty;
+                    loop {
+                        match current {
+                            | Type::Var(id) => {
+                                let entry = levels.entry(*id).or_insert(level);
+                                *entry = (*entry).min(level);
+                                if let Some(roots) = collect_numeric.as_mut() {
+                                    roots.insert(*id);
+                                }
+                                if visited_vars.insert((false, *id))
+                                    && let Some(bound) = subst.get(id)
+                                {
+                                    current = bound.as_ref();
+                                    continue;
+                                }
+                            },
+                            | Type::Scalar(rep, dim) => {
+                                let resolved_rep = resolve_rep_table(rep_subst, *rep);
+                                if let Rep::Var(rep_id) = resolved_rep {
+                                    let entry = rep_levels.entry(rep_id).or_insert(level);
+                                    *entry = (*entry).min(level);
+                                    if let Some(roots) = collect_numeric.as_mut() {
+                                        roots.insert(rep_id);
+                                    }
+                                }
+                                if !dim.is_concrete() {
+                                    for id in dims.resolve(dim).vars() {
+                                        let entry = dim_levels.entry(id).or_insert(level);
+                                        *entry = (*entry).min(level);
+                                    }
+                                }
+                            },
+                            | Type::Tensor { shape, elem } => {
+                                if !visited_ptrs.insert(std::ptr::from_ref(current).addr()) {
+                                    break;
+                                }
+                                if let Shape::Refined(extents) = shape {
+                                    for extent in extents.iter().flatten() {
+                                        if nat_subst.is_empty() {
+                                            for id in extent.vars() {
+                                                let entry = nat_levels.entry(id).or_insert(level);
+                                                *entry = (*entry).min(level);
+                                            }
+                                        } else {
+                                            pending_nats.push(extent);
+                                        }
+                                    }
+                                    while let Some(nat) = pending_nats.pop() {
+                                        match nat {
+                                            | Nat::Lit(_) => {},
+                                            | Nat::Var(id) => {
+                                                let entry = nat_levels.entry(*id).or_insert(level);
+                                                *entry = (*entry).min(level);
+                                                if visited_nats.insert(*id)
+                                                    && let Some(bound) = nat_subst.get(id)
+                                                {
+                                                    pending_nats.push(bound);
+                                                }
+                                            },
+                                            | Nat::Add(a, b) | Nat::Mul(a, b) => {
+                                                pending_nats.push(a);
+                                                pending_nats.push(b);
+                                            },
+                                        }
+                                    }
+                                }
+                                current = elem;
+                                continue;
+                            },
+                            | Type::Fn(params, ret) => {
+                                if !visited_ptrs.insert(std::ptr::from_ref(current).addr()) {
+                                    break;
+                                }
+                                for param in params {
+                                    pending.push(Occurrence::Type(param));
+                                }
+                                current = ret;
+                                continue;
+                            },
+                            | Type::Record(row) => {
+                                pending.push(Occurrence::Row(row));
+                            },
+                            | Type::Adt(_, args) => {
+                                if !visited_ptrs.insert(std::ptr::from_ref(current).addr()) {
+                                    break;
+                                }
+                                for arg in args {
+                                    pending.push(Occurrence::Type(arg));
+                                }
+                            },
+                            | Type::Io(inner)
+                            | Type::TypeRepIntrinsic(Some(inner))
+                            | Type::FromValueIntrinsic(Some(inner)) => {
+                                if !visited_ptrs.insert(std::ptr::from_ref(current).addr()) {
+                                    break;
+                                }
+                                current = inner;
+                                continue;
+                            },
+                            | Type::TensorIntrinsic(intrinsic) => {
+                                if let Some(rep) = intrinsic.element
+                                    && let Rep::Var(rep_id) = resolve_rep_table(rep_subst, rep)
+                                {
+                                    let entry = rep_levels.entry(rep_id).or_insert(level);
+                                    *entry = (*entry).min(level);
+                                    if let Some(roots) = collect_numeric.as_mut() {
+                                        roots.insert(rep_id);
+                                    }
+                                }
+                            },
+                            | Type::Dyn(rep) => {
+                                if let Rep::Var(rep_id) = resolve_rep_table(rep_subst, *rep) {
+                                    let entry = rep_levels.entry(rep_id).or_insert(level);
+                                    *entry = (*entry).min(level);
+                                    if let Some(roots) = collect_numeric.as_mut() {
+                                        roots.insert(rep_id);
+                                    }
+                                }
+                            },
+                            | Type::Point(dim) | Type::UnitOf(dim) => {
+                                if !dim.is_concrete() {
+                                    for id in dims.resolve(dim).vars() {
+                                        let entry = dim_levels.entry(id).or_insert(level);
+                                        *entry = (*entry).min(level);
+                                    }
+                                }
+                            },
+                            | _ => {},
+                        }
+                        break;
+                    }
+                },
+                | Occurrence::Row(row) => {
+                    let mut current = row;
+                    loop {
+                        match current {
+                            | Row::Empty => break,
+                            | Row::Var(id) => {
+                                let entry = row_levels.entry(*id).or_insert(level);
+                                *entry = (*entry).min(level);
+                                if visited_vars.insert((true, *id))
+                                    && let Some(bound) = row_subst.get(id)
+                                {
+                                    current = bound;
+                                    continue;
+                                }
+                                break;
+                            },
+                            | Row::Extend { ty, tail, .. } => {
+                                pending.push(Occurrence::Type(ty));
+                                current = tail;
+                            },
                         }
                     }
-                }
-                self.lower_levels(elem, level);
-            },
-            | Type::Fn(params, ret) => {
-                for param in params {
-                    self.lower_levels(param, level);
-                }
-                self.lower_levels(ret, level);
-            },
-            | Type::Record(row) => self.lower_row_levels(row, level),
-            | Type::Adt(_, args) => {
-                for arg in args {
-                    self.lower_levels(arg, level);
-                }
-            },
-            | Type::Io(inner)
-            | Type::TypeRepIntrinsic(Some(inner))
-            | Type::FromValueIntrinsic(Some(inner)) => {
-                self.lower_levels(inner, level);
-            },
-            | Type::TensorIntrinsic(intrinsic) => {
-                if let Some(rep) = intrinsic.element {
-                    self.lower_rep_levels(rep, level);
-                }
-            },
-            | Type::Dyn(rep) => self.lower_rep_levels(*rep, level),
-            | Type::Point(dim) | Type::UnitOf(dim) => {
-                for id in dim.vars() {
-                    let entry = self.dim_levels.entry(id).or_insert(level);
-                    *entry = (*entry).min(level);
-                }
-            },
-            | _ => {},
-        }
-    }
-
-    fn lower_row_levels(
-        &mut self,
-        row: &Row,
-        level: u32,
-    ) {
-        for (_, field) in row.iter_fields() {
-            self.lower_levels(field, level);
-        }
-        if let Some(id) = row.tail_var() {
-            let entry = self.row_levels.entry(id).or_insert(level);
-            *entry = (*entry).min(level);
-        }
-    }
-
-    fn lower_numeric_levels(
-        &mut self,
-        ty: &Type,
-        level: u32,
-    ) {
-        let mut schema = Scheme::mono(ty.clone());
-        self.attach_numeric_scheme(&mut schema);
-        for constraint in schema.numeric {
-            for ty in constraint.types() {
-                self.lower_levels(&ty, level);
+                },
             }
         }
     }
 
-    fn lower_rep_levels(
+    fn unify_shape_memo(
         &mut self,
-        rep: Rep,
-        level: u32,
-    ) {
-        if let Rep::Var(id) = rep {
-            let entry = self.rep_levels.entry(id).or_insert(level);
-            *entry = (*entry).min(level);
+        memo: &mut UnifyMemo,
+        left: &Shape,
+        right: &Shape,
+    ) -> Result<(), UnifyError> {
+        if std::ptr::eq(left, right) {
+            return Ok(());
         }
+        if let (Shape::Rank(a), Shape::Rank(b)) = (left, right)
+            && a == b
+        {
+            return Ok(());
+        }
+        let key = (
+            std::ptr::from_ref(left).addr(),
+            std::ptr::from_ref(right).addr(),
+        );
+        if !memo.visited_shapes.insert(key) {
+            return Ok(());
+        }
+        self.unify_shape(left, right)
     }
 
     /// Unifies two shapes.
@@ -2742,6 +3365,9 @@ impl Infer {
         left: &Shape,
         right: &Shape,
     ) -> Result<(), UnifyError> {
+        if std::ptr::eq(left, right) {
+            return Ok(());
+        }
         match (left, right) {
             | (Shape::Rank(a), Shape::Rank(b)) if a == b => Ok(()),
             // Same rank, one side knows the extents — safe in either direction.
@@ -2765,6 +3391,7 @@ impl Infer {
                 }
                 for (x, y) in a.iter().zip(b.iter()) {
                     match (x, y) {
+                        | (Some(p), Some(q)) if p == q => {},
                         // Two literal extents that differ are a shape error
                         // the reader can see (`[2]` against `[3]`), not the
                         // solver's normalised `0 = 1`.
@@ -2864,10 +3491,12 @@ impl Infer {
         }
     }
 
-    fn unify_row(
+    fn unify_row_memo(
         &mut self,
+        memo: &mut UnifyMemo,
         left: &Row,
         right: &Row,
+        depth: u32,
     ) -> Result<(), UnifyError> {
         let left_tail = left.tail_var();
         let right_tail = right.tail_var();
@@ -2877,7 +3506,7 @@ impl Infer {
         for (label, ty) in left.iter_fields() {
             left_labels.insert(label);
             if let Some(other) = right_fields.get(label) {
-                self.unify(ty, other)?;
+                self.unify_pair_rec(memo, ty, other, depth.saturating_add(1))?;
             } else if right_tail.is_some() {
                 left_only.push((label, ty));
             } else {
@@ -2894,7 +3523,12 @@ impl Infer {
             .flatten()
             .any(|tail| self.row_subst.contains_key(&tail))
         {
-            return self.unify_row(&self.resolve_row(left), &self.resolve_row(right));
+            return self.unify_row_memo(
+                memo,
+                &self.resolve_row(left),
+                &self.resolve_row(right),
+                depth.saturating_add(1),
+            );
         }
 
         let mut right_only = Vec::new();
@@ -3060,7 +3694,7 @@ impl Infer {
             }
         }
         let level = self.row_levels.get(&id).copied().unwrap_or(0);
-        self.lower_row_levels(&row, level);
+        self.lower_levels_iter(Occurrence::Row(&row), level, None);
         self.row_subst.insert(id, row);
         Ok(())
     }
@@ -3521,7 +4155,7 @@ impl Infer {
                         // Record the default as a substitution: a deferred
                         // constraint recorded this variable, and it must see
                         // the defaulted type too.
-                        self.subst.insert(id, defaulted.clone());
+                        self.subst.insert(id, Arc::new(defaulted.clone()));
                         self.numeric_changed(id);
                         defaulted
                     },
@@ -3887,6 +4521,318 @@ impl Infer {
 enum Occurrence<'a> {
     Type(&'a Type),
     Row(&'a Row),
+}
+
+enum BindTarget<'a> {
+    Arc(Arc<Type>),
+    Borrowed(&'a Type),
+}
+
+impl BindTarget<'_> {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "uniformly borrows the target Type whether wrapped in Arc or stack-borrowed"
+    )]
+    fn as_type(&self) -> &Type {
+        match self {
+            | Self::Arc(arc) => arc.as_ref(),
+            | Self::Borrowed(ty) => ty,
+        }
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "preserves O(1) Arc sharing when binding a variable to an existing Arc"
+    )]
+    fn into_arc(self) -> Arc<Type> {
+        match self {
+            | Self::Arc(arc) => arc,
+            | Self::Borrowed(ty) => Arc::new(ty.clone()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum NodeKey {
+    Var(u32),
+    Ptr(usize),
+}
+
+#[derive(Default)]
+struct UnifyMemo {
+    visited: HashSet<(NodeKey, NodeKey)>,
+    visited_shapes: HashSet<(usize, usize)>,
+    verified_var_pairs: Vec<(u32, u32)>,
+    flat_cache: HashMap<usize, Arc<FlatTree>>,
+}
+
+impl UnifyMemo {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn to_flat_side(
+        &mut self,
+        ty: &Type,
+    ) -> FlatSide {
+        if let Type::Var(id) = ty {
+            return FlatSide::Var(*id);
+        }
+        let addr = std::ptr::from_ref(ty).addr();
+        if let Some(cached) = self.flat_cache.get(&addr) {
+            return FlatSide::Node(Arc::clone(cached), 0);
+        }
+        let tree = Arc::new(flatten_type(ty));
+        self.flat_cache.insert(addr, Arc::clone(&tree));
+        FlatSide::Node(tree, 0)
+    }
+
+    #[allow(
+        clippy::unused_self,
+        reason = "method keeps trampoline side normalization consistent on UnifyMemo"
+    )]
+    fn unwrap_flat_var(
+        &self,
+        side: FlatSide,
+    ) -> FlatSide {
+        if let FlatSide::Node(ref tree, idx) = side
+            && let Some(FlatType::Direct(Type::Var(id))) = tree.nodes.get(idx)
+        {
+            return FlatSide::Var(*id);
+        }
+        side
+    }
+}
+
+enum FlatSide {
+    Var(u32),
+    Node(Arc<FlatTree>, usize),
+}
+
+struct FlatTree {
+    nodes: Vec<FlatType>,
+    ptrs: Vec<usize>,
+}
+
+impl FlatTree {
+    fn is_error(
+        &self,
+        idx: usize,
+    ) -> bool {
+        matches!(self.nodes.get(idx), Some(FlatType::Direct(ty)) if ty.is_error())
+    }
+
+    fn is_var(
+        &self,
+        idx: usize,
+    ) -> bool {
+        matches!(self.nodes.get(idx), Some(FlatType::Direct(Type::Var(_))))
+    }
+
+    fn ptr(
+        &self,
+        idx: usize,
+    ) -> usize {
+        self.ptrs.get(idx).copied().unwrap_or(0)
+    }
+}
+
+enum FlatType {
+    Direct(Type),
+    Tensor {
+        shape: Shape,
+        elem: usize,
+    },
+    TypeRep(usize),
+    FromValue(usize),
+    Fn {
+        params: Vec<usize>,
+        ret: usize,
+    },
+    Adt {
+        id: crate::ty::AdtId,
+        args: Vec<usize>,
+    },
+    Io(usize),
+}
+
+const fn canonical_pair(
+    a: u32,
+    b: u32,
+) -> (u32, u32) {
+    if a < b { (a, b) } else { (b, a) }
+}
+
+fn resolve_rep_table(
+    rep_subst: &HashMap<u32, Rep>,
+    rep: Rep,
+) -> Rep {
+    let mut current = rep;
+    for _ in 0..=rep_subst.len() {
+        let Rep::Var(id) = current else {
+            return current;
+        };
+        let Some(bound) = rep_subst.get(&id) else {
+            return current;
+        };
+        current = *bound;
+    }
+    current
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "flattens deep type trees iteratively once per Arc when trampoline activates"
+)]
+fn flatten_type(root: &Type) -> FlatTree {
+    let mut nodes = vec![FlatType::Direct(Type::Error)];
+    let mut ptrs = vec![0usize];
+    let mut work = vec![(0usize, root)];
+    while let Some((slot, ty)) = work.pop() {
+        if let Some(ptr) = ptrs.get_mut(slot) {
+            *ptr = std::ptr::from_ref(ty).addr();
+        }
+        let flat = match ty {
+            | Type::Tensor { shape, elem } => {
+                let child = nodes.len();
+                nodes.push(FlatType::Direct(Type::Error));
+                ptrs.push(0);
+                work.push((child, elem));
+                FlatType::Tensor {
+                    shape: shape.clone(),
+                    elem: child,
+                }
+            },
+            | Type::Io(inner) => {
+                let child = nodes.len();
+                nodes.push(FlatType::Direct(Type::Error));
+                ptrs.push(0);
+                work.push((child, inner));
+                FlatType::Io(child)
+            },
+            | Type::TypeRepIntrinsic(Some(inner)) => {
+                let child = nodes.len();
+                nodes.push(FlatType::Direct(Type::Error));
+                ptrs.push(0);
+                work.push((child, inner));
+                FlatType::TypeRep(child)
+            },
+            | Type::FromValueIntrinsic(Some(inner)) => {
+                let child = nodes.len();
+                nodes.push(FlatType::Direct(Type::Error));
+                ptrs.push(0);
+                work.push((child, inner));
+                FlatType::FromValue(child)
+            },
+            | Type::Fn(params, ret) => {
+                let mut param_slots = Vec::with_capacity(params.len());
+                for param in params {
+                    let child = nodes.len();
+                    nodes.push(FlatType::Direct(Type::Error));
+                    ptrs.push(0);
+                    work.push((child, param));
+                    param_slots.push(child);
+                }
+                let ret_slot = nodes.len();
+                nodes.push(FlatType::Direct(Type::Error));
+                ptrs.push(0);
+                work.push((ret_slot, ret));
+                FlatType::Fn {
+                    params: param_slots,
+                    ret: ret_slot,
+                }
+            },
+            | Type::Adt(id, args) => {
+                let mut arg_slots = Vec::with_capacity(args.len());
+                for arg in args {
+                    let child = nodes.len();
+                    nodes.push(FlatType::Direct(Type::Error));
+                    ptrs.push(0);
+                    work.push((child, arg));
+                    arg_slots.push(child);
+                }
+                FlatType::Adt {
+                    id: *id,
+                    args: arg_slots,
+                }
+            },
+            | _ => FlatType::Direct(ty.clone()),
+        };
+        if let Some(target) = nodes.get_mut(slot) {
+            *target = flat;
+        }
+    }
+    FlatTree { nodes, ptrs }
+}
+
+fn unflatten_type(
+    tree: &FlatTree,
+    root: usize,
+) -> Type {
+    let mut dfs = vec![(root, false)];
+    let mut built: HashMap<usize, Type> = HashMap::new();
+    while let Some((idx, ready)) = dfs.pop() {
+        let Some(node) = tree.nodes.get(idx) else {
+            continue;
+        };
+        if !ready {
+            dfs.push((idx, true));
+            match node {
+                | FlatType::Tensor { elem, .. }
+                | FlatType::Io(elem)
+                | FlatType::TypeRep(elem)
+                | FlatType::FromValue(elem) => {
+                    dfs.push((*elem, false));
+                },
+                | FlatType::Fn { params, ret } => {
+                    dfs.push((*ret, false));
+                    for &param in params {
+                        dfs.push((param, false));
+                    }
+                },
+                | FlatType::Adt { args, .. } => {
+                    for &arg in args {
+                        dfs.push((arg, false));
+                    }
+                },
+                | FlatType::Direct(_) => {},
+            }
+            continue;
+        }
+        let ty = match node {
+            | FlatType::Direct(direct) => direct.clone(),
+            | FlatType::Tensor { shape, elem } => {
+                Type::Tensor {
+                    shape: shape.clone(),
+                    elem: Box::new(built.remove(elem).unwrap_or(Type::Error)),
+                }
+            },
+            | FlatType::Io(inner) => Type::Io(Box::new(built.remove(inner).unwrap_or(Type::Error))),
+            | FlatType::TypeRep(inner) => {
+                Type::TypeRepIntrinsic(Some(Box::new(built.remove(inner).unwrap_or(Type::Error))))
+            },
+            | FlatType::FromValue(inner) => {
+                Type::FromValueIntrinsic(Some(Box::new(built.remove(inner).unwrap_or(Type::Error))))
+            },
+            | FlatType::Fn { params, ret } => {
+                let param_tys = params
+                    .iter()
+                    .map(|id| built.remove(id).unwrap_or(Type::Error))
+                    .collect();
+                let ret_ty = built.remove(ret).unwrap_or(Type::Error);
+                Type::Fn(param_tys, Box::new(ret_ty))
+            },
+            | FlatType::Adt { id, args } => {
+                let arg_tys = args
+                    .iter()
+                    .map(|id| built.remove(id).unwrap_or(Type::Error))
+                    .collect();
+                Type::Adt(*id, arg_tys)
+            },
+        };
+        built.insert(idx, ty);
+    }
+    built.remove(&root).unwrap_or(Type::Error)
 }
 
 /// Applies fields from back to front around a shared tail.
@@ -4610,7 +5556,7 @@ mod tests {
             if let Type::Var(id) = alias
                 && alias != root
             {
-                assert_eq!(infer.subst.get(id), Some(root));
+                assert_eq!(infer.subst.get(id).map(Arc::as_ref), Some(root));
             }
         }
         let rep = infer.fresh_rep();
@@ -4672,5 +5618,156 @@ mod tests {
             .unwrap();
         assert_eq!(target.resolve(&ret), Type::float(Dim::base("Length")));
         assert!(matches!(infer.resolve_rep(right), Rep::Var(_)));
+    }
+
+    fn drain_deep_tensor_type(mut ty: Type) {
+        while let Type::Tensor { elem, .. } = ty {
+            ty = *elem;
+        }
+    }
+
+    fn build_deep_tensor(
+        depth: usize,
+        leaf: Type,
+    ) -> Type {
+        let mut current = leaf;
+        for step in 0..depth {
+            let extent = (step % 4) + 1;
+            current = Type::Tensor {
+                shape: Shape::Refined(vec![Some(Nat::Lit(extent as u64))]),
+                elem: Box::new(current),
+            };
+        }
+        current
+    }
+
+    #[test]
+    fn deep_nested_tensor_unification_accepts_equal_and_rejects_mismatch() {
+        let mut infer = Infer::new();
+        let deep_a = build_deep_tensor(4096, Type::float(Dim::one()));
+        let deep_b = build_deep_tensor(4096, Type::float(Dim::one()));
+        infer.unify(&deep_a, &deep_b).unwrap();
+
+        let bound_a = build_deep_tensor(1024, Type::float(Dim::one()));
+        let bound_b = build_deep_tensor(1024, Type::float(Dim::one()));
+        let var_a = infer.fresh_type();
+        let var_b = infer.fresh_type();
+        infer.unify(&var_a, &bound_a).unwrap();
+        infer.unify(&var_b, &bound_b).unwrap();
+        infer.unify(&var_a, &var_b).unwrap();
+        // Repeat hits `unified_vars` directly.
+        infer.unify(&var_a, &var_b).unwrap();
+
+        let bad_leaf = build_deep_tensor(4096, Type::int());
+        assert!(infer.unify(&deep_a, &bad_leaf).is_err());
+
+        let bad_shape = Type::Tensor {
+            shape: Shape::Refined(vec![Some(Nat::Lit(99))]),
+            elem: Box::new(build_deep_tensor(4095, Type::float(Dim::one()))),
+        };
+        assert!(infer.unify(&deep_a, &bad_shape).is_err());
+
+        // Drop deep monolithic trees iteratively.
+        drop(infer);
+        drain_deep_tensor_type(deep_a);
+        drain_deep_tensor_type(deep_b);
+        drain_deep_tensor_type(bound_a);
+        drain_deep_tensor_type(bound_b);
+        drain_deep_tensor_type(bad_leaf);
+        drain_deep_tensor_type(bad_shape);
+    }
+
+    #[test]
+    fn deep_var_bound_tensor_chain_exercises_trampoline_without_stack_overflow() {
+        let mut infer = Infer::new();
+        let mut head_a = Type::float(Dim::one());
+        let mut head_b = Type::float(Dim::one());
+        for step in 0..4096 {
+            let extent = Some(Nat::Lit(((step % 3) + 2) as u64));
+            let va = infer.fresh_type();
+            let vb = infer.fresh_type();
+            infer
+                .unify(
+                    &va,
+                    &Type::Tensor {
+                        shape: Shape::Refined(vec![extent.clone()]),
+                        elem: Box::new(head_a),
+                    },
+                )
+                .unwrap();
+            infer
+                .unify(
+                    &vb,
+                    &Type::Tensor {
+                        shape: Shape::Refined(vec![extent]),
+                        elem: Box::new(head_b),
+                    },
+                )
+                .unwrap();
+            head_a = va;
+            head_b = vb;
+        }
+        infer.unify(&head_a, &head_b).unwrap();
+
+        // Also verify mixed Var-chain against monolithic deep tensor (triggers depth >= 64 trampoline).
+        let monolithic = build_deep_tensor(4096, Type::float(Dim::one()));
+        let mut mixed = Type::float(Dim::one());
+        for step in 0..4096 {
+            let extent = Some(Nat::Lit(((step % 4) + 1) as u64));
+            let v = infer.fresh_type();
+            infer
+                .unify(
+                    &v,
+                    &Type::Tensor {
+                        shape: Shape::Refined(vec![extent]),
+                        elem: Box::new(mixed),
+                    },
+                )
+                .unwrap();
+            mixed = v;
+        }
+        infer.unify(&mixed, &monolithic).unwrap();
+        drain_deep_tensor_type(monolithic);
+    }
+
+    #[test]
+    fn shared_dag_tensor_unification_deduplicates_paths_and_respects_restore() {
+        let mut infer = Infer::new();
+        let build_dag = |infer: &mut Infer, leaf: Type| -> Type {
+            let mut cur = infer.fresh_type();
+            infer.unify(&cur, &leaf).unwrap();
+            for depth in 0..64 {
+                let next = infer.fresh_type();
+                let tensor = Type::Tensor {
+                    shape: Shape::Refined(vec![Some(Nat::Lit((depth % 5) + 1))]),
+                    elem: Box::new(cur.clone()),
+                };
+                infer
+                    .unify(
+                        &next,
+                        &Type::func(vec![tensor.clone(), tensor.clone()], tensor),
+                    )
+                    .unwrap();
+                cur = next;
+            }
+            cur
+        };
+
+        let left = build_dag(&mut infer, Type::float(Dim::one()));
+        let right = build_dag(&mut infer, Type::float(Dim::one()));
+        let bad = build_dag(&mut infer, Type::int());
+
+        let snapshot = infer.clone();
+        infer.unify(&left, &right).unwrap();
+        // Repeat after caching `unified_vars`.
+        infer.unify(&left, &right).unwrap();
+        // Mismatch deep at bottom of 2^64 paths still fails cleanly.
+        assert!(infer.unify(&left, &bad).is_err());
+
+        // Restoring snapshot rolls back `unified_vars` too, so re-unifying still validates cleanly.
+        infer.restore(&snapshot);
+        assert!(infer.unify(&left, &bad).is_err());
+        infer.restore(&snapshot);
+        infer.unify(&left, &right).unwrap();
     }
 }

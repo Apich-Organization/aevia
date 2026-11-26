@@ -780,7 +780,14 @@ impl Registry {
                     .iter()
                     .enumerate()
                     .filter(|(_, source)| {
-                        **source == rssn::kernel::manifest::SignatureSource::Witnessed
+                        // An overlay overload is hand-curated typing for this
+                        // operator, so it carries the same authority as a
+                        // witnessed one when the domain module picks a shape.
+                        matches!(
+                            **source,
+                            rssn::kernel::manifest::SignatureSource::Witnessed
+                                | rssn::kernel::manifest::SignatureSource::Overlay
+                        )
                     })
                     .map(|(index, _)| index)
                     .collect(),

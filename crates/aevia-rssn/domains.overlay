@@ -67,7 +67,7 @@ family Special special:* numerical_special:*
 family Statistics stats:* numerical_stats:*
 family Calculus calculus:* variational:* verify:* holonomic:*
 family Elementary elementary:* complex:* radicals:*
-family Core kernel:* rewriting:* cse:* units:*
+family Core kernel:* arith:* rewriting:* cse:* units:*
 family Numeric numeric:* numerical_matrix:* numerical_vector:* numerical_callback:*
 family LinearAlgebra linalg:* sparse_symbolic:*
 family Differential ode:* sde:* pde:*

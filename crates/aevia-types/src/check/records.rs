@@ -204,12 +204,12 @@ impl Checker {
             match &elem {
                 | None => elem = Some(ty),
                 | Some(existing) => {
-                    let existing_resolved = self.infer.resolve(existing);
-                    let this_resolved = self.infer.resolve(&ty);
                     if let Err(error) = self.infer.unify(existing, &ty) {
                         // §3.5.2: same-level sub-sequences must have equal
                         // length, and that has its own code (E0203) instead of
                         // a generic mismatch — `[[1.0, 2.0], [3.0]]` is ragged.
+                        let existing_resolved = self.infer.resolve(existing);
+                        let this_resolved = self.infer.resolve(&ty);
                         if shapes_are_ragged(&existing_resolved, &this_resolved) {
                             self.error(
                                 "E0203",
@@ -220,11 +220,11 @@ impl Checker {
                             self.report_unify(error, item.span);
                         }
                     }
-                    if matches!(existing_resolved, Type::Var(_)) {
+                    if let Some(tail_var) = self.infer.unbound_var_alias(existing) {
                         // Consecutive literal variables bind left to right.
                         // Keep the current alias instead of revisiting the
                         // first element's growing chain on every iteration.
-                        elem = Some(existing_resolved);
+                        elem = Some(tail_var);
                     }
                 },
             }

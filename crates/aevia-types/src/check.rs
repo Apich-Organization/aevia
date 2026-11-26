@@ -6853,25 +6853,16 @@ impl Checker {
         actual: &Type,
         expected: &Type,
     ) -> Option<String> {
-        let actual = self.infer.resolve(actual);
-        let expected = self.infer.resolve(expected);
-        let (
-            Type::Tensor {
-                shape: Shape::Rank(actual_rank),
-                ..
-            },
-            Type::Tensor {
-                shape: Shape::Refined(items),
-                ..
-            },
-        ) = (&actual, &expected)
-        else {
+        let Some(Shape::Refined(items)) = self.infer.outer_tensor_shape(expected) else {
+            return None;
+        };
+        let Some(Shape::Rank(actual_rank)) = self.infer.outer_tensor_shape(actual) else {
             return None;
         };
         let known_extent = items
             .iter()
             .any(|item| item.as_ref().and_then(Nat::as_const).is_some());
-        if known_extent && usize::try_from(*actual_rank).unwrap_or(usize::MAX) == items.len() {
+        if known_extent && usize::try_from(actual_rank).unwrap_or(usize::MAX) == items.len() {
             Some("a rank-only tensor cannot satisfy a refined annotation".to_string())
         } else {
             None
