@@ -1,0 +1,25 @@
+module MatrixOperations
+
+## Dense matrix construction, triangular masks, trace, transpose, and
+## element updates while preserving physical dimensions.
+
+let a = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]
+let b = fill(3.5, 2, 2)
+let grid = linspace(0.0, 1.0, 5)
+let id = eye(3)
+let d = diag([2.0, 4.0, 6.0])
+
+fn main(): IO Unit = do
+    let updated = set(a, [1, 1], 10.0)
+    println("trace(a)       = {trace(a)}")
+    println("trace(updated) = {trace(updated)}")
+    println("tril(id)       = {tril(id)}")
+    println("triu(d)        = {triu(d)}")
+    println("transpose(b)   = {transpose(b)}")
+    println("linspace(0,1,5)= {grid}")
+
+test "trace matches diagonal sum" = approx_eq(trace(a), 15.0, 1e-12)
+test "identity trace equals dimension" = approx_eq(trace(eye(4)), 4.0, 1e-12)
+test "set updates matrix diagonal" = approx_eq(trace(set(a, [2, 2], 10.0)), 16.0, 1e-12)
+test "diag extracts vector entries" = approx_eq(sum(diag(d)), 12.0, 1e-12)
+test "fill builds requested shape" = shape(fill(1.5, 2, 3)) == [2, 3]

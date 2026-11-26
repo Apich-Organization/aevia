@@ -1,0 +1,39 @@
+## Run: aevia run examples/sim_io_visualization.aev
+## Simulate a damped harmonic oscillator, export tabular/array outputs (CSV, JSON, NPY),
+## and render SVG, HTML, and animated GIF visualizations.
+open Units.SI
+import Data as Data
+import Plot as Plots
+
+let times = [0.0 s, 0.5 s, 1.0 s, 1.5 s, 2.0 s, 2.5 s, 3.0 s, 3.5 s]
+let observed = [1.00 m, 0.58 m, 0.34 m, 0.19 m, 0.11 m, 0.06 m, 0.04 m, 0.02 m]
+let model = [1.00 m, 0.60 m, 0.36 m, 0.22 m, 0.13 m, 0.08 m, 0.05 m, 0.03 m]
+let err = [0.04 m, 0.03 m, 0.03 m, 0.02 m, 0.02 m, 0.02 m, 0.01 m, 0.01 m]
+let residuals = observed - model
+
+let frame1 = Plots.combine([
+    Plots.line_with(times, model, { Plots.default_plot_opts with color = Some("#228855"), label = Some("Model"), xunit = Some("s"), yunit = Some("m") }),
+    Plots.errorbar_with(times, observed, err, { Plots.default_plot_opts with color = Some("#2255aa"), label = Some("Observed"), xunit = Some("s"), yunit = Some("m") })
+])
+let frame2 = Plots.combine([Plots.hist(residuals, 4)])
+let frame3 = Plots.combine([Plots.heatmap([[1.0, 0.6, 0.36], [0.6, 0.36, 0.22], [0.36, 0.22, 0.13]])])
+
+fn main(): IO Unit = do
+    let tbl_res = Data.to_table([
+        { t = 0.0, y = 1.00 },
+        { t = 0.5, y = 0.58 },
+        { t = 1.0, y = 0.34 },
+        { t = 1.5, y = 0.19 }
+    ])
+    match tbl_res with
+    | Ok(tbl) -> do
+        let _ = Data.write_csv("damped_oscillator.csv", tbl)
+        println("Wrote damped_oscillator.csv")
+    | Err(e) -> println("Table error")
+    let _ = Data.write_npy("damped_oscillator.npy", [[1.0, 0.58], [0.5, 0.34], [1.0, 0.19]])
+    Plots.save("damped_oscillator.svg", frame1)
+    Plots.save("damped_residuals.html", frame2)
+    anim <- Plots.plot_save_gif("damped_evolution.gif", [frame1, frame2, frame3], 30)
+    match anim with
+    | Ok(_) -> println("Wrote damped_oscillator.npy, damped_oscillator.svg, damped_residuals.html, and damped_evolution.gif.")
+    | Err(e) -> println(e)
