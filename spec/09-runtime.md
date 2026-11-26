@@ -14,7 +14,7 @@
 | `aevia-rssn` | rssn 桥：`Session`、两套值模型的转换、Kernel Manifest、`Rssn` 模块生成、JIT 透传 |
 | `aevia-std` / `aevia-stdlib-model` | 标准库源码与 RSSN 适配 / 标准库生成的事实来源 |
 | `aevia-core` | 值、张量、闭包、IO、解释器、内建函数、符号层、模块加载器（`driver`/`manifest`）、磁盘缓存、并行、可选 JIT |
-| `aevia-fmt` / `aevia-doc` | 格式化器 / `##` 文档与 doctest 抽取 |
+| `aevia-fmt` / `aevia-doc` / `aevia-lint` | 格式化器 / `##` 文档与 doctest 抽取 / 编译器与风格 lint 检查 |
 | `aevia-analysis` / `aevia-lsp` | 与编辑器无关的语义查询 / LSP 适配层（唯一知道 JSON-RPC 的 crate） |
 | `aevia-resolve` | 版本需求与依赖解析（§7.5.1.2），纯 crate |
 | `aevia-cli` | `aevia` 可执行文件 |
@@ -417,7 +417,7 @@ aevia check [--all] [-A|-W|-D|-F LINT] [file.aev…]  类型/量纲检查，不�
 aevia lint [--all] [--fix] [--format human|json|sarif] [-A|-W|-D|-F LINT] [file.aev…]
                                                    运行编译器/正确性/风格/pedantic lint（支持 `--list`、`--explain`）
 aevia watch [file] [--once | --runs N]             反复检查，只重检变化的模块（§9.11.1）
-aevia test [--filter PAT] [file.aev]               运行 `test` 声明
+aevia test [--filter PAT | --exact=NAME] [--no-cache] [--relax-result] [file.aev]  运行 `test` 声明
 aevia test --doc [--filter PAT] [files…]           编译 `##` 文档中的 aevia 代码块（§9.12）
 aevia repl                                         交互会话（§9.8）
 aevia fmt [--check] [files…]                       格式化，默认包的 src/
@@ -433,8 +433,11 @@ aevia tree [--offline]                             打印依赖树
 aevia clean [--registry]                           删除 `.aevia/`（`.aevia/registry` 除非指定否则保留）
 aevia lsp [--stdio]                                语言服务器（§9.10）
 aevia debug [--stdio]                             为编辑器提供源码调试适配器
+aevia completions <bash|zsh|fish|powershell|elvish>  生成 shell 补全脚本
+aevia toolchain <command>                          安装、更新与切换工具链
 aevia rssn [--audit] [--emit [--out DIR] [--namespaces]]   审计 Kernel Manifest / 生成 Rssn 模块（第 13 章）
 aevia rssn --describe OPERATOR                     查看当前清单的算子文档、重载和 Aevia 绑定
+aevia devices                                      查看 CPU SIMD、JIT 与已注册的 RSSN/GPU 设备
 aevia login                                        用浏览器把签名密钥绑定到 registry 账户
 aevia publish [--owner HANDLE] [--no-verify] [--dry-run] [选项…]  检查、签名并上传本包
 aevia search <query>      aevia info <owner/name>  搜索 registry / 显示包页面
@@ -457,12 +460,13 @@ aevia --version
 | `--max-stack MiB` | 解释器线程的栈（默认 1024） |
 | `--budget STEPS` | 尾调用/IO 步骤预算，超出 `E0805`（默认 100,000,000；不是秒，§9.3.4） |
 | `--caps LIST` | 只授予这些 capability：`fs,net,env,rand,gpu`（空列表 = 全部沙箱；默认全部，§9.14） |
+| `--backend NAME` | 选择执行后端：`auto`、`ir`、`ast`、`cpu`、`cpu-parallel` 或 `gpu` |
 | `--jobs N` | 并行求值的工作线程数（§9.7.2） |
-| `--no-cache` | `check`/`run` 既不读也不写磁盘缓存（§9.11） |
-| `--out PATH` | 输出路径（`rssn --emit`、`doc`） |
 | `--color auto\|always\|never` | CLI 与 REPL 着色；自动模式遵循终端支持与 `NO_COLOR` |
 | `--locked` | 拒绝改写过期的 `aevia.lock`（`update`/`add`/…） |
 | `--release` | 执行前优化已检查的 Core IR：折叠常量布尔表达式、传播局部已知布尔条件并消除不可达分支；保留运行时检查、执行预算和数值表示（JIT 见 §9.6） |
+
+子命令选项包括 `--no-cache`（`run`、`check`、`lint`、`test`）和 `--out PATH`（`rssn --emit`、`doc`）。
 
 - **程序参数**：`aevia run [file] -- args…` 只把 `--` **之后**的字符串交给程序，程序用 `args()` 读取
   （§8.1.8，返回 `Tensor<1, String>`；无参数为 `[]`）。`check`/`test`/`bench` 不转发参数。
@@ -599,7 +603,7 @@ LSP 复用 `aevia-syntax`/`aevia-types`，不启动运行时。文件已保存�
   `driver::load_with_disk_cache` 与 `driver::load_incremental_with_disk_cache`（`DiskCache::beside(entry)`）。
 
 缓存保存完整的已检查模块、单位表和量纲环境。计算缓存键会读取依赖闭包中的接口。
-CLI 的 `check` 和 `run` 使用此缓存，按模块名保留至多四个修订。
+CLI 的 `check`（含 `--all`）、`run`、`lint`（含 `--all`）、`test` 和 `watch` 使用此缓存，按模块名保留至多四个修订。
 
 ## 9.12 测试与基准
 

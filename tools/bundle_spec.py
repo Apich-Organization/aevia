@@ -54,7 +54,7 @@ ORDER = [
     "appendix-b-diagnostics.md",
 ]
 KEYWORDS = (
-    "as class derive dimension do else false fn for if import in instance let match "
+    "as class derive dimension do else export false fn for if import in instance let match "
     "module open private rec test then true type unit where with forall"
 ).split()
 

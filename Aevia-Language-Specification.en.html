@@ -4893,8 +4893,8 @@ Physics
 <td>values, tensors, closures, IO, the interpreters, built-ins, the symbolic layer, the module loader (<code>driver</code>/<code>manifest</code>), the disk cache, parallelism, the optional JIT</td>
 </tr>
 <tr>
-<td><code>aevia-fmt</code> / <code>aevia-doc</code></td>
-<td>the formatter / <code>##</code> documentation and doctest extraction</td>
+<td><code>aevia-fmt</code> / <code>aevia-doc</code> / <code>aevia-lint</code></td>
+<td>the formatter / <code>##</code> documentation and doctest extraction / compiler and style lints</td>
 </tr>
 <tr>
 <td><code>aevia-analysis</code> / <code>aevia-lsp</code></td>
@@ -5274,7 +5274,7 @@ aevia check [--all] [-A|-W|-D|-F LINT] [file.aev…]  type/dimension check witho
 aevia lint [--all] [--fix] [--format human|json|sarif] [-A|-W|-D|-F LINT] [file.aev…]
                                                    run compiler, correctness, style, and pedantic lints (`--list`, `--explain`)
 aevia watch [file] [--once | --runs N]             check repeatedly, re-checking only changed modules (§9.11.1)
-aevia test [--filter PAT] [file.aev]               run `test` declarations
+aevia test [--filter PAT | --exact=NAME] [--no-cache] [--relax-result] [file.aev]  run `test` declarations
 aevia test --doc [--filter PAT] [files…]           compile the aevia blocks of `##` docs (§9.12)
 aevia repl                                         interactive session (§9.8)
 aevia fmt [--check] [files…]                       format source, the package&#39;s src/ by default
@@ -5290,8 +5290,11 @@ aevia tree [--offline]                             print the dependency tree
 aevia clean [--registry]                           remove `.aevia/` (`.aevia/registry` stays unless asked)
 aevia lsp [--stdio]                                language server (§9.10)
 aevia debug [--stdio]                             source debug adapter for editors
+aevia completions &lt;bash|zsh|fish|powershell|elvish&gt;  generate shell completion scripts
+aevia toolchain &lt;command&gt;                          install, update, and select toolchains
 aevia rssn [--audit] [--emit [--out DIR] [--namespaces]]   audit a Kernel Manifest / generate the Rssn module (chapter 13)
 aevia rssn --describe OPERATOR                     show the live manifest documentation, overloads, and Aevia bindings
+aevia devices                                      inspect CPU SIMD, JIT, and registered RSSN/GPU devices
 aevia login                                        bind a signing key to your registry account (browser)
 aevia publish [--owner HANDLE] [--no-verify] [--dry-run] [options…]  check, sign and upload this package
 aevia search &lt;query&gt;      aevia info &lt;owner/name&gt;  search the registry / show a package page
@@ -5325,16 +5328,12 @@ aevia --version</code></pre>
 <td>grant only these capabilities: <code>fs,net,env,rand,gpu</code> (empty list = sandbox everything; default all, §9.14)</td>
 </tr>
 <tr>
+<td><code>--backend NAME</code></td>
+<td>select execution backend: <code>auto</code>, <code>ir</code>, <code>ast</code>, <code>cpu</code>, <code>cpu-parallel</code>, or <code>gpu</code></td>
+</tr>
+<tr>
 <td><code>--jobs N</code></td>
 <td>worker threads for parallel evaluation (§9.7.2)</td>
-</tr>
-<tr>
-<td><code>--no-cache</code></td>
-<td><code>check</code>/<code>run</code> neither read nor write the disk caches (§9.11)</td>
-</tr>
-<tr>
-<td><code>--out PATH</code></td>
-<td>output path (<code>rssn --emit</code>, <code>doc</code>)</td>
 </tr>
 <tr>
 <td><code>--color auto|always|never</code></td>
@@ -5350,6 +5349,7 @@ aevia --version</code></pre>
 </tr>
 </tbody>
 </table>
+<p>Per-subcommand flags include <code>--no-cache</code> (<code>run</code>, <code>check</code>, <code>lint</code>, <code>test</code>) and <code>--out PATH</code> (<code>rssn --emit</code>, <code>doc</code>).</p>
 <ul>
 <li><strong>Program arguments</strong>: <code>aevia run [file] -- args…</code> hands only the strings <strong>after</strong> <code>--</code> to the program, which reads them with <code>args()</code> (§8.1.8, a <code>Tensor&lt;1, String&gt;</code>; <code>[]</code> when there are none). <code>check</code>, <code>test</code> and <code>bench</code> do not forward arguments.</li>
 <li><strong>Registry commands.</strong> Aevia forwards <code>login</code>, <code>search</code>, <code>info</code>, <code>yank</code>, <code>verify</code>, <code>key</code>, <code>status</code>, <code>lock</code>, and <code>index</code> to <code>aevia-pkg</code>. The toolchain resolves dependencies locally for <code>add</code>, <code>update</code>, <code>fetch</code>, and <code>tree</code> and uses the companion for network requests. Set <code>AEVIA_PKG</code> to select a specific executable. Otherwise Aevia looks beside its own executable, on <code>PATH</code>, and in the platform build directory of a source checkout. Forwarded <code>--registry URL</code> takes precedence over <code>AEVIA_REGISTRY</code>, followed by the client configuration and public registry.</li>
@@ -5426,7 +5426,7 @@ aevia --version</code></pre>
 <li><strong><code>AdtId</code> does not enter the file (§7.3).</strong> On encoding, each <code>AdtId</code> that occurs gets an in-file index and the ADT table records its full definition (<code>AdtKey</code> = module path + name + declaration schema, parameters, parameter kinds, constructors and field types, with cycles expressed by index); the reserved <code>Option</code>/<code>Result</code>/<code>Ordering</code> (0/1/2) are written as is. On decoding, the ADT table is first <strong>re-interned</strong> into this process's registry (a complete type with the same <code>AdtKey</code> reuses its <code>AdtId</code>, otherwise one is created; host and opaque types are <code>intern</code>ed by name) and only then is the body decoded.</li>
 <li>An entry is reused only under the same <code>FileId</code>, which is in both the key and the file. <code>LoadStats</code> gains <code>disk_hits</code> and <code>disk_writes</code>; the entry points are <code>driver::load_with_disk_cache</code> and <code>driver::load_incremental_with_disk_cache</code> (<code>DiskCache::beside(entry)</code>).</li>
 </ul>
-<p>The cache stores the checked module with its unit table and dimension environment. Computing a key visits the interfaces in the dependency closure. The CLI uses this cache for <code>check</code> and <code>run</code>. The four-revision retention applies per module name.</p>
+<p>The cache stores the checked module with its unit table and dimension environment. Computing a key visits the interfaces in the dependency closure. The CLI uses this cache for <code>check</code> (including <code>--all</code>), <code>run</code>, <code>lint</code> (including <code>--all</code>), <code>test</code>, and <code>watch</code>. The four-revision retention applies per module name.</p>
 <h2 id="09-runtime--912-tests-and-benchmarks">9.12 Tests and benchmarks</h2>
 <ul>
 <li>Unit tests: <code>test</code> declarations, <code>aevia test [--filter PAT]</code>. Use <code>forall</code> to test propositions over fixed numeric samples (§8.13).</li>

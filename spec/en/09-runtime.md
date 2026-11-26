@@ -16,7 +16,7 @@ performance boundaries.
 | `aevia-rssn` | the rssn bridge: `Session`, conversion between the two value models, Kernel Manifest, `Rssn` module generation, JIT pass-through |
 | `aevia-std` / `aevia-stdlib-model` | standard-library source and RSSN adapters / the source of truth for generation |
 | `aevia-core` | values, tensors, closures, IO, the interpreters, built-ins, the symbolic layer, the module loader (`driver`/`manifest`), the disk cache, parallelism, the optional JIT |
-| `aevia-fmt` / `aevia-doc` | the formatter / `##` documentation and doctest extraction |
+| `aevia-fmt` / `aevia-doc` / `aevia-lint` | the formatter / `##` documentation and doctest extraction / compiler and style lints |
 | `aevia-analysis` / `aevia-lsp` | editor-independent semantic queries / the LSP adapter (the only crate that knows JSON-RPC) |
 | `aevia-resolve` | version requirements and dependency resolution (§7.5.1.2), a pure crate |
 | `aevia-cli` | the `aevia` executable |
@@ -566,7 +566,7 @@ aevia check [--all] [-A|-W|-D|-F LINT] [file.aev…]  type/dimension check witho
 aevia lint [--all] [--fix] [--format human|json|sarif] [-A|-W|-D|-F LINT] [file.aev…]
                                                    run compiler, correctness, style, and pedantic lints (`--list`, `--explain`)
 aevia watch [file] [--once | --runs N]             check repeatedly, re-checking only changed modules (§9.11.1)
-aevia test [--filter PAT] [file.aev]               run `test` declarations
+aevia test [--filter PAT | --exact=NAME] [--no-cache] [--relax-result] [file.aev]  run `test` declarations
 aevia test --doc [--filter PAT] [files…]           compile the aevia blocks of `##` docs (§9.12)
 aevia repl                                         interactive session (§9.8)
 aevia fmt [--check] [files…]                       format source, the package's src/ by default
@@ -582,8 +582,11 @@ aevia tree [--offline]                             print the dependency tree
 aevia clean [--registry]                           remove `.aevia/` (`.aevia/registry` stays unless asked)
 aevia lsp [--stdio]                                language server (§9.10)
 aevia debug [--stdio]                             source debug adapter for editors
+aevia completions <bash|zsh|fish|powershell|elvish>  generate shell completion scripts
+aevia toolchain <command>                          install, update, and select toolchains
 aevia rssn [--audit] [--emit [--out DIR] [--namespaces]]   audit a Kernel Manifest / generate the Rssn module (chapter 13)
 aevia rssn --describe OPERATOR                     show the live manifest documentation, overloads, and Aevia bindings
+aevia devices                                      inspect CPU SIMD, JIT, and registered RSSN/GPU devices
 aevia login                                        bind a signing key to your registry account (browser)
 aevia publish [--owner HANDLE] [--no-verify] [--dry-run] [options…]  check, sign and upload this package
 aevia search <query>      aevia info <owner/name>  search the registry / show a package page
@@ -606,12 +609,13 @@ Global flags (before the program-argument separator `--`):
 | `--max-stack MiB` | the interpreter thread's stack (default 1024) |
 | `--budget STEPS` | tail-call/IO step budget before `E0805` (default 100,000,000; not seconds, §9.3.4) |
 | `--caps LIST` | grant only these capabilities: `fs,net,env,rand,gpu` (empty list = sandbox everything; default all, §9.14) |
+| `--backend NAME` | select execution backend: `auto`, `ir`, `ast`, `cpu`, `cpu-parallel`, or `gpu` |
 | `--jobs N` | worker threads for parallel evaluation (§9.7.2) |
-| `--no-cache` | `check`/`run` neither read nor write the disk caches (§9.11) |
-| `--out PATH` | output path (`rssn --emit`, `doc`) |
 | `--color auto\|always\|never` | CLI and REPL colouring; automatic mode honors terminal support and `NO_COLOR` |
 | `--locked` | refuse to rewrite an out-of-date `aevia.lock` (`update`/`add`/…) |
 | `--release` | optimize checked Core IR before execution: fold constant boolean expressions, propagate locally known boolean conditions, and eliminate unreachable constant branches; runtime checks, budgets and numeric representations are preserved (JIT: §9.6) |
+
+Per-subcommand flags include `--no-cache` (`run`, `check`, `lint`, `test`) and `--out PATH` (`rssn --emit`, `doc`).
 
 - **Program arguments**: `aevia run [file] -- args…` hands only the strings **after** `--` to the
   program, which reads them with `args()` (§8.1.8, a `Tensor<1, String>`; `[]` when there are
@@ -806,7 +810,8 @@ miss and is overwritten; at most 4 revisions per module name are kept.
 
 The cache stores the checked module with its unit table and dimension environment.
 Computing a key visits the interfaces in the dependency closure. The CLI uses this
-cache for `check` and `run`. The four-revision retention applies per module name.
+cache for `check` (including `--all`), `run`, `lint` (including `--all`), `test`, and `watch`.
+The four-revision retention applies per module name.
 
 ## 9.12 Tests and benchmarks
 

@@ -4891,8 +4891,8 @@ Physics
 <td>值、张量、闭包、IO、解释器、内建函数、符号层、模块加载器（<code>driver</code>/<code>manifest</code>）、磁盘缓存、并行、可选 JIT</td>
 </tr>
 <tr>
-<td><code>aevia-fmt</code> / <code>aevia-doc</code></td>
-<td>格式化器 / <code>##</code> 文档与 doctest 抽取</td>
+<td><code>aevia-fmt</code> / <code>aevia-doc</code> / <code>aevia-lint</code></td>
+<td>格式化器 / <code>##</code> 文档与 doctest 抽取 / 编译器与风格 lint 检查</td>
 </tr>
 <tr>
 <td><code>aevia-analysis</code> / <code>aevia-lsp</code></td>
@@ -5271,7 +5271,7 @@ aevia check [--all] [-A|-W|-D|-F LINT] [file.aev…]  类型/量纲检查，不�
 aevia lint [--all] [--fix] [--format human|json|sarif] [-A|-W|-D|-F LINT] [file.aev…]
                                                    运行编译器/正确性/风格/pedantic lint（支持 `--list`、`--explain`）
 aevia watch [file] [--once | --runs N]             反复检查，只重检变化的模块（§9.11.1）
-aevia test [--filter PAT] [file.aev]               运行 `test` 声明
+aevia test [--filter PAT | --exact=NAME] [--no-cache] [--relax-result] [file.aev]  运行 `test` 声明
 aevia test --doc [--filter PAT] [files…]           编译 `##` 文档中的 aevia 代码块（§9.12）
 aevia repl                                         交互会话（§9.8）
 aevia fmt [--check] [files…]                       格式化，默认包的 src/
@@ -5287,8 +5287,11 @@ aevia tree [--offline]                             打印依赖树
 aevia clean [--registry]                           删除 `.aevia/`（`.aevia/registry` 除非指定否则保留）
 aevia lsp [--stdio]                                语言服务器（§9.10）
 aevia debug [--stdio]                             为编辑器提供源码调试适配器
+aevia completions &lt;bash|zsh|fish|powershell|elvish&gt;  生成 shell 补全脚本
+aevia toolchain &lt;command&gt;                          安装、更新与切换工具链
 aevia rssn [--audit] [--emit [--out DIR] [--namespaces]]   审计 Kernel Manifest / 生成 Rssn 模块（第 13 章）
 aevia rssn --describe OPERATOR                     查看当前清单的算子文档、重载和 Aevia 绑定
+aevia devices                                      查看 CPU SIMD、JIT 与已注册的 RSSN/GPU 设备
 aevia login                                        用浏览器把签名密钥绑定到 registry 账户
 aevia publish [--owner HANDLE] [--no-verify] [--dry-run] [选项…]  检查、签名并上传本包
 aevia search &lt;query&gt;      aevia info &lt;owner/name&gt;  搜索 registry / 显示包页面
@@ -5322,16 +5325,12 @@ aevia --version</code></pre>
 <td>只授予这些 capability：<code>fs,net,env,rand,gpu</code>（空列表 = 全部沙箱；默认全部，§9.14）</td>
 </tr>
 <tr>
+<td><code>--backend NAME</code></td>
+<td>选择执行后端：<code>auto</code>、<code>ir</code>、<code>ast</code>、<code>cpu</code>、<code>cpu-parallel</code> 或 <code>gpu</code></td>
+</tr>
+<tr>
 <td><code>--jobs N</code></td>
 <td>并行求值的工作线程数（§9.7.2）</td>
-</tr>
-<tr>
-<td><code>--no-cache</code></td>
-<td><code>check</code>/<code>run</code> 既不读也不写磁盘缓存（§9.11）</td>
-</tr>
-<tr>
-<td><code>--out PATH</code></td>
-<td>输出路径（<code>rssn --emit</code>、<code>doc</code>）</td>
 </tr>
 <tr>
 <td><code>--color auto|always|never</code></td>
@@ -5347,6 +5346,7 @@ aevia --version</code></pre>
 </tr>
 </tbody>
 </table>
+<p>子命令选项包括 <code>--no-cache</code>（<code>run</code>、<code>check</code>、<code>lint</code>、<code>test</code>）和 <code>--out PATH</code>（<code>rssn --emit</code>、<code>doc</code>）。</p>
 <ul>
 <li><strong>程序参数</strong>：<code>aevia run [file] -- args…</code> 只把 <code>--</code> <strong>之后</strong>的字符串交给程序，程序用 <code>args()</code> 读取 （§8.1.8，返回 <code>Tensor&lt;1, String&gt;</code>；无参数为 <code>[]</code>）。<code>check</code>/<code>test</code>/<code>bench</code> 不转发参数。</li>
 <li><strong>注册中心命令。</strong> Aevia 将 <code>login</code>、<code>search</code>、<code>info</code>、<code>yank</code>、<code>verify</code>、<code>key</code>、<code>status</code>、<code>lock</code> 和 <code>index</code> 转发给 <code>aevia-pkg</code>。<code>add</code>、<code>update</code>、<code>fetch</code> 和 <code>tree</code> 由工具链在本地处理依赖， 并委托配套客户端处理网络请求。用 <code>AEVIA_PKG</code> 指定可执行文件。默认依次在 Aevia 可执行文件所在目录、 <code>PATH</code> 和源码工作区的平台构建目录中查找。转发命令的注册中心依次取 <code>--registry URL</code>、 <code>AEVIA_REGISTRY</code>、客户端配置和公共注册中心。</li>
@@ -5423,7 +5423,7 @@ aevia --version</code></pre>
 <li><strong><code>AdtId</code> 不进入文件（§7.3）。</strong> 编码时每个出现的 <code>AdtId</code> 在文件内分配下标，ADT 表写下完整定义（<code>AdtKey</code> = 模块路径 + 名字 + 声明 schema、参数、参数种类、构造器及字段类型，环用下标表达）；保留的 <code>Option</code>/<code>Result</code>/<code>Ordering</code>（0/1/2）按原值 写。解码时先把 ADT 表<strong>重新驻留</strong>到本进程注册表（已有完整且 <code>AdtKey</code> 相同的类型就复用 <code>AdtId</code>，否则新建；宿主/不透明类型 按名字 <code>intern</code>），再解码正文。</li>
 <li>缓存项只在同一 <code>FileId</code> 下复用，<code>FileId</code> 同时在键和文件里。<code>LoadStats</code> 增加 <code>disk_hits</code>/<code>disk_writes</code>；入口函数是 <code>driver::load_with_disk_cache</code> 与 <code>driver::load_incremental_with_disk_cache</code>（<code>DiskCache::beside(entry)</code>）。</li>
 </ul>
-<p>缓存保存完整的已检查模块、单位表和量纲环境。计算缓存键会读取依赖闭包中的接口。 CLI 的 <code>check</code> 和 <code>run</code> 使用此缓存，按模块名保留至多四个修订。</p>
+<p>缓存保存完整的已检查模块、单位表和量纲环境。计算缓存键会读取依赖闭包中的接口。 CLI 的 <code>check</code>（含 <code>--all</code>）、<code>run</code>、<code>lint</code>（含 <code>--all</code>）、<code>test</code> 和 <code>watch</code> 使用此缓存，按模块名保留至多四个修订。</p>
 <h2 id="09-runtime--912-测试与基准">9.12 测试与基准</h2>
 <ul>
 <li>单元测试：<code>test</code> 声明；<code>aevia test [--filter PAT]</code>。用 <code>forall</code> 在固定数值样本上检验命题（§8.13）。</li>

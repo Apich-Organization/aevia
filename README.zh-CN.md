@@ -25,7 +25,7 @@ aevia run examples/kinematics.aev
 | 资料 | 用途 |
 |---|---|
 | [Aevia 教程](platform/manuals/book/zh/01-getting-started.md) · [交互版](https://aevia.apich.org/book?lang=zh) | 通过完整练习和可运行示例学习 |
-| [标准库概览](spec/08-stdlib.md) · [在线参考](https://aevia.apich.org/stdlib?lang=zh) | 查找名称、签名、物理量纲和示例 |
+| [标准库](platform/stdlib-docs/stdlib.md) · [在线参考](https://aevia.apich.org/stdlib?lang=zh) | 查找名称、签名、物理量纲和示例 |
 | [语言规范](spec/README.md) · [单页 HTML](Aevia-Language-Specification.html) | 查询语法、类型规则和语言语义 |
 | [示例](examples/README.zh-CN.md) | 运行完整程序或复现数值验证 |
 | [编辑器](editors/README.md) | 配置诊断、导航、任务及受支持的调试功能 |
@@ -46,6 +46,8 @@ aevia check --all
 aevia run
 aevia test
 ```
+
+每个源码测试在结束时都会释放该测试创建的 RSSN 原生对象；文件级对象仍对同一文件中的全部测试可见。
 
 清单 `aevia.toml` 定义入口与依赖。[包指南](platform/manuals/book/zh/10-modules-and-packages.md)说明本地依赖、锁文件、文档和发布。[aevia-pkg](platform/README.md) 提供注册表访问和签名发布。
 

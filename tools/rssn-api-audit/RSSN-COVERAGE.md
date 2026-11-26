@@ -9,14 +9,14 @@ RSSN 3.0.0-beta.1, kernel API 2.
 
 | | operators |
 |---|---:|
-| in the manifest | 5353 |
+| in the manifest | 5436 |
 | typed in a domain module (curated `sig`, `Result` channel) | 265 |
-| typed in a domain module from kernel evidence (witnessed overload, `Result` channel) | 445 |
-| dynamic in a domain module (generated, `Result<Value, OpError>`) | 4643 |
+| typed in a domain module from kernel evidence (witnessed overload, `Result` channel) | 1157 |
+| dynamic in a domain module (generated, `Result<Value, OpError>`) | 4014 |
 | excluded from domain modules (with reason) | 0 |
 | unclassified (must be 0) | 0 |
-| exact-typed in the flat `Rssn.<op>` facade (some overload pinned to a declared/overlay signature) | 1098 |
-| with a same-named chapter-8 standard-library entry | 102 |
+| exact-typed in the flat `Rssn.<op>` facade (some overload pinned to a declared/overlay signature) | 1404 |
+| with a same-named chapter-8 standard-library entry | 103 |
 
 Exposure tiers, from best to worst: **typed** (`Rssn_<Domain>.f(x: Int): Result<Int, OpError>`, curated), **witnessed** (the same shape of wrapper, generated from an overload the kernel observed and can replay), **dynamic** (`Rssn_<Domain>.f(a, b): Result<Value, OpError>`), and the always-available escape hatch `Rssn.dynamic("f", [..])`. Nothing in the manifest is unreachable.
 
@@ -26,77 +26,78 @@ Exposure tiers, from best to worst: **typed** (`Rssn_<Domain>.f(x: Int): Result<
 |---|---|---:|---:|---:|---:|---:|---|
 | `Rssn_NumberTheory` | typed-required | 47 | 44 | 0 | 3 | 0 | number_theory |
 | `Rssn_Combinatorics` | typed-required | 50 | 43 | 0 | 7 | 0 | combinatorics |
-| `Rssn_Group` | dynamic-ok | 108 | 23 | 34 | 51 | 0 | discrete |
+| `Rssn_Group` | dynamic-ok | 108 | 23 | 79 | 6 | 0 | discrete |
 | `Rssn_FiniteField` | typed-required | 53 | 42 | 0 | 11 | 0 | discrete |
-| `Rssn_Coding` | dynamic-ok | 22 | 0 | 17 | 5 | 0 | discrete |
-| `Rssn_Crypto` | dynamic-ok | 19 | 0 | 6 | 13 | 0 | discrete |
-| `Rssn_Graph` | dynamic-ok | 60 | 21 | 13 | 26 | 0 | discrete |
-| `Rssn_Topology` | dynamic-ok | 57 | 0 | 24 | 33 | 0 | discrete |
-| `Rssn_Crystallography` | dynamic-ok | 29 | 0 | 13 | 16 | 0 | discrete |
-| `Rssn_Chaos` | dynamic-ok | 31 | 0 | 20 | 11 | 0 | discrete |
-| `Rssn_Graphics` | dynamic-ok | 44 | 0 | 33 | 11 | 0 | discrete |
-| `Rssn_Discrete` | dynamic-ok | 5 | 0 | 3 | 2 | 0 | discrete |
-| `Rssn_LieAlgebra` | dynamic-ok | 61 | 0 | 18 | 43 | 0 | lie, lie_structure |
-| `Rssn_Polynomial` | dynamic-ok | 29 | 0 | 4 | 25 | 0 | poly |
-| `Rssn_Logic` | dynamic-ok | 31 | 0 | 18 | 13 | 0 | logic |
-| `Rssn_GeometricAlgebra` | dynamic-ok | 31 | 0 | 10 | 21 | 0 | geometric_algebra |
-| `Rssn_DifferentialGeometry` | dynamic-ok | 48 | 0 | 28 | 20 | 0 | geometry |
-| `Rssn_Functional` | dynamic-ok | 32 | 0 | 7 | 25 | 0 | functional |
-| `Rssn_Special` | dynamic-ok | 254 | 0 | 22 | 232 | 0 | numerical_special, special |
-| `Rssn_Statistics` | dynamic-ok | 170 | 0 | 39 | 131 | 0 | numerical_stats, stats |
-| `Rssn_Calculus` | dynamic-ok | 45 | 0 | 14 | 31 | 0 | calculus, holonomic, variational, verify |
-| `Rssn_Elementary` | dynamic-ok | 72 | 0 | 12 | 60 | 0 | complex, elementary, radicals |
-| `Rssn_Core` | dynamic-ok | 18 | 0 | 3 | 15 | 0 | cse, kernel, rewriting, units |
-| `Rssn_Numeric` | dynamic-ok | 3657 | 90 | 0 | 3567 | 0 | numeric, numerical_callback, numerical_matrix, numerical_vector |
-| `Rssn_LinearAlgebra` | dynamic-ok | 91 | 0 | 62 | 29 | 0 | linalg, sparse_symbolic |
-| `Rssn_Differential` | dynamic-ok | 103 | 2 | 10 | 91 | 0 | ode, pde, sde |
-| `Rssn_Physics` | dynamic-ok | 147 | 0 | 28 | 119 | 0 | physics, physics_quantum |
-| `Rssn_Solving` | dynamic-ok | 24 | 0 | 7 | 17 | 0 | optimize, solve |
-| `Rssn_Transforms` | dynamic-ok | 15 | 0 | 0 | 15 | 0 | transforms |
+| `Rssn_Coding` | dynamic-ok | 22 | 0 | 21 | 1 | 0 | discrete |
+| `Rssn_Crypto` | dynamic-ok | 19 | 0 | 19 | 0 | 0 | discrete |
+| `Rssn_Graph` | dynamic-ok | 60 | 21 | 27 | 12 | 0 | discrete |
+| `Rssn_Topology` | dynamic-ok | 57 | 0 | 35 | 22 | 0 | discrete |
+| `Rssn_Crystallography` | dynamic-ok | 29 | 0 | 22 | 7 | 0 | discrete |
+| `Rssn_Chaos` | dynamic-ok | 31 | 0 | 29 | 2 | 0 | discrete |
+| `Rssn_Graphics` | dynamic-ok | 44 | 0 | 42 | 2 | 0 | discrete |
+| `Rssn_Discrete` | dynamic-ok | 5 | 0 | 4 | 1 | 0 | discrete |
+| `Rssn_LieAlgebra` | dynamic-ok | 61 | 0 | 54 | 7 | 0 | lie, lie_structure |
+| `Rssn_Polynomial` | dynamic-ok | 29 | 0 | 23 | 6 | 0 | poly |
+| `Rssn_Logic` | dynamic-ok | 31 | 0 | 28 | 3 | 0 | logic |
+| `Rssn_GeometricAlgebra` | dynamic-ok | 31 | 0 | 15 | 16 | 0 | geometric_algebra |
+| `Rssn_DifferentialGeometry` | dynamic-ok | 48 | 0 | 46 | 2 | 0 | geometry |
+| `Rssn_Functional` | dynamic-ok | 32 | 0 | 30 | 2 | 0 | functional |
+| `Rssn_Special` | dynamic-ok | 254 | 0 | 74 | 180 | 0 | numerical_special, special |
+| `Rssn_Statistics` | dynamic-ok | 170 | 0 | 96 | 74 | 0 | numerical_stats, stats |
+| `Rssn_Calculus` | dynamic-ok | 45 | 0 | 43 | 2 | 0 | calculus, holonomic, variational, verify |
+| `Rssn_Elementary` | dynamic-ok | 72 | 0 | 72 | 0 | 0 | complex, elementary, radicals |
+| `Rssn_Core` | dynamic-ok | 21 | 0 | 8 | 13 | 0 | arith, cse, kernel, rewriting, units |
+| `Rssn_Numeric` | dynamic-ok | 3737 | 90 | 80 | 3567 | 0 | numeric, numerical_callback, numerical_matrix, numerical_vector |
+| `Rssn_LinearAlgebra` | dynamic-ok | 91 | 0 | 82 | 9 | 0 | linalg, sparse_symbolic |
+| `Rssn_Differential` | dynamic-ok | 103 | 2 | 55 | 46 | 0 | ode, pde, sde |
+| `Rssn_Physics` | dynamic-ok | 147 | 0 | 146 | 1 | 0 | physics, physics_quantum |
+| `Rssn_Solving` | dynamic-ok | 24 | 0 | 12 | 12 | 0 | optimize, solve |
+| `Rssn_Transforms` | dynamic-ok | 15 | 0 | 15 | 0 | 0 | transforms |
 
 ## By kernel rule set
 
 | rule set | ops | declared/overlay sig | derived sig | kernel-witnessed | flat-facade exact | domain typed | domain witnessed | domain dynamic | excluded | domains |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| `calculus` | 21 | 3 | 18 | 0 | 0 | 0 | 1 | 20 | 0 | Calculus |
-| `combinatorics` | 50 | 0 | 50 | 43 | 0 | 43 | 0 | 7 | 0 | Combinatorics |
-| `complex` | 38 | 0 | 38 | 7 | 0 | 0 | 9 | 29 | 0 | Elementary |
+| `arith` | 3 | 3 | 0 | 0 | 3 | 0 | 0 | 3 | 0 | Core |
+| `calculus` | 21 | 21 | 0 | 21 | 1 | 0 | 20 | 1 | 0 | Calculus |
+| `combinatorics` | 50 | 7 | 43 | 50 | 4 | 43 | 0 | 7 | 0 | Combinatorics |
+| `complex` | 38 | 31 | 7 | 38 | 1 | 0 | 38 | 0 | 0 | Elementary |
 | `cse` | 2 | 0 | 2 | 2 | 0 | 0 | 1 | 1 | 0 | Core |
-| `discrete` | 428 | 0 | 428 | 253 | 0 | 86 | 163 | 179 | 0 | Chaos, Coding, Crypto, Crystallography, Discrete, FiniteField, Graph, Graphics, Group, Topology |
-| `elementary` | 32 | 0 | 32 | 3 | 0 | 0 | 3 | 29 | 0 | Elementary |
-| `functional` | 32 | 0 | 32 | 7 | 0 | 0 | 7 | 25 | 0 | Functional |
-| `geometric_algebra` | 31 | 0 | 31 | 26 | 0 | 0 | 10 | 21 | 0 | GeometricAlgebra |
-| `geometry` | 48 | 1 | 47 | 30 | 0 | 0 | 28 | 20 | 0 | DifferentialGeometry |
-| `holonomic` | 5 | 0 | 5 | 1 | 0 | 0 | 4 | 1 | 0 | Calculus |
-| `kernel` | 8 | 7 | 1 | 0 | 2 | 0 | 0 | 8 | 0 | Core |
-| `lie` | 13 | 0 | 13 | 6 | 0 | 0 | 1 | 12 | 0 | LieAlgebra |
-| `lie_structure` | 48 | 0 | 48 | 11 | 0 | 0 | 17 | 31 | 0 | LieAlgebra |
-| `linalg` | 70 | 8 | 62 | 51 | 4 | 0 | 46 | 24 | 0 | LinearAlgebra |
-| `logic` | 31 | 6 | 25 | 12 | 3 | 0 | 18 | 13 | 0 | Logic |
-| `number_theory` | 47 | 1 | 46 | 35 | 1 | 44 | 0 | 3 | 0 | NumberTheory |
-| `numeric` | 90 | 83 | 7 | 7 | 65 | 90 | 0 | 0 | 0 | Numeric |
+| `discrete` | 428 | 175 | 253 | 428 | 46 | 86 | 278 | 64 | 0 | Chaos, Coding, Crypto, Crystallography, Discrete, FiniteField, Graph, Graphics, Group, Topology |
+| `elementary` | 32 | 29 | 3 | 32 | 29 | 0 | 32 | 0 | 0 | Elementary |
+| `functional` | 32 | 25 | 7 | 32 | 0 | 0 | 30 | 2 | 0 | Functional |
+| `geometric_algebra` | 31 | 5 | 26 | 31 | 0 | 0 | 15 | 16 | 0 | GeometricAlgebra |
+| `geometry` | 48 | 18 | 30 | 48 | 0 | 0 | 46 | 2 | 0 | DifferentialGeometry |
+| `holonomic` | 5 | 4 | 1 | 5 | 0 | 0 | 5 | 0 | 0 | Calculus |
+| `kernel` | 8 | 8 | 0 | 1 | 2 | 0 | 0 | 8 | 0 | Core |
+| `lie` | 13 | 7 | 6 | 13 | 6 | 0 | 8 | 5 | 0 | LieAlgebra |
+| `lie_structure` | 48 | 37 | 11 | 48 | 25 | 0 | 46 | 2 | 0 | LieAlgebra |
+| `linalg` | 70 | 19 | 51 | 70 | 5 | 0 | 64 | 6 | 0 | LinearAlgebra |
+| `logic` | 31 | 19 | 12 | 31 | 9 | 0 | 28 | 3 | 0 | Logic |
+| `number_theory` | 47 | 12 | 35 | 46 | 6 | 44 | 0 | 3 | 0 | NumberTheory |
+| `numeric` | 170 | 163 | 7 | 170 | 145 | 90 | 80 | 0 | 0 | Numeric |
 | `numerical_callback` | 148 | 148 | 0 | 0 | 10 | 0 | 0 | 148 | 0 | Numeric |
 | `numerical_matrix` | 436 | 436 | 0 | 0 | 184 | 0 | 0 | 436 | 0 | Numeric |
 | `numerical_special` | 178 | 178 | 0 | 0 | 171 | 0 | 0 | 178 | 0 | Special |
 | `numerical_stats` | 74 | 74 | 0 | 0 | 73 | 0 | 0 | 74 | 0 | Statistics |
 | `numerical_vector` | 2983 | 2983 | 0 | 0 | 582 | 0 | 0 | 2983 | 0 | Numeric |
-| `ode` | 16 | 0 | 16 | 4 | 0 | 0 | 4 | 12 | 0 | Differential |
-| `optimize` | 16 | 0 | 16 | 13 | 0 | 0 | 3 | 13 | 0 | Solving |
-| `pde` | 84 | 0 | 84 | 6 | 0 | 2 | 6 | 76 | 0 | Differential |
-| `physics` | 138 | 0 | 138 | 23 | 0 | 0 | 27 | 111 | 0 | Physics |
-| `physics_quantum` | 9 | 0 | 9 | 0 | 0 | 0 | 1 | 8 | 0 | Physics |
-| `poly` | 29 | 1 | 28 | 3 | 0 | 0 | 4 | 25 | 0 | Polynomial |
-| `radicals` | 2 | 0 | 2 | 0 | 0 | 0 | 0 | 2 | 0 | Elementary |
-| `rewriting` | 3 | 0 | 3 | 2 | 0 | 0 | 1 | 2 | 0 | Core |
-| `sde` | 3 | 3 | 0 | 0 | 3 | 0 | 0 | 3 | 0 | Differential |
-| `solve` | 8 | 1 | 7 | 4 | 0 | 0 | 4 | 4 | 0 | Solving |
-| `sparse_symbolic` | 21 | 0 | 21 | 19 | 0 | 0 | 16 | 5 | 0 | LinearAlgebra |
-| `special` | 76 | 0 | 76 | 19 | 0 | 0 | 22 | 54 | 0 | Special |
-| `stats` | 96 | 0 | 96 | 39 | 0 | 0 | 39 | 57 | 0 | Statistics |
-| `transforms` | 15 | 0 | 15 | 0 | 0 | 0 | 0 | 15 | 0 | Transforms |
-| `units` | 5 | 2 | 3 | 1 | 0 | 0 | 1 | 4 | 0 | Core |
-| `variational` | 12 | 0 | 12 | 3 | 0 | 0 | 3 | 9 | 0 | Calculus |
-| `verify` | 7 | 1 | 6 | 3 | 0 | 0 | 6 | 1 | 0 | Calculus |
+| `ode` | 16 | 12 | 4 | 16 | 3 | 0 | 11 | 5 | 0 | Differential |
+| `optimize` | 16 | 3 | 13 | 16 | 0 | 0 | 6 | 10 | 0 | Solving |
+| `pde` | 84 | 78 | 6 | 84 | 16 | 2 | 43 | 39 | 0 | Differential |
+| `physics` | 138 | 115 | 23 | 138 | 20 | 0 | 137 | 1 | 0 | Physics |
+| `physics_quantum` | 9 | 9 | 0 | 9 | 1 | 0 | 9 | 0 | 0 | Physics |
+| `poly` | 29 | 26 | 3 | 28 | 7 | 0 | 23 | 6 | 0 | Polynomial |
+| `radicals` | 2 | 2 | 0 | 2 | 2 | 0 | 2 | 0 | 0 | Elementary |
+| `rewriting` | 3 | 1 | 2 | 3 | 0 | 0 | 2 | 1 | 0 | Core |
+| `sde` | 3 | 3 | 0 | 3 | 3 | 0 | 1 | 2 | 0 | Differential |
+| `solve` | 8 | 4 | 4 | 8 | 0 | 0 | 6 | 2 | 0 | Solving |
+| `sparse_symbolic` | 21 | 2 | 19 | 21 | 0 | 0 | 18 | 3 | 0 | LinearAlgebra |
+| `special` | 76 | 57 | 19 | 76 | 47 | 0 | 74 | 2 | 0 | Special |
+| `stats` | 96 | 57 | 39 | 96 | 2 | 0 | 96 | 0 | 0 | Statistics |
+| `transforms` | 15 | 15 | 0 | 15 | 1 | 0 | 15 | 0 | 0 | Transforms |
+| `units` | 5 | 4 | 1 | 5 | 0 | 0 | 5 | 0 | 0 | Core |
+| `variational` | 12 | 9 | 3 | 12 | 0 | 0 | 12 | 0 | 0 | Calculus |
+| `verify` | 7 | 4 | 3 | 6 | 0 | 0 | 6 | 1 | 0 | Calculus |
 
 ## Typed operators
 
