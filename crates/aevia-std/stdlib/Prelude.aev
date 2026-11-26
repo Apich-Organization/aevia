@@ -147,7 +147,7 @@ let by_cases = by_cases
 ##
 ## **Signature:** `ceil : Scalar<ρ,d> -> Scalar<ρ,d>`
 ##
-## **Kernel signature** (derived):
+## **Kernel signature** (overlay):
 ## - `ceil : (Real) -> Real`
 ## - `ceil : (Dyn<term>) -> Dyn<term>`
 ##
@@ -449,7 +449,7 @@ let flip = flip
 ##
 ## **Signature:** `floor : Scalar<ρ,d> -> Scalar<ρ,d>`
 ##
-## **Kernel signature** (derived):
+## **Kernel signature** (overlay):
 ## - `floor : (Real) -> Real`
 ## - `floor : (Dyn<term>) -> Dyn<term>`
 ##
@@ -1066,7 +1066,7 @@ let rng = rng
 ##
 ## **Signature:** `round : (Scalar<ρ,d>, Int) -> Scalar<ρ,d>`
 ##
-## **Kernel signature** (derived):
+## **Kernel signature** (overlay):
 ## - `round : (Real) -> Real`
 ## - `round : (Dyn<term>) -> Dyn<term>`
 ##

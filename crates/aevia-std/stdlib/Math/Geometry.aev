@@ -7,7 +7,7 @@ module Math.Geometry
 ##
 ## **Signature:** `distance : (Tensor<1, Real[L]>, Tensor<1, Real[L]>) -> Real[L]`
 ##
-## **Kernel signature** (derived):
+## **Kernel signature** (overlay):
 ## - `distance : (Real, Real) -> Real`
 ## - `distance : (Dyn<term>, Dyn<term>) -> Dyn<term>`
 ##

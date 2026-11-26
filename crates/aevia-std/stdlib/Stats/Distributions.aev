@@ -70,7 +70,7 @@ type Distribution<d> =
 ##
 ## **Signature:** `cdf : (Distribution<d>, Real[d]) -> Real[1]`
 ##
-## **Kernel signature** (derived):
+## **Kernel signature** (overlay):
 ## - `cdf : (Dyn<term>, Dyn<term>) -> Dyn<term>`
 ##
 ## **Dimensions:** kernel rule `CompatibleDimensionless`
@@ -115,7 +115,7 @@ let dist_quantile = dist_quantile
 ##
 ## **Signature:** `pdf : (Distribution<d>, Real[d]) -> Real[1/d]`
 ##
-## **Kernel signature** (derived):
+## **Kernel signature** (overlay):
 ## - `pdf : (Dyn<term>, Dyn<term>) -> Dyn<term>`
 ##
 ## **Dimensions:** kernel rule `Custom("")`

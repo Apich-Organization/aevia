@@ -7,7 +7,7 @@ module Math.Complex
 ##
 ## **Signature:** `arg : Complex[d] -> Real[1]`
 ##
-## **Kernel signature** (derived):
+## **Kernel signature** (overlay):
 ## - `arg : (Dyn<term>) -> Dyn<term>`
 ##
 ## **Dimensions:** the result is dimensionless
@@ -100,7 +100,7 @@ let conj = conj
 ##
 ## **Signature:** `cos : Complex[1] -> Complex[1]`
 ##
-## **Kernel signature** (derived):
+## **Kernel signature** (overlay):
 ## - `cos : (Real) -> Real`
 ## - `cos : (Dyn<term>) -> Dyn<term>`
 ##
@@ -120,7 +120,7 @@ let cos = cos
 ##
 ## **Signature:** `im : Complex[d] -> Real[d]`
 ##
-## **Kernel signature** (derived):
+## **Kernel signature** (overlay):
 ## - `im : (Dyn<term>) -> Dyn<term>`
 ##
 ## **Dimensions:** the result has the dimension of argument 1
@@ -149,7 +149,7 @@ let magnitude = magnitude
 ##
 ## **Signature:** `re : Complex[d] -> Real[d]`
 ##
-## **Kernel signature** (derived):
+## **Kernel signature** (overlay):
 ## - `re : (Dyn<term>) -> Dyn<term>`
 ##
 ## **Dimensions:** the result has the dimension of argument 1

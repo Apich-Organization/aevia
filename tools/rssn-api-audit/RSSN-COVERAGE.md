@@ -9,13 +9,13 @@ RSSN 3.0.0-beta.1, kernel API 2.
 
 | | operators |
 |---|---:|
-| in the manifest | 5436 |
-| typed in a domain module (curated `sig`, `Result` channel) | 265 |
-| typed in a domain module from kernel evidence (witnessed overload, `Result` channel) | 1157 |
-| dynamic in a domain module (generated, `Result<Value, OpError>`) | 4014 |
+| in the manifest | 5583 |
+| typed in a domain module (curated `sig`, `Result` channel) | 267 |
+| typed in a domain module from kernel evidence (witnessed overload, `Result` channel) | 1260 |
+| dynamic in a domain module (generated, `Result<Value, OpError>`) | 4056 |
 | excluded from domain modules (with reason) | 0 |
 | unclassified (must be 0) | 0 |
-| exact-typed in the flat `Rssn.<op>` facade (some overload pinned to a declared/overlay signature) | 1404 |
+| exact-typed in the flat `Rssn.<op>` facade (some overload pinned to a declared/overlay signature) | 1456 |
 | with a same-named chapter-8 standard-library entry | 103 |
 
 Exposure tiers, from best to worst: **typed** (`Rssn_<Domain>.f(x: Int): Result<Int, OpError>`, curated), **witnessed** (the same shape of wrapper, generated from an overload the kernel observed and can replay), **dynamic** (`Rssn_<Domain>.f(a, b): Result<Value, OpError>`), and the always-available escape hatch `Rssn.dynamic("f", [..])`. Nothing in the manifest is unreachable.
@@ -45,9 +45,9 @@ Exposure tiers, from best to worst: **typed** (`Rssn_<Domain>.f(x: Int): Result<
 | `Rssn_Special` | dynamic-ok | 254 | 0 | 74 | 180 | 0 | numerical_special, special |
 | `Rssn_Statistics` | dynamic-ok | 170 | 0 | 96 | 74 | 0 | numerical_stats, stats |
 | `Rssn_Calculus` | dynamic-ok | 45 | 0 | 43 | 2 | 0 | calculus, holonomic, variational, verify |
-| `Rssn_Elementary` | dynamic-ok | 72 | 0 | 72 | 0 | 0 | complex, elementary, radicals |
+| `Rssn_Elementary` | dynamic-ok | 125 | 2 | 123 | 0 | 0 | complex, elementary, radicals |
 | `Rssn_Core` | dynamic-ok | 21 | 0 | 8 | 13 | 0 | arith, cse, kernel, rewriting, units |
-| `Rssn_Numeric` | dynamic-ok | 3737 | 90 | 80 | 3567 | 0 | numeric, numerical_callback, numerical_matrix, numerical_vector |
+| `Rssn_Numeric` | dynamic-ok | 3831 | 90 | 132 | 3609 | 0 | numeric, numerical_callback, numerical_matrix, numerical_vector |
 | `Rssn_LinearAlgebra` | dynamic-ok | 91 | 0 | 82 | 9 | 0 | linalg, sparse_symbolic |
 | `Rssn_Differential` | dynamic-ok | 103 | 2 | 55 | 46 | 0 | ode, pde, sde |
 | `Rssn_Physics` | dynamic-ok | 147 | 0 | 146 | 1 | 0 | physics, physics_quantum |
@@ -61,10 +61,10 @@ Exposure tiers, from best to worst: **typed** (`Rssn_<Domain>.f(x: Int): Result<
 | `arith` | 3 | 3 | 0 | 0 | 3 | 0 | 0 | 3 | 0 | Core |
 | `calculus` | 21 | 21 | 0 | 21 | 1 | 0 | 20 | 1 | 0 | Calculus |
 | `combinatorics` | 50 | 7 | 43 | 50 | 4 | 43 | 0 | 7 | 0 | Combinatorics |
-| `complex` | 38 | 31 | 7 | 38 | 1 | 0 | 38 | 0 | 0 | Elementary |
+| `complex` | 91 | 84 | 7 | 91 | 1 | 1 | 90 | 0 | 0 | Elementary |
 | `cse` | 2 | 0 | 2 | 2 | 0 | 0 | 1 | 1 | 0 | Core |
 | `discrete` | 428 | 175 | 253 | 428 | 46 | 86 | 278 | 64 | 0 | Chaos, Coding, Crypto, Crystallography, Discrete, FiniteField, Graph, Graphics, Group, Topology |
-| `elementary` | 32 | 29 | 3 | 32 | 29 | 0 | 32 | 0 | 0 | Elementary |
+| `elementary` | 32 | 29 | 3 | 32 | 29 | 1 | 31 | 0 | 0 | Elementary |
 | `functional` | 32 | 25 | 7 | 32 | 0 | 0 | 30 | 2 | 0 | Functional |
 | `geometric_algebra` | 31 | 5 | 26 | 31 | 0 | 0 | 15 | 16 | 0 | GeometricAlgebra |
 | `geometry` | 48 | 18 | 30 | 48 | 0 | 0 | 46 | 2 | 0 | DifferentialGeometry |
@@ -75,7 +75,7 @@ Exposure tiers, from best to worst: **typed** (`Rssn_<Domain>.f(x: Int): Result<
 | `linalg` | 70 | 19 | 51 | 70 | 5 | 0 | 64 | 6 | 0 | LinearAlgebra |
 | `logic` | 31 | 19 | 12 | 31 | 9 | 0 | 28 | 3 | 0 | Logic |
 | `number_theory` | 47 | 12 | 35 | 46 | 6 | 44 | 0 | 3 | 0 | NumberTheory |
-| `numeric` | 170 | 163 | 7 | 170 | 145 | 90 | 80 | 0 | 0 | Numeric |
+| `numeric` | 264 | 215 | 49 | 222 | 197 | 90 | 132 | 42 | 0 | Numeric |
 | `numerical_callback` | 148 | 148 | 0 | 0 | 10 | 0 | 0 | 148 | 0 | Numeric |
 | `numerical_matrix` | 436 | 436 | 0 | 0 | 184 | 0 | 0 | 436 | 0 | Numeric |
 | `numerical_special` | 178 | 178 | 0 | 0 | 171 | 0 | 0 | 178 | 0 | Special |
@@ -106,6 +106,7 @@ Exposure tiers, from best to worst: **typed** (`Rssn_<Domain>.f(x: Int): Result<
 * `Rssn_Group`: cyclic_group, dihedral_group, group_class_count, group_exponent, group_is_abelian, group_is_nilpotent, group_is_simple, group_is_solvable, group_is_valid, group_order, group_sylow_count, klein_four_group, perm_compose, perm_group_contains, perm_group_is_abelian, perm_group_is_nilpotent, perm_group_is_solvable, perm_group_is_transitive, perm_group_order, perm_inverse, perm_order, perm_sign, symmetric_group
 * `Rssn_FiniteField`: gf256_add, gf256_div, gf256_exp, gf256_inv, gf256_log, gf256_mul, gf256_poly_add, gf256_poly_derivative, gf256_poly_eval, gf256_poly_gcd, gf256_poly_mod, gf256_poly_mul, gf256_poly_scale, gf256_pow, gf_add, gf_div, gf_inv, gf_is_one, gf_is_zero, gf_mul, gf_neg, gf_pow, gf_sub, gfp_add, gfp_degree, gfp_derivative, gfp_eval, gfp_gcd, gfp_invmod, gfp_isirreducible, gfp_monic, gfp_mul, gfp_powmod, gfp_sub, gfx_add, gfx_div, gfx_inv, gfx_mul, gfx_neg, gfx_pow, gfx_reduce, gfx_sub
 * `Rssn_Graph`: graph_add_edge, graph_add_node, graph_adjacency, graph_bfs, graph_chromatic_number, graph_complement, graph_complete, graph_cycle, graph_dfs, graph_disjoint_union, graph_empty, graph_has_cycle, graph_in_degree, graph_is_connected, graph_is_directed, graph_isomorphic, graph_join, graph_laplacian, graph_node_count, graph_out_degree, graph_path
+* `Rssn_Elementary`: E, I
 * `Rssn_Numeric`: advect_fd (advect_fd, advect_fd_2d, advect_fd_3d), advect_fd_upwind (advect_fd_upwind, advect_fd_upwind_2d, advect_fd_upwind_3d), amg_solve, anderson_fixed_point, bandwidth_scott, bandwidth_silverman, bessel_i_complex, bessel_j_complex, bicgstab_l_solve, biweight_location, blackman_window, bootstrap_basic_ci, bootstrap_ci, coherence, cp_als (cp_als_2, cp_als_3, cp_als_4), cp_dense (cp_dense_2, cp_dense_3, cp_dense_4), cross_correlation, digamma_complex, dwt2, dwt_approx, dwt_detail, ecdf, erf_complex, fft_abs, fft_im, fft_re, fftconv, fgmres_solve, fresnel_c_complex, fresnel_s_complex, frft_im, frft_re, function_inf_norm, function_inner, function_l1_norm, function_l2_norm, function_normalize, function_project, gamma_complex, hamming_window, hann_window, heat_fd (heat_fd, heat_fd_2d, heat_fd_3d), heat_fd_bc (heat_fd_bc, heat_fd_bc_2d, heat_fd_bc_3d), hooi (hooi_2, hooi_3, hooi_4), hosvd (hosvd_2, hosvd_3, hosvd_4), huber_location, idwt, idwt2, ifft_abs, ifft_im, ifft_re, interpolate, inverse_wavelet_packet, kde, lambert_w_complex, lgamma_complex, lobpcg_eigenvalues, mad, mad_sigma, minres_solve, nested_dissection_order, newton_cg_minimize, ode_etdrk4, ode_imex, ode_solve, ode_symplectic, oscillatory_integral, poisson_fd (poisson_fd, poisson_fd_2d, poisson_fd_3d), poisson_fd_bc (poisson_fd_bc, poisson_fd_bc_2d, poisson_fd_bc_3d), polynomial_system_roots, qr_pivoted_diagonal, qr_pivoted_permutation, qr_pivoted_rank, quantile_hf, randomized_singular_values, sparse_solve, tensor_contract (tensor_contract_2, tensor_contract_3, tensor_contract_4), tensor_inner (tensor_inner_1, tensor_inner_2, tensor_inner_3, tensor_inner_4), tensor_norm (tensor_norm_1, tensor_norm_2, tensor_norm_3, tensor_norm_4), tensordot (tensordot_1_1_1, tensordot_1_2_1, tensordot_1_3_1, tensordot_1_4_1, tensordot_2_1_1, tensordot_2_2_1, tensordot_2_2_2, tensordot_2_3_1, tensordot_2_3_2, tensordot_2_4_1, tensordot_2_4_2, tensordot_3_1_1, tensordot_3_2_1, tensordot_3_2_2, tensordot_3_3_1, tensordot_3_3_2, tensordot_3_3_3, tensordot_3_4_2, tensordot_3_4_3, tensordot_4_1_1, tensordot_4_2_1, tensordot_4_2_2, tensordot_4_3_2, tensordot_4_3_3, tensordot_4_4_2, tensordot_4_4_3, tensordot_4_4_4), trimmed_mean, tt_dense (tt_dense_2, tt_dense_3, tt_dense_4), tt_svd (tt_svd_2, tt_svd_3, tt_svd_4), tucker_dense (tucker_dense_2, tucker_dense_3, tucker_dense_4), wave_fd (wave_fd, wave_fd_2d, wave_fd_3d), wave_fd_bc (wave_fd_bc, wave_fd_bc_2d, wave_fd_bc_3d), wavedec, wavelet_packet, waverec, winsorized_mean
 * `Rssn_Differential`: bessel_root, bessel_zero
 

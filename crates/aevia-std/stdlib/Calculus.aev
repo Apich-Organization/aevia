@@ -39,7 +39,7 @@ let curl = curl
 ##
 ## **Signature:** `defint : (Real[d] -> Real[e], Real[d], Real[d]) -> Result<Real[e*d], MathError>`
 ##
-## **Kernel signature** (derived):
+## **Kernel signature** (overlay):
 ## - `defint : (Dyn<term>, Symbol, Dyn<term>, Dyn<term>) -> Dyn<term>`
 ##
 ## **Dimensions:** argument 1 multiplied by argument 2
@@ -167,7 +167,7 @@ let jacobian = jacobian
 ##
 ## **Signature:** `laplacian : ((Tensor<1, Real[d]> -> Real[e]), Tensor<1, Real[d]>) -> Real[e/d^2]`
 ##
-## **Kernel signature** (derived):
+## **Kernel signature** (overlay):
 ## - `laplacian : (Dyn<term>, Dyn<term>) -> Dyn<term>`
 ##
 ## **Dimensions:** kernel rule `DiffN { f: 0, x: 1, n: 2 }`
@@ -185,7 +185,7 @@ let laplacian = laplacian
 ##
 ## **Signature:** `limit : (Real[d] -> Real[e], Real[d]) -> Result<Real[e], MathError>`
 ##
-## **Kernel signature** (derived):
+## **Kernel signature** (overlay):
 ## - `limit : () -> Dyn<term> with 0... x Dyn<term>`
 ##
 ## **Dimensions:** the result has the dimension of argument 1
@@ -216,7 +216,7 @@ let numeric_deriv = numeric_deriv
 ##
 ## **Signature:** `product : (Real[1] -> Real[1], Real[1], Real[1]) -> Real[1]`
 ##
-## **Kernel signature** (derived):
+## **Kernel signature** (overlay):
 ## - `product : (Dyn<term>, Symbol, Dyn<term>, Dyn<term>) -> Dyn<term>`
 ##
 ## **Dimensions:** kernel rule `ProductOver { f: 0, index: 1 }`
