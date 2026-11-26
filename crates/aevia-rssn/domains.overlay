@@ -296,6 +296,9 @@ sig bessel_i_complex(order: Float, re: Float, im: Float) -> Result<Tensor<1, Flo
 sig erf_complex(re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
 sig fresnel_s_complex(re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
 sig fresnel_c_complex(re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
+# Uppercase kernel constants cannot be emitted as Aevia `fn` names directly.
+sig E as euler_e() -> Result<Value, OpError>
+sig I as imag_i() -> Result<Value, OpError>
 # Wavelets, bootstrap and sparse solves name a method, wavelet or statistic with a
 # symbol. A symbol is an Aevia `Real` (`let haar = symbol("haar")`): bind it once,
 # every `symbol(..)` call makes a distinct one (`haar#2`) that the kernel does

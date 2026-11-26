@@ -1,0 +1,38 @@
+## Complex analysis operators of the rssn `complex` and `numeric` rule sets
+## through `Rssn_Elementary` and `Rssn_Numeric`.
+## Run with: cargo run -p aevia-cli -- test tests/domain_complex.aev
+import Rssn_Elementary as E
+import Rssn_Numeric as N
+
+fn near(got: Tensor<1, Float>, expected: Tensor<1, Float>, tol: Float): Bool = length(got) == length(expected) && all(fn (d: Float) => abs(d) < tol, map2(fn (a: Float, b: Float) => a - b, got, expected))
+
+fn vec_close(r: Result<Tensor<1, Float>, OpError>, expected: Tensor<1, Float>, tol: Float): Bool =
+    match r with
+    | Ok(v) -> near(v, expected, tol)
+    | Err(_) -> false
+
+fn flag(r: Result<Bool, OpError>): Bool =
+    match r with
+    | Ok(v) -> v
+    | Err(_) -> false
+
+fn real_eq(r: Result<Real, OpError>, expected: Real): Bool =
+    match r with
+    | Ok(v) -> "{v}" == "{expected}"
+    | Err(_) -> false
+
+let z = symbol("z")
+
+## --- numeric complex special functions (typed in Rssn_Numeric) -------------
+test "gamma_complex(1 + 0i) = [1, 0] and gamma_complex(0.5 + 0i) = [sqrt(pi), 0]" = vec_close(N.gamma_complex(1.0, 0.0), [1.0, 0.0], 1e-12) && vec_close(N.gamma_complex(0.5, 0.0), [1.7724538509055159, 0.0], 1e-12)
+
+test "erf_complex(0 + 0i) = [0, 0] and digamma_complex(1 + 0i) = [-gamma, 0]" = vec_close(N.erf_complex(0.0, 0.0), [0.0, 0.0], 1e-12) && vec_close(N.digamma_complex(1.0, 0.0), [-0.5772156649015329, 0.0], 1e-10)
+
+test "lambert_w_complex(0 + 0i, 0) = [0, 0] and bessel_j_complex(0, 0, 0) = [1, 0]" = vec_close(N.lambert_w_complex(0.0, 0.0, 0), [0.0, 0.0], 1e-12) && vec_close(N.bessel_j_complex(0.0, 0.0, 0.0), [1.0, 0.0], 1e-12)
+
+## --- symbolic complex analysis (Rssn_Elementary) ----------------------------
+test "wirtinger_dzbar and complex_laplacian vanish on holomorphic z^2" = real_eq(E.wirtinger_dzbar(z ^ 2, z), 0) && real_eq(E.complex_laplacian(z ^ 2, z), 0)
+
+test "is_entire and is_meromorphic classification" = flag(E.is_entire(exp(z) + z ^ 2, z)) && flag(E.is_meromorphic(1 / (z ^ 2 + 1), z)) && !flag(E.is_entire(1 / (z ^ 2 + 1), z))
+
+test "residue(1/(z - 1), z, 1) = 1 and residue(1/(z - 2)^2, z, 2) = 0" = real_eq(E.residue(1 / (z - 1), z, 1), 1) && real_eq(E.residue(1 / (z - 2) ^ 2, z, 2), 0)
