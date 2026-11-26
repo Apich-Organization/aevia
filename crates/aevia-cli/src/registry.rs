@@ -214,11 +214,13 @@ pub fn docs(args: &[String]) -> ExitCode {
     let mut section = None;
     let mut language = None;
     let mut download = false;
+    let mut local = false;
     let mut args = args.iter().map(String::as_str);
     while let Some(argument) = args.next() {
         match argument {
             | "--open" => open = true,
             | "--download" => download = true,
+            | "--local" => local = true,
             | "--section" => {
                 let value = args.next();
                 if !matches!(value, Some("book" | "architecture" | "spec" | "stdlib")) {
@@ -254,6 +256,24 @@ pub fn docs(args: &[String]) -> ExitCode {
             },
         }
     }
+    if local {
+        if download {
+            eprintln!("aevia docs: --download describes a hosted page; drop it with --local");
+            return ExitCode::from(2);
+        }
+        let path = match local_documentation(section, language) {
+            | Ok(path) => path,
+            | Err(message) => {
+                eprintln!("aevia docs: {message}");
+                return ExitCode::from(2);
+            },
+        };
+        println!("{}", path.display());
+        if open {
+            open_url(&path.to_string_lossy());
+        }
+        return ExitCode::SUCCESS;
+    }
     let environment = std::env::var("AEVIA_REGISTRY").ok();
     let base = registry
         .or_else(|| {
@@ -275,6 +295,115 @@ pub fn docs(args: &[String]) -> ExitCode {
         open_url(&url);
     }
     ExitCode::SUCCESS
+}
+
+/// The local documentation root, for an offline `aevia docs --local`.
+///
+/// Checked in order: `AEVIA_DOCS`, `AEVIA_DOCS_HOME`, `$AEVIA_HOME/docs`, the
+/// installed toolchain's `share/doc`, and finally a source checkout (a
+/// directory holding both `spec/` and `platform/stdlib-docs/`).
+fn local_docs_root() -> Result<PathBuf, String> {
+    for key in ["AEVIA_DOCS", "AEVIA_DOCS_HOME"] {
+        if let Some(dir) = std::env::var_os(key) {
+            let path = PathBuf::from(dir);
+            if path.is_dir() {
+                return Ok(path);
+            }
+            return Err(format!(
+                "{key} does not name a directory: {}",
+                path.display()
+            ));
+        }
+    }
+    if let Some(home) = std::env::var_os("AEVIA_HOME") {
+        let docs = PathBuf::from(home).join("docs");
+        if docs.is_dir() {
+            return Ok(docs);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(root) = exe.ancestors().nth(2)
+    {
+        for candidate in [root.join("share/doc"), root.join("docs")] {
+            if candidate.is_dir() {
+                return Ok(candidate);
+            }
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        for ancestor in cwd.ancestors() {
+            if ancestor.join("spec").is_dir() && ancestor.join("platform/stdlib-docs").is_dir() {
+                return Ok(ancestor.to_path_buf());
+            }
+        }
+    }
+    Err(
+        "no local documentation found; set AEVIA_DOCS to the directory that holds \
+         the specification and standard-library reference"
+            .to_owned(),
+    )
+}
+
+/// Resolves one local document against the ambient documentation root.
+fn local_documentation(
+    section: Option<&str>,
+    language: Option<&str>,
+) -> Result<PathBuf, String> {
+    local_documentation_in(&local_docs_root()?, section, language)
+}
+
+/// Resolves one local document under `root`.
+fn local_documentation_in(
+    root: &std::path::Path,
+    section: Option<&str>,
+    language: Option<&str>,
+) -> Result<PathBuf, String> {
+    let chinese = language == Some("zh");
+    let existing = |path: PathBuf| {
+        if path.is_file() {
+            Ok(path)
+        } else {
+            Err(format!("missing local document: {}", path.display()))
+        }
+    };
+    match section {
+        | Some("spec") => {
+            let name = if chinese {
+                "Aevia-Language-Specification.md"
+            } else {
+                "Aevia-Language-Specification.en.md"
+            };
+            let full = root.join(name);
+            if full.is_file() {
+                return Ok(full);
+            }
+            // A chapter-by-chapter checkout keeps the same text under `spec/`.
+            let directory = if chinese {
+                root.join("spec")
+            } else {
+                root.join("spec/en")
+            };
+            existing(directory.join("08-stdlib.md"))
+        },
+        | Some("stdlib") => {
+            let directory = root.join("platform/stdlib-docs");
+            let index = directory.join("index.md");
+            if index.is_file() {
+                return Ok(index);
+            }
+            existing(directory.join("stdlib.md"))
+        },
+        | Some("architecture") => existing(root.join("ARCHITECTURE.md")),
+        | Some("book") => {
+            Err(
+                "the book is only published online; use --section spec or --section stdlib \
+             with --local, or drop --local for the hosted book"
+                    .to_owned(),
+            )
+        },
+        | Some(other) => Err(format!("unknown documentation section `{other}`")),
+        | None => Ok(root.to_path_buf()),
+    }
 }
 
 #[allow(
@@ -438,6 +567,46 @@ fn on_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_documents_resolve_from_a_checkout() {
+        let root = std::env::temp_dir().join(format!(
+            "aevia-docs-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_nanos())
+        ));
+        let stdlib = root.join("platform/stdlib-docs");
+        std::fs::create_dir_all(&stdlib).expect("stdlib dir");
+        std::fs::write(root.join("Aevia-Language-Specification.en.md"), "en").expect("en spec");
+        std::fs::write(root.join("Aevia-Language-Specification.md"), "zh").expect("zh spec");
+        std::fs::write(stdlib.join("index.md"), "index").expect("stdlib index");
+        std::fs::write(root.join("ARCHITECTURE.md"), "arch").expect("architecture");
+
+        assert_eq!(
+            local_documentation_in(&root, Some("spec"), Some("en")).expect("en"),
+            root.join("Aevia-Language-Specification.en.md")
+        );
+        assert_eq!(
+            local_documentation_in(&root, Some("spec"), Some("zh")).expect("zh"),
+            root.join("Aevia-Language-Specification.md")
+        );
+        assert_eq!(
+            local_documentation_in(&root, Some("stdlib"), None).expect("stdlib"),
+            stdlib.join("index.md")
+        );
+        assert_eq!(
+            local_documentation_in(&root, Some("architecture"), None).expect("architecture"),
+            root.join("ARCHITECTURE.md")
+        );
+        assert_eq!(
+            local_documentation_in(&root, None, None).expect("root"),
+            root
+        );
+        assert!(local_documentation_in(&root, Some("book"), None).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn the_aliases_are_the_client_commands_and_not_the_native_ones() {
