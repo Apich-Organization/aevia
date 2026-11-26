@@ -100,6 +100,50 @@ struct Options {
     /// `--caps fs,rand`: the runtime capabilities a program starts with
     /// (§9.14); `None` grants all of them.
     caps: Option<u8>,
+    /// `--backend auto|ir|ast|cpu|cpu-parallel|gpu`: execution backend policy.
+    backend: BackendChoice,
+}
+
+/// The `--backend` setting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BackendChoice {
+    /// Default adaptive execution (Core IR + SIMD + parallel host workers).
+    Auto,
+    /// Core IR interpreter.
+    Ir,
+    /// Reference AST interpreter.
+    Ast,
+    /// Single-threaded CPU execution (`--jobs 1`).
+    Cpu,
+    /// Multi-threaded CPU execution.
+    CpuParallel,
+    /// Prefer GPU device offload when a GPU adapter is registered.
+    Gpu,
+}
+
+impl BackendChoice {
+    fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            | "auto" => Some(Self::Auto),
+            | "ir" => Some(Self::Ir),
+            | "ast" => Some(Self::Ast),
+            | "cpu" => Some(Self::Cpu),
+            | "cpu-parallel" => Some(Self::CpuParallel),
+            | "gpu" => Some(Self::Gpu),
+            | _ => None,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            | Self::Auto => "auto",
+            | Self::Ir => "ir",
+            | Self::Ast => "ast",
+            | Self::Cpu => "cpu",
+            | Self::CpuParallel => "cpu-parallel",
+            | Self::Gpu => "gpu",
+        }
+    }
 }
 
 /// The `--color` setting.
@@ -125,6 +169,7 @@ impl Default for Options {
             jobs: None,
             locked: false,
             caps: None,
+            backend: BackendChoice::Auto,
         }
     }
 }
@@ -214,6 +259,14 @@ impl Options {
                     }
                     options.jobs = Some(jobs);
                 },
+                | "--backend" => {
+                    let raw = take("--backend", &mut index)?;
+                    options.backend = BackendChoice::parse(&raw).ok_or_else(|| {
+                        format!(
+                            "`--backend` expects auto, ir, ast, cpu, cpu-parallel, or gpu, found `{raw}`"
+                        )
+                    })?;
+                },
                 | _ => rest.push(arg),
             }
             index = index.saturating_add(1);
@@ -279,6 +332,27 @@ fn apply_options(
     if options.release {
         interp.mode = aevia_core::Mode::Ir;
     }
+    match options.backend {
+        | BackendChoice::Auto => {},
+        | BackendChoice::Ir => interp.mode = aevia_core::Mode::Ir,
+        | BackendChoice::Ast => {
+            interp.mode = aevia_core::Mode::Ast;
+            interp.optimize_ir = false;
+        },
+        | BackendChoice::Cpu => interp.set_jobs(1),
+        | BackendChoice::CpuParallel => {
+            if options.jobs.is_none() {
+                interp.set_jobs(aevia_core::parallel::default_jobs());
+            }
+        },
+        | BackendChoice::Gpu => {
+            if !aevia_rssn::device::has_gpu() {
+                eprintln!(
+                    "aevia: `--backend gpu` requested, but no GPU device is registered in this build; falling back to CPU parallel execution"
+                );
+            }
+        },
+    }
     if let Some(budget) = options.budget {
         interp.max_tail_calls = budget;
         interp.max_io_steps = budget;
@@ -342,6 +416,7 @@ fn run_cli(
         | "fetch" => package::fetch(tail),
         | "tree" => package::tree(tail),
         | "rssn" => rssn_command(tail),
+        | "devices" => devices_command(tail),
         // The registry client is a separate binary; `aevia pkg` forwards to it
         // so the toolchain has one entry point. See `registry.rs`.
         | "pkg" => registry::run(tail),
@@ -477,6 +552,86 @@ const ZSH_COMPLETIONS: &str = "#compdef aevia\n\
              }\n\
              _aevia \"$@\"\n";
 
+/// Prints the host execution capabilities and registered RSSN devices.
+fn print_devices_summary() {
+    let env = aevia_rssn::host_execution_environment();
+    let workers = aevia_rssn::default_worker_threads();
+    let simd = aevia_rssn::host_simd_label();
+    let mode = aevia_rssn::execution::default_execution_mode();
+    let jit = if cfg!(feature = "jit") {
+        "enabled"
+    } else {
+        "disabled (rebuild with `--features jit`)"
+    };
+    let gpu_build = if cfg!(feature = "gpu-wgpu") {
+        "enabled"
+    } else {
+        "disabled (rebuild with `--features gpu-wgpu`)"
+    };
+    println!("Execution environment:");
+    println!("  CPU threads: {workers} (detected: {})", env.cpu_threads());
+    println!(
+        "  SIMD ISA:    {simd} ({} f64 lanes)",
+        env.simd().f64_lanes()
+    );
+    println!("  Policy:      {mode:?}");
+    println!("  Cranelift:   {jit}");
+    println!("  GPU (wgpu):  {gpu_build}");
+    println!("Registered RSSN devices:");
+    for dev in aevia_rssn::device::available() {
+        let dtypes: Vec<&str> = dev
+            .dtypes
+            .iter()
+            .map(|dt| {
+                match dt {
+                    | aevia_rssn::device::Dtype::F32 => "f32",
+                    | aevia_rssn::device::Dtype::F64 => "f64",
+                }
+            })
+            .collect();
+        let mut ops = Vec::new();
+        if dev.ops.elementwise {
+            ops.push("elementwise");
+        }
+        if dev.ops.reduce {
+            ops.push("reduce");
+        }
+        if dev.ops.matmul {
+            ops.push("matmul");
+        }
+        if dev.ops.structured {
+            ops.push("structured");
+        }
+        let emu = if dev.emulated_f64 {
+            ", emulated-f64"
+        } else {
+            ""
+        };
+        println!(
+            "  - {} ({}, kind={}, parallelism={}, dtypes=[{}], ops=[{}]{emu})",
+            dev.id,
+            dev.name,
+            dev.kind.tag(),
+            dev.parallelism,
+            dtypes.join(","),
+            ops.join(",")
+        );
+    }
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "CLI subcommand inspecting host execution devices and capabilities"
+)]
+fn devices_command(args: &[String]) -> ExitCode {
+    if let Some(extra) = args.first() {
+        eprintln!("aevia devices: unexpected argument `{extra}`");
+        return ExitCode::from(2);
+    }
+    print_devices_summary();
+    ExitCode::SUCCESS
+}
+
 /// Generates shell completion source for the selected shell.
 #[allow(
     clippy::single_call_fn,
@@ -488,7 +643,7 @@ fn completions_command(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     };
     let shell = shell.to_ascii_lowercase();
-    let commands = "run check lint watch test repl fmt doc bench clean lsp debug completions toolchain init add update fetch tree rssn pkg publish docs login search info yank verify help";
+    let commands = "run check lint watch test repl fmt doc bench clean lsp debug completions toolchain init add update fetch tree rssn devices pkg publish docs login search info yank verify help";
     let script = match shell.as_str() {
         | "bash" => {
             format!(
@@ -506,11 +661,11 @@ fn completions_command(args: &[String]) -> ExitCode {
              \x20           return 0\n\
              \x20           ;;\n\
              \x20       doc)\n\
-             \x20           COMPREPLY=( $(compgen -W \"--out --open --stdlib --json\" -- \"$cur\") )\n\
+             \x20           COMPREPLY=( $(compgen -W \"--out --open --stdlib --lang --json\" -- \"$cur\") )\n\
              \x20           return 0\n\
              \x20           ;;\n\
              \x20       run|check|test)\n\
-             \x20           COMPREPLY=( $(compgen -W \"--relax-result --no-cache --help\" -f -- \"$cur\") )\n\
+             \x20           COMPREPLY=( $(compgen -W \"--relax-result --no-cache --backend --jobs --help\" -f -- \"$cur\") )\n\
              \x20           return 0\n\
              \x20           ;;\n\
              \x20   esac\n\
@@ -634,13 +789,15 @@ fn entry_path(
             return Err(ExitCode::from(2));
         }
         if let Some(extra) = args.get(1) {
-            // `run file -- args` is in §9.9, but this runtime calls a
-            // zero-argument `main`, so there is nowhere for an argument to go.
-            // Saying so is better than dropping it.
-            eprintln!(
-                "aevia {command}: unexpected argument `{extra}`; this runtime calls a \
-                 zero-argument `main`, so a program cannot take arguments yet"
-            );
+            if command == "run" {
+                eprintln!(
+                    "aevia run: unexpected argument `{extra}`; pass program arguments after `--`"
+                );
+            } else {
+                eprintln!(
+                    "aevia {command}: unexpected argument `{extra}` (expected at most one entry file)"
+                );
+            }
             return Err(ExitCode::from(2));
         }
         return Ok(PathBuf::from(first));
@@ -973,7 +1130,7 @@ fn check_command(
         return ExitCode::from(2);
     }
     if all {
-        return check_all(options, &files, cli_overrides);
+        return check_all(options, &files, cli_overrides, no_cache);
     }
     // Expand a pattern the shell did not expand (`examples/*.aev` under
     // PowerShell), then check each file it named.
@@ -1222,18 +1379,20 @@ fn watch_command(
         },
     };
     let cache = std::rc::Rc::new(std::cell::RefCell::new(driver::CheckCache::new()));
+    let disk = aevia_core::disk_cache::DiskCache::beside(&path);
     let overlays = aevia_core::source::SourceOverlays::new();
     let mut round = 0usize;
     let mut failed;
     loop {
         round = round.saturating_add(1);
         let started = std::time::Instant::now();
-        let (program, stats) = driver::load_incremental(
+        let (program, stats) = driver::load_incremental_with_disk_cache(
             &path,
             roots.clone(),
             &overlays,
             &aevia_types::check::CheckOptions::default(),
             &cache,
+            &disk,
         );
         let elapsed = started.elapsed();
         failed = report(&program.diagnostics, &program.sources, style(options));
@@ -1323,6 +1482,7 @@ fn check_all(
     options: Options,
     files: &[String],
     cli_overrides: Vec<aevia_lint::CliOverride>,
+    no_cache: bool,
 ) -> ExitCode {
     if let Some(extra) = files.first() {
         eprintln!(
@@ -1363,8 +1523,19 @@ fn check_all(
     };
     // One loader for every entry: a module shared by several entries is parsed
     // and checked once, not once per entry.
-    let (program, stats) =
-        driver::load_all_with_roots(&paths, roots, &aevia_types::check::CheckOptions::default());
+    let disk = (!no_cache)
+        .then(|| {
+            paths
+                .first()
+                .map(|entry| aevia_core::disk_cache::DiskCache::beside(entry))
+        })
+        .flatten();
+    let (program, stats) = driver::load_all_with_roots_and_disk_cache(
+        &paths,
+        roots,
+        &aevia_types::check::CheckOptions::default(),
+        disk.as_ref(),
+    );
     let store = aevia_lint::LintStore::with_builtins();
     let lint_config = aevia_lint::LintConfig {
         manifest_lints: package.manifest.lints,
@@ -1447,6 +1618,7 @@ fn test_command(
     let mut files: Vec<String> = Vec::new();
     let mut doc = false;
     let mut relax_result = false;
+    let mut no_cache = false;
     let mut index = 0;
     while let Some(argument) = args.get(index) {
         match argument.as_str() {
@@ -1461,11 +1633,12 @@ fn test_command(
             // §7.5.5/§9.12: compile the ```aevia blocks of the `##` docs.
             | "--doc" => doc = true,
             | "--relax-result" => relax_result = true,
+            | "--no-cache" => no_cache = true,
             | option if option.starts_with("--exact=") => exact = option.strip_prefix("--exact="),
             | other if other.starts_with('-') => {
                 eprintln!(
                     "aevia test: unknown option `{other}` (the options are `--filter PAT`, \
-                     `--exact=NAME`, `--doc`, and `--relax-result`)"
+                     `--exact=NAME`, `--doc`, `--no-cache`, and `--relax-result`)"
                 );
                 return ExitCode::from(2);
             },
@@ -1484,7 +1657,7 @@ fn test_command(
         | Ok(path) => path,
         | Err(code) => return code,
     };
-    let program = match load_program(&path, style(options)) {
+    let program = match load_program_with(&path, style(options), !no_cache) {
         | Ok(program) => program,
         | Err(code) => return code,
     };
@@ -2419,7 +2592,7 @@ fn handle_repl_command(
     let name = parts.next().unwrap_or("");
     let argument = parts.next().unwrap_or("").trim();
     match name {
-        | "quit" | "q" => return ReplControl::Quit,
+        | "quit" | "q" | "exit" => return ReplControl::Quit,
         | "reset" => {
             session.reset();
             println!("session cleared");
@@ -2453,6 +2626,63 @@ fn handle_repl_command(
                     "unknown output format `{argument}`; choose show, repr, pretty, latex, or typst"
                 );
             }
+        },
+        | "backend" => {
+            if argument.is_empty() {
+                println!(
+                    "backend: {} (release={}, jobs={})\nAvailable: auto, ir, ast, cpu, cpu-parallel, gpu",
+                    session.options.backend.as_str(),
+                    session.options.release,
+                    session
+                        .options
+                        .jobs
+                        .unwrap_or_else(aevia_core::parallel::default_jobs),
+                );
+            } else if let Some(choice) = BackendChoice::parse(argument) {
+                session.options.backend = choice;
+                if let Some(interp) = session.interp.as_mut() {
+                    apply_options(interp, session.options);
+                }
+                println!("backend: {}", choice.as_str());
+            } else {
+                eprintln!(
+                    "unknown backend `{argument}`; choose auto, ir, ast, cpu, cpu-parallel, or gpu"
+                );
+                session.command_failed = true;
+            }
+        },
+        | "jobs" => {
+            if argument.is_empty() {
+                let active = session
+                    .options
+                    .jobs
+                    .unwrap_or_else(aevia_core::parallel::default_jobs);
+                println!(
+                    "jobs: {active} (default: {})",
+                    aevia_core::parallel::default_jobs()
+                );
+            } else if argument == "auto" {
+                session.options.jobs = None;
+                let default_workers = aevia_core::parallel::default_jobs();
+                if let Some(interp) = session.interp.as_mut() {
+                    interp.set_jobs(default_workers);
+                }
+                println!("jobs: {default_workers} (auto)");
+            } else if let Ok(jobs) = argument.parse::<usize>()
+                && jobs >= 1
+            {
+                session.options.jobs = Some(jobs);
+                if let Some(interp) = session.interp.as_mut() {
+                    interp.set_jobs(jobs);
+                }
+                println!("jobs: {jobs}");
+            } else {
+                eprintln!("`:jobs` expects a positive integer or `auto`, found `{argument}`");
+                session.command_failed = true;
+            }
+        },
+        | "devices" => {
+            print_devices_summary();
         },
         | "run" => {
             session.command_failed = !run_repl_main(session);
@@ -2648,7 +2878,24 @@ fn handle_repl_command(
                 }
             }
         },
-        | other => eprintln!("unknown command `:{other}`; type :help for commands and examples"),
+        | other => {
+            const KNOWN_REPL_COMMANDS: &[&str] = &[
+                "help", "h", "?", "quit", "q", "exit", "reset", "doc", "apropos", "format",
+                "backend", "jobs", "devices", "run", "show", "print", "repr", "pretty", "pprint",
+                "latex", "typst", "source", "imports", "bindings", "vars", "save", "dims", "units",
+                "type", "t", "ast", "core", "time", "load", "l", "paste", "end", "cancel",
+            ];
+            if let Some(suggestion) =
+                aevia_types::check::closest_name(other, KNOWN_REPL_COMMANDS.iter().copied())
+            {
+                eprintln!(
+                    "unknown command `:{other}`; did you mean `:{suggestion}`? Type :help for commands and examples"
+                );
+            } else {
+                eprintln!("unknown command `:{other}`; type :help for commands and examples");
+            }
+            session.command_failed = true;
+        },
     }
     ReplControl::Continue
 }
@@ -2704,6 +2951,9 @@ fn repl_item_help(
                     | "repr"
                     | "print"
                     | "format"
+                    | "backend"
+                    | "jobs"
+                    | "devices"
                     | "doc"
                     | "apropos"
                     | "ast"
@@ -2719,6 +2969,7 @@ fn repl_item_help(
                     | "reset"
                     | "quit"
                     | "q"
+                    | "exit"
                     | "help"
                     | "h"
                     | "?"
@@ -2784,6 +3035,9 @@ Session commands:
   :pretty EXPR   print two-dimensional mathematics (:pprint alias)
   :repr EXPR     render source representation; :print EXPR renders human text
   :format NAME   set normal result format: show, repr, pretty, latex, typst
+  :backend [B]   show or switch execution backend: auto, ir, ast, cpu, cpu-parallel, gpu
+  :jobs [N|auto] show or set parallel worker thread budget
+  :devices       inspect CPU SIMD, JIT, and registered RSSN/GPU devices
   :help ITEM     signature, documentation, and examples for a function/type/unit
   :doc ITEM      item documentation; :apropos TEXT searches names and docs
   :help :CMD     help for a REPL command; :help alone shows this guide (:h, :?)
@@ -2848,6 +3102,11 @@ Numbers are exact by default. Use approx(EXPR) when you want a numerical result.
         | "time" | "ast" | "core" => {
             println!(
                 "usage: :{topic} EXPRESSION\nExample: :{topic} 1 + 2\n:ast parses; :core also type-checks; :time evaluates once using :format's output mode."
+            );
+        },
+        | "backend" | "jobs" | "devices" => {
+            println!(
+                "Execution controls:\n  :backend [auto|ir|ast|cpu|cpu-parallel|gpu]  inspect or switch execution backend\n  :jobs [N|auto]                               inspect or set parallel worker budget\n  :devices                                     inspect CPU SIMD, JIT, and registered RSSN/GPU devices"
             );
         },
         | "imports" | "import" | "open" => {

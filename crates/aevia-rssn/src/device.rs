@@ -19,8 +19,10 @@ use std::sync::Arc;
 pub use rssn::backend::device::Device;
 pub use rssn::backend::device::DeviceInfo;
 pub use rssn::backend::device::DeviceKind;
+pub use rssn::backend::device::DeviceOps;
 pub use rssn::backend::device::Dtype;
 use rssn::backend::device::KernelIr;
+pub use rssn::backend::device::ReduceOp;
 use rssn::backend::device::map_columns;
 use rssn::backend::device::preferred_dtype;
 use rssn::backend::device::registry;
@@ -86,6 +88,105 @@ pub fn resolve(selector: Selector) -> Result<Arc<dyn Device>, String> {
                 })
         },
     }
+}
+
+/// Resolves the preferred execution device for the given GPU/parallelism
+/// preference. Falls back to CPU when `prefer_gpu` is set but no GPU adapter
+/// is registered.
+///
+/// # Errors
+/// Returns an error if the CPU device itself is missing from the registry.
+pub fn resolve_default(
+    prefer_gpu: bool,
+    parallel: bool,
+) -> Result<Arc<dyn Device>, String> {
+    if prefer_gpu && has_gpu() {
+        return resolve(Selector::Gpu(0));
+    }
+    resolve(if parallel {
+        Selector::CpuParallel
+    } else {
+        Selector::Cpu
+    })
+}
+
+/// Multiplies row-major matrices `a` (`m x k`) and `b` (`k x n`) on `device`.
+///
+/// # Errors
+/// Returns a message on shape mismatch, overflow, or when the device does not
+/// support `matmul` or fails to execute.
+pub fn matmul(
+    device: &dyn Device,
+    a: &[f64],
+    b: &[f64],
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Result<Vec<f64>, String> {
+    let expected_a = m
+        .checked_mul(k)
+        .ok_or_else(|| "device matmul: matrix `a` dimensions overflow".to_string())?;
+    let expected_b = k
+        .checked_mul(n)
+        .ok_or_else(|| "device matmul: matrix `b` dimensions overflow".to_string())?;
+    let out_len = m
+        .checked_mul(n)
+        .ok_or_else(|| "device matmul: output dimensions overflow".to_string())?;
+    if a.len() != expected_a || b.len() != expected_b {
+        return Err(format!(
+            "device matmul: expected lengths {expected_a} and {expected_b}, got {} and {}",
+            a.len(),
+            b.len()
+        ));
+    }
+    if out_len == 0 {
+        return Ok(Vec::new());
+    }
+    let dtype = preferred_dtype(device.info());
+    let buf_a = device
+        .upload(a, dtype)
+        .map_err(|err| format!("device `{}` upload failed: {err}", device.info().id))?;
+    let buf_b = device
+        .upload(b, dtype)
+        .map_err(|err| format!("device `{}` upload failed: {err}", device.info().id))?;
+    let mut buf_c = device
+        .alloc(out_len, dtype)
+        .map_err(|err| format!("device `{}` alloc failed: {err}", device.info().id))?;
+    device
+        .matmul(&buf_a, &buf_b, &mut buf_c, m, k, n)
+        .map_err(|err| format!("device `{}` matmul failed: {err}", device.info().id))?;
+    let mut host = vec![0.0; out_len];
+    device
+        .download(&buf_c, &mut host)
+        .map_err(|err| format!("device `{}` download failed: {err}", device.info().id))?;
+    Ok(host)
+}
+
+/// Reduces a host slice on `device` using `op`.
+///
+/// # Errors
+/// Returns a message when `data` is empty for `Min`/`Max`, or when the device
+/// does not support `reduce` or fails to execute.
+pub fn reduce(
+    device: &dyn Device,
+    op: ReduceOp,
+    data: &[f64],
+) -> Result<f64, String> {
+    if data.is_empty() {
+        return match op {
+            | ReduceOp::Sum | ReduceOp::Prod => Ok(op.identity()),
+            | ReduceOp::Min | ReduceOp::Max => {
+                Err("device reduce: min/max of an empty buffer is undefined".to_string())
+            },
+        };
+    }
+    let dtype = preferred_dtype(device.info());
+    let buf = device
+        .upload(data, dtype)
+        .map_err(|err| format!("device `{}` upload failed: {err}", device.info().id))?;
+    device
+        .reduce(op, &buf)
+        .map_err(|err| format!("device `{}` reduce failed: {err}", device.info().id))
 }
 
 /// A pure scalar program prepared for batch execution on a device.
@@ -378,5 +479,28 @@ mod tests {
         };
         assert!(square_plus_one().run(&device, &[&input]).is_none());
         assert!(device.launched.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn device_matmul_and_reduce_agree_across_cpu_devices() {
+        let a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let b = [7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
+        let expected = [58.0, 64.0, 139.0, 154.0];
+        for selector in [Selector::Cpu, Selector::CpuParallel] {
+            let device = resolve(selector).unwrap();
+            let got = matmul(&*device, &a, &b, 2, 3, 2).unwrap();
+            assert_eq!(got, expected);
+            assert_eq!(reduce(&*device, ReduceOp::Sum, &a).unwrap(), 21.0);
+            assert_eq!(reduce(&*device, ReduceOp::Prod, &a).unwrap(), 720.0);
+            assert_eq!(reduce(&*device, ReduceOp::Min, &a).unwrap(), 1.0);
+            assert_eq!(reduce(&*device, ReduceOp::Max, &a).unwrap(), 6.0);
+            assert_eq!(reduce(&*device, ReduceOp::Sum, &[]).unwrap(), 0.0);
+            assert_eq!(reduce(&*device, ReduceOp::Prod, &[]).unwrap(), 1.0);
+            assert!(reduce(&*device, ReduceOp::Min, &[]).is_err());
+        }
+        let default_par = resolve_default(false, true).unwrap();
+        assert_eq!(default_par.info().id, "cpu-parallel");
+        let default_seq = resolve_default(false, false).unwrap();
+        assert_eq!(default_seq.info().id, "cpu");
     }
 }

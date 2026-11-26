@@ -923,6 +923,8 @@ fn witnessed_type(ty: &crate::registry::SigType) -> Option<String> {
         | S::Real | S::Symbol | S::Dyn => "Real".to_string(),
         | S::Float => "Float".to_string(),
         | S::Bool => "Bool".to_string(),
+        | S::Str => "String".to_string(),
+        | S::Complex => "Complex".to_string(),
         | S::Opaque(_) => "Value".to_string(),
         | S::Tensor { rank, elem, .. } => {
             let rank = (*rank)?;
@@ -1001,6 +1003,8 @@ pub fn witnessed_param_names(types: &[String]) -> Vec<String> {
             | "Int" => "n".to_string(),
             | "Real" | "Float" => "x".to_string(),
             | "Bool" => "flag".to_string(),
+            | "String" => "s".to_string(),
+            | "Complex" => "z".to_string(),
             | "Value" => "v".to_string(),
             | _ => {
                 match ty
