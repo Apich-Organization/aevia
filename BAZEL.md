@@ -12,6 +12,8 @@ work/
   rssn/     MODULE.bazel
 ```
 
+To verify a paired change in GitHub Actions, push its RSSN revision first and enter the branch, tag or commit in the CI workflow’s `rssn_ref` input. The resolver pins one commit for all jobs. Release CI uses the commit selected by the release workflow.
+
 You can select an existing RSSN worktree from Aevia. Bazel stages declared inputs in a stable, side-by-side local mirror to preserve Cargo path dependency semantics.
 
 ```sh

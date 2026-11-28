@@ -7,7 +7,7 @@
 # `aevia-rssn` links the kernel by path (`../../../rssn` from its crate), so the
 # two repositories are checked out side by side: `$GITHUB_WORKSPACE/aevia` and
 # `$GITHUB_WORKSPACE/rssn`. The kernel revision is the repository variable
-# RSSN_REF (default `v0.3`); set it to build against a branch or a tag.
+# RSSN_REF (default `v0.3`). Manual runs may select a branch, tag or SHA.
 #
 # `platform/` is a separate Cargo workspace that depends on the language crates
 # by path (`../crates/aevia-doc`), so the same checkout serves it.
@@ -19,6 +19,11 @@ name: CI
     branches: [main, v0.1]
   pull_request:
   workflow_dispatch:
+    inputs:
+      rssn_ref:
+        description: RSSN branch, tag or commit for this run
+        type: string
+        required: false
   workflow_call:
     inputs:
       rssn_commit:
@@ -54,7 +59,7 @@ jobs:
         with:
           persist-credentials: false
           repository: Apich-Organization/rssn
-          ref: ${{ inputs.rssn_commit || vars.RSSN_REF || 'v0.3' }}
+          ref: ${{ inputs.rssn_commit || inputs.rssn_ref || vars.RSSN_REF || 'v0.3' }}
           path: rssn
       - id: pin
         working-directory: rssn

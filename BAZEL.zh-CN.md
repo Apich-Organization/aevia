@@ -18,6 +18,8 @@ work/
 bazel test --override_module=rssn=/work/rssn-worktree //:joint_test
 ```
 
+在 GitHub Actions 中验证配套改动时，先推送 RSSN 提交，再在手动触发 CI 时填写 `rssn_ref`，可以指定分支、标签或提交。所有任务使用同一个解析出的提交。发布 CI 使用发布工作流选定的提交。
+
 | 命令 | 用途 |
 | --- | --- |
 | `bazel build //:toolchain` | 构建 CLI 和 LSP |
