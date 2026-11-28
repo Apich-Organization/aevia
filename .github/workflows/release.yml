@@ -159,7 +159,10 @@ jobs:
           repository-cache: true
       - name: System dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y fontconfig libfontconfig1-dev libvulkan1 mesa-vulkan-drivers
+        run: sudo apt-get update && sudo apt-get install -y fontconfig libfontconfig1-dev libvulkan1 mesa-vulkan-drivers zstd
+      - name: LLVM SDK decompressor
+        if: runner.os == 'macOS'
+        run: command -v zstd || brew install zstd
       - name: Build, package and verify the optimized distribution
         env:
           RSSN_TARGET_ENV: ${{ vars.RSSN_TARGET_ENV }}
