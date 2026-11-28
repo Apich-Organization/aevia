@@ -30,7 +30,7 @@ bazel test --override_module=rssn=/work/rssn-worktree //:joint_test
 | `bazel run //:benchmark -- interp\|matmul\|startup` | Measure IR workloads, dense matrix multiplication, or RSSN bridge startup |
 | `bazel run //:benchmark -- tail-call\|dense-tensors\|dense-matmul` | Run the dedicated tail-call, boxed/dense tensor, or language matrix-product timing harness |
 | `bazel run --config=release-local //:aevia -- bench program.aev` | Measure user programs annotated with `@bench` using an optimized CLI |
-| `bazel run //:profile -- run program.aev` | Sample an Aevia command on x86-64 Windows with the profiling build |
+| `bazel run //:profile -- run program.aev` | Sample an Aevia command on x86-64 Windows with an unstripped CLI and, on MSVC, an adjacent PDB |
 | `bazel run //:check` | Check the Rust workspace without linking test binaries |
 | `bazel run //:fmt` / `bazel test //:fmt_test` | Format both workspaces with nightly Rustfmt, or check formatting |
 | `bazel test //:rustdoc_test //:platform_rustdoc_test` | Build Rust API documentation for both workspaces |

@@ -101,7 +101,11 @@ def artifacts(build, workflow):
         build.cargo(["build", *packages, *flags], cwd=build.root / "platform", env=overrides)
     suffix = ".exe" if "windows" in build.target else ""
     profile = "profiling" if workflow == "toolchain_profiling" else ("release" if optimized else "debug")
-    build.copy_artifacts("bin", build.cargo_output(profile), [name + suffix for name in names])
+    output = build.cargo_output(profile)
+    binaries = [name + suffix for name in names]
+    if workflow == "toolchain_profiling" and build.target.endswith("-windows-msvc"):
+        binaries.append("aevia.pdb")
+    build.copy_artifacts("bin", output, binaries)
     if optimized:
         receipt = build.outputs["bin"] / _RELEASE_INPUTS
         staged = {path: build.mirror / path for path in build.inputs}

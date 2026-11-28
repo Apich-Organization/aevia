@@ -29,7 +29,7 @@ bazel test --override_module=rssn=/work/rssn-worktree //:joint_test
 | `bazel run //:benchmark -- interp\|matmul\|startup` | 测量 IR 解释器、稠密矩阵乘法或 RSSN 桥接启动 |
 | `bazel run //:benchmark -- tail-call\|dense-tensors\|dense-matmul` | 运行尾调用、稠密与装箱张量或语言层矩阵乘法计时 |
 | `bazel run --config=release-local //:aevia -- bench program.aev` | 用优化构建的 CLI 测量以 `@bench` 标注的程序 |
-| `bazel run //:profile -- run program.aev` | 在 x86-64 Windows 上采样分析 Aevia 命令 |
+| `bazel run //:profile -- run program.aev` | 在 x86-64 Windows 上使用保留调试符号的 CLI 进行采样。MSVC 构建会提供同目录的 PDB |
 | `bazel run //:check` | 检查 Rust 工作区，省去测试可执行文件的链接 |
 | `bazel run //:fmt` / `bazel test //:fmt_test` | 用 nightly Rustfmt 格式化两个工作区，或验证格式 |
 | `bazel test //:rustdoc_test //:platform_rustdoc_test` | 为两个工作区构建 Rust API 文档 |

@@ -90,6 +90,7 @@ lto = "thin"
 codegen-units = 16
 incremental = true
 debug = "line-tables-only"
+strip = "none"
 
 [workspace.lints.rust]
 future_incompatible = { level = "deny", priority = -1 }
