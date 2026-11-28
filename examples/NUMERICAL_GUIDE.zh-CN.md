@@ -94,11 +94,50 @@ cargo run -p aevia-cli -- test examples/dimensioned_numerics.aev
 第一行输出使用初始状态，并计入输入的直接馈通项。
 [带量纲仿真示例](measured_state_space.aev)
 
+将同一条记录传给 `num_control_discrete_n_states`、`num_control_discrete_n_inputs`
+和 `num_control_discrete_n_outputs`，即可获取状态、输入和输出的数量。
+`num_control_discrete_poles` 返回复数特征值，`num_control_discrete_is_stable`
+检查所有极点是否严格位于单位圆内。可控性矩阵和可观性矩阵分别保留 `b` 和 `c`
+的量纲。上述接口接受离散模型，其中状态矩阵 `a` 无量纲。
+
+对无量纲复数 Taylor 系数，`Rssn_Special.pade_complex` 返回包含分子和分母的记录。
+用 `Rssn_Special.eval_pade_complex` 可在多个复数点复用该记录。
+`recenter_taylor_complex` 按顺序移动 Taylor 多项式的展开中心，
+`wynn_epsilon_complex` 对部分和序列做收敛加速。
+[可运行的延拓测试](../tests/domain_analytic_continuation.aev)
+
+`Rssn_Special.holonomic_order`、`continue_holonomic` 和
+`holonomic_monodromy` 接收无量纲多项式系数矩阵，每行按幂次升序排列。
+第 `j` 行乘以第 `j` 阶导数，初始状态从函数值开始逐阶列出。计算单值化矩阵时
+传入闭合路径。`borel_pade_complex` 在有理 Borel 变换的正实积分轴上遇到极点时，
+取确定的上侧积分。
+
+`num_continuation_laurent_fft` 接收复数回调、量纲相同的中心和正半径、
+负幂与正幂的阶数、采样数和求值预算。系数对应局部变量 `(z - center) / radius`，
+保留回调输出的单位，起始幂次由 `first_power` 给出。结果还包含半径和实际采样数。
+[可运行示例](../tests/domain_holonomic_borel_laurent.aev)
+
 `num_native_irfft_plan_new` 按固定的实数输出长度准备逆实数 FFT。用同一计划反复调用 `num_native_irfft_plan_apply`，结果保留频谱的物理量纲。`num_native_irfft_plan_output_len` 返回实数样本数，`num_native_irfft_plan_spectrum_len` 返回所需的非负频率分量数。四个和五个实数样本都需要三个频率分量。[可运行示例](native_kernel_families.aev)
+
+`Rssn_Optimizer.solve_linear_program` 在有限下界和可选上界下最小化线性目标。
+`upper_present` 标记哪些上界生效，每行约束选择 `Le`、`Ge` 或 `Eq`。
+若坐标、目标值、约束右端的量纲依次为 D、E、C，目标系数的量纲为 E/D，
+约束系数的量纲为 C/D。分别传入量纲为 D、E、C 的正参考量。结果包含状态、
+带量纲坐标及可选目标值。`simplex_budgeted` 对变量施加非负约束，可选择
+`Dantzig`、`SteepestEdge` 或 `Bland` 定价，两个阶段共用一个枢轴预算。
+[可运行的线性规划示例](../tests/domain_linear_programming.aev)
 
 `num_stats_simple_linear_regression` 接收各自带量纲的预测张量和响应张量。斜率的单位为响应单位除以预测单位，截距保留响应单位。内核在极端尺度下缩放样本，以处理超出浮点范围的中间矩。[可运行示例](native_kernel_families.aev)
 
 `num_polynomial_model_try_long_division` 对坐标参考量相同、系数按降幂排列的多项式做长除法。除式可有前导零，零多项式作除式会返回错误。商的系数单位为被除式单位除以除式单位，余式系数保留被除式单位。[可运行示例](native_algebra_models.aev)
+
+`Rssn_ComplexPolynomial` 接收按次数升序排列的无量纲复系数。`durand_kerner` 和 `aberth_ehrlich` 返回与次数相同数量的候选根，以及每个根的相对后向误差和重建归一化系数时的最大偏差。非零常数返回空张量。`laguerre` 接收复数初值，返回可选的候选根及其残差。零多项式和未收敛的求解会返回错误。后向误差衡量多项式的扰动，重根或病态根的残差很小时，坐标误差仍可能较大。
+
+`Rssn_RiemannHilbert` 使用形状为 `2 × 2` 的复数张量。矩阵加减要求元素量纲一致，乘积的量纲为两个输入量纲的乘积，逆矩阵使用倒数量纲，Frobenius 范数保留原量纲。`evaluate` 可复用无量纲配点记录，其中包含 `(-1, 1)` 内严格递增的节点、正求积权重以及形状为 `n × 2 × 2` 的跃变密度张量。求值点须位于闭区间 `[-1, 1]` 对应的复平面线段之外。 `Rssn_numerical_callback.num_riemann_hilbert_solve_typed` 通过无量纲矩阵跃变回调生成该记录，验证两个端点为单位矩阵，并返回实际回调次数。
+
+标量接口 `num_riemann_hilbert_cauchy_checked_typed`、`num_riemann_hilbert_plemelj_checked_typed` 和 `num_riemann_hilbert_factor_checked_typed` 报告绝对误差估计、收敛状态及回调次数。Cauchy 和 Plemelj 保留密度的量纲。标量分解从 `-1` 处的主辐角开始采样连续跃变相位，并分别报告指数化前后的误差。`num_complex_cauchy_fft_derivatives_checked_typed` 对局部坐标 `(z - center) / radius` 求导，因此返回张量具有统一量纲。双倍采样网格的结果差作为经验误差估计。
+
+带量纲的圆形轮廓和解析回调可使用 `Rssn_numerical_callback` 的 `num_complex_root_circle_moments_typed`、`num_complex_root_circle_winding_typed` 和 `num_complex_root_circle_rouche_samples_typed`。矩基于 `(z - center) / radius` 的幂，返回值记录两种采样网格的差异。绕数要求两个网格的结果收敛到同一个整数附近。Rouché 接口报告严格不等式在各采样点成立的情况。回调接收已换算到相干单位的坐标，结果记录实际回调次数。
 
 `num_native_categorical_new` 用有限非负相对权重预备采样表，同一张表可配合一个或多个会话随机流使用。`num_native_categorical_categories` 的计数包含零权重项。`num_native_categorical_sample` 返回按原权重顺序排列的零基索引，`num_native_categorical_fill` 按与连续单次抽样相同的顺序返回张量。[可运行示例](native_discrete_objects.aev)
 
@@ -124,6 +163,14 @@ cargo run -p aevia-cli -- test examples/dimensioned_numerics.aev
 `num_finite_field_gf256_scale` 用同一个系数缩放整条字节向量。`num_finite_field_gf256_mul_add` 将缩放后的源向量逐字节异或到等长目标向量。两个算子与 Reed–Solomon 使用相同的 GF(256) 多项式。[可运行示例](native_kernel_families.aev)
 
 `num_analysis_convergence_levin_condition_numbers` 返回 Levin 变换各个可用阶数的无量纲条件数。级数项允许带共同量纲，变换名称为 `U`、`T` 或 `V`。无穷值表示条件数不可用或无界。
+
+`Rssn_ComplexDynamics` 使用无量纲二次映射 `z² + c`。逃逸函数返回越过半径的步数、
+`escaped` 标志和可选的势估计。迭代预算耗尽时，势估计为 `None`。`quadratic_orbit`
+包含起点。`quadratic_multiplier` 验证指定次数的迭代是否闭合，再返回数值分类。
+`quadratic_periodic_points` 返回基周期符合要求的候选点和残差。`external_ray`
+接收以圈为单位的角度，返回射线点与 Böttcher 坐标的相对残差。
+
+自定义映射可调用 `Rssn_numerical_callback.num_complex_dynamics_newton_basin_checked_typed`，传入映射、导数、坐标尺度和残差尺度。导数奇异或迭代用尽时返回 `root = None`。回调预算用尽时返回错误。`num_complex_dynamics_koenigs_checked_typed` 先检查不动点闭合误差，然后返回截断坐标估计、带量纲的闭合误差和实际计算次数。
 
 `num_analysis_ode_fixed_final` 在等步长网格上求值已保留的原生右端项程序，返回末态并恢复各分量的物理单位。方法 `0`、`1` 和 `2` 分别为 Euler、Heun 和经典 RK4，求值预算至少为步数的 1、2 或 4 倍。[可运行示例](native_ode_objects.aev)
 
@@ -237,7 +284,112 @@ cargo run -p aevia-cli -- test examples/dimensioned_numerics.aev
 
 `num_analysis_sobol_point_at` 按无符号 32 位索引取点而不推进序列。`num_analysis_sobol_seek` 改变生成器的位置，下一次抽取前进一步。最大索引之后回到原点。[可运行示例](native_discrete_objects.aev)
 
+
+`Rssn_numerical_callback` 提供带量纲的 Wirtinger 导数、柯西–黎曼与保角诊断、
+笛卡尔 Laplacian、局部倍率与旋转、极坐标残差及复步长导数。极坐标诊断分别接受
+径向步长和无量纲角步长。一阶笛卡尔诊断复用同一组四点采样，实解析复步长导数
+只需一次采样。步长无法在浮点中区分或回调预算不足时返回错误。
+[可运行测试](../tests/domain_conformal_stencil.aev)。
+
+`Rssn_Univalent` 提供归一化单位圆盘上的系数与导数诊断。Taylor 系数按升幂
+从常数项开始传入，Grunsky 矩阵和测试向量使用复数张量。Bieberbach、Grunsky
+与 Becker 计算有限数值条件。Loewner 使用固定弧度驱动角推进一个径向步长。
+[可运行测试](../tests/domain_univalent.aev)。
+
+类型化数值回调还可用单个 64 点圆估计 Schwarz 导数，并在有限网格上检查
+Nehari 条件、星形性和凸性。Schwarz 导数的量纲为坐标量纲平方的倒数。
+这些采样诊断要求显式回调预算，并可拒绝浮点分辨率不足的输入。
+[可运行测试](../tests/domain_univalent_sampled.aev)。
+
+`Rssn_Special` 的保角算子可根据三对点拟合齐次 Möbius 变换、用补零后的
+多项式系数行计算 Bergman 核，以及在上半平面内部评估给定的 Schwarz–Christoffel
+映射。积分返回是否达到指定容差、绝对误差估计及实际采样次数。
+[可运行测试](../tests/domain_conformal_kernels.aev)。
+
+Szegő 求解可预先计算并复用边界点、Cauchy 权重和中心，供 Szegő 核、
+Bergman 核与 Riemann 映射多次求值。检查式映射要求从中心到查询点的直线
+位于采样边界内部。两个回调入口均显式限制采样点数和回调次数。
+[可运行测试](../tests/domain_conformal_szego.aev)。
+
+Riemann 覆盖算子返回分支循环的紧凑表示和零基片层置换。无穷远处的局部
+环路按 `1/z` 坐标定向。数值 monodromy 的系数矩阵按行索引 `w` 的幂、
+按列索引 `z` 的幂，并自动连接路径尾点和起点。接触无法分辨的分支点时返回错误。
+带量纲的割线跳跃回调分别接受法线角度和坐标步长。
+[可运行测试](../tests/domain_riemann_covering.aev)。
+
+若要固定圆周采样，可使用 `num_contour_residue_infinity_fixed_typed`；
+回调预算需覆盖至少 32 个节点。自适应轮廓积分、主值和留数还返回绝对误差估计
+及收敛状态。实部和虚部复用同一批复数回调采样。
+[可运行测试](../tests/domain_contour_compatibility.aev)。
+
+`Rssn_Contour` 构造带有统一坐标量纲的开路径和闭路径。`starts` 和 `ends`
+保存各段的起点和终点。`arc_segments` 是圆弧段的零基索引，依次对应 `arc_centers`、
+`arc_radii`、`theta_start` 和 `theta_end`。角度用无量纲弧度表示，扫角的符号决定
+方向。`bromwich` 和 `hankel` 的 `closed` 为 `false`。`indented_semicircle`
+先在单位半径坐标系内为每个指定极点构造缩进，再恢复原坐标量纲。
+
+
+`Rssn_Contour.deform` 在两个带量纲的复数端点之间构造开路径。输入包括极点向量、
+割线起点向量、正的极点避让距离，以及逐一对应的无量纲弧度角。极点与割线合计最多
+64 个。路径可以沿同一分支绕过割线起点。构造器无法验证避让距离或路径与割线不相交时
+会返回错误。可复用返回的路径，也可调用
+`Rssn_numerical_callback.num_contour_integrate_deformed_checked_typed`
+一次完成路径构造与积分。[可运行测试](../tests/domain_contour_deformation.aev)。
+
+`Rssn_numerical_callback.num_contour_integrate_checked_typed` 接收路径、坐标与函数值的参考尺度、
+绝对容差、每个分量的求积区间预算以及回调总预算。最后一个参数是返回复数的回调。
+结果包含 `value`、估计绝对误差 `error`、求值次数 `evaluations` 和收敛标志 `converged`。
+区间预算耗尽时，有限估计可带 `converged = false` 返回。回调失败、样本非有限或
+回调次数预算耗尽时返回错误。
+
 `num_analysis_levin_plan_new` 为固定相位、相位导数和频率准备结点与权重。`num_analysis_levin_plan_nodes` 返回带量纲结点。可用 `num_analysis_levin_plan_integrate_samples` 传入同序振幅样本，或用 `num_analysis_levin_plan_integrate` 传入已编译振幅。复积分量纲为振幅量纲与坐标量纲的乘积。[可运行示例](physical_functions.aev)
+
+`Rssn_Special.complex_jacobi_p` 和其他 `complex_*` 正交多项式入口接收无量纲参数与坐标，次数为 0 到 4096 的整数。`complex_spherical_harmonic` 还接收整数阶数，余纬和方位角用弧度表示。这组入口通过 `Result<Complex, OpError>` 返回结果。[可运行示例](complex_special_functions.aev)
+
+同一模块的 Weierstrass σ 和 ζ 接收两个无量纲复半周期。
+σ 在格点为零，ζ 在格点返回极点错误。实现缓存约化格的 θ 系数，并在格胞外恢复准周期修正。
+
+`Rssn_Special` 提供复阶主值 Bessel `J` 和 `I`、实阶 Anger `J` 和
+Weber `E`，以及以 `ber`、`bei`、`ker`、`kei` 命名字段的 Kelvin 函数。
+这些接口的参数均为无量纲。指数积分 `E_n` 和 Legendre 主值 `Q_n` 接收
+0 到 4096 的整数。虚部的正负零决定割线的边界取值。奇点和非有限结果返回错误。
+
+`Rssn_numerical_callback` 中带类型的复数求根回调可以分别指定坐标和残差参考量。
+`num_complex_root_muller_typed` 需要三个初值。Halley 接口接收一个初值，以及
+残差和对坐标的一阶、二阶导数。Homotopy 接口使用对坐标和时间的导数，将已知的
+根从无量纲时间 0 跟踪至 1。成功时返回原坐标量纲的根和实际回调求值次数。
+
+`num_complex_root_delves_lyness_typed` 通过对函数和一阶导数采样，估计无极点
+函数在圆内的零点。半径用作坐标参考量，所得根保留圆的量纲。需要经过认证的
+包络时可使用整个圆盘的认证算子。
+
+`Rssn_numerical_callback` 中的 `num_saddle_*_typed` 算子共用带量纲的鞍点记录。
+`num_saddle_find_typed` 接收复数初值、坐标参考量、归一化斜率容差和回调预算。
+相位无量纲，一阶和二阶导数的量纲分别为坐标的一次和二次倒数。首项近似、二阶修正
+和路径积分的结果量纲均为振幅乘坐标。二阶修正要求相位和振幅在坐标参考量十分之一
+为半径的圆盘内解析。路径积分接收带量纲的半程长度和以结果量纲表示的绝对容差。
+
+`Rssn_ComplexDisk` 用 `[实部, 虚部, 半径]` 表示复平面上的闭圆盘。坐标和半径
+使用同一物理量纲。`make` 接收复数圆心和非负半径。`point` 接收实部和虚部，
+构造零半径的点圆盘。`contains` 将无法确定的边界点视为可能属于圆盘，
+`inside_strictly` 验证严格包含。`mul` 和 `divide` 按乘除法组合量纲。
+无法证实分母圆盘与零分离时，`divide` 返回 `Ok(None)`。
+
+`variable` 和 `constant` 可构造无量纲一阶自动微分对象。`value` 和 `derivative`
+分别保存函数值和导数的包络圆盘。`jet_*` 系列函数在复合运算时传播一阶导数。
+`matvec`、`matmul` 和 `solve` 使用最后一轴保存圆盘坐标。`solve` 在无法认证解的包络时
+返回 `Ok(None)`。
+
+初等 Jet 函数同时包络主值和一阶导数。例如 `jet_acosh` 的导数分别使用 `z - 1`
+和 `z + 1` 的主值平方根。若输入圆盘碰到分支割线或无法认证包络，返回可选结果的
+Jet 接口返回 `Ok(None)`。`sec`、`csc`、`cot`、`sech`、`csch` 和 `coth` 也在无法
+证实分母与零分离时返回 `Ok(None)`。初等指数运算采用有界的参数缩减，输入圆盘
+的模上界需不超过 `2^20` 才能给出有限包络。
+
+`erf`、`gamma`、`log_gamma` 和 `bessel_j` 包络整个无量纲圆盘。遇到极点、
+分支割线或超出有限计算范围时，可能返回 `Ok(None)`。在 `Rssn_numerical_callback`
+中使用 `num_complex_disk_certify_*_typed` 进行认证时，回调须包络整个圆盘或复数盒。
+标量 Krawczyk 检验需要两次回调，系统检验需要三次，每段圆弧的 Rouché 检验需要两次。
 
 `num_native_ball_values_and_jacobian_at_terms` 在同一点联合计算多项式的值及 Jacobian。`num_native_ball_eval_value_and_jacobian_terms` 在复数盒上返回两者的包围。值保留残差量纲，Jacobian 条目量纲为残差除以坐标量纲。[可运行示例](native_discrete_objects.aev)
 
@@ -359,6 +511,42 @@ cargo run -p aevia-cli -- test examples/dimensioned_numerics.aev
 cargo run -p aevia-cli -- test examples/native_execution.aev
 ```
 
+[数值变换用例](../tests/domain_numerical_transforms.aev) 演示了
+`Rssn_numerical_callback` 中带误差及调用预算的 Mellin、Hilbert 和
+逆 Laplace 回调，以及 `Rssn_NumericalTransforms` 中的 Borel 多项式和
+Meijer G。坐标须无量纲，绝对容差采用回调结果的单位。有限积分的误差估计
+不包含截掉的尾部。逆 Laplace 通过比较两种分辨率估计误差。
+
+## 对带量纲的平面区域进行三角剖分
+
+`Rssn_Meshgen.advancing_front` 按目标边长填充简单多边形。
+`Rssn_Meshgen.constrained_delaunay` 将从零开始的线段端点对保留为三角网中的边链。
+约束线段相交时可能插入顶点。两者都接收与坐标范围接近的正参考长度和显式的输出顶点
+预算，预算允许 3 至 4096 个顶点。返回值包含带量纲的成对坐标和从零开始的三角形三元组。
+[平面网格示例和检查](../tests/domain_planar_meshgen.aev)
+
+## 操作带量纲的 CAD 网格
+
+`Rssn_Cad.mesh_new` 接受三列长度坐标和三列从零开始的三角形索引。闭合且面朝向一致时，
+`signed_volume` 返回带量纲的体积。读写内存中的 STL 时需提供坐标单位的长度，检查相邻
+关系前先焊接网格。[CAD 网格示例和检查](../tests/domain_cad_mesh.aev)
+`read_step_text` 读取由直线围成的平面 STEP 实体，按文本声明的单位为每个实体返回一个
+带量纲的网格句柄。在 Aevia 中，先以文件读取权限调用 `read_file(path)`，再将返回
+的文本传给 `Rssn_Cad.read_step_text`。语言绑定可以使用宿主的文件 API 读取文本，
+再调用 `num_cad_step_read_text`。
+
+## 复用带量纲的插值网格与积分函数
+
+`Rssn_Interpolation.prepare_bilinear(xs, ys, cells)` 保留直角网格。两个坐标轴须严格
+递增，值张量的形状为 `[len(ys), len(xs)]`。两个轴和值可以使用不同的量纲。
+`interpolate(grid, x, y, cell_unit)` 将越界坐标限制在网格边界，返回与网格值
+同量纲的结果。后续查询可以复用句柄。[带量纲的网格示例](../tests/domain_interpolation.aev)
+
+`Rssn_ParallelQuadrature.gauss_legendre` 和 `clenshaw_curtis` 在带量纲的区间上对已编译
+的标量函数积分。参数中的被积函数单位用于校验量纲，结果的量纲是坐标与函数值的乘积。
+编译时设置的工作预算须覆盖积分采样。`sum_compensated` 保留输入向量的量纲并使用
+确定性的补偿求和。[固定阶积分示例](../tests/domain_parallel_quadrature.aev)
+
 运行 `aevia devices` 查看可用的 RSSN 后端选择器。[带量纲的编译示例](native_backend.aev)
 使用当前选择。可加上 `--rssn-backend cpu` 或 `--rssn-backend cranelift` 来比较执行结果。
 
@@ -373,6 +561,43 @@ cargo run -p aevia-cli -- test examples/native_execution.aev
 随机拒绝步重用有界的耦合噪声离散；分辨率或预算不足时返回错误，不重抽噪声
 来掩盖拒绝。Lévy 方法仅在 alpha=2 时支持布朗高阶修正。
 
+## 分析预计算传递函数
+
+`Rssn_Control` 接受按降幂排列的分子与分母系数，使用统一归一化尺度下的时间和频率。
+同一个模型可用于频率求值、连接、阶跃响应与裕量分析。阶跃响应要求分子次数不超过分母次数。
+
+```aevia
+import Rssn_Control as Control
+
+test "稳定的一阶传递函数" =
+    match Control.transfer_new_proper([2.0], [1.0, 1.0]) with
+    | Ok(model) -> Control.is_stable(model) == Ok(true) && Control.release_transfer(model) == Ok(true)
+    | Err(_) -> false
+```
+
+[传递函数示例和检查](../tests/domain_control_transfer.aev)
+
+`Rssn_Control.simulate_pid` 接受归一化误差、正采样间隔和可选限幅，`pid_response` 使用已经
+准备好的传递函数。`identify_era` 根据输入向量与逐采样、逐输出排列的张量辨识离散模型。
+可用 `era_matrices` 检查矩阵，或用 `impulse_response` 计算脉冲响应。[PID 与 ERA 测试](../tests/domain_control_trajectories.aev)
+
+`Rssn_Control.prepare_mpc` 创建离散预测控制计划。`mpc_closed_loop` 返回初态及后续控制状态。
+同一个计划可复用于多次轨迹计算，使用结束后调用 `release_mpc`。[MPC 示例和检查](../tests/domain_control_mpc.aev)
+
+### 预备目标函数与标量求根
+
+`Rssn_Optimizer` 可将内置函数、归一化计算带或回归模型预备为可重复使用的
+目标函数。计算带采用单位尺度参考量并指定输出槽。使用 `prepare_checked`
+时，非有限求值返回错误。预备目标可保留盒约束，也可复用目标函数并设置新的边界。
+`minimize` 接受求解器名称、初始点、迭代与求值限额以及显式种子，返回最佳点、
+目标值、终止原因和求值次数。
+
+`regression_problem` 使用模型保存的归一化参考量。将带量纲系数和响应参考量
+传给 `residuals`，即可得到以一致单位表示的拟合值减观测值。
+`Rssn_numerical_vector` 中带类型的求根入口接收标量回调、有序区间、正容差和
+求值限额。Newton 与 Halley 可使用显式导数。
+参见[预备优化示例](../tests/domain_optimizer.aev)。
+
 源码覆盖表位于 `tools/rssn-api-audit/inventory.tsv`，语言可达性报告位于
 `tools/rssn-api-audit/RSSN-COVERAGE.md`。`object_binding!` 从类型声明生成参数
 个数、模式、编解码和注册信息；简单函数与记录使用经审阅的量纲策略生成绑定。
@@ -382,3 +607,70 @@ cargo run -p aevia-cli -- test examples/native_execution.aev
 
 使用 `tools/sync-kernel.sh` 更新契约、绑定及清单。验证时优先运行对应的原生
 契约测试与 AST/IR 示例目标；无需为每个适配器反复运行整个工作区测试。
+
+## 复用精确的模算术计划
+
+`Rssn_Modular` 为无符号整数提供有类型的预计算计划。模数可能是偶数时可以使用 Barrett，
+在奇数模数下可使用 Montgomery 连续运算编码后的剩余类。输入和输出都是精确整数。
+计划使用结束后，可调用 `release_barrett` 或 `release_montgomery` 释放会话资源。
+
+```aevia
+import Rssn_Modular as Mod
+
+test "合数模数下的乘法" =
+    match Mod.barrett_new(12) with
+    | Ok(plan) ->
+        let product = Mod.barrett_mul(plan, 7, 7)
+        product == Ok(1) && Mod.release_barrett(plan) == Ok(true)
+    | Err(_) -> false
+```
+
+[模算术测试](../tests/domain_modular.aev)覆盖 128 位约减、已释放的句柄和超出范围的编码输入。
+
+### 马尔可夫链蒙特卡洛
+
+`Rssn_Mcmc` 提供显式设种的 PCG32 流和收敛诊断。将带量纲的单条链传给
+`autocorrelation`、`effective_sample_size` 或 `geweke`。调用 `split_rhat`
+时，每条链占张量的一行，所有行采用同一物理量纲。诊断结果均无量纲。
+用完确定性随机流后，可调用 `Rssn_Mcmc.release` 释放。
+
+采样入口位于 `Rssn_numerical_stats` 的 `num_mcmc_*_typed` 函数中，输入包括
+归一化坐标、种子，以及限定样本数、预热步数和抽稀间隔的配置。Metropolis–Hastings
+接收对数目标密度，Hamiltonian 蒙特卡洛还需要其梯度。Gibbs 的条件采样回调
+接收从零开始的坐标编号、当前状态和一个均匀抽样值。采样结果按行存放，并附带
+提议与接受次数。未提供联合对数目标密度时，Gibbs 返回空的对数密度张量。
+参见[确定性回归示例](../tests/domain_mcmc.aev)。
+
+Rssn_Statrs.prepare 接收分布名称和对应的参数个数。密度、矩和尾概率可复用同一会话句柄。sf 直接计算上尾概率。用完后可通过 release_distribution 释放。
+
+
+## 精确稀疏矩阵与预备素域
+
+`Rssn_SparseExact.field` 验证无符号 64 位素数并创建会话内的素域。
+后续算术、约化和批量求逆可直接复用该素域。分母可被素数整除时，
+`reduce_matrix` 返回 `None`。批量求逆遇到零剩余时也返回 `None`。
+`reducer` 返回可独立使用的 `Rssn_Modular` Barrett 句柄。
+
+`rational_rref` 与 `prime_rref` 返回约化稀疏矩阵以及从零开始编号的主元列。
+`rcm_order` 返回方阵稀疏结构缓存排序的正反两个方向。
+调用 `solve_dixon_multi` 时，每一行放置一组右端项。返回值保留同一行约定
+和精确有理数系数。奇异系统返回 `None`。
+参见[精确稀疏示例](../tests/domain_sparse_exact.aev)。
+
+`Rssn_Special.complex_carlson_*` 提供五个无量纲复数算子。
+`complex_carlson_rj(x, y, z, p)` 接受实部非负的 `x`、`y`、`z` 和实部为正的
+`p`。`p` 与前三个参数之一取同一分支且相等时，可按相应的 `R_D` 求值。
+奇异参数返回 `Err`。`R_G(x, 0, 0)` 等于 `x` 的主平方根的一半。
+
+`Rssn_Special.to_polar` 和 `from_polar` 支持带量纲的复坐标。半径保留坐标量纲，
+主辐角使用弧度。`complex_abs_squared` 返回平方量纲。`unwrap_phase` 接受避开零点
+的带量纲采样。对无量纲路径，`continue_complex_root` 可沿路径追踪选定的根分支。
+相邻采样点间的真实辐角变化需小于 π。
+
+`Rssn_Special.barycentric_interpolate` 接受带量纲的横坐标和纵坐标。
+在同一个小型网格上重复查询时会复用节点权重。无量纲多项式按降幂存放系数，
+`polynomial_power` 接受整数指数，`polynomial_gcd` 接受相对系数容差。
+
+`Rssn_Statistics.fit_glm` 接受无量纲样本、分布族、链接函数、可选的观测权重，
+以及明确的迭代次数和容差。它返回具名诊断结果，并在模型中保留所用链接。
+`predict_glm(model, rows)` 复用该链接预测响应均值。传入的设计矩阵无需截距列。
