@@ -24089,6 +24089,20 @@ Actual native band-factor solve in normalized coordinates.
 
 Solves `A x = b`.
 
+## `numerical_vector.num_analysis_clenshaw_curtis_parallel` (Experimental)
+
+```aevia
+(Float[_], Float[_], Int, Float[_], rssn/native/compiled/v1) -> Float[_]
+```
+
+Fixed Clenshaw–Curtis quadrature of a scalar compiled integrand. Order is rounded up to an even number of at least two; the return unit is coordinate times integrand.
+
+[`clenshaw_curtis`] with the node evaluations spread over the pool.
+
+Node values are collected in node order and the weighted terms are summed
+in that order, so the value is bit-identical to [`clenshaw_curtis`] for
+every thread count.
+
 ## `numerical_vector.num_analysis_complex_mobius_apply` (Experimental)
 
 ```aevia
@@ -24989,6 +25003,21 @@ with `phase = [a, b]`.
 Same method and validity rules as [`filon2d`]; the value is returned as a
 complex number so both the cosine and sine components are available, and
 the error is the norm of the complex error.
+
+## `numerical_vector.num_analysis_gauss_legendre_parallel` (Experimental)
+
+```aevia
+(Float[_], Float[_], Int, Float[_], rssn/native/compiled/v1) -> Float[_]
+```
+
+Fixed Gauss–Legendre quadrature of a scalar compiled integrand. Bounds share the input units; the supplied output reference witnesses the integrand units. Order is 1..=4096.
+
+[`gauss_legendre`] with the `n` node evaluations spread over the pool.
+
+The node values are independent and are collected in node order, and the
+weighted terms are still summed in that order, so the value is bit-identical
+to [`gauss_legendre`] for every thread count. Most useful when one
+evaluation of `f` is expensive.
 
 ## `numerical_vector.num_analysis_gaussian_new` (Experimental)
 
@@ -29563,6 +29592,22 @@ Returns full unnormalised complex spectra. The number of bins per frame is
 the window length. Incomplete trailing frames are discarded. Empty windows,
 zero hops and signals shorter than a window yield an empty result.
 
+## `numerical_vector.num_analysis_simplex_budgeted` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<2, Float[_]>, Tensor<1, String>, Tensor<1, Float[_]>, String, Float[_], Float[_], Float[_], Int) -> { status: String, x: Tensor<1, Float[_]>, value: None | Some(Float[_]), iterations: None | Some(Int), bland_pivots: None | Some(Int) }
+```
+
+Two-phase nonnegative simplex with selectable Dantzig, SteepestEdge or Bland pricing and an exact total pivot budget.
+
+Two-phase tableau simplex with a selectable pricing rule and an explicit
+total pivot budget across Phase I and Phase II.
+
+# Errors
+Returns an error string when the total number of pivots across Phase I and
+Phase II would exceed `max_iter` before optimality, infeasibility, or
+unboundedness is determined.
+
 ## `numerical_vector.num_analysis_simplex_scaled` (Experimental)
 
 ```aevia
@@ -30336,6 +30381,20 @@ process over `[t0 + k dt, t0 + (k+1) dt]`, drawn step-major (component order
 inside a step), which is exactly the layout the kernel's fixed-step solvers
 consume. A fixed-step integration with the same seed and structure therefore
 consumes these numbers.
+
+## `numerical_vector.num_analysis_sum_compensated` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Int, Int) -> Float[_]
+```
+
+Deterministic Neumaier-compensated sum of a finite measured vector. Positive block and grain parameters control accumulation and parallel scheduling. The return unit matches the input.
+
+Neumaier-compensated sum of `f(i)` over `0..n` using fixed blocks of size `block`.
+
+Each block accumulates a `(sum, compensation)` pair deterministically and block pairs are
+folded sequentially in block order with Neumaier compensation, so serial execution
+(`grain = usize::MAX`) and parallel execution produce bit-identical `f64` values.
 
 ## `numerical_vector.num_analysis_symplectic_body_data` (Experimental)
 
@@ -32151,6 +32210,196 @@ Indices of AABBs hit by origin+t*direction, t>=0, on an immutable portable BVH. 
 
 Returns the indices of all [`Aabb`]s intersected by the ray `origin + t * dir` (`t >= 0`).
 
+## `numerical_vector.num_cad_mesh_arrays` (Experimental)
+
+```aevia
+(rssn/native/cad/mesh/v1) -> { vertices: Tensor<2, Float[Length]>, triangles: Tensor<2, Int> }
+```
+
+Copies the mesh's coherent length coordinates and zero-based triangle indices. Empty tensors retain three columns.
+
+## `numerical_vector.num_cad_mesh_boolean` (Experimental)
+
+```aevia
+(rssn/native/cad/mesh/v1, rssn/native/cad/mesh/v1, String) -> rssn/native/cad/mesh/v1
+```
+
+Combines outward-wound convex meshes by union, difference or intersection within fixed evaluation limits. Inputs and result share the same coherent length frame.
+
+Combines the closed meshes `a` and `b` with the operation `op`.
+
+# Errors
+
+Returns `Err` when a mesh has no non-degenerate triangle, so that no solid
+can be built from it.
+
+## `numerical_vector.num_cad_mesh_euler_characteristic` (Experimental)
+
+```aevia
+(rssn/native/cad/mesh/v1) -> Int
+```
+
+Returns V − E + F with isolated indexed vertices included.
+
+The Euler characteristic `V - E + F` of `mesh`.
+
+## `numerical_vector.num_cad_mesh_is_closed` (Experimental)
+
+```aevia
+(rssn/native/cad/mesh/v1) -> Bool
+```
+
+Checks that every edge of the nonempty indexed surface has exactly two incident triangles.
+
+Whether every undirected edge of `mesh` is shared by exactly two triangles.
+
+## `numerical_vector.num_cad_mesh_is_manifold` (Experimental)
+
+```aevia
+(rssn/native/cad/mesh/v1) -> Bool
+```
+
+Checks edge-manifoldness. This allows boundary edges and requires each triangle to use three distinct indices.
+
+Whether `mesh` is edge-manifold: no edge is shared by more than two
+triangles and no triangle repeats a vertex.
+
+## `numerical_vector.num_cad_mesh_new` (Experimental)
+
+```aevia
+(Tensor<2, Float[Length]>, Tensor<2, Int>) -> rssn/native/cad/mesh/v1
+```
+
+Prepares an indexed mesh from a rank-two [x, y, z] tensor of lengths and zero-based triangle indices. Both tensors have three columns.
+
+Builds a mesh from raw vertex and triangle arrays.
+
+## `numerical_vector.num_cad_mesh_repair` (Experimental)
+
+```aevia
+(rssn/native/cad/mesh/v1, Float[Length]) -> { mesh: rssn/native/cad/mesh/v1, merged_vertices: Int, removed_degenerate: Int, filled_holes: Int, flipped: Int }
+```
+
+Welds, reorients and fills boundary loops where the repair algorithm can resolve them. Returns a new model and counts of the changes.
+
+Welds, re-orients and closes `mesh`.
+
+The passes run in that order: coincident vertices are merged, triangles that
+collapse are dropped, the surface is oriented consistently, and every
+remaining boundary loop is closed using Liepa's minimum-weight triangulation.
+
+## `numerical_vector.num_cad_mesh_signed_volume` (Experimental)
+
+```aevia
+(rssn/native/cad/mesh/v1) -> Float[Length^3]
+```
+
+Returns the signed volume of a closed consistently wound mesh. An inward-wound surface gives negative volume.
+
+The signed volume enclosed by `mesh`, positive for outward-facing normals.
+
+## `numerical_vector.num_cad_mesh_triangle_count` (Experimental)
+
+```aevia
+(rssn/native/cad/mesh/v1) -> Int
+```
+
+Returns the number of indexed triangle faces.
+
+The number of triangles.
+
+## `numerical_vector.num_cad_mesh_vertex_count` (Experimental)
+
+```aevia
+(rssn/native/cad/mesh/v1) -> Int
+```
+
+Returns the number of indexed vertices.
+
+The number of vertices.
+
+## `numerical_vector.num_cad_mesh_weld` (Experimental)
+
+```aevia
+(rssn/native/cad/mesh/v1, Float[Length]) -> { mesh: rssn/native/cad/mesh/v1, merged_vertices: Int }
+```
+
+Merges nearby vertices using the supplied length tolerance and returns a new mesh and a vertex count. Zero tolerance merges bit-identical coordinates.
+
+Merges vertices closer than `tolerance` and drops degenerate triangles.
+
+Returns the welded mesh and the number of vertices that disappeared. A
+non-positive or non-finite `tolerance` falls back to exact matching.
+
+## `numerical_vector.num_cad_step_read_text` (Experimental)
+
+```aevia
+(String) -> Tensor<1, rssn/native/cad/mesh/v1>
+```
+
+Reads bounded planar STEP B-reps with LINE edges directly from text. Each output is a measured mesh. Declared STEP length units are applied; otherwise one coordinate unit is one metre.
+
+Reads every solid in a STEP file.
+
+Returns one [`Mesh`] per `MANIFOLD_SOLID_BREP`, or one per `CLOSED_SHELL`
+when the file has no solid wrapper. When the file declares a length unit
+(`SI_UNIT` or `CONVERSION_BASED_UNIT`), coordinates are scaled into metres;
+unitless files keep scale `1.0`.
+
+# Errors
+
+Returns `Err` when the bytes are not UTF-8, when there is no `DATA` section,
+when there is no closed shell, or when an entity reference is undefined or
+malformed.
+
+## `numerical_vector.num_cad_stl_read` (Experimental)
+
+```aevia
+(Tensor<1, Int>, Float[Length]) -> rssn/native/cad/mesh/v1
+```
+
+Reads binary or ASCII STL directly from byte values 0–255. Supply the length of one unit in the file. STL triangles repeat vertex coordinates until welded.
+
+Reads an STL file, detecting binary and ASCII encodings automatically.
+
+# Errors
+
+Returns `Err` when the data is too short to be an STL file, when a binary
+triangle count does not match the payload length, when the ASCII body has a
+malformed `vertex` line, or when the ASCII vertex count is not a multiple of
+three.
+
+## `numerical_vector.num_cad_stl_read_text` (Experimental)
+
+```aevia
+(String, Float[Length]) -> rssn/native/cad/mesh/v1
+```
+
+Reads ASCII STL directly from text using the supplied coordinate unit length.
+
+## `numerical_vector.num_cad_stl_write_ascii` (Experimental)
+
+```aevia
+(rssn/native/cad/mesh/v1, Float[Length], String) -> String
+```
+
+Returns ASCII STL text with coordinates divided by the supplied unit length.
+
+Serialises `mesh` as an ASCII STL file with the given solid `name`.
+
+## `numerical_vector.num_cad_stl_write_binary` (Experimental)
+
+```aevia
+(rssn/native/cad/mesh/v1, Float[Length]) -> Tensor<1, Int>
+```
+
+Returns binary STL as byte values 0–255. Coordinates are divided by the supplied unit length before conversion to STL Float32.
+
+Serialises `mesh` as a binary STL file.
+
+Triangles whose indices are out of range are written with zero coordinates
+rather than skipped, so the declared facet count always matches the payload.
+
 ## `numerical_vector.num_cauchy_root_bound` (Experimental)
 
 ```aevia
@@ -32698,6 +32947,40 @@ Native complex analysis with positive coordinate/value scales, independent D/E p
 `radius` around `z` (Cauchy's integral formula); accurate for high
 orders where finite differences are not.
 
+## `numerical_callback.num_complex_cauchy_fft_derivatives_checked` (Experimental)
+
+```aevia
+(Complex[_], Float[_], Float[_], Float[_], Int, Int, Int, (Complex[_]) -> Complex[_]) -> { derivatives: Tensor<1, Complex[_]>, sample_error: Float[_], converged: Bool, samples: Int, evaluations: Int }
+```
+
+Returns Cauchy FFT derivatives in the normalized local coordinate (z-center)/radius. All entries share the callback value dimension. A doubled grid estimates the largest absolute difference, and convergence compares this estimate with the requested absolute tolerance. Reports the refined sample count and actual callback evaluations.
+
+Computes `f^(0)(z0), f^(1)(z0), ..., f^(max_order)(z0)` in one pass using
+Cauchy's integral formula discretized with an FFT (Lyness-Moler method) on
+`|z - z0| = radius` with `n_samples` equispaced nodes.
+
+## `numerical_callback.num_complex_cauchy_riemann_checked` (Experimental)
+
+```aevia
+(Complex[_], Float[_], Float[_], Float[_], Float, Int, (Complex[_]) -> Complex[_]) -> Bool
+```
+
+`num_complex_cauchy_riemann_checked(point, step, coordinate_scale, value_scale, tolerance, budget, callback)`: Checks the relative Cauchy–Riemann residual in the normalized reference frame. Invalid or collapsed stencils and exhaustion of the total callback budget produce errors.
+
+Checks the Cauchy-Riemann equations numerically at `z` via
+`|d/d(conj(z)) f(z)| <= tol * (1 + |d/dz f(z)|)`.
+
+## `numerical_callback.num_complex_cauchy_riemann_polar_checked` (Experimental)
+
+```aevia
+(Float[_], Float, Float[_], Float, Float[_], Int, (Float[_], Float) -> Complex[_]) -> { radial: Float[_], angular: Float[_] }
+```
+
+`num_complex_cauchy_riemann_polar_checked(radius, angle, radial_step, angular_step, value_scale, budget, callback)`: Returns radial and angular polar Cauchy–Riemann residuals with separate radial and angular steps. Invalid or collapsed stencils and exhaustion of the total callback budget produce errors.
+
+Numerical polar Cauchy-Riemann residual `(r * u_r - v_theta, u_theta + r * v_r)`
+at `(r, theta)`.
+
 ## `numerical_callback.num_complex_circle_integral_scaled` (Experimental)
 
 ```aevia
@@ -32719,6 +33002,173 @@ Native complex analysis with positive coordinate/value scales, independent D/E p
 
 `∫ f(z) dz` along the polygon through `path`, by Simpson's rule on each
 segment subdivided `per_segment` times.
+
+## `numerical_special.num_complex_coords_abs_sq` (Experimental)
+
+```aevia
+(Complex[_]) -> Float[_]
+```
+
+Returns the squared modulus in squared coordinate units. An unrepresentable result is a domain error.
+
+Squared modulus `|z|^2 = re^2 + im^2`.
+
+## `numerical_special.num_complex_coords_arg_branch` (Experimental)
+
+```aevia
+(Complex, Float) -> Float
+```
+
+`num_complex_coords_arg_branch(z, theta0)` returns the argument of z in (theta0, theta0 + 2π], with theta0 in radians. The upper endpoint is used on the cut. At zero the result follows the signed-zero convention of atan2 before wrapping. Both arguments are dimensionless.
+
+Argument of `z` in `(theta0, theta0 + 2*pi]`, placing the branch cut along ray `theta0`.
+
+## `numerical_callback.num_complex_coords_branch_jump_checked` (Experimental)
+
+```aevia
+(Complex[_], Float[_], Float, Float[_], Int, (Complex[_]) -> Complex[_]) -> Complex[_]
+```
+
+Estimates the positive-normal lip minus the negative-normal lip of a branch cut. Pass point, coordinate step, bare normal angle in radians, callback-value scale, callback budget and callback.
+
+Numerical branch-cut jump `lim_{eps -> 0+} (f(p + i*eps) - f(p - i*eps))`
+using Richardson extrapolation across `eps` and `eps / 2`.
+
+## `numerical_special.num_complex_coords_chordal_distance` (Experimental)
+
+```aevia
+(Complex, Complex) -> Float
+```
+
+`chordal_distance(z1, z2)` returns the Euclidean distance of the images on the unit sphere. `2 * |z1 - z2| / sqrt((1 + |z1|^2) * (1 + |z2|^2))`. Overflow-safe for large moduli.
+
+Spherical chordal distance on the Riemann sphere:
+`2 * |z1 - z2| / sqrt((1 + |z1|^2) * (1 + |z2|^2))`.
+Overflow-safe for large moduli.
+
+## `numerical_special.num_complex_coords_cis` (Experimental)
+
+```aevia
+(Float) -> Complex
+```
+
+`cis(theta)` returns the unit complex number `cos(theta) + i * sin(theta)`. The angle is in radians.
+
+Unit complex number `cos(theta) + i * sin(theta)`.
+
+## `numerical_special.num_complex_coords_continue_root` (Experimental)
+
+```aevia
+(Tensor<1, Complex>, Int, Int) -> Tensor<1, Complex>
+```
+
+Tracks the continuous degree-th root of a dimensionless sampled path away from zero. A positive degree and increments of less than π between samples select a branch.
+
+Tracks a continuous branch of `z^(1/n)` along `points` starting on `initial_branch`.
+
+## `numerical_special.num_complex_coords_from_polar` (Experimental)
+
+```aevia
+(Float[_], Float) -> Complex[_]
+```
+
+Reconstructs a complex point in radius units from a nonnegative radius and an angle in radians.
+
+Reconstructs `r * exp(i * theta)`.
+
+## `numerical_special.num_complex_coords_from_riemann_sphere` (Experimental)
+
+```aevia
+(Float, Float, Float) -> None | Some(Complex)
+```
+
+`num_complex_coords_from_riemann_sphere(x, y, z)` inverts stereographic projection for a dimensionless unit sphere point. The north pole returns None. Invalid coordinates or an unrepresentable finite image produce a domain error.
+
+Inverse stereographic projection from `S^2` to `C`.
+Returns `None` at the north pole `(0, 0, 1)` (infinity).
+
+## `numerical_special.num_complex_coords_log_cut` (Experimental)
+
+```aevia
+(Complex, Float) -> Complex
+```
+
+`num_complex_coords_log_cut(z, theta0)` returns ln(|z|) + i·arg_branch(z, theta0) for dimensionless nonzero z. The cut angle theta0 is in radians. The upper endpoint is used on the cut.
+
+Logarithm `ln|z| + i * arg_branch(z, theta0)` with branch cut along ray `theta0`.
+
+## `numerical_special.num_complex_coords_pow_cut` (Experimental)
+
+```aevia
+(Complex, Complex, Float) -> Complex
+```
+
+`num_complex_coords_pow_cut(z, w, theta0)` returns exp(w·log_cut(z, theta0)) for dimensionless nonzero base z and dimensionless exponent w. The cut angle theta0 is in radians. The upper endpoint is used on the cut.
+
+Complex power `exp(w * log_cut(z, theta0))` with branch cut along ray `theta0`.
+
+## `numerical_special.num_complex_coords_sign` (Experimental)
+
+```aevia
+(Complex[_]) -> Complex
+```
+
+Returns the dimensionless unit direction of a finite nonzero point; zero maps to zero.
+
+Complex signum `z / |z|`, or `0` if `z == 0`.
+
+## `numerical_special.num_complex_coords_spherical_metric_factor` (Experimental)
+
+```aevia
+(Complex) -> Float
+```
+
+`spherical_metric_factor(z)` returns the conformal factor `2 / (1 + |z|^2)`.
+
+Spherical metric conformal factor `2 / (1 + |z|^2)`.
+
+## `numerical_special.num_complex_coords_sqrt_cut` (Experimental)
+
+```aevia
+(Complex[_], Float) -> Complex[_]
+```
+
+`num_complex_coords_sqrt_cut(z, theta0)` returns sqrt(|z|)·exp(i·arg_branch(z, theta0)/2), with theta0 in radians. The result has the square root of the input dimension. Zero maps to zero.
+
+Square root `sqrt(|z|) * cis(arg_branch(z, theta0) / 2)` with branch cut along ray `theta0`.
+
+## `numerical_special.num_complex_coords_to_polar` (Experimental)
+
+```aevia
+(Complex[_]) -> { angle: Float, radius: Float[_] }
+```
+
+Returns a measured radius and the principal angle in radians. Signed zero selects the angle on the negative real axis.
+
+Polar coordinates `(r, theta)` with `r = |z|` and `theta = arg(z) in (-pi, pi]`.
+
+## `numerical_special.num_complex_coords_to_riemann_sphere` (Experimental)
+
+```aevia
+(Complex) -> { x: Float, y: Float, z: Float }
+```
+
+`num_complex_coords_to_riemann_sphere(point)` projects a finite dimensionless complex point to a unit sphere record with x, y and z fields. Zero maps to the south pole.
+
+Stereographic projection from `C` to the unit Riemann sphere `S^2`.
+
+Maps `0` to `(0, 0, -1)` and `infinity` to `(0, 0, 1)`.
+Uses `1/z` scaling when `|z| > 1` to avoid overflow for huge `|z|`.
+
+## `numerical_special.num_complex_coords_unwrap_phase` (Experimental)
+
+```aevia
+(Tensor<1, Complex[_]>) -> Tensor<1, Float>
+```
+
+Unwraps phases in radians of nonzero samples with a shared coordinate dimension. Consecutive increments are in (−π, π].
+
+Unwraps the phase `arg(samples[k])` continuously along a sampled path.
 
 ## `numerical_callback.num_complex_count_zeros_poles_scaled` (Experimental)
 
@@ -32748,6 +33198,807 @@ Native complex analysis with positive coordinate/value scales, independent D/E p
 `f'(z)` by the central difference along the real axis (valid for
 analytic `f`).
 
+## `numerical_special.num_complex_disk_add` (Experimental)
+
+```aevia
+(Tensor<[3], Float[_]>, Tensor<[3], Float[_]>) -> Tensor<[3], Float[_]>
+```
+
+`num_complex_disk_add(a, b)` encloses every sum of points in two disks of the same dimension.
+
+Addition `self + other`.
+
+## `numerical_special.num_complex_disk_bessel_j` (Experimental)
+
+```aevia
+(Tensor<[3], Float>, Float) -> None | Some(Tensor<[3], Float>)
+```
+
+Encloses the principal Bessel function J of nonnegative real or negative integral order. Fractional orders use the principal branch on dimensionless disks.
+
+Complex Bessel function `J_nu(z)` enclosure for real `nu >= 0`,
+using `|J_nu'(w)| = 0.5 * |J_{nu-1}(w) - J_{nu+1}(w)|` Lipschitz bound.
+
+## `numerical_special.num_complex_disk_center` (Experimental)
+
+```aevia
+(Tensor<[3], Float[_]>) -> Complex[_]
+```
+
+`num_complex_disk_center(disk)` returns the disk center as a complex quantity.
+
+## `numerical_callback.num_complex_disk_certify_root` (Experimental)
+
+```aevia
+(Tensor<[3], Float>, Int, ({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }) -> None | Some({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> })) -> None | Some(Tensor<[3], Float>)
+```
+
+Krawczyk existence and uniqueness test. The callback must enclose the function and derivative on each entire normalized disk. None means the test could not certify a root.
+
+Certifies existence and uniqueness of a simple complex root of `f` inside `ball`.
+
+Uses the 1D complex Krawczyk operator:
+`K(B) = m - f(m)/f'(m) + (1 - f'(B)/f'(m)) * (B - m)`.
+Returns `Some(K(B))` if `K(B)` lies strictly inside `ball`.
+
+## `numerical_callback.num_complex_disk_certify_rouche` (Experimental)
+
+```aevia
+(Complex, Float, Int, Int, (Tensor<[3], Float>) -> None | Some(Tensor<[3], Float>), (Tensor<[3], Float>) -> None | Some(Tensor<[3], Float>)) -> Bool
+```
+
+Checks the strict Rouché inequality on every covering disk of the normalized circle. Both callbacks must enclose their functions on the entire input disk and the functions must be holomorphic in the enclosed region.
+
+Certifies Rouché's theorem on the circle `|z - center| = radius` by covering
+the circle with `segments` overlapping [`ComplexBall`]s and checking
+`|g(B)|_upper < |f(B)|_lower` on every segment.
+
+## `numerical_callback.num_complex_disk_certify_system` (Experimental)
+
+```aevia
+(Tensor<2, Float>, Int, (Tensor<2, Float>) -> None | Some(Tensor<2, Float>), (Tensor<2, Float>) -> None | Some(Tensor<3, Float>)) -> None | Some(Tensor<2, Float>)
+```
+
+Krawczyk existence and uniqueness test for a normalized complex box. The Jacobian callback must enclose every derivative on the entire box. None means no certificate was obtained.
+
+Multi-dimensional complex Krawczyk root certification for `F(z) = 0`.
+
+Given a box `balls` (`[B_0, ..., B_{n-1}]`), midpoint evaluation `f_mid = F(m)`,
+and Jacobian enclosure `jac_box = J_F(B)` (evaluated over `balls`), computes
+`K(B) = m - R * f_mid + (I - R * J_F(B)) * (B - m)` where `R ~ J_F(m)^{-1}`.
+Returns `Some(K(B))` if every component `K(B)_i` lies strictly inside `B_i`.
+
+## `numerical_special.num_complex_disk_conj` (Experimental)
+
+```aevia
+(Tensor<[3], Float[_]>) -> Tensor<[3], Float[_]>
+```
+
+`num_complex_disk_conj(disk)` reflects the disk in the real axis and preserves its coordinate dimension.
+
+Complex conjugate of this ball.
+
+## `numerical_special.num_complex_disk_contains` (Experimental)
+
+```aevia
+(Tensor<[3], Float[_]>, Complex[_]) -> Bool
+```
+
+`num_complex_disk_contains(disk, point)` tests whether the point may lie in the closed disk. Uncertainty due to rounding at its boundary counts as possible membership.
+
+Whether `z` lies in this closed disk (checked with outward tolerance on `|z - mid|`).
+
+## `numerical_special.num_complex_disk_contains_zero` (Experimental)
+
+```aevia
+(Tensor<[3], Float[_]>) -> Bool
+```
+
+`num_complex_disk_contains_zero(disk)` tests whether zero may lie in the closed disk.
+
+Whether `0` may lie in this disk.
+
+## `numerical_special.num_complex_disk_cot` (Experimental)
+
+```aevia
+(Tensor<[3], Float>) -> None | Some(Tensor<[3], Float>)
+```
+
+`num_complex_disk_cot(disk)` encloses the dimensionless cotangent. Returns None if the denominator cannot be certified nonzero.
+
+Complex cotangent `cot(z) = cos(z) / sin(z)`.
+
+## `numerical_special.num_complex_disk_coth` (Experimental)
+
+```aevia
+(Tensor<[3], Float>) -> None | Some(Tensor<[3], Float>)
+```
+
+`num_complex_disk_coth(disk)` encloses the dimensionless hyperbolic cotangent. Returns None if the denominator cannot be certified nonzero.
+
+Complex hyperbolic cotangent `coth(z) = cosh(z) / sinh(z)`.
+
+## `numerical_special.num_complex_disk_csc` (Experimental)
+
+```aevia
+(Tensor<[3], Float>) -> None | Some(Tensor<[3], Float>)
+```
+
+`num_complex_disk_csc(disk)` encloses the dimensionless cosecant. Returns None if the denominator cannot be certified nonzero.
+
+Complex cosecant `csc(z) = 1 / sin(z)`.
+
+## `numerical_special.num_complex_disk_csch` (Experimental)
+
+```aevia
+(Tensor<[3], Float>) -> None | Some(Tensor<[3], Float>)
+```
+
+`num_complex_disk_csch(disk)` encloses the dimensionless hyperbolic cosecant. Returns None if the denominator cannot be certified nonzero.
+
+Complex hyperbolic cosecant `csch(z) = 1 / sinh(z)`.
+
+## `numerical_special.num_complex_disk_div` (Experimental)
+
+```aevia
+(Tensor<[3], Float[_]>, Tensor<[3], Float[_]>) -> None | Some(Tensor<[3], Float[_]>)
+```
+
+`num_complex_disk_div(numerator, denominator)` encloses quotients with numerator over denominator dimension. Returns None if the denominator disk cannot be separated from zero.
+
+Division `self / other`. Returns `None` if `other` cannot be separated from zero.
+
+## `numerical_special.num_complex_disk_erf` (Experimental)
+
+```aevia
+(Tensor<[3], Float>) -> None | Some(Tensor<[3], Float>)
+```
+
+Encloses the complex error function for a dimensionless disk, using an explicit series remainder or a whole-disk integral bound.
+
+Complex error function enclosure `erf(z)` via midpoint evaluation + Lipschitz
+derivative bound `|erf'(w)| = (2/sqrt(pi)) * |exp(-w^2)|`.
+
+## `numerical_special.num_complex_disk_gamma` (Experimental)
+
+```aevia
+(Tensor<[3], Float>) -> None | Some(Tensor<[3], Float>)
+```
+
+Encloses complex Gamma for a dimensionless disk on the supported log-Gamma domain. None indicates an unavailable finite enclosure.
+
+Complex gamma enclosure `Gamma(z) = exp(ln_gamma(z))` away from `(-inf, 0]`.
+
+## `numerical_special.num_complex_disk_i` (Experimental)
+
+```aevia
+() -> Tensor<[3], Float>
+```
+
+`num_complex_disk_i()` returns a dimensionless point disk at the imaginary unit.
+
+The imaginary unit point ball `0 + 1i`.
+
+## `numerical_special.num_complex_disk_inside_strictly` (Experimental)
+
+```aevia
+(Tensor<[3], Float[_]>, Tensor<[3], Float[_]>) -> Bool
+```
+
+`num_complex_disk_inside_strictly(inner, outer)` certifies that the inner disk lies strictly in the interior of the outer disk.
+
+Whether `self` lies strictly in the interior of `outer`.
+
+## `numerical_special.num_complex_disk_is_finite` (Experimental)
+
+```aevia
+(Tensor<[3], Float[_]>) -> Bool
+```
+
+Tests whether well-formed disk coordinates and radius are all finite. An infinite radius gives false; malformed disks give an error.
+
+Whether center and radius are finite.
+
+## `numerical_special.num_complex_disk_jet_acos` (Experimental)
+
+```aevia
+({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }) -> None | Some({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> })
+```
+
+`num_complex_disk_jet_acos(value)` encloses the dimensionless principal inverse cosine and its first derivative. Returns None when a finite analytic enclosure cannot be certified.
+
+Inverse cosine.
+
+## `numerical_special.num_complex_disk_jet_acosh` (Experimental)
+
+```aevia
+({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }) -> None | Some({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> })
+```
+
+`num_complex_disk_jet_acosh(value)` encloses the dimensionless principal inverse hyperbolic cosine and its first derivative. Returns None when a finite analytic enclosure cannot be certified.
+
+Inverse hyperbolic cosine.
+
+## `numerical_special.num_complex_disk_jet_add` (Experimental)
+
+```aevia
+({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }, { value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }) -> { value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }
+```
+
+`num_complex_disk_jet_add(a, b)` adds two dimensionless jets, enclosing both value and first derivative.
+
+Addition.
+
+## `numerical_special.num_complex_disk_jet_asin` (Experimental)
+
+```aevia
+({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }) -> None | Some({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> })
+```
+
+`num_complex_disk_jet_asin(value)` encloses the dimensionless principal inverse sine and its first derivative. Returns None when a finite analytic enclosure cannot be certified.
+
+Inverse sine.
+
+## `numerical_special.num_complex_disk_jet_asinh` (Experimental)
+
+```aevia
+({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }) -> None | Some({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> })
+```
+
+`num_complex_disk_jet_asinh(value)` encloses the dimensionless principal inverse hyperbolic sine and its first derivative. Returns None when a finite analytic enclosure cannot be certified.
+
+Inverse hyperbolic sine.
+
+## `numerical_special.num_complex_disk_jet_atan` (Experimental)
+
+```aevia
+({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }) -> None | Some({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> })
+```
+
+`num_complex_disk_jet_atan(value)` encloses the dimensionless principal inverse tangent and its first derivative. Returns None when a finite analytic enclosure cannot be certified.
+
+Inverse tangent.
+
+## `numerical_special.num_complex_disk_jet_atanh` (Experimental)
+
+```aevia
+({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }) -> None | Some({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> })
+```
+
+`num_complex_disk_jet_atanh(value)` encloses the dimensionless principal inverse hyperbolic tangent and its first derivative. Returns None when a finite analytic enclosure cannot be certified.
+
+Inverse hyperbolic tangent.
+
+## `numerical_special.num_complex_disk_jet_constant` (Experimental)
+
+```aevia
+(Tensor<[3], Float>) -> { value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }
+```
+
+`num_complex_disk_jet_constant(disk)` initializes a dimensionless jet with a zero derivative. The record stores value and derivative disks.
+
+Constant `c` with derivative `0`.
+
+## `numerical_special.num_complex_disk_jet_cos` (Experimental)
+
+```aevia
+({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }) -> { value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }
+```
+
+`num_complex_disk_jet_cos(value)` encloses the dimensionless cosine and its first derivative. A non-finite enclosure reports an error.
+
+Cosine.
+
+## `numerical_special.num_complex_disk_jet_cosh` (Experimental)
+
+```aevia
+({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }) -> { value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }
+```
+
+`num_complex_disk_jet_cosh(value)` encloses the dimensionless hyperbolic cosine and its first derivative. A non-finite enclosure reports an error.
+
+Hyperbolic cosine.
+
+## `numerical_special.num_complex_disk_jet_div` (Experimental)
+
+```aevia
+({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }, { value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }) -> None | Some({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> })
+```
+
+`num_complex_disk_jet_div(numerator, denominator)` divides dimensionless jets with the quotient rule. Returns None when a denominator cannot be separated from zero.
+
+Division.
+
+## `numerical_special.num_complex_disk_jet_exp` (Experimental)
+
+```aevia
+({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }) -> { value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }
+```
+
+`num_complex_disk_jet_exp(value)` encloses the dimensionless exponential and its first derivative. A non-finite enclosure reports an error.
+
+Exponential.
+
+## `numerical_special.num_complex_disk_jet_ln` (Experimental)
+
+```aevia
+({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }) -> None | Some({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> })
+```
+
+`num_complex_disk_jet_ln(value)` encloses the dimensionless principal logarithm and its first derivative. Returns None when a finite analytic enclosure cannot be certified.
+
+Principal logarithm.
+
+## `numerical_special.num_complex_disk_jet_mul` (Experimental)
+
+```aevia
+({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }, { value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }) -> { value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }
+```
+
+`num_complex_disk_jet_mul(a, b)` multiplies two dimensionless jets, enclosing both value and first derivative.
+
+Multiplication.
+
+## `numerical_special.num_complex_disk_jet_pow` (Experimental)
+
+```aevia
+({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }, { value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }) -> None | Some({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> })
+```
+
+`num_complex_disk_jet_pow(base, exponent)` encloses the principal complex power of two dimensionless jets and its first derivative. Returns None when a principal logarithm cannot be certified.
+
+Complex power `self^exponent` for a constant exponent `c` or general jet.
+
+## `numerical_special.num_complex_disk_jet_powi` (Experimental)
+
+```aevia
+({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }, Int) -> None | Some({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> })
+```
+
+`num_complex_disk_jet_powi(value, exponent)` raises a dimensionless jet to a signed integer power and encloses its first derivative. The exponent and exponent minus one must fit i32.
+
+Integer power.
+
+## `numerical_special.num_complex_disk_jet_sin` (Experimental)
+
+```aevia
+({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }) -> { value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }
+```
+
+`num_complex_disk_jet_sin(value)` encloses the dimensionless sine and its first derivative. A non-finite enclosure reports an error.
+
+Sine.
+
+## `numerical_special.num_complex_disk_jet_sinh` (Experimental)
+
+```aevia
+({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }) -> { value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }
+```
+
+`num_complex_disk_jet_sinh(value)` encloses the dimensionless hyperbolic sine and its first derivative. A non-finite enclosure reports an error.
+
+Hyperbolic sine.
+
+## `numerical_special.num_complex_disk_jet_sqrt` (Experimental)
+
+```aevia
+({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }) -> None | Some({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> })
+```
+
+`num_complex_disk_jet_sqrt(value)` encloses the dimensionless principal square root and its first derivative. Returns None when a finite analytic enclosure cannot be certified.
+
+Principal square root.
+
+## `numerical_special.num_complex_disk_jet_sub` (Experimental)
+
+```aevia
+({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }, { value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }) -> { value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }
+```
+
+`num_complex_disk_jet_sub(a, b)` subtracts two dimensionless jets, enclosing both value and first derivative.
+
+Subtraction.
+
+## `numerical_special.num_complex_disk_jet_tan` (Experimental)
+
+```aevia
+({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }) -> None | Some({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> })
+```
+
+`num_complex_disk_jet_tan(value)` encloses the dimensionless tangent and its first derivative. Returns None when a finite analytic enclosure cannot be certified.
+
+Tangent.
+
+## `numerical_special.num_complex_disk_jet_tanh` (Experimental)
+
+```aevia
+({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }) -> None | Some({ value: Tensor<[3], Float>, derivative: Tensor<[3], Float> })
+```
+
+`num_complex_disk_jet_tanh(value)` encloses the dimensionless hyperbolic tangent and its first derivative. Returns None when a finite analytic enclosure cannot be certified.
+
+Hyperbolic tangent.
+
+## `numerical_special.num_complex_disk_jet_variable` (Experimental)
+
+```aevia
+(Tensor<[3], Float>) -> { value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }
+```
+
+`num_complex_disk_jet_variable(disk)` initializes a dimensionless jet with a unit derivative. The record stores value and derivative disks.
+
+Independent variable `z` with derivative `1`.
+
+## `numerical_special.num_complex_disk_log_gamma` (Experimental)
+
+```aevia
+(Tensor<[3], Float>) -> None | Some(Tensor<[3], Float>)
+```
+
+Encloses principal log Gamma on a dimensionless disk off the nonpositive real cut. Uses outward recurrence and a bounded Stirling remainder.
+
+Complex log-gamma enclosure `ln(Gamma(z))` away from `(-inf, 0]`,
+using `|psi(w)|` Lipschitz bound.
+
+## `numerical_special.num_complex_disk_matmul` (Experimental)
+
+```aevia
+(Tensor<3, Float[_]>, Tensor<3, Float[_]>) -> Tensor<3, Float[_]>
+```
+
+`num_complex_disk_matmul(a, b)` encloses a product of disk matrices. Each input has nonempty row and column axes, and every disk uses a trailing coordinate axis of length 3; physical dimensions multiply.
+
+Matrix-matrix product over [`ComplexBall`].
+
+## `numerical_special.num_complex_disk_matvec` (Experimental)
+
+```aevia
+(Tensor<3, Float[_]>, Tensor<2, Float[_]>) -> Tensor<2, Float[_]>
+```
+
+`num_complex_disk_matvec(matrix, vector)` encloses a nonempty disk matrix of shape `[rows, columns, 3]` times a disk vector of shape `[columns, 3]`. Physical dimensions multiply.
+
+Matrix-vector product over [`ComplexBall`].
+
+## `numerical_special.num_complex_disk_modulus_lower` (Experimental)
+
+```aevia
+(Tensor<[3], Float[_]>) -> Float[_]
+```
+
+`num_complex_disk_modulus_lower(disk)` returns an outward lower bound on the modulus of every point in the disk.
+
+Lower bound on `|z|` for all `z` in this disk.
+
+## `numerical_special.num_complex_disk_modulus_upper` (Experimental)
+
+```aevia
+(Tensor<[3], Float[_]>) -> Float[_]
+```
+
+`num_complex_disk_modulus_upper(disk)` returns an outward upper bound on the modulus of every point in the disk.
+
+Upper bound on `|z|` for all `z` in this disk.
+
+## `numerical_special.num_complex_disk_mul` (Experimental)
+
+```aevia
+(Tensor<[3], Float[_]>, Tensor<[3], Float[_]>) -> Tensor<[3], Float[_]>
+```
+
+`num_complex_disk_mul(a, b)` encloses products of points in two disks. The coordinate dimensions multiply.
+
+Multiplication `self * other`.
+
+## `numerical_special.num_complex_disk_neg` (Experimental)
+
+```aevia
+(Tensor<[3], Float[_]>) -> Tensor<[3], Float[_]>
+```
+
+`num_complex_disk_neg(disk)` negates a disk and preserves its coordinate dimension.
+
+Negation `-self`.
+
+## `numerical_special.num_complex_disk_new` (Experimental)
+
+```aevia
+(Complex[_], Float[_]) -> Tensor<[3], Float[_]>
+```
+
+`num_complex_disk_new(center, radius)` constructs a disk `[real, imag, radius]` from a finite complex center and a finite nonnegative radius with the same physical dimension.
+
+Constructs a ball `{ z : |z - mid| <= rad }`.
+Returns `None` if `rad < 0.0` or `rad.is_nan()` or `mid` has NaN components.
+
+## `numerical_special.num_complex_disk_of` (Experimental)
+
+```aevia
+(Complex[_]) -> Tensor<[3], Float[_]>
+```
+
+`num_complex_disk_of(center)` returns the exact point disk of a finite complex center, preserving its dimension.
+
+A [`Complex64`] as a point ball with radius `0.0`.
+
+## `numerical_special.num_complex_disk_one` (Experimental)
+
+```aevia
+() -> Tensor<[3], Float>
+```
+
+`num_complex_disk_one()` returns a dimensionless point disk at 1.
+
+The unit ball `1 + 0i`.
+
+## `numerical_special.num_complex_disk_overlaps` (Experimental)
+
+```aevia
+(Tensor<[3], Float[_]>, Tensor<[3], Float[_]>) -> Bool
+```
+
+`num_complex_disk_overlaps(a, b)` tests whether two disks with the same coordinate dimension may intersect.
+
+Whether two balls intersect.
+
+## `numerical_special.num_complex_disk_point` (Experimental)
+
+```aevia
+(Float[_], Float[_]) -> Tensor<[3], Float[_]>
+```
+
+`num_complex_disk_point(real, imag)` returns an exact point disk from finite real and imaginary coordinates with the same dimension.
+
+The exact point ball `re + i*im` with radius `0.0`.
+
+## `numerical_special.num_complex_disk_radius` (Experimental)
+
+```aevia
+(Tensor<[3], Float[_]>) -> Float[_]
+```
+
+`num_complex_disk_radius(disk)` returns the disk radius with the coordinates’ physical dimension.
+
+## `numerical_special.num_complex_disk_recip` (Experimental)
+
+```aevia
+(Tensor<[3], Float[_]>) -> None | Some(Tensor<[3], Float[_]>)
+```
+
+`num_complex_disk_recip(disk)` encloses reciprocals with inverse coordinate dimension. Returns None if the disk cannot be separated from zero.
+
+Reciprocal `1 / self`. Returns `None` if `self` cannot be separated from zero.
+
+## `numerical_special.num_complex_disk_scale` (Experimental)
+
+```aevia
+(Tensor<[3], Float[_]>, Float[_]) -> Tensor<[3], Float[_]>
+```
+
+`num_complex_disk_scale(disk, scale)` multiplies the disk by a finite real scalar. The physical dimensions multiply.
+
+Multiplication by a real scalar `s`.
+
+## `numerical_special.num_complex_disk_sec` (Experimental)
+
+```aevia
+(Tensor<[3], Float>) -> None | Some(Tensor<[3], Float>)
+```
+
+`num_complex_disk_sec(disk)` encloses the dimensionless secant. Returns None if the denominator cannot be certified nonzero.
+
+Complex secant `sec(z) = 1 / cos(z)`.
+
+## `numerical_special.num_complex_disk_sech` (Experimental)
+
+```aevia
+(Tensor<[3], Float>) -> None | Some(Tensor<[3], Float>)
+```
+
+`num_complex_disk_sech(disk)` encloses the dimensionless hyperbolic secant. Returns None if the denominator cannot be certified nonzero.
+
+Complex hyperbolic secant `sech(z) = 1 / cosh(z)`.
+
+## `numerical_special.num_complex_disk_solve` (Experimental)
+
+```aevia
+(Tensor<3, Float[_]>, Tensor<2, Float[_]>) -> None | Some(Tensor<2, Float[_]>)
+```
+
+`num_complex_disk_solve(matrix, rhs)` encloses the solution to a square disk-valued system when residual certification succeeds. The solution dimension is right-hand side over matrix; failed certification gives None.
+
+Solves `A x = b` over [`ComplexBall`] with verified enclosure via midpoint
+Gaussian elimination and Krawczyk/Rump residual certification.
+
+## `numerical_special.num_complex_disk_square` (Experimental)
+
+```aevia
+(Tensor<[3], Float[_]>) -> Tensor<[3], Float[_]>
+```
+
+`num_complex_disk_square(disk)` encloses the squares of points in a disk. The result has squared coordinate dimension.
+
+Square `self * self`.
+
+## `numerical_special.num_complex_disk_sub` (Experimental)
+
+```aevia
+(Tensor<[3], Float[_]>, Tensor<[3], Float[_]>) -> Tensor<[3], Float[_]>
+```
+
+`num_complex_disk_sub(a, b)` encloses every difference of points in two disks of the same dimension.
+
+Subtraction `self - other`.
+
+## `numerical_special.num_complex_disk_zero` (Experimental)
+
+```aevia
+() -> Tensor<[3], Float>
+```
+
+`num_complex_disk_zero()` returns a dimensionless point disk at 0.
+
+The zero ball `0 + 0i`.
+
+## `numerical_special.num_complex_dynamics_bottcher` (Experimental)
+
+```aevia
+(Complex, Complex, Int) -> Complex
+```
+
+`num_complex_dynamics_bottcher(point, c, max_steps)` returns a truncated principal Böttcher coordinate estimate in the exterior quadratic basin. Requires a positive iteration budget and an initial point outside the conservative radius sqrt(2) sqrt(max(abs(re(c)), abs(im(c)))) + 1, with a minimum radius of 2.
+
+Computes Böttcher's coordinate `\phi_c(z) = z \prod_{n=0}^{N-1} (1 + c / z_n^2)^{2^{-(n+1)}}`
+in the basin of infinity of `f_c(z) = z^2 + c`, satisfying `\phi_c(z^2 + c) = \phi_c(z)^2`.
+
+# Errors
+
+Returns an error if the orbit hits zero or does not clearly escape to infinity.
+
+## `numerical_special.num_complex_dynamics_external_ray` (Experimental)
+
+```aevia
+(Complex, Float, Float, Int) -> { point: Complex, residual: Float }
+```
+
+`num_complex_dynamics_external_ray(c, angle, potential, max_steps)` estimates a quadratic external-ray point and reports a relative Böttcher-coordinate residual. Angles are turns in [0, 1); the potential is positive and at most 325.
+
+Traces a point on a quadratic map’s external ray.
+
+Traces a point on the external ray of `f_c(z) = z^2 + c` at angle `theta_turns` `\in [0, 1)`
+and Green potential `potential_r > 0`, satisfying `\phi_c(z) = e^{r + 2\pi i \theta}`,
+by stepping inward from a large radius `R_0 = e^{2^k r}` via `k` square-root continuations.
+
+# Errors
+
+Returns an error for a nonpositive potential, a zero step count, or failed Böttcher coordinate evaluation.
+
+## `numerical_special.num_complex_dynamics_in_main_components` (Experimental)
+
+```aevia
+(Complex) -> Bool
+```
+
+`num_complex_dynamics_in_main_components(c)` tests membership in the Mandelbrot main cardioid or period-two bulb. Other bounded parameters may return false.
+
+Checks if `c` lies inside the main cardioid or period-2 bulb of the Mandelbrot set.
+
+## `numerical_special.num_complex_dynamics_julia_escape` (Experimental)
+
+```aevia
+(Complex, Complex, Int, Float) -> { steps: Int, escaped: Bool, potential: None | Some(Float) }
+```
+
+`num_complex_dynamics_julia_escape(initial, c, max_steps, radius)` checks iterates preceding the budget for a radius crossing. Returns the crossing step and a potential estimate, or the exhausted budget and no estimate.
+
+Julia escape time and Green's potential $`G_c(z_0)`$ for $z_{n+1} = `z_n^2` + c$.
+
+## `numerical_callback.num_complex_dynamics_koenigs_checked` (Experimental)
+
+```aevia
+(Complex[_], Complex, Complex[_], Float[_], Float[_], Int, Int, (Complex[_]) -> Complex[_]) -> { coordinate: Complex[_], fixed_point_error: Float[_], steps: Int, evaluations: Int }
+```
+
+Returns a truncated measured Koenigs coordinate estimate with its fixed-point closure error and actual counts. The supplied multiplier must have magnitude strictly between zero and one. Uses positive coordinate scale and closure tolerance, and bounded iterations and callbacks.
+
+Computes the Koenigs coordinate of an attracting fixed point.
+
+Computes Koenigs's linearizing coordinate
+$\psi(z) = \lim_{n\to\infty} \lambda^{-n} (f^{\circ n}(z) - `z_0`)$ near an attracting
+fixed point $`z_0`$ ($0 < |\lambda| < 1$), satisfying $\psi(f(z)) = \lambda \psi(z)$.
+
+# Errors
+
+Returns an error if the multiplier does not satisfy `0 < |lambda| < 1`.
+
+## `numerical_special.num_complex_dynamics_mandelbrot_distance` (Experimental)
+
+```aevia
+(Complex, Int) -> None | Some(Float)
+```
+
+`num_complex_dynamics_mandelbrot_distance(c, max_steps)` returns an exterior distance estimate when an iterate crosses the native threshold, or None when no crossing was observed within the budget.
+
+Mandelbrot distance estimator `d(c) ≈ |z_n| * ln|z_n| / |z'_n|` (returns `0.0` if bounded).
+
+## `numerical_special.num_complex_dynamics_mandelbrot_escape` (Experimental)
+
+```aevia
+(Complex, Int, Float) -> { steps: Int, escaped: Bool, potential: None | Some(Float) }
+```
+
+`num_complex_dynamics_mandelbrot_escape(c, max_steps, radius)` checks iterates preceding the budget for a radius crossing. Returns the crossing step and a potential estimate, or the exhausted budget and no estimate.
+
+Mandelbrot escape time and Green's potential `G_c(c) = \lim 2^{-(n-1)} \ln|z_n|` for `z_0 = 0, z_{n+1} = z_n^2 + c`.
+
+## `numerical_callback.num_complex_dynamics_newton_basin_checked` (Experimental)
+
+```aevia
+(Complex[_], Float[_], Float[_], Float[_], Int, Int, (Complex[_]) -> Complex[_], (Complex[_]) -> Complex[_]) -> { root: None | Some({ point: Complex[_], iterations: Int }), tested: Int, evaluations: Int }
+```
+
+Tests a Newton basin from an initial coordinate using positive coordinate and value scales, absolute residual tolerance, iteration and callback budgets, and function and derivative callbacks. Reports an optional measured root, the number of tested points and actual callbacks.
+
+Evaluates Newton fractal basin convergence for `f(z) / df(z)` starting at `z0`,
+returning `(converged_root, iterations)`.
+
+## `numerical_special.num_complex_dynamics_quadratic_lyapunov` (Experimental)
+
+```aevia
+(Complex, Complex, Int, Int) -> Float
+```
+
+`num_complex_dynamics_quadratic_lyapunov(initial, c, steps, burn_in)` estimates the mean log derivative magnitude along the dimensionless quadratic orbit after the requested burn-in. A zero or nonfinite derivative is an error.
+
+Estimates the Lyapunov exponent $\frac{1}{N} \sum_{n=\text{burn\_in}}^{\text{burn\_in}+N-1} \ln |f'(`z_n`)|$.
+
+# Errors
+
+Returns an error for a zero step count or a zero or non-finite derivative along the orbit.
+
+## `numerical_special.num_complex_dynamics_quadratic_multiplier` (Experimental)
+
+```aevia
+(Complex, Complex, Int, Float) -> { multiplier: Complex, kind: String, period: Int, residual: Float }
+```
+
+`num_complex_dynamics_quadratic_multiplier(point, c, period, tolerance)` returns the multiplier, closure residual and numerical class for the requested quadratic iterate, or an error when it fails to close within tolerance.
+
+Computes the multiplier $\lambda = \prod_{k=0}^{p-1} f'(`z_k`)$ along a period-`p` orbit
+starting at `z0`, and classifies the periodic point.
+
+## `numerical_special.num_complex_dynamics_quadratic_orbit` (Experimental)
+
+```aevia
+(Complex, Complex, Int) -> Tensor<1, Complex>
+```
+
+`num_complex_dynamics_quadratic_orbit(initial, c, steps)` returns the dimensionless forward orbit of z -> z²+c, including the initial point. A nonfinite iterate produces an error.
+
+Computes the forward orbit $[`z_0`, `f(z_0)`, \dots, f^{\circ `n}(z_0)`]$.
+
+## `numerical_special.num_complex_dynamics_quadratic_periodic_points` (Experimental)
+
+```aevia
+(Complex, Int, Tensor<1, Complex>, Int, Float) -> { points: Tensor<1, Complex>, residuals: Tensor<1, Float>, period: Int }
+```
+
+`num_complex_dynamics_quadratic_periodic_points(c, period, seeds, max_steps, tolerance)` uses bounded Newton searches from the supplied seeds and returns deduplicated candidates for the requested primitive period with their residuals. Empty results report that the supplied searches found no candidate.
+
+Finds periodic points of $`f_c(z)` = z^2 + c$ of period `period` by running Newton's method
+on $`f_c^{\circ` p}(z) - z = 0$ from the provided initial `seeds`, deduplicating within `tol * 1e3`.
+
+## `numerical_callback.num_complex_laplacian_checked` (Experimental)
+
+```aevia
+(Complex[_], Float[_], Float[_], Int, (Complex[_]) -> Complex[_]) -> Complex[_]
+```
+
+`num_complex_laplacian_checked(point, step, value_scale, budget, callback)`: Estimates the Cartesian Laplacian in callback-value units over coordinate units squared. Invalid or collapsed stencils and exhaustion of the total callback budget produce errors.
+
+Numerical complex Laplacian `4 * d^2 f / (dz d(conj(z))) = f_xx + f_yy`
+using central 2nd-order finite differences with step `h`.
+
 ## `numerical_callback.num_complex_newton_scaled` (Experimental)
 
 ```aevia
@@ -32760,6 +34011,60 @@ Newton's method for an analytic `f` with derivative `df`, from `z0`.
 Returns the root once a step is below `tolerance`, or `None` after
 `max_iterations` or at a vanishing derivative.
 
+## `numerical_vector.num_complex_polynomial_aberth_ehrlich` (Experimental)
+
+```aevia
+(Tensor<1, Complex>, Int, Float) -> { roots: Tensor<1, Complex>, backward_errors: Tensor<1, Float>, coefficient_error: Float, degree: Int }
+```
+
+Finds approximate roots with Aberth–Ehrlich in dimensionless coordinates. Coefficients are ascending. Reports the degree, root candidates including multiplicities, their coefficientwise relative backward errors and the largest coefficient error of the reconstructed polynomial after normalization. A nonzero constant has an empty root set. The zero polynomial, exceeded work budget and nonconvergence return errors.
+
+Finds all roots of a polynomial with ascending coefficients using the Aberth–Ehrlich method.
+
+# Errors
+
+Returns an error for an empty coefficient slice or when the iterations fail to converge.
+
+## `numerical_vector.num_complex_polynomial_durand_kerner` (Experimental)
+
+```aevia
+(Tensor<1, Complex>, Int, Float) -> { roots: Tensor<1, Complex>, backward_errors: Tensor<1, Float>, coefficient_error: Float, degree: Int }
+```
+
+Finds approximate roots with Durand–Kerner in dimensionless coordinates. Coefficients are ascending. Reports the degree, root candidates including multiplicities, their coefficientwise relative backward errors and the largest coefficient error of the reconstructed polynomial after normalization. A nonzero constant has an empty root set. The zero polynomial, exceeded work budget and nonconvergence return errors.
+
+Finds all roots of a polynomial with ascending coefficients using the Durand–Kerner method.
+
+# Errors
+
+Returns an error for an empty coefficient slice or when the iterations fail to converge.
+
+## `numerical_vector.num_complex_polynomial_isolate_verified` (Experimental)
+
+```aevia
+(Tensor<1, Complex>, Float) -> { disks: Tensor<2, Float>, complete: Bool, degree: Int }
+```
+
+Certifies disjoint simple-root disks for an ascending dimensionless polynomial of degree at most 128. Each disk is [real, imaginary, radius]. complete is true only if the certificates account for every root; unresolved or multiple roots may produce a partial set.
+
+Verified root isolation for a complex polynomial inside `|Re(z)|, |Im(z)| <= R`
+using [`ComplexBall`](crate::kernels::complex_ball::ComplexBall) interval exclusion,
+quadtree subdivision, and 1D Krawczyk certification.
+
+## `numerical_vector.num_complex_polynomial_laguerre` (Experimental)
+
+```aevia
+(Tensor<1, Complex>, Complex, Int, Float) -> None | Some({ root: Complex, backward_error: Float })
+```
+
+Finds an approximate root of an ascending dimensionless polynomial from the supplied complex seed. The result includes its coefficientwise relative backward error. A nonzero constant returns None. The zero polynomial, exceeded work budget and nonconvergence return errors.
+
+Finds a single root of a polynomial starting from `z0` via Laguerre's method.
+
+# Errors
+
+Returns an error for a constant polynomial, a vanishing Laguerre denominator, or nonconvergence.
+
 ## `numerical_callback.num_complex_residue_scaled` (Experimental)
 
 ```aevia
@@ -32770,6 +34075,157 @@ Native complex analysis with positive coordinate/value scales, independent D/E p
 
 The residue of `f` at `z0`: `(1 / 2 pi i) ∮ f dz` over a small circle
 that must enclose no other singularity.
+
+## `numerical_callback.num_complex_root_circle_moments` (Experimental)
+
+```aevia
+(Complex[_], Float[_], Float[_], Int, Int, Int, (Complex[_]) -> Complex[_], (Complex[_]) -> Complex[_]) -> { moments: Tensor<1, Complex>, sample_delta: Float, samples: Int, evaluations: Int }
+```
+
+Returns sampled logarithmic-derivative moments of (z-center)/radius, the largest coarse/fine difference, and sample/evaluation counts. Takes a measured center, radius, callback value scale, initial sample count, maximum moment, host budget, analytic function and derivative.
+
+Computes power-sum moments $`s_k` = \frac{1}{2\pi i} \oint_{|z-c|=r} z^k \frac{f'(z)}{f(z)} dz$
+for $k = 0, \dots, \text{max\_moment}$ using the periodic trapezoidal rule.
+
+# Errors
+
+Returns an error for an invalid radius or sample count, or if the function is nearly zero on the circle.
+
+## `numerical_callback.num_complex_root_circle_rouche_samples` (Experimental)
+
+```aevia
+(Complex[_], Float[_], Float[_], Int, Int, (Complex[_]) -> Complex[_], (Complex[_]) -> Complex[_]) -> { satisfied_at_samples: Bool, samples: Int, evaluations: Int }
+```
+
+Reports |f|>|g| at each sampled point of a measured circle and returns actual counts. Takes the circle, shared callback value scale, sample count, host budget and two analytic functions. An entire-circle inequality requires a separate enclosure.
+
+Checks Rouché's condition $|f(z)| > |g(z)|$ on $|z - \text{center}| = \text{radius}$.
+
+# Errors
+
+Returns an error for an invalid circle radius or sample count.
+
+## `numerical_callback.num_complex_root_circle_winding` (Experimental)
+
+```aevia
+(Complex[_], Float[_], Float[_], Int, Int, (Complex[_]) -> Complex[_], (Complex[_]) -> Complex[_]) -> { winding: Int, samples: Int, evaluations: Int }
+```
+
+Returns a sampled winding estimate and actual counts if the coarse and refined complex integrals approach the same integer. Takes the measured circle, value scale, initial samples, host budget, and analytic or meromorphic function and derivative.
+
+Computes the argument principle winding number `(Z - P) = \text{round}(\text{Re}(s_0))`.
+
+# Errors
+
+Returns an error when moment evaluation fails or the winding estimate is too far from an integer.
+
+## `numerical_callback.num_complex_root_delves_lyness` (Experimental)
+
+```aevia
+(Complex[_], Float[_], Float[_], Int, Int, (Complex[_]) -> Complex[_], (Complex[_]) -> Complex[_]) -> { roots: Tensor<1, Complex[_]>, evaluations: Int }
+```
+
+Approximates zeros of a pole-free function inside a sampled circle. Takes its measured center and radius, residual reference scale, sample count, callback budget, f and f'.
+
+Finds zeros of an analytic function in a disk using Delves–Lyness localization.
+
+Uses argument-principle moments, Newton’s identities to form the monic polynomial, and
+Aberth–Ehrlich iteration to extract its zeros. The function must be pole-free in the disk.
+
+# Errors
+
+Returns an error when moment evaluation or the polynomial solve fails, or the winding number is invalid.
+
+## `numerical_callback.num_complex_root_halley` (Experimental)
+
+```aevia
+(Complex[_], Float[_], Float[_], Float, Int, Int, (Complex[_]) -> Complex[_], (Complex[_]) -> Complex[_], (Complex[_]) -> Complex[_]) -> { root: Complex[_], evaluations: Int }
+```
+
+Halley root using a measured seed, coordinate and value scales, normalized residual tolerance, iteration limit, callback budget, f, f' and f''. The derivative units follow the axis dimension.
+
+Finds a complex root using Halley's cubically convergent method.
+
+# Errors
+
+Returns an error if the iterations fail to converge.
+
+## `numerical_callback.num_complex_root_homotopy` (Experimental)
+
+```aevia
+(Complex[_], Float[_], Float[_], Float, Int, Int, Int, (Complex[_], Float) -> Complex[_], (Complex[_], Float) -> Complex[_], (Complex[_], Float) -> Complex[_]) -> { root: Complex[_], evaluations: Int }
+```
+
+Follows a measured complex zero from t=0 to t=1. Takes seed, coordinate and value scales, normalized residual tolerance, nominal step count, correction limit, callback budget, H, dH/dz and dH/dt.
+
+Tracks a complex homotopy root from `t = 0` to `t = 1`.
+
+Starts at `z(0) = z_0` for `H(z(t), t) = 0`, using an adaptive RK4 predictor and Newton
+corrector with damping near a singular target.
+
+# Errors
+
+Returns an error for a zero step count, a singular Jacobian, or failure to reach and correct the endpoint within the step budget.
+
+## `numerical_callback.num_complex_root_muller` (Experimental)
+
+```aevia
+(Complex[_], Complex[_], Complex[_], Float[_], Float[_], Float, Int, Int, (Complex[_]) -> Complex[_]) -> { root: Complex[_], evaluations: Int }
+```
+
+Muller root using three measured guesses, coordinate scale, residual scale, normalized residual tolerance, iteration limit, callback budget and one analytic callback.
+
+Finds a complex root of an arbitrary analytic function `f` using Muller's quadratic interpolation.
+
+# Errors
+
+Returns an error if the interpolation denominator vanishes or the iterations fail to converge.
+
+## `numerical_callback.num_complex_step_derivative_checked` (Experimental)
+
+```aevia
+(Float[_], Float[_], Float[_], Int, (Complex[_]) -> Complex[_]) -> Float[_]
+```
+
+`num_complex_step_derivative_checked(x, step, value_scale, budget, callback)`: Estimates a real analytic derivative from the imaginary part of a single sample. Invalid or collapsed stencils and exhaustion of the total callback budget produce errors.
+
+Complex-step differentiation `Im(f(x + i*h)) / h` for real analytic
+functions, avoiding subtractive cancellation down to machine precision.
+
+## `numerical_special.num_complex_surface_hyperelliptic` (Experimental)
+
+```aevia
+(Tensor<1, Complex>) -> { degree: Int, branch_points: Tensor<1, Complex>, has_branch_at_infinity: Bool, ramification_indices: { offsets: Tensor<1, Int>, indices: Tensor<1, Int> }, monodromy_generators: { offsets: Tensor<1, Int>, indices: Tensor<1, Int> }, genus: Int }
+```
+
+Returns normalized hyperelliptic covering topology for w^2 with given finite roots. Generators act on zero-based sheets, and ramification cycles are packed with offsets.
+
+Topological invariants for a hyperelliptic curve `w^2 = prod_{k=1}^d (z - r_k)`
+assuming the `roots` are distinct.
+
+## `numerical_special.num_complex_surface_monodromy_checked` (Experimental)
+
+```aevia
+(Tensor<2, Complex>, Tensor<1, Complex>, Int) -> Tensor<1, Int>
+```
+
+Tracks polynomial fibers on a normalized closed piecewise-linear loop. Coefficient rows index w degree and columns index z degree in ascending order. The last vertex is connected back to the first. Returns zero-based sheet images or an error for ambiguous fibers.
+
+Returns the monodromy permutation of `P(z, w) = 0` along a closed loop.
+
+Tracks the `n` sheets from `loop_pts[0]` around the loop and back, subdividing steps
+adaptively to prevent sheet collisions. The permutation acts on `0..n`.
+
+## `numerical_special.num_complex_surface_superelliptic` (Experimental)
+
+```aevia
+(Tensor<1, Complex>, Int) -> { degree: Int, branch_points: Tensor<1, Complex>, has_branch_at_infinity: Bool, ramification_indices: { offsets: Tensor<1, Int>, indices: Tensor<1, Int> }, monodromy_generators: { offsets: Tensor<1, Int>, indices: Tensor<1, Int> }, genus: Int }
+```
+
+Returns normalized superelliptic covering topology for w^degree with given finite roots. The infinity permutation uses a positive loop in the 1/z coordinate.
+
+Topological invariants for a superelliptic curve `w^n = prod_{k=1}^d (z - r_k)`
+deduplicating roots within `1e-12` (so repeated roots do not inflate genus).
 
 ## `numerical_vector.num_complex_winding_number` (Experimental)
 
@@ -32784,6 +34240,28 @@ Winding number about the origin of the closed polygonal path through `points`.
 Joins the last vertex to the first. Counterclockwise turns count as
 positive. Returns `None` for an empty path, a nonfinite vertex or an edge
 through the origin. A single nonzero finite vertex has winding number zero.
+
+## `numerical_callback.num_complex_wirtinger_dz_checked` (Experimental)
+
+```aevia
+(Complex[_], Float[_], Float[_], Int, (Complex[_]) -> Complex[_]) -> Complex[_]
+```
+
+`num_complex_wirtinger_dz_checked(point, step, value_scale, budget, callback)`: Estimates the Wirtinger derivative with respect to z. Invalid or collapsed stencils and exhaustion of the total callback budget produce errors.
+
+Numerical Wirtinger derivative `d/dz = 0.5 * (d/dx - i * d/dy)` by central
+finite differences with step `h`.
+
+## `numerical_callback.num_complex_wirtinger_dzbar_checked` (Experimental)
+
+```aevia
+(Complex[_], Float[_], Float[_], Int, (Complex[_]) -> Complex[_]) -> Complex[_]
+```
+
+`num_complex_wirtinger_dzbar_checked(point, step, value_scale, budget, callback)`: Estimates the Wirtinger derivative with respect to conjugate z. Invalid or collapsed stencils and exhaustion of the total callback budget produce errors.
+
+Numerical Wirtinger derivative `d/d(conj(z)) = 0.5 * (d/dx + i * d/dy)` by
+central finite differences with step `h`.
 
 ## `numerical_vector.num_computer_graphics_degrees_to_radians` (Experimental)
 
@@ -32825,6 +34303,537 @@ Converts radians to degrees.
 # Errors
 As [`svd`].
 
+## `numerical_special.num_conformal_bergman_kernel_disk` (Experimental)
+
+```aevia
+(Complex, Complex) -> Complex
+```
+
+Bergman kernel of the unit disk. Both dimensionless complex inputs must lie inside the open disk.
+
+Exact Bergman kernel of the unit disk: $K_{\mathbb{D}}(z, w) = \frac{1}{\pi (1 - z \bar{w})^2}$.
+
+## `numerical_special.num_conformal_bergman_polynomial_basis` (Experimental)
+
+```aevia
+(Tensor<2, Complex>, Complex, Complex) -> Complex
+```
+
+Evaluates a dimensionless Bergman expansion with rows of ascending complex basis coefficients. Zero-pad lower-degree polynomials. The diagonal evaluates the basis once per row.
+
+Evaluates a Bergman kernel expansion `K(z, w) = \sum_{k=0}^M \phi_k(z) \overline{\phi_k(w)}`
+from a list of orthonormal polynomial basis vectors (each in ascending power coefficients).
+
+## `numerical_special.num_conformal_cayley_transform` (Experimental)
+
+```aevia
+(Complex) -> Complex
+```
+
+`cayley_transform(z)` returns the Möbius map `(z - i) / (z + i)`. Its pole is at `-i`. On the upper half-plane its image is the open unit disk.
+
+Cayley transform $C(z) = \frac{z - i}{z + i}$ mapping the upper half-plane to the unit disk.
+
+## `numerical_special.num_conformal_classify_mobius` (Experimental)
+
+```aevia
+({ a: Complex, b: Complex, c: Complex, d: Complex }) -> String
+```
+
+Classifies finite, projectively equivalent Möbius coefficients as identity, elliptic, parabolic, hyperbolic or loxodromic.
+
+Classifies a Möbius transformation by its normalized trace squared $\tau = (a+d)^2 / (ad-bc)$.
+
+# Errors
+
+Returns an error for a degenerate transformation.
+
+## `numerical_special.num_conformal_cross_ratio` (Experimental)
+
+```aevia
+(Complex, Complex, Complex, Complex) -> Complex
+```
+
+`cross_ratio(z1, z2, z3, z4)` computes `((z1 - z3) * (z2 - z4)) / ((z1 - z4) * (z2 - z3))`.
+
+Computes the cross ratio `(z_1, z_2; z_3, z_4) = \frac{(z_1 - z_3)(z_2 - z_4)}{(z_1 - z_4)(z_2 - z_3)}`.
+
+## `numerical_special.num_conformal_disk_automorphism` (Experimental)
+
+```aevia
+(Complex, Float) -> { a: Complex, b: Complex, c: Complex, d: Complex }
+```
+
+Builds a Möbius automorphism of the unit disk with |alpha| < 1 and angle theta in radians.
+
+Unit disk automorphism $f(z) = e^{i\theta} \frac{z - \alpha}{1 - \bar{\alpha} z}$ for $|\alpha| < 1$.
+
+# Errors
+
+Returns an error if the translation parameter lies on or outside the unit circle.
+
+## `numerical_special.num_conformal_joukowsky` (Experimental)
+
+```aevia
+(Complex) -> Complex
+```
+
+`joukowsky(z)` returns the Joukowsky airfoil transformation `(z + 1/z)/2`.
+
+Joukowsky airfoil transformation $J(z) = \frac{1}{2}(z + 1/z)$.
+
+## `numerical_special.num_conformal_joukowsky_inverse` (Experimental)
+
+```aevia
+(Complex) -> { plus: Complex, minus: Complex }
+```
+
+`num_conformal_joukowsky_inverse(point)` returns the two dimensionless inverse branches as named plus and minus fields, ordered by the principal square root of point² - 1. An unrepresentable branch produces a domain error.
+
+Two branches of the inverse Joukowsky map $w \pm \sqrt{w^2 - 1}$.
+
+## `numerical_special.num_conformal_karman_trefftz` (Experimental)
+
+```aevia
+(Complex, Float) -> Complex
+```
+
+`karman_trefftz(z, exponent)` evaluates the Kármán–Trefftz map with principal complex powers. For exponent `n`, the map is `n * ((z+1)^n + (z-1)^n) / ((z+1)^n - (z-1)^n)`.
+
+Kármán–Trefftz transformation $`K_n(z)` = n \frac{(z+1)^n + (z-1)^n}{(z+1)^n - (z-1)^n}$.
+
+## `numerical_special.num_conformal_koebe_map` (Experimental)
+
+```aevia
+(Complex) -> Complex
+```
+
+`koebe_map(z)` returns the Koebe function `z / (1 - z)^2`.
+
+Koebe function $k(z) = \frac{z}{(1 - z)^2}$.
+
+## `numerical_special.num_conformal_mobius_fixed_points` (Experimental)
+
+```aevia
+({ a: Complex, b: Complex, c: Complex, d: Complex }) -> { points: Tensor<1, Complex>, all: Bool }
+```
+
+Returns finite complex fixed points in the points field. For the identity all is true and points is empty.
+
+Returns the finite fixed points of $m(z) = z$, i.e. roots of $c z^2 + (d - a) z - b = 0$.
+
+## `numerical_special.num_conformal_mobius_three_points` (Experimental)
+
+```aevia
+(Complex, Complex, Complex, Complex, Complex, Complex) -> { a: Complex, b: Complex, c: Complex, d: Complex }
+```
+
+Builds the projective Möbius map sending three distinct finite source points to three distinct finite target points. Coefficients are homogeneous.
+
+Constructs the unique Möbius transformation mapping `(z1, z2, z3) -> (w1, w2, w3)`.
+
+# Errors
+
+Returns an error if the source triple or the target triple contains repeated points.
+
+## `numerical_callback.num_conformal_numeric_checked` (Experimental)
+
+```aevia
+(Complex[_], Float[_], Float[_], Float[_], Float, Int, (Complex[_]) -> Complex[_]) -> Bool
+```
+
+`num_conformal_numeric_checked(point, step, coordinate_scale, value_scale, tolerance, budget, callback)`: Checks the relative Cauchy–Riemann residual and nonzero normalized magnification using one stencil. Invalid or collapsed stencils and exhaustion of the total callback budget produce errors.
+
+Numerically verifies conformality at `z`: Cauchy–Riemann holds and $|f'(z)| > \text{tol}$.
+
+## `numerical_callback.num_conformal_scale_rotation_checked` (Experimental)
+
+```aevia
+(Complex[_], Float[_], Float[_], Int, (Complex[_]) -> Complex[_]) -> { scale: Float[_], rotation: Float }
+```
+
+`num_conformal_scale_rotation_checked(point, step, value_scale, budget, callback)`: Returns measured local magnification and dimensionless rotation in radians. Invalid or collapsed stencils and exhaustion of the total callback budget produce errors.
+
+Returns the local conformal magnification $|f'(z)|$ and rotation angle $\arg f'(z)$.
+
+## `numerical_special.num_conformal_schwarz_christoffel_evaluate` (Experimental)
+
+```aevia
+({ prevertices: Tensor<1, Float>, interior_angles_pi: Tensor<1, Float>, scale: Complex, shift: Complex }, Complex, Float, Int) -> { value: Complex, error: Float, evaluations: Int, converged: Bool }
+```
+
+Evaluates a normalized Schwarz–Christoffel map on the open upper half-plane. Provide the prepared map, point, positive absolute tolerance and panel budget. The result contains the complex value, absolute error estimate, evaluations and convergence.
+
+Evaluates the Schwarz–Christoffel integral from $`z_0` = i$ to $z$ (with $\text{Im}(z) > 0$).
+
+# Errors
+
+This method currently returns `Ok` for every evaluation.
+
+## `numerical_special.num_conformal_schwarz_christoffel_solve` (Experimental)
+
+```aevia
+(Tensor<1, Complex>, Int, Float) -> { prevertices: Tensor<1, Float>, interior_angles_pi: Tensor<1, Float>, scale: Complex, shift: Complex }
+```
+
+Fits a reusable Schwarz–Christoffel map to a simple counterclockwise polygon in normalized coordinates. Pass a positive tolerance and Newton iteration budget.
+
+Solves for the prevertices of a Schwarz–Christoffel map.
+
+Maps the upper half-plane to the simple counterclockwise polygon `polygon_vertices`. Fixes
+the first three prevertices at `(-1, 0, 1)` and finds the remaining `n - 3` by damped Newton
+iteration.
+
+# Errors
+
+Returns an error for an invalid polygon or when the quadrature or Newton solve fails.
+
+## `numerical_special.num_conformal_szego_evaluate` (Experimental)
+
+```aevia
+({ points: Tensor<1, Complex>, weights: Tensor<1, Complex>, center: Complex }, Complex) -> Complex
+```
+
+Evaluates an interior point against a portable prepared Szegő quadrature.
+
+Evaluates the Szegő kernel $S(w, a)$ at an interior point `w`.
+
+## `numerical_special.num_conformal_szego_evaluate_bergman` (Experimental)
+
+```aevia
+({ points: Tensor<1, Complex>, weights: Tensor<1, Complex>, center: Complex }, Complex) -> Complex
+```
+
+Evaluates the Bergman kernel via the prepared Szegő quadrature at an interior point.
+
+Bergman kernel $K(z, a) = 4 \pi S(z, a)^2$ for simply-connected $\Omega$.
+
+## `numerical_special.num_conformal_szego_evaluate_map` (Experimental)
+
+```aevia
+({ points: Tensor<1, Complex>, weights: Tensor<1, Complex>, center: Complex }, Complex) -> { mapped: Complex, szego: Complex }
+```
+
+Evaluates a Riemann map and Szegő kernel from prepared quadrature. The straight segment from the center to the query must stay interior.
+
+Evaluates the Riemann map $f(z)$ and Szegő kernel $S(z, a)$ at `z`.
+
+## `numerical_callback.num_conformal_szego_map_checked` (Experimental)
+
+```aevia
+(Complex, Complex, Int, Int, (Float) -> Complex, (Float) -> Complex) -> { mapped: Complex, szego: Complex }
+```
+
+Returns a Riemann map and the Szegő kernel for one interior query. Pass center, query, nodes, callback budget, boundary and derivative callbacks.
+
+Computes a Riemann map of a smooth Jordan domain.
+
+Computes the Szegő kernel `S(\cdot, a)` on the boundary of a smooth Jordan domain
+parameterized CCW by `gamma(t)` with derivative `dgamma(t)` for `t \in [0, 2\pi]`
+via the Kerzman–Stein integral equation `(I + A) S_a = \bar{H}_a`, and evaluates
+the Riemann map `f(z) = \frac{2\pi}{S(a,a)} \int_a^z S(\zeta, a)^2 d\zeta` at `z`.
+
+# Errors
+
+Returns an error if the boundary data or integral-equation solve is invalid.
+
+## `numerical_callback.num_conformal_szego_prepare_checked` (Experimental)
+
+```aevia
+(Complex, Int, Int, (Float) -> Complex, (Float) -> Complex) -> { points: Tensor<1, Complex>, weights: Tensor<1, Complex>, center: Complex }
+```
+
+Prepares reusable Szegő quadrature from a counterclockwise boundary callback and its derivative on a normalized chart. Pass center, nodes, callback budget and callbacks.
+
+Solves $(I + A) `S_a` = \bar{H}_a$ once and caches the boundary Szegő kernel.
+
+# Errors
+
+Returns an error for fewer than 16 quadrature nodes, a vanishing boundary tangent, or a failed linear solve.
+
+## `numerical_special.num_conformal_szego_prepare_sampled` (Experimental)
+
+```aevia
+(Tensor<1, Complex>, Tensor<1, Complex>, Complex) -> { points: Tensor<1, Complex>, weights: Tensor<1, Complex>, center: Complex }
+```
+
+Prepares reusable Szegő quadrature from 16 to 192 equally spaced counterclockwise boundary samples and their complex parameter derivatives, in dimensionless normalized coordinates.
+
+Solves $(I + A) `S_a` = \bar{H}_a$ once and caches the boundary Szegő kernel.
+
+# Errors
+
+Returns an error for fewer than 16 quadrature nodes, a vanishing boundary tangent, or a failed linear solve.
+
+## `numerical_special.num_continuation_borel_pade` (Experimental)
+
+```aevia
+(Tensor<1, Complex>, Complex, Int, Int) -> Complex
+```
+
+Borel–Padé resummation of an ascending dimensionless asymptotic series through order m+n. Poles on the positive Borel axis select the upper lateral integral.
+
+Borel-Padé resummation of a divergent asymptotic series `sum_{k>=0} c_k z^k`
+via Borel transform `B(t) = sum (c_k / k!) t^k`, Padé `[m/n]` approximant,
+and Laplace integral `int_0^oo e^(-t) B(z * t) dt`.
+
+## `numerical_special.num_continuation_eval_pade` (Experimental)
+
+```aevia
+({ numerator: Tensor<1, Complex>, denominator: Tensor<1, Complex> }, Complex) -> Complex
+```
+
+Evaluates the dimensionless Padé numerator divided by its denominator at a complex point. Pass the record returned by num_continuation_pade. A zero denominator or unrepresentable result returns a domain error.
+
+Evaluates rational function `P(z) / Q(z)` via Horner's method.
+
+## `numerical_special.num_continuation_holonomic_follow` (Experimental)
+
+```aevia
+(Tensor<2, Complex>, Tensor<1, Complex>, Tensor<1, Complex>, Int) -> Tensor<1, Complex>
+```
+
+Continues the derivative state [y, y', ...] of a dimensionless polynomial-coefficient ODE along a complex polygonal path. Returns the endpoint state, or an error for a singular or unresolved step.
+
+Analytically continues `[y, y', ..., y^(r-1)]` of a [`HolonomicOde`] along
+the polygonal `path` using adaptive local Taylor series steps.
+
+## `numerical_special.num_continuation_holonomic_monodromy` (Experimental)
+
+```aevia
+(Tensor<2, Complex>, Tensor<1, Complex>, Int) -> Tensor<2, Complex>
+```
+
+Continues the derivative-state identity basis around the closed complex loop; an omitted closing point is appended. Matrix columns correspond to the initial basis vectors.
+
+Computes the `r x r` monodromy matrix of a [`HolonomicOde`] around the
+closed loop `loop_pts` (closing back to `loop_pts[0]`).
+
+## `numerical_special.num_continuation_holonomic_order` (Experimental)
+
+```aevia
+(Tensor<2, Complex>) -> Int
+```
+
+Returns the order of an ODE described by rows p_0 through p_r with polynomial coefficients in ascending powers, padded with zeros.
+
+Order `r` of the differential equation.
+
+## `numerical_callback.num_continuation_laurent_fft` (Experimental)
+
+```aevia
+(Complex[_], Float[_], Int, Int, Int, Int, (Complex[_]) -> Complex[_]) -> { coefficients: Tensor<1, Complex[_]>, first_power: Int, radius: Float[_], evaluations: Int }
+```
+
+Samples an analytic annulus along a measured circle and returns Laurent coefficients in the dimensionless coordinate (z-center)/radius. Coefficients share the callback amplitude units; first_power is the first exponent and evaluations counts actual callback calls.
+
+Extracts Laurent coefficients `c_k` for `k in -neg_order..=pos_order` around
+`center` on the circle `|z - center| = radius` using a single FFT.
+
+## `numerical_special.num_continuation_pade` (Experimental)
+
+```aevia
+(Tensor<1, Complex>, Int, Int) -> { numerator: Tensor<1, Complex>, denominator: Tensor<1, Complex> }
+```
+
+Forms a complex [m/n] Padé approximant from Taylor coefficients in ascending order. Supply at least m+n+1 dimensionless coefficients. The denominator has constant coefficient one and can drop in degree for a rank-deficient system. The denominator degree may not exceed 64.
+
+Constructs the `[m/n]` complex Padé approximant `P(z) / Q(z)` from Taylor
+coefficients `c_0, c_1, ..., c_{m+n}` (with `Q(0) = 1`).
+
+## `numerical_special.num_continuation_recenter` (Experimental)
+
+```aevia
+(Tensor<1, Complex>, Tensor<1, Complex>) -> Tensor<1, Complex>
+```
+
+Re-centers ascending complex Taylor coefficients along the supplied chain of dimensionless centers. The first center corresponds to the input coefficients and the last to the output. Empty inputs and work above eight million coefficient pairs are rejected.
+
+Continues a Taylor series along a chain of overlapping disks.
+
+The series `sum c_k (z - a_0)^k` is re-centered at each successive point in `centers`,
+returning the coefficients at the last center.
+
+## `numerical_special.num_continuation_wynn` (Experimental)
+
+```aevia
+(Tensor<1, Complex>) -> Complex
+```
+
+Accelerates convergence of up to 4096 dimensionless complex partial sums with Wynn's epsilon algorithm. With no finite accelerated estimate, returns the last sum. An empty sequence returns zero.
+
+Wynn's epsilon algorithm for accelerating convergence of complex sequences.
+
+## `numerical_special.num_contour_bromwich` (Experimental)
+
+```aevia
+(Float[_], Float[_]) -> { starts: Tensor<1, Complex[_]>, ends: Tensor<1, Complex[_]>, arc_segments: Tensor<1, Int>, arc_centers: Tensor<1, Complex[_]>, arc_radii: Tensor<1, Float[_]>, theta_start: Tensor<1, Float>, theta_end: Tensor<1, Float>, closed: Bool }
+```
+
+`num_contour_bromwich(c, y_max)` returns the open upward interval from c-i*y_max to c+i*y_max, with y_max positive.
+
+Vertical Bromwich contour `c + i * y` for `y in [-y_max, y_max]`.
+
+## `numerical_special.num_contour_deform_checked` (Experimental)
+
+```aevia
+(Complex[_], Complex[_], Tensor<1, Complex[_]>, Tensor<1, Complex[_]>, Float[_], Tensor<1, Float>) -> { starts: Tensor<1, Complex[_]>, ends: Tensor<1, Complex[_]>, arc_segments: Tensor<1, Int>, arc_centers: Tensor<1, Complex[_]>, arc_radii: Tensor<1, Float[_]>, theta_start: Tensor<1, Float>, theta_end: Tensor<1, Float>, closed: Bool }
+```
+
+Constructs an open contour from start to end with positive pole clearance and no branch-ray crossing. Endpoint, pole, ray origin, and clearance dimensions agree. Angles are bare radians. Up to 64 poles and rays are allowed in total. Returns an error when the bounded construction cannot verify a path.
+
+Deforms the straight path `[start, end]` around nearby `poles` and crossed
+`BranchRay`s by inserting circular detour arcs of radius `clearance`.
+
+## `numerical_special.num_contour_dogbone` (Experimental)
+
+```aevia
+(Complex[_], Complex[_], Float[_]) -> { starts: Tensor<1, Complex[_]>, ends: Tensor<1, Complex[_]>, arc_segments: Tensor<1, Int>, arc_centers: Tensor<1, Complex[_]>, arc_radii: Tensor<1, Float[_]>, theta_start: Tensor<1, Float>, theta_end: Tensor<1, Float>, closed: Bool }
+```
+
+`num_contour_dogbone(a, b, radius)` returns the closed contour enclosing the finite cut from a to b at a positive offset. Coincident endpoints give a circle.
+
+Dogbone (dumbbell) contour surrounding the finite branch cut `[a, b]`.
+
+## `numerical_special.num_contour_hankel` (Experimental)
+
+```aevia
+(Float[_], Float[_], Float, Float) -> { starts: Tensor<1, Complex[_]>, ends: Tensor<1, Complex[_]>, arc_segments: Tensor<1, Int>, arc_centers: Tensor<1, Complex[_]>, arc_radii: Tensor<1, Float[_]>, theta_start: Tensor<1, Float>, theta_end: Tensor<1, Float>, closed: Bool }
+```
+
+`num_contour_hankel(inner, outer, cut_angle, gap)` returns an open Hankel path around a cut through zero. The radii share units; angles are bare radians.
+
+Open Hankel contour around `0` avoiding the branch cut along `cut_angle`.
+
+
+Enters from `r_outer` along `cut_angle + gap`, wraps `2*pi - 2*gap` around
+the origin at `r_inner`, and exits to `r_outer` along `cut_angle - gap`.
+
+## `numerical_special.num_contour_indented_semicircle` (Experimental)
+
+```aevia
+(Float[_], Tensor<1, Float[_]>, Float[_], Bool) -> { starts: Tensor<1, Complex[_]>, ends: Tensor<1, Complex[_]>, arc_segments: Tensor<1, Int>, arc_centers: Tensor<1, Complex[_]>, arc_radii: Tensor<1, Float[_]>, theta_start: Tensor<1, Float>, theta_end: Tensor<1, Float>, closed: Bool }
+```
+
+`num_contour_indented_semicircle(radius, poles, indent, upper)` returns a closed semicircle with a bypass for each real pole. Internal geometry uses a unit-radius frame and returns the original coordinate units.
+
+Indented semicircle contour on `[-radius, radius]` bypassing `real_poles`
+with small semicircular indents into the upper (or lower) half-plane.
+
+## `numerical_callback.num_contour_integrate` (Experimental)
+
+```aevia
+({ starts: Tensor<1, Complex[_]>, ends: Tensor<1, Complex[_]>, arc_segments: Tensor<1, Int>, arc_centers: Tensor<1, Complex[_]>, arc_radii: Tensor<1, Float[_]>, theta_start: Tensor<1, Float>, theta_end: Tensor<1, Float>, closed: Bool }, Float[_], Float[_], Float[_], Int, (Complex[_]) -> Complex[_]) -> Complex[_]
+```
+
+Integrates an oriented measured path, returning the value with the legacy tolerance and quadrature defaults. Pass path, coordinate scale, integrand scale, tolerance, callback budget and callback.
+
+Integrates `f(z)` along a sequence of [`ContourSegment`]s.
+
+## `numerical_callback.num_contour_integrate_checked` (Experimental)
+
+```aevia
+({ starts: Tensor<1, Complex[_]>, ends: Tensor<1, Complex[_]>, arc_segments: Tensor<1, Int>, arc_centers: Tensor<1, Complex[_]>, arc_radii: Tensor<1, Float[_]>, theta_start: Tensor<1, Float>, theta_end: Tensor<1, Float>, closed: Bool }, Float[_], Float[_], Float[_], Int, Int, (Complex[_]) -> Complex[_]) -> { value: Complex[_], error: Float[_], evaluations: Int, converged: Bool }
+```
+
+Estimates an oriented line-and-arc integral along a portable contour record. Pass positive coordinate and callback-value scales, absolute tolerance, panel limit per component, total callback limit, then the callback. The result includes the value, heuristic absolute error, actual evaluations, and convergence status.
+
+## `numerical_callback.num_contour_integrate_deformed_checked` (Experimental)
+
+```aevia
+(Complex[_], Complex[_], Tensor<1, Complex[_]>, Tensor<1, Complex[_]>, Float[_], Tensor<1, Float>, Float[_], Float[_], Float[_], Int, Int, (Complex[_]) -> Complex[_]) -> { value: Complex[_], error: Float[_], evaluations: Int, converged: Bool }
+```
+
+Builds a verified deformation from measured endpoints, poles, ray origins, positive clearance and bare ray angles, then integrates without sampling unsafe geometry. Pass positive coordinate and callback-value scales, absolute tolerance, panel limit per component, total callback limit, then the callback. The result includes the value, heuristic absolute error, actual evaluations, and convergence status.
+
+Integrates `f(z)` from `start` to `end` along an automatically deformed path
+avoiding `poles` and `cuts` by at least `clearance`.
+
+## `numerical_callback.num_contour_integrate_segment` (Experimental)
+
+```aevia
+({ starts: Tensor<1, Complex[_]>, ends: Tensor<1, Complex[_]>, arc_segments: Tensor<1, Int>, arc_centers: Tensor<1, Complex[_]>, arc_radii: Tensor<1, Float[_]>, theta_start: Tensor<1, Float>, theta_end: Tensor<1, Float>, closed: Bool }, Float[_], Float[_], Float[_], Int, (Complex[_]) -> Complex[_]) -> Complex[_]
+```
+
+Integrates one oriented measured segment, returning the value with the legacy tolerance and quadrature defaults. Pass path, coordinate scale, integrand scale, tolerance, callback budget and callback.
+
+Integrates `f(z)` along a single [`ContourSegment`] using adaptive Gauss-Kronrod.
+
+## `numerical_callback.num_contour_integrate_segment_checked` (Experimental)
+
+```aevia
+({ starts: Tensor<1, Complex[_]>, ends: Tensor<1, Complex[_]>, arc_segments: Tensor<1, Int>, arc_centers: Tensor<1, Complex[_]>, arc_radii: Tensor<1, Float[_]>, theta_start: Tensor<1, Float>, theta_end: Tensor<1, Float>, closed: Bool }, Float[_], Float[_], Float[_], Int, Int, (Complex[_]) -> Complex[_]) -> { value: Complex[_], error: Float[_], evaluations: Int, converged: Bool }
+```
+
+Estimates one oriented line or arc from a single-segment portable contour record. Pass positive coordinate and callback-value scales, absolute tolerance, panel limit per component, total callback limit, then the callback. The result includes the value, heuristic absolute error, actual evaluations, and convergence status.
+
+## `numerical_special.num_contour_keyhole` (Experimental)
+
+```aevia
+(Complex[_], Float[_], Float[_], Float, Float) -> { starts: Tensor<1, Complex[_]>, ends: Tensor<1, Complex[_]>, arc_segments: Tensor<1, Int>, arc_centers: Tensor<1, Complex[_]>, arc_radii: Tensor<1, Float[_]>, theta_start: Tensor<1, Float>, theta_end: Tensor<1, Float>, closed: Bool }
+```
+
+`num_contour_keyhole(branch_point, inner, outer, cut_angle, gap)` returns a closed, positively oriented keyhole path around a cut. The branch point and both radii share units; angles are bare radians.
+
+Keyhole contour around a branch cut at `branch_pt` along `cut_angle`.
+
+## `numerical_callback.num_contour_principal_value` (Experimental)
+
+```aevia
+(Float[_], Float[_], Tensor<1, Float[_]>, Float[_], Float[_], Float[_], Int, (Float[_]) -> Complex[_]) -> Complex[_]
+```
+
+Returns the legacy value-only principal value with interior pole filtering. Reversed intervals return zero. Pass endpoints, poles, coordinate scale, integrand scale, tolerance, callback budget and callback.
+
+Cauchy principal value `P.V. int_a^b f(x) dx` with real simple poles in `(a, b)`
+via symmetric folding `int_0^delta (f(p + t) + f(p - t)) dt`.
+
+## `numerical_callback.num_contour_principal_value_checked` (Experimental)
+
+```aevia
+(Float[_], Float[_], Tensor<1, Float[_]>, Float[_], Float[_], Float[_], Int, Int, (Float[_]) -> Complex[_]) -> { value: Complex[_], error: Float[_], evaluations: Int, converged: Bool }
+```
+
+Estimates a Cauchy principal value on two finite endpoints with a vector of strictly interior simple poles. Pass positive coordinate and callback-value scales, absolute tolerance, panel limit per component, total callback limit, then the callback. The result includes the value, heuristic absolute error, actual evaluations, and convergence status.
+
+## `numerical_special.num_contour_rectangle` (Experimental)
+
+```aevia
+(Float[_], Float[_], Float[_], Float[_]) -> { starts: Tensor<1, Complex[_]>, ends: Tensor<1, Complex[_]>, arc_segments: Tensor<1, Int>, arc_centers: Tensor<1, Complex[_]>, arc_radii: Tensor<1, Float[_]>, theta_start: Tensor<1, Float>, theta_end: Tensor<1, Float>, closed: Bool }
+```
+
+`num_contour_rectangle(x0, x1, y0, y1)` returns a closed counterclockwise rectangle. Both real bounds and both imaginary bounds must strictly increase and share units.
+
+Counterclockwise rectangular contour `[x0, x1] x [y0, y1]`.
+
+## `numerical_callback.num_contour_residue_infinity_checked` (Experimental)
+
+```aevia
+(Float[_], Float[_], Float[_], Float[_], Int, Int, (Complex[_]) -> Complex[_]) -> { value: Complex[_], error: Float[_], evaluations: Int, converged: Bool }
+```
+
+Adaptively estimates the residue at infinity on a positive circle enclosing the finite singularities supplied by the caller. Pass positive coordinate and callback-value scales, absolute tolerance, panel limit per component, total callback limit, then the callback. The result includes the value, heuristic absolute error, actual evaluations, and convergence status.
+
+## `numerical_callback.num_contour_residue_infinity_fixed` (Experimental)
+
+```aevia
+(Float[_], Int, Float[_], Float[_], Int, (Complex[_]) -> Complex[_]) -> Complex[_]
+```
+
+Estimates residue at infinity with exactly max(samples, 32) circular samples. Pass radius, requested samples, coordinate reference, callback-value reference, callback budget and callback.
+
+Numerical residue at infinity: `Res_{z=oo} f(z) = -1/(2*pi*i) * oint_{|z|=R} f(z) dz`.
+
+## `numerical_special.num_contour_sector` (Experimental)
+
+```aevia
+(Float[_], Float) -> { starts: Tensor<1, Complex[_]>, ends: Tensor<1, Complex[_]>, arc_segments: Tensor<1, Int>, arc_centers: Tensor<1, Complex[_]>, arc_radii: Tensor<1, Float[_]>, theta_start: Tensor<1, Float>, theta_end: Tensor<1, Float>, closed: Bool }
+```
+
+`num_contour_sector(radius, angle)` returns a closed sector with positive radius and a nonzero signed sweep of at most one turn in radians.
+
+Closed sector (wedge) contour from `0` to `radius`, along arc `0..angle`, and back to `0`.
+
 ## `numerical_matrix.num_control_c2d_zoh` (Experimental)
 
 ```aevia
@@ -32842,6 +34851,155 @@ integrated input matrix, not a Euler approximation.
 # Errors
 Returns an error when `dt` is not finite and positive, or when the
 matrix exponential fails.
+
+## `numerical_matrix.num_control_discrete_controllability_matrix` (Experimental)
+
+```aevia
+({ a: Tensor<2, Float>, b: Tensor<2, Float[_]>, c: Tensor<2, Float[_]>, d: Tensor<2, Float[_]>, dt: Float[Time] }) -> Tensor<2, Float[_]>
+```
+
+`num_control_discrete_controllability_matrix(model)` returns [B, A B, ..., A^(n-1) B] with n rows and n*m columns for n states and m inputs. Its entries retain the units of B.
+
+Controllability matrix `[B, A B, ..., A^{n-1} B]` (`n x (n m)`).
+
+## `numerical_matrix.num_control_discrete_is_stable` (Experimental)
+
+```aevia
+({ a: Tensor<2, Float>, b: Tensor<2, Float[_]>, c: Tensor<2, Float[_]>, d: Tensor<2, Float[_]>, dt: Float[Time] }) -> Bool
+```
+
+`num_control_discrete_is_stable(model)` checks whether every pole lies strictly inside the unit circle. A failed eigensolve is reported as an error.
+
+## `numerical_matrix.num_control_discrete_n_inputs` (Experimental)
+
+```aevia
+({ a: Tensor<2, Float>, b: Tensor<2, Float[_]>, c: Tensor<2, Float[_]>, d: Tensor<2, Float[_]>, dt: Float[Time] }) -> Int
+```
+
+`num_control_discrete_n_inputs(model)` returns the number of inputs of a checked discrete state-space model.
+
+Number of inputs `m`.
+
+## `numerical_matrix.num_control_discrete_n_outputs` (Experimental)
+
+```aevia
+({ a: Tensor<2, Float>, b: Tensor<2, Float[_]>, c: Tensor<2, Float[_]>, d: Tensor<2, Float[_]>, dt: Float[Time] }) -> Int
+```
+
+`num_control_discrete_n_outputs(model)` returns the number of outputs of a checked discrete state-space model.
+
+Number of outputs `p`.
+
+## `numerical_matrix.num_control_discrete_n_states` (Experimental)
+
+```aevia
+({ a: Tensor<2, Float>, b: Tensor<2, Float[_]>, c: Tensor<2, Float[_]>, d: Tensor<2, Float[_]>, dt: Float[Time] }) -> Int
+```
+
+`num_control_discrete_n_states(model)` returns the number of states of a checked discrete state-space model.
+
+Number of states `n`.
+
+## `numerical_matrix.num_control_discrete_observability_matrix` (Experimental)
+
+```aevia
+({ a: Tensor<2, Float>, b: Tensor<2, Float[_]>, c: Tensor<2, Float[_]>, d: Tensor<2, Float[_]>, dt: Float[Time] }) -> Tensor<2, Float[_]>
+```
+
+`num_control_discrete_observability_matrix(model)` returns [C; C A; ...; C A^(n-1)] with n*p rows and n columns for n states and p outputs. Its entries retain the units of C.
+
+Observability matrix `[C; C A; ...; C A^{n-1}]` (`(n p) x n`).
+
+## `numerical_matrix.num_control_discrete_poles` (Experimental)
+
+```aevia
+({ a: Tensor<2, Float>, b: Tensor<2, Float[_]>, c: Tensor<2, Float[_]>, d: Tensor<2, Float[_]>, dt: Float[Time] }) -> Tensor<1, Complex>
+```
+
+`num_control_discrete_poles(model)` returns the dimensionless eigenvalues of the discrete state matrix. A failed eigensolve or a pole outside binary64 range produces an error.
+
+## `numerical_vector.num_control_era` (Experimental)
+
+```aevia
+(Tensor<2, Float>, Tensor<1, Float>, Int) -> rssn/native/control/era/v1
+```
+
+Fits a normalized discrete one-input state-space model from finite input and output samples. Output matrix rows are sample times. The first input must be nonzero. The fitted model has no direct feedthrough.
+
+Realises a state-space model from input/output data by the eigensystem
+realisation algorithm.
+
+The impulse response is recovered by deconvolution and arranged in a block
+Hankel matrix; an SVD truncated to `order` gives the shift-invariant
+subspace from which `A`, `B` and `C` are read.
+
+# Errors
+Returns an error for inconsistent data, a zero first input sample, too few
+samples for the requested order, or a rank-deficient Hankel matrix.
+
+## `numerical_vector.num_control_era_matrices` (Experimental)
+
+```aevia
+(rssn/native/control/era/v1) -> { a: Tensor<2, Float>, b: Tensor<2, Float>, c: Tensor<2, Float>, order: Int }
+```
+
+Returns the fitted A, B and C matrices and realisation order from a live ERA handle.
+
+## `numerical_vector.num_control_impulse_response` (Experimental)
+
+```aevia
+(rssn/native/control/era/v1, Int) -> Tensor<2, Float>
+```
+
+Computes the first-input impulse response in sample-by-output order from a fitted ERA model. The first row is zero and a zero-step result preserves the output column count.
+
+Impulse response of a realised model, `h[0] = 0` and
+`h[k] = C A^{k-1} B`.
+
+# Errors
+Returns an error when the model has no inputs.
+
+## `numerical_vector.num_control_mpc_closed_loop` (Experimental)
+
+```aevia
+(rssn/native/control/mpc/v1, Tensor<1, Float>, Tensor<1, Float>, Int) -> Tensor<2, Float>
+```
+
+Runs a normalized MPC from an initial state toward a fixed state reference, reusing the condensed QP for every step. The trajectory includes the initial state.
+
+Runs the MPC controller in closed loop for `steps` samples.
+
+Returns the state trajectory including the initial state, so the result has
+`steps + 1` entries.
+
+# Errors
+As [`mpc_step`].
+
+## `numerical_vector.num_control_mpc_prepare` (Experimental)
+
+```aevia
+(Tensor<2, Float>, Tensor<2, Float>, Float, { horizon: Int, control_horizon: Int, q: Tensor<1, Float>, r: Tensor<1, Float>, u_min: None | Some(Tensor<1, Float>), u_max: None | Some(Tensor<1, Float>), x_min: None | Some(Tensor<1, Float>), x_max: None | Some(Tensor<1, Float>) }) -> rssn/native/control/mpc/v1
+```
+
+Prepares a bounded normalized discrete MPC from state and input matrices, positive sample time, horizons, weights and optional ordered bounds. Each input weight must be positive.
+
+## `numerical_vector.num_control_pid_response` (Experimental)
+
+```aevia
+({ kp: Float, ki: Float, kd: Float, filter_time: None | Some(Float) }, rssn/native/control/transfer/v1, Tensor<1, Float>, Float) -> Tensor<1, Float>
+```
+
+Simulates a parallel PID against a prepared proper transfer model on a finite increasing normalized time grid from rest.
+
+Closed-loop step response of `plant` under `pid` on the time grid `t`.
+
+The derivative is filtered with a first-order filter of time constant
+[`Pid::tf`] when it is set. The plant is integrated with fourth-order
+Runge-Kutta on each interval.
+
+# Errors
+Returns an error when the plant cannot be converted to state space or the
+time grid is not strictly increasing.
 
 ## `numerical_matrix.num_control_simulate_continuous` (Experimental)
 
@@ -32887,6 +35045,298 @@ Returns the output at each input sample.
 # Errors
 Returns an error for a wrong `x0` or input length, or when the model has
 no sample time.
+
+## `numerical_vector.num_control_simulate_pid` (Experimental)
+
+```aevia
+({ kp: Float, ki: Float, kd: Float, filter_time: None | Some(Float) }, Tensor<1, Float>, Float, None | Some({ low: Float, high: Float })) -> Tensor<1, Float>
+```
+
+Simulates a positional parallel PID over finite normalized error samples using a positive step, optional derivative filtering and bounded-output anti-windup.
+
+Simulates a positional PID over an error sequence with optional output
+limits and conditional-integration anti-windup.
+
+Returns the control signal at each sample.
+
+## `numerical_matrix.num_control_state_space_continuous` (Experimental)
+
+```aevia
+(Tensor<2, Float>, Tensor<2, Float>, Tensor<2, Float>, Tensor<2, Float>) -> rssn/native/control/state-space/v1
+```
+
+Prepares a continuous state-space model from normalized A, B, C and D matrices.
+
+Builds a continuous-time model.
+
+# Errors
+As [`StateSpace::new`].
+
+## `numerical_matrix.num_control_state_space_discrete` (Experimental)
+
+```aevia
+(Tensor<2, Float>, Tensor<2, Float>, Tensor<2, Float>, Tensor<2, Float>, Float) -> rssn/native/control/state-space/v1
+```
+
+Prepares a discrete model from normalized A, B, C and D matrices and a positive sampling interval.
+
+Builds a discrete-time model with sample time `dt`.
+
+# Errors
+As [`StateSpace::new`], plus an error when `dt` is not finite and
+positive.
+
+## `numerical_matrix.num_control_state_space_is_controllable` (Experimental)
+
+```aevia
+(rssn/native/control/state-space/v1) -> Bool
+```
+
+Checks whether the normalized state-space controllability matrix has full row rank.
+
+Whether the pair `(A, B)` is controllable (numerical rank test with a
+relative tolerance of `1e-9`).
+
+## `numerical_matrix.num_control_state_space_is_observable` (Experimental)
+
+```aevia
+(rssn/native/control/state-space/v1) -> Bool
+```
+
+Checks whether the normalized state-space observability matrix has full column rank.
+
+Whether the pair `(A, C)` is observable (numerical rank test with a
+relative tolerance of `1e-9`).
+
+## `numerical_matrix.num_control_state_space_is_stable` (Experimental)
+
+```aevia
+(rssn/native/control/state-space/v1) -> Bool
+```
+
+Checks whether all continuous poles have negative real part or all discrete poles lie inside the unit circle.
+
+Whether the model is asymptotically stable.
+
+A continuous model is stable when every pole has negative real part; a
+discrete model when every pole lies inside the unit circle.
+
+## `numerical_matrix.num_control_state_space_new` (Experimental)
+
+```aevia
+(Tensor<2, Float>, Tensor<2, Float>, Tensor<2, Float>, Tensor<2, Float>) -> rssn/native/control/state-space/v1
+```
+
+Prepares a continuous model from normalized A, B, C and D matrices. Simulation times use the model's chosen time unit.
+
+Builds a continuous-time model after checking the matrix dimensions.
+
+# Errors
+Returns an error when `a` is not square, when `b`/`c`/`d` are not
+consistent with `a`, or when an entry is not finite.
+
+## `numerical_matrix.num_control_state_space_poles` (Experimental)
+
+```aevia
+(rssn/native/control/state-space/v1) -> Tensor<1, Complex>
+```
+
+Returns finite poles of a prepared model. A static model has no poles. Eigenvalue failure returns an error.
+
+Eigenvalues of `A`.
+
+Returns an empty vector for a static model or when the eigensolver
+fails.
+
+## `numerical_matrix.num_control_state_space_simulate_with_dt` (Experimental)
+
+```aevia
+(rssn/native/control/state-space/v1, Tensor<1, Float>, Tensor<2, Float>, Float) -> Tensor<2, Float>
+```
+
+Simulates a normalized model at positive sampling interval dt. A discrete model requires its configured sample interval.
+
+Simulates either a continuous-time model (by zero-order-hold
+discretisation at sample time `dt`) or a discrete-time model whose
+sample time matches `dt` to a relative tolerance of `1e-12`.
+
+# Errors
+Returns an error when `dt` is not finite and positive, when a discrete
+model's `dt` does not match the requested `dt`, or when [`StateSpace::c2d_zoh`]
+or [`StateSpace::simulate`] fails.
+
+## `numerical_vector.num_control_transfer_evaluate` (Experimental)
+
+```aevia
+(rssn/native/control/transfer/v1, Complex) -> Complex
+```
+
+Evaluates a transfer function at a finite normalized complex frequency. Rejects a pole or a response outside Float range.
+
+Evaluates `G(s)` at a complex frequency.
+
+## `numerical_vector.num_control_transfer_feedback` (Experimental)
+
+```aevia
+(rssn/native/control/transfer/v1, rssn/native/control/transfer/v1) -> rssn/native/control/transfer/v1
+```
+
+Prepares the negative feedback connection a / (1 + a b).
+
+Negative feedback `a / (1 + a b)`.
+
+# Errors
+As [`TransferFunction::new`].
+
+## `numerical_vector.num_control_transfer_gain_margin_phase_margin` (Experimental)
+
+```aevia
+(rssn/native/control/transfer/v1) -> { gain_db: None | Some(Float), phase_degrees: None | Some(Float) }
+```
+
+Returns gain margin in dB and phase margin in degrees. Each margin is None when its crossover is absent on the normalized log-frequency grid.
+
+Gain and phase margins of a loop transfer function.
+
+Returns `(gain margin in dB, phase margin in degrees)`. Each margin is
+`None` when the corresponding crossover does not occur on the internal
+log-spaced grid from `1e-3` to `1e3` rad/s. Crossovers are refined by
+bisection on `log10(omega)`.
+
+# Errors
+Returns an error when the transfer function cannot be evaluated.
+
+## `numerical_vector.num_control_transfer_is_proper` (Experimental)
+
+```aevia
+(rssn/native/control/transfer/v1) -> Bool
+```
+
+Returns whether the numerator degree is at most the denominator degree.
+
+Whether the transfer function is proper (`deg(num) <= deg(den)`).
+
+A zero numerator is always proper.
+
+## `numerical_vector.num_control_transfer_is_stable` (Experimental)
+
+```aevia
+(rssn/native/control/transfer/v1) -> Bool
+```
+
+Checks that all continuous-time poles have negative real parts. Returns an error if the poles cannot be computed.
+
+Whether every pole has negative real part.
+
+## `numerical_vector.num_control_transfer_is_strictly_proper` (Experimental)
+
+```aevia
+(rssn/native/control/transfer/v1) -> Bool
+```
+
+Returns whether the numerator degree is below the denominator degree. The zero transfer is strictly proper.
+
+Whether the transfer function is strictly proper (`deg(num) < deg(den)`).
+
+A zero numerator is always strictly proper.
+
+## `numerical_vector.num_control_transfer_new` (Experimental)
+
+```aevia
+(Tensor<1, Float>, Tensor<1, Float>) -> rssn/native/control/transfer/v1
+```
+
+Prepares a real SISO transfer function from finite coefficients in descending powers of normalized s. A nonzero denominator is required; improper functions are allowed.
+
+Builds a transfer function after trimming leading zero coefficients.
+
+Improper rational functions (`deg(num) > deg(den)`, such as a pure
+differentiator or PD controller) are permitted here so they can be used
+in frequency-response and block-algebra calculations; use
+[`TransferFunction::new_proper`] when a state-space realisation is
+required.
+
+# Errors
+Returns an error when the denominator is zero or when a coefficient is
+not finite.
+
+## `numerical_vector.num_control_transfer_new_proper` (Experimental)
+
+```aevia
+(Tensor<1, Float>, Tensor<1, Float>) -> rssn/native/control/transfer/v1
+```
+
+Prepares a proper real SISO transfer function from finite coefficients in descending powers of normalized s.
+
+Builds a proper transfer function (`deg(num) <= deg(den)`) after
+trimming leading zero coefficients.
+
+# Errors
+Returns an error when [`TransferFunction::new`] fails or when the
+numerator has higher degree than the denominator.
+
+## `numerical_vector.num_control_transfer_order` (Experimental)
+
+```aevia
+(rssn/native/control/transfer/v1) -> Int
+```
+
+Returns the denominator degree after trimming leading zeros.
+
+Order of the denominator (degree of `den`).
+
+## `numerical_vector.num_control_transfer_parallel` (Experimental)
+
+```aevia
+(rssn/native/control/transfer/v1, rssn/native/control/transfer/v1) -> rssn/native/control/transfer/v1
+```
+
+Prepares the parallel connection a + b.
+
+Parallel connection `a + b`.
+
+# Errors
+As [`TransferFunction::new`].
+
+## `numerical_vector.num_control_transfer_series` (Experimental)
+
+```aevia
+(rssn/native/control/transfer/v1, rssn/native/control/transfer/v1) -> rssn/native/control/transfer/v1
+```
+
+Prepares the series connection a b.
+
+Series connection `a b`.
+
+# Errors
+As [`TransferFunction::new`].
+
+## `numerical_vector.num_control_transfer_step_response` (Experimental)
+
+```aevia
+(rssn/native/control/transfer/v1, Tensor<1, Float>) -> Tensor<1, Float>
+```
+
+Returns the fourth-order Runge-Kutta unit-step response of a proper model on a finite, strictly increasing normalized time grid. The initial state is zero at the first sample.
+
+Closed-loop step response of `tf` on the time grid `t`.
+
+The model is converted to state space and integrated with fourth-order
+Runge-Kutta on each interval `t[k+1] - t[k]`.
+
+# Errors
+Returns an error when the time grid is not strictly increasing or the
+conversion fails.
+
+## `numerical_vector.num_control_transfer_zeros` (Experimental)
+
+```aevia
+(rssn/native/control/transfer/v1) -> Tensor<1, Complex>
+```
+
+Returns the finite zeros of the transfer numerator as a complex vector. Constant and zero numerators have an empty result.
+
+Zeros: roots of the numerator (empty for a zero numerator).
 
 ## `numerical_vector.num_convergence_aitken_acceleration` (Experimental)
 
@@ -32942,6 +35392,24 @@ the sequence itself, and each further entry is the last element of the
 next even epsilon column, so later entries are higher-order estimates of
 the limit. Estimates that are not finite are dropped, and the process
 stops when two consecutive values coincide (exact convergence).
+
+## `numerical_vector.num_convex_solve_lp` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<2, Float[_]>, Tensor<1, String>, Tensor<1, Float[_]>, Float[_], Float[_], Float[_], Tensor<1, Float[_]>, Tensor<1, Float[_]>, Tensor<1, Bool>, Int) -> { status: String, x: Tensor<1, Float[_]>, value: None | Some(Float[_]), iterations: None | Some(Int), bland_pivots: None | Some(Int) }
+```
+
+Bounded dense LP with physical reference scales, finite lower bounds, masked upper bounds and a total simplex pivot budget.
+
+Solves a bounded dense linear program.
+
+`max_iter` limits the total number of simplex pivots performed across
+Phase I and Phase II.
+
+# Errors
+Returns an error string when the dimensions disagree, when any input entry
+is not finite, when `max_iter` is zero, or when the simplex exceeds
+`max_iter` pivots.
 
 ## `numerical_stats.num_correlation` (Experimental)
 
@@ -33156,6 +35624,42 @@ preconditioned basis vectors are retained, and Arnoldi uses reorthogonalized
 modified Gram-Schmidt. A zero restart is clamped to one, as before. Final
 convergence uses the original system residual.
 
+## `numerical_matrix.num_csr_lsqr` (Experimental)
+
+```aevia
+({ rows: Int, cols: Int, indptr: Tensor<1, Int>, indices: Tensor<1, Int>, values: Tensor<1, Float[_]> }, Tensor<1, Float[_]>, Float[_], Float, Int) -> { x: Tensor<1, Float[_]>, residual: Float, iterations: Int, converged: Bool }
+```
+
+Solves rectangular sparse least squares using cached working buffers and the original normal equations for convergence. Damping uses the matrix entry dimension. The reported residual is the unaugmented relative residual.
+
+## `numerical_matrix.num_csr_matmul_dense` (Experimental)
+
+```aevia
+({ rows: Int, cols: Int, indptr: Tensor<1, Int>, indices: Tensor<1, Int>, values: Tensor<1, Float[_]> }, Tensor<2, Float[_]>) -> Tensor<2, Float[_]>
+```
+
+Multiplies a rectangular CSR matrix by a dense rank-two tensor using SIMD row updates. The result keeps the product of both entry units.
+
+Sparse-matrix × dense-matrix product `C = A * B`, parallelised over output rows
+and accelerated with SIMD row AXPY updates.
+
+# Errors
+Returns an error if `self.cols != rhs.rows`.
+
+## `numerical_matrix.num_csr_matmul_sparse` (Experimental)
+
+```aevia
+({ rows: Int, cols: Int, indptr: Tensor<1, Int>, indices: Tensor<1, Int>, values: Tensor<1, Float[_]> }, { rows: Int, cols: Int, indptr: Tensor<1, Int>, indices: Tensor<1, Int>, values: Tensor<1, Float[_]> }) -> { rows: Int, cols: Int, indptr: Tensor<1, Int>, indices: Tensor<1, Int>, values: Tensor<1, Float[_]> }
+```
+
+Multiplies two rectangular CSR records. Output columns are strictly ordered and the value budget is checked before allocation. Entry dimensions multiply.
+
+Sparse-matrix × sparse-matrix product `C = A * B` in CSR format with sorted
+column indices per row. Parallelises rows deterministically for large matrices.
+
+# Errors
+Returns an error if `self.cols != other.rows`.
+
 ## `numerical_matrix.num_csr_minres` (Experimental)
 
 ```aevia
@@ -33287,6 +35791,16 @@ off-diagonal entry contributing an edge regardless of its value.
 Components, including isolated vertices, are processed in ascending
 order of their smallest vertex, then the complete order is reversed.
 Returns `perm` with `perm[new] = old`.
+
+## `numerical_matrix.num_csr_transpose` (Experimental)
+
+```aevia
+({ rows: Int, cols: Int, indptr: Tensor<1, Int>, indices: Tensor<1, Int>, values: Tensor<1, Float[_]> }) -> { rows: Int, cols: Int, indptr: Tensor<1, Int>, indices: Tensor<1, Int>, values: Tensor<1, Float[_]> }
+```
+
+Transposes a checked rectangular CSR record, preserving entry units and strictly ordered columns.
+
+Returns the transpose `A^T` in CSR format with sorted column indices.
 
 ## `numerical_stats.num_cv` (Experimental)
 
@@ -35510,6 +38024,28 @@ Multiplies every byte by the supplied coefficient in GF(256) with polynomial 0x1
 
 Multiplies each byte of the slice by the coefficient in place.
 
+## `numerical_vector.num_finite_field_ntt_plan` (Experimental)
+
+```aevia
+(Int, Int) -> { modulus: Int, length: Int }
+```
+
+Validates an odd prime and a power-of-two transform length dividing p-1. Returns a portable plan description backed by the shared NTT cache.
+
+Looks up or constructs a cached [`NttPrimePlan`] for `(modulus, len)` in
+[`crate::kernels::reuse::global_pool`]'s named plan cache `"finite_field_ntt_plan"`.
+
+Returns `None` if `modulus` is not an odd prime, `len` is not a power of two,
+or `len` does not divide `modulus - 1`.
+
+## `numerical_vector.num_finite_field_ntt_transform` (Experimental)
+
+```aevia
+(Tensor<1, Int>, { modulus: Int, length: Int }, Bool) -> Tensor<1, Int>
+```
+
+Applies the cached forward or inverse number-theoretic transform to ordinary unsigned coefficients. The input must match the plan length. Coefficients are reduced modulo the prime and the inverse is normalized.
+
 ## `numerical_vector.num_finite_field_poly_mul_ntt_mod` (Experimental)
 
 ```aevia
@@ -36826,6 +39362,98 @@ The non-negative volume of a tetrahedron, from four vertices in `R^3`.
 Ill-conditioned and extreme-scale inputs use an exact determinant of the
 represented coordinates. Fewer than twelve coordinates give zero. Only
 the first twelve coordinates are used.
+
+## `numerical_stats.num_glm_fit` (Experimental)
+
+```aevia
+(Tensor<2, Float>, Tensor<1, Float>, String, String, None | Some(Tensor<1, Float>), Int, Float) -> { estimation: { beta: Tensor<1, Float>, se: Tensor<1, Float>, deviance: Float, null_deviance: Float, iterations: Int, converged: Bool, aic: Float, dispersion: Float, fitted: Tensor<1, Float> }, link: String }
+```
+
+Fits a generalized linear model. Design rows omit the intercept; optional weights must align with observations. Returns a portable named model with coefficients, convergence status and the inverse link used for prediction.
+
+Fits a generalised linear model by iteratively reweighted least squares.
+
+`x` holds one row of covariates per observation and must **not** contain an
+intercept column; `fit` prepends one, so the returned coefficient vector has
+`x[0].len() + 1` entries with the intercept first. `weights` are prior
+weights (number of trials for a binomial proportion, exposure for a Poisson
+rate); when `None` every observation weighs one.
+
+Convergence is declared when `max |Δβ| / (1 + |β|) < tol`. Each step is
+halved up to `MAX_HALVINGS` times while the deviance would increase.
+
+# Errors
+Returns a lowercase message when the design and response disagree in
+length, the design is empty or non-finite, a weight is not strictly
+positive, the response leaves the family's support, `max_iter` is zero,
+`tol` is not positive, there are fewer observations than parameters, or a
+linear system in the iteration is singular.
+
+## `numerical_stats.num_glm_inverse_link` (Experimental)
+
+```aevia
+(String, Float) -> Float
+```
+
+Maps a finite dimensionless linear predictor to its response mean. Uses the same named links as num_glm_link and preserves representable lower-tail probabilities.
+
+Evaluates the inverse link `g⁻¹(eta)`, i.e. the mean implied by a linear
+predictor.
+
+## `numerical_stats.num_glm_link` (Experimental)
+
+```aevia
+(String, Float) -> Float
+```
+
+Maps a dimensionless mean to the linear predictor. Choose identity, log, logit, probit, inverse, loglog, or cloglog. Means at a boundary with an infinite link are rejected.
+
+Evaluates the link function `g(mu)`.
+
+Out-of-range arguments follow the limits of the function: the logit link
+returns `±inf` at `mu = 0` or `mu = 1`, and the log link returns `-inf`
+at `mu = 0`.
+
+## `numerical_stats.num_glm_link_derivative` (Experimental)
+
+```aevia
+(String, Float) -> Float
+```
+
+Returns the dimensionless derivative of a named GLM link at an admissible mean. The reciprocal link has a negative derivative.
+
+Evaluates the derivative `g'(mu) = d eta / d mu`.
+
+The derivative is always positive on the interior of the mean space, so
+the working weights `1 / (V(mu) g'(mu)²)` stay positive.
+
+## `numerical_stats.num_glm_predict` (Experimental)
+
+```aevia
+({ estimation: { beta: Tensor<1, Float>, se: Tensor<1, Float>, deviance: Float, null_deviance: Float, iterations: Int, converged: Bool, aic: Float, dispersion: Float, fitted: Tensor<1, Float> }, link: String }, Tensor<2, Float>) -> Tensor<1, Float>
+```
+
+Predicts response means from a fitted model with the model's stored link. Design rows omit the intercept and must match the fitted slope count.
+
+Predicts the mean response for new covariate rows.
+
+`x` holds one row of covariates per observation, without the intercept
+column, exactly as accepted by [`fit`](crate::kernels::glm::fit::fit). The
+returned values are on the response scale, `g⁻¹(x'β)`.
+
+# Errors
+Returns a lowercase message when the model has no coefficients or a row
+does not have one entry per fitted slope.
+
+## `numerical_stats.num_glm_variance` (Experimental)
+
+```aevia
+(String, Float) -> Float
+```
+
+Returns the dimensionless variance function at a mean in the named family's support. Choose gaussian, poisson, binomial, gamma, or inverse_gaussian.
+
+The variance function `V(mu)` of the family.
 
 ## `numerical_vector.num_grid_acoustics_config` (Experimental)
 
@@ -42896,6 +45524,32 @@ Dimension-aware serial quadrature with a strict callback evaluation budget. Fixe
 
 Integral over `[a, inf)` using `x = a + t/(1-t)`, `t in [0, 1)`.
 
+## `numerical_vector.num_interp_bilinear_grid_evaluate` (Experimental)
+
+```aevia
+(rssn/native/interpolation/bilinear/v1, Float[_], Float[_], Float[_]) -> Float[_]
+```
+
+Interpolates one finite point on a prepared rectilinear grid. Queries are clamped at the edges. The supplied value witness sets the return unit and must match the grid cells.
+
+Returns one clamped interpolant without rescanning the grid.
+
+# Errors
+Rejects non-finite coordinates.
+
+## `numerical_vector.num_interp_bilinear_grid_prepare` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<1, Float[_]>, Tensor<2, Float[_]>) -> rssn/native/interpolation/bilinear/v1
+```
+
+Prepares a rectilinear grid with measured axes. The value tensor is [y axis length, x axis length] in row-major order. Each axis and the values may have independent units.
+
+Prepares a grid using the same validation as [`interp2`].
+
+# Errors
+Rejects empty, non-finite or unordered axes and invalid grid storage.
+
 ## `numerical_vector.num_interp_ext_akima` (Experimental)
 
 ```aevia
@@ -46938,6 +49592,181 @@ Returns `None` when the projection does not determine a solution
 (singular matrix, or an unlucky projection in each of the `trials`). A
 returned vector always satisfies `A x = b`.
 
+## `numerical_matrix.num_linear_sparse_exact_dixon_multi` (Experimental)
+
+```aevia
+(rssn/native/sparse-rational/v1, Tensor<2, Real>) -> None | Some(Tensor<2, Real>)
+```
+
+Solves a square rational sparse system with one right-hand side per tensor row. Shares a modular factorization and returns None for a singular system.
+
+Solves a square nonsingular rational system with multiple right-hand sides.
+
+Dixon’s `p`-adic lifting shares one modular factorization of `A` and one flat CSR workspace
+across all columns of `rhs`.
+
+Returns `None` when `matrix` is not square, any vector in `rhs` does not
+have length `matrix.rows`, or `matrix` is singular.
+
+## `numerical_matrix.num_linear_sparse_exact_field_add` (Experimental)
+
+```aevia
+(rssn/native/sparse-prime-field/v1, Int, Int) -> Int
+```
+
+Returns the canonical residue of a plus b, including for unreduced u64 inputs.
+
+`(a + b) mod p`.
+
+## `numerical_matrix.num_linear_sparse_exact_field_batch_inv` (Experimental)
+
+```aevia
+(rssn/native/sparse-prime-field/v1, Tensor<1, Int>) -> None | Some(Tensor<1, Int>)
+```
+
+Inverts a vector of up to 16,384 residues with one field inversion. Returns None when any entry is zero modulo the prime.
+
+Batch modular inversion of non-zero elements in `values` modulo `p`
+using Montgomery's trick: 1 extended GCD plus `3(k - 1)` modular
+multiplications, all division-free, leasing its prefix-product
+workspace from [`crate::kernels::reuse::global_pool`].
+
+Returns `None` if `p <= 1` or any element is divisible by `p`.
+
+## `numerical_matrix.num_linear_sparse_exact_field_inv` (Experimental)
+
+```aevia
+(rssn/native/sparse-prime-field/v1, Int) -> None | Some(Int)
+```
+
+Returns the canonical inverse of a field element, or None for a zero residue.
+
+## `numerical_matrix.num_linear_sparse_exact_field_mul` (Experimental)
+
+```aevia
+(rssn/native/sparse-prime-field/v1, Int, Int) -> Int
+```
+
+Returns the canonical residue of a times b using the prepared field.
+
+## `numerical_matrix.num_linear_sparse_exact_field_new` (Experimental)
+
+```aevia
+(Int) -> rssn/native/sparse-prime-field/v1
+```
+
+Prepares a session-owned prime field after validating the full unsigned 64-bit modulus.
+
+The field of integers modulo `p`.
+
+A modulus below two is not a field; such a value keeps the historical
+behaviour of mapping every residue to zero, which the operations below
+check before touching the reducer.
+
+## `numerical_matrix.num_linear_sparse_exact_field_pow` (Experimental)
+
+```aevia
+(rssn/native/sparse-prime-field/v1, Int, Int) -> Int
+```
+
+Raises an element to an unsigned exponent using the prepared field.
+
+## `numerical_matrix.num_linear_sparse_exact_field_prime` (Experimental)
+
+```aevia
+(rssn/native/sparse-prime-field/v1) -> Int
+```
+
+Returns the exact prime modulus.
+
+The prime modulus.
+
+## `numerical_matrix.num_linear_sparse_exact_field_reduce` (Experimental)
+
+```aevia
+(rssn/native/sparse-prime-field/v1, Int) -> Int
+```
+
+Reduces a signed exact integer of up to 16,384 bits to its canonical prime-field residue.
+
+## `numerical_matrix.num_linear_sparse_exact_field_reducer` (Experimental)
+
+```aevia
+(rssn/native/sparse-prime-field/v1) -> rssn/native/modular/barrett/v1
+```
+
+Returns an independently owned, reusable Barrett reducer for this prime field.
+
+The division-free reducer for this modulus.
+
+## `numerical_matrix.num_linear_sparse_exact_field_sub` (Experimental)
+
+```aevia
+(rssn/native/sparse-prime-field/v1, Int, Int) -> Int
+```
+
+Returns the canonical residue of a minus b, including for unreduced u64 inputs.
+
+`(a - b) mod p`.
+
+## `numerical_matrix.num_linear_sparse_exact_prime_rref` (Experimental)
+
+```aevia
+(rssn/native/sparse-prime/v1) -> { matrix: rssn/native/sparse-prime/v1, pivots: Tensor<1, Int> }
+```
+
+Computes exact RREF and ascending zero-based pivot columns in the matrix's field.
+
+## `numerical_matrix.num_linear_sparse_exact_prime_to_dense` (Experimental)
+
+```aevia
+(rssn/native/sparse-prime/v1) -> Tensor<2, Int>
+```
+
+Copies a prime-field sparse matrix into a rank-two tensor of exact residues.
+
+## `numerical_matrix.num_linear_sparse_exact_rational_rref` (Experimental)
+
+```aevia
+(rssn/native/sparse-rational/v1) -> { matrix: rssn/native/sparse-rational/v1, pivots: Tensor<1, Int> }
+```
+
+Computes exact rational RREF and ascending zero-based pivot columns. Input coefficient bits are bounded before elimination.
+
+Reduced row echelon form (Gauss-Jordan form) of a sparse matrix over `dom`.
+
+Scales every pivot row so its pivot entry is `1` and eliminates each pivot
+column from all earlier pivot rows as well as subsequent rows. Returns the
+reduced [`SparseMat<D::E>`] with pivot rows placed in canonical order at the
+top followed by any zero rows, together with the sorted list of pivot columns.
+
+## `numerical_matrix.num_linear_sparse_exact_rational_to_prime` (Experimental)
+
+```aevia
+(rssn/native/sparse-rational/v1, rssn/native/sparse-prime-field/v1) -> None | Some(rssn/native/sparse-prime/v1)
+```
+
+Reduces a rational sparse matrix in the prepared field. A denominator divisible by the prime gives None.
+
+Reduces a sparse rational matrix directly to `GF(p)` using Montgomery's
+trick batch inversion over all non-trivial denominators, leasing its
+workspace from [`crate::kernels::reuse::global_pool`].
+
+Returns `None` if the modulus is below two or any entry has a denominator
+divisible by it.
+
+## `numerical_matrix.num_linear_sparse_exact_rcm_plan` (Experimental)
+
+```aevia
+(rssn/native/sparse-rational/v1) -> { permutation: Tensor<1, Int>, inverse: Tensor<1, Int> }
+```
+
+Returns a cached symmetric Reverse Cuthill–McKee ordering of a square sparse pattern. permutation[new] is the old index, and inverse[old] is the new index.
+
+Computes and caches a symmetric Reverse Cuthill-McKee bandwidth-reducing
+ordering for this matrix's sparsity pattern via
+[`crate::kernels::reuse::ComputeReusePool::sparse_ordering_plan`].
+
 ## `numerical_matrix.num_linear_sparse_lu_dim` (Experimental)
 
 ```aevia
@@ -48649,6 +51478,199 @@ Panics if the product of the dimensions overflows.
 
 Computes the maximum value of a slice of data.
 
+## `numerical_stats.num_mcmc_autocorrelation` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Int) -> Tensor<1, Float>
+```
+
+Dimensionless sample autocorrelations at lags zero through max_lag. The chain must vary and the lag and attempted work must fit the limits.
+
+## `numerical_stats.num_mcmc_effective_sample_size` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>) -> Float
+```
+
+Initial positive sequence estimate of effective sample size from a measured chain of at most 4096 draws.
+
+## `numerical_stats.num_mcmc_geweke` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>) -> Float
+```
+
+Dimensionless Geweke z-score comparing the first tenth against the last half of one measured chain.
+
+## `numerical_stats.num_mcmc_gibbs` (Experimental)
+
+```aevia
+((Int, Tensor<1, Float>, Float) -> Float, Tensor<1, Float>, { draws: Int, burn_in: Int, thin: Int, seed: Int }) -> { draws: Tensor<2, Float>, log_posterior: Tensor<1, Float>, accepted: Int, proposed: Int }
+```
+
+Seeded Gibbs sweeps with a typed conditional sampler taking a zero-based coordinate, normalized state and a uniform draw. No joint log values are recorded.
+
+Gibbs sampler driven by user-supplied full conditionals.
+
+Each coordinate is refreshed in turn from its full conditional. A
+conditional is a function of the current state and one uniform variate in
+`(0, 1)`; it returns the new value of its coordinate, normally by inverting
+the conditional CDF on a bracketed grid. One sweep over all coordinates is
+one iteration. [`MhOptions::proposal_sd`] is not used, because Gibbs moves
+have no proposal distribution; prefer [`gibbs_with_log_posterior`] with
+[`GibbsOptions`] when you also have the joint log density.
+
+Because no joint density is provided, [`Chain::log_posterior`] is filled
+with `NaN`.
+
+# Errors
+Returns an error when the number of conditionals does not match the state,
+the state is empty, `n` or `thin` is zero, the iteration budget overflows,
+or a conditional returns a non-finite value.
+
+## `numerical_stats.num_mcmc_gibbs_with_log_posterior` (Experimental)
+
+```aevia
+((Int, Tensor<1, Float>, Float) -> Float, (Tensor<1, Float>) -> Float, Tensor<1, Float>, { draws: Int, burn_in: Int, thin: Int, seed: Int }) -> { draws: Tensor<2, Float>, log_posterior: Tensor<1, Float>, accepted: Int, proposed: Int }
+```
+
+Seeded Gibbs sweeps with a typed coordinate conditional and joint log target. The log posterior is evaluated at every retained draw.
+
+Gibbs sampler driven by user-supplied full conditionals that also records
+the joint `log_posterior` at every kept draw.
+
+Each coordinate is refreshed in turn from its full conditional, exactly as
+in [`gibbs`]. After each retained sweep, `log_posterior(&state)` is
+evaluated and stored in [`Chain::log_posterior`].
+
+# Errors
+Returns an error when the number of conditionals does not match the state,
+the state is empty or contains non-finite values, `n` or `thin` is zero,
+the iteration budget overflows, a conditional returns a non-finite value,
+or `log_posterior` returns a non-finite value at a kept draw.
+
+## `numerical_stats.num_mcmc_hmc` (Experimental)
+
+```aevia
+((Tensor<1, Float>) -> Float, (Tensor<1, Float>) -> Tensor<1, Float>, Tensor<1, Float>, Float, Int, { draws: Int, burn_in: Int, thin: Int, seed: Int }) -> { draws: Tensor<2, Float>, log_posterior: Tensor<1, Float>, accepted: Int, proposed: Int }
+```
+
+Seeded Hamiltonian Monte Carlo on normalized coordinates with typed log-target and gradient functions and a fixed leapfrog schedule.
+
+Hamiltonian Monte Carlo sampler.
+
+A standard-normal momentum is drawn at every iteration, the Hamiltonian
+dynamics of the target are integrated with the leapfrog scheme for
+`leapfrog_steps` steps of length `step_size`, and the endpoint is accepted
+with the Metropolis probability `min(1, exp(H_old - H_new))`. The returned
+chain holds `n` draws taken every `thin` iterations after `burn_in`
+discarded ones.
+
+# Errors
+Returns an error when the initial state is empty, the step size is not
+positive and finite, the number of leapfrog steps, `n` or `thin` is zero,
+the iteration budget overflows, the target log density is not finite at the
+initial state, or the gradient has the wrong length or a non-finite entry.
+
+## `numerical_stats.num_mcmc_metropolis_hastings` (Experimental)
+
+```aevia
+((Tensor<1, Float>) -> Float, Tensor<1, Float>, Tensor<1, Float>, { draws: Int, burn_in: Int, thin: Int, seed: Int }) -> { draws: Tensor<2, Float>, log_posterior: Tensor<1, Float>, accepted: Int, proposed: Int }
+```
+
+Seeded Metropolis–Hastings with normalized coordinates, positive Gaussian proposal scales and a typed log-target function.
+
+Metropolis-Hastings sampler with a symmetric Gaussian random walk.
+
+Each iteration proposes one joint move `x + proposal_sd * z` with `z`
+standard normal per coordinate and accepts it with probability
+`min(1, exp(log_target(new) - log_target(old)))`. Proposals whose target
+density is not a number are rejected. The returned chain holds `n` draws
+taken every `thin` iterations after `burn_in` discarded ones.
+
+# Errors
+Returns an error when the initial state or `proposal_sd` is empty or
+mismatched, a proposal scale is not positive and finite, `n` or `thin` is
+zero, the iteration budget overflows, or the target log density is not
+finite at the initial state.
+
+## `numerical_stats.num_mcmc_pcg32_new` (Experimental)
+
+```aevia
+(Int, Int) -> rssn/native/mcmc/pcg32/v1
+```
+
+Creates a deterministic PCG32 stream from a u64 seed and a 63-bit stream selector.
+
+Creates a generator from a seed and a stream selector.
+
+## `numerical_stats.num_mcmc_pcg32_next_f64` (Experimental)
+
+```aevia
+(rssn/native/mcmc/pcg32/v1) -> Float
+```
+
+Advances the specified PCG32 stream and returns a 53-bit uniform draw in [0, 1).
+
+Next uniform variate in `[0, 1)` with 53 bits of resolution.
+
+## `numerical_stats.num_mcmc_pcg32_next_u32` (Experimental)
+
+```aevia
+(rssn/native/mcmc/pcg32/v1) -> Int
+```
+
+Advances the specified PCG32 stream and returns its next unsigned 32-bit output.
+
+Next 32-bit output.
+
+## `numerical_stats.num_mcmc_pcg32_normal` (Experimental)
+
+```aevia
+(rssn/native/mcmc/pcg32/v1) -> Float
+```
+
+Draws a standard normal from the specified PCG32 stream, preserving its cached Box–Muller variate.
+
+Next standard-normal variate by the Box-Muller transform.
+
+The second variate of each pair is cached and returned by the next call.
+
+## `numerical_stats.num_mcmc_pcg32_seeded` (Experimental)
+
+```aevia
+(Int) -> rssn/native/mcmc/pcg32/v1
+```
+
+Creates a deterministic PCG32 stream with the default stream selector.
+
+Creates a generator on the default stream.
+
+## `numerical_stats.num_mcmc_random_walk_metropolis` (Experimental)
+
+```aevia
+((Tensor<1, Float>) -> Float, Tensor<1, Float>, Tensor<1, Float>, { draws: Int, burn_in: Int, thin: Int, seed: Int }) -> { draws: Tensor<2, Float>, log_posterior: Tensor<1, Float>, accepted: Int, proposed: Int }
+```
+
+Seeded random-walk Metropolis with normalized coordinates, fixed Gaussian proposal scales and a typed log-target function.
+
+Random-walk Metropolis sampler.
+
+This is the same algorithm as [`metropolis_hastings`] with the per-coordinate
+proposal scales taken as given: no adaptation of the step sizes is
+performed, so the chain stays a time-homogeneous Markov chain.
+
+# Errors
+Returns the errors of [`metropolis_hastings`].
+
+## `numerical_stats.num_mcmc_split_rhat` (Experimental)
+
+```aevia
+(Tensor<2, Float[_]>) -> Float
+```
+
+Split Rhat for rank-two measured draws, with one equally long chain per row. All chains measure the same quantity. The result is dimensionless.
+
 ## `numerical_stats.num_mean` (Experimental)
 
 ```aevia
@@ -48679,6 +51701,27 @@ Computes the median of a slice of data.
 # Returns
 The median of the data as an `f64`.
 
+## `numerical_vector.num_meshgen_advancing_front_2d` (Experimental)
+
+```aevia
+(Tensor<2, Float[_]>, Float[_], Float[_], Int) -> { points: Tensor<2, Float[_]>, triangles: Tensor<2, Int> }
+```
+
+Builds a counterclockwise triangle mesh of a simple planar boundary. Pass two coordinate columns, positive target spacing, positive coordinate reference and maximum vertices. Both length-like arguments share the boundary unit.
+
+Meshes the interior of the closed loop `boundary` by front advancement.
+
+`spacing` is the target edge length; boundary edges are resampled to it and
+new interior vertices are placed at the height of an equilateral triangle
+over the front. The returned mesh is counter-clockwise and covers the
+polygon.
+
+# Errors
+
+Returns `Err` when the boundary has fewer than three points, contains
+non-finite coordinates or repeated consecutive points, when the enclosed
+area is zero, or when `spacing` is not positive and finite.
+
 ## `numerical_vector.num_meshgen_boundary_faces` (Experimental)
 
 ```aevia
@@ -48691,6 +51734,29 @@ The faces of `tets` that belong to exactly one tetrahedron.
 
 Each face is returned once, with the winding it has in the tetrahedron that
 owns it, so the faces of a closed mesh point outwards.
+
+## `numerical_vector.num_meshgen_constrained_delaunay_2d` (Experimental)
+
+```aevia
+(Tensor<2, Float[_]>, Tensor<2, Int>, Float[_], Int) -> { points: Tensor<2, Float[_]>, triangles: Tensor<2, Int> }
+```
+
+Triangulates measured points while preserving zero-based constrained segment endpoints as chains of edges. Crossing constraints can create additional measured vertices up to the supplied vertex budget.
+
+Constrained Delaunay triangulation of `points` and `segments`, returning
+the full [`TriMesh2`] including any Steiner vertices inserted where input
+segments cross.
+
+Segments passing through existing collinear vertices are split at those
+vertices, and mutually crossing segments are split at their intersection
+points (deduplicated against existing vertices within tolerance). Every
+input segment is guaranteed to be represented as a chain of constrained
+edges in the output mesh.
+
+# Errors
+
+Returns `Err` when the points are invalid, when a segment index is out of
+range, or when a segment joins a vertex to itself.
 
 ## `numerical_vector.num_meshgen_delaunay_2d_incremental` (Experimental)
 
@@ -48756,6 +51822,434 @@ Large batches use the current execution pool and preserve input order.
 
 Computes the minimum value of a slice of data.
 
+## `numerical_special.num_modular_barrett_add` (Experimental)
+
+```aevia
+(rssn/native/modular/barrett/v1, Int, Int) -> Int
+```
+
+`num_modular_barrett_add(plan, a, b)` Adds two unsigned words modulo the prepared modulus.
+
+`(a + b) mod m`.
+
+## `numerical_special.num_modular_barrett_div` (Experimental)
+
+```aevia
+(rssn/native/modular/barrett/v1, Int, Int) -> None | Some(Int)
+```
+
+`num_modular_barrett_div(plan, numerator, denominator)` Returns the modular quotient, or None when the denominator is not invertible.
+
+`a * b^(-1) mod m`, or `None` when `b` is not invertible.
+
+## `numerical_special.num_modular_barrett_inv` (Experimental)
+
+```aevia
+(rssn/native/modular/barrett/v1, Int) -> None | Some(Int)
+```
+
+`num_modular_barrett_inv(plan, value)` Returns the modular inverse, or None when the value is not coprime to the modulus.
+
+`a^(-1) mod m`, or `None` when `gcd(a, m) != 1`.
+
+## `numerical_special.num_modular_barrett_modulus` (Experimental)
+
+```aevia
+(rssn/native/modular/barrett/v1) -> Int
+```
+
+`num_modular_barrett_modulus(plan)` Returns the prepared modulus.
+
+The modulus `m`.
+
+## `numerical_special.num_modular_barrett_mu` (Experimental)
+
+```aevia
+(rssn/native/modular/barrett/v1) -> Int
+```
+
+`num_modular_barrett_mu(plan)` Returns floor(2^64 / modulus), the high word of the reciprocal.
+
+The high word of `mu = floor(2^128 / m)`, which is `floor(2^64 / m)`.
+
+## `numerical_special.num_modular_barrett_mul` (Experimental)
+
+```aevia
+(rssn/native/modular/barrett/v1, Int, Int) -> Int
+```
+
+`num_modular_barrett_mul(plan, a, b)` Multiplies two unsigned words modulo the prepared modulus.
+
+`(a * b) mod m`.
+
+## `numerical_special.num_modular_barrett_neg` (Experimental)
+
+```aevia
+(rssn/native/modular/barrett/v1, Int) -> Int
+```
+
+`num_modular_barrett_neg(plan, value)` Negates an unsigned word modulo the prepared modulus.
+
+`(-a) mod m`.
+
+## `numerical_special.num_modular_barrett_new` (Experimental)
+
+```aevia
+(Int) -> rssn/native/modular/barrett/v1
+```
+
+`num_modular_barrett_new(modulus)` prepares reusable reduction constants for an unsigned 64-bit modulus of at least two.
+
+Builds a reducer for `modulus >= 2`, or `None` for `0` and `1`.
+
+## `numerical_special.num_modular_barrett_new_prime` (Experimental)
+
+```aevia
+(Int) -> rssn/native/modular/barrett/v1
+```
+
+`num_modular_barrett_new_prime(modulus)` certifies a prime before preparing reduction constants.
+
+Builds a reducer for a modulus the caller has already established as at
+least two.
+
+# Panics
+
+Panics if `modulus < 2`.
+
+## `numerical_special.num_modular_barrett_pow` (Experimental)
+
+```aevia
+(rssn/native/modular/barrett/v1, Int, Int) -> Int
+```
+
+`num_modular_barrett_pow(plan, base, exponent)` Raises an unsigned word to an unsigned 64-bit exponent modulo the prepared modulus.
+
+`a^exp mod m`.
+
+## `numerical_special.num_modular_barrett_reduce_u128` (Experimental)
+
+```aevia
+(rssn/native/modular/barrett/v1, Int) -> Int
+```
+
+`num_modular_barrett_reduce_u128(plan, value)` Reduces an unsigned 128-bit word modulo the prepared modulus.
+
+Reduces a `u128` modulo `m`.
+
+For `x < 2^126` — every product of two residues below `2^63` — the
+reduction is pure multiply-and-shift with at most two conditional
+subtractions. Above that the high word no longer fits the bound the
+estimate relies on, so the hardware division is used; that path only
+runs for moduli above `2^63`.
+
+## `numerical_special.num_modular_barrett_reduce_u64` (Experimental)
+
+```aevia
+(rssn/native/modular/barrett/v1, Int) -> Int
+```
+
+`num_modular_barrett_reduce_u64(plan, value)` Reduces an unsigned 64-bit word modulo the prepared modulus.
+
+Reduces a `u64` modulo `m` without hardware division.
+
+## `numerical_special.num_modular_barrett_sub` (Experimental)
+
+```aevia
+(rssn/native/modular/barrett/v1, Int, Int) -> Int
+```
+
+`num_modular_barrett_sub(plan, a, b)` Subtracts two unsigned words modulo the prepared modulus.
+
+`(a - b) mod m`.
+
+## `numerical_special.num_modular_montgomery_add` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1, Int, Int) -> Int
+```
+
+`num_modular_montgomery_add(plan, a, b)` Adds two unsigned words modulo the prepared modulus.
+
+`(a + b) mod p` in the standard domain; inputs may exceed `p`.
+
+## `numerical_special.num_modular_montgomery_add_mont` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1, Int, Int) -> Int
+```
+
+`num_modular_montgomery_add_mont(plan, a, b)` Adds two canonical Montgomery residues.
+
+`(a + b) mod p` for Montgomery residues in `[0, p)`.
+
+## `numerical_special.num_modular_montgomery_div` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1, Int, Int) -> None | Some(Int)
+```
+
+`num_modular_montgomery_div(plan, numerator, denominator)` Returns the modular quotient, or None when the denominator is not invertible.
+
+`a * b^(-1) mod p`, or `None` when `b` is not invertible.
+
+## `numerical_special.num_modular_montgomery_fma_mont` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1, Int, Int, Int) -> Int
+```
+
+`num_modular_montgomery_fma_mont(plan, a, b, accumulator)` Adds the product to the accumulator in Montgomery representation. All three inputs must be canonical.
+
+`acc + a * b * R^(-1) mod p`, the fused form used by inner products.
+
+## `numerical_special.num_modular_montgomery_from_mont` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1, Int) -> Int
+```
+
+`num_modular_montgomery_from_mont(plan, value)` Converts a canonical Montgomery residue to standard representation.
+
+Converts a Montgomery residue back to `[0, p)`.
+
+## `numerical_special.num_modular_montgomery_half` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1, Int) -> Int
+```
+
+`num_modular_montgomery_half(plan, value)` Halves a canonical residue for the odd modulus, in either representation.
+
+Halves a residue modulo the odd modulus.
+
+Halving commutes with the Montgomery representation (`(x * R) / 2` is
+the representation of `x / 2`), so this is valid in either domain.
+
+## `numerical_special.num_modular_montgomery_inv` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1, Int) -> None | Some(Int)
+```
+
+`num_modular_montgomery_inv(plan, value)` Returns the modular inverse, or None when the value is not coprime to the modulus.
+
+`a^(-1) mod p`, or `None` when `a` is a multiple of `p`.
+
+## `numerical_special.num_modular_montgomery_modulus` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1) -> Int
+```
+
+`num_modular_montgomery_modulus(plan)` Returns the prepared odd modulus.
+
+The modulus `p`.
+
+## `numerical_special.num_modular_montgomery_mul` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1, Int, Int) -> Int
+```
+
+`num_modular_montgomery_mul(plan, a, b)` Multiplies two unsigned words modulo the prepared modulus.
+
+`(a * b) mod p` in the standard domain.
+
+One conversion plus one REDC: `a * (b * R) * R^(-1) = a * b`, so only
+`b` needs to enter the Montgomery domain.
+
+## `numerical_special.num_modular_montgomery_mul_mont` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1, Int, Int) -> Int
+```
+
+`num_modular_montgomery_mul_mont(plan, a, b)` Multiplies two canonical Montgomery residues.
+
+`a * b * R^(-1) mod p` for Montgomery residues in `[0, p)`.
+
+## `numerical_special.num_modular_montgomery_n_prime` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1) -> Int
+```
+
+`num_modular_montgomery_n_prime(plan)` Returns the Montgomery reduction multiplier -p^(-1) mod 2^64.
+
+`n' = -p^(-1) mod 2^64`, the REDC multiplier.
+
+## `numerical_special.num_modular_montgomery_neg` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1, Int) -> Int
+```
+
+`num_modular_montgomery_neg(plan, value)` Negates an unsigned word modulo the prepared modulus.
+
+`(-a) mod p`.
+
+Negation commutes with the Montgomery representation, so this serves
+both domains; `neg_mont` is the same computation without the defensive
+reduction.
+
+## `numerical_special.num_modular_montgomery_neg_mont` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1, Int) -> Int
+```
+
+`num_modular_montgomery_neg_mont(plan, value)` Negates a canonical Montgomery residue.
+
+`(-a) mod p` for a Montgomery residue in `[0, p)`.
+
+## `numerical_special.num_modular_montgomery_new` (Experimental)
+
+```aevia
+(Int) -> rssn/native/modular/montgomery/v1
+```
+
+`num_modular_montgomery_new(modulus)` prepares reusable reduction constants for an unsigned 64-bit odd modulus greater than one.
+
+Builds a context for an odd `modulus > 1`, or `None` for any other
+modulus (including every even modulus, where `2^64` is not invertible).
+
+## `numerical_special.num_modular_montgomery_new_prime` (Experimental)
+
+```aevia
+(Int) -> rssn/native/modular/montgomery/v1
+```
+
+`num_modular_montgomery_new_prime(modulus)` certifies an odd prime before preparing reduction constants.
+
+Builds a context for a modulus the caller has already established as an
+odd integer greater than one.
+
+The only callers are primality tests and prime-field constructors that
+have certified the modulus, so the branch is a formality; it is checked
+rather than assumed because a silent wrong answer in modular arithmetic
+is far more expensive than one compare.
+
+# Panics
+
+Panics if `modulus <= 1` or `modulus` is even.
+
+## `numerical_special.num_modular_montgomery_one` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1) -> Int
+```
+
+`num_modular_montgomery_one(plan)` Returns the multiplicative identity in standard representation.
+
+`R mod p`, the Montgomery form of `1`.
+
+## `numerical_special.num_modular_montgomery_one_mont` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1) -> Int
+```
+
+`num_modular_montgomery_one_mont(plan)` Returns the Montgomery representation of the multiplicative identity.
+
+`R mod p`, the Montgomery form of `1` (alias of [`Self::one`] kept for
+the call sites that name the representation explicitly).
+
+## `numerical_special.num_modular_montgomery_pow` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1, Int, Int) -> Int
+```
+
+`num_modular_montgomery_pow(plan, base, exponent)` Raises an unsigned word to an unsigned 64-bit exponent modulo the prepared modulus.
+
+`a^exp mod p` in the standard domain.
+
+## `numerical_special.num_modular_montgomery_pow_mont` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1, Int, Int) -> Int
+```
+
+`num_modular_montgomery_pow_mont(plan, base, exponent)` Raises a canonical Montgomery residue to an unsigned 64-bit exponent.
+
+`base^exp * R mod p` from a Montgomery base.
+
+## `numerical_special.num_modular_montgomery_r2_mod` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1) -> Int
+```
+
+`num_modular_montgomery_r2_mod(plan)` Returns 2^128 reduced modulo the prepared modulus.
+
+`R^2 mod p = 2^128 mod p`, used to convert into Montgomery form.
+
+## `numerical_special.num_modular_montgomery_r_mod` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1) -> Int
+```
+
+`num_modular_montgomery_r_mod(plan)` Returns 2^64 reduced modulo the prepared modulus.
+
+`R mod p = 2^64 mod p`, the Montgomery form of `1`.
+
+## `numerical_special.num_modular_montgomery_redc` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1, Int) -> Int
+```
+
+`num_modular_montgomery_redc(plan, value)` Returns value times the inverse Montgomery radix modulo p. Requires value < p * 2^64.
+
+Montgomery reduction `t * R^(-1) mod p` for `0 <= t < p * 2^64`.
+
+The sum `t + m * p` can carry out of 128 bits for a modulus near `2^64`;
+`overflowing_add` reports that carry, and the wrap-around subtraction
+`u.wrapping_sub(p)` then yields `u + 2^64 - p`, which is the reduced
+value.
+
+## `numerical_special.num_modular_montgomery_sub` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1, Int, Int) -> Int
+```
+
+`num_modular_montgomery_sub(plan, a, b)` Subtracts two unsigned words modulo the prepared modulus.
+
+`(a - b) mod p` in the standard domain; inputs may exceed `p`.
+
+## `numerical_special.num_modular_montgomery_sub_mont` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1, Int, Int) -> Int
+```
+
+`num_modular_montgomery_sub_mont(plan, a, b)` Subtracts two canonical Montgomery residues.
+
+`(a - b) mod p` for Montgomery residues in `[0, p)`.
+
+## `numerical_special.num_modular_montgomery_to_mont` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1, Int) -> Int
+```
+
+`num_modular_montgomery_to_mont(plan, value)` Converts an unsigned 64-bit word to a reduced Montgomery residue.
+
+Converts a standard residue `a` to `a * R mod p`.
+
+## `numerical_special.num_modular_montgomery_to_mont_u128` (Experimental)
+
+```aevia
+(rssn/native/modular/montgomery/v1, Int) -> Int
+```
+
+`num_modular_montgomery_to_mont_u128(plan, value)` Converts an unsigned 128-bit word to a reduced Montgomery residue.
+
+Converts a `u128` value to its Montgomery form, reducing first.
+
 ## `numerical_special.num_mp_ball_abs` (Experimental)
 
 ```aevia
@@ -48769,6 +52263,51 @@ The absolute value, as the hull of the endpoints' absolute values.
 # Errors
 Fails when an exponent leaves the range.
 
+## `numerical_special.num_mp_ball_acos` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_acos(interval, precision)` encloses the inverse cosine on the real domain [-1, 1].
+
+## `numerical_special.num_mp_ball_add` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_add(left, right, precision)` encloses every sum of two dyadic intervals. Precision sets the midpoint bit width; the radius includes midpoint rounding.
+
+The sum.
+
+# Errors
+Fails when an exponent leaves the range.
+
+## `numerical_special.num_mp_ball_asin` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_asin(interval, precision)` encloses the inverse sine on the real domain [-1, 1].
+
+## `numerical_special.num_mp_ball_atan` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_atan(interval, precision)` encloses the real inverse tangent of a closed interval.
+
+## `numerical_special.num_mp_ball_atan2` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_atan2(y, x, precision)` encloses the principal angle of a closed rectangle away from the origin and wrapping cut.
+
 ## `numerical_special.num_mp_ball_contains_zero` (Experimental)
 
 ```aevia
@@ -48778,6 +52317,22 @@ Fails when an exponent leaves the range.
 Tests whether the closed interval contains zero, including either endpoint.
 
 Whether the interval contains zero.
+
+## `numerical_special.num_mp_ball_cos` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_cos(interval, precision)` encloses the real cos over a closed dyadic interval.
+
+## `numerical_special.num_mp_ball_cosh` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_cosh(interval, precision)` encloses the hyperbolic cosine over a closed dyadic interval.
 
 ## `numerical_special.num_mp_ball_div` (Experimental)
 
@@ -48801,6 +52356,83 @@ Fails when the divisor contains zero or an exponent leaves the range.
 Returns the lower endpoint rounded down and upper endpoint rounded up at the requested precision.
 
 The two endpoints, `mid - rad` and `mid + rad`.
+
+# Errors
+Fails when an exponent leaves the range.
+
+## `numerical_special.num_mp_ball_exp` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_exp(interval, precision)` encloses the exponential over a closed dyadic interval.
+
+## `numerical_special.num_mp_ball_exp2` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_exp2(interval, precision)` encloses the base-two exponential over a closed dyadic interval.
+
+## `numerical_special.num_mp_ball_lipschitz` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, { mantissa: Int, exponent: Int, precision: Int }, { mantissa: Int, exponent: Int, precision: Int }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+Given the exact mapped midpoint and a caller-supplied nonnegative Lipschitz bound, widens the radius by input radius times the bound and includes rounding of the midpoint.
+
+Widens the radius by a Lipschitz bound of the function applied to the
+midpoint.
+
+# Errors
+Fails when an exponent leaves the range.
+
+## `numerical_special.num_mp_ball_ln` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_ln(interval, precision)` encloses the natural logarithm over a closed dyadic interval.
+
+## `numerical_special.num_mp_ball_log10` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_log10(interval, precision)` encloses the base-ten logarithm over a closed dyadic interval.
+
+## `numerical_special.num_mp_ball_log2` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_log2(interval, precision)` encloses the base-two logarithm over a closed dyadic interval.
+
+## `numerical_special.num_mp_ball_midpoint` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+`num_mp_ball_midpoint(interval)` Returns the midpoint of the closed dyadic interval.
+
+The midpoint.
+
+## `numerical_special.num_mp_ball_mul` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_mul(left, right, precision)` encloses every product of two dyadic intervals. Precision sets the midpoint bit width; the radius includes midpoint rounding.
+
+The product.
 
 # Errors
 Fails when an exponent leaves the range.
@@ -48838,6 +52470,93 @@ Creates a closed interval containing exactly the given dyadic.
 
 The degenerate ball holding exactly `mid`.
 
+## `numerical_special.num_mp_ball_pow` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_pow(base, exponent, precision)` encloses a real power over closed base and exponent intervals.
+
+## `numerical_special.num_mp_ball_pow_ratio` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int, Int, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_pow_ratio(base, numerator, denominator, precision)` encloses a closed interval raised to an exact rational exponent.
+
+## `numerical_special.num_mp_ball_powi` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_powi(base, exponent, precision)` encloses a closed interval raised to a signed integer exponent.
+
+## `numerical_special.num_mp_ball_radius` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+`num_mp_ball_radius(interval)` Returns the nonnegative radius of the closed dyadic interval.
+
+The radius.
+
+## `numerical_special.num_mp_ball_sin` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_sin(interval, precision)` encloses the real sin over a closed dyadic interval.
+
+## `numerical_special.num_mp_ball_sinh` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_sinh(interval, precision)` encloses the hyperbolic sine over a closed dyadic interval.
+
+## `numerical_special.num_mp_ball_sqrt` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_sqrt(interval, precision)` Encloses the square root of a nonnegative closed interval.
+
+## `numerical_special.num_mp_ball_sub` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_sub(left, right, precision)` encloses every difference of two dyadic intervals. Precision sets the midpoint bit width; the radius includes midpoint rounding.
+
+The difference.
+
+# Errors
+Fails when an exponent leaves the range.
+
+## `numerical_special.num_mp_ball_tan` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_tan(interval, precision)` encloses the real tan over a closed dyadic interval.
+
+## `numerical_special.num_mp_ball_tanh` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_ball_tanh(interval, precision)` encloses the hyperbolic tangent over a closed dyadic interval.
+
 ## `numerical_special.num_mp_ball_width` (Experimental)
 
 ```aevia
@@ -48851,6 +52570,647 @@ The width `2 * rad`.
 # Errors
 Fails when an exponent leaves the range.
 
+## `numerical_special.num_mp_complex_abs` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_complex_abs(value, precision)` encloses the modulus of a closed dyadic rectangle.
+
+Modulus `|self| = sqrt(re^2 + im^2)`.
+
+# Errors
+Fails if an exponent leaves the range.
+
+## `numerical_special.num_mp_complex_abs_sq` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_complex_abs_sq(value, precision)` encloses the squared magnitudes using the rectangle’s nearest and farthest coordinates from zero.
+
+Squared modulus `re^2 + im^2`.
+
+# Errors
+Fails if an exponent leaves the range.
+
+## `numerical_special.num_mp_complex_acos` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_acos(value, precision)` encloses the principal inverse cosine of a closed dyadic rectangle.
+
+Principal inverse cosine `acos(z) = pi/2 - asin(z)`.
+
+# Errors
+Fails if the expression crosses a branch cut.
+
+## `numerical_special.num_mp_complex_acosh` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_acosh(value, precision)` encloses the principal inverse hyperbolic cosine of a closed dyadic rectangle.
+
+Principal inverse hyperbolic cosine `acosh(z) = ln(z + sqrt(z - 1) * sqrt(z + 1))`.
+
+# Errors
+Fails if the expression crosses a branch cut.
+
+## `numerical_special.num_mp_complex_add` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_add(left, right, precision)` encloses the pairwise sums at the requested bit precision.
+
+Addition `self + other`.
+
+# Errors
+Fails if an exponent leaves the supported range.
+
+## `numerical_special.num_mp_complex_arg` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_complex_arg(value, precision)` encloses the principal argument of an exact dyadic rectangle off the non-positive real axis.
+
+Principal argument `arg(self) = atan2(im, re)` in `(-pi, pi]`.
+
+# Errors
+Fails if the enclosure meets the non-positive real axis cut.
+
+## `numerical_special.num_mp_complex_asin` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_asin(value, precision)` encloses the principal inverse sine of a closed dyadic rectangle.
+
+Principal inverse sine `asin(z) = -i * ln(i*z + sqrt(1 - z^2))`.
+
+# Errors
+Fails if the expression crosses a branch cut.
+
+## `numerical_special.num_mp_complex_asinh` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_asinh(value, precision)` encloses the principal inverse hyperbolic sine of a closed dyadic rectangle.
+
+Principal inverse hyperbolic sine `asinh(z) = ln(z + sqrt(z^2 + 1))`.
+
+# Errors
+Fails if the expression crosses a branch cut.
+
+## `numerical_special.num_mp_complex_atan` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_atan(value, precision)` encloses the principal inverse tangent of a closed dyadic rectangle.
+
+Principal inverse tangent `atan(z) = (i/2) * ln((1 - i*z) / (1 + i*z))`.
+
+# Errors
+Fails if the expression crosses a branch cut.
+
+## `numerical_special.num_mp_complex_atanh` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_atanh(value, precision)` encloses the principal inverse hyperbolic tangent of a closed dyadic rectangle.
+
+Principal inverse hyperbolic tangent `atanh(z) = 0.5 * ln((1 + z) / (1 - z))`.
+
+# Errors
+Fails if the expression crosses a branch cut.
+
+## `numerical_special.num_mp_complex_bessel_j` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+Encloses principal Bessel J for dimensionless dyadic argument and order rectangles. Exact integer orders through magnitude 512 admit either side of the cut. General orders require Re(order) >= 0 and up to 512 bits. The argument rectangle must stay within |Re(z)| + |Im(z)| <= 256.
+
+Complex Bessel function `J_nu(z)` at `prec` bits for `nu >= 0`.
+
+# Errors
+Fails if `z` meets `(-inf, 0]` for non-integer `nu` or series fails to converge.
+
+## `numerical_special.num_mp_complex_conj` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_conj(value)` conjugates a rectangle by negating its imaginary interval.
+
+Complex conjugate `re - i * im`.
+
+## `numerical_special.num_mp_complex_cos` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_cos(value, precision)` encloses the cosine of a closed dyadic rectangle.
+
+Complex cosine `cos(x + i*y) = cos(x)cosh(y) - i*sin(x)sinh(y)`.
+
+# Errors
+Fails if an exponent leaves the range.
+
+## `numerical_special.num_mp_complex_cosh` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_cosh(value, precision)` encloses the hyperbolic cosine of a closed dyadic rectangle.
+
+Complex hyperbolic cosine `cosh(x + i*y) = cosh(x)cos(y) + i*sinh(x)sin(y)`.
+
+# Errors
+Fails if an exponent leaves the range.
+
+## `numerical_special.num_mp_complex_digamma` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+Encloses the logarithmic derivative of gamma for a closed dyadic rectangle separated from the poles. Precision is at most 1024 bits and recurrence work is bounded.
+
+Complex digamma function `psi(z) = Gamma'(z) / Gamma(z)` at `prec` bits.
+
+# Errors
+Fails if `z` meets `(-inf, 0]` or exponents overflow.
+
+## `numerical_special.num_mp_complex_div` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_div(left, right, precision)` encloses the pairwise quotients at the requested bit precision. The divisor must be separated from zero by the squared-modulus enclosure.
+
+Division `self / other`.
+
+# Errors
+Fails if `|other|^2` contains zero or an exponent leaves the range.
+
+## `numerical_special.num_mp_complex_erf` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+Encloses the complex error function over a closed dyadic rectangle with a certified series remainder.
+
+Complex error function `erf(z)` at `prec` bits.
+
+# Errors
+Fails if series does not converge or exponents overflow.
+
+## `numerical_special.num_mp_complex_erfc` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+Encloses the complex complementary error function over a closed dyadic rectangle. A certified right-sector tail avoids cancellation in the far positive range.
+
+Complex complementary error function `erfc(z) = 1 - erf(z)` at `prec` bits.
+
+# Errors
+Fails if `erf` fails.
+
+## `numerical_special.num_mp_complex_exp` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_exp(value, precision)` encloses the exponential of a closed dyadic rectangle.
+
+Complex exponential `exp(x + i*y) = exp(x) * (cos(y) + i*sin(y))`.
+
+# Errors
+Fails if an exponent leaves the range.
+
+## `numerical_special.num_mp_complex_from_real` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_from_real(real)` lifts the real interval into a rectangle with an exact zero imaginary part.
+
+Lifts a real [`Ball`] to `re + 0i`.
+
+## `numerical_special.num_mp_complex_gamma` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+Encloses gamma for a closed dyadic rectangle separated from the nonpositive integer poles. Precision is at most 1024 bits and recurrence work is bounded.
+
+Complex gamma function `Gamma(z) = exp(ln_gamma(z))` at `prec` bits.
+
+# Errors
+Fails if `z` meets `(-inf, 0]` or exponents overflow.
+
+## `numerical_special.num_mp_complex_i` (Experimental)
+
+```aevia
+(Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_i(precision)` constructs the exact imaginary unit at the requested bit precision.
+
+`0 + 1i` at precision `prec`.
+
+## `numerical_special.num_mp_complex_ln` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_ln(value, precision)` encloses the principal logarithm of a closed dyadic rectangle that avoids the branch cut.
+
+Principal complex logarithm `ln(z) = ln|z| + i*arg(z)`.
+
+# Errors
+Fails if the enclosure meets the branch cut `(-inf, 0]`.
+
+## `numerical_special.num_mp_complex_log_gamma` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+Encloses the analytic log-gamma branch real on positive reals. The closed dyadic rectangle must avoid the nonpositive real cut. Precision is at most 1024 bits and recurrence work is bounded.
+
+Principal complex log-gamma `ln(Gamma(z))` at `prec` bits (away from `(-inf, 0]`).
+
+# Errors
+Fails if `z` meets `(-inf, 0]` or exponents overflow.
+
+## `numerical_special.num_mp_complex_mul` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_mul(left, right, precision)` encloses the pairwise products at the requested bit precision.
+
+Multiplication `self * other`.
+
+# Errors
+Fails if an exponent leaves the supported range.
+
+## `numerical_special.num_mp_complex_neg` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_neg(value)` negates both coordinate intervals exactly.
+
+Negation `-self`.
+
+## `numerical_special.num_mp_complex_new` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_new(real, imag)` constructs a rectangle from two closed dyadic intervals.
+
+Constructs an [`MpComplex`] from real and imaginary [`Ball`]s.
+
+## `numerical_special.num_mp_complex_one` (Experimental)
+
+```aevia
+(Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_one(precision)` constructs the exact real unit at the requested bit precision.
+
+`1 + 0i` at precision `prec`.
+
+## `numerical_special.num_mp_complex_point` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, { mantissa: Int, exponent: Int, precision: Int }) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_point(real, imag)` constructs an exact complex point from two dyadics.
+
+Constructs an exact point [`MpComplex`] from two [`Real`] values.
+
+## `numerical_special.num_mp_complex_polylog` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+Encloses polylogarithm when the argument rectangle lies strictly within the unit disk and the order rectangle has Re(order) >= -256. Returns an error when a certified tail cannot be reached within the bounded series. Precision is at most 512 bits.
+
+Complex polylogarithm `Li_s(z) = sum_{k>=1} z^k / k^s` at `prec` bits for `|z| < 0.85`.
+
+# Errors
+Fails if `|z| >= 0.85` or series fails to converge.
+
+## `numerical_special.num_mp_complex_pow` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_pow(base, exponent, precision)` encloses a signed integer power or the principal complex power of dyadic rectangles.
+
+Complex power `self^w`. Uses [`Self::powi`] when `w` is an exact integer point,
+otherwise computes `exp(w * ln(self))`.
+
+# Errors
+Fails if `self` meets the logarithm cut or an exponent overflows.
+
+## `numerical_special.num_mp_complex_powi` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_powi(value, exponent, precision)` encloses the integer power at the requested bit precision. The exponent must fit a signed 64-bit integer. Negative powers require separation from zero.
+
+Integer power `self^n` via binary exponentiation (exact at `n = 0` and for non-positive real bases).
+
+# Errors
+Fails if `n < 0` and `self` cannot be separated from zero, or on exponent overflow.
+
+## `numerical_special.num_mp_complex_recip` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_recip(value, precision)` encloses the reciprocals at the requested bit precision. The rectangle must be separated from zero by the squared-modulus enclosure.
+
+Reciprocal `1 / self`.
+
+# Errors
+Fails if `|self|^2` contains zero or an exponent leaves the range.
+
+## `numerical_special.num_mp_complex_riemann_zeta` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+Encloses the analytic continuation of Riemann zeta. General order rectangles must avoid one and satisfy Re(order) >= -32 and |order| <= 256. Exact negative even integer orders are trivial zeros and the supported exact odd orders extend down to -127. Precision is at most 512 bits.
+
+Complex Riemann zeta function `zeta(s)` at `prec` bits for `Re(s) > 1` or `s != 1`.
+
+# Errors
+Fails at `s = 1` or on exponent overflow.
+
+## `numerical_special.num_mp_complex_sin` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_sin(value, precision)` encloses the sine of a closed dyadic rectangle.
+
+Complex sine `sin(x + i*y) = sin(x)cosh(y) + i*cos(x)sinh(y)`.
+
+# Errors
+Fails if an exponent leaves the range.
+
+## `numerical_special.num_mp_complex_sinh` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_sinh(value, precision)` encloses the hyperbolic sine of a closed dyadic rectangle.
+
+Complex hyperbolic sine `sinh(x + i*y) = sinh(x)cos(y) + i*cosh(x)sin(y)`.
+
+# Errors
+Fails if an exponent leaves the range.
+
+## `numerical_special.num_mp_complex_sqrt` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_sqrt(value, precision)` encloses the principal square root of a closed dyadic rectangle.
+
+Principal complex square root `sqrt(z)`.
+
+# Errors
+Fails if the enclosure crosses the negative real axis `(-inf, 0)`.
+
+## `numerical_special.num_mp_complex_sub` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_sub(left, right, precision)` encloses the pairwise differences at the requested bit precision.
+
+Subtraction `self - other`.
+
+# Errors
+Fails if an exponent leaves the supported range.
+
+## `numerical_special.num_mp_complex_tan` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_tan(value, precision)` encloses the tangent of a closed dyadic rectangle.
+
+Complex tangent `tan(z) = sin(z) / cos(z)`.
+
+# Errors
+Fails if `cos(z)` contains zero or an exponent leaves the range.
+
+## `numerical_special.num_mp_complex_tanh` (Experimental)
+
+```aevia
+({ real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }, Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_tanh(value, precision)` encloses the hyperbolic tangent of a closed dyadic rectangle.
+
+Complex hyperbolic tangent `tanh(z) = sinh(z) / cosh(z)`.
+
+# Errors
+Fails if `cosh(z)` contains zero or an exponent leaves the range.
+
+## `numerical_special.num_mp_complex_zero` (Experimental)
+
+```aevia
+(Int) -> { real: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, imag: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_complex_zero(precision)` constructs the exact zero rectangle at the requested bit precision.
+
+`0 + 0i` at precision `prec`.
+
+## `numerical_special.num_mp_decimal_enclose` (Experimental)
+
+```aevia
+(String, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_decimal_enclose(text, precision)` Encloses an exact decimal in a dyadic ball at the requested midpoint precision.
+
+## `numerical_special.num_mp_decimal_exponent` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }) -> None | Some(Int)
+```
+
+`num_mp_decimal_exponent(value)` Returns the exact base-ten order of magnitude, or None for zero.
+
+The decimal exponent of `x`, `floor(log10(|x|))`, or `None` for zero.
+
+## `numerical_special.num_mp_decimal_format_ball` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> String
+```
+
+`num_mp_decimal_format_ball(interval, digits)` Formats a dyadic ball when both endpoints determine the same rounded digits.
+
+The digits `ball` pins down, or an error when its radius straddles a
+rounding boundary.
+
+# Errors
+Fails when the two endpoints round to different text.
+
+## `numerical_special.num_mp_decimal_from_text` (Experimental)
+
+```aevia
+(String, Int) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+`num_mp_decimal_from_text(text, precision)` Parses exact decimal text and rounds to a dyadic with ties to even.
+
+The exact value of decimal text, rounded to `prec` bits.
+
+Accepts an optional sign, digits with an optional decimal point, and an
+optional `e` or `E` exponent. Spaces around the text are ignored.
+
+# Errors
+Fails on malformed text, an empty mantissa, or an exponent outside the
+representable range.
+
+## `numerical_special.num_mp_decimal_from_text_in` (Experimental)
+
+```aevia
+(String, Int, String) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+`num_mp_decimal_from_text_in(text, precision, rounding)` Parses exact decimal text and rounds once in the requested direction.
+
+## `numerical_special.num_mp_decimal_round_text` (Experimental)
+
+```aevia
+(String, Int, String) -> String
+```
+
+`num_mp_decimal_round_text(text, digits, rounding)` Rounds a decimal literal directly to significant digits without binary conversion.
+
+Rounds decimal text to `digits` significant digits in `mode`.
+
+# Errors
+Fails on malformed text or when an exponent leaves the range.
+
+## `numerical_special.num_mp_decimal_significant_digits` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }) -> Int
+```
+
+`num_mp_decimal_significant_digits(value)` Counts digits in the exact terminating decimal, capped at 10000.
+
+The number of significant decimal digits `x` needs to be exact, capped at
+[`MAX_DIGITS`].
+
+## `numerical_special.num_mp_decimal_to_text` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int) -> String
+```
+
+`num_mp_decimal_to_text(value, digits)` Formats an exact dyadic to significant digits with ties to even.
+
+`x` as decimal text with `digits` significant digits, correctly rounded.
+
+# Errors
+Fails for fewer than one digit or when an exponent leaves the range.
+
+## `numerical_special.num_mp_decimal_to_text_in` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int, String) -> String
+```
+
+`num_mp_decimal_to_text_in(value, digits, rounding)` Formats an exact dyadic to significant digits in the requested direction.
+
+`x` as decimal text with `digits` significant digits, rounded in `mode`.
+
+# Errors
+Fails for fewer than one digit or when an exponent leaves the range.
+
+## `numerical_special.num_mp_decimal_working_bits` (Experimental)
+
+```aevia
+(Int) -> Int
+```
+
+`num_mp_decimal_working_bits(digits)` Estimates working binary precision including 16 guard bits for decimal digits.
+
+Bits that hold `digits` decimal digits, with guard bits.
+
+## `numerical_special.num_mp_expression_enclose` (Experimental)
+
+```aevia
+(String, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+Evaluates a bounded arithmetic expression to a dyadic enclosure. Invalid syntax, uncertifiable domains and out-of-range precision return errors.
+
+Evaluates `text` at `prec` bits.
+
+# Errors
+Fails on malformed text, an unknown name, a domain error, or when an
+exponent leaves the representable range.
+
 ## `numerical_special.num_mp_real_abs` (Experimental)
 
 ```aevia
@@ -48860,6 +53220,19 @@ Fails when an exponent leaves the range.
 Returns the absolute value of an exact dyadic without rounding.
 
 The absolute value.
+
+## `numerical_special.num_mp_real_acos` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_real_acos(value, precision)` encloses the inverse cosine on the real domain [-1, 1].
+
+`acos(x)` as a ball, for `|x| <= 1`.
+
+# Errors
+Fails outside `[-1, 1]` or when an exponent leaves the range.
 
 ## `numerical_special.num_mp_real_add` (Experimental)
 
@@ -48874,6 +53247,66 @@ The sum, rounded once to `prec` bits.
 # Errors
 Fails when the exponent would leave the representable range.
 
+## `numerical_special.num_mp_real_asin` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_real_asin(value, precision)` encloses the inverse sine on the real domain [-1, 1].
+
+`asin(x)` as a ball, for `|x| <= 1`.
+
+# Errors
+Fails outside `[-1, 1]` or when an exponent leaves the range.
+
+## `numerical_special.num_mp_real_atan` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_real_atan(value, precision)` encloses the real inverse tangent of a dyadic.
+
+`atan(x)` as a ball.
+
+# Errors
+Fails when an exponent leaves the representable range.
+
+## `numerical_special.num_mp_real_atan2` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, { mantissa: Int, exponent: Int, precision: Int }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_real_atan2(y, x, precision)` encloses the principal angle of the exact dyadic coordinates (x, y).
+
+`atan2(y, x)` as a ball, with the quadrant resolved.
+
+# Errors
+Fails when both operands are zero or an exponent leaves the range.
+
+## `numerical_special.num_mp_real_cbrt` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_real_cbrt(value, precision)` Encloses the real cube root of a dyadic, including negative inputs.
+
+The cube root as a ball.
+
+# Errors
+Fails when an exponent leaves the representable range.
+
+## `numerical_special.num_mp_real_cbrt_in` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int, String) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+`num_mp_real_cbrt_in(value, precision, rounding)` Rounds the real cube root of a dyadic in the requested direction.
+
 ## `numerical_special.num_mp_real_compare` (Experimental)
 
 ```aevia
@@ -48884,6 +53317,154 @@ Compares canonical dyadic records exactly. Returns -1, 0, or 1 and allows differ
 
 Total order: `-1`, `0` or `1` as `self` is below, equal to or above
 `other`.
+
+## `numerical_special.num_mp_real_const_e` (Experimental)
+
+```aevia
+(Int) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+`num_mp_real_const_e(precision)` returns Euler’s number e, correctly rounded to the requested bit precision.
+
+`e` at `prec` bits.
+
+# Errors
+Fails when an exponent leaves the representable range.
+
+## `numerical_special.num_mp_real_const_enclose` (Experimental)
+
+```aevia
+(String, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_real_const_enclose(name, precision)` returns an outward dyadic enclosure of a named constant.
+
+## `numerical_special.num_mp_real_const_functions` (Experimental)
+
+```aevia
+() -> Tensor<1, String>
+```
+
+`num_mp_real_const_functions()` lists the function names recognized by the multiprecision expression parser.
+
+The names [`evaluate`] accepts as functions, for diagnostics and help.
+
+## `numerical_special.num_mp_real_const_ln2` (Experimental)
+
+```aevia
+(Int) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+`num_mp_real_const_ln2(precision)` returns the natural logarithm of two, correctly rounded to the requested bit precision.
+
+`ln 2` at `prec` bits.
+
+# Errors
+Fails when an exponent leaves the representable range.
+
+## `numerical_special.num_mp_real_const_named` (Experimental)
+
+```aevia
+(String, Int) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+`num_mp_real_const_named(name, precision)` returns a named constant correctly rounded to the requested bit precision.
+
+The constant `name` at `prec` bits, if it is known.
+
+# Errors
+Fails for an unknown name or when an exponent leaves the range.
+
+## `numerical_special.num_mp_real_const_names` (Experimental)
+
+```aevia
+() -> Tensor<1, String>
+```
+
+`num_mp_real_const_names()` lists the exact names accepted by the dyadic constant functions.
+
+The names [`named`] accepts, for diagnostics and the operator's help text.
+
+## `numerical_special.num_mp_real_const_phi` (Experimental)
+
+```aevia
+(Int) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+`num_mp_real_const_phi(precision)` returns the golden ratio, correctly rounded to the requested bit precision.
+
+The golden ratio `(1 + sqrt 5) / 2` at `prec` bits.
+
+# Errors
+Fails when an exponent leaves the representable range.
+
+## `numerical_special.num_mp_real_const_pi` (Experimental)
+
+```aevia
+(Int) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+`num_mp_real_const_pi(precision)` returns the circle constant pi, correctly rounded to the requested bit precision.
+
+`pi` at `prec` bits.
+
+# Errors
+Fails when an exponent leaves the representable range.
+
+## `numerical_special.num_mp_real_const_pi_scaled` (Experimental)
+
+```aevia
+(Int) -> Int
+```
+
+`num_mp_real_const_pi_scaled(bits)` returns the exact integer floor of pi times 2^bits. Accepts 0 to 32768 bits.
+
+A fixed-point approximation to `pi` as a [`BigInt`] numerator over `2^prec`.
+
+The constant is evaluated with guard bits before scaling and truncating.
+
+# Errors
+Fails when an exponent leaves the range.
+
+## `numerical_special.num_mp_real_const_sqrt2` (Experimental)
+
+```aevia
+(Int) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+`num_mp_real_const_sqrt2(precision)` returns the square root of two, correctly rounded to the requested bit precision.
+
+`sqrt 2` at `prec` bits.
+
+# Errors
+Fails when an exponent leaves the representable range.
+
+## `numerical_special.num_mp_real_cos` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_real_cos(value, precision)` encloses the real cos of an exact dyadic.
+
+`cos(x)` as a ball.
+
+# Errors
+Fails for an argument beyond `2^20` in magnitude or when an exponent
+leaves the range.
+
+## `numerical_special.num_mp_real_cosh` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_real_cosh(value, precision)` encloses the hyperbolic cosine of an exact dyadic.
+
+`cosh(x)` as a ball.
+
+# Errors
+Fails when an exponent leaves the representable range.
 
 ## `numerical_special.num_mp_real_div` (Experimental)
 
@@ -48898,6 +53479,42 @@ The quotient, rounded once to `prec` bits.
 # Errors
 Fails on division by zero or when the exponent leaves the range.
 
+## `numerical_special.num_mp_real_exp` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_real_exp(value, precision)` encloses the exponential of an exact dyadic.
+
+`exp(x)` as a ball.
+
+# Errors
+Fails when an exponent leaves the representable range.
+
+## `numerical_special.num_mp_real_exp2` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_real_exp2(value, precision)` encloses the base-two exponential of an exact dyadic.
+
+`2^x`, a convenience over [`exp`].
+
+# Errors
+Fails when an exponent leaves the representable range.
+
+## `numerical_special.num_mp_real_exponent` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }) -> Int
+```
+
+`num_mp_real_exponent(value)` Returns the binary exponent of the canonical dyadic.
+
+The binary exponent: the value is `mantissa * 2^exponent`.
+
 ## `numerical_special.num_mp_real_floor_log2` (Experimental)
 
 ```aevia
@@ -48907,6 +53524,58 @@ Fails on division by zero or when the exponent leaves the range.
 Returns floor(log2(abs(value))) or None if value is zero.
 
 `floor(log2(|x|))`, or `None` for zero.
+
+## `numerical_special.num_mp_real_from_bigint` (Experimental)
+
+```aevia
+(Int, Int, String) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+`num_mp_real_from_bigint(value, precision, mode)` converts a signed integer up to 65536 bits in magnitude, rounded once to the requested bit precision and mode.
+
+The integer `value` at precision `prec`, rounded when it does not fit.
+
+# Errors
+Fails when the exponent would leave the representable range.
+
+## `numerical_special.num_mp_real_from_f64` (Experimental)
+
+```aevia
+(Float, Int) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+`num_mp_real_from_f64(value, precision)` rounds a finite binary64 value to the requested bit precision with ties to even. Both signed zeros give the canonical dyadic zero.
+
+The exact value of an `f64` at precision `prec`.
+
+# Errors
+Fails for an infinity or a NaN, or when the exponent leaves the range.
+
+## `numerical_special.num_mp_real_from_i64` (Experimental)
+
+```aevia
+(Int, Int) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+`num_mp_real_from_i64(value, precision)` converts an integer in the signed 64-bit range, rounded to the requested bit precision with ties to even.
+
+The integer `value` at precision `prec`, exactly when it fits.
+
+# Errors
+Fails when the exponent would leave the representable range.
+
+## `numerical_special.num_mp_real_hypot` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, { mantissa: Int, exponent: Int, precision: Int }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_real_hypot(left, right, precision)` Encloses the Euclidean norm of two exact dyadics.
+
+`sqrt(a^2 + b^2)` as a ball.
+
+# Errors
+Fails when an exponent leaves the representable range.
 
 ## `numerical_special.num_mp_real_is_integer` (Experimental)
 
@@ -48927,6 +53596,63 @@ Whether the value is an exact integer.
 Tests whether a canonical dyadic is zero.
 
 Whether the value is zero.
+
+## `numerical_special.num_mp_real_limits` (Experimental)
+
+```aevia
+() -> { min_precision: Int, max_precision: Int, min_exponent: Int, max_exponent: Int }
+```
+
+`num_mp_real_limits()` Reports the supported dyadic precision and exponent limits.
+
+## `numerical_special.num_mp_real_ln` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_real_ln(value, precision)` encloses the natural logarithm of an exact dyadic.
+
+`ln(x)` as a ball, for `x > 0`.
+
+# Errors
+Fails for a non-positive operand or when an exponent leaves the range.
+
+## `numerical_special.num_mp_real_log10` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_real_log10(value, precision)` encloses the base-ten logarithm of an exact dyadic.
+
+`log10(x)` as a ball, for `x > 0`.
+
+# Errors
+Fails for a non-positive operand or when an exponent leaves the range.
+
+## `numerical_special.num_mp_real_log2` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_real_log2(value, precision)` encloses the base-two logarithm of an exact dyadic.
+
+`log2(x)` as a ball, for `x > 0`.
+
+# Errors
+Fails for a non-positive operand or when an exponent leaves the range.
+
+## `numerical_special.num_mp_real_mantissa` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }) -> Int
+```
+
+`num_mp_real_mantissa(value)` Returns the exact arbitrary-width integer mantissa.
+
+The mantissa, normalised to [`Self::precision`] bits.
 
 ## `numerical_special.num_mp_real_mul` (Experimental)
 
@@ -48951,6 +53677,56 @@ Negates an exact dyadic at its existing precision.
 
 The value negated.
 
+## `numerical_special.num_mp_real_one` (Experimental)
+
+```aevia
+(Int) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+`num_mp_real_one(precision)` returns the exact number one at the requested bit precision.
+
+The value one at precision `prec`.
+
+## `numerical_special.num_mp_real_pow` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, { mantissa: Int, exponent: Int, precision: Int }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_real_pow(base, exponent, precision)` encloses the real power of two exact dyadics.
+
+`x^y` as a ball.
+
+# Errors
+Fails for a negative base with a non-integer exponent, or when an exponent
+leaves the representable range.
+
+## `numerical_special.num_mp_real_pow_ratio` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int, Int, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_real_pow_ratio(base, numerator, denominator, precision)` encloses an exact dyadic raised to the rational exponent numerator / denominator.
+
+## `numerical_special.num_mp_real_powi` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_real_powi(base, exponent, precision)` encloses an exact dyadic raised to a signed integer exponent.
+
+## `numerical_special.num_mp_real_precision` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }) -> Int
+```
+
+`num_mp_real_precision(value)` Returns the dyadic significand precision in bits.
+
+The mantissa width in bits.
+
 ## `numerical_special.num_mp_real_round` (Experimental)
 
 ```aevia
@@ -48964,6 +53740,40 @@ Rounds mantissa times 2^exponent once to the requested bit precision. Returns th
 # Errors
 Fails when the exponent would leave the representable range.
 
+## `numerical_special.num_mp_real_rounding_mode` (Experimental)
+
+```aevia
+(String) -> String
+```
+
+`num_mp_real_rounding_mode(rounding)` Returns the canonical rounding name for a supported spelling.
+
+The rounding modes an operator accepts, by name.
+
+# Errors
+Fails for an unknown name.
+
+## `numerical_special.num_mp_real_scale_decimal` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int, Int) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+`num_mp_real_scale_decimal(value, exponent, precision)` multiplies an exact dyadic by a power of ten and rounds once to nearest-even.
+
+`x * 10^n` for an integer `n`, exact up to the target precision.
+
+# Errors
+Fails when an exponent leaves the representable range.
+
+## `numerical_special.num_mp_real_scale_decimal_in` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int, Int, String) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+`num_mp_real_scale_decimal_in(value, exponent, precision, rounding)` multiplies an exact dyadic by a power of ten and rounds once in the requested direction.
+
 ## `numerical_special.num_mp_real_scale_pow2` (Experimental)
 
 ```aevia
@@ -48976,6 +53786,52 @@ Multiplies a dyadic by an integer power of two exactly. Zero keeps its canonical
 
 # Errors
 Fails when the exponent leaves the representable range.
+
+## `numerical_special.num_mp_real_sign` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }) -> Int
+```
+
+`num_mp_real_sign(value)` returns -1, 0 or 1 for a negative, zero or positive dyadic.
+
+`-1`, `0` or `1`.
+
+## `numerical_special.num_mp_real_sin` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_real_sin(value, precision)` encloses the real sin of an exact dyadic.
+
+`sin(x)` as a ball.
+
+# Errors
+Fails for an argument beyond `2^20` in magnitude, where the reduction
+would need more bits than the exponent range allows, or when an exponent
+leaves the range.
+
+## `numerical_special.num_mp_real_sin_cos` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int) -> { sin: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, cos: { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } } }
+```
+
+`num_mp_real_sin_cos(value, precision)` encloses sine and cosine with one certified argument reduction.
+
+## `numerical_special.num_mp_real_sinh` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_real_sinh(value, precision)` encloses the hyperbolic sine of an exact dyadic.
+
+`sinh(x)` as a ball.
+
+# Errors
+Fails when an exponent leaves the representable range.
 
 ## `numerical_special.num_mp_real_sqrt` (Experimental)
 
@@ -49003,6 +53859,47 @@ The difference, rounded once to `prec` bits.
 # Errors
 Fails when the exponent would leave the representable range.
 
+## `numerical_special.num_mp_real_tan` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_real_tan(value, precision)` encloses the real tan of an exact dyadic.
+
+`tan(x)` as a ball.
+
+# Errors
+Fails where the cosine interval contains zero, or for an argument beyond
+`2^20` in magnitude.
+
+## `numerical_special.num_mp_real_tanh` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+`num_mp_real_tanh(value, precision)` encloses the hyperbolic tangent of an exact dyadic.
+
+`tanh(x)` as a ball.
+
+# Errors
+Fails when an exponent leaves the representable range.
+
+## `numerical_special.num_mp_real_to_f64` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }) -> Float
+```
+
+`num_mp_real_to_f64(value)` rounds a dyadic directly to binary64 with ties to even. Subnormal and signed-zero results are preserved. Overflow is a domain error.
+
+The value as an `f64`, rounded to nearest-even.
+
+Subnormals, overflow to infinity and underflow to zero follow IEEE-754,
+so this is the correctly rounded conversion of the arbitrary-precision
+value rather than a conversion of a `f64` approximation of it.
+
 ## `numerical_special.num_mp_real_trunc_to_bigint` (Experimental)
 
 ```aevia
@@ -49028,6 +53925,16 @@ The same value rounded to `prec` bits.
 
 # Errors
 Fails when the exponent would leave the representable range.
+
+## `numerical_special.num_mp_real_zero` (Experimental)
+
+```aevia
+(Int) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+`num_mp_real_zero(precision)` returns canonical zero at the requested bit precision.
+
+The value zero at precision `prec`.
 
 ## `numerical_special.num_multinomial` (Experimental)
 
@@ -68897,6 +73804,217 @@ Invalid inputs or callback outputs, exhausted attempts/evaluations, a
 tolerance requiring a smaller step than `h_min`, an unsplittable time grid,
 or failed implicit stages.
 
+## `numerical_vector.num_optimizer_find_root` (Experimental)
+
+```aevia
+((Float) -> Float, { solver: String, lower: Float, upper: Float, tolerance: Float, iterations: Int, evaluations: Int }) -> { root: Float, residual: Float, iterations: Int, function_evals: Int, converged: Bool }
+```
+
+Runs a bounded bracketed root search with a scoped normalized callback. Newton and Halley estimate a missing derivative.
+
+Finds a root of `f` inside `bracket`.
+
+`derivative` is used by [`RootSolver::Newton`] and
+[`RootSolver::Halley`]; when it is `None` a central difference stands in,
+and Halley's second derivative is differenced from the same source.
+
+# Errors
+Returns an error when the bracket is not finite and ordered, when the
+endpoints do not bracket a sign change, or when the solver reports a
+non-convergent failure.
+
+## `numerical_vector.num_optimizer_find_root_with_derivative` (Experimental)
+
+```aevia
+((Float) -> Float, (Float) -> Float, { solver: String, lower: Float, upper: Float, tolerance: Float, iterations: Int, evaluations: Int }) -> { root: Float, residual: Float, iterations: Int, function_evals: Int, converged: Bool }
+```
+
+Runs a bounded bracketed root search with scoped normalized function and derivative callbacks.
+
+## `numerical_vector.num_optimizer_has_gradient` (Experimental)
+
+```aevia
+(rssn/native/analysis/optimizer/problem/v1) -> Bool
+```
+
+Reports whether a prepared problem carries an analytic gradient.
+
+Whether the problem carries an analytic gradient.
+
+## `numerical_vector.num_optimizer_minimize` (Experimental)
+
+```aevia
+(rssn/native/analysis/optimizer/problem/v1, Tensor<1, Float>, String, { iterations: Int, evaluations: Int, tolerance: Float, gradient_tolerance: Float, seed: Int }) -> { point: Tensor<1, Float>, cost: Float, iterations: Int, cost_evals: Int, converged: Bool, termination: String }
+```
+
+Runs a named solver against a prepared normalized objective with explicit iteration, evaluation and seed controls.
+
+Minimises `problem` with `kind`.
+
+`start` is the initial point; a scalar solver ([`SolverKind::Brent`],
+[`SolverKind::GoldenSection`]) requires exactly one variable.
+
+# Errors
+Returns an error when the problem has no gradient but the solver needs one,
+when the solver needs bounds and none were supplied, when a scalar solver
+receives more than one variable, or when the solver aborts.
+
+## `numerical_vector.num_optimizer_needs_bounds` (Experimental)
+
+```aevia
+(String) -> Bool
+```
+
+Reports whether the named solver requires an explicit finite box.
+
+Whether the solver requires finite box bounds.
+
+## `numerical_vector.num_optimizer_needs_gradient` (Experimental)
+
+```aevia
+(String) -> Bool
+```
+
+Reports whether the named solver uses the objective's analytic gradient.
+
+Whether the solver evaluates the analytic gradient.
+
+## `numerical_vector.num_optimizer_problem_new` (Experimental)
+
+```aevia
+(rssn/native/backend/tape/v1, Int, Tensor<1, Float>, Bool) -> rssn/native/analysis/optimizer/problem/v1
+```
+
+Prepares an objective from an immutable unit-scale tape, an output slot, dimensionless parameters, and an optional analytic tape gradient.
+
+Builds a problem from a cost closure and an optional gradient closure.
+
+`bounds` is `(lower, upper)`; a free side uses [`f64::INFINITY`]. When
+`bounds` is `None` every variable is free.
+
+## `numerical_vector.num_optimizer_problem_try_new` (Experimental)
+
+```aevia
+(rssn/native/backend/tape/v1, Int, Tensor<1, Float>, Bool) -> rssn/native/analysis/optimizer/problem/v1
+```
+
+Prepares a fallible objective from an immutable unit-scale tape. Nonfinite objective and gradient evaluations return domain errors.
+
+Builds a problem from fallible closures.
+
+## `numerical_vector.num_optimizer_rastrigin` (Experimental)
+
+```aevia
+(Int) -> rssn/native/analysis/optimizer/problem/v1
+```
+
+Builds a normalized Rastrigin objective with its analytic gradient.
+
+The problem over this instance's dimension.
+
+## `numerical_vector.num_optimizer_rastrigin_cost` (Experimental)
+
+```aevia
+(Tensor<1, Float>) -> Float
+```
+
+Evaluates the Rastrigin function at a normalized point.
+
+The function value at `x`.
+
+## `numerical_vector.num_optimizer_regression_coefficient_count` (Experimental)
+
+```aevia
+(rssn/native/analysis/argmin/regression/v1) -> Int
+```
+
+Returns the coefficient count of the retained regression, including the intercept.
+
+Number of coefficients, including the intercept.
+
+## `numerical_vector.num_optimizer_regression_problem` (Experimental)
+
+```aevia
+(rssn/native/analysis/argmin/regression/v1) -> rssn/native/analysis/optimizer/problem/v1
+```
+
+Prepares the regression objective in its stored normalized coordinates and response scale, with an intercept followed by slopes.
+
+The problem form used by [`minimize`].
+
+## `numerical_vector.num_optimizer_regression_residuals` (Experimental)
+
+```aevia
+(rssn/native/analysis/argmin/regression/v1, Dyn<term>, Float[_]) -> Tensor<1, Float[_]>
+```
+
+Returns fitted minus observed responses in coherent response units. The positive response reference attests the output dimension.
+
+Residual vector at `beta`.
+
+## `numerical_vector.num_optimizer_rosenbrock` (Experimental)
+
+```aevia
+(Int) -> rssn/native/analysis/optimizer/problem/v1
+```
+
+Builds a normalized Rosenbrock objective with its analytic gradient.
+
+The problem over `dimension` variables.
+
+## `numerical_vector.num_optimizer_rosenbrock_cost` (Experimental)
+
+```aevia
+(Tensor<1, Float>) -> Float
+```
+
+Evaluates the Rosenbrock polynomial at a point with at least two coordinates.
+
+The function value at `x`.
+
+## `numerical_vector.num_optimizer_sphere` (Experimental)
+
+```aevia
+(Int) -> rssn/native/analysis/optimizer/problem/v1
+```
+
+Builds a normalized sphere objective with its analytic gradient.
+
+The problem over `dimension` variables.
+
+## `numerical_vector.num_optimizer_sphere_cost` (Experimental)
+
+```aevia
+(Tensor<1, Float>) -> Float
+```
+
+Evaluates the sum of squared coordinates.
+
+The function value at `x`.
+
+## `numerical_vector.num_optimizer_value_and_gradient` (Experimental)
+
+```aevia
+(rssn/native/analysis/optimizer/problem/v1, Tensor<1, Float>) -> { value: Float, gradient: Tensor<1, Float> }
+```
+
+Evaluates a prepared objective and its analytic gradient at one normalized point.
+
+Cost and gradient at `x`.
+
+# Errors
+Returns an error when the cost fails or the problem has no gradient.
+
+## `numerical_vector.num_optimizer_with_bounds` (Experimental)
+
+```aevia
+(rssn/native/analysis/optimizer/problem/v1, Tensor<1, Float>, Tensor<1, Float>) -> rssn/native/analysis/optimizer/problem/v1
+```
+
+Returns a new prepared problem with finite strictly ordered bounds, sharing its objective.
+
+The same closures over a different box.
+
 ## `numerical_vector.num_par_dot_fixed` (Experimental)
 
 ```aevia
@@ -70234,6 +75352,22 @@ Householder QR with q square and r matching the input.
 
 Householder QR: returns `(Q, R)` with `Q` of size `m x m`, `R` of size `m x n`.
 
+## `numerical_matrix.num_qr_thin` (Experimental)
+
+```aevia
+(Tensor<2, Float[_]>) -> { q: Tensor<2, Float>, r: Tensor<2, Float[_]> }
+```
+
+Economy Householder QR. For an m by n matrix, q is m by min(m,n) and dimensionless, and r is min(m,n) by n with the input units. Unrepresentable factors are errors.
+
+Economy (thin) Householder QR: returns `(Q, R)` with `Q` of size `m x k` and
+`R` of size `k x n`, where `k = min(m, n)`.
+
+Avoids materialising an `m x m` orthogonal matrix when `m >> n`.
+
+# Errors
+Returns [`DenseError::Shape`] if `a` has inconsistent internal storage.
+
 ## `numerical_vector.num_quadrature_clenshaw_curtis_rule` (Experimental)
 
 ```aevia
@@ -70298,6 +75432,43 @@ inconsistent dimensions, [`InterpError::Domain`] for non-finite data,
 an invalid kernel scale, or an unrepresentable result, and
 [`InterpError::Singular`] for a singular interpolation matrix.
 
+## `numerical_special.num_real_polynomial_barycentric_eval` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<1, Float[_]>, Float[_]) -> Float[_]
+```
+
+Interpolates finite samples with up to 2048 distinct nodes. The nodes and query share abscissa units, and the result uses ordinate units.
+
+Evaluates the Lagrange interpolating polynomial through `(xs[i], ys[i])`
+directly at `x` using the second (true) barycentric interpolation formula.
+
+# Errors
+Returns an error if `xs` and `ys` have different lengths, are empty,
+contain non-finite values, or contain duplicate `x` nodes.
+
+## `numerical_special.num_real_polynomial_gcd` (Experimental)
+
+```aevia
+(Tensor<1, Float>, Tensor<1, Float>, Float) -> Tensor<1, Float>
+```
+
+Returns the monic numerical greatest common divisor of two dimensionless coefficient vectors. Tolerance is relative to normalized coefficients and must lie in [0, 1).
+
+Computes the numerical monic greatest common divisor of `self` and `other`
+using the Euclidean algorithm with tolerance `tol` for leading-term and
+remainder cleanup.
+
+## `numerical_special.num_real_polynomial_power` (Experimental)
+
+```aevia
+(Tensor<1, Float>, Int) -> Tensor<1, Float>
+```
+
+Raises a polynomial with dimensionless descending coefficients to a nonnegative integer power. The result contains at most 4097 coefficients.
+
+Raises the polynomial to the integer power `exp` by binary exponentiation.
+
 ## `numerical_vector.num_reflect` (Experimental)
 
 ```aevia
@@ -70314,6 +75485,156 @@ The result can remain finite even when the intermediate correction overflows.
 
 # Errors
 Returns an error if the vectors have different lengths.
+
+## `numerical_callback.num_riemann_hilbert_cauchy_checked` (Experimental)
+
+```aevia
+(Complex, Float[_], Float[_], Int, Int, (Float) -> Complex[_]) -> { value: Complex[_], error: Float[_], converged: Bool, evaluations: Int }
+```
+
+Evaluates the Cauchy transform off [-1, 1] using checked adaptive quadrature. The density, output, amplitude scale and absolute tolerance share one dimension. The result reports the estimated error, convergence and actual host callbacks.
+
+Evaluates the scalar Cauchy transform $C\[\phi\](z) = \frac{1}{2\pi i} \int_{-1}^1 \frac{\phi(t)}{t - z} \, dt$
+for $z \notin [-1, 1]$.
+
+## `numerical_callback.num_riemann_hilbert_factor_checked` (Experimental)
+
+```aevia
+(Complex, Float, Int, Int, Int, (Float) -> Complex) -> { value: Complex, error: Float, logarithm: Complex, log_error: Float, converged: Bool, evaluations: Int }
+```
+
+Factors a nonzero dimensionless jump on (-1, 1). The supplied mesh must resolve its continuous phase from the principal phase at -1. Reports the estimates and errors before and after exponentiation, convergence against the absolute value tolerance and actual host callbacks.
+
+Solves the scalar Riemann–Hilbert problem $X^+(t) = G(t) X^-(t)$ on $(-1, 1)$
+with $X(\infty) = 1$ via continuous phase unwrapping of $\ln G(t)$.
+
+## `numerical_matrix.num_riemann_hilbert_matrix_add` (Experimental)
+
+```aevia
+(Tensor<[2, 2], Complex[_]>, Tensor<[2, 2], Complex[_]>) -> Tensor<[2, 2], Complex[_]>
+```
+
+Adds two 2x2 matrices with the same entry dimension.
+
+## `numerical_matrix.num_riemann_hilbert_matrix_identity` (Experimental)
+
+```aevia
+() -> Tensor<[2, 2], Complex>
+```
+
+Returns the dimensionless 2x2 identity matrix.
+
+Identity 2x2 matrix.
+
+## `numerical_matrix.num_riemann_hilbert_matrix_inv` (Experimental)
+
+```aevia
+(Tensor<[2, 2], Complex[_]>) -> None | Some(Tensor<[2, 2], Complex[_]>)
+```
+
+Returns the inverse in reciprocal units. None denotes a numerically singular matrix or an inverse outside binary64 range.
+
+Matrix inverse.
+
+## `numerical_matrix.num_riemann_hilbert_matrix_mul` (Experimental)
+
+```aevia
+(Tensor<[2, 2], Complex[_]>, Tensor<[2, 2], Complex[_]>) -> Tensor<[2, 2], Complex[_]>
+```
+
+Multiplies two 2x2 matrices. Result entries have the product dimension.
+
+## `numerical_matrix.num_riemann_hilbert_matrix_new` (Experimental)
+
+```aevia
+(Tensor<[4], Complex[_]>) -> Tensor<[2, 2], Complex[_]>
+```
+
+Constructs a complex 2x2 matrix from four row-major entries of the same dimension.
+
+Matrix from 4 complex entries `[m00, m01, m10, m11]`.
+
+## `numerical_matrix.num_riemann_hilbert_matrix_norm` (Experimental)
+
+```aevia
+(Tensor<[2, 2], Complex[_]>) -> Float[_]
+```
+
+Returns a scale-stable Frobenius norm retaining the matrix entry dimension.
+
+Frobenius norm of the 2x2 matrix.
+
+## `numerical_matrix.num_riemann_hilbert_matrix_scale` (Experimental)
+
+```aevia
+(Tensor<[2, 2], Complex[_]>, Complex[_]) -> Tensor<[2, 2], Complex[_]>
+```
+
+Scales a 2x2 matrix by a complex scalar. Result entries have the product dimension.
+
+Scalar multiplication.
+
+## `numerical_matrix.num_riemann_hilbert_matrix_sub` (Experimental)
+
+```aevia
+(Tensor<[2, 2], Complex[_]>, Tensor<[2, 2], Complex[_]>) -> Tensor<[2, 2], Complex[_]>
+```
+
+Subtracts two 2x2 matrices with the same entry dimension.
+
+## `numerical_matrix.num_riemann_hilbert_matrix_zero` (Experimental)
+
+```aevia
+() -> Tensor<[2, 2], Complex>
+```
+
+Returns the dimensionless 2x2 zero matrix.
+
+Zero 2x2 matrix.
+
+## `numerical_callback.num_riemann_hilbert_plemelj_checked` (Experimental)
+
+```aevia
+(Float, Float[_], Float[_], Int, Int, (Float) -> Complex[_]) -> { upper: Complex[_], lower: Complex[_], error: Float[_], converged: Bool, evaluations: Int }
+```
+
+Evaluates both Plemelj boundary limits inside (-1, 1), using singularity subtraction and a shared error estimate. The density, output, amplitude scale and absolute tolerance share one dimension. Reports convergence and actual host callbacks.
+
+Computes the Plemelj–Sokhotski boundary limits $(C_+\[\phi\](x), C_-\[\phi\](x))$
+on $x \in (-1, 1)$ via singularity subtraction: $C_+ - C_- = \phi(x)$.
+
+# Errors
+
+Returns an error if the evaluation point lies outside the open interval `(-1, 1)`.
+
+## `numerical_matrix.num_riemann_hilbert_solution_eval` (Experimental)
+
+```aevia
+({ nodes: Tensor<1, Float>, weights: Tensor<1, Float>, density: Tensor<3, Complex> }, Complex) -> Tensor<[2, 2], Complex>
+```
+
+Evaluates a portable Riemann–Hilbert collocation record at a dimensionless complex point off [-1, 1]. Nodes and positive weights have shape [n], and jump density has shape [n, 2, 2].
+
+Evaluates $Y(z) = I + \frac{1}{2\pi i} \int_{-1}^1 \frac{U(t)}{t - z} \, dt$ off the arc,
+using singularity subtraction near `[-1, 1]` for high accuracy up to the boundary.
+
+## `numerical_callback.num_riemann_hilbert_solve` (Experimental)
+
+```aevia
+(Int, Int, (Float) -> Tensor<[2, 2], Complex>) -> { solution: { nodes: Tensor<1, Float>, weights: Tensor<1, Float>, density: Tensor<3, Complex> }, evaluations: Int }
+```
+
+Collocates a dimensionless 2x2 jump on the normalized interval (-1, 1). The callback must give the identity at both endpoints. Uses 4 to 64 Gauss–Legendre nodes and a host budget for both endpoint checks and each collocation sample. Returns the reusable collocation solution and actual callback count.
+
+Solves a two-by-two matrix Riemann–Hilbert problem on `(-1, 1)`.
+
+Solves the 2x2 matrix Riemann–Hilbert problem $Y^+(t) = Y^-(t) G(t)$ on $(-1, 1)$
+with $Y(\infty) = I$ (assuming $G(\pm 1) = I$) via spectral collocation on `n_nodes`
+Gauss–Legendre nodes using the singular integral equation $U - C_-\[U\](G - I) = G - I$.
+
+# Errors
+
+Returns an error for fewer than four collocation nodes or when the collocation system cannot be assembled or solved.
 
 ## `numerical_special.num_riemann_zeta` (Experimental)
 
@@ -70511,6 +75832,52 @@ Dimension-aware serial quadrature with a strict callback evaluation budget. Fixe
 
 Romberg integration with Richardson extrapolation of the trapezoid rule.
 The error is the last difference of diagonal entries.
+
+## `numerical_callback.num_saddle_find` (Experimental)
+
+```aevia
+(Complex[_], Float[_], Float, Int, (Complex[_]) -> Complex, (Complex[_]) -> Complex[_], (Complex[_]) -> Complex[_]) -> None | Some({ z0: Complex[_], phase: Complex, curvature: Complex[_], angle: Float, degeneracy: Int })
+```
+
+Finds a slope zero from a measured complex guess, coordinate reference, normalized slope tolerance, callback budget, phase and its first two derivatives. Phase is dimensionless.
+
+Locates a saddle point `phi'(z0) = 0` from `z_guess` via Newton's method.
+
+## `numerical_callback.num_saddle_integrate` (Experimental)
+
+```aevia
+({ z0: Complex[_], phase: Complex, curvature: Complex[_], angle: Float, degeneracy: Int }, Float[_], Float, Float[_], Float[_], Int, (Complex[_]) -> Complex, (Complex[_]) -> Complex[_]) -> Complex[_]
+```
+
+Numeric finite path integral from the negative to positive branch of an oriented simple saddle. Takes saddle, coordinate reference, positive lambda, measured half length, absolute tolerance in the result units, callback budget, phase and amplitude.
+
+Integrates numerically along a curved steepest-descent path.
+
+Traces `Im(phi(z)) = Im(phi(z0))` by predictor-corrector projection onto the constant-phase
+curve, with `Re(phi(z))` decreasing away from `z0`.
+
+## `numerical_callback.num_saddle_leading` (Experimental)
+
+```aevia
+({ z0: Complex[_], phase: Complex, curvature: Complex[_], angle: Float, degeneracy: Int }, Float[_], Float, Int, (Complex[_]) -> Complex[_]) -> Complex[_]
+```
+
+Leading oriented Gaussian saddle term. Takes the saddle, coordinate reference, positive lambda, callback budget and analytic amplitude.
+
+Leading-order saddle-point approximation:
+`g(z0) * exp(lambda * phi(z0)) * sqrt(2*pi / (-lambda * phi''(z0)))`
+with branch oriented along `saddle.steepest_angle`.
+
+## `numerical_callback.num_saddle_order2` (Experimental)
+
+```aevia
+({ z0: Complex[_], phase: Complex, curvature: Complex[_], angle: Float, degeneracy: Int }, Float[_], Float, Int, (Complex[_]) -> Complex, (Complex[_]) -> Complex[_]) -> Complex[_]
+```
+
+Oriented Gaussian approximation with the first inverse-lambda correction. The phase and amplitude must be analytic on the sampling disk of radius one tenth of the coordinate reference.
+
+Second-order saddle-point approximation including the `O(1/lambda)` term,
+using Cauchy-FFT derivatives of `phi` (to order 4) and `g` (to order 2) at `z0`.
 
 ## `numerical_vector.num_scalar_mul` (Experimental)
 
@@ -71348,6 +76715,22 @@ Integrates `q_t + ∇·F(q) = 0` with nodal DG and the full option set
 If the mesh is invalid, periodic faces are inconsistent or the initial
 data have the wrong number of components.
 
+## `numerical_matrix.num_solve_linear_rows` (Experimental)
+
+```aevia
+(Tensor<2, Float[_]>, Tensor<1, Float[_]>) -> Tensor<1, Float[_]>
+```
+
+Solves a finite dense square system A x = b. The solution has the units of b divided by the units of A.
+
+Solves a dense square linear system `A x = b` given as row slices, checking
+that the solution is finite.
+
+# Errors
+Returns [`DenseError::Shape`] for mismatched dimensions,
+[`DenseError::Singular`] if the matrix is singular or produces a non-finite
+solution, or [`DenseError::NonFinite`] if inputs contain NaN/Inf.
+
 ## `numerical_matrix.num_sparse_auto_model_apply` (Experimental)
 
 ```aevia
@@ -71620,6 +77003,268 @@ Computes the Chebyshev polynomial of the first kind `T_n(x)`.
 ```
 
 Computes the Chebyshev polynomial of the second kind `U_n(x)`.
+
+## `numerical_special.num_special_complex_anger_j` (Experimental)
+
+```aevia
+(Float, Complex) -> Complex
+```
+
+Anger J for real order and complex argument using its finite integral.
+
+Complex Anger function `J_nu^A(z) = (1/pi) * int_0^pi cos(nu*t - z*sin(t)) dt`.
+
+## `numerical_special.num_special_complex_associated_legendre_p` (Experimental)
+
+```aevia
+(Int, Int, Complex) -> Complex
+```
+
+Associated Legendre P_l^m(z) with the Condon–Shortley phase and principal sqrt(1-z²). Degree 0 through 4096. Orders m > l return zero.
+
+Complex associated Legendre function `P_l^m(z)` for `0 <= m <= l`.
+
+## `numerical_special.num_special_complex_bernoulli` (Experimental)
+
+```aevia
+(Int, Complex) -> Complex
+```
+
+Bernoulli polynomial B_n(z), with B_1(0) = -1/2. Degree 0 through 128.
+
+Complex Bernoulli polynomial `B_n(z)`.
+
+## `numerical_special.num_special_complex_bessel_i_order` (Experimental)
+
+```aevia
+(Complex, Complex) -> Complex
+```
+
+Modified Bessel I with complex order and argument on the principal branch.
+
+Complex-order modified Bessel function of the first kind `I_nu(z)` for `nu, z in C`.
+
+## `numerical_special.num_special_complex_bessel_j_order` (Experimental)
+
+```aevia
+(Complex, Complex) -> Complex
+```
+
+Bessel J with complex order and argument on the principal branch.
+
+Complex-order Bessel function of the first kind `J_nu(z)` for `nu, z in C`.
+
+## `numerical_special.num_special_complex_carlson_rc` (Experimental)
+
+```aevia
+(Complex, Complex) -> Complex
+```
+
+Carlson R_C(x, y) is R_F(x, y, y); y must be nonzero. Inputs and output are dimensionless. Poles and values outside binary64 range produce a domain error.
+
+Complex Carlson degenerate integral `R_C(x, y) = R_F(x, y, y)`.
+
+## `numerical_special.num_special_complex_carlson_rd` (Experimental)
+
+```aevia
+(Complex, Complex, Complex) -> Complex
+```
+
+Carlson R_D uses principal square roots. The last argument must be nonzero, and the first two cannot both vanish. Inputs and output are dimensionless. Poles and values outside binary64 range produce a domain error.
+
+Complex Carlson symmetric elliptic integral `R_D(x, y, z)`.
+
+## `numerical_special.num_special_complex_carlson_rf` (Experimental)
+
+```aevia
+(Complex, Complex, Complex) -> Complex
+```
+
+Carlson R_F accepts up to one zero and uses principal square roots. Inputs and output are dimensionless. Poles and values outside binary64 range produce a domain error.
+
+Complex Carlson symmetric elliptic integral `R_F(x, y, z)`.
+
+## `numerical_special.num_special_complex_carlson_rg` (Experimental)
+
+```aevia
+(Complex, Complex, Complex) -> Complex
+```
+
+Carlson R_G uses principal square roots and accepts zero arguments. Inputs and output are dimensionless. Poles and values outside binary64 range produce a domain error.
+
+Complex Carlson symmetric elliptic integral `R_G(x, y, z)`.
+
+## `numerical_special.num_special_complex_carlson_rj` (Experimental)
+
+```aevia
+(Complex, Complex, Complex, Complex) -> Complex
+```
+
+Carlson R_J accepts nonnegative real parts for x, y, z and a positive real part for p. If p equals one of x, y, z, the corresponding R_D branch applies. Inputs and output are dimensionless. Poles and values outside binary64 range produce a domain error.
+
+Complex Carlson symmetric elliptic integral `R_J(x, y, z, p)`.
+
+## `numerical_special.num_special_complex_chebyshev_t` (Experimental)
+
+```aevia
+(Int, Complex) -> Complex
+```
+
+First-kind Chebyshev polynomial T_n(z) for a dimensionless complex point and integer degree 0 through 4096.
+
+Complex Chebyshev polynomial of the first kind `T_n(z)`.
+
+## `numerical_special.num_special_complex_chebyshev_u` (Experimental)
+
+```aevia
+(Int, Complex) -> Complex
+```
+
+Second-kind Chebyshev polynomial U_n(z) for a dimensionless complex point and integer degree 0 through 4096.
+
+Complex Chebyshev polynomial of the second kind `U_n(z)`.
+
+## `numerical_special.num_special_complex_clausen` (Experimental)
+
+```aevia
+(Int, Complex) -> Complex
+```
+
+Complex Clausen function using the antisymmetric polylog combination for even order and the symmetric combination for odd order. Integer order 0 through 4096.
+
+Complex Clausen function: `Im(Li_n(e^(i z)))` for even `n`, `Re(Li_n(e^(i z)))` for odd `n`.
+
+## `numerical_special.num_special_complex_euler` (Experimental)
+
+```aevia
+(Int, Complex) -> Complex
+```
+
+Euler polynomial E_n(z), with E_1(z) = z - 1/2. Degree 0 through 128.
+
+Complex Euler polynomial `E_n(z) = (2 / (n + 1)) * (B_{n+1}(z) - 2^(n+1) B_{n+1}(z / 2))`.
+
+## `numerical_special.num_special_complex_exp_integral_en` (Experimental)
+
+```aevia
+(Int, Complex) -> Complex
+```
+
+Generalized exponential integral E_n for nonnegative integer orders up to 4096. At the negative real cut, the sign of the imaginary zero selects the boundary value.
+
+Generalized complex exponential integral `E_n(z)`.
+
+## `numerical_special.num_special_complex_fresnel_auxiliary` (Experimental)
+
+```aevia
+(Complex) -> { f: Complex, g: Complex }
+```
+
+Fresnel auxiliary functions f and g, returned as the named components of a record.
+
+Auxiliary Fresnel functions `(f(z), g(z))` in `C` satisfying
+`C(z) = 1/2 + f(z) sin(pi z^2 / 2) - g(z) cos(pi z^2 / 2)`.
+
+## `numerical_special.num_special_complex_gegenbauer_c` (Experimental)
+
+```aevia
+(Int, Complex, Complex) -> Complex
+```
+
+Gegenbauer C_n^(lambda)(z) with dimensionless complex parameter and point. Degree 0 through 4096.
+
+Complex Gegenbauer (ultraspherical) polynomial `C_n^(lambda)(z)`.
+
+## `numerical_special.num_special_complex_hermite_h` (Experimental)
+
+```aevia
+(Int, Complex) -> Complex
+```
+
+Physicists’ Hermite polynomial H_n(z) for a dimensionless complex point and integer degree 0 through 4096.
+
+Complex physicists' Hermite polynomial `H_n(z)`.
+
+## `numerical_special.num_special_complex_jacobi_p` (Experimental)
+
+```aevia
+(Int, Complex, Complex, Complex) -> Complex
+```
+
+Jacobi P_n^(alpha,beta)(z) with dimensionless complex parameters and point. Degree 0 through 4096.
+
+Complex Jacobi polynomial `P_n^(alpha, beta)(z)`.
+
+## `numerical_special.num_special_complex_kelvin` (Experimental)
+
+```aevia
+(Float, Complex) -> { ber: Complex, bei: Complex, ker: Complex, kei: Complex }
+```
+
+Kelvin ber, bei, ker and kei for real order and complex argument as named components.
+
+Complex Kelvin functions `(ber_nu(z), bei_nu(z), ker_nu(z), kei_nu(z))`.
+
+## `numerical_special.num_special_complex_laguerre_l` (Experimental)
+
+```aevia
+(Int, Complex, Complex) -> Complex
+```
+
+Generalized Laguerre L_n^(alpha)(z) with dimensionless complex parameter and point. Degree 0 through 4096.
+
+Complex generalized Laguerre polynomial `L_n^(alpha)(z)`.
+
+## `numerical_special.num_special_complex_legendre_p` (Experimental)
+
+```aevia
+(Int, Complex) -> Complex
+```
+
+Legendre polynomial P_n(z) for a dimensionless complex point and integer degree 0 through 4096.
+
+Complex Legendre polynomial `P_n(z)`.
+
+## `numerical_special.num_special_complex_legendre_q` (Experimental)
+
+```aevia
+(Int, Complex) -> Complex
+```
+
+Principal Legendre Q of the second kind for nonnegative integer degrees up to 4096. The sign of the imaginary zero selects the side of the cut from -1 to 1.
+
+Complex Legendre function of the second kind `Q_n(z)` for integer `n >= 0`
+off `[-1, 1]`, via forward recurrence from `Q_0(z) = 0.5 * ln((z + 1)/(z - 1))`.
+
+## `numerical_special.num_special_complex_log_barnes_g` (Experimental)
+
+```aevia
+(Complex) -> Complex
+```
+
+Analytic log Barnes G, real on the positive axis. The signed imaginary zero selects a side of the non-positive real cut. Zeros of G return a domain error.
+
+Complex log Barnes G-function `ln G(z)`.
+
+## `numerical_special.num_special_complex_spherical_harmonic` (Experimental)
+
+```aevia
+(Int, Int, Complex, Complex) -> Complex
+```
+
+Normalized spherical harmonic Y_l^m(theta, phi) with Condon–Shortley phase. Theta is colatitude, phi is azimuth, in radians. Degree 0 through 4096. Orders |m| > l return zero.
+
+Complex spherical harmonic `Y_l^m(theta, phi)`.
+
+## `numerical_special.num_special_complex_weber_e` (Experimental)
+
+```aevia
+(Float, Complex) -> Complex
+```
+
+Weber E for real order and complex argument using its finite integral.
+
+Complex Weber function `E_nu(z) = (1/pi) * int_0^pi sin(nu*t - z*sin(t)) dt`.
 
 ## `numerical_special.num_special_digamma_batch` (Experimental)
 
@@ -72323,6 +77968,76 @@ Cubic spline interpolation with selectable boundary conditions
 [`InterpError::ShapeMismatch`], [`InterpError::Empty`], or [`InterpError::Domain`]
 when knots are not strictly increasing.
 
+## `numerical_callback.num_sqp_oracle_constraints` (Experimental)
+
+```aevia
+(Tensor<1, Float>, { equalities: Int, inequalities: Int }, (Tensor<1, Float>) -> { objective: Float, gradient: Tensor<1, Float>, constraints: Tensor<1, Float>, jacobian: { rows: Tensor<1, Int>, columns: Tensor<1, Int>, values: Tensor<1, Float> } }) -> Tensor<1, Float>
+```
+
+Reads equality-first values from the checked SQP evaluation callback.
+
+## `numerical_callback.num_sqp_oracle_equality_count` (Experimental)
+
+```aevia
+({ equalities: Int, inequalities: Int }) -> Int
+```
+
+Returns the declared equality row count of the normalized SQP oracle.
+
+## `numerical_callback.num_sqp_oracle_gradient` (Experimental)
+
+```aevia
+(Tensor<1, Float>, { equalities: Int, inequalities: Int }, (Tensor<1, Float>) -> { objective: Float, gradient: Tensor<1, Float>, constraints: Tensor<1, Float>, jacobian: { rows: Tensor<1, Int>, columns: Tensor<1, Int>, values: Tensor<1, Float> } }) -> Tensor<1, Float>
+```
+
+Reads the objective gradient from the checked SQP evaluation callback.
+
+## `numerical_callback.num_sqp_oracle_hessian` (Experimental)
+
+```aevia
+(Tensor<1, Float>, Tensor<1, Float>, Tensor<1, Float>, (Tensor<1, Float>, Tensor<1, Float>, Tensor<1, Float>) -> { rows: Tensor<1, Int>, columns: Tensor<1, Int>, values: Tensor<1, Float> }) -> { rows: Tensor<1, Int>, columns: Tensor<1, Int>, values: Tensor<1, Float> }
+```
+
+Evaluates the callback for the sparse upper-triangular Lagrangian Hessian.
+
+## `numerical_callback.num_sqp_oracle_inequality_count` (Experimental)
+
+```aevia
+({ equalities: Int, inequalities: Int }) -> Int
+```
+
+Returns the declared inequality row count of the normalized SQP oracle.
+
+## `numerical_callback.num_sqp_oracle_jacobian` (Experimental)
+
+```aevia
+(Tensor<1, Float>, { equalities: Int, inequalities: Int }, (Tensor<1, Float>) -> { objective: Float, gradient: Tensor<1, Float>, constraints: Tensor<1, Float>, jacobian: { rows: Tensor<1, Int>, columns: Tensor<1, Int>, values: Tensor<1, Float> } }) -> { rows: Tensor<1, Int>, columns: Tensor<1, Int>, values: Tensor<1, Float> }
+```
+
+Reads the zero-based sparse constraint Jacobian from the checked SQP evaluation callback.
+
+## `numerical_callback.num_sqp_oracle_objective` (Experimental)
+
+```aevia
+(Tensor<1, Float>, { equalities: Int, inequalities: Int }, (Tensor<1, Float>) -> { objective: Float, gradient: Tensor<1, Float>, constraints: Tensor<1, Float>, jacobian: { rows: Tensor<1, Int>, columns: Tensor<1, Int>, values: Tensor<1, Float> } }) -> Float
+```
+
+Reads the objective from the checked SQP evaluation callback.
+
+## `numerical_callback.num_sqp_solve` (Experimental)
+
+```aevia
+(Tensor<1, Float>, { equalities: Int, inequalities: Int }, Float, Float, Int, Int, (Tensor<1, Float>) -> { objective: Float, gradient: Tensor<1, Float>, constraints: Tensor<1, Float>, jacobian: { rows: Tensor<1, Int>, columns: Tensor<1, Int>, values: Tensor<1, Float> } }, (Tensor<1, Float>, Tensor<1, Float>, Tensor<1, Float>) -> { rows: Tensor<1, Int>, columns: Tensor<1, Int>, values: Tensor<1, Float> }) -> { x: Tensor<1, Float>, objective: Float, equality_multipliers: Tensor<1, Float>, inequality_multipliers: Tensor<1, Float>, iterations: Int, evaluations: Int, kkt_residual: Float, converged: Bool }
+```
+
+Solves a normalized nonlinear program with bounded typed evaluation and Lagrangian-Hessian callbacks. The evaluation callback receives each consecutive point once. Equality rows precede inequalities g(x) <= 0. Returns KKT residual, convergence, multipliers and callback counts.
+
+Solves a sparse nonlinear program by sequential quadratic programming.
+
+# Errors
+Returns an error string when the dimensions reported by the oracle are
+inconsistent or a working-set system is singular.
+
 ## `numerical_stats.num_standard_error` (Experimental)
 
 ```aevia
@@ -72332,6 +78047,125 @@ when knots are not strictly increasing.
 Standard error of the mean.
 
 Computes the sample standard error of the mean (SEM = `std_dev` / sqrt(n)).
+
+## `numerical_stats.num_statrs_distribution_cdf` (Experimental)
+
+```aevia
+(rssn/native/statrs/distribution/v1, Float) -> Float
+```
+
+Cumulative probability at the dimensionless query point.
+
+The cumulative probability at `x`.
+
+# Errors
+Returns an error when the parameters are invalid.
+
+## `numerical_stats.num_statrs_distribution_entropy` (Experimental)
+
+```aevia
+(rssn/native/statrs/distribution/v1) -> Float
+```
+
+Returns the discrete or differential entropy in nats when defined.
+
+The differential (or discrete) entropy, when `statrs` defines it.
+
+# Errors
+Returns an error when the parameters are invalid.
+
+## `numerical_stats.num_statrs_distribution_is_discrete` (Experimental)
+
+```aevia
+(rssn/native/statrs/distribution/v1) -> Bool
+```
+
+Whether the distribution is discrete.
+
+## `numerical_stats.num_statrs_distribution_is_signed_discrete` (Experimental)
+
+```aevia
+(rssn/native/statrs/distribution/v1) -> Bool
+```
+
+Whether the distribution uses signed integer support.
+
+Whether the distribution indexes with a signed integer.
+
+## `numerical_stats.num_statrs_distribution_mean` (Experimental)
+
+```aevia
+(rssn/native/statrs/distribution/v1) -> Float
+```
+
+Returns a finite distribution mean when defined.
+
+The mean, when it exists.
+
+# Errors
+Returns an error when the parameters are invalid or the mean is
+infinite.
+
+## `numerical_stats.num_statrs_distribution_new` (Experimental)
+
+```aevia
+(String, Tensor<1, Float>) -> rssn/native/statrs/distribution/v1
+```
+
+Creates a checked statrs distribution from its kebab-case Rust name and ordered dimensionless parameters. Use exact parameter counts. The categorical family takes a vector of weights.
+
+Builds a distribution from a name and its parameters.
+
+The names are the `statrs` type names in kebab case: `normal`,
+`uniform`, `beta`, `cauchy`, `chi`, `chi-squared`, `erlang`,
+`exponential`, `fisher-snedecor`, `gamma`, `gumbel`, `inverse-gamma`,
+`laplace`, `levy`, `log-normal`, `pareto`, `student-t`, `triangular`,
+`weibull`, `bernoulli`, `binomial`, `categorical`,
+`discrete-uniform`, `geometric`, `hypergeometric`,
+`negative-binomial` and `poisson`.
+
+# Errors
+Returns an error for an unknown name or a wrong parameter count.
+
+## `numerical_stats.num_statrs_distribution_pdf` (Experimental)
+
+```aevia
+(rssn/native/statrs/distribution/v1, Float) -> Float
+```
+
+Evaluates the dimensionless density or discrete mass. A density singularity may return positive infinity.
+
+The density (continuous) or mass (discrete) at `x`.
+
+# Errors
+Returns an error when the parameters are invalid.
+
+## `numerical_stats.num_statrs_distribution_sf` (Experimental)
+
+```aevia
+(rssn/native/statrs/distribution/v1, Float) -> Float
+```
+
+Upper-tail probability evaluated directly to avoid subtracting a cdf rounded to one.
+
+The survival probability `1 - cdf(x)`, computed without cancellation.
+
+# Errors
+Returns an error when the parameters are invalid.
+
+## `numerical_stats.num_statrs_distribution_variance` (Experimental)
+
+```aevia
+(rssn/native/statrs/distribution/v1) -> Float
+```
+
+Returns a finite distribution variance when defined.
+
+The variance, when it exists.
+
+# Errors
+Returns an error when the parameters are invalid or the variance is
+infinite.
 
 ## `numerical_stats.num_stats_chi_squared_test` (Experimental)
 
@@ -72712,6 +78546,74 @@ Computes the standard deviation of a slice of data.
 # Returns
 The standard deviation of the data as an `f64`.
 
+## `numerical_stats.num_survival_fit_cox` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<1, Bool>, Tensor<2, Float>, String, Int, Float) -> { beta: Tensor<1, Float>, se: Tensor<1, Float>, z: Tensor<1, Float>, p: Tensor<1, Float>, loglik: Float, iterations: Int, converged: Bool, concordance: Float }
+```
+
+Fits a Cox proportional-hazards model for observed times, event flags and finite dimensionless covariate rows without an intercept. Select breslow or efron for tied events. Returns portable coefficients and fit diagnostics.
+
+Fits a Cox proportional-hazards model by Newton-Raphson on the partial
+likelihood, with step halving when a full step lowers the likelihood.
+
+`x` holds one row of covariates per observation, `time` the observed times
+and `event` whether the observation ended in the event. The iteration stops
+when the largest absolute change of a coefficient falls below `tol` or
+after `max_iter` iterations; the fit reports which happened through
+[`CoxFit::converged`].
+
+# Errors
+Returns an error for empty or mismatched inputs, non-finite values, an empty
+design matrix, a covariate column with zero variance, a sample in which
+every observation is censored, a singular observed information matrix, or a
+non-positive `max_iter` or `tol`.
+
+## `numerical_stats.num_survival_kaplan_meier` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<1, Bool>, Float) -> { times: Tensor<1, Float[_]>, at_risk: Tensor<1, Int>, events: Tensor<1, Int>, survival: Tensor<1, Float>, variance: Tensor<1, Float>, lower: Tensor<1, Float>, upper: Tensor<1, Float> }
+```
+
+Estimates the Kaplan–Meier curve and log-log confidence bounds. Event flags distinguish observed events from censoring. The estimate retains the input time dimension.
+
+Kaplan-Meier product-limit estimate of the survival function.
+
+`time` holds the observed times and `event` is true when the observation
+ended in the event of interest and false when it was censored. The inputs
+are not modified; the estimate is computed on an internal sorted copy.
+`conf` is the two-sided confidence level and must lie strictly between 0
+and 1.
+
+# Errors
+Returns an error for empty or mismatched inputs, non-finite times, a
+confidence level outside `(0, 1)`, or a sample in which every observation
+is censored.
+
+## `numerical_stats.num_survival_median` (Experimental)
+
+```aevia
+({ times: Tensor<1, Float[_]>, at_risk: Tensor<1, Int>, events: Tensor<1, Int>, survival: Tensor<1, Float>, variance: Tensor<1, Float>, lower: Tensor<1, Float>, upper: Tensor<1, Float> }) -> None | Some(Float[_])
+```
+
+Returns the first measured time at or below one-half survival. Returns None if the fitted estimate never crosses one-half.
+
+Smallest observed time at which the estimated survival drops to at most
+one half, or `None` when the curve never reaches one half.
+
+## `numerical_stats.num_survival_predict_cox` (Experimental)
+
+```aevia
+({ beta: Tensor<1, Float>, se: Tensor<1, Float>, z: Tensor<1, Float>, p: Tensor<1, Float>, loglik: Float, iterations: Int, converged: Bool, concordance: Float }, Tensor<2, Float>) -> Tensor<1, Float>
+```
+
+Predicts finite relative hazards exp(row*beta) from a portable fitted Cox model and covariate rows with the fitted column count.
+
+Relative hazards `exp(x . beta)` for new covariate rows.
+
+# Errors
+Returns an error when a row does not have one entry per fitted coefficient.
+
 ## `numerical_matrix.num_svd` (Experimental)
 
 ```aevia
@@ -73065,6 +78967,171 @@ returned by increasing dimension, lexicographically within a dimension.
 
 The Vietoris-Rips filtration restricted to its 1-skeleton: for each of `steps + 1` radii `max_epsilon * s / steps` the vertices and the edges no longer than the radius.
 
+## `numerical_callback.num_transform_borel_series` (Experimental)
+
+```aevia
+(Tensor<1, Complex[_]>, Complex) -> Complex[_]
+```
+
+Finite Borel polynomial with dimensionless argument and a shared coefficient dimension.
+
+Evaluates the truncated Borel transform `B[a](t) = \sum_{n=0}^{N-1} \frac{a_n}{n!} t^n`.
+
+## `numerical_callback.num_transform_hankel_checked` (Experimental)
+
+```aevia
+(Float, Float, Float, Float[_], Int, Int, (Float) -> Complex[_]) -> { value: Complex[_], error: Float[_], converged: Bool, evaluations: Int }
+```
+
+Truncated Hankel transform of the given order and wavenumber, on [0, limit]. Coordinates and wavenumber are dimensionless.
+
+Numerical Hankel transform of order `nu`:
+`\mathcal{H}_\nu[f](k) = \int_0^{R_{\max}} f(r) J_\nu(k r) r \, dr`.
+
+## `numerical_callback.num_transform_hilbert_checked` (Experimental)
+
+```aevia
+(Float, Float, Float[_], Int, Int, (Float) -> Float[_]) -> { value: Float[_], error: Float[_], converged: Bool, evaluations: Int }
+```
+
+Finite Hilbert transform with a real density and singularity subtraction.
+
+Numerical Hilbert transform $\mathcal{H}\[f\](x) = \frac{1}{\pi} \text{PV} \int_{-L}^L \frac{f(t)}{x - t} \, dt$
+using singularity subtraction on $[-L, L]$.
+
+# Errors
+
+Returns an error if the evaluation point lies outside the open integration interval.
+
+## `numerical_callback.num_transform_inverse_mellin_checked` (Experimental)
+
+```aevia
+(Complex, Float, Float, Float[_], Int, Int, (Complex) -> Complex[_]) -> { value: Complex[_], error: Float[_], converged: Bool, evaluations: Int }
+```
+
+Truncated inverse Mellin transform on a caller-selected vertical line. The absolute error estimate excludes the omitted tail.
+
+Numerical inverse Mellin transform
+$f(x) = \frac{1}{2\pi i} \int_{c - i T}^{c + i T} x^{-s} F(s) \, ds$.
+
+## `numerical_callback.num_transform_laplace_parabola_checked` (Experimental)
+
+```aevia
+(Float, Float[_], Int, Int, (Complex) -> Complex[_]) -> { value: Complex[_], error: Float[_], converged: Bool, evaluations: Int }
+```
+
+Unshifted parabolic Laplace inversion with an empirical error from a second grid.
+
+Numerical Bromwich Laplace inversion using Weideman's parabolic contour
+$s(u) = \mu (i u + 1)^2$ ($u \in \mathbb{R}$) for $t > 0$.
+
+# Errors
+
+Returns an error if time is nonpositive or there are fewer than four quadrature points.
+
+## `numerical_callback.num_transform_laplace_parabola_shifted_checked` (Experimental)
+
+```aevia
+(Float, Float, Float[_], Int, Int, (Complex) -> Complex[_]) -> { value: Complex[_], error: Float[_], converged: Bool, evaluations: Int }
+```
+
+Shifted parabolic Laplace inversion. The caller selects a shift to the right of relevant singularities.
+
+Numerical Bromwich Laplace inversion using Weideman's parabolic contour
+shifted by abscissa `sigma`: $s(u) = \sigma + \mu (i u + 1)^2$.
+
+# Errors
+
+Returns an error if time is nonpositive, the shift is non-finite, or there are fewer than four quadrature points.
+
+## `numerical_callback.num_transform_laplace_stehfest_checked` (Experimental)
+
+```aevia
+(Float, Float[_], Int, Int, (Float) -> Float[_]) -> { value: Float[_], error: Float[_], converged: Bool, evaluations: Int }
+```
+
+Real-axis Gaver–Stehfest inversion, comparing successive even orders to estimate error.
+
+Gaver–Stehfest real-axis inverse Laplace transform for $t > 0$ (`m_even` in `2..=14`).
+
+# Errors
+
+Returns an error if time is nonpositive or the order is not even and in `2..=14`.
+
+## `numerical_callback.num_transform_laplace_talbot_checked` (Experimental)
+
+```aevia
+(Float, Float[_], Int, Int, (Complex) -> Complex[_]) -> { value: Complex[_], error: Float[_], converged: Bool, evaluations: Int }
+```
+
+Unshifted Talbot Laplace inversion with an empirical error from a second grid.
+
+Numerical Bromwich Laplace inversion using Weideman's optimal Talbot contour:
+$f(t) = \frac{1}{2\pi i} \int_{\Gamma} e^{s t} F(s) \, ds$ for $t > 0$.
+
+# Errors
+
+Returns an error if time is nonpositive or there are fewer than four quadrature points.
+
+## `numerical_callback.num_transform_laplace_talbot_shifted_checked` (Experimental)
+
+```aevia
+(Float, Float, Float[_], Int, Int, (Complex) -> Complex[_]) -> { value: Complex[_], error: Float[_], converged: Bool, evaluations: Int }
+```
+
+Shifted Talbot Laplace inversion. The caller selects a shift to the right of relevant singularities.
+
+Numerical Bromwich Laplace inversion using Weideman's optimal Talbot contour
+shifted by abscissa `sigma` (so singularities with `Re(s) < sigma` are enclosed).
+
+# Errors
+
+Returns an error if time is nonpositive, the shift is non-finite, or there are fewer than four quadrature points.
+
+## `numerical_callback.num_transform_meijer_g_checked` (Experimental)
+
+```aevia
+(Tensor<1, Complex>, Tensor<1, Complex>, Int, Int, Complex, Float, Float, Float, Int) -> { value: Complex, error: Float, converged: Bool, evaluations: Int }
+```
+
+Finite Meijer G quadrature with a caller-selected pole-separating line and explicit termination information.
+
+## `numerical_callback.num_transform_mellin_barnes_checked` (Experimental)
+
+```aevia
+(Tensor<1, Complex>, Tensor<1, Complex>, Tensor<1, Complex>, Tensor<1, Complex>, Complex, Float, Float, Float, Int) -> { value: Complex, error: Float, converged: Bool, evaluations: Int }
+```
+
+Finite Mellin–Barnes quadrature on a pole-free segment. The error estimate excludes contour tails.
+
+Evaluates a Mellin–Barnes integral.
+
+Evaluates a Mellin–Barnes integral
+`\frac{1}{2\pi i} \int_{c - iT}^{c + iT} \frac{\prod \Gamma(\alpha_j + s) \prod \Gamma(\beta_j - s)}{\prod \Gamma(\gamma_j + s) \prod \Gamma(\delta_j - s)} z^{-s} \, ds`
+along a slightly tilted/vertical contour `\text{Re}(s) = c`.
+
+## `numerical_callback.num_transform_mellin_checked` (Experimental)
+
+```aevia
+(Complex, Float, Float[_], Int, Int, (Float) -> Complex[_]) -> { value: Complex[_], error: Float[_], converged: Bool, evaluations: Int }
+```
+
+Truncated Mellin transform between exp(-limit) and exp(limit). The absolute error estimate covers finite quadrature only.
+
+Numerical Mellin transform `\mathcal{M}[f](s) = \int_0^\infty x^{s-1} f(x) \, dx`
+via the substitution `x = e^u` (`u \in [-L, L]`).
+
+## `numerical_callback.num_transform_stieltjes_checked` (Experimental)
+
+```aevia
+(Complex, Float, Float[_], Int, Int, (Float) -> Complex[_]) -> { value: Complex[_], error: Float[_], converged: Bool, evaluations: Int }
+```
+
+Finite Stieltjes transform on [0, limit], with the spectral argument off the negative real cut.
+
+Numerical Stieltjes transform `S[f](z) = int_0^{r_max} f(t) / (t + z) dt`
+for `z` off `(-inf, 0]`.
+
 ## `numerical_vector.num_transforms_irfft` (Experimental)
 
 ```aevia
@@ -73308,6 +79375,146 @@ Maps a dimensionless complex point in the open upper half-plane to the open Poin
 
 Cayley transform mapping the upper half-plane `{ Im(z) > 0 }` to the unit disk `{ |w| < 1 }`:
 `w = (z - i) / (z + i)`. Returns `None` at `z = -i`.
+
+## `numerical_special.num_univalent_becker` (Experimental)
+
+```aevia
+(Complex, Complex, Complex) -> Bool
+```
+
+Tests Becker’s pointwise dimensionless inequality at a point in the unit disk with a nonzero first derivative.
+
+Checks Becker's sufficient univalence criterion `(1 - |z|^2) * |z * f''(z)/f'(z)| <= 1`.
+
+## `numerical_special.num_univalent_bieberbach` (Experimental)
+
+```aevia
+(Tensor<1, Complex>, Float) -> Bool
+```
+
+Checks the necessary Bieberbach–de Branges coefficient inequalities for dimensionless Taylor coefficients [a0,a1,...]. False rules out the normalized class within the nonnegative tolerance.
+
+Checks the Bieberbach–de Branges necessary condition $|`a_n` / `a_1`| \le n$ ($n \ge 2$)
+for a normalized univalent function $f(z) = `a_1` z + `a_2` z^2 + \dots$ (with `coeffs[k]` = $`a_k`$).
+
+## `numerical_callback.num_univalent_convexity_radius_sampled` (Experimental)
+
+```aevia
+(Float, Int, Int, (Complex) -> Complex, (Complex) -> Complex) -> Float
+```
+
+Bisects a finite angular diagnostic for convexity. Pass maximum normalized radius, angular count, callback budget, the first and second derivatives.
+
+Numerically estimates the radius of convexity $\sup \{ r \in (0, r_{\max}] : 1 + \text{Re}(z f''(z)/f'(z)) > 0 \text{ on } |z|=r \}$
+via bisection.
+
+## `numerical_special.num_univalent_fekete_szego` (Experimental)
+
+```aevia
+(Complex, Complex, Complex) -> Float
+```
+
+Returns |a3 - mu*a2^2| for normalized dimensionless Taylor coefficients.
+
+Computes the Fekete–Szegő functional $|`a_3` - \mu `a_2^2`|$.
+
+## `numerical_special.num_univalent_grunsky_check` (Experimental)
+
+```aevia
+(Tensor<2, Complex>, Tensor<1, Complex>, Float) -> Bool
+```
+
+Tests the complex bilinear Grunsky inequality for a supplied vector and checks a power-iteration estimate of the spectral norm. This is a finite-dimensional numerical diagnostic.
+
+Verifies the Grunsky inequality $\left|\sum_{m,n=1}^M G_{m,n} `x_m` `x_n\right`| \le \sum_{m=1}^M |`x_m|^2` + \text{tol}$.
+
+# Errors
+
+Returns an error if the supplied vector length does not match the matrix dimension.
+
+## `numerical_special.num_univalent_grunsky_matrix` (Experimental)
+
+```aevia
+(Tensor<1, Complex>, Int) -> Tensor<2, Complex>
+```
+
+Builds the symmetric normalized complex Grunsky matrix. Requires 2*order+2 dimensionless Taylor coefficients for a positive order through 92.
+
+Computes the Grunsky matrix of a Taylor series.
+
+Computes the $M \times M$ Grunsky matrix $G_{m,n} = \sqrt{mn} \, c_{m,n}$ for $1 \le m, n \le M$
+from the Taylor coefficients $f(z) = z + `a_2` z^2 + \dots$ (`taylor_coeffs[k]` = $`a_k`$, $`a_1` = 1$),
+defined via $\ln \frac{f(z) - f(\zeta)}{z - \zeta} = -\sum_{m,n \ge 1} c_{m,n} z^m \zeta^n$.
+
+# Errors
+
+Returns an error when the Taylor coefficients are missing, have a zero linear term, or do not reach the requested order.
+
+## `numerical_special.num_univalent_hankel` (Experimental)
+
+```aevia
+(Tensor<1, Complex>, Int, Int) -> Complex
+```
+
+Returns the dimensionless Hankel determinant with entry coefficients[start+i+j]. Order zero returns one. Orders through 256 are supported.
+
+Computes the $q \times q$ Hankel determinant $`H_q(n)` = \det [c_{n + i + j}]_{i,j=0}^{q-1}$.
+
+# Errors
+
+Returns an error if the supplied series has too few coefficients for the requested determinant.
+
+## `numerical_special.num_univalent_loewner_step` (Experimental)
+
+```aevia
+(Complex, Float, Float) -> Complex
+```
+
+Takes one radial Loewner RK4 step in the normalized disk. The driving angle is in radians, the step is nonnegative and each sampled state must stay away from the driving pole.
+
+Advances one RK4 step of the radial Loewner slit ODE
+$\frac{dw}{dt} = w \frac{e^{i\kappa} + w}{e^{i\kappa} - w}$ with constant driving `driving_kappa` over `dt`.
+
+## `numerical_callback.num_univalent_nehari_sampled` (Experimental)
+
+```aevia
+(Tensor<1, Float>, Int, Float, Int, (Complex) -> Complex) -> Bool
+```
+
+Checks Nehari’s inequality on a finite angular/radial grid in the normalized unit disk. Pass sample radii, angles per radius, positive Cauchy radius, callback budget, then the callback.
+
+Checks Nehari's sufficient univalence criterion $(1 - |z|^2)^2 |\{f, z\}| \le 2$
+across sample radii in $(0, 1)$ and `n_angles` angles per radius.
+
+# Errors
+
+Returns an error for invalid sample radii, a zero angular sample count, or failed Schwarzian evaluation.
+
+## `numerical_callback.num_univalent_schwarzian_checked` (Experimental)
+
+```aevia
+(Complex[_], Float[_], Float[_], Int, (Complex[_]) -> Complex[_]) -> Complex[_]
+```
+
+Estimates the measured Schwarzian derivative from one 64-sample Cauchy circle. Pass center, radius, a positive callback-value scale, total callback budget, then the callback.
+
+Computes the Schwarzian derivative $\{f, z\} = \frac{f'''(z)}{f'(z)} - \frac{3}{2} \left(\frac{f''(z)}{f'(z)}\right)^2$
+using Cauchy–FFT derivatives on a circle of radius `h`.
+
+# Errors
+
+Returns an error when derivative evaluation fails or the first derivative vanishes.
+
+## `numerical_callback.num_univalent_starlikeness_radius_sampled` (Experimental)
+
+```aevia
+(Float, Int, Int, (Complex) -> Complex, (Complex) -> Complex) -> Float
+```
+
+Bisects a finite angular diagnostic for starlikeness. Pass maximum normalized radius, angular count, callback budget, the map and its first derivative.
+
+Numerically estimates the radius of starlikeness $\sup \{ r \in (0, r_{\max}] : \text{Re}(z f'(z)/f(z)) > 0 \text{ on } |z|=r \}$
+via bisection.
 
 ## `numerical_stats.num_variance` (Experimental)
 
@@ -73603,6 +79810,16 @@ Computes the Weierstrass invariants g2 and g3 as a named complex record. The dim
 
 Weierstrass invariants `(g2, g3)` for half-periods `(omega1, omega2)`.
 
+## `numerical_special.num_weierstrass_modular_discriminant_complex` (Experimental)
+
+```aevia
+(Complex) -> Complex
+```
+
+Discriminant (2*pi)^12 * eta(tau)^24 for a dimensionless tau in the open upper half-plane.
+
+Modular discriminant `Delta(tau) = (2*pi)^12 * eta(tau)^24` for `Im(tau) > 0`.
+
 ## `numerical_special.num_weierstrass_p_prime_complex` (Experimental)
 
 ```aevia
@@ -73612,6 +79829,26 @@ Weierstrass invariants `(g2, g3)` for half-periods `(omega1, omega2)`.
 Numerically evaluates the Weierstrass derivative at z. The arguments omega1 and omega2 are nonzero, non-collinear half-periods, so the basic periods are 2*omega1 and 2*omega2. All arguments and the result are dimensionless. A detected lattice pole, an invalid lattice or a nonfinite result produces a domain error.
 
 Weierstrass elliptic derivative `wp'(z; omega1, omega2)` via central complex step or theta.
+
+## `numerical_special.num_weierstrass_sigma_complex` (Experimental)
+
+```aevia
+(Complex, Complex, Complex) -> Complex
+```
+
+Weierstrass sigma for dimensionless complex z and two nonzero, non-collinear half-periods. Sigma vanishes at lattice points and its derivative at zero is one.
+
+Weierstrass sigma function `sigma(z; omega1, omega2)`.
+
+## `numerical_special.num_weierstrass_zeta_complex` (Experimental)
+
+```aevia
+(Complex, Complex, Complex) -> Complex
+```
+
+Weierstrass zeta for dimensionless complex z and two nonzero, non-collinear half-periods. Lattice poles return a domain error.
+
+Weierstrass zeta function `zeta_W(z; omega1, omega2)`.
 
 ## `numerical_stats.num_z_scores` (Experimental)
 
