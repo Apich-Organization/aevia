@@ -5,6 +5,7 @@
 //! their arguments (`L` and `L^2`), which the caller attaches.
 
 /// The non-negative area of ordered, flat `[x0, y0, x1, y1, ...]` vertices.
+///
 /// Fewer than three vertices give zero. RSSN evaluates the area at the input
 /// coordinates' scale, including a polygon translated far from the origin.
 #[must_use]

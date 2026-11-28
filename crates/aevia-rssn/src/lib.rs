@@ -42,6 +42,8 @@
     )
 )]
 
+/// Discover and select RSSN numeric expression backends from a Rust host.
+pub use rssn::backend;
 pub mod bindings;
 pub mod codegen;
 pub mod device;
@@ -260,9 +262,26 @@ pub enum SimdBinaryOp {
     Mul,
 }
 
-/// Computes `out[i] = op(a[i], b[i])` over `0..a.len().min(b.len())` using
-/// runtime-dispatched SIMD (`AVX2+FMA`/`NEON`) and parallel chunks when
-/// `mode` allows and the slice is large enough.
+fn run_elementwise_in_mode<R, F>(
+    items: usize,
+    mode: execution::ExecutionMode,
+    evaluate: F,
+) -> R
+where
+    R: Send,
+    F: FnOnce() -> R + Send,
+{
+    if should_split_for_mode(items, SIMD_PAR_MIN, mode) {
+        run_in_mode(mode, evaluate)
+    } else {
+        execution::with_scoped_pool(Some(1), evaluate)
+    }
+}
+
+/// Computes `out[i] = op(a[i], b[i])` over the common input prefix.
+///
+/// Uses the RSSN vector kernels, which dispatch to the host SIMD instructions
+/// and split large requests within the supplied execution budget.
 #[must_use]
 pub fn simd_binary_f64_in_mode(
     op: SimdBinaryOp,
@@ -270,40 +289,31 @@ pub fn simd_binary_f64_in_mode(
     b: &[f64],
     mode: execution::ExecutionMode,
 ) -> Vec<f64> {
+    use rssn::kernels::vector;
+
     let n = a.len().min(b.len());
-    let mut out = vec![0.0; n];
-    par_for_chunks_mut_in_mode(
-        &mut out,
-        SIMD_PAR_CHUNK,
-        SIMD_PAR_MIN,
-        mode,
-        |offset, dst| {
-            let end = offset.saturating_add(dst.len());
-            if let (Some(sa), Some(sb)) = (a.get(offset..end), b.get(offset..end)) {
-                match op {
-                    | SimdBinaryOp::Add => simd::add_into_f64(sa, sb, dst),
-                    | SimdBinaryOp::Sub => simd::sub_into_f64(sa, sb, dst),
-                    | SimdBinaryOp::Mul => simd::hadamard_mul_into_f64(sa, sb, dst),
-                }
-            }
-        },
-    );
-    out
+    let (left, _) = a.split_at(n);
+    let (right, _) = b.split_at(n);
+    run_elementwise_in_mode(n, mode, || {
+        match op {
+            | SimdBinaryOp::Add => vector::vec_add(left, right),
+            | SimdBinaryOp::Sub => vector::vec_sub(left, right),
+            | SimdBinaryOp::Mul => vector::hadamard_mul(left, right),
+        }
+        .unwrap_or_else(|_| unreachable!("vector operands have the same prefix length"))
+    })
 }
 
-/// Computes `out[i] = a[i] * scale` using runtime-dispatched SIMD and parallel
-/// chunks when `mode` allows and `a` is large enough.
+/// Computes `out[i] = a[i] * scale` using the RSSN SIMD vector kernel.
 #[must_use]
 pub fn simd_scale_f64_in_mode(
     a: &[f64],
     scale: f64,
     mode: execution::ExecutionMode,
 ) -> Vec<f64> {
-    let mut out = a.to_vec();
-    par_for_chunks_mut_in_mode(&mut out, SIMD_PAR_CHUNK, SIMD_PAR_MIN, mode, |_, dst| {
-        simd::scale_f64(scale, dst);
-    });
-    out
+    run_elementwise_in_mode(a.len(), mode, || {
+        rssn::kernels::vector::scalar_mul(a, scale)
+    })
 }
 
 /// Deterministic Neumaier-compensated sum of `items`, bit-identical across

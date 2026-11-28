@@ -23,6 +23,46 @@ use rssn::kernel::signature::DimExpr;
 use rssn::kernel::value::SparseValue;
 use rssn::kernel::value::Value;
 
+#[test]
+fn a_witnessed_angle_checks_its_coordinate_dimensions() {
+    use aevia_dim::Dim;
+    use aevia_rssn::witness::DimensionWitness;
+    use rssn::kernel::signature::DimRuleInfo;
+
+    let atan2 = registry().op("atan2").unwrap();
+    assert_eq!(atan2.dim_rule, Some(DimRuleInfo::Angle));
+    let key = atan2.key(1).unwrap();
+    let args = [Val::Num(Num::Float(1.0)), Val::Num(Num::Float(2.0))];
+    let length = DimensionWitness::Scalar(Dim::base("Length"));
+    let duration = DimensionWitness::Scalar(Dim::base("Time"));
+    let session = kernel();
+    assert!(
+        session
+            .call_key_with_witnesses(key, &args, &[length.clone(), length.clone()])
+            .is_ok()
+    );
+    let error = session
+        .call_key_with_witnesses(key, &args, &[length, duration])
+        .unwrap_err();
+    assert_eq!(error.code, "E0401");
+}
+
+#[test]
+fn a_witnessed_dimensionless_call_rejects_measured_arguments() {
+    use aevia_dim::Dim;
+    use aevia_rssn::witness::DimensionWitness;
+
+    let session = kernel();
+    let args = [Val::Num(Num::Float(2.0))];
+    let pure = [DimensionWitness::Scalar(Dim::one())];
+    assert!(session.call_with_witnesses("gamma", &args, &pure).is_ok());
+    let measured = [DimensionWitness::Scalar(Dim::base("Length"))];
+    let error = session
+        .call_with_witnesses("gamma", &args, &measured)
+        .unwrap_err();
+    assert_eq!(error.code, "E0401");
+}
+
 // ---------------------------------------------------------------------------
 // 1. One decision: name plus argument types to a pinned key
 // ---------------------------------------------------------------------------

@@ -150,7 +150,7 @@ fn scoped_calls_use_manifest_slots_for_leading_callbacks_and_keep_dynamic_units(
         .key(0)
         .unwrap();
     let pinned = kernel
-        .call_ho_scoped_key(&key, &args, &witnesses, &callbacks)
+        .call_ho_scoped_key(key, &args, &witnesses, &callbacks)
         .unwrap();
     assert_eq!(pinned, unpinned);
     assert!(matches!(pinned.1, W::Scalar(dim) if !dim.is_one()));

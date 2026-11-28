@@ -1,0 +1,62 @@
+## Exact dyadic arithmetic and closed interval interfaces.
+import Rssn_Multiprecision as MP
+import Rssn_numerical_special as Kernel
+
+let zero: MP.Dyadic = { mantissa = 0, exponent = 0, precision = 1 }
+let one: MP.Dyadic = { mantissa = 1, exponent = 0, precision = 1 }
+let two: MP.Dyadic = { mantissa = 1, exponent = 1, precision = 1 }
+let three: MP.Dyadic = { mantissa = 3, exponent = 0, precision = 2 }
+
+fn fails<A>(result: Result<A, OpError>): Bool =
+    match result with
+    | Err(_) -> true
+    | Ok(_) -> false
+
+test "existing dyadic arithmetic preserves a wide mantissa through the curated domain" =
+    let wide = 18446744073709551617
+    match MP.round_dyadic(wide, 0, 65, "nearest") with
+    | Ok(x) -> x.mantissa == wide && MP.compare_dyadic(x, one) == Ok(1)
+    | Err(_) -> false
+
+test "dyadic division returns exact components and enclosures" =
+    let ball_one: MP.DyadicBall = { midpoint = one, radius = zero }
+    let ball_three: MP.DyadicBall = { midpoint = three, radius = zero }
+    match MP.divide_dyadic(one, three, 4, "nearest") with
+    | Ok(third) ->
+        match MP.divide_balls(ball_one, ball_three, 4) with
+        | Ok(enclosure) ->
+            (third.mantissa == 11 && third.exponent == -5 && third.precision == 4
+                && enclosure == Kernel.num_mp_ball_div(ball_one, ball_three, 4))
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "division rejects an exact zero and an interval containing zero" =
+    let interval: MP.DyadicBall = { midpoint = one, radius = one }
+    (fails(MP.divide_dyadic(one, zero, 4, "nearest"))
+        && fails(MP.divide_balls({ midpoint = three, radius = zero }, interval, 8)))
+
+test "dyadic square root respects outward rounding" =
+    MP.sqrt_dyadic(two, 4, "down") == Ok({ mantissa = 11, exponent = -3, precision = 4 }) && MP.sqrt_dyadic(two, 4, "up") == Ok({ mantissa = 12, exponent = -3, precision = 4 })
+
+test "zero scaling preserves a valid round-trip record" =
+    match MP.scale_dyadic_pow2(zero, -800) with
+    | Ok(z) -> z == zero && MP.dyadic_is_zero(z) == Ok(true) && MP.dyadic_floor_log2(z) == Ok(None)
+    | Err(_) -> false
+
+test "exact integer conversion truncates toward zero" =
+    let negative: MP.Dyadic = { mantissa = -7, exponent = -1, precision = 3 }
+    MP.truncate_dyadic(negative) == Ok(-3) && MP.dyadic_is_integer(negative) == Ok(false)
+
+test "the absolute enclosure includes zero at a closed endpoint" =
+    match MP.make_ball(one, two) with
+    | Ok(interval) -> match MP.abs_ball(interval, 8) with
+        | Ok(nonnegative) -> match MP.ball_endpoints(nonnegative, 8) with
+            | Ok(ends) -> MP.dyadic_is_zero(ends.lower) == Ok(true) && MP.compare_dyadic(ends.upper, three) == Ok(0) && MP.ball_contains_zero(nonnegative) == Ok(true)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "malformed records and invalid requests return typed errors" =
+    let malformed: MP.Dyadic = { mantissa = 0, exponent = 1, precision = 16 }
+    let negative: MP.Dyadic = { mantissa = -1, exponent = 0, precision = 1 }
+    fails(MP.point_ball(malformed)) && fails(MP.sqrt_dyadic(negative, 8, "nearest")) && fails(MP.make_ball(one, negative))

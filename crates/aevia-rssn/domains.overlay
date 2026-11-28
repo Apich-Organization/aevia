@@ -36,6 +36,7 @@ domain Functional | Inner-product spaces, operators and integral equations.
 domain Special | Special functions, symbolic and numerical.
 domain Statistics | Distributions, tests and descriptive statistics, symbolic and numerical.
 domain Calculus | Symbolic calculus, variational calculus, result verification, and D-finite functions (differential equations, recurrences, decided identities).
+domain Multiprecision | Exact binary dyadics and closed real enclosures with explicit bit precision.
 domain Elementary | Elementary and complex functions, radicals.
 domain Core | Kernel plumbing: term constructors, rewriting, CSE, unit conversion.
 domain Numeric | Numerical vectors, matrices and callbacks.
@@ -45,10 +46,11 @@ domain Physics | Classical and quantum physics formulas.
 domain Solving | Equation solving and optimisation.
 domain Transforms | Integral and discrete transforms.
 
-family NumberTheory number_theory:*
+family NumberTheory number_theory:* numerical_special:num_number_theory_gcd_u128 numerical_special:num_number_theory_is_prime_bpsw numerical_special:num_number_theory_is_prime_u128 numerical_special:num_number_theory_carmichael_lambda numerical_special:num_number_theory_divisors numerical_special:num_number_theory_divisor_count numerical_special:num_number_theory_divisor_sigma numerical_special:num_number_theory_mul_mod numerical_special:num_number_theory_mul_mod_u128 numerical_special:num_number_theory_mod_pow_u128 numerical_special:num_number_theory_extended_gcd_u64 numerical_special:num_number_theory_mod_inv_u64 numerical_special:num_number_theory_jacobi_symbol numerical_special:num_number_theory_legendre_symbol numerical_special:num_number_theory_primitive_root
+family NumberTheory numerical_special:num_number_exact_bigint_crt_garner numerical_special:num_number_exact_bigint_gcd numerical_special:num_number_exact_bigint_isqrt numerical_special:num_number_exact_bigint_mod_inverse numerical_special:num_number_exact_bigint_nth_root numerical_special:num_number_exact_bigint_xgcd numerical_special:num_number_exact_jacobi_bigint numerical_special:num_number_exact_strong_lucas_bigint numerical_special:num_number_ext_batch_mod_pow numerical_special:num_number_ext_crt_bigint numerical_special:num_number_ext_totient_sieve
 family Combinatorics combinatorics:*
 family Group discrete:perm_* discrete:group* discrete:cyclic_group discrete:dihedral_group discrete:symmetric_group discrete:klein_four_group discrete:fp_group* discrete:todd_coxeter* discrete:presentation_* discrete:representation_* discrete:character_*
-family FiniteField discrete:gf_* discrete:gfp_* discrete:gfx_* discrete:gf256_* discrete:factor_mod discrete:is_irreducible_mod
+family FiniteField discrete:gf_* discrete:gfp_* discrete:gfx_* discrete:gf256_* discrete:factor_mod discrete:is_irreducible_mod numerical_vector:num_finite_field_batch_inverse_mod numerical_vector:num_finite_field_batch_inverse_skip_zeros numerical_vector:num_finite_field_slice_add_mod numerical_vector:num_finite_field_slice_sub_mod numerical_vector:num_finite_field_slice_scale_mod numerical_vector:num_finite_field_slice_axpy_mod numerical_vector:num_finite_field_dot_mod numerical_vector:num_finite_field_primitive_root_prime numerical_vector:num_finite_field_poly_mul_ntt_mod
 family Coding discrete:bch_* discrete:hamming_* discrete:rs_* discrete:crc* discrete:conv_encode discrete:interleave discrete:deinterleave discrete:code_*
 family Crypto discrete:ec_* discrete:ecdh_* discrete:ecdsa_* discrete:rsa_*
 family Graph discrete:graph* discrete:digraph discrete:induced_subgraph discrete:algebraic_connectivity
@@ -63,6 +65,7 @@ family Logic logic:*
 family GeometricAlgebra geometric_algebra:*
 family DifferentialGeometry geometry:*
 family Functional functional:*
+family Multiprecision numerical_special:num_mp_real_* numerical_special:num_mp_ball_*
 family Special special:* numerical_special:*
 family Statistics stats:* numerical_stats:*
 family Calculus calculus:* variational:* verify:* holonomic:*
@@ -82,6 +85,7 @@ family Transforms transforms:*
 mode NumberTheory typed
 mode Combinatorics typed
 mode FiniteField typed
+mode Multiprecision typed
 
 # A `sig` is also the overlay's statement that the operator is a pure,
 # dimensionless function of its (dimensionless) arguments; see
@@ -90,6 +94,32 @@ mode FiniteField typed
 # wrapper turns that into `Err(NotReduced(..))`.
 
 # --- NumberTheory -----------------------------------------------------------
+sig num_number_exact_bigint_crt_garner as crt_garner_u64(residues: Tensor<1, Int>, moduli: Tensor<1, Int>) -> Result<Option<Int>, OpError>
+sig num_number_exact_bigint_gcd as bigint_gcd(a: Int, b: Int) -> Result<Int, OpError>
+sig num_number_exact_bigint_isqrt as bigint_isqrt(n: Int) -> Result<Option<Int>, OpError>
+sig num_number_exact_bigint_mod_inverse as bigint_mod_inverse(a: Int, modulus: Int) -> Result<Option<Int>, OpError>
+sig num_number_exact_bigint_nth_root as bigint_nth_root(n: Int, degree: Int) -> Result<Option<Int>, OpError>
+sig num_number_exact_bigint_xgcd as bigint_xgcd(a: Int, b: Int) -> Result<BezoutBig, OpError>
+sig num_number_exact_jacobi_bigint as bigint_jacobi(a: Int, modulus: Int) -> Result<Option<Int>, OpError>
+sig num_number_exact_strong_lucas_bigint as bigint_strong_lucas(n: Int) -> Result<Bool, OpError>
+sig num_number_ext_batch_mod_pow as batch_pow_mod_i64(bases: Tensor<1, Int>, exponents: Tensor<1, Int>, modulus: Int) -> Result<Tensor<1, Int>, OpError>
+sig num_number_ext_crt_bigint as crt_bigint(residues: Tensor<1, Int>, moduli: Tensor<1, Int>) -> Result<CrtSolution, OpError>
+sig num_number_ext_totient_sieve as totients_up_to(limit: Int) -> Result<Tensor<1, Int>, OpError>
+sig num_number_theory_gcd_u128 as gcd_u128(a: Int, b: Int) -> Result<Int, OpError>
+sig num_number_theory_is_prime_bpsw as is_prime_bpsw_u64(n: Int) -> Result<Bool, OpError>
+sig num_number_theory_is_prime_u128 as is_prime_u128(n: Int) -> Result<Bool, OpError>
+sig num_number_theory_carmichael_lambda as carmichael_lambda_u64(n: Int) -> Result<Int, OpError>
+sig num_number_theory_divisors as divisors_u64(n: Int) -> Result<Tensor<1, Int>, OpError>
+sig num_number_theory_divisor_count as divisor_count_u64(n: Int) -> Result<Int, OpError>
+sig num_number_theory_divisor_sigma as divisor_sigma_u64_saturating(n: Int, k: Int) -> Result<Int, OpError>
+sig num_number_theory_mul_mod as mul_mod_u64(a: Int, b: Int, m: Int) -> Result<Int, OpError>
+sig num_number_theory_mul_mod_u128 as mul_mod_u128(a: Int, b: Int, m: Int) -> Result<Int, OpError>
+sig num_number_theory_mod_pow_u128 as pow_mod_u128(base: Int, exponent: Int, m: Int) -> Result<Int, OpError>
+sig num_number_theory_extended_gcd_u64 as extended_gcd_u64(a: Int, b: Int) -> Result<Bezout64, OpError>
+sig num_number_theory_mod_inv_u64 as mod_inv_u64(a: Int, m: Int) -> Result<Int, OpError>
+sig num_number_theory_jacobi_symbol as jacobi_i128(a: Int, n: Int) -> Result<Int, OpError>
+sig num_number_theory_legendre_symbol as legendre_u64(a: Int, p: Int) -> Result<Int, OpError>
+sig num_number_theory_primitive_root as primitive_root_u64(n: Int) -> Result<Int, OpError>
 sig gcd(a: Int, b: Int) -> Result<Int, OpError>
 sig lcm(a: Int, b: Int) -> Result<Int, OpError>
 sig mod as modulo(a: Int, m: Int) -> Result<Int, OpError>
@@ -187,6 +217,15 @@ dynamic hook_lengths partition_list | ragged results (a list of lists); decode t
 
 # --- FiniteField ------------------------------------------------------------
 # Polynomials are coefficient tensors, highest degree first, residues in [0, p).
+sig num_finite_field_batch_inverse_mod as batch_inverse_mod(values: Tensor<1, Int>, m: Int) -> Result<Tensor<1, Int>, OpError>
+sig num_finite_field_batch_inverse_skip_zeros as batch_inverse_skip_zeros(values: Tensor<1, Int>, m: Int) -> Result<Tensor<1, Int>, OpError>
+sig num_finite_field_slice_add_mod as vector_add_mod(a: Tensor<1, Int>, b: Tensor<1, Int>, m: Int) -> Result<Tensor<1, Int>, OpError>
+sig num_finite_field_slice_sub_mod as vector_sub_mod(a: Tensor<1, Int>, b: Tensor<1, Int>, m: Int) -> Result<Tensor<1, Int>, OpError>
+sig num_finite_field_slice_scale_mod as vector_scale_mod(values: Tensor<1, Int>, scalar: Int, m: Int) -> Result<Tensor<1, Int>, OpError>
+sig num_finite_field_slice_axpy_mod as vector_axpy_mod(alpha: Int, x: Tensor<1, Int>, y: Tensor<1, Int>, m: Int) -> Result<Tensor<1, Int>, OpError>
+sig num_finite_field_dot_mod as vector_dot_mod(a: Tensor<1, Int>, b: Tensor<1, Int>, m: Int) -> Result<Int, OpError>
+sig num_finite_field_primitive_root_prime as primitive_root_prime(p: Int) -> Result<Int, OpError>
+sig num_finite_field_poly_mul_ntt_mod as poly_mul_ntt_mod(a: Tensor<1, Int>, b: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
 sig gf_add(a: Int, b: Int, p: Int) -> Result<Int, OpError>
 sig gf_sub(a: Int, b: Int, p: Int) -> Result<Int, OpError>
 sig gf_mul(a: Int, b: Int, p: Int) -> Result<Int, OpError>
@@ -241,6 +280,18 @@ dynamic factor_mod is_irreducible_mod | the three-argument form (polynomial, pri
 # wrapper reports `Err(NotReduced(..))`. Every answer is a floating-point number
 # (`Float`), including counts and 0-based indices such as `qr_pivoted_rank` and
 # `qr_pivoted_permutation`: the kernel encodes no exact integers here.
+# Exact algebra over normalized rational coefficient handles.
+sig num_native_qlinalg_charpoly as exact_charpoly(matrix: ExactMatrix) -> Result<Option<Tensor<1, Real>>, OpError>
+sig num_native_qlinalg_det_bareiss as exact_det_bareiss(matrix: ExactMatrix) -> Result<Int, OpError>
+sig num_native_qlinalg_det_modular_int as exact_det_modular(matrix: ExactMatrix) -> Result<Int, OpError>
+sig num_native_qlinalg_hermite_normal_form as exact_hermite_form(matrix: ExactMatrix) -> Result<Tensor<2, Int>, OpError>
+sig num_native_qlinalg_hermite_normal_form_with_transform as exact_hermite(matrix: ExactMatrix) -> Result<HermiteForm, OpError>
+sig num_native_qlinalg_smith_normal_form as exact_smith(matrix: ExactMatrix) -> Result<SmithForm, OpError>
+sig num_native_qlinalg_smith_normal_form_diag as exact_smith_invariants(matrix: ExactMatrix) -> Result<Tensor<1, Int>, OpError>
+sig num_native_qlinalg_solve_dixon as exact_solve_dixon(matrix: ExactMatrix, rhs: Tensor<1, Real>) -> Result<Option<Tensor<1, Real>>, OpError>
+sig num_native_qlinalg_solve_mat as exact_solve_matrix(matrix: ExactMatrix, rhs: ExactMatrix) -> Result<ExactMatrixSolution, OpError>
+sig num_native_qlinalg_solve_unique as exact_solve_unique(matrix: ExactMatrix, rhs: Tensor<1, Real>) -> Result<Option<Tensor<1, Real>>, OpError>
+
 # Robust statistics.
 sig mad(xs: Tensor<1, Float>) -> Result<Float, OpError>
 sig mad_sigma(xs: Tensor<1, Float>) -> Result<Float, OpError>
@@ -284,6 +335,23 @@ sig function_inf_norm(points: Tensor<2, Float>) -> Result<Float, OpError>
 sig function_inner(f: Tensor<2, Float>, g: Tensor<2, Float>) -> Result<Float, OpError>
 sig function_project(f: Tensor<2, Float>, g: Tensor<2, Float>) -> Result<Tensor<2, Float>, OpError>
 sig function_normalize(f: Tensor<2, Float>) -> Result<Tensor<2, Float>, OpError>
+# Dimensionless numeric special functions with exact integer counts.
+sig num_harmonic as harmonic_float(n: Int) -> Result<Float, OpError>
+sig num_ln_binomial as log_binomial(n: Int, k: Int) -> Result<Float, OpError>
+sig num_multinomial as multinomial_float(n: Int, parts: Tensor<1, Int>) -> Result<Float, OpError>
+sig num_inverse_beta_reg as inverse_regularized_beta(a: Float, b: Float, p: Float) -> Result<Float, OpError>
+
+# Complex geometry and elliptic functions with dimensionless arguments.
+sig num_uhp_to_disk as uhp_to_disk(point: Complex) -> Result<Complex, OpError>
+sig num_disk_to_uhp as disk_to_uhp(point: Complex) -> Result<Complex, OpError>
+sig num_uhp_distance as uhp_distance(first: Complex, second: Complex) -> Result<Float, OpError>
+sig num_poincare_disk_distance as poincare_disk_distance(first: Complex, second: Complex) -> Result<Float, OpError>
+sig num_weierstrass_p_prime_complex as weierstrass_p_prime(point: Complex, omega1: Complex, omega2: Complex) -> Result<Complex, OpError>
+sig num_weierstrass_invariants_complex as weierstrass_invariants(omega1: Complex, omega2: Complex) -> Result<WeierstrassInvariants, OpError>
+
+# Checked division on exact dyadic data.
+sig num_mp_real_div as dyadic_div(numerator: Dyadic, denominator: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_ball_div as dyadic_ball_div(numerator: DyadicBall, denominator: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
 # Complex special functions: arguments are (re, im), results are [re, im].
 sig lgamma_complex(re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
 sig gamma_complex(re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
@@ -459,6 +527,17 @@ sig cp_dense as cp_dense_4(weights: Tensor<1, Float>, factors: Tensor<1, Tensor<
 # Rich types. Curated Aevia source that is placed ahead of the generated
 # wrappers. Keep it to types and codecs: the arithmetic belongs to the kernel.
 # ---------------------------------------------------------------------------
+prelude Special
+| ## Lattice invariants for the chosen pair of Weierstrass half-periods.
+| type WeierstrassInvariants = { g2: Complex, g3: Complex }
+|
+| ## A binary real with value mantissa * 2^exponent and precision in bits.
+| type Dyadic = { mantissa: Int, exponent: Int, precision: Int }
+|
+| ## A closed real enclosure with a nonnegative radius.
+| type DyadicBall = { midpoint: Dyadic, radius: Dyadic }
+|
+
 codec Perm perm_to_value perm_from_value
 
 prelude Combinatorics
@@ -495,7 +574,47 @@ codec Hooi4 - hooi4_from_value
 codec CpFit - cpfit_from_value
 codec TensorTrain - tensortrain_from_value
 
+codec ExactMatrix exact_matrix_to_value exact_matrix_from_value
+codec ExactMatrixSolution - exact_matrix_solution_from_value
+
 prelude Numeric
+| ## Session-owned rational coefficients normalized by an explicit positive reference.
+| type ExactMatrix = | ExactMatrix(Value)
+|
+| type ExactMatrixSolution = Option<ExactMatrix>
+|
+| fn exact_matrix_to_value(matrix: ExactMatrix): Value =
+|     match matrix with
+|     | ExactMatrix(wire) -> wire
+|
+| fn exact_matrix_from_value(wire: Value): Result<ExactMatrix, OpError> =
+|     Ok(ExactMatrix(wire))
+|
+| fn exact_matrix_solution_from_value(wire: Value): Result<ExactMatrixSolution, OpError> =
+|     match from_value<Option<Value>>(wire) with
+|     | Ok(Some(value)) -> Ok(Some(ExactMatrix(value)))
+|     | Ok(None) -> Ok(None)
+|     | Err(failure) -> Err(failure)
+|
+| ## Normalize a rational matrix by a positive reference of the same dimension.
+| ## Supply exact literals or fractions to retain exact coefficients.
+| fn exact_matrix<d: Dim>(values: Tensor<2, Real[d]>, reference: Real[d]): Result<ExactMatrix, OpError> =
+|     match Rssn.dynamic("num_native_qmatrix_new", [to_value(values), to_value(reference)]) with
+|     | Ok(wire) -> exact_matrix_from_value(wire)
+|     | Err(failure) -> Err(failure)
+|
+| ## Read normalized rational coefficients as a rank-two tensor.
+| fn exact_matrix_entries(matrix: ExactMatrix): Result<Tensor<2, Real>, OpError> =
+|     match Rssn.dynamic("num_native_qmatrix_export", [exact_matrix_to_value(matrix)]) with
+|     | Ok(wire) -> from_value<Tensor<2, Real>>(wire)
+|     | Err(failure) -> Err(failure)
+|
+| ## A row Hermite form with a unimodular transform satisfying transform * A = form.
+| type HermiteForm = { form: Tensor<2, Int>, transform: Tensor<2, Int> }
+|
+| ## A Smith form with unimodular transforms satisfying left * A * right = form.
+| type SmithForm = { left: Tensor<2, Int>, form: Tensor<2, Int>, right: Tensor<2, Int> }
+|
 | ## Truncated higher-order SVD: the core, one factor matrix per mode (`factors[k]` is
 | ## n_k x r_k with orthonormal columns) and the singular values of each mode unfolding.
 | ## The tensor is `core` multiplied by `factors[k]` along mode k.
@@ -648,7 +767,28 @@ prelude Numeric
 |         let err = from_value<Float>(at(ps, 1))?
 |         Ok({ cores = cores, error = err })
 |
+codec BezoutBig - bezout_big_from_value
+codec CrtSolution - crt_solution_from_value
+
 prelude NumberTheory
+| ## Nonnegative gcd and the two coefficients in a * x + b * y = gcd.
+| type BezoutBig = { gcd: Int, x: Int, y: Int }
+|
+| fn bezout_big_from_value(wire: Value): Result<BezoutBig, OpError> =
+|     match from_value<{ item0: Int, item1: Int, item2: Int }>(wire) with
+|     | Ok(result) -> Ok({ gcd = result.item0, x = result.item1, y = result.item2 })
+|     | Err(failure) -> Err(failure)
+|
+| ## Least nonnegative solution and positive least common multiple of the moduli.
+| type CrtSolution = { residue: Int, modulus: Int }
+|
+| fn crt_solution_from_value(wire: Value): Result<CrtSolution, OpError> =
+|     match from_value<{ item0: Int, item1: Int }>(wire) with
+|     | Ok(result) -> Ok({ residue = result.item0, modulus = result.item1 })
+|     | Err(failure) -> Err(failure)
+|
+| type Bezout64 = { gcd: Int, x: Int, y: Int }
+|
 | ## An element of Z/nZ. The residue and its modulus travel together, so combining two
 | ## moduli is an `Err`, never a silently wrong answer. The arithmetic is the kernel's
 | ## (`modulo`, `invmod`, `powmod`); a residue is always in [0, n).
@@ -817,3 +957,40 @@ sig perm_group_is_transitive(g: PermGroup) -> Result<Bool, OpError>
 sig perm_group_is_solvable(g: PermGroup) -> Result<Bool, OpError>
 sig perm_group_is_nilpotent(g: PermGroup) -> Result<Bool, OpError>
 sig perm_group_contains(g: PermGroup, p: Perm) -> Result<Bool, OpError>
+
+# --- Multiprecision ----------------------------------------------------------
+prelude Multiprecision
+| ## A finite exact dyadic equal to mantissa * 2^exponent.
+| ## Nonzero mantissas have precision bits. Zero has exponent zero.
+| type Dyadic = { mantissa: Int, exponent: Int, precision: Int }
+|
+| ## A closed interval with a nonnegative dyadic radius.
+| type DyadicBall = { midpoint: Dyadic, radius: Dyadic }
+|
+| ## Endpoints rounded outward to the requested bit precision.
+| type DyadicBounds = { lower: Dyadic, upper: Dyadic }
+|
+
+sig num_mp_real_round as round_dyadic(mantissa: Int, exponent: Int, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_real_compare as compare_dyadic(left: Dyadic, right: Dyadic) -> Result<Int, OpError>
+sig num_mp_real_add as add_dyadic(left: Dyadic, right: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_real_sub as subtract_dyadic(left: Dyadic, right: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_real_mul as multiply_dyadic(left: Dyadic, right: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_real_div as divide_dyadic(left: Dyadic, right: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_ball_div as divide_balls(numerator: DyadicBall, divisor: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_real_abs as abs_dyadic(value: Dyadic) -> Result<Dyadic, OpError>
+sig num_mp_real_neg as negate_dyadic(value: Dyadic) -> Result<Dyadic, OpError>
+sig num_mp_real_is_zero as dyadic_is_zero(value: Dyadic) -> Result<Bool, OpError>
+sig num_mp_real_is_integer as dyadic_is_integer(value: Dyadic) -> Result<Bool, OpError>
+sig num_mp_real_floor_log2 as dyadic_floor_log2(value: Dyadic) -> Result<Option<Int>, OpError>
+sig num_mp_real_trunc_to_bigint as truncate_dyadic(value: Dyadic) -> Result<Int, OpError>
+sig num_mp_real_with_precision as requantize_dyadic(value: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_real_sqrt as sqrt_dyadic(value: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_real_scale_pow2 as scale_dyadic_pow2(value: Dyadic, shift: Int) -> Result<Dyadic, OpError>
+sig num_mp_ball_new as make_ball(midpoint: Dyadic, radius: Dyadic) -> Result<DyadicBall, OpError>
+sig num_mp_ball_point as point_ball(value: Dyadic) -> Result<DyadicBall, OpError>
+sig num_mp_ball_contains_zero as ball_contains_zero(interval: DyadicBall) -> Result<Bool, OpError>
+sig num_mp_ball_width as ball_width(interval: DyadicBall) -> Result<Dyadic, OpError>
+sig num_mp_ball_neg as negate_ball(interval: DyadicBall) -> Result<DyadicBall, OpError>
+sig num_mp_ball_abs as abs_ball(interval: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_endpoints as ball_endpoints(interval: DyadicBall, precision: Int) -> Result<DyadicBounds, OpError>

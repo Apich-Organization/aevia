@@ -110,50 +110,194 @@ pub fn resolve_default(
     })
 }
 
-/// Multiplies row-major matrices `a` (`m x k`) and `b` (`k x n`) on `device`.
+/// Device preference for eligible Aevia matrix products.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MatmulPolicy {
+    /// Consider native f64 hardware once large work can amortize transfers.
+    #[default]
+    Auto,
+    /// Use the host's dense kernels.
+    Cpu,
+    /// Also try smaller products and the exact subset on emulated devices.
+    PreferGpu,
+}
+
+/// Try a registered GPU when it can preserve the Float calculation.
+///
+/// A device that emulates f64 is eligible only when every input is an exact
+/// integer and the sum of absolute products is bounded by 2^24. That also
+/// makes its f32 indexing parameters exact for the bounded launch shape.
+/// Device failures permit replay on the host; the inputs are unmodified.
+#[must_use]
+pub fn try_gpu_matmul(
+    policy: MatmulPolicy,
+    left: &[f64],
+    right: &[f64],
+    rows: usize,
+    inner: usize,
+    cols: usize,
+) -> Option<Vec<f64>> {
+    if policy == MatmulPolicy::Cpu
+        || rows == 0
+        || inner == 0
+        || cols == 0
+        || !rssn::backend::gpu_allowed()
+    {
+        return None;
+    }
+    let output = rows.checked_mul(cols)?;
+    let work = output.checked_mul(inner)?;
+    if left.len() != rows.checked_mul(inner)? || right.len() != inner.checked_mul(cols)? {
+        return None;
+    }
+    // The GPU operation copies both host inputs and the result. Keep small
+    // operations on the host in automatic mode, including skinny products.
+    if policy == MatmulPolicy::Auto && (work < (1 << 24) || inner < 64) {
+        return None;
+    }
+    let inputs = left.len().checked_add(right.len())?;
+    let mut exact_f32 = None;
+    let devices = registry();
+    let candidates = devices.list();
+    let mut finite = None;
+    for info in candidates {
+        if !matches!(info.kind, DeviceKind::Gpu(_))
+            || !info.ops.matmul
+            || !info.dtypes.contains(&Dtype::F64)
+            || inputs.max(output) > info.max_buffer_elems
+            || (policy == MatmulPolicy::Auto
+                && (info.emulated_f64 || info.name.contains(" [software]")))
+        {
+            continue;
+        }
+        let dtype = if info.emulated_f64 {
+            if inputs.max(output) > (1 << 24)
+                || !*exact_f32.get_or_insert_with(|| exact_f32_matmul(left, right, inner))
+            {
+                continue;
+            }
+            if info.dtypes.contains(&Dtype::F32) {
+                Dtype::F32
+            } else {
+                Dtype::F64
+            }
+        } else {
+            if !*finite.get_or_insert_with(|| left.iter().chain(right).all(|x| x.is_finite())) {
+                continue;
+            }
+            Dtype::F64
+        };
+        if let Some(device) = devices.get(&info.id)
+            && let Ok(data) = matmul_with_dtype(&*device, dtype, left, right, rows, inner, cols)
+        {
+            return Some(data);
+        }
+    }
+    None
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "isolates the precision bound for emulated GPU work"
+    )
+)]
+fn exact_f32_matmul(
+    left: &[f64],
+    right: &[f64],
+    inner: usize,
+) -> bool {
+    const MAX_EXACT: f64 = 16_777_216.0;
+    let bounds = |values: &[f64]| {
+        values.iter().try_fold(
+            (0.0_f64, false, false),
+            |(max, has_zero, has_negative), &x| {
+                let abs = x.abs();
+                // A negative zero can already distinguish the formats.
+                (abs <= MAX_EXACT && x.fract() == 0.0 && !(x == 0.0 && x.is_sign_negative()))
+                    .then_some((max.max(abs), has_zero || x == 0.0, has_negative || x < 0.0))
+            },
+        )
+    };
+    let (
+        Some((left_max, left_zero, left_negative)),
+        Some((right_max, right_zero, right_negative)),
+        Ok(terms),
+    ) = (bounds(left), bounds(right), u32::try_from(inner))
+    else {
+        return false;
+    };
+    // Different accumulators can retain or erase the minus sign of a zero
+    // product. Keep those cases on Aevia's host path.
+    !(left_zero && right_negative || right_zero && left_negative)
+        && left_max * right_max * f64::from(terms) <= MAX_EXACT
+}
+
+/// Multiplies two row-major matrices on `device`. The left shape is
+/// `rows × inner` and the right shape is `inner × columns`.
 ///
 /// # Errors
 /// Returns a message on shape mismatch, overflow, or when the device does not
 /// support `matmul` or fails to execute.
 pub fn matmul(
     device: &dyn Device,
-    a: &[f64],
-    b: &[f64],
-    m: usize,
-    k: usize,
-    n: usize,
+    left: &[f64],
+    right: &[f64],
+    rows: usize,
+    inner: usize,
+    columns: usize,
 ) -> Result<Vec<f64>, String> {
-    let expected_a = m
-        .checked_mul(k)
+    matmul_with_dtype(
+        device,
+        preferred_dtype(device.info()),
+        left,
+        right,
+        rows,
+        inner,
+        columns,
+    )
+}
+
+fn matmul_with_dtype(
+    device: &dyn Device,
+    dtype: Dtype,
+    left: &[f64],
+    right: &[f64],
+    rows: usize,
+    inner: usize,
+    columns: usize,
+) -> Result<Vec<f64>, String> {
+    let expected_left = rows
+        .checked_mul(inner)
         .ok_or_else(|| "device matmul: matrix `a` dimensions overflow".to_string())?;
-    let expected_b = k
-        .checked_mul(n)
+    let expected_right = inner
+        .checked_mul(columns)
         .ok_or_else(|| "device matmul: matrix `b` dimensions overflow".to_string())?;
-    let out_len = m
-        .checked_mul(n)
+    let out_len = rows
+        .checked_mul(columns)
         .ok_or_else(|| "device matmul: output dimensions overflow".to_string())?;
-    if a.len() != expected_a || b.len() != expected_b {
+    if left.len() != expected_left || right.len() != expected_right {
         return Err(format!(
-            "device matmul: expected lengths {expected_a} and {expected_b}, got {} and {}",
-            a.len(),
-            b.len()
+            "device matmul: expected lengths {expected_left} and {expected_right}, got {} and {}",
+            left.len(),
+            right.len()
         ));
     }
     if out_len == 0 {
         return Ok(Vec::new());
     }
-    let dtype = preferred_dtype(device.info());
     let buf_a = device
-        .upload(a, dtype)
+        .upload(left, dtype)
         .map_err(|err| format!("device `{}` upload failed: {err}", device.info().id))?;
     let buf_b = device
-        .upload(b, dtype)
+        .upload(right, dtype)
         .map_err(|err| format!("device `{}` upload failed: {err}", device.info().id))?;
     let mut buf_c = device
         .alloc(out_len, dtype)
         .map_err(|err| format!("device `{}` alloc failed: {err}", device.info().id))?;
     device
-        .matmul(&buf_a, &buf_b, &mut buf_c, m, k, n)
+        .matmul(&buf_a, &buf_b, &mut buf_c, rows, inner, columns)
         .map_err(|err| format!("device `{}` matmul failed: {err}", device.info().id))?;
     let mut host = vec![0.0; out_len];
     device
@@ -479,6 +623,42 @@ mod tests {
         };
         assert!(square_plus_one().run(&device, &[&input]).is_none());
         assert!(device.launched.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn emulated_gpu_matmul_requires_exact_operands_and_accumulation() {
+        assert!(exact_f32_matmul(&[4_096.0], &[4_096.0], 1));
+        assert!(!exact_f32_matmul(&[4_096.0], &[4_096.0], 2));
+        assert!(exact_f32_matmul(&[0.0], &[1.0], 1));
+        assert!(!exact_f32_matmul(&[0.0], &[-1.0], 1));
+        assert!(!exact_f32_matmul(&[-1.0], &[0.0], 1));
+        for bad in [f64::NAN, f64::INFINITY, -0.0, 0.25, 16_777_217.0] {
+            assert!(!exact_f32_matmul(&[bad], &[1.0], 1));
+            assert!(!exact_f32_matmul(&[1.0], &[bad], 1));
+        }
+        assert!(try_gpu_matmul(MatmulPolicy::Cpu, &[1.0], &[1.0], 1, 1, 1).is_none());
+        assert!(try_gpu_matmul(MatmulPolicy::Auto, &[1.0], &[1.0], 1, 1, 1).is_none());
+        assert!(try_gpu_matmul(MatmulPolicy::PreferGpu, &[1.0], &[1.0], 1, 2, 1).is_none());
+        assert!(try_gpu_matmul(MatmulPolicy::PreferGpu, &[], &[], usize::MAX, 2, 2).is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "gpu-wgpu")]
+    fn preferred_gpu_executes_an_exact_product_when_an_adapter_is_registered() {
+        if !has_gpu() {
+            return;
+        }
+        assert_eq!(
+            try_gpu_matmul(
+                MatmulPolicy::PreferGpu,
+                &[1.0, -2.0, 3.0, 4.0],
+                &[5.0, 6.0, 7.0, 8.0],
+                2,
+                2,
+                2,
+            ),
+            Some(vec![-9.0, -10.0, 43.0, 50.0])
+        );
     }
 
     #[test]

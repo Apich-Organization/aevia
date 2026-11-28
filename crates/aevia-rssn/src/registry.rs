@@ -286,20 +286,23 @@ impl OpEntry {
         self.keys.get(index)
     }
 
-    /// The conservative source overload for a fixed-nullary derived pair.
+    /// The term overload for a nullary pair with an eligible dimension rule.
     ///
-    /// RSSN derives a scalar result from the evaluator and publishes a term
-    /// contract for the same registration. A dimensionless or dimensionally
-    /// polymorphic result can use the term contract without assigning units
-    /// to a physical constant whose dimensions require separate evidence.
+    /// RSSN publishes scalar and term signatures for some nullary graph
+    /// operators. An explicit overlay can preserve this pair. A dimensionless
+    /// or dimensionally polymorphic result can use the term contract.
     #[must_use]
     pub fn derived_nullary_term_index(&self) -> Option<usize> {
         let [scalar, symbolic] = self.raw.as_slice() else {
             return None;
         };
-        if self.source == Source::Derived
-            && self.arity == (0, Some(0))
-            && self.witnessed.is_empty()
+        // The domain facade also treats overlay overloads as authoritative.
+        // Their indices carry no runtime evidence without recorded witnesses.
+        if matches!(
+            (self.source, self.witnessed.as_slice()),
+            (Source::Derived, []) | (Source::Overlay, [0, 1])
+        ) && self.arity == (0, Some(0))
+            && self.witnesses.is_empty()
             && matches!(
                 self.dim_rule,
                 Some(
@@ -351,7 +354,8 @@ impl OpEntry {
     /// This is `kernel::overload`'s lattice, applied to types instead of
     /// values: arity first, then the weakest per-argument match, then the
     /// unique maximum. A dimensionless or dimensionally polymorphic
-    /// fixed-nullary derived scalar-and-term pair selects its term contract.
+    /// nullary scalar and term pair from inference or an overlay selects
+    /// its term contract.
     ///
     /// # Errors
     ///
@@ -529,7 +533,7 @@ impl Capabilities {
             row("core.sde", "sde", self.sde),
             // Callback support is scoped to synchronous, thread-affine
             // interpreter calls. Individual signatures remain subject to the
-            // binding catalog's Float-only, trailing callback restrictions.
+            // binding catalog and the checked recursive callback schema.
             row(
                 "core.callback",
                 "callback",

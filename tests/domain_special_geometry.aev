@@ -1,0 +1,49 @@
+## The Special domain keeps geometry and lattice results typed.
+import Rssn_Special as Special
+import Rssn_numerical_special as Kernel
+
+let first = complex(0.0, 1.0)
+let second = complex(0.0, 4.0)
+let omega1 = complex(1.0, 0.0)
+let omega2 = complex(0.2, 1.1)
+let point = complex(0.3, 0.4)
+
+fn rejected<T>(result: Result<T, OpError>): Bool =
+    match result with
+    | Err(_) -> true
+    | Ok(_) -> false
+
+test "both charts give the same geodesic length" =
+    match Special.uhp_to_disk(second) with
+    | Ok(disk) ->
+        match Special.disk_to_uhp(disk) with
+        | Ok(restored) ->
+            let plane = Special.uhp_distance(first, second)
+            let circle = Special.poincare_disk_distance(complex(0.0, 0.0), disk)
+            (approx_eq(magnitude(restored - second), 0.0, 1e-12)
+                && approx_eq(unwrap_or(plane, nan), ln(4.0), 1e-12)
+                && approx_eq(unwrap_or(circle, nan), ln(4.0), 1e-12))
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "points on either chart boundary return errors" =
+    (rejected(Special.uhp_to_disk(complex(1.0, 0.0)))
+        && rejected(Special.disk_to_uhp(complex(1.0, 0.0)))
+        && rejected(Special.uhp_distance(complex(1.0, 0.0), second))
+        && rejected(Special.poincare_disk_distance(first, complex(0.0, 0.0))))
+
+test "named lattice invariants and derivative match the rule set" =
+    let expected = Kernel.num_weierstrass_invariants_complex(omega1, omega2)
+    let result: Result<Special.WeierstrassInvariants, OpError> = Special.weierstrass_invariants(omega1, omega2)
+    match result with
+    | Ok(invariants) ->
+        match Special.weierstrass_p_prime(point, omega1, omega2) with
+        | Ok(derivative) ->
+            (invariants.g2 == expected.g2 && invariants.g3 == expected.g3
+                && derivative == Kernel.num_weierstrass_p_prime_complex(point, omega1, omega2))
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "collinear lattice periods return errors" =
+    (rejected(Special.weierstrass_invariants(omega1, omega1))
+        && rejected(Special.weierstrass_p_prime(point, omega1, omega1)))

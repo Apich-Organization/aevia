@@ -12,6 +12,8 @@ default = ["jit", "gpu-wgpu", "npy"]
 jit = ["rssn/jit"]
 gpu-wgpu = ["rssn/gpu-wgpu"]
 npy = ["rssn/npy"]
+# Expose every RSSN feature to Aevia distribution builds.
+all-kernel-features = ["rssn/default", "rssn/dev-headers", "rssn/full", "rssn/gpu-wgpu"]
 
 [dependencies]
 aevia-dim.workspace = true

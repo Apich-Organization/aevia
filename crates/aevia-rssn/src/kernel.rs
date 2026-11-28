@@ -17,10 +17,12 @@ use num_rational::BigRational;
 use num_traits::ToPrimitive;
 use rssn::api::Config;
 use rssn::api::Session;
+use rssn::graph::DimensionMode;
 use rssn::kernel::call::CallCtx;
 use rssn::kernel::call::OpError;
 use rssn::kernel::manifest::KernelManifest;
 use rssn::kernel::result::Solutions;
+use rssn::kernel::signature::DimRuleInfo;
 use rssn::kernel::signature::OpKey;
 use rssn::kernel::signature::Signature;
 use rssn::kernel::signature::TypeExpr;
@@ -32,6 +34,8 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
+
+type KeyedSessionCall = fn(&Session, &OpKey, &[Value], &CallCtx<'_>) -> Result<Value, OpError>;
 
 const SCRATCH_VALUE_POOL_CAP: usize = 8;
 const SCRATCH_VALUE_ELEMS_CAP: usize = 256;
@@ -1679,12 +1683,28 @@ impl Kernel {
                 }
             }
             if !witnesses.iter().all(dimensionless) {
+                if entry.dim_rule == Some(DimRuleInfo::Dimensionless)
+                    && let Some((index, dimension)) =
+                        witnesses.iter().enumerate().find_map(|(index, witness)| {
+                            measured_dimension(witness).map(|d| (index, d))
+                        })
+                {
+                    return Err(KernelError::of(
+                        "E0401",
+                        crate::error::Failure::Type,
+                        format!(
+                            "argument {} must be dimensionless, got {dimension}",
+                            index.saturating_add(1)
+                        ),
+                    )
+                    .at_operator(name));
+                }
                 return Err(KernelError::capability("dim.dynamic_input_witness"));
             }
         }
         let raw = self
             .session
-            .call_value(name, &converted.0, &CallCtx::new())
+            .call_value(name, &converted.0, &witnessed_call_context(entry))
             .map_err(|error| from_op_error(&error).at_operator(name))?;
         self.refuse_declined(name, &raw)?;
         let trusted = (entry.source.is_exact() && entry.is_value_native())
@@ -1824,14 +1844,33 @@ impl Kernel {
         key: &OpKey,
         args: &[Val],
     ) -> Result<Val, KernelError> {
+        self.call_key_inner(key, args, Session::call_key)
+    }
+
+    /// Calls the pinned overload with argument diagnostics for source callers.
+    ///
+    /// # Errors
+    /// Reports capability, conversion, stale-key, argument and evaluator errors.
+    pub fn call_key_diagnosed(
+        &self,
+        key: &OpKey,
+        args: &[Val],
+    ) -> Result<Val, KernelError> {
+        self.call_key_inner(key, args, Session::call_key_diagnosed)
+    }
+
+    fn call_key_inner(
+        &self,
+        key: &OpKey,
+        args: &[Val],
+        call: KeyedSessionCall,
+    ) -> Result<Val, KernelError> {
         let registry = crate::registry::registry();
         if let Some(entry) = registry.op(&key.name) {
             registry.capabilities.require_op(entry)?;
         }
         let converted = self.convert(&key.name, args)?;
-        let value = self
-            .session
-            .call_key(key, &converted, &CallCtx::new())
+        let value = call(&self.session, key, &converted, &CallCtx::new())
             .map_err(|error| from_op_error(&error).at_operator(&key.name))?;
         self.refuse_declined(&key.name, &value)?;
         Val::from_rssn(&value, self.id)
@@ -1879,7 +1918,12 @@ impl Kernel {
         args: &[Val],
         witnesses: &[crate::witness::DimensionWitness],
     ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
-        self.call_key_attaching_witnesses(key, ArgumentSlice::Neutral(args), witnesses)
+        self.call_key_attaching_witnesses(
+            key,
+            ArgumentSlice::Neutral(args),
+            witnesses,
+            Session::call_key,
+        )
     }
 
     /// Calls the pinned native overload with checked, optionally borrowed input.
@@ -1894,7 +1938,30 @@ impl Kernel {
         args: &[NativeArgument<'_>],
         witnesses: &[crate::witness::DimensionWitness],
     ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
-        self.call_key_attaching_witnesses(key, ArgumentSlice::Native(args), witnesses)
+        self.call_key_attaching_witnesses(
+            key,
+            ArgumentSlice::Native(args),
+            witnesses,
+            Session::call_key,
+        )
+    }
+
+    /// Calls the pinned native overload with source-level argument diagnostics.
+    ///
+    /// # Errors
+    /// Reports capability, witness, stale-key, argument and evaluator errors.
+    pub fn call_key_with_native_arguments_diagnosed(
+        &self,
+        key: &OpKey,
+        args: &[NativeArgument<'_>],
+        witnesses: &[crate::witness::DimensionWitness],
+    ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
+        self.call_key_attaching_witnesses(
+            key,
+            ArgumentSlice::Native(args),
+            witnesses,
+            Session::call_key_diagnosed,
+        )
     }
 
     fn call_key_attaching_witnesses(
@@ -1902,6 +1969,7 @@ impl Kernel {
         key: &OpKey,
         args: ArgumentSlice<'_, '_>,
         witnesses: &[crate::witness::DimensionWitness],
+        call: KeyedSessionCall,
     ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
         if args.len() != witnesses.len() {
             return Err(KernelError::new(
@@ -1931,10 +1999,13 @@ impl Kernel {
                 crate::witness::attach(value, witness, param)?;
             }
         }
-        let raw = self
-            .session
-            .call_key(key, &converted.0, &CallCtx::new())
-            .map_err(|error| from_op_error(&error).at_operator(&key.name))?;
+        let raw = call(
+            &self.session,
+            key,
+            &converted.0,
+            &witnessed_call_context(entry),
+        )
+        .map_err(|error| from_op_error(&error).at_operator(&key.name))?;
         self.refuse_declined(&key.name, &raw)?;
         let witness = crate::witness::extract(&raw, entry.source.is_exact());
         Ok((Val::from_rssn(&raw, self.id)?, witness))
@@ -2030,7 +2101,7 @@ impl Kernel {
     ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
         self.call_ho_scoped_inner(
             &key.name,
-            Some(key),
+            Some((key, Session::call_key)),
             ArgumentSlice::Neutral(args),
             witnesses,
             callbacks,
@@ -2053,7 +2124,27 @@ impl Kernel {
     ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
         self.call_ho_scoped_inner(
             &key.name,
-            Some(key),
+            Some((key, Session::call_key)),
+            ArgumentSlice::Native(args),
+            witnesses,
+            callbacks,
+        )
+    }
+
+    /// Calls the exact higher-order key with source-level argument diagnostics.
+    ///
+    /// # Errors
+    /// Reports stale-key, witness, callback, argument and evaluator errors.
+    pub fn call_ho_scoped_key_native_diagnosed(
+        &self,
+        key: &OpKey,
+        args: &[NativeArgument<'_>],
+        witnesses: &[crate::witness::DimensionWitness],
+        callbacks: &[Arc<dyn BridgeCallback>],
+    ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
+        self.call_ho_scoped_inner(
+            &key.name,
+            Some((key, Session::call_key_diagnosed)),
             ArgumentSlice::Native(args),
             witnesses,
             callbacks,
@@ -2067,7 +2158,7 @@ impl Kernel {
     fn call_ho_scoped_inner(
         &self,
         name: &str,
-        key: Option<&OpKey>,
+        key: Option<(&OpKey, KeyedSessionCall)>,
         args: ArgumentSlice<'_, '_>,
         witnesses: &[crate::witness::DimensionWitness],
         callbacks: &[Arc<dyn BridgeCallback>],
@@ -2089,7 +2180,7 @@ impl Kernel {
         let [signature] = entry.signatures.as_slice() else {
             return Err(KernelError::capability("core.callback.signature"));
         };
-        if let Some(key) = key
+        if let Some((key, _)) = key
             && entry.key_index(key) != Some(0)
         {
             return Err(KernelError::new(
@@ -2155,7 +2246,7 @@ impl Kernel {
         let raw = if handles.is_empty() {
             key.map_or_else(
                 || self.session.call_value(name, &converted.0, &ctx),
-                |key| self.session.call_key(key, &converted.0, &ctx),
+                |(key, call)| call(&self.session, key, &converted.0, &ctx),
             )
         } else {
             // The kernel's host call_ho API appends handles. Use the exact
@@ -2176,7 +2267,7 @@ impl Kernel {
             }
             key.map_or_else(
                 || self.session.call_value(name, &combined.0, &ctx),
-                |key| self.session.call_key(key, &combined.0, &ctx),
+                |(key, call)| call(&self.session, key, &combined.0, &ctx),
             )
         }
         .map_err(|e| from_op_error(&e).at_operator(name))?;
@@ -2757,6 +2848,50 @@ pub fn rational(
     Num::Rat(BigRational::new(BigInt::from(numer), BigInt::from(denom)))
 }
 
+fn measured_dimension(witness: &crate::witness::DimensionWitness) -> Option<&aevia_dim::Dim> {
+    use crate::witness::DimensionWitness as W;
+    let known = |d: &&aevia_dim::Dim| d.is_concrete() && !d.is_one();
+    match witness {
+        | W::Unknown => None,
+        | W::Scalar(d) => Some(d).filter(known),
+        | W::Tensor {
+            dimension,
+            element,
+            elements,
+            ..
+        } => {
+            dimension
+                .as_ref()
+                .filter(known)
+                .or_else(|| element.as_deref().and_then(measured_dimension))
+                .or_else(|| elements.iter().find_map(measured_dimension))
+        },
+        | W::Record(fields) => {
+            fields
+                .iter()
+                .find_map(|(_, witness)| measured_dimension(witness))
+        },
+        | W::OptionSchema(payload) => measured_dimension(payload),
+        | W::Variant { fields, .. } => fields.iter().find_map(measured_dimension),
+    }
+}
+
+fn witnessed_call_context(entry: &crate::registry::OpEntry) -> CallCtx<'static> {
+    let context = CallCtx::new();
+    // These rules certify a pure result only after the kernel validates the
+    // input dimensions, including compatibility for probabilities and angles.
+    if matches!(
+        entry.dim_rule,
+        Some(
+            DimRuleInfo::Dimensionless | DimRuleInfo::CompatibleDimensionless | DimRuleInfo::Angle
+        )
+    ) {
+        context.dimensions(DimensionMode::Strict)
+    } else {
+        context
+    }
+}
+
 /// Whether the kernel's *own dimension rule* makes a bare numeric result
 /// dimensionless.
 ///
@@ -2765,9 +2900,10 @@ pub fn rational(
 /// `from_value`, however obviously dimensionless it was (`invmod`, `binomial`,
 /// `totient`). The manifest does state the rule, though:
 ///
-/// * `Dimensionless` says the result is a pure number whatever the arguments;
+/// * `Dimensionless`, `CompatibleDimensionless` and `Angle` give a pure
+///   number after the kernel validates the arguments.
 /// * `Same(index)` follows the dimension of the designated argument.
-/// * `List`, `NonMetric`, `Compare` and `Angle` yield pure numbers only when
+/// * `List`, `NonMetric` and `Compare` yield pure numbers only when
 ///   every argument is itself *known* to be dimensionless.
 ///
 /// The remaining rules require more evidence than this check evaluates.
@@ -2828,9 +2964,9 @@ fn result_is_dimensionless(
         return true;
     }
     match &entry.dim_rule {
-        | Some(R::Dimensionless | R::CompatibleDimensionless) => true,
+        | Some(R::Dimensionless | R::CompatibleDimensionless | R::Angle) => true,
         | Some(R::Same(index)) => witnesses.get(usize::from(*index)).is_some_and(known_one),
-        | Some(R::List | R::NonMetric | R::Compare | R::Angle) => witnesses.iter().all(known_one),
+        | Some(R::List | R::NonMetric | R::Compare) => witnesses.iter().all(known_one),
         | _ => false,
     }
 }

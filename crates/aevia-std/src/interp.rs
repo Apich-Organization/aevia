@@ -12,7 +12,6 @@
 
 use crate::NumericError;
 use rssn::kernels::interp_ext;
-use rssn::kernels::interpolate::MultilinearGrid;
 
 mod extended;
 pub use extended::BSpline;
@@ -86,9 +85,7 @@ pub fn interp2(
 /// fastest. Validation runs once, and a query searches only the two axes.
 #[derive(Debug)]
 pub struct BilinearGrid<'grid> {
-    grid: MultilinearGrid<'grid>,
-    x_bounds: (f64, f64),
-    y_bounds: (f64, f64),
+    grid: interp_ext::BilinearGrid<'grid>,
 }
 
 impl<'grid> BilinearGrid<'grid> {
@@ -101,29 +98,8 @@ impl<'grid> BilinearGrid<'grid> {
         ys: &'grid [f64],
         values: &'grid [f64],
     ) -> Result<Self, NumericError> {
-        let (Some((&xmin, &xmax)), Some((&ymin, &ymax))) =
-            (xs.first().zip(xs.last()), ys.first().zip(ys.last()))
-        else {
-            return Err(NumericError::Empty);
-        };
-        let (nx, ny) = (xs.len(), ys.len());
-        if nx.checked_mul(ny) != Some(values.len()) {
-            return Err(NumericError::ShapeMismatch(format!(
-                "interp2 needs a {ny}x{nx} grid, found {} values",
-                values.len(),
-            )));
-        }
-        if nx < 2 || ny < 2 {
-            return Err(NumericError::Domain(
-                "interp2 needs at least two points per axis".into(),
-            ));
-        }
-        let grid = MultilinearGrid::new([xs, ys], values).map_err(NumericError::Domain)?;
-        Ok(Self {
-            grid,
-            x_bounds: (xmin, xmax),
-            y_bounds: (ymin, ymax),
-        })
+        let grid = interp_ext::BilinearGrid::new(xs, ys, values).map_err(extended::map_err)?;
+        Ok(Self { grid })
     }
 
     /// Interpolates one point, clamping each coordinate independently.
@@ -134,14 +110,7 @@ impl<'grid> BilinearGrid<'grid> {
         x: f64,
         y: f64,
     ) -> Result<f64, NumericError> {
-        if !x.is_finite() || !y.is_finite() {
-            return Err(NumericError::Domain(
-                "grid and queries must be finite".into(),
-            ));
-        }
-        let x = x.clamp(self.x_bounds.0, self.x_bounds.1);
-        let y = y.clamp(self.y_bounds.0, self.y_bounds.1);
-        self.grid.evaluate(&[x, y]).map_err(NumericError::Domain)
+        self.grid.eval(x, y).map_err(extended::map_err)
     }
 
     /// Interpolates a batch of `(x, y)` pairs in input order.

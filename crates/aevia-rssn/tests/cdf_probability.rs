@@ -35,12 +35,14 @@ fn graph_cdf_proves_a_unitless_float_for_a_dynamic_caller() {
     };
     assert!((probability / 7.619_853_024_160_526e-24 - 1.0).abs() < 3e-13);
 
-    assert!(
-        host.call_with_witnesses(
-            "cdf",
-            &[normal, point],
-            &[proof, DimensionWitness::Scalar(Dim::base("Time"))],
-        )
-        .is_err()
-    );
+    let args = [normal, point];
+    let wrong_units = [proof, DimensionWitness::Scalar(Dim::base("Time"))];
+    let dynamic = host
+        .call_with_witnesses("cdf", &args, &wrong_units)
+        .unwrap_err();
+    let pinned = host
+        .call_key_with_witnesses(entry.key(0).unwrap(), &args, &wrong_units)
+        .unwrap_err();
+    assert_eq!(dynamic.code, "E0401");
+    assert_eq!(pinned.code, "E0401");
 }

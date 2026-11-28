@@ -815,26 +815,51 @@ fn visit_items(
     }
     Ok(())
 }
+fn explicit_type(ty: &rssn::kernel::signature::TypeExpr) -> bool {
+    use rssn::kernel::signature::TypeExpr as T;
+    match ty {
+        | T::Dyn(_) => false,
+        | T::Dim(elem, _) | T::Tensor { elem, .. } | T::Sparse { elem, .. } => explicit_type(elem),
+        | T::Record(fields) => fields.iter().all(|(_, ty)| explicit_type(ty)),
+        | T::Variant(tags) => {
+            tags.iter()
+                .all(|(_, fields)| fields.iter().all(explicit_type))
+        },
+        | T::Function(params, ret) => params.iter().all(explicit_type) && explicit_type(ret),
+        | T::Table(row) => row.columns.iter().all(|(_, ty)| explicit_type(ty)),
+        | _ => true,
+    }
+}
+
 #[allow(
     clippy::single_call_fn,
     reason = "isolates manifest provenance validation"
 )]
-fn exported() -> Result<BTreeMap<String, Vec<String>>, String> {
+fn exported(
+    manifest: &rssn::kernel::KernelManifest
+) -> Result<BTreeMap<String, Vec<String>>, String> {
     use rssn::kernel::manifest::SignatureSource;
-    let session = rssn::api::Session::new();
-    let manifest = session.manifest();
     let mut paths: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for info in &manifest.ops {
         let Some(path) = &info.rust_path else {
             continue;
         };
+        let typed_source = match info.signature_source {
+            | SignatureSource::Declared => true,
+            | SignatureSource::Overlay => {
+                info.overloads.iter().any(|signature| {
+                    explicit_type(&signature.ret) && signature.params.iter().all(explicit_type)
+                })
+            },
+            | _ => false,
+        };
         if !path.starts_with("crate::")
-            || info.signature_source != SignatureSource::Declared
+            || !typed_source
             || info.overloads.is_empty()
             || info.overloads.len() != info.keys.len()
         {
             return Err(format!(
-                "invalid source provenance or non-declared signature for {}",
+                "invalid source provenance or missing explicit typed signature for {}",
                 info.name
             ));
         }
@@ -843,7 +868,7 @@ fn exported() -> Result<BTreeMap<String, Vec<String>>, String> {
                 rssn::kernel::signature::OpKey::new(&info.rule_set, &info.name, Some(signature));
             if *key != expected {
                 return Err(format!(
-                    "manifest key disagrees with declared signature for {}",
+                    "manifest key disagrees with the signature for {}",
                     info.name
                 ));
             }
@@ -866,38 +891,14 @@ fn exported() -> Result<BTreeMap<String, Vec<String>>, String> {
     Ok(paths)
 }
 
-/// Checks the exact public function referenced by an adapter outside the
-/// inventoried numerical modules, without auditing every sibling rule API.
-fn resolve_additional_export(
-    sources: &mut Sources,
-    src: &Path,
-    path: &str,
-) -> Result<Option<Entry>, String> {
-    let Some(tail) = path.strip_prefix("crate::") else {
-        return Ok(None);
-    };
-    let segments: Vec<String> = tail.split("::").map(str::to_owned).collect();
-    let lib = sources.parse(&src.join("lib.rs"))?;
-    Ok(
-        resolve_local_function(sources, &lib.items, src, &segments, "", 0, 1)?.map(
-            |(signature, cfg)| {
-                Entry {
-                    alias_of: None,
-                    path: path.to_owned(),
-                    reason: type_reason(&signature, false),
-                    signature: compact(&signature),
-                    cfg,
-                }
-            },
-        ),
-    )
-}
-
 #[allow(
     clippy::single_call_fn,
     reason = "isolates source collection from snapshot rendering"
 )]
-fn report(root: &Path) -> Result<String, String> {
+fn report(
+    root: &Path,
+    manifest: &rssn::kernel::KernelManifest,
+) -> Result<Inventory, String> {
     let mut entries = Vec::new();
     let mut sources = Sources::default();
     for module in ["kernels", "backend", "sim"] {
@@ -913,7 +914,7 @@ fn report(root: &Path) -> Result<String, String> {
             &mut entries,
         )?;
     }
-    let exports = exported()?;
+    let exports = exported(manifest)?;
     let present: BTreeSet<_> = entries.iter().map(|entry| entry.path.as_str()).collect();
     let mut missing = Vec::new();
     let mut resolved = Vec::new();
@@ -922,8 +923,24 @@ fn report(root: &Path) -> Result<String, String> {
         .keys()
         .filter(|path| !present.contains(path.as_str()))
     {
-        if let Some(entry) = resolve_additional_export(&mut sources, &src, path)? {
-            resolved.push(entry);
+        // Resolve only the function named by the adapter. Keep sibling
+        // modules outside the numerical source inventory.
+        let Some(tail) = path.strip_prefix("crate::") else {
+            missing.push(path);
+            continue;
+        };
+        let segments: Vec<_> = tail.split("::").map(str::to_owned).collect();
+        let lib = sources.parse(&src.join("lib.rs"))?;
+        if let Some((signature, cfg)) =
+            resolve_local_function(&mut sources, &lib.items, &src, &segments, "", 0, 1)?
+        {
+            resolved.push(Entry {
+                alias_of: None,
+                path: path.clone(),
+                reason: type_reason(&signature, false),
+                signature: compact(&signature),
+                cfg,
+            });
         } else {
             missing.push(path);
         }
@@ -957,6 +974,39 @@ fn identity(
     Some(path)
 }
 
+#[derive(Default)]
+struct Inventory {
+    tsv: String,
+    aliases: BTreeMap<String, String>,
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps the source identity check separate from rendering"
+)]
+fn proven_aliases(entries: &[Entry]) -> BTreeMap<String, String> {
+    let mut aliases = BTreeMap::new();
+    let mut ambiguous = BTreeSet::new();
+    for entry in entries {
+        match &entry.alias_of {
+            | Some(target) => {
+                if let Some(previous) = aliases.insert(entry.path.clone(), target.clone())
+                    && previous != *target
+                {
+                    ambiguous.insert(entry.path.as_str());
+                }
+            },
+            | None => {
+                ambiguous.insert(entry.path.as_str());
+            },
+        }
+    }
+    // Different conditional definitions of the same path can designate
+    // different functions. Share review only for unambiguous source identities.
+    aliases.retain(|path, _| !ambiguous.contains(path.as_str()));
+    aliases
+}
+
 #[allow(
     clippy::single_call_fn,
     reason = "keeps canonical TSV serialization separate from source analysis"
@@ -964,14 +1014,11 @@ fn identity(
 fn render(
     entries: Vec<Entry>,
     exports: &BTreeMap<String, Vec<String>>,
-) -> String {
+) -> Inventory {
     let mut out = String::from(
         "# RSSN public kernel, backend and simulation source inventory v2\n# source syntax only; cfg is not evaluated; macros are not expanded; exported is not a runtime capability claim\n# path\tclassification\tabi names\tcfg\tsignature\n",
     );
-    let aliases: BTreeMap<_, _> = entries
-        .iter()
-        .filter_map(|e| e.alias_of.as_ref().map(|a| (e.path.clone(), a.clone())))
-        .collect();
+    let aliases = proven_aliases(&entries);
     let mut inherited: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (path, names) in exports {
         if let Some(key) = identity(path, &aliases) {
@@ -1003,7 +1050,7 @@ fn render(
             e.path, class, names, e.cfg, e.signature
         );
     }
-    out
+    Inventory { tsv: out, aliases }
 }
 #[allow(
     clippy::single_call_fn,
@@ -1026,7 +1073,7 @@ fn check_snapshot(
     reason = "keeps the source boundary policy directly testable"
 )]
 fn check_complete(
-    report: &str,
+    inventory: &Inventory,
     policy: &str,
 ) -> Result<(usize, usize), String> {
     let mut host_boundaries = BTreeMap::new();
@@ -1044,10 +1091,16 @@ fn check_complete(
             return Err(format!("duplicate source boundary: {path}"));
         }
     }
+    let reviewed: BTreeSet<_> = host_boundaries
+        .keys()
+        .filter_map(|path| identity(path, &inventory.aliases))
+        .collect();
     let mut matched_boundaries = BTreeSet::new();
     let mut adapted = 0usize;
+    let mut host_only = 0usize;
     let mut missing = Vec::new();
-    for row in report
+    for row in inventory
+        .tsv
         .lines()
         .filter(|row| !row.starts_with('#') && !row.is_empty())
     {
@@ -1070,6 +1123,9 @@ fn check_complete(
             adapted = adapted.saturating_add(1);
         } else if host_boundaries.contains_key(path) {
             matched_boundaries.insert(*path);
+            host_only = host_only.saturating_add(1);
+        } else if identity(path, &inventory.aliases).is_some_and(|key| reviewed.contains(&key)) {
+            host_only = host_only.saturating_add(1);
         } else {
             missing.push(*path);
         }
@@ -1083,7 +1139,7 @@ fn check_complete(
         ));
     }
     if missing.is_empty() {
-        Ok((adapted, matched_boundaries.len()))
+        Ok((adapted, host_only))
     } else {
         Err(format!(
             "{} callable source interfaces need a declared adapter or a reviewed Rust host boundary:\n{}",
@@ -1100,11 +1156,11 @@ fn check_complete(
 fn apply_inventory(
     mode: &str,
     snapshot: &Path,
-    inventory: &str,
+    inventory: &Inventory,
     policy: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if matches!(mode, "--check" | "--verify") {
-        check_snapshot(&std::fs::read_to_string(snapshot)?, inventory)?;
+        check_snapshot(&std::fs::read_to_string(snapshot)?, &inventory.tsv)?;
         println!("kernel API inventory verified");
     }
     if matches!(mode, "--coverage-check" | "--verify" | "--write-checked") {
@@ -1114,23 +1170,56 @@ fn apply_inventory(
         );
     }
     if matches!(mode, "--write" | "--write-checked") {
-        std::fs::write(snapshot, inventory)?;
+        std::fs::write(snapshot, &inventory.tsv)?;
         println!("wrote {}", snapshot.display());
     }
     if mode == "--report" {
-        print!("{inventory}");
+        print!("{}", inventory.tsv);
+    }
+    Ok(())
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps domain report rendering separate from CLI argument parsing"
+)]
+fn apply_domain_report(
+    action: &str,
+    manifest: &rssn::kernel::KernelManifest,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let registry = aevia_rssn::registry::Registry::from_manifest(manifest);
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let chapter = std::fs::read_to_string(directory.join("../../spec/08-stdlib.md"))?;
+    let names = aevia_stdlib_model::spec::names(&chapter)
+        .into_iter()
+        .collect();
+    let text =
+        aevia_rssn::domains::coverage_report(&registry, aevia_rssn::domains::overlay(), &names);
+    let path = directory.join("RSSN-COVERAGE.md");
+    match action {
+        | "report" => print!("{text}"),
+        | "write" => std::fs::write(path, text)?,
+        | _ => {
+            if std::fs::read_to_string(path)?.replace("\r\n", "\n") != text {
+                return Err("Aevia domain coverage changed; review --domains-report and run --domains-write".into());
+            }
+            println!("Aevia domain coverage verified");
+        },
     }
     Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     type Generator = fn(&Path, &str) -> Result<String, String>;
-    const USAGE: &str = "usage: rssn-api-audit --verify|--write-checked|--check|--write|--report|--coverage-check|--bindings-check|--bindings-write|--bindings-report|--structured-check|--structured-write|--structured-report|--codecs-check|--codecs-write|--codecs-report";
-    let mut args = std::env::args().skip(1);
-    let (Some(mode), None) = (args.next(), args.next()) else {
-        return Err(USAGE.into());
+    const USAGE: &str = "usage: rssn-api-audit --verify|--write-checked|--check|--write|--report|--coverage-check|--domains-report|--domains-write|--domains-check|--bindings-check|--bindings-write|--bindings-report|--structured-check|--structured-write|--structured-report|--codecs-check|--codecs-write|--codecs-report [--manifest PATH]";
+    let mut args = std::env::args_os().skip(1);
+    let mode = args.next().ok_or(USAGE)?;
+    let mode = mode.to_str().ok_or(USAGE)?;
+    let manifest_path = match (args.next(), args.next(), args.next()) {
+        | (None, None, None) => None,
+        | (Some(flag), Some(path), None) if flag == "--manifest" => Some(PathBuf::from(path)),
+        | _ => return Err(USAGE.into()),
     };
-    let mode = mode.as_str();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../rssn");
     if let Some((family, action @ ("check" | "write" | "report"))) = mode
         .strip_prefix("--")
@@ -1164,6 +1253,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             | _ => None,
         };
         if let Some((policy, filename, label, generate)) = generation {
+            if manifest_path.is_some() {
+                return Err("--manifest applies to inventory commands".into());
+            }
             let policy = std::fs::read_to_string(root.join("tools/rssn-api-gen").join(policy))?;
             let source = generate(&root, &policy)?;
             let target = root.join("src/rules/numerical_abi").join(filename);
@@ -1185,12 +1277,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if !matches!(
         mode,
-        "--verify" | "--write-checked" | "--check" | "--write" | "--report" | "--coverage-check"
+        "--verify"
+            | "--write-checked"
+            | "--check"
+            | "--write"
+            | "--report"
+            | "--coverage-check"
+            | "--domains-report"
+            | "--domains-write"
+            | "--domains-check"
     ) {
         return Err(USAGE.into());
     }
     let snapshot = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("inventory.tsv");
-    let result = report(&root)?;
+    let manifest = if let Some(path) = manifest_path {
+        let supplied = rssn::kernel::KernelManifest::from_json(&std::fs::read_to_string(&path)?)?;
+        if !supplied.verify() {
+            return Err(format!("manifest digest disagrees with {}", path.display()).into());
+        }
+        std::sync::Arc::new(supplied)
+    } else {
+        rssn::api::Session::new().manifest()
+    };
+    if let Some(action) = mode.strip_prefix("--domains-") {
+        return apply_domain_report(action, &manifest);
+    }
+    let result = report(&root, &manifest)?;
     apply_inventory(
         mode,
         &snapshot,
@@ -1211,37 +1323,65 @@ mod tests {
 
     #[test]
     fn declared_exports_can_point_outside_the_numerical_modules() {
+        use rssn::kernel::manifest::SignatureSource;
+
         let dir =
             std::env::temp_dir().join(format!("rssn-audit-extra-export-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("src");
+        for module in ["kernels", "backend", "sim"] {
+            let module_dir = src.join(module);
+            std::fs::create_dir_all(&module_dir).unwrap();
+            std::fs::write(module_dir.join("mod.rs"), "").unwrap();
+        }
         std::fs::write(
-            dir.join("lib.rs"),
+            src.join("lib.rs"),
             r#"#[cfg(feature = "pde")] pub mod rules;
                mod private { pub fn f() {} }"#,
         )
         .unwrap();
         std::fs::write(
-            dir.join("rules.rs"),
+            src.join("rules.rs"),
             "pub mod pde { pub fn sample(x: f64) -> f64 { x } fn hidden() {} }",
         )
         .unwrap();
-        let mut sources = Sources::default();
+
+        let mut manifest = rssn::api::Session::new().manifest().as_ref().clone();
+        let mut operator = manifest
+            .ops
+            .iter()
+            .find(|info| {
+                matches!(info.signature_source, SignatureSource::Declared)
+                    && info.rust_path.is_some()
+                    && info.keys.len() == 1
+            })
+            .expect("a declared operator with one overload")
+            .clone();
         let path = "crate::rules::pde::sample";
-        let entry = resolve_additional_export(&mut sources, &dir, path)
-            .unwrap()
-            .unwrap();
-        assert_eq!(entry.path, path);
-        assert!(entry.signature.contains("x : f64"));
-        assert_eq!(entry.cfg, r#"# [cfg (feature = "pde")]"#);
+        operator.rust_path = Some(path.into());
+        let expected = format!(
+            "{path}\tdeclared\t{}\t# [cfg (feature = \"pde\")]\tfn sample (x : f64) -> f64",
+            operator.name
+        );
+        manifest.ops = vec![operator];
+
+        let inventory = report(&dir, &manifest).unwrap();
+        let entries: Vec<_> = inventory
+            .tsv
+            .lines()
+            .filter(|line| !line.starts_with('#'))
+            .collect();
+        assert_eq!(entries, [expected.as_str()]);
         for missing in [
             "crate::rules::pde::hidden",
             "crate::rules::pde::absent",
             "crate::private::f",
         ] {
-            assert!(
-                resolve_additional_export(&mut sources, &dir, missing)
-                    .unwrap()
-                    .is_none()
+            manifest.ops[0].rust_path = Some(missing.into());
+            assert_eq!(
+                report(&dir, &manifest).err(),
+                Some(format!(
+                    "ABI metadata points to missing public kernel functions:\n{missing}"
+                ))
             );
         }
         std::fs::remove_dir_all(dir).unwrap();
@@ -1251,17 +1391,23 @@ mod tests {
     fn combined_snapshot_actions_use_the_same_checked_report() {
         let path =
             std::env::temp_dir().join(format!("rssn-checked-inventory-{}.tsv", std::process::id()));
-        let accepted = "crate::kernels::f\tdeclared\tnum_f\t\tfn f()\n";
-        let incomplete = "crate::kernels::f\tno-declared-adapter\t\t\tfn f()\n";
+        let accepted = Inventory {
+            tsv: "crate::kernels::f\tdeclared\tnum_f\t\tfn f()\n".into(),
+            ..Inventory::default()
+        };
+        let incomplete = Inventory {
+            tsv: "crate::kernels::f\tno-declared-adapter\t\t\tfn f()\n".into(),
+            ..Inventory::default()
+        };
         std::fs::write(&path, "previous snapshot").unwrap();
-        assert!(apply_inventory("--write-checked", &path, incomplete, "").is_err());
+        assert!(apply_inventory("--write-checked", &path, &incomplete, "").is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "previous snapshot");
-        assert!(apply_inventory("--verify", &path, accepted, "").is_err());
+        assert!(apply_inventory("--verify", &path, &accepted, "").is_err());
 
-        apply_inventory("--write-checked", &path, accepted, "").unwrap();
-        apply_inventory("--verify", &path, accepted, "").unwrap();
-        std::fs::write(&path, incomplete).unwrap();
-        assert!(apply_inventory("--verify", &path, incomplete, "").is_err());
+        apply_inventory("--write-checked", &path, &accepted, "").unwrap();
+        apply_inventory("--verify", &path, &accepted, "").unwrap();
+        std::fs::write(&path, &incomplete.tsv).unwrap();
+        assert!(apply_inventory("--verify", &path, &incomplete, "").is_err());
         std::fs::remove_file(path).unwrap();
     }
 
@@ -1299,8 +1445,16 @@ mod tests {
             vec!["num_method".into()],
         )]);
         let report = render(rows, &exports);
-        assert!(report.contains("crate::kernels::Alias::method\tdeclared-alias\tnum_method"));
-        assert!(report.contains("crate::kernels::unrelated\tno-declared-adapter\t"));
+        assert!(
+            report
+                .tsv
+                .contains("crate::kernels::Alias::method\tdeclared-alias\tnum_method")
+        );
+        assert!(
+            report
+                .tsv
+                .contains("crate::kernels::unrelated\tno-declared-adapter\t")
+        );
         assert!(check_complete(&report, "").is_err());
         let policy = "crate::kernels::unrelated\tRust-specific test interface\n";
         assert_eq!(check_complete(&report, policy), Ok((2, 1)));
@@ -1349,13 +1503,58 @@ mod tests {
             "crate::kernels::<reexport:2>\tpartial-reexport\t\t\t{ f, missing }\n",
             "crate::kernels::<reexport:3>\tunresolved-reexport\t\t\tother::*\n",
         );
-        assert_eq!(check_complete(complete, ""), Ok((1, 0)));
+        let inventory = |tsv: String| {
+            Inventory {
+                tsv,
+                ..Inventory::default()
+            }
+        };
+        assert_eq!(check_complete(&inventory(complete.into()), ""), Ok((1, 0)));
         assert!(
-            check_complete(&complete.replace("declared\tnum_f", "opaque\t"), "")
-                .unwrap_err()
-                .contains("crate::kernels::f")
+            check_complete(
+                &inventory(complete.replace("declared\tnum_f", "opaque\t")),
+                ""
+            )
+            .unwrap_err()
+            .contains("crate::kernels::f")
         );
-        assert!(check_complete(&complete.replace("declared\tnum_f", "declared\t"), "").is_err());
+        assert!(
+            check_complete(
+                &inventory(complete.replace("declared\tnum_f", "declared\t")),
+                ""
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn reviewed_boundary_covers_only_proven_source_aliases() {
+        let entry = |name: &str, alias_of: Option<&str>, cfg: &str| {
+            Entry {
+                alias_of: alias_of.map(|target| format!("crate::kernels::{target}")),
+                path: format!("crate::kernels::{name}"),
+                signature: "fn f()".into(),
+                cfg: cfg.into(),
+                reason: "opaque",
+            }
+        };
+        let rows = vec![
+            entry("source", None, ""),
+            entry("alias", Some("source"), ""),
+            entry("chained", Some("alias"), ""),
+        ];
+        let policy = "crate::kernels::source\tCaller-owned Rust work state\n";
+        let exports = BTreeMap::new();
+        assert_eq!(
+            check_complete(&render(rows.clone(), &exports), policy),
+            Ok((0, 3))
+        );
+
+        let mut ambiguous = rows;
+        ambiguous.push(entry("alias", Some("alternative"), "feature = alt"));
+        let error = check_complete(&render(ambiguous, &exports), policy).unwrap_err();
+        assert!(error.contains("crate::kernels::alias"));
+        assert!(error.contains("crate::kernels::chained"));
     }
 
     #[test]
@@ -1512,7 +1711,7 @@ mod tests {
                 &mut entries,
             )
             .unwrap();
-            render(entries, &BTreeMap::new())
+            render(entries, &BTreeMap::new()).tsv
         }
         let saved = scan("pub fn existing(x: f64) -> f64 { x }");
         let changed =
@@ -1526,9 +1725,10 @@ mod tests {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../rssn");
         let snapshot = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("inventory.tsv");
         let expected = std::fs::read_to_string(&snapshot).expect("inventory snapshot");
-        let actual = report(&root).expect("live inventory");
+        let manifest = rssn::api::Session::new().manifest();
+        let actual = report(&root, &manifest).expect("live inventory");
         assert!(
-            actual == expected,
+            actual.tsv == expected,
             "kernel inventory changed; review `--report` and regenerate with `--write`"
         );
     }

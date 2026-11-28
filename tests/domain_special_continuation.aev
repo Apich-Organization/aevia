@@ -1,0 +1,21 @@
+## Real-axis continuation and an explicit complex signature from the RSSN manifest.
+import Rssn_numeric as Numeric
+
+fn fl(x: Real): Float = unwrap_or(to_float(x), nan)
+
+fn continuation_agrees(z: Real, s: Real, expected: Float): Bool =
+    let phi = Numeric.lerch_phi_complex(z, 0.0, s, 0.0, 1.0, 0.0)
+    let li = Numeric.polylog_complex(s, z, 0.0)
+    let lerch_agrees = abs(fl(phi[0]) - expected) < 1e-12 && abs(fl(phi[1])) < 1e-12
+    let polylog_agrees = abs(fl(li[0]) / fl(z) - expected) < 1e-12 && abs(fl(li[1])) < 1e-12
+    lerch_agrees && polylog_agrees
+
+test "Lerch and polylog agree on the negative real axis" =
+    continuation_agrees(-2.9343781968654095, 0.8055785832642504, 0.42657897908466085)
+
+test "Negative non-integer orders share the real continuation" =
+    continuation_agrees(-1.6394980815057556, -1.0498918503244488, 0.1324398586163252)
+
+test "Complex binomial returns its typed real and imaginary components" =
+    let value: Tensor<1, Real> = Numeric.binomial_complex(5.0, 0.0, 2.0, 0.0)
+    length(value) == 2 && abs(fl(value[0]) - 10.0) < 1e-12 && abs(fl(value[1])) < 1e-12

@@ -5,20 +5,29 @@ including conditional declarations. `--verify` checks both the checked-in
 snapshot and callable coverage from one reading of the kernel sources. After
 reviewing an intentional change, use `--write-checked` to validate coverage and
 update the snapshot. `--check`, `--coverage-check` and `--write` still support
-running those steps individually. The audit rejects any ABI descriptor whose
+running those steps individually. To audit the operator metadata of a release
+artifact, run `aevia rssn --manifest-json > manifest.json` using that
+installation and pass `--manifest manifest.json` to an inventory command. The
+command checks the manifest digest before comparing the artifact
+against the source tree. The audit rejects any ABI descriptor whose
 declared Rust path is missing. A declared adapter outside these modules is inventoried
 when its fully qualified public function resolves through the crate source.
-Every inventoried callable needs an adapter or an exact
-path and rationale in [the Rust host interface inventory](source-boundaries.tsv).
-The latter covers APIs such as a solver that takes a borrowed mutable Rust
+Every inventoried callable needs an adapter or a reviewed Rust host boundary.
+Each boundary records the exact path and rationale in
+[the Rust host interface inventory](source-boundaries.tsv). Re-exports proven
+to resolve to the same callable inherit that review. Conditional definitions
+with different source identities require their own coverage.
+The host inventory covers APIs such as a solver that takes a borrowed mutable Rust
 callback or writes into caller-supplied storage. The check rejects stale
 entries and requires an entry to be removed when an adapter is declared. Struct-literal and trait-operator
 adapter helpers omit that provenance instead of claiming a missing inherent method.
 
 Each row states a fully qualified Rust path, an inventory classification, the
 names of any numerical ABI exports, its `cfg` attributes, and the Rust
-signature. A `declared` row records manifest source provenance and verified declared signature keys, not proof that every value or
-backend can execute it. Functions with no descriptor provenance are reported separately, with callback,
+signature. A `declared` row records manifest source provenance and verified keys
+for a declared signature or an explicit overlay with a typed overload. Backend
+and value-specific behavior is covered by the runtime tests. Functions with no
+descriptor provenance are reported separately, with callback,
 generic, opaque and method shapes highlighted. An unmapped Rust function can
 still be reachable through an older hand-written rule; the tool does not claim
 it is unreachable. The dynamic manifest and namespace coverage
@@ -70,7 +79,12 @@ dimension rule and available flat bindings from the live kernel.
 source inventory: for every kernel operator family it states how Aevia exposes it
 (curated typed wrapper, generated dynamic wrapper, or excluded with a reason) and
 whether the exact-typed flat `Rssn.<op>` facade covers it. It is produced from the
-live Kernel Manifest and `crates/aevia-rssn/domains.overlay`;
+live Kernel Manifest and `crates/aevia-rssn/domains.overlay`. Use
+`cargo run -p rssn-api-audit -- --domains-report --manifest PATH` to render
+the report from a release artifact. After review, `--domains-write` records
+the report and `--domains-check` compares it with the checkout. Each command
+uses the linked manifest when the path is omitted.
+
 `cargo test -p aevia-rssn --test domains` fails when it is stale or when an
 operator is neither bound nor excluded, and `AEVIA_BLESS=1` rewrites it.
 

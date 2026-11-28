@@ -259,7 +259,7 @@ fn classify(
                     .any(|ty| matches!(ty, crate::registry::SigType::Func(..)))
             {
                 unavailable.insert(
-                    "higher-order signature has no supported trailing callback".to_string(),
+                    "higher-order signature has no supported top-level callback".to_string(),
                 );
             }
             unavailable.remove(
@@ -297,8 +297,7 @@ fn classify(
                     || !callback_raw_parameters_supported(&signature.params)
                 {
                     unavailable.insert(
-                        "callback bridge requires supported recursive trailing callback schemas"
-                            .to_string(),
+                        "callback bridge requires supported recursive callback schemas".to_string(),
                     );
                 }
                 if !op.higher_order {
@@ -587,15 +586,11 @@ fn callback_parameters_supported(params: &[crate::registry::SigType]) -> bool {
     }
     let mut seen_callback = false;
     for param in params {
-        match param {
-            | S::Func(args, ret) => {
-                seen_callback = true;
-                if !args.iter().all(schema) || !schema(ret) {
-                    return false;
-                }
-            },
-            | _ if seen_callback => return false,
-            | _ => {},
+        if let S::Func(args, ret) = param {
+            seen_callback = true;
+            if !args.iter().all(schema) || !schema(ret) {
+                return false;
+            }
         }
     }
     seen_callback
@@ -662,15 +657,11 @@ fn callback_raw_parameters_supported(params: &[TypeExpr]) -> bool {
     }
     let mut seen_callback = false;
     for param in params {
-        match param {
-            | TypeExpr::Function(args, ret) => {
-                seen_callback = true;
-                if !args.iter().all(schema) || !schema(ret) {
-                    return false;
-                }
-            },
-            | _ if seen_callback => return false,
-            | _ => {},
+        if let TypeExpr::Function(args, ret) = param {
+            seen_callback = true;
+            if !args.iter().all(schema) || !schema(ret) {
+                return false;
+            }
         }
     }
     seen_callback
@@ -838,10 +829,30 @@ mod callback_strategy_tests {
     use super::callback_parameters_supported;
     use crate::registry::SigType as S;
     #[test]
-    fn callback_facades_match_recursive_transport_and_trailing_order() {
-        let scalar = S::Func(vec![S::Int, S::Bool], Box::new(S::Real));
-        assert!(callback_parameters_supported(&[S::Float, scalar.clone()]));
-        assert!(!callback_parameters_supported(&[scalar, S::Float]));
+    fn callback_facades_accept_leading_interleaved_and_trailing_callbacks() {
+        use super::callback_raw_parameters_supported;
+        use rssn::kernel::signature::TypeExpr as T;
+
+        let mirrored = S::Func(vec![S::Int, S::Bool], Box::new(S::Real));
+        let raw = T::Function(vec![T::Int, T::Bool], Box::new(T::Real));
+        assert!(callback_parameters_supported(&[mirrored.clone(), S::Float]));
+        assert!(callback_parameters_supported(&[S::Float, mirrored.clone()]));
+        assert!(callback_parameters_supported(&[
+            mirrored.clone(),
+            S::Float,
+            mirrored
+        ]));
+        assert!(callback_raw_parameters_supported(&[raw.clone(), T::Float]));
+        assert!(callback_raw_parameters_supported(&[T::Float, raw.clone()]));
+        assert!(callback_raw_parameters_supported(&[
+            raw.clone(),
+            T::Float,
+            raw
+        ]));
+    }
+
+    #[test]
+    fn mirrored_callback_schema_rejects_unknown_and_malformed_promises() {
         let tensor = S::Tensor {
             rank: Some(1),
             shape: Some(vec![2]),
@@ -872,6 +883,11 @@ mod callback_strategy_tests {
             vec![S::Func(vec![], Box::new(S::Float))],
             Box::new(record)
         )]));
+        assert!(!callback_parameters_supported(&[
+            S::Func(vec![S::Float], Box::new(S::Bool)),
+            S::Int,
+            S::Func(vec![S::Var("T".into())], Box::new(S::Float))
+        ]));
         assert!(!callback_parameters_supported(&[S::Float]));
     }
     #[test]
@@ -1021,7 +1037,12 @@ mod callback_strategy_tests {
             shape: Some(vec![NatExpr::Lit(1), NatExpr::Lit(2)]),
             elem: Box::new(T::Float)
         })]));
-        assert!(!supports(&[callback(T::Float), T::Var("T".into())]));
+        assert!(supports(&[callback(T::Float), T::Var("T".into())]));
+        assert!(!supports(&[
+            callback(T::Float),
+            T::Int,
+            callback(T::Var("T".into()))
+        ]));
     }
     #[test]
     fn generic_dynamic_fallback_cannot_bypass_callback_guard() {
