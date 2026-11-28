@@ -121,7 +121,7 @@ jobs:
   binaries:
     name: Binaries (${{ matrix.target }})
     needs: verify
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ fromJSON(vars.RSSN_RELEASE_RUNNERS || '{}')[matrix.rust_target] || matrix.os }}
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -170,7 +170,7 @@ jobs:
           DISTRIBUTION: ${{ needs.verify.outputs.distribution }}
           RSSN_COMMIT: ${{ needs.verify.outputs.rssn_commit }}
         run: |
-          flags=(--config=release-max --define=rust_target=${{ matrix.rust_target }})
+          flags=(--config=release-max --repo_env=RSSN_FETCH_LLVM_SDK=1 --define=rust_target=${{ matrix.rust_target }})
           for variable in RSSN_TARGET_ENV RUSTC CARGO RSSN_LLVM_CONFIG RSSN_LLVM_IMPORT_LIBRARY; do
             if [[ -n "${!variable}" ]]; then flags+=("--repo_env=$variable"); fi
           done
