@@ -1786,6 +1786,16 @@ fn rssn_command(args: &[String]) -> ExitCode {
         return ExitCode::from(1);
     }
     if let Some((flag, rest)) = args.split_first()
+        && flag == "--manifest-json"
+    {
+        if !rest.is_empty() {
+            eprintln!("aevia rssn: --manifest-json must be used alone");
+            return ExitCode::from(2);
+        }
+        println!("{}", aevia_rssn::kernel::kernel().manifest().to_json());
+        return ExitCode::SUCCESS;
+    }
+    if let Some((flag, rest)) = args.split_first()
         && flag == "--describe"
     {
         let [name] = rest else {

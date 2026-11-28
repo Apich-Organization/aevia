@@ -57,6 +57,22 @@ class ReleaseInputsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "clean rssn checkout"):
             self.verify()
 
+    def test_rejects_untracked_source_inputs(self):
+        (self.checkouts["aevia"] / "Cargo.local.toml").write_text("# untracked\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "clean aevia checkout"):
+            self.verify()
+
+    def test_rejects_ignored_files_selected_as_release_inputs(self):
+        checkout = self.checkouts["rssn"]
+        (checkout / ".git/info/exclude").write_text("/Cargo.lock\n", encoding="utf-8")
+        lockfile = checkout / "Cargo.lock"
+        lockfile.write_text("# ignored lockfile\n", encoding="utf-8")
+        self.assertEqual(self.git("rssn", "status", "--porcelain"), "")
+        self.verify()  # An ignored file outside the build inputs is harmless.
+        self.inputs["rssn/Cargo.lock"] = lockfile
+        with self.assertRaisesRegex(ValueError, r"tracked by Git: rssn/Cargo\.lock"):
+            self.verify()
+
     def test_rejects_an_unrelated_revision(self):
         self.commits["rssn"] = "0" * 40
         with self.assertRaisesRegex(ValueError, "rssn must be checked out"):

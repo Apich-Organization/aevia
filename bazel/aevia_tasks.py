@@ -1,6 +1,7 @@
 """Aevia compiler, editor and platform workflows."""
 
 import argparse
+from contextlib import redirect_stdout
 import hashlib
 import json
 import os
@@ -164,6 +165,16 @@ def verify_release_inputs(build, aevia_commit, rssn_commit, toolchain, platform)
         ).stdout
         if changes:
             raise ValueError(f"Create a clean {project} checkout for the release. Local changes:\n{changes}")
+        tracked = set(build.run(
+            ["git", "ls-files", "--cached", "-z"],
+            cwd=checkout, capture_output=True, text=True,
+        ).stdout.split("\0"))
+        prefix = project + "/"
+        untracked_inputs = sorted(
+            path for path in build.inputs if path.startswith(prefix) and path.removeprefix(prefix) not in tracked
+        )
+        if untracked_inputs:
+            raise ValueError(f"Release inputs must be tracked by Git: {', '.join(untracked_inputs)}")
 
     digests = source_digests(build.inputs)
     # Package actions have their own source mirror. Compare with the snapshots
@@ -345,8 +356,12 @@ def contracts(build):
     cli, _ = bins(build)
     build.tool("aevia-stdlib-gen", "--check")
     build.tool("rssn-api-audit", "--codecs-check")
-    build.tool("rssn-api-audit", "--verify")
-    build.tool("rssn-api-audit", "--domains-check")
+    with tempfile.TemporaryDirectory(dir=build.scratch) as directory:
+        manifest = Path(directory) / "rssn-manifest.json"
+        with manifest.open("wb") as stream:
+            build.run([cli, "rssn", "--manifest-json"], stdout=stream)
+        build.tool("rssn-api-audit", "--verify", "--manifest", manifest)
+        build.tool("rssn-api-audit", "--domains-check", "--manifest", manifest)
     build.python("tools/check_stdlib_docs.py", "--aevia", cli)
     build.python("tools/bundle_spec.py", "--check")
     build.python("tools/check_manuals.py", "--aevia", cli)
@@ -437,6 +452,8 @@ def dispatch(build, workflow, args):
     elif workflow == "cli":
         build.assert_native()
         cli, _ = bins(build)
-        build.run([cli, *args], cwd=Path(os.getenv("BUILD_WORKING_DIRECTORY", str(build.workspace))))
+        # Keep the runner's command trace off the CLI's stdout.
+        with redirect_stdout(sys.stderr):
+            build.run([cli, *args], cwd=Path(os.getenv("BUILD_WORKING_DIRECTORY", str(build.workspace))))
     else:
         raise ValueError(f"unknown Aevia workflow: {workflow}")

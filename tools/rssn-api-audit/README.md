@@ -6,8 +6,9 @@ snapshot and callable coverage from one reading of the kernel sources. After
 reviewing an intentional change, use `--write-checked` to validate coverage and
 update the snapshot. `--check`, `--coverage-check` and `--write` still support
 running those steps individually. To audit the operator metadata of a release
-artifact, pass its JSON manifest with `--manifest PATH` to an inventory
-command. The command checks the manifest digest before comparing the artifact
+artifact, run `aevia rssn --manifest-json > manifest.json` using that
+installation and pass `--manifest manifest.json` to an inventory command. The
+command checks the manifest digest before comparing the artifact
 against the source tree. The audit rejects any ABI descriptor whose
 declared Rust path is missing. A declared adapter outside these modules is inventoried
 when its fully qualified public function resolves through the crate source.

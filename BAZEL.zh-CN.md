@@ -22,6 +22,7 @@ bazel test --override_module=rssn=/work/rssn-worktree //:joint_test
 | --- | --- |
 | `bazel build //:toolchain` | 构建 CLI 和 LSP |
 | `bazel run //:aevia -- --version` | 运行 Bazel 构建的 CLI |
+| `bazel run //:aevia -- rssn --manifest-json > manifest.json` | 导出实际链接的 RSSN 清单，供审计与绑定工具使用 |
 | `bazel run //:check` | 检查 Rust 工作区，省去测试可执行文件的链接 |
 | `bazel test //:test` | Aevia Rust 主测试、安装和工具链测试、契约检查 |
 | `bazel test //:joint_test` | Aevia 和 RSSN 主测试及两边的契约检查 |

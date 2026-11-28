@@ -643,6 +643,27 @@ fn rssn_describe_reports_operator_docs_and_callable_binding() {
 }
 
 #[test]
+fn rssn_manifest_json_matches_the_linked_kernel() {
+    let scratch = Scratch::new("rssn-manifest-json");
+    let output = aevia(scratch.path(), &["rssn", "--manifest-json"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let exported: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("one plain JSON document");
+    let linked = aevia_rssn::kernel::kernel().manifest();
+    let expected: serde_json::Value =
+        serde_json::from_str(&linked.to_json()).expect("canonical RSSN manifest");
+    assert!(
+        exported == expected,
+        "the CLI must export the linked manifest"
+    );
+
+    let mixed = aevia(scratch.path(), &["rssn", "--manifest-json", "--audit"]);
+    assert_eq!(code(&mixed), 2);
+    assert!(mixed.stdout.is_empty());
+    assert!(stderr(&mixed).contains("--manifest-json must be used alone"));
+}
+
+#[test]
 fn rssn_emit_writes_the_generated_module_into_out() {
     let scratch = Scratch::new("rssn-emit");
     let output = aevia(scratch.path(), &["rssn", "--emit", "--out", "gen"]);

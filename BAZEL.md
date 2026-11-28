@@ -22,6 +22,7 @@ bazel test --override_module=rssn=/work/rssn-worktree //:joint_test
 | --- | --- |
 | `bazel build //:toolchain` | Build the CLI and LSP |
 | `bazel run //:aevia -- --version` | Run the Bazel-built CLI |
+| `bazel run //:aevia -- rssn --manifest-json > manifest.json` | Export the linked RSSN manifest for audit and bindings tools |
 | `bazel run //:check` | Check the Rust workspace without linking test binaries |
 | `bazel test //:test` | Aevia Rust tests, installer and toolchain tests, and contract checks |
 | `bazel test //:joint_test` | Core tests and contract checks for both repositories |
