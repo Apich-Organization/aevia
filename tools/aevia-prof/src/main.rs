@@ -11,8 +11,7 @@
 //! profile does) so symbols resolve.
 //!
 //! ```console
-//! cargo build --profile profiling -p aevia-cli
-//! cargo run -p aevia-prof --release -- target/profiling/aevia.exe run prog.aev
+//! bazel run //:profile -- run prog.aev
 //! ```
 //!
 //! Environment: `AEVIA_PROF_TOP` (rows printed, default 45),

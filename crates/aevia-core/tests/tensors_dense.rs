@@ -730,9 +730,8 @@ fn the_fast_paths_decline_non_dense_storage() {
 
 /// Times `xs + xs` on 100k elements through both paths.
 ///
-/// Run with `cargo test --release -p aevia-core --test tensors_dense --
-/// --ignored --nocapture`. The boxed measurement is the *old* code path: the
-/// fast path is skipped for a boxed operand, so one binary measures both.
+/// Run with `bazel run //:benchmark -- dense-tensors`. The boxed operand
+/// takes the element-wise path, so one binary measures both paths.
 #[test]
 #[ignore = "measurement harness"]
 fn bench_dense_vs_boxed_100k() {
@@ -825,10 +824,8 @@ fn sequential_matmul(
 
 /// Times `@` on 256×256, before and after the move onto the dispatcher.
 ///
-/// Run with `RAYON_NUM_THREADS=2 cargo test --release -p aevia-core --test
-/// tensors_dense -- --ignored --nocapture bench_matmul_256`. `RAYON_NUM_THREADS`
-/// is the project's rule (§3.5): `faer` defaults to every core, which is slower
-/// on a machine already shared with other builds.
+/// Run with `bazel run //:benchmark -- dense-matmul`. Keep Rayon worker
+/// counts consistent across runs (§3.5), especially on a shared machine.
 #[test]
 #[ignore = "measurement harness"]
 fn bench_matmul_256() {

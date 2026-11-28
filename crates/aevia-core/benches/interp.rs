@@ -1,6 +1,6 @@
 //! Offline interpreter benchmarks (round-2 performance work).
 //!
-//! Run with `cargo bench -p aevia-core --bench interp`.
+//! Run with `bazel run //:benchmark -- interp`.
 //!
 //! Protocol: **release-ish** build (`cargo bench` uses the `bench` profile, which
 //! inherits `release`), one process, warm up once per workload, then report the

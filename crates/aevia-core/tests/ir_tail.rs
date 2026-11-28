@@ -191,8 +191,7 @@ fn wide_calls_preserve_aliased_arguments_and_live_frames() {
 /// Measurement harness (ignored by default): the wall-clock cost of one
 /// trampoline step, Int and Float.
 ///
-/// Run with:
-/// `cargo test -p aevia-core --test ir_tail -- --ignored --nocapture`.
+/// Run with `bazel run //:benchmark -- tail-call`.
 ///
 /// These are debug-build numbers in the same unit as the performance
 /// research's baselines (30.7 µs/step Int, 22.2 µs/step Float before the

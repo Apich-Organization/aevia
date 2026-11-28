@@ -533,6 +533,41 @@ def refresh_stdlib_reference(build, args):
             build.python("tools/check_stdlib_docs.py", "--aevia", cli, "--write")
 
 
+def benchmark(build, args):
+    workloads = {
+        "interp": ["bench", "-p", "aevia-core", "--bench", "interp"],
+        "matmul": ["run", "-p", "aevia-std", "--release", "--example", "matmul_bench"],
+        "startup": ["run", "-p", "aevia-rssn", "--profile", "profiling", "--example", "startup"],
+        "tail-call": ["test", "-p", "aevia-core", "--test", "ir_tail",
+                      "--", "--ignored", "--nocapture", "--exact", "bench_tail_call_step"],
+        "dense-tensors": ["test", "--release", "-p", "aevia-core", "--test", "tensors_dense",
+                          "--", "--ignored", "--nocapture", "--exact", "bench_dense_vs_boxed_100k"],
+        "dense-matmul": ["test", "--release", "-p", "aevia-core", "--test", "tensors_dense",
+                         "--", "--ignored", "--nocapture", "--exact", "bench_matmul_256"],
+    }
+    parser = argparse.ArgumentParser(description="Run an Aevia performance benchmark")
+    parser.add_argument("workload", choices=tuple(workloads))
+    options = parser.parse_args(args)
+    build.assert_runnable()
+    env = None
+    if options.workload == "dense-matmul":
+        env = {"RAYON_NUM_THREADS": build.env.get("RAYON_NUM_THREADS", "2")}
+    build.cargo(workloads[options.workload], env=env)
+
+
+def profile(build, args):
+    if not args:
+        raise ValueError("Pass the Aevia command and its arguments after //:profile --")
+    build.assert_native()
+    if build.target not in ("x86_64-pc-windows-msvc", "x86_64-pc-windows-gnu"):
+        raise ValueError("The sampling profiler requires x86-64 Windows")
+    build.cargo(["build", "-p", "aevia-prof", "--release"])
+    executable = build.cargo_output("release") / "aevia-prof.exe"
+    (toolchain,) = build.extra
+    cwd = Path(os.getenv("BUILD_WORKING_DIRECTORY", str(build.workspace)))
+    build.run([executable, toolchain / "aevia.exe", *args], cwd=cwd)
+
+
 def dispatch(build, workflow, args):
     if workflow in ("toolchain", "toolchain_minimal", "toolchain_profiling",
                     "platform_cli", "platform_binaries", "registry_server"):
@@ -565,6 +600,10 @@ def dispatch(build, workflow, args):
             verify_release_archive(build, (cwd / inputs.archive).resolve())
         else:
             release_smoke(build, (cwd / inputs.bin_dir).resolve())
+    elif workflow == "benchmark":
+        benchmark(build, args)
+    elif workflow == "profile":
+        profile(build, args)
     elif workflow == "check":
         build.cargo(["check", *(args or ["--workspace", "--all-targets"])])
     elif workflow == "fmt":

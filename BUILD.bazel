@@ -431,6 +431,25 @@ scientific_run(
     workflow = "rssn-api-audit",
 )
 
+[
+    scientific_run(
+        name = name,
+        aevia = ":sources",
+        data = _TASKS + data,
+        project = "aevia",
+        rssn = "@rssn//:sources",
+        tags = ["manual"],
+        workflow = name,
+    )
+    for name, data in [
+        ("benchmark", []),
+        (
+            "profile",
+            [":toolchain_profiling"],
+        ),
+    ]
+]
+
 scientific_run(
     name = "fmt",
     aevia = ":sources",
