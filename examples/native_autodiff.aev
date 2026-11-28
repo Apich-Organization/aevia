@@ -1,0 +1,101 @@
+## Run: aevia test examples/native_autodiff.aev
+## Native AD callbacks operate on dimensionless normalized variables. Positive
+## coordinate/output reference quantities restore value E and derivatives E/D.
+## Dual fields are native forward-mode values, never finite-difference samples.
+## Reverse handles exist only during the callback; keep no handles in globals.
+open Units.SI
+
+import Rssn_numerical_vector as V
+
+import Rssn_numerical_callback as C
+
+type Dual = { val: Float, deriv: Float }
+
+type DualVector = { val: Tensor<1, Float>, deriv: Tensor<1, Float> }
+
+fn square(x: Dual): Dual = V.num_dual_mul(x, x)
+
+fn sum_squares(x: DualVector): Dual =
+    let a = { val = x.val[0], deriv = x.deriv[0] }
+    let b = { val = x.val[1], deriv = x.deriv[1] }
+    V.num_dual_add(V.num_dual_mul(a, a), V.num_dual_mul(b, b))
+
+let derivative = C.num_dual_forward_derivative_scaled_typed(2.0 m, 1.0 m, 1.0 s, 10, square)
+
+let gradient = C.num_dual_forward_gradient_scaled_typed([2.0 m, 3.0 m], 1.0 m, 1.0 s, 10, sum_squares)
+
+test "forward dual arithmetic restores independently chosen physical units" =
+    match derivative with
+    | Ok(result) -> result.value == 4.0 s && result.derivative == 4.0 s/m
+    | Err(_) -> false
+
+test "forward sweeps recover every gradient component" =
+    match gradient with
+    | Ok(result) -> result[0] == 4.0 s/m && result[1] == 6.0 s/m
+    | Err(_) -> false
+
+fn reverse_sum_squares(x: Tensor<1, NativeAdVar>): NativeAdVar = V.num_ad_var_add(V.num_ad_var_mul(x[0], x[0]), V.num_ad_var_mul(x[1], x[1]))
+
+let reverse = C.num_native_reverse_gradient_scaled_typed([2.0 m, 3.0 m], 1.0 m, 1.0 s, 10, reverse_sum_squares)
+
+test "scoped native reverse accumulation preserves exact gradient and units" =
+    match reverse with
+    | Ok(result) -> result.value == 13.0 s && result.gradient[0] == 4.0 s/m && result.gradient[1] == 6.0 s/m && result.evaluations == 1
+    | Err(_) -> false
+
+test "expression Jacobian keeps row order and repeated outputs" =
+    let matrix = V.num_ad_jacobian(["x*y", "x*y+x^2", "x*y"], ["x", "y"], [2.0, 3.0])
+    let first = matrix[0, 0] == 3.0 && matrix[0, 1] == 2.0
+    let middle = matrix[1, 0] == 7.0 && matrix[1, 1] == 2.0
+    first && middle && matrix[2, 0] == 3.0 && matrix[2, 1] == 2.0
+
+## Changing reference scales changes the normalized function, so describe the
+## same physical function by compensating inside its callback.
+fn rescaled_square(x: Dual): Dual = V.num_dual_mul(V.num_dual_constant(2.0), V.num_dual_mul(x, x))
+
+let rescaled = C.num_dual_forward_derivative_scaled_typed(2.0 m, 2.0 m, 2.0 s, 10, rescaled_square)
+
+test "physical derivatives remain invariant under consistent reference changes" =
+    match rescaled with
+    | Ok(result) -> result.value == 4.0 s && result.derivative == 4.0 s/m
+    | Err(_) -> false
+
+test "integer dual powers return the first and second derivatives of a seeded direction" =
+    let base = { val = 2.0, deriv = 3.0 }
+    match Rssn.dynamic("num_dual_powi_with_second_derivative", [to_value(base), to_value(4)]) with
+    | Ok(value) ->
+        match from_value<{ val: Float, deriv: Float, second: Float }>(value) with
+        | Ok(power) -> power.val == 16.0 && power.deriv == 96.0 && power.second == 432.0
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "explicit Hessian diagonal steps retain separate coordinate and output units" =
+    let arguments = [to_value([1.0 m, 2.0 m]), to_value(2.0 m), to_value(4.0 s), to_value(5), to_value([0.125 m, 0.25 m])]
+    let callback = to_callback(fn (point: Tensor<1, Float[Length]>) => (3.0 * point[0] * point[0] + 5.0 * point[1] * point[1]) * (1.0 s/m^2))
+    match Rssn.call_ho("num_native_hessian_diagonal_with_steps_scaled", arguments, [callback]) with
+    | Ok(value) ->
+        match from_value<Tensor<[2], Float[Time/Length^2]>>(value) with
+        | Ok(diagonal) -> approx_eq(diagonal[0], 6.0 s/m^2, 1e-7 s/m^2) && approx_eq(diagonal[1], 10.0 s/m^2, 1e-7 s/m^2)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "a prepared Newton–CG tape owns its program and preserves mixed units" =
+    let sizes = to_value([to_value(1.0 m), to_value(1.0 s)])
+    let tape = unwrap_or(Rssn.dynamic("num_native_tape_lower", [to_value(["(x-p)*(x-p)+(y-2)*(y-2)"]), to_value(["x", "y"]), to_value(["p"]), sizes, to_value([to_value(1.0 m)]), to_value([to_value(5.0 kg)])]), to_value(0))
+    let plan = unwrap_or(Rssn.dynamic("num_analysis_newton_cg_tape_plan_new", [tape, to_value(0)]), to_value(0))
+    let config = { gradient_tolerance = 1e-10, max_iterations = 24, max_cg_iterations = 8, cg_relative_tolerance = 0.1, initial_radius = 1.0, max_radius = 10.0, min_radius = 1e-10, acceptance_threshold = 0.1 }
+    let start = to_value([to_value(0.0 m), to_value(0.0 s)])
+    match Rssn.dynamic("num_native_release", [tape]) with
+    | Ok(_) ->
+        match Rssn.dynamic("num_analysis_newton_cg_tape_plan_minimize", [plan, start, to_value([to_value(4.0 m)]), to_value(config)]) with
+        | Ok(value) ->
+            match from_value<{ x: Tensor<[2], Value>, value: Float[Mass], status: String, normalized_gradient_norm: Float, iterations: Int, objective_evaluations: Int, gradient_evaluations: Int, hessian_vector_evaluations: Int, negative_curvature_steps: Int, boundary_steps: Int, accepted_steps: Int }>(value) with
+            | Ok(result) ->
+                match (from_value<Float[Length]>(result.x[0]), from_value<Float[Time]>(result.x[1])) with
+                | (Ok(x), Ok(y)) -> result.status == "FirstOrderConverged" && approx_eq(x, 4.0 m, 1e-9 m) && approx_eq(y, 2.0 s, 1e-9 s) && approx_eq(result.value, 0.0 kg, 1e-18 kg)
+                | _ -> false
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+fn main(): IO Unit = println("Native forward and reverse AD with physical derivatives")

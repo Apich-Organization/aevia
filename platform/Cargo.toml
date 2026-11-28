@@ -1,0 +1,91 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/aevia-registry-core",
+    "crates/aevia-registry-db",
+    "crates/aevia-registry-docs",
+    "crates/aevia-registry-web",
+    "crates/aevia-registry-server",
+    "crates/aevia-pkg",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "Apache-2.0"
+repository = "https://github.com/Apich-Organization/aevia"
+
+[workspace.dependencies]
+# The default documentation feature reuses the language parser and formatter.
+# Cargo resolves these local dependencies from the surrounding workspace.
+aevia-doc = { path = "../crates/aevia-doc" }
+aevia-syntax = { path = "../crates/aevia-syntax" }
+# Versions, requirements, the resolver and the sparse-index reader: pure, no
+# dependencies, shared with the toolchain so both agree on what `^1.2` means.
+aevia-resolve = { path = "../crates/aevia-resolve" }
+
+aevia-registry-core = { path = "crates/aevia-registry-core" }
+aevia-registry-db = { path = "crates/aevia-registry-db" }
+aevia-registry-docs = { path = "crates/aevia-registry-docs" }
+aevia-registry-web = { path = "crates/aevia-registry-web" }
+
+ammonia = "4"
+axum = { version = "0.8", features = ["multipart"] }
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+ed25519-dalek = "2"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+hex = "0.4"
+leptos = { version = "0.8", features = ["ssr"] }
+pgp = { version = "0.21", default-features = false }
+rand = "0.9"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "gzip"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "json", "migrate", "macros"] }
+tar = "0.4"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "timeout", "set-header", "compression-gzip", "fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+url = "2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unreachable_code = "deny"
+improper_ctypes_definitions = "deny"
+future_incompatible = { level = "deny", priority = -1 }
+nonstandard_style = { level = "deny", priority = -1 }
+rust_2018_idioms = { level = "deny", priority = -1 }
+missing_docs = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+missing_safety_doc = "deny"
+same_item_push = "deny"
+implicit_clone = "deny"
+undocumented_unsafe_blocks = "deny"
+unnecessary_safety_comment = "deny"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+# Not `panic = "abort"`: the documentation build runs in a blocking task, and a
+# panic there must fail that one version's docs, not the whole registry process.
+strip = true
+
+# Server-side rendering is debugged with backtraces, not with full dependency
+# debug info.
+[profile.dev.package."*"]
+debug = "line-tables-only"

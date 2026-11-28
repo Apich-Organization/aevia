@@ -1,0 +1,18 @@
+## Enclose the square root of two using dyadics rounded in opposite directions.
+import Rssn_Multiprecision as MP
+
+let two: MP.Dyadic = { mantissa = 1, exponent = 1, precision = 1 }
+
+let lower = MP.sqrt_dyadic(two, 12, "down")
+let upper = MP.sqrt_dyadic(two, 12, "up")
+
+fn main(): IO Unit = do
+    println("Lower bound: {lower}")
+    println("Upper bound: {upper}")
+
+test "the bounds straddle two after squaring at exact precision" =
+    match (lower, upper) with
+    | (Ok(lo), Ok(hi)) -> match (MP.multiply_dyadic(lo, lo, 24, "nearest"), MP.multiply_dyadic(hi, hi, 24, "nearest")) with
+        | (Ok(lo2), Ok(hi2)) -> MP.compare_dyadic(lo2, two) == Ok(-1) && MP.compare_dyadic(hi2, two) == Ok(1)
+        | _ -> false
+    | _ -> false

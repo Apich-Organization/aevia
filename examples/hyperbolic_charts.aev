@@ -1,0 +1,35 @@
+## Compare geodesic distances in the upper half-plane and the Poincare disk.
+## The Special domain uses Result for conversions and distances on the open charts.
+import Rssn_Special as Special
+
+let first = complex(0.0, 1.0)
+let second = complex(0.0, 4.0)
+
+let disk_second = Special.uhp_to_disk(second)
+let half_plane_distance = Special.uhp_distance(first, second)
+let disk_distance =
+    match disk_second with
+    | Ok(point) -> Special.poincare_disk_distance(complex(0.0, 0.0), point)
+    | Err(error) -> Err(error)
+
+test "Cayley round trip returns to height four" =
+    match disk_second with
+    | Ok(point) ->
+        match Special.disk_to_uhp(point) with
+        | Ok(restored) -> approx_eq(magnitude(restored - second), 0.0, 1e-12)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "vertical geodesic distance is the logarithm of the height ratio" =
+    approx_eq(unwrap_or(half_plane_distance, nan), ln(4.0), 1e-12)
+
+test "distance is invariant under Cayley coordinates" =
+    approx_eq(unwrap_or(half_plane_distance, nan), unwrap_or(disk_distance, nan), 1e-12)
+
+fn main(): IO Unit = do
+    match (half_plane_distance, disk_distance) with
+    | (Ok(plane), Ok(disk)) -> do
+        println("Geodesic length in the half-plane: {plane}")
+        println("Geodesic length in the disk: {disk}")
+    | (Err(error), _) -> println("Half-plane distance failed: {error}")
+    | (_, Err(error)) -> println("Disk distance failed: {error}")

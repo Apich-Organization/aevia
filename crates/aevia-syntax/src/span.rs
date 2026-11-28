@@ -1,0 +1,395 @@
+//! Source files and byte spans.
+//!
+//! Every token, expression and diagnostic carries a [`Span`]. Spans are byte
+//! ranges into a file registered in a [`SourceMap`], which is what turns them
+//! into `line:column` for diagnostics and the LSP.
+
+use std::fmt;
+
+/// Identifier of a file inside a [`SourceMap`].
+pub type FileId = u32;
+
+/// A byte range in one source file.
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
+pub struct Span {
+    /// The file the range belongs to.
+    pub file: FileId,
+    /// Inclusive start byte offset.
+    pub start: u32,
+    /// Exclusive end byte offset.
+    pub end: u32,
+}
+
+impl Span {
+    /// Creates a span.
+    #[must_use]
+    pub fn new(
+        file: FileId,
+        start: usize,
+        end: usize,
+    ) -> Self {
+        Self {
+            file,
+            start: u32::try_from(start).unwrap_or(u32::MAX),
+            end: u32::try_from(end).unwrap_or(u32::MAX),
+        }
+    }
+
+    /// A span that covers both inputs.
+    #[must_use]
+    pub fn join(
+        self,
+        other: Self,
+    ) -> Self {
+        if self.file != other.file {
+            return self;
+        }
+        Self {
+            file: self.file,
+            start: self.start.min(other.start),
+            end: self.end.max(other.end),
+        }
+    }
+
+    /// The zero-width span at the start of this one.
+    #[must_use]
+    pub const fn start_span(self) -> Self {
+        Self {
+            file: self.file,
+            start: self.start,
+            end: self.start,
+        }
+    }
+
+    /// The length in bytes.
+    #[must_use]
+    pub fn len(self) -> usize {
+        usize::try_from(self.end.saturating_sub(self.start)).unwrap_or(0)
+    }
+
+    /// True when the span covers no bytes.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.end <= self.start
+    }
+}
+
+impl fmt::Debug for Span {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
+        write!(f, "{}..{}@{}", self.start, self.end, self.file)
+    }
+}
+
+/// One source file: its display name and its text.
+#[derive(Clone, Debug)]
+pub struct SourceFile {
+    /// Path or synthetic name shown in diagnostics.
+    pub name: String,
+    /// The full UTF-8 source text.
+    pub text: String,
+    /// Byte offsets at which each line starts.
+    line_starts: Vec<usize>,
+}
+
+impl SourceFile {
+    /// Registers a file and precomputes line starts.
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        text: impl Into<String>,
+    ) -> Self {
+        let text = text.into();
+        let mut line_starts = vec![0];
+        let mut bytes = text.bytes().enumerate().peekable();
+        while let Some((offset, byte)) = bytes.next() {
+            match byte {
+                | b'\r' if matches!(bytes.peek(), Some((_, b'\n'))) => {
+                    if let Some((end, _)) = bytes.next() {
+                        line_starts.push(end.saturating_add(1));
+                    }
+                },
+                | b'\r' | b'\n' => line_starts.push(offset.saturating_add(1)),
+                | _ => {},
+            }
+        }
+        Self {
+            name: name.into(),
+            text,
+            line_starts,
+        }
+    }
+
+    /// The 1-based line and column (in characters) of a byte offset.
+    #[must_use]
+    pub fn line_col(
+        &self,
+        offset: u32,
+    ) -> (usize, usize) {
+        let offset = self.floor_boundary(usize::try_from(offset).unwrap_or(0));
+        let line = match self.line_starts.binary_search(&offset) {
+            | Ok(index) => index,
+            | Err(index) => index.saturating_sub(1),
+        };
+        let start = self.line_starts.get(line).copied().unwrap_or(0);
+        // Both bytes of CRLF denote the same end-of-line insertion point.
+        // Offsets supplied by external hosts may be inside a UTF-8 scalar.
+        let line_number = line.saturating_add(1);
+        let content_end = start.saturating_add(self.line_text(line_number).len());
+        let column = self
+            .text
+            .get(start..offset.min(content_end))
+            .unwrap_or_default()
+            .chars()
+            .count()
+            .saturating_add(1);
+        (line_number, column)
+    }
+
+    pub(crate) fn floor_boundary(
+        &self,
+        offset: usize,
+    ) -> usize {
+        let mut offset = offset.min(self.text.len());
+        while !self.text.is_char_boundary(offset) {
+            offset = offset.saturating_sub(1);
+        }
+        offset
+    }
+
+    pub(crate) fn ceil_boundary(
+        &self,
+        offset: usize,
+    ) -> usize {
+        let mut offset = offset.min(self.text.len());
+        while !self.text.is_char_boundary(offset) {
+            offset = offset.saturating_add(1);
+        }
+        offset
+    }
+
+    pub(crate) fn line_start(
+        &self,
+        line: usize,
+    ) -> usize {
+        self.line_starts
+            .get(line.saturating_sub(1))
+            .copied()
+            .unwrap_or(self.text.len())
+    }
+
+    /// The text of a 1-based line, without its terminator.
+    #[must_use]
+    pub fn line_text(
+        &self,
+        line: usize,
+    ) -> &str {
+        let Some(&start) = self.line_starts.get(line.saturating_sub(1)) else {
+            return "";
+        };
+        let end = self
+            .line_starts
+            .get(line)
+            .copied()
+            .unwrap_or(self.text.len());
+        let text = &self.text[start..end];
+        let text = text.strip_suffix('\n').unwrap_or(text);
+        text.strip_suffix('\r').unwrap_or(text)
+    }
+}
+
+/// All files of a compilation, indexed by [`FileId`].
+#[derive(Clone, Debug, Default)]
+pub struct SourceMap {
+    files: Vec<SourceFile>,
+}
+
+impl SourceMap {
+    /// An empty map.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds a file and returns its id.
+    pub fn add(
+        &mut self,
+        name: impl Into<String>,
+        text: impl Into<String>,
+    ) -> FileId {
+        let id = u32::try_from(self.files.len()).unwrap_or(u32::MAX);
+        self.files.push(SourceFile::new(name, text));
+        id
+    }
+
+    /// Replaces a buffer while retaining its stable source id.
+    /// Hosts that compile successive revisions use this to keep saved spans
+    /// from imported modules distinct from newly opened source files.
+    pub fn replace(
+        &mut self,
+        id: FileId,
+        name: impl Into<String>,
+        text: impl Into<String>,
+    ) -> bool {
+        let Some(file) = self.files.get_mut(id as usize) else {
+            return false;
+        };
+        *file = SourceFile::new(name, text);
+        true
+    }
+
+    /// The file with the given id.
+    #[must_use]
+    pub fn file(
+        &self,
+        id: FileId,
+    ) -> Option<&SourceFile> {
+        self.files.get(usize::try_from(id).ok()?)
+    }
+
+    /// The text of a span, when it is in range.
+    #[must_use]
+    pub fn text(
+        &self,
+        span: Span,
+    ) -> &str {
+        let Some(file) = self.file(span.file) else {
+            return "";
+        };
+        let start = usize::try_from(span.start).unwrap_or(0);
+        let end = usize::try_from(span.end).unwrap_or(0);
+        file.text.get(start..end).unwrap_or("")
+    }
+
+    /// The `file:line:column` prefix for a span.
+    #[must_use]
+    pub fn location(
+        &self,
+        span: Span,
+    ) -> String {
+        match self.file(span.file) {
+            | Some(file) => {
+                let (line, column) = file.line_col(span.start);
+                format!("{}:{line}:{column}", display_path(&file.name))
+            },
+            | None => "<unknown>".to_string(),
+        }
+    }
+}
+
+/// The spelling of a source path in a diagnostic.
+///
+/// Loaders canonicalise paths so that one file has one identity, and on
+/// Windows that produces the verbatim form `\\?\C:\dir\file.aev`. That prefix
+/// is an implementation detail of the identity, not something a user typed:
+/// it is dropped, and a path under the working directory is shown relative to
+/// it, the way the user named it on the command line.
+#[must_use]
+pub fn display_path(name: &str) -> String {
+    let plain = strip_verbatim(name);
+    if let Ok(cwd) = std::env::current_dir() {
+        let cwd = strip_verbatim(&cwd.to_string_lossy());
+        let cwd = cwd.trim_end_matches(['/', '\\']);
+        if !cwd.is_empty()
+            && plain.len() > cwd.len().saturating_add(1)
+            && plain.is_char_boundary(cwd.len())
+        {
+            let (head, rest) = plain.split_at(cwd.len());
+            let same = if cfg!(windows) {
+                head.eq_ignore_ascii_case(cwd)
+            } else {
+                head == cwd
+            };
+            if same && rest.starts_with(['/', '\\']) {
+                return rest.get(1..).unwrap_or_default().to_string();
+            }
+        }
+    }
+    plain
+}
+
+fn strip_verbatim(name: &str) -> String {
+    name.strip_prefix(r"\\?\UNC\").map_or_else(
+        || name.strip_prefix(r"\\?\").unwrap_or(name).to_string(),
+        |rest| format!(r"\\{rest}"),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn line_breaks_match_the_lexer_for_cr_lf_and_crlf() {
+        let file = SourceFile::new("mixed.aev", "one\rtwo\r\n三\n");
+        assert_eq!(file.line_col(4), (2, 1));
+        assert_eq!(file.line_col(7), (2, 4));
+        assert_eq!(file.line_col(8), (2, 4));
+        assert_eq!(file.line_col(9), (3, 1));
+        assert_eq!(file.line_col(10), (3, 1));
+        assert_eq!(file.line_col(13), (4, 1));
+        assert_eq!(file.line_text(1), "one");
+        assert_eq!(file.line_text(2), "two");
+        assert_eq!(file.line_text(3), "三");
+        assert_eq!(file.line_text(4), "");
+    }
+
+    #[test]
+    fn byte_locations_clamp_to_utf8_boundaries_and_crlf_content() {
+        let file = SourceFile::new("unicode.aev", "界x\r\nα");
+        assert_eq!(file.line_col(1), (1, 1));
+        assert_eq!(file.line_col(2), (1, 1));
+        assert_eq!(file.line_col(3), (1, 2));
+        assert_eq!(file.line_col(4), (1, 3));
+        assert_eq!(file.line_col(5), (1, 3));
+        assert_eq!(file.line_col(6), (2, 1));
+        assert_eq!(file.line_col(7), (2, 1));
+        assert_eq!(file.line_col(u32::MAX), (2, 2));
+    }
+
+    #[test]
+    fn verbatim_prefixes_are_not_shown() {
+        assert_eq!(strip_verbatim(r"\\?\C:\a\b.aev"), r"C:\a\b.aev");
+        assert_eq!(
+            strip_verbatim(r"\\?\UNC\srv\share\b.aev"),
+            r"\\srv\share\b.aev"
+        );
+        assert_eq!(strip_verbatim("src/main.aev"), "src/main.aev");
+        assert_eq!(display_path("main.aev"), "main.aev");
+    }
+
+    #[test]
+    fn line_and_column_are_one_based() {
+        let mut map = SourceMap::new();
+        let id = map.add("test.aev", "let x = 1\nlet y = 2\n");
+        let file = map.file(id).unwrap();
+        assert_eq!(file.line_col(0), (1, 1));
+        assert_eq!(file.line_col(4), (1, 5));
+        assert_eq!(file.line_col(10), (2, 1));
+        assert_eq!(file.line_text(1), "let x = 1");
+    }
+
+    #[test]
+    fn spans_join_across_children() {
+        let a = Span::new(0, 4, 5);
+        let b = Span::new(0, 6, 9);
+        assert_eq!(a.join(b), Span::new(0, 4, 9));
+        assert_eq!(a.len(), 1);
+    }
+}

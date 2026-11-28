@@ -1,0 +1,48 @@
+[package]
+name = "aevia-registry-server"
+description = "The aevia.apich.org server: registry API, accounts and documentation site"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+default-run = "aevia-registry"
+
+[lib]
+name = "aevia_registry"
+path = "src/lib.rs"
+
+[[bin]]
+name = "aevia-registry"
+path = "src/main.rs"
+
+[dependencies]
+aevia-registry-core.workspace = true
+aevia-registry-db.workspace = true
+aevia-registry-docs.workspace = true
+aevia-registry-web.workspace = true
+axum.workspace = true
+chrono.workspace = true
+hex.workspace = true
+hmac = "0.12"
+rand.workspace = true
+reqwest.workspace = true
+aevia-resolve.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+subtle = "2"
+tokio.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tower.workspace = true
+
+[lints]
+workspace = true

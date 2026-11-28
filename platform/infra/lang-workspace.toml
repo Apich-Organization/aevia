@@ -1,0 +1,68 @@
+# Subset of the repository root Cargo.toml for the five language crates used
+# by the platform:
+# aevia-doc -> aevia-syntax, aevia-fmt; aevia-fmt -> aevia-syntax, aevia-dim;
+# aevia-syntax -> aevia-dim; and aevia-resolve (version/dependency resolution).
+#
+# It exists because those crates inherit `version`/`edition`/`rust-version`/
+# `license`/`repository` and their external dependencies via `.workspace = true`,
+# and cargo refuses to load a crate whose workspace root it cannot find. The
+# real root sits above `crates/`, outside both build contexts, so
+# Containerfile.server copies this manifest to /build/Cargo.toml.
+#
+# Keep the inherited package fields, dependency declarations and lint settings
+# aligned with the repository root. Run sh platform/infra/check-lang-workspace.sh
+# from the repository root after changing those settings or the member list.
+
+[workspace]
+resolver = "3"
+members = [
+    "crates/aevia-dim",
+    "crates/aevia-syntax",
+    "crates/aevia-fmt",
+    "crates/aevia-doc",
+    "crates/aevia-resolve",
+]
+
+[workspace.package]
+version = "0.1.0-beta.1"
+edition = "2024"
+rust-version = "1.100"
+license = "Apache-2.0"
+repository = "https://github.com/Apich-Organization/aevia"
+
+[workspace.dependencies]
+aevia-dim = { path = "crates/aevia-dim" }
+aevia-syntax = { path = "crates/aevia-syntax" }
+aevia-fmt = { path = "crates/aevia-fmt" }
+aevia-doc = { path = "crates/aevia-doc" }
+aevia-resolve = { path = "crates/aevia-resolve" }
+
+bincode-next = "3.2"
+indexmap = { version = "2", features = ["serde"] }
+num-bigint = { version = "0.4", features = ["serde"] }
+num-integer = "0.1"
+num-rational = { version = "0.4", features = ["serde"] }
+num-traits = "0.2"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+unicode-ident = "1"
+unicode-normalization = "0.1"
+unicode-segmentation = "1"
+
+[workspace.lints.rust]
+future_incompatible = { level = "deny", priority = -1 }
+nonstandard_style = { level = "deny", priority = -1 }
+rust_2018_idioms = { level = "deny", priority = -1 }
+improper_ctypes_definitions = "deny"
+unreachable_code = "deny"
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+dbg_macro = "deny"
+implicit_clone = "deny"
+missing_safety_doc = "deny"
+same_item_push = "deny"
+todo = "deny"
+undocumented_unsafe_blocks = "deny"
+unnecessary_safety_comment = "deny"

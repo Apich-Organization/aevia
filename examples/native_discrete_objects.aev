@@ -1,0 +1,240 @@
+## Native source objects are session capabilities; all mathematical work is in RSSN.
+## Run: cargo run -p aevia-cli -- test examples/native_discrete_objects.aev
+
+import Rssn_numerical_special as Special
+
+test "closed interval polynomial roots retain dimensioned endpoints" =
+    match Rssn.dynamic("num_native_polynomial_normalized_new", [to_value([1.0, -0.25, 0.0])]) with
+    | Ok(polynomial) ->
+        match Rssn.dynamic("num_native_real_roots_find_roots_in", [polynomial, to_value(0.0 m), to_value(1.0 m), to_value(1e-10 m), to_value(4.0 m)]) with
+        | Ok(value) ->
+            match from_value<Tensor<1, Float[Length]>>(value) with
+            | Ok(roots) -> roots == [0.0 m, 1.0 m]
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "opaque permutation groups execute exact Schreier Sims" =
+    match Rssn.dynamic("num_native_group_new", [to_value(3), to_value([[1, 0, 2], [1, 2, 0]])]) with
+    | Ok(group) ->
+        match Rssn.dynamic("num_native_group_order", [group]) with
+        | Ok(value) ->
+            match from_value<Int>(value) with
+            | Ok(order) -> order == 6
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "physical graphics points retain their coordinate dimension" =
+    match Rssn.dynamic("num_native_graphics_point3_new", [to_value(1.0 m), to_value(2.0 m), to_value(3.0 m)]) with
+    | Ok(point) ->
+        match Rssn.dynamic("num_native_graphics_point3_components", [point]) with
+        | Ok(value) ->
+            match from_value<Tensor<1, Float[Length]>>(value) with
+            | Ok(coords) -> coords == [1.0 m, 2.0 m, 3.0 m]
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+fn triangle_point_m(x: Float[Length], y: Float[Length], z: Float[Length]): Value =
+    unwrap_or(Rssn.dynamic("num_native_graphics_point3_new", [to_value(x), to_value(y), to_value(z)]), to_value(0))
+
+test "quadratic sieve factor pairs are ordered exact integers" =
+    let limits = unwrap_or(Rssn.dynamic("num_native_qs_limits_for_digits", [to_value(2)]), to_value(0))
+    match Rssn.dynamic("num_native_qs_factor_pair", [to_value(77), limits]) with
+    | Ok(result) ->
+        match from_value<Option<{ item0: Int, item1: Int }>>(result) with
+        | Ok(Some(pair)) -> pair.item0 == 7 && pair.item1 == 11 && pair.item0 * pair.item1 == 77
+        | _ -> false
+    | Err(_) -> false
+
+test "prepared triangle batches distinguish hits and preserve physical coordinates" =
+    let a = triangle_point_m(0.0 m, 0.0 m, 0.0 m)
+    let b = triangle_point_m(1e-4 m, 0.0 m, 0.0 m)
+    let c = triangle_point_m(0.0 m, 1e-4 m, 0.0 m)
+    let inside = triangle_point_m(2.5e-5 m, 2.5e-5 m, 1.0 m)
+    let outside = triangle_point_m(1.0 m, 1.0 m, 1.0 m)
+    let direction = unwrap_or(Rssn.dynamic("num_native_graphics_vector3_new", [to_value(0.0), to_value(0.0), to_value(-1.0)]), to_value(0))
+    let unbounded: Option<Float[Length]> = None
+    match Rssn.dynamic("num_native_graphics_prepared_triangle_new", [a, b, c, to_value(1.0 m)]) with
+    | Ok(prepared) ->
+        match from_value<Option<Value>>(prepared) with
+        | Ok(Some(triangle)) ->
+            match Rssn.dynamic("num_native_graphics_prepared_triangle_intersect_parallel", [triangle, to_value([inside, outside]), direction, to_value(0.0 m), to_value(unbounded)]) with
+            | Ok(value) ->
+                match from_value<{ hit_mask: Tensor<1, Bool>, t: Tensor<1, Float[Length]>, points: Tensor<2, Float[Length]>, normals: Tensor<2, Float> }>(value) with
+                | Ok(batch) -> batch.hit_mask == [true, false] && approx_eq(at(batch.t, 0), 1.0 m, 1e-14 m) && at(batch.t, 1) == 0.0 m && approx_eq(batch.points[0, 0], 2.5e-5 m, 1e-17 m) && batch.normals[0, 2] == 1.0
+                | Err(_) -> false
+            | Err(_) -> false
+        | _ -> false
+    | Err(_) -> false
+
+test "native complex enclosure norms preserve sample units" =
+    match Rssn.dynamic("num_native_cball_point", [to_value(3.0 m), to_value(4.0 m)]) with
+    | Ok(ball) ->
+        match Rssn.dynamic("num_native_cball_modulus_upper", [ball]) with
+        | Ok(value) ->
+            match from_value<Float[Length]>(value) with
+            | Ok(norm) -> approx_eq(norm, 5.0 m, 1e-12 m)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "double-double norms expose both measured components" =
+    let x = unwrap_or(Rssn.dynamic("num_native_dd_from_f64", [to_value(100.0 cm)]), to_value(0))
+    let norm = unwrap_or(Rssn.dynamic("num_native_dd_hypot", [x, x]), to_value(0))
+    let z = unwrap_or(Rssn.dynamic("num_native_cdd_new", [to_value(1.0 m), to_value(1.0 m)]), to_value(0))
+    let modulus = unwrap_or(Rssn.dynamic("num_native_cdd_norm_dd", [z]), to_value(0))
+    let both = (Rssn.dynamic("num_native_dd_parts", [norm]), Rssn.dynamic("num_native_dd_parts", [modulus]))
+    match both with
+    | (Ok(a), Ok(b)) ->
+        let parts = (from_value<{ item0: Float[Length], item1: Float[Length] }>(a), from_value<{ item0: Float[Length], item1: Float[Length] }>(b))
+        match parts with
+        | (Ok(aa), Ok(bb)) ->
+            aa == bb && approx_eq(aa.item0, 1.4142135623730951 m, 1e-15 m) && approx_eq(aa.item1, -9.667293313452913e-17 m, 2e-31 m)
+        | _ -> false
+    | _ -> false
+
+test "a complex double-double reciprocal keeps extreme magnitudes and inverse units" =
+    let z = unwrap_or(Rssn.dynamic("num_native_cdd_new", [to_value(3e200 m), to_value(4e200 m)]), to_value(0))
+    match Rssn.dynamic("num_native_cdd_recip", [z]) with
+    | Ok(inverse) ->
+        match Rssn.dynamic("num_native_cdd_norm", [inverse]) with
+        | Ok(value) ->
+            match from_value<Float[Length^-1]>(value) with
+            | Ok(modulus) -> approx_eq(modulus / 2e-201 m^-1, 1.0, 1e-14)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "native exact root system methods are callable through retained objects" =
+    match Rssn.dynamic("num_native_root_system_new", [to_value([[2, -1], [-1, 2]])]) with
+    | Ok(result) ->
+        match from_value<Option<Value>>(result) with
+        | Ok(Some(root_system)) ->
+            match Rssn.dynamic("num_native_root_system_weyl_dim", [root_system, to_value([1, 0])]) with
+            | Ok(value) ->
+                match from_value<Option<Int>>(value) with
+                | Ok(Some(size)) -> size == 3
+                | _ -> false
+            | Err(_) -> false
+        | _ -> false
+    | Err(_) -> false
+
+test "native random streams are session state rather than seed replays" =
+    match Rssn.dynamic("num_native_rng_new", [to_value(42)]) with
+    | Ok(stream) ->
+        match Rssn.dynamic("num_native_rng_next_u64", [stream]) with
+        | Ok(first) ->
+            match Rssn.dynamic("num_native_rng_next_u64", [stream]) with
+            | Ok(second) ->
+                match from_value<Int>(first) with
+                | Ok(a) ->
+                    match from_value<Int>(second) with
+                    | Ok(b) -> a != b
+                    | Err(_) -> false
+                | Err(_) -> false
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "a prepared categorical table preserves input indices and excludes zero weights" =
+    match (Rssn.dynamic("num_native_categorical_new", [to_value([0.0, 1.0, 0.0])]), Rssn.dynamic("num_native_rng_new", [to_value(42)])) with
+    | (Ok(distribution), Ok(stream)) ->
+        let categories = Rssn.dynamic("num_native_categorical_categories", [distribution])
+        let batch = Rssn.dynamic("num_native_categorical_fill", [distribution, stream, to_value(3)])
+        let single = Rssn.dynamic("num_native_categorical_sample", [distribution, stream])
+        match (categories, batch, single) with
+        | (Ok(n), Ok(draws), Ok(index)) ->
+            match (from_value<Int>(n), from_value<Tensor<1, Int>>(draws), from_value<Int>(index)) with
+            | (Ok(3), Ok(indices), Ok(1)) -> indices == [1, 1, 1]
+            | _ -> false
+        | _ -> false
+    | _ -> false
+
+test "native Sobol positions can be read or moved independently" =
+    let sequence = unwrap_or(Rssn.dynamic("num_analysis_sobol_new", [to_value(2)]), to_value(0))
+    let first = unwrap_or(Rssn.dynamic("num_analysis_sobol_point_at", [sequence, to_value(1)]), to_value(0))
+    match Rssn.dynamic("num_analysis_sobol_seek", [sequence, to_value(4294967295)]) with
+    | Ok(_) ->
+        let origin = unwrap_or(Rssn.dynamic("num_analysis_sobol_next", [sequence]), to_value(0))
+        let after_origin = unwrap_or(Rssn.dynamic("num_analysis_sobol_next", [sequence]), to_value(0))
+        let expected = unwrap_or(from_value<Tensor<1, Float>>(first), [-1.0, -1.0])
+        let restarted = unwrap_or(from_value<Tensor<1, Float>>(after_origin), [-1.0, -1.0])
+        match from_value<Tensor<1, Float>>(origin) with
+        | Ok(point) -> point == [0.0, 0.0] && expected == [0.5, 0.5] && restarted == expected
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "a fused complex polynomial keeps residual and Jacobian dimensions" =
+    let system = unwrap_or(Rssn.dynamic("num_native_polynomial_system_new", [to_value([1.0]), to_value([[2]]), to_value([0, 1]), to_value(2.0 m), to_value(3.0 kg)]), to_value(0))
+    match Rssn.dynamic("num_native_ball_values_and_jacobian_at_terms", [system, to_value([4.0 m])]) with
+    | Ok(value) ->
+        match from_value<{ values: Tensor<1, Complex[Mass]>, jacobian: Tensor<2, Complex[Mass/Length]> }>(value) with
+        | Ok(result) -> approx_eq(re(at(result.values, 0)), 12.0 kg, 1e-12 kg) && approx_eq(re(result.jacobian[0, 0]), 6.0 kg/m, 1e-12 kg/m)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "Bell batches keep finite counts when one index overflows" =
+    match Rssn.dynamic("num_combinatorics_bell_batch", [to_value([5, 219, 0, 5])]) with
+    | Ok(value) ->
+        match from_value<Tensor<1, Option<Float>>>(value) with
+        | Ok(counts) -> counts == [Some(52.0), None, Some(1.0), Some(52.0)]
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "an empty Bell batch retains its optional Float element type" =
+    let indices: Tensor<[0], Int> = []
+    let expected: Tensor<[0], Option<Float>> = []
+    match Rssn.dynamic("num_combinatorics_bell_batch", [to_value(indices)]) with
+    | Ok(value) ->
+        match (from_value<Tensor<[0], Option<Float>>>(value), from_value<Tensor<[0], Option<Int>>>(value)) with
+        | (Ok(counts), Err(_)) -> counts == expected
+        | _ -> false
+    | Err(_) -> false
+
+test "the typed Bell binding preserves options for populated and empty batches" =
+    let indices: Tensor<[0], Int> = []
+    let expected: Tensor<[0], Option<Float>> = []
+    let empty = Special.num_combinatorics_bell_batch(indices)
+    let populated = Special.num_combinatorics_bell_batch([5, 219])
+    empty == expected && populated == [Some(52.0), None]
+
+test "a prepared prime modulus can evaluate roots and nonresidues" =
+    match Rssn.dynamic("num_number_theory_prime_sqrt_plan_new", [to_value(17)]) with
+    | Ok(value) ->
+        match from_value<Option<Value>>(value) with
+        | Ok(Some(plan)) ->
+            let root = unwrap_or(Rssn.dynamic("num_number_theory_prime_sqrt_plan_sqrt", [plan, to_value(4)]), to_value(0))
+            let nonresidue = unwrap_or(Rssn.dynamic("num_number_theory_prime_sqrt_plan_sqrt", [plan, to_value(3)]), to_value(0))
+            match from_value<Option<Int>>(root) with
+            | Ok(Some(square_root)) -> square_root == 2 && from_value<Option<Int>>(nonresidue) == Ok(None)
+            | _ -> false
+        | _ -> false
+    | Err(_) -> false
+
+test "a central multivector product multiplies coefficient dimensions" =
+    let a = unwrap_or(Rssn.dynamic("num_native_multivector_new", [to_value(2.0 m), to_value(0.0 m), to_value(0.0 m), to_value(0.0 m), to_value(0.0 m), to_value(0.0 m), to_value(0.0 m), to_value(3.0 m)]), to_value(0))
+    let product = unwrap_or(Rssn.dynamic("num_native_multivector_mul_central", [a, to_value(4.0 s), to_value(5.0 s)]), to_value(0))
+    match Rssn.dynamic("num_native_multivector_norm_sq", [product]) with
+    | Ok(value) ->
+        match from_value<Float[Length^2*Time^2]>(value) with
+        | Ok(norm_squared) -> approx_eq(norm_squared, 533.0 m^2*s^2, 1e-12 m^2*s^2)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "a Lie matrix basis returns exact bracket coordinates" =
+    let h = unwrap_or(Rssn.dynamic("num_native_qmatrix_new", [to_value([[1, 0], [0, -1]]), to_value(1)]), to_value(0))
+    let e = unwrap_or(Rssn.dynamic("num_native_qmatrix_new", [to_value([[0, 1], [0, 0]]), to_value(1)]), to_value(0))
+    match Rssn.dynamic("num_native_lie_from_matrices", [to_value([h, e])]) with
+    | Ok(value) ->
+        match from_value<Option<Value>>(value) with
+        | Ok(Some(algebra)) ->
+            match Rssn.dynamic("num_native_lie_bracket", [algebra, to_value([1, 0]), to_value([0, 1])]) with
+            | Ok(bracket) ->
+                match from_value<Tensor<[2], Real>>(bracket) with
+                | Ok(coordinates) -> coordinates == [0, 2]
+                | Err(_) -> false
+            | Err(_) -> false
+        | _ -> false
+    | Err(_) -> false

@@ -1,0 +1,1029 @@
+# Domain overlay for the Aevia view of the rssn Kernel Manifest.
+#
+# The manifest says what the kernel *is* (operators, rule sets, kernel
+# signatures). This file says how Aevia presents it: which operators form a
+# domain module, which of them get a curated typed signature, which rich types
+# exist, and what is deliberately left out. See `src/domains.rs`.
+#
+# Directives (one per line, `#` starts a comment):
+#   domain  Name | one-line doc
+#   family  Name rule_set:glob [rule_set:glob ...]    first match wins
+#   mode    Name typed|dynamic       `typed`: every operator needs sig/dynamic/exclude
+#   sig     op [as name][<d, ...>](p: T, ...) -> Result<R, OpError>
+#           optional generic parameters may bind dimensions in the signature
+#   codec   Type to_fn from_fn       wire conversion of a rich type (see prelude)
+#   exclude op [op ...] | reason
+#   dynamic op [op ...] | reason     accepted as dynamic on purpose
+#   prelude Name                     followed by `| ` lines of Aevia source
+
+domain NumberTheory | Number theory over the integers: divisibility, modular arithmetic, primality, factorisation.
+domain Combinatorics | Counting, partitions, permutations as numbers, recurrences.
+domain Group | Finite groups and permutation groups, presentations, characters.
+domain FiniteField | Finite fields GF(p), GF(2^8), extension fields and polynomial arithmetic over them.
+domain Coding | Error-correcting codes and checksums.
+domain Crypto | Elliptic curves, ECDH/ECDSA and RSA.
+domain Graph | Graphs and graph algorithms.
+domain Topology | Simplicial and cubical complexes, homology and persistence.
+domain Crystallography | Point groups, crystal systems and molecular symmetry.
+domain Chaos | Fractals, iterated maps, dynamical-system orbits and fractal dimensions.
+domain Graphics | Quaternions, rigid transforms, curves, meshes and rays.
+domain Discrete | Remaining discrete-mathematics operators.
+domain LieAlgebra | Lie algebras, root systems, representations and Lie groups.
+domain Polynomial | Symbolic polynomials, Groebner bases, real-root isolation, partial fractions.
+domain Logic | Propositional logic, SAT, BDDs.
+domain GeometricAlgebra | Clifford algebra: multivectors, rotors, products.
+domain DifferentialGeometry | Metrics, curvature, differential forms, vector calculus in coordinates.
+domain Functional | Inner-product spaces, operators and integral equations.
+domain Special | Special functions, symbolic and numerical.
+domain Statistics | Distributions, tests and descriptive statistics, symbolic and numerical.
+domain Calculus | Symbolic calculus, variational calculus, result verification, and D-finite functions (differential equations, recurrences, decided identities).
+domain Multiprecision | Exact binary dyadics and closed real enclosures with explicit bit precision.
+domain Elementary | Elementary and complex functions, radicals.
+domain Core | Kernel plumbing: term constructors, rewriting, CSE, unit conversion.
+domain Numeric | Numerical vectors, matrices and callbacks.
+domain LinearAlgebra | Symbolic linear algebra, dense and sparse (exact and symbolic sparse matrices, modular methods).
+domain Differential | Ordinary, stochastic and partial differential equations.
+domain Physics | Classical and quantum physics formulas.
+domain Solving | Equation solving and optimisation.
+domain Transforms | Integral and discrete transforms.
+
+family NumberTheory number_theory:* numerical_special:num_number_theory_gcd_u128 numerical_special:num_number_theory_is_prime_bpsw numerical_special:num_number_theory_is_prime_u128 numerical_special:num_number_theory_carmichael_lambda numerical_special:num_number_theory_divisors numerical_special:num_number_theory_divisor_count numerical_special:num_number_theory_divisor_sigma numerical_special:num_number_theory_mul_mod numerical_special:num_number_theory_mul_mod_u128 numerical_special:num_number_theory_mod_pow_u128 numerical_special:num_number_theory_extended_gcd_u64 numerical_special:num_number_theory_mod_inv_u64 numerical_special:num_number_theory_jacobi_symbol numerical_special:num_number_theory_legendre_symbol numerical_special:num_number_theory_primitive_root
+family NumberTheory numerical_special:num_number_exact_bigint_crt_garner numerical_special:num_number_exact_bigint_gcd numerical_special:num_number_exact_bigint_isqrt numerical_special:num_number_exact_bigint_mod_inverse numerical_special:num_number_exact_bigint_nth_root numerical_special:num_number_exact_bigint_xgcd numerical_special:num_number_exact_jacobi_bigint numerical_special:num_number_exact_strong_lucas_bigint numerical_special:num_number_ext_batch_mod_pow numerical_special:num_number_ext_crt_bigint numerical_special:num_number_ext_totient_sieve
+family Combinatorics combinatorics:*
+family Group discrete:perm_* discrete:group* discrete:cyclic_group discrete:dihedral_group discrete:symmetric_group discrete:klein_four_group discrete:fp_group* discrete:todd_coxeter* discrete:presentation_* discrete:representation_* discrete:character_*
+family FiniteField discrete:gf_* discrete:gfp_* discrete:gfx_* discrete:gf256_* discrete:factor_mod discrete:is_irreducible_mod numerical_vector:num_finite_field_batch_inverse_mod numerical_vector:num_finite_field_batch_inverse_skip_zeros numerical_vector:num_finite_field_slice_add_mod numerical_vector:num_finite_field_slice_sub_mod numerical_vector:num_finite_field_slice_scale_mod numerical_vector:num_finite_field_slice_axpy_mod numerical_vector:num_finite_field_dot_mod numerical_vector:num_finite_field_primitive_root_prime numerical_vector:num_finite_field_poly_mul_ntt_mod
+family Coding discrete:bch_* discrete:hamming_* discrete:rs_* discrete:crc* discrete:conv_encode discrete:interleave discrete:deinterleave discrete:code_*
+family Crypto discrete:ec_* discrete:ecdh_* discrete:ecdsa_* discrete:rsa_*
+family Graph discrete:graph* discrete:digraph discrete:induced_subgraph discrete:algebraic_connectivity
+family Topology discrete:sc_* discrete:cubical_* discrete:persist* discrete:rips_* discrete:vietoris_* discrete:betti_at_radius discrete:bottleneck_distance
+family Crystallography discrete:point_group* discrete:crystal* discrete:bravais_lattices discrete:molecule_*
+family Chaos discrete:mandelbrot_* discrete:julia_escape discrete:burning_ship_escape discrete:multibrot_escape discrete:newton_fractal_root discrete:henon_orbit discrete:ifs_* discrete:lorenz* discrete:logistic_* discrete:rossler_orbit discrete:tinkerbell_orbit discrete:map_* discrete:complex_map_* discrete:lyapunov_exponent discrete:orbit_* discrete:moran_dimension discrete:similarity_dimension discrete:box_counting discrete:correlation_dimension
+family Graphics discrete:quat_* discrete:rotation_* discrete:translation discrete:translation_* discrete:scaling discrete:scaling_* discrete:shear discrete:shear_* discrete:rotation discrete:reflection discrete:reflection_* discrete:reflect discrete:refract discrete:look_at discrete:perspective discrete:orthographic discrete:ray_* discrete:mesh_* discrete:bezier* discrete:bspline discrete:catmull_rom discrete:barycentric
+family Discrete discrete:*
+family LieAlgebra lie_structure:* lie:*
+family Polynomial poly:*
+family Logic logic:*
+family GeometricAlgebra geometric_algebra:*
+family DifferentialGeometry geometry:*
+family Functional functional:*
+family Multiprecision numerical_special:num_mp_real_* numerical_special:num_mp_ball_*
+family Special special:* numerical_special:*
+family Statistics stats:* numerical_stats:*
+family Calculus calculus:* variational:* verify:* holonomic:*
+family Elementary elementary:* complex:* radicals:*
+family Core kernel:* arith:* rewriting:* cse:* units:*
+family Numeric numeric:* numerical_matrix:* numerical_vector:* numerical_callback:*
+family LinearAlgebra linalg:* sparse_symbolic:*
+family Differential ode:* sde:* pde:*
+family Physics physics:* physics_quantum:*
+family Solving solve:* optimize:*
+family Transforms transforms:*
+
+# ---------------------------------------------------------------------------
+# Typed domains. `mode typed`: a new kernel operator in these families fails
+# the coverage test until it is given a `sig`, `dynamic` or `exclude` line.
+# ---------------------------------------------------------------------------
+mode NumberTheory typed
+mode Combinatorics typed
+mode FiniteField typed
+mode Multiprecision typed
+
+# A `sig` is also the overlay's statement that the operator is a pure,
+# dimensionless function of its (dimensionless) arguments; see
+# `Kernel::call_with_witnesses`. An argument outside an operator's domain comes
+# back from the kernel as the unreduced call (`invmod(6, 15)`); the generated
+# wrapper turns that into `Err(NotReduced(..))`.
+
+# --- NumberTheory -----------------------------------------------------------
+sig num_number_exact_bigint_crt_garner as crt_garner_u64(residues: Tensor<1, Int>, moduli: Tensor<1, Int>) -> Result<Option<Int>, OpError>
+sig num_number_exact_bigint_gcd as bigint_gcd(a: Int, b: Int) -> Result<Int, OpError>
+sig num_number_exact_bigint_isqrt as bigint_isqrt(n: Int) -> Result<Option<Int>, OpError>
+sig num_number_exact_bigint_mod_inverse as bigint_mod_inverse(a: Int, modulus: Int) -> Result<Option<Int>, OpError>
+sig num_number_exact_bigint_nth_root as bigint_nth_root(n: Int, degree: Int) -> Result<Option<Int>, OpError>
+sig num_number_exact_bigint_xgcd as bigint_xgcd(a: Int, b: Int) -> Result<BezoutBig, OpError>
+sig num_number_exact_jacobi_bigint as bigint_jacobi(a: Int, modulus: Int) -> Result<Option<Int>, OpError>
+sig num_number_exact_strong_lucas_bigint as bigint_strong_lucas(n: Int) -> Result<Bool, OpError>
+sig num_number_ext_batch_mod_pow as batch_pow_mod_i64(bases: Tensor<1, Int>, exponents: Tensor<1, Int>, modulus: Int) -> Result<Tensor<1, Int>, OpError>
+sig num_number_ext_crt_bigint as crt_bigint(residues: Tensor<1, Int>, moduli: Tensor<1, Int>) -> Result<CrtSolution, OpError>
+sig num_number_ext_totient_sieve as totients_up_to(limit: Int) -> Result<Tensor<1, Int>, OpError>
+sig num_number_theory_gcd_u128 as gcd_u128(a: Int, b: Int) -> Result<Int, OpError>
+sig num_number_theory_is_prime_bpsw as is_prime_bpsw_u64(n: Int) -> Result<Bool, OpError>
+sig num_number_theory_is_prime_u128 as is_prime_u128(n: Int) -> Result<Bool, OpError>
+sig num_number_theory_carmichael_lambda as carmichael_lambda_u64(n: Int) -> Result<Int, OpError>
+sig num_number_theory_divisors as divisors_u64(n: Int) -> Result<Tensor<1, Int>, OpError>
+sig num_number_theory_divisor_count as divisor_count_u64(n: Int) -> Result<Int, OpError>
+sig num_number_theory_divisor_sigma as divisor_sigma_u64_saturating(n: Int, k: Int) -> Result<Int, OpError>
+sig num_number_theory_mul_mod as mul_mod_u64(a: Int, b: Int, m: Int) -> Result<Int, OpError>
+sig num_number_theory_mul_mod_u128 as mul_mod_u128(a: Int, b: Int, m: Int) -> Result<Int, OpError>
+sig num_number_theory_mod_pow_u128 as pow_mod_u128(base: Int, exponent: Int, m: Int) -> Result<Int, OpError>
+sig num_number_theory_extended_gcd_u64 as extended_gcd_u64(a: Int, b: Int) -> Result<Bezout64, OpError>
+sig num_number_theory_mod_inv_u64 as mod_inv_u64(a: Int, m: Int) -> Result<Int, OpError>
+sig num_number_theory_jacobi_symbol as jacobi_i128(a: Int, n: Int) -> Result<Int, OpError>
+sig num_number_theory_legendre_symbol as legendre_u64(a: Int, p: Int) -> Result<Int, OpError>
+sig num_number_theory_primitive_root as primitive_root_u64(n: Int) -> Result<Int, OpError>
+sig gcd(a: Int, b: Int) -> Result<Int, OpError>
+sig lcm(a: Int, b: Int) -> Result<Int, OpError>
+sig mod as modulo(a: Int, m: Int) -> Result<Int, OpError>
+sig invmod(a: Int, m: Int) -> Result<Int, OpError>
+sig powmod(base: Int, exponent: Int, m: Int) -> Result<Int, OpError>
+sig egcd(a: Int, b: Int) -> Result<Tensor<1, Int>, OpError>
+sig crt(residues: Tensor<1, Int>, moduli: Tensor<1, Int>) -> Result<Int, OpError>
+sig crt_general(residues: Tensor<1, Int>, moduli: Tensor<1, Int>) -> Result<Tensor<1, Int>, OpError>
+sig lincong(a: Int, b: Int, m: Int) -> Result<Tensor<1, Int>, OpError>
+sig dlog(base: Int, target: Int, m: Int) -> Result<Int, OpError>
+sig sqrtmod(a: Int, p: Int) -> Result<Int, OpError>
+sig mult_order(a: Int, m: Int) -> Result<Int, OpError>
+sig primitive_root(p: Int) -> Result<Int, OpError>
+sig quadratic_residues(p: Int) -> Result<Tensor<1, Int>, OpError>
+sig legendre_symbol(a: Int, p: Int) -> Result<Int, OpError>
+sig jacobi(a: Int, n: Int) -> Result<Int, OpError>
+sig kronecker_symbol(a: Int, n: Int) -> Result<Int, OpError>
+sig binomial_mod(n: Int, k: Int, m: Int) -> Result<Int, OpError>
+sig isprime as is_prime(n: Int) -> Result<Bool, OpError>
+sig nextprime as next_prime(n: Int) -> Result<Int, OpError>
+sig prevprime as prev_prime(n: Int) -> Result<Int, OpError>
+sig nth_prime(n: Int) -> Result<Int, OpError>
+sig prime_pi(n: Int) -> Result<Int, OpError>
+sig primes(limit: Int) -> Result<Tensor<1, Int>, OpError>
+sig factorint(n: Int) -> Result<Tensor<2, Int>, OpError>
+sig divisors(n: Int) -> Result<Tensor<1, Int>, OpError>
+sig divisor_count(n: Int) -> Result<Int, OpError>
+sig divisor_sum(n: Int) -> Result<Int, OpError>
+sig sigma(n: Int, k: Int) -> Result<Int, OpError>
+sig totient(n: Int) -> Result<Int, OpError>
+sig carmichael(n: Int) -> Result<Int, OpError>
+sig mobius(n: Int) -> Result<Int, OpError>
+sig liouville(n: Int) -> Result<Int, OpError>
+sig omega(n: Int) -> Result<Int, OpError>
+sig bigomega(n: Int) -> Result<Int, OpError>
+sig radical(n: Int) -> Result<Int, OpError>
+sig is_squarefree(n: Int) -> Result<Bool, OpError>
+sig is_square(n: Int) -> Result<Bool, OpError>
+sig isqrt(n: Int) -> Result<Int, OpError>
+sig iroot(n: Int, k: Int) -> Result<Int, OpError>
+sig perfect_power(n: Int) -> Result<Tensor<1, Int>, OpError>
+sig two_squares(n: Int) -> Result<Tensor<1, Int>, OpError>
+sig pell(d: Int) -> Result<Tensor<1, Int>, OpError>
+sig farey(n: Int) -> Result<Tensor<2, Int>, OpError>
+dynamic cfrac convergents | rational-valued: decode the Value with from_value<Tensor<1, Real>>
+dynamic diophantine | takes a symbolic equation term, not integers
+
+# --- Combinatorics ----------------------------------------------------------
+sig ballot(n: Int, k: Int) -> Result<Int, OpError>
+sig bell(n: Int) -> Result<Int, OpError>
+sig bernoulli_number(n: Int) -> Result<Real, OpError>
+sig binomial(n: Int, k: Int) -> Result<Int, OpError>
+sig bracelets(n: Int, k: Int) -> Result<Int, OpError>
+sig catalan(n: Int) -> Result<Int, OpError>
+sig central_binomial(n: Int) -> Result<Int, OpError>
+sig compositions(n: Int, k: Int) -> Result<Int, OpError>
+sig derangements(n: Int) -> Result<Int, OpError>
+sig double_factorial(n: Int) -> Result<Int, OpError>
+sig euler_number(n: Int) -> Result<Int, OpError>
+sig eulerian(n: Int, k: Int) -> Result<Int, OpError>
+sig factorial(n: Int) -> Result<Int, OpError>
+sig falling(x: Int, k: Int) -> Result<Int, OpError>
+sig fibonacci(n: Int) -> Result<Int, OpError>
+sig fubini(n: Int) -> Result<Int, OpError>
+sig harmonic(n: Int) -> Result<Real, OpError>
+sig involutions(n: Int) -> Result<Int, OpError>
+sig lah(n: Int, k: Int) -> Result<Int, OpError>
+sig lucas(n: Int) -> Result<Int, OpError>
+sig motzkin(n: Int) -> Result<Int, OpError>
+sig multinomial(parts: Tensor<1, Int>) -> Result<Int, OpError>
+sig narayana(n: Int, k: Int) -> Result<Int, OpError>
+sig necklaces(n: Int, k: Int) -> Result<Int, OpError>
+sig partitions(n: Int) -> Result<Int, OpError>
+sig partitions_distinct(n: Int) -> Result<Int, OpError>
+sig partitions_k(n: Int, k: Int) -> Result<Int, OpError>
+sig partitions_max(n: Int, k: Int) -> Result<Int, OpError>
+sig permutations(n: Int, k: Int) -> Result<Int, OpError>
+sig rencontres(n: Int, k: Int) -> Result<Int, OpError>
+sig rising(x: Int, k: Int) -> Result<Int, OpError>
+sig schroeder(n: Int) -> Result<Int, OpError>
+sig stirling1(n: Int, k: Int) -> Result<Int, OpError>
+sig stirling2(n: Int, k: Int) -> Result<Int, OpError>
+sig weak_compositions(n: Int, k: Int) -> Result<Int, OpError>
+sig zigzag(n: Int) -> Result<Int, OpError>
+sig cycle_type(p: Perm) -> Result<Tensor<1, Int>, OpError>
+sig inversions(p: Perm) -> Result<Int, OpError>
+sig permutation_order(p: Perm) -> Result<Int, OpError>
+sig permutation_rank(p: Perm) -> Result<Int, OpError>
+sig permutation_sign(p: Perm) -> Result<Int, OpError>
+sig permutation_unrank(n: Int, rank: Int) -> Result<Perm, OpError>
+sig syt_count(shape: Tensor<1, Int>) -> Result<Int, OpError>
+dynamic period | argument is a rational or a sequence term, no integer-only form
+dynamic expand_binomial gf_coeffs inclusion_exclusion rsolve | symbolic: they take and return expression terms, so the wrapper passes Value terms through; there is no typed form
+dynamic hook_lengths partition_list | ragged results (a list of lists); decode the Value with from_value<Tensor<1, Tensor<1, Int>>>
+
+# --- FiniteField ------------------------------------------------------------
+# Polynomials are coefficient tensors, highest degree first, residues in [0, p).
+sig num_finite_field_batch_inverse_mod as batch_inverse_mod(values: Tensor<1, Int>, m: Int) -> Result<Tensor<1, Int>, OpError>
+sig num_finite_field_batch_inverse_skip_zeros as batch_inverse_skip_zeros(values: Tensor<1, Int>, m: Int) -> Result<Tensor<1, Int>, OpError>
+sig num_finite_field_slice_add_mod as vector_add_mod(a: Tensor<1, Int>, b: Tensor<1, Int>, m: Int) -> Result<Tensor<1, Int>, OpError>
+sig num_finite_field_slice_sub_mod as vector_sub_mod(a: Tensor<1, Int>, b: Tensor<1, Int>, m: Int) -> Result<Tensor<1, Int>, OpError>
+sig num_finite_field_slice_scale_mod as vector_scale_mod(values: Tensor<1, Int>, scalar: Int, m: Int) -> Result<Tensor<1, Int>, OpError>
+sig num_finite_field_slice_axpy_mod as vector_axpy_mod(alpha: Int, x: Tensor<1, Int>, y: Tensor<1, Int>, m: Int) -> Result<Tensor<1, Int>, OpError>
+sig num_finite_field_dot_mod as vector_dot_mod(a: Tensor<1, Int>, b: Tensor<1, Int>, m: Int) -> Result<Int, OpError>
+sig num_finite_field_primitive_root_prime as primitive_root_prime(p: Int) -> Result<Int, OpError>
+sig num_finite_field_poly_mul_ntt_mod as poly_mul_ntt_mod(a: Tensor<1, Int>, b: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gf_add(a: Int, b: Int, p: Int) -> Result<Int, OpError>
+sig gf_sub(a: Int, b: Int, p: Int) -> Result<Int, OpError>
+sig gf_mul(a: Int, b: Int, p: Int) -> Result<Int, OpError>
+sig gf_div(a: Int, b: Int, p: Int) -> Result<Int, OpError>
+sig gf_neg(a: Int, p: Int) -> Result<Int, OpError>
+sig gf_inv(a: Int, p: Int) -> Result<Int, OpError>
+sig gf_pow(a: Int, e: Int, p: Int) -> Result<Int, OpError>
+sig gf_is_zero(a: Int, p: Int) -> Result<Bool, OpError>
+sig gf_is_one(a: Int, p: Int) -> Result<Bool, OpError>
+sig gf256_add(a: Int, b: Int) -> Result<Int, OpError>
+sig gf256_mul(a: Int, b: Int) -> Result<Int, OpError>
+sig gf256_div(a: Int, b: Int) -> Result<Int, OpError>
+sig gf256_inv(a: Int) -> Result<Int, OpError>
+sig gf256_pow(a: Int, e: Int) -> Result<Int, OpError>
+sig gf256_exp(e: Int) -> Result<Int, OpError>
+sig gf256_log(a: Int) -> Result<Int, OpError>
+sig gfp_add(a: Tensor<1, Int>, b: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfp_sub(a: Tensor<1, Int>, b: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfp_mul(a: Tensor<1, Int>, b: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfp_gcd(a: Tensor<1, Int>, b: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfp_derivative(a: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfp_monic(a: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfp_degree(a: Tensor<1, Int>, p: Int) -> Result<Int, OpError>
+sig gfp_eval(a: Tensor<1, Int>, x: Int, p: Int) -> Result<Int, OpError>
+sig gfp_isirreducible(a: Tensor<1, Int>, p: Int) -> Result<Bool, OpError>
+sig gfp_powmod(base: Tensor<1, Int>, e: Int, modulus: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfp_invmod(a: Tensor<1, Int>, modulus: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfx_add(a: Tensor<1, Int>, b: Tensor<1, Int>, modulus: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfx_sub(a: Tensor<1, Int>, b: Tensor<1, Int>, modulus: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfx_mul(a: Tensor<1, Int>, b: Tensor<1, Int>, modulus: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfx_div(a: Tensor<1, Int>, b: Tensor<1, Int>, modulus: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfx_neg(a: Tensor<1, Int>, modulus: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfx_inv(a: Tensor<1, Int>, modulus: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfx_pow(a: Tensor<1, Int>, e: Int, modulus: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfx_reduce(a: Tensor<1, Int>, modulus: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gf256_poly_add(a: Tensor<1, Int>, b: Tensor<1, Int>) -> Result<Tensor<1, Int>, OpError>
+sig gf256_poly_mul(a: Tensor<1, Int>, b: Tensor<1, Int>) -> Result<Tensor<1, Int>, OpError>
+sig gf256_poly_mod(a: Tensor<1, Int>, b: Tensor<1, Int>) -> Result<Tensor<1, Int>, OpError>
+sig gf256_poly_gcd(a: Tensor<1, Int>, b: Tensor<1, Int>) -> Result<Tensor<1, Int>, OpError>
+sig gf256_poly_derivative(a: Tensor<1, Int>) -> Result<Tensor<1, Int>, OpError>
+sig gf256_poly_scale(a: Tensor<1, Int>, c: Int) -> Result<Tensor<1, Int>, OpError>
+sig gf256_poly_eval(a: Tensor<1, Int>, x: Int) -> Result<Int, OpError>
+dynamic gf256_poly_divmod gfp_divmod gfp_egcd gfp_squarefree gfp_factor gfp_ddf gfp_edf gfp_berlekamp | tuple or ragged results (pairs of polynomials, lists of factors with multiplicities); decode with from_value<Tensor<1, Tensor<1, Int>>> or a record
+dynamic gfp_norm | contract not yet pinned down by a test; typed once its normalisation convention is documented in the kernel
+dynamic factor_mod is_irreducible_mod | the three-argument form (polynomial, prime, variable-or-flag) is not the coefficient-tensor API of gfp_*; left dynamic until its argument contract is documented
+
+# --- Numeric ----------------------------------------------------------------
+# The Numeric domain is not `typed`: an operator without a line here is still
+# generated, as a dynamic wrapper. The operators below take plain numbers and
+# rectangular lists and have a curated signature. The kernel computes them from
+# literal numbers only, so a symbolic argument comes back unreduced and the
+# wrapper reports `Err(NotReduced(..))`. Every answer is a floating-point number
+# (`Float`), including counts and 0-based indices such as `qr_pivoted_rank` and
+# `qr_pivoted_permutation`: the kernel encodes no exact integers here.
+# Exact algebra over normalized rational coefficient handles.
+sig num_native_qlinalg_charpoly as exact_charpoly(matrix: ExactMatrix) -> Result<Option<Tensor<1, Real>>, OpError>
+sig num_native_qlinalg_det_bareiss as exact_det_bareiss(matrix: ExactMatrix) -> Result<Int, OpError>
+sig num_native_qlinalg_det_modular_int as exact_det_modular(matrix: ExactMatrix) -> Result<Int, OpError>
+sig num_native_qlinalg_hermite_normal_form as exact_hermite_form(matrix: ExactMatrix) -> Result<Tensor<2, Int>, OpError>
+sig num_native_qlinalg_hermite_normal_form_with_transform as exact_hermite(matrix: ExactMatrix) -> Result<HermiteForm, OpError>
+sig num_native_qlinalg_smith_normal_form as exact_smith(matrix: ExactMatrix) -> Result<SmithForm, OpError>
+sig num_native_qlinalg_smith_normal_form_diag as exact_smith_invariants(matrix: ExactMatrix) -> Result<Tensor<1, Int>, OpError>
+sig num_native_qlinalg_solve_dixon as exact_solve_dixon(matrix: ExactMatrix, rhs: Tensor<1, Real>) -> Result<Option<Tensor<1, Real>>, OpError>
+sig num_native_qlinalg_solve_mat as exact_solve_matrix(matrix: ExactMatrix, rhs: ExactMatrix) -> Result<ExactMatrixSolution, OpError>
+sig num_native_qlinalg_solve_unique as exact_solve_unique(matrix: ExactMatrix, rhs: Tensor<1, Real>) -> Result<Option<Tensor<1, Real>>, OpError>
+
+# Robust statistics.
+sig mad(xs: Tensor<1, Float>) -> Result<Float, OpError>
+sig mad_sigma(xs: Tensor<1, Float>) -> Result<Float, OpError>
+sig trimmed_mean(xs: Tensor<1, Float>, proportion: Float) -> Result<Float, OpError>
+sig winsorized_mean(xs: Tensor<1, Float>, proportion: Float) -> Result<Float, OpError>
+sig huber_location(xs: Tensor<1, Float>, k: Float) -> Result<Float, OpError>
+sig biweight_location(xs: Tensor<1, Float>, c: Float) -> Result<Float, OpError>
+sig ecdf(xs: Tensor<1, Float>, x: Float) -> Result<Float, OpError>
+sig kde(xs: Tensor<1, Float>, x: Float, bandwidth: Float) -> Result<Float, OpError>
+sig bandwidth_silverman(xs: Tensor<1, Float>) -> Result<Float, OpError>
+sig bandwidth_scott(xs: Tensor<1, Float>) -> Result<Float, OpError>
+sig quantile_hf(xs: Tensor<1, Float>, p: Float, kind: Int) -> Result<Float, OpError>
+# Windows and spectra. A complex signal is its real and imaginary parts.
+sig hann_window(n: Int) -> Result<Tensor<1, Float>, OpError>
+sig hamming_window(n: Int) -> Result<Tensor<1, Float>, OpError>
+sig blackman_window(n: Int) -> Result<Tensor<1, Float>, OpError>
+sig cross_correlation(xs: Tensor<1, Float>, ys: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
+sig fftconv(xs: Tensor<1, Float>, ys: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
+sig interpolate(xs: Tensor<1, Float>, ys: Tensor<1, Float>, x: Float) -> Result<Float, OpError>
+sig fft_abs(xs: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
+sig fft_re(xs: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
+sig fft_im(xs: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
+sig ifft_re(re: Tensor<1, Float>, im: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
+sig ifft_im(re: Tensor<1, Float>, im: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
+sig ifft_abs(re: Tensor<1, Float>, im: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
+sig frft_re(re: Tensor<1, Float>, im: Tensor<1, Float>, order: Float) -> Result<Tensor<1, Float>, OpError>
+sig frft_im(re: Tensor<1, Float>, im: Tensor<1, Float>, order: Float) -> Result<Tensor<1, Float>, OpError>
+# Dense Krylov solves, low rank and rank-revealing QR.
+sig minres_solve(a: Tensor<2, Float>, b: Tensor<1, Float>, tol: Float) -> Result<Tensor<1, Float>, OpError>
+sig fgmres_solve(a: Tensor<2, Float>, b: Tensor<1, Float>, tol: Float) -> Result<Tensor<1, Float>, OpError>
+sig bicgstab_l_solve(a: Tensor<2, Float>, b: Tensor<1, Float>, tol: Float) -> Result<Tensor<1, Float>, OpError>
+sig randomized_singular_values(a: Tensor<2, Float>, k: Int) -> Result<Tensor<1, Float>, OpError>
+sig lobpcg_eigenvalues(a: Tensor<2, Float>, k: Int, tol: Float) -> Result<Tensor<1, Float>, OpError>
+sig qr_pivoted_rank(a: Tensor<2, Float>, tol: Float) -> Result<Float, OpError>
+sig qr_pivoted_permutation(a: Tensor<2, Float>) -> Result<Tensor<1, Float>, OpError>
+sig qr_pivoted_diagonal(a: Tensor<2, Float>) -> Result<Tensor<1, Float>, OpError>
+# Functions sampled as an n x 2 list of (x, y) points, ascending in x.
+sig function_l1_norm(points: Tensor<2, Float>) -> Result<Float, OpError>
+sig function_l2_norm(points: Tensor<2, Float>) -> Result<Float, OpError>
+sig function_inf_norm(points: Tensor<2, Float>) -> Result<Float, OpError>
+sig function_inner(f: Tensor<2, Float>, g: Tensor<2, Float>) -> Result<Float, OpError>
+sig function_project(f: Tensor<2, Float>, g: Tensor<2, Float>) -> Result<Tensor<2, Float>, OpError>
+sig function_normalize(f: Tensor<2, Float>) -> Result<Tensor<2, Float>, OpError>
+# Dimensionless numeric special functions with exact integer counts.
+sig num_harmonic as harmonic_float(n: Int) -> Result<Float, OpError>
+sig num_ln_binomial as log_binomial(n: Int, k: Int) -> Result<Float, OpError>
+sig num_multinomial as multinomial_float(n: Int, parts: Tensor<1, Int>) -> Result<Float, OpError>
+sig num_inverse_beta_reg as inverse_regularized_beta(a: Float, b: Float, p: Float) -> Result<Float, OpError>
+
+# Complex geometry and elliptic functions with dimensionless arguments.
+sig num_uhp_to_disk as uhp_to_disk(point: Complex) -> Result<Complex, OpError>
+sig num_disk_to_uhp as disk_to_uhp(point: Complex) -> Result<Complex, OpError>
+sig num_uhp_distance as uhp_distance(first: Complex, second: Complex) -> Result<Float, OpError>
+sig num_poincare_disk_distance as poincare_disk_distance(first: Complex, second: Complex) -> Result<Float, OpError>
+sig num_complex_coords_cis as cis(theta: Float) -> Result<Complex, OpError>
+sig num_complex_coords_to_riemann_sphere as riemann_sphere_project(point: Complex) -> Result<RiemannSpherePoint, OpError>
+sig num_complex_coords_from_riemann_sphere as riemann_sphere_unproject(x: Float, y: Float, z: Float) -> Result<Option<Complex>, OpError>
+sig num_complex_coords_chordal_distance as chordal_distance(first: Complex, second: Complex) -> Result<Float, OpError>
+sig num_complex_coords_spherical_metric_factor as spherical_metric_factor(point: Complex) -> Result<Float, OpError>
+sig num_conformal_cross_ratio as cross_ratio(z1: Complex, z2: Complex, z3: Complex, z4: Complex) -> Result<Complex, OpError>
+sig num_conformal_joukowsky as joukowsky(point: Complex) -> Result<Complex, OpError>
+sig num_conformal_joukowsky_inverse as joukowsky_inverse(point: Complex) -> Result<JoukowskyBranches, OpError>
+sig num_conformal_karman_trefftz as karman_trefftz(point: Complex, exponent: Float) -> Result<Complex, OpError>
+sig num_conformal_koebe_map as koebe_map(point: Complex) -> Result<Complex, OpError>
+sig num_conformal_cayley_transform as cayley_transform(point: Complex) -> Result<Complex, OpError>
+sig num_weierstrass_p_prime_complex as weierstrass_p_prime(point: Complex, omega1: Complex, omega2: Complex) -> Result<Complex, OpError>
+sig num_weierstrass_invariants_complex as weierstrass_invariants(omega1: Complex, omega2: Complex) -> Result<WeierstrassInvariants, OpError>
+
+# Checked division on exact dyadic data.
+sig num_mp_real_div as dyadic_div(numerator: Dyadic, denominator: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_ball_div as dyadic_ball_div(numerator: DyadicBall, denominator: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+# Configurable branch cuts use a real angle in radians.
+sig num_complex_coords_arg_branch as arg_branch(z: Complex, theta0: Float) -> Result<Float, OpError>
+sig num_complex_coords_log_cut as log_cut(z: Complex, theta0: Float) -> Result<Complex, OpError>
+sig num_complex_coords_sqrt_cut as sqrt_cut<d>(z: Complex[d], theta0: Float) -> Result<Complex[d^(1/2)], OpError>
+sig num_complex_coords_pow_cut as pow_cut(z: Complex, w: Complex, theta0: Float) -> Result<Complex, OpError>
+# Complex special functions: arguments are (re, im), results are [re, im].
+sig lgamma_complex(re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
+sig gamma_complex(re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
+sig digamma_complex(re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
+sig lambert_w_complex(re: Float, im: Float, branch: Int) -> Result<Tensor<1, Float>, OpError>
+sig bessel_j_complex(order: Float, re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
+sig bessel_i_complex(order: Float, re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
+# The error function and the Fresnel integrals of `re + i im`, answered as `[re, im]`
+# (the modulus is limited to 1000).
+sig erf_complex(re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
+sig fresnel_s_complex(re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
+sig fresnel_c_complex(re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
+# Uppercase kernel constants cannot be emitted as Aevia `fn` names directly.
+sig E as euler_e() -> Result<Value, OpError>
+sig I as imag_i() -> Result<Value, OpError>
+# Wavelets, bootstrap and sparse solves name a method, wavelet or statistic with a
+# symbol. A symbol is an Aevia `Real` (`let haar = symbol("haar")`): bind it once,
+# every `symbol(..)` call makes a distinct one (`haar#2`) that the kernel does
+# not know.
+sig dwt_approx(xs: Tensor<1, Float>, wavelet: Real) -> Result<Tensor<1, Float>, OpError>
+sig dwt_detail(xs: Tensor<1, Float>, wavelet: Real) -> Result<Tensor<1, Float>, OpError>
+sig idwt(approx: Tensor<1, Float>, detail: Tensor<1, Float>, wavelet: Real) -> Result<Tensor<1, Float>, OpError>
+sig wavedec(xs: Tensor<1, Float>, wavelet: Real, levels: Int) -> Result<Tensor<1, Tensor<1, Float>>, OpError>
+sig waverec(coefficients: Tensor<1, Tensor<1, Float>>, wavelet: Real) -> Result<Tensor<1, Float>, OpError>
+sig dwt2(m: Tensor<2, Float>, wavelet: Real) -> Result<Tensor<3, Float>, OpError>
+sig idwt2(ll: Tensor<2, Float>, lh: Tensor<2, Float>, hl: Tensor<2, Float>, hh: Tensor<2, Float>, wavelet: Real) -> Result<Tensor<2, Float>, OpError>
+sig wavelet_packet(xs: Tensor<1, Float>, wavelet: Real, levels: Int) -> Result<Tensor<2, Float>, OpError>
+sig inverse_wavelet_packet(bands: Tensor<2, Float>, wavelet: Real) -> Result<Tensor<1, Float>, OpError>
+sig coherence(xs: Tensor<1, Float>, ys: Tensor<1, Float>, window: Tensor<1, Float>, hop: Int, sample_rate: Float) -> Result<Tensor<1, Float>, OpError>
+sig bootstrap_basic_ci(xs: Tensor<1, Float>, statistic: Real, alpha: Float, resamples: Int, seed: Int) -> Result<Tensor<1, Float>, OpError>
+sig bootstrap_ci(xs: Tensor<1, Float>, statistic: Real, alpha: Float, resamples: Int, seed: Int) -> Result<Tensor<1, Float>, OpError>
+sig sparse_solve(entries: Tensor<2, Float>, b: Tensor<1, Float>, tol: Float, method: Real) -> Result<Tensor<1, Float>, OpError>
+sig amg_solve(entries: Tensor<2, Float>, b: Tensor<1, Float>, tol: Float, kind: Real) -> Result<Tensor<1, Float>, OpError>
+# Positive dimensionless radial Bessel roots, numbered from one.
+sig bessel_zero(order: Float, rank: Int) -> Result<Float, OpError>
+sig bessel_root(order: Float, robin: Float, rank: Int) -> Result<Float, OpError>
+# The finite-difference solvers are dimension free in the kernel: the space
+# dimension is the nesting depth of the field (a line, a plane, a cube). An Aevia
+# signature has one literal rank, so one kernel operator carries one signature per
+# space dimension, each under its own name: the bare name `heat_fd` is the
+# one-dimensional solver, `heat_fd_2d` and `heat_fd_3d` take `Tensor<2, Float>` and
+# `Tensor<3, Float>` fields (indexed `u[i][j]`, `u[i][j][k]`, nodes spread evenly
+# over the unit box, the first and last node on its boundary) and answer the field
+# at `t_end` in the same shape. `boundary` is the constant Dirichlet value on the
+# whole boundary. The advection velocity has one component per space dimension and
+# the field is periodic.
+sig heat_fd(alpha: Float, u0: Tensor<1, Float>, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<1, Float>, OpError>
+sig heat_fd as heat_fd_2d(alpha: Float, u0: Tensor<2, Float>, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<2, Float>, OpError>
+sig heat_fd as heat_fd_3d(alpha: Float, u0: Tensor<3, Float>, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<3, Float>, OpError>
+sig wave_fd(c: Float, u0: Tensor<1, Float>, v0: Tensor<1, Float>, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<1, Float>, OpError>
+sig wave_fd as wave_fd_2d(c: Float, u0: Tensor<2, Float>, v0: Tensor<2, Float>, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<2, Float>, OpError>
+sig wave_fd as wave_fd_3d(c: Float, u0: Tensor<3, Float>, v0: Tensor<3, Float>, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<3, Float>, OpError>
+sig poisson_fd(f: Tensor<1, Float>, boundary: Float) -> Result<Tensor<1, Float>, OpError>
+sig poisson_fd as poisson_fd_2d(f: Tensor<2, Float>, boundary: Float) -> Result<Tensor<2, Float>, OpError>
+sig poisson_fd as poisson_fd_3d(f: Tensor<3, Float>, boundary: Float) -> Result<Tensor<3, Float>, OpError>
+sig advect_fd(velocity: Tensor<1, Float>, u0: Tensor<1, Float>, t_end: Float, steps: Int) -> Result<Tensor<1, Float>, OpError>
+sig advect_fd as advect_fd_2d(velocity: Tensor<1, Float>, u0: Tensor<2, Float>, t_end: Float, steps: Int) -> Result<Tensor<2, Float>, OpError>
+sig advect_fd as advect_fd_3d(velocity: Tensor<1, Float>, u0: Tensor<3, Float>, t_end: Float, steps: Int) -> Result<Tensor<3, Float>, OpError>
+sig advect_fd_upwind(velocity: Tensor<1, Float>, u0: Tensor<1, Float>, t_end: Float, steps: Int) -> Result<Tensor<1, Float>, OpError>
+sig advect_fd_upwind as advect_fd_upwind_2d(velocity: Tensor<1, Float>, u0: Tensor<2, Float>, t_end: Float, steps: Int) -> Result<Tensor<2, Float>, OpError>
+sig advect_fd_upwind as advect_fd_upwind_3d(velocity: Tensor<1, Float>, u0: Tensor<3, Float>, t_end: Float, steps: Int) -> Result<Tensor<3, Float>, OpError>
+# The `_bc` solvers take the boundary kind as a symbol (`Real`, made once with
+# `symbol("neumann")`, as `sparse_solve` takes its `method`): `dirichlet`,
+# `neumann`, or a pattern of `d`/`n` letters, one per axis (`dn` in 2D: Dirichlet
+# on the `x` faces, Neumann on the `y` faces) or one per face in the order
+# `x-, x+, y-, y+, z-, z+`. `boundary` is the one number on the whole boundary (a
+# Neumann value is the outward normal derivative); per-axis or per-face values
+# are the kernel's list form and need `Rssn.dynamic`. Pure Neumann is singular:
+# the data must balance (`sum_i w_i (f_i + b_i) = 0`) or the call answers
+# `rssn.diag.incompatible`, and the solution returned has zero (trapezoid-weighted)
+# mean.
+sig heat_fd_bc(alpha: Float, u0: Tensor<1, Float>, kind: Real, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<1, Float>, OpError>
+sig heat_fd_bc as heat_fd_bc_2d(alpha: Float, u0: Tensor<2, Float>, kind: Real, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<2, Float>, OpError>
+sig heat_fd_bc as heat_fd_bc_3d(alpha: Float, u0: Tensor<3, Float>, kind: Real, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<3, Float>, OpError>
+sig wave_fd_bc(c: Float, u0: Tensor<1, Float>, v0: Tensor<1, Float>, kind: Real, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<1, Float>, OpError>
+sig wave_fd_bc as wave_fd_bc_2d(c: Float, u0: Tensor<2, Float>, v0: Tensor<2, Float>, kind: Real, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<2, Float>, OpError>
+sig wave_fd_bc as wave_fd_bc_3d(c: Float, u0: Tensor<3, Float>, v0: Tensor<3, Float>, kind: Real, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<3, Float>, OpError>
+sig poisson_fd_bc(f: Tensor<1, Float>, kind: Real, boundary: Float) -> Result<Tensor<1, Float>, OpError>
+sig poisson_fd_bc as poisson_fd_bc_2d(f: Tensor<2, Float>, kind: Real, boundary: Float) -> Result<Tensor<2, Float>, OpError>
+sig poisson_fd_bc as poisson_fd_bc_3d(f: Tensor<3, Float>, kind: Real, boundary: Float) -> Result<Tensor<3, Float>, OpError>
+# Ragged arguments are tensors of tensors; polynomial equations are term tables
+# [[coefficient, e1, .., en], ..], one per equation, with different term counts.
+sig nested_dissection_order(adjacency: Tensor<1, Tensor<1, Float>>) -> Result<Tensor<1, Float>, OpError>
+sig polynomial_system_roots(system: Tensor<1, Tensor<2, Float>>) -> Result<Tensor<3, Float>, OpError>
+# Expression operators: the right-hand sides and variables are symbolic (`Real`
+# terms), every other parameter is a number.
+sig oscillatory_integral(f: Real, g: Real, x: Real, a: Float, b: Float, w: Float, n: Int) -> Result<Tensor<1, Float>, OpError>
+sig anderson_fixed_point(g: Tensor<1, Real>, vars: Tensor<1, Real>, x0: Tensor<1, Float>, tol: Float) -> Result<Tensor<1, Float>, OpError>
+sig newton_cg_minimize(f: Real, vars: Tensor<1, Real>, x0: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
+sig ode_solve(rhs: Tensor<1, Real>, vars: Tensor<1, Real>, t: Real, y0: Tensor<1, Float>, t0: Float, t1: Float, tol: Float, method: Real) -> Result<Tensor<1, Float>, OpError>
+sig ode_symplectic(accel: Tensor<1, Real>, vars: Tensor<1, Real>, q0: Tensor<1, Float>, p0: Tensor<1, Float>, t0: Float, t1: Float, steps: Int, method: Real) -> Result<Tensor<2, Float>, OpError>
+sig ode_imex(f_ex: Tensor<1, Real>, f_im: Tensor<1, Real>, vars: Tensor<1, Real>, t: Real, y0: Tensor<1, Float>, t0: Float, t1: Float, steps: Int, scheme: Real) -> Result<Tensor<1, Float>, OpError>
+sig ode_etdrk4(l: Tensor<2, Float>, f: Tensor<1, Real>, vars: Tensor<1, Real>, t: Real, u0: Tensor<1, Float>, t0: Float, t1: Float, steps: Int) -> Result<Tensor<1, Float>, OpError>
+# Rank-polymorphic tensor operators. The kernel takes a nested list of any depth; an
+# Aevia type has a literal rank, so each operator has one signature per rank, named
+# `<op>_<rank>`: `tensor_norm_3` takes a `Tensor<3, Float>`. `tensor_inner_<r>` takes
+# two tensors of rank r. `tensordot_<ra>_<rb>_<k>` contracts k axes of a rank-ra
+# and a rank-rb tensor (`axes_a[i]` of `a` against `axes_b[i]` of `b`, 0-based) and
+# has rank ra + rb - 2k (a `Float` when 0); ranks 1..4, k from 1 to min(ra, rb), results
+# up to rank 4 (use `Rssn.dynamic` beyond that). The decompositions have signatures
+# for tensors of rank 2, 3 and 4 and answer with the records declared in the
+# `Numeric` prelude (`Hosvd3`, `Hooi3`, `CpFit`, `TensorTrain`). A rank argument of
+# `0` in `ranks` keeps the full rank of that mode; `tt_dense_<r>` rebuilds a rank-r
+# tensor from r cores of shape (left, n, right).
+sig tensor_norm as tensor_norm_1(t: Tensor<1, Float>) -> Result<Float, OpError>
+sig tensor_norm as tensor_norm_2(t: Tensor<2, Float>) -> Result<Float, OpError>
+sig tensor_norm as tensor_norm_3(t: Tensor<3, Float>) -> Result<Float, OpError>
+sig tensor_norm as tensor_norm_4(t: Tensor<4, Float>) -> Result<Float, OpError>
+sig tensor_inner as tensor_inner_1(a: Tensor<1, Float>, b: Tensor<1, Float>) -> Result<Float, OpError>
+sig tensor_inner as tensor_inner_2(a: Tensor<2, Float>, b: Tensor<2, Float>) -> Result<Float, OpError>
+sig tensor_inner as tensor_inner_3(a: Tensor<3, Float>, b: Tensor<3, Float>) -> Result<Float, OpError>
+sig tensor_inner as tensor_inner_4(a: Tensor<4, Float>, b: Tensor<4, Float>) -> Result<Float, OpError>
+sig tensordot as tensordot_1_1_1(a: Tensor<1, Float>, b: Tensor<1, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Float, OpError>
+sig tensordot as tensordot_1_2_1(a: Tensor<1, Float>, b: Tensor<2, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<1, Float>, OpError>
+sig tensordot as tensordot_1_3_1(a: Tensor<1, Float>, b: Tensor<3, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<2, Float>, OpError>
+sig tensordot as tensordot_1_4_1(a: Tensor<1, Float>, b: Tensor<4, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<3, Float>, OpError>
+sig tensordot as tensordot_2_1_1(a: Tensor<2, Float>, b: Tensor<1, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<1, Float>, OpError>
+sig tensordot as tensordot_2_2_1(a: Tensor<2, Float>, b: Tensor<2, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<2, Float>, OpError>
+sig tensordot as tensordot_2_2_2(a: Tensor<2, Float>, b: Tensor<2, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Float, OpError>
+sig tensordot as tensordot_2_3_1(a: Tensor<2, Float>, b: Tensor<3, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<3, Float>, OpError>
+sig tensordot as tensordot_2_3_2(a: Tensor<2, Float>, b: Tensor<3, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<1, Float>, OpError>
+sig tensordot as tensordot_2_4_1(a: Tensor<2, Float>, b: Tensor<4, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<4, Float>, OpError>
+sig tensordot as tensordot_2_4_2(a: Tensor<2, Float>, b: Tensor<4, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<2, Float>, OpError>
+sig tensordot as tensordot_3_1_1(a: Tensor<3, Float>, b: Tensor<1, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<2, Float>, OpError>
+sig tensordot as tensordot_3_2_1(a: Tensor<3, Float>, b: Tensor<2, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<3, Float>, OpError>
+sig tensordot as tensordot_3_2_2(a: Tensor<3, Float>, b: Tensor<2, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<1, Float>, OpError>
+sig tensordot as tensordot_3_3_1(a: Tensor<3, Float>, b: Tensor<3, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<4, Float>, OpError>
+sig tensordot as tensordot_3_3_2(a: Tensor<3, Float>, b: Tensor<3, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<2, Float>, OpError>
+sig tensordot as tensordot_3_3_3(a: Tensor<3, Float>, b: Tensor<3, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Float, OpError>
+sig tensordot as tensordot_3_4_2(a: Tensor<3, Float>, b: Tensor<4, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<3, Float>, OpError>
+sig tensordot as tensordot_3_4_3(a: Tensor<3, Float>, b: Tensor<4, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<1, Float>, OpError>
+sig tensordot as tensordot_4_1_1(a: Tensor<4, Float>, b: Tensor<1, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<3, Float>, OpError>
+sig tensordot as tensordot_4_2_1(a: Tensor<4, Float>, b: Tensor<2, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<4, Float>, OpError>
+sig tensordot as tensordot_4_2_2(a: Tensor<4, Float>, b: Tensor<2, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<2, Float>, OpError>
+sig tensordot as tensordot_4_3_2(a: Tensor<4, Float>, b: Tensor<3, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<3, Float>, OpError>
+sig tensordot as tensordot_4_3_3(a: Tensor<4, Float>, b: Tensor<3, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<1, Float>, OpError>
+sig tensordot as tensordot_4_4_2(a: Tensor<4, Float>, b: Tensor<4, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<4, Float>, OpError>
+sig tensordot as tensordot_4_4_3(a: Tensor<4, Float>, b: Tensor<4, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<2, Float>, OpError>
+sig tensordot as tensordot_4_4_4(a: Tensor<4, Float>, b: Tensor<4, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Float, OpError>
+
+sig hosvd as hosvd_2(t: Tensor<2, Float>, ranks: Tensor<1, Int>) -> Result<Hosvd2, OpError>
+sig hosvd as hosvd_3(t: Tensor<3, Float>, ranks: Tensor<1, Int>) -> Result<Hosvd3, OpError>
+sig hosvd as hosvd_4(t: Tensor<4, Float>, ranks: Tensor<1, Int>) -> Result<Hosvd4, OpError>
+sig hooi as hooi_2(t: Tensor<2, Float>, ranks: Tensor<1, Int>, sweeps: Int, tol: Float) -> Result<Hooi2, OpError>
+sig hooi as hooi_3(t: Tensor<3, Float>, ranks: Tensor<1, Int>, sweeps: Int, tol: Float) -> Result<Hooi3, OpError>
+sig hooi as hooi_4(t: Tensor<4, Float>, ranks: Tensor<1, Int>, sweeps: Int, tol: Float) -> Result<Hooi4, OpError>
+sig cp_als as cp_als_2(t: Tensor<2, Float>, rank: Int, sweeps: Int, seed: Int) -> Result<CpFit, OpError>
+sig cp_als as cp_als_3(t: Tensor<3, Float>, rank: Int, sweeps: Int, seed: Int) -> Result<CpFit, OpError>
+sig cp_als as cp_als_4(t: Tensor<4, Float>, rank: Int, sweeps: Int, seed: Int) -> Result<CpFit, OpError>
+sig tt_svd as tt_svd_2(t: Tensor<2, Float>, tol: Float, max_rank: Int) -> Result<TensorTrain, OpError>
+sig tt_svd as tt_svd_3(t: Tensor<3, Float>, tol: Float, max_rank: Int) -> Result<TensorTrain, OpError>
+sig tt_svd as tt_svd_4(t: Tensor<4, Float>, tol: Float, max_rank: Int) -> Result<TensorTrain, OpError>
+sig tt_dense as tt_dense_2(cores: Tensor<1, Tensor<3, Float>>) -> Result<Tensor<2, Float>, OpError>
+sig tt_dense as tt_dense_3(cores: Tensor<1, Tensor<3, Float>>) -> Result<Tensor<3, Float>, OpError>
+sig tt_dense as tt_dense_4(cores: Tensor<1, Tensor<3, Float>>) -> Result<Tensor<4, Float>, OpError>
+# `tensor_contract_<r>` is the generalised trace of a rank-r tensor over two axes
+# (0-based, equal extents) and has rank r - 2 (a `Float` for a matrix). The kernel's
+# result rank is a rank variable (`r`); each Aevia signature fixes it.
+sig tensor_contract as tensor_contract_2(t: Tensor<2, Float>, i: Int, j: Int) -> Result<Float, OpError>
+sig tensor_contract as tensor_contract_3(t: Tensor<3, Float>, i: Int, j: Int) -> Result<Tensor<1, Float>, OpError>
+sig tensor_contract as tensor_contract_4(t: Tensor<4, Float>, i: Int, j: Int) -> Result<Tensor<2, Float>, OpError>
+# `tucker_dense_<r>` and `cp_dense_<r>` rebuild a rank-r tensor from a Tucker core with
+# its r factor matrices (rows = the extent of that mode) or from CP weights with r
+# factor matrices (one column per component).
+sig tucker_dense as tucker_dense_2(core: Tensor<2, Float>, factors: Tensor<1, Tensor<2, Float>>) -> Result<Tensor<2, Float>, OpError>
+sig tucker_dense as tucker_dense_3(core: Tensor<3, Float>, factors: Tensor<1, Tensor<2, Float>>) -> Result<Tensor<3, Float>, OpError>
+sig tucker_dense as tucker_dense_4(core: Tensor<4, Float>, factors: Tensor<1, Tensor<2, Float>>) -> Result<Tensor<4, Float>, OpError>
+sig cp_dense as cp_dense_2(weights: Tensor<1, Float>, factors: Tensor<1, Tensor<2, Float>>) -> Result<Tensor<2, Float>, OpError>
+sig cp_dense as cp_dense_3(weights: Tensor<1, Float>, factors: Tensor<1, Tensor<2, Float>>) -> Result<Tensor<3, Float>, OpError>
+sig cp_dense as cp_dense_4(weights: Tensor<1, Float>, factors: Tensor<1, Tensor<2, Float>>) -> Result<Tensor<4, Float>, OpError>
+
+# ---------------------------------------------------------------------------
+# Rich types. Curated Aevia source that is placed ahead of the generated
+# wrappers. Keep it to types and codecs: the arithmetic belongs to the kernel.
+# ---------------------------------------------------------------------------
+prelude Special
+| ## Cartesian coordinates on the unit Riemann sphere.
+| type RiemannSpherePoint = { x: Float, y: Float, z: Float }
+|
+| ## Inverse Joukowsky branches ordered by the principal square root.
+| type JoukowskyBranches = { plus: Complex, minus: Complex }
+|
+| ## Lattice invariants for the chosen pair of Weierstrass half-periods.
+| type WeierstrassInvariants = { g2: Complex, g3: Complex }
+|
+| ## A binary real with value mantissa * 2^exponent and precision in bits.
+| type Dyadic = { mantissa: Int, exponent: Int, precision: Int }
+|
+| ## A closed real enclosure with a nonnegative radius.
+| type DyadicBall = { midpoint: Dyadic, radius: Dyadic }
+|
+
+codec Perm perm_to_value perm_from_value
+
+prelude Combinatorics
+| ## A permutation of {0, .., n-1} as the list of images, 0-based like every Aevia
+| ## index. The kernel's permutation operators are 1-based; the `Perm` codec shifts
+| ## at the boundary, so no call site ever sees a 1-based list.
+| type Perm = | Perm(Tensor<1, Int>)
+| derive Eq, Show for Perm
+|
+| fn perm_images(p: Perm): Tensor<1, Int> =
+|     match p with
+|     | Perm(images) -> images
+|
+| fn perm_to_value(p: Perm): Value =
+|     match p with
+|     | Perm(images) -> to_value(map(fn (i: Int) => i + 1, images))
+|
+| fn perm_from_value(v: Value): Result<Perm, OpError> =
+|     match from_value<Tensor<1, Int>>(v) with
+|     | Ok(images) -> Ok(Perm(map(fn (i: Int) => i - 1, images)))
+|     | Err(e) -> Err(e)
+|
+
+# --- Numeric: results of the tensor decompositions ----------------------------
+# The kernel answers a list of unlike parts (`list(core, list(U_1, .., U_N), error)`)
+# that no Aevia tensor type holds. `from_value<Tensor<1, Value>>` hands the parts out as
+# handles, and these decoders give each its type. The types are decode-only.
+codec Hosvd2 - hosvd2_from_value
+codec Hosvd3 - hosvd3_from_value
+codec Hosvd4 - hosvd4_from_value
+codec Hooi2 - hooi2_from_value
+codec Hooi3 - hooi3_from_value
+codec Hooi4 - hooi4_from_value
+codec CpFit - cpfit_from_value
+codec TensorTrain - tensortrain_from_value
+
+codec ExactMatrix exact_matrix_to_value exact_matrix_from_value
+codec ExactMatrixSolution - exact_matrix_solution_from_value
+
+prelude Numeric
+| ## Session-owned rational coefficients normalized by an explicit positive reference.
+| type ExactMatrix = | ExactMatrix(Value)
+|
+| type ExactMatrixSolution = Option<ExactMatrix>
+|
+| fn exact_matrix_to_value(matrix: ExactMatrix): Value =
+|     match matrix with
+|     | ExactMatrix(wire) -> wire
+|
+| fn exact_matrix_from_value(wire: Value): Result<ExactMatrix, OpError> =
+|     Ok(ExactMatrix(wire))
+|
+| fn exact_matrix_solution_from_value(wire: Value): Result<ExactMatrixSolution, OpError> =
+|     match from_value<Option<Value>>(wire) with
+|     | Ok(Some(value)) -> Ok(Some(ExactMatrix(value)))
+|     | Ok(None) -> Ok(None)
+|     | Err(failure) -> Err(failure)
+|
+| ## Normalize a rational matrix by a positive reference of the same dimension.
+| ## Supply exact literals or fractions to retain exact coefficients.
+| fn exact_matrix<d: Dim>(values: Tensor<2, Real[d]>, reference: Real[d]): Result<ExactMatrix, OpError> =
+|     match Rssn.dynamic("num_native_qmatrix_new", [to_value(values), to_value(reference)]) with
+|     | Ok(wire) -> exact_matrix_from_value(wire)
+|     | Err(failure) -> Err(failure)
+|
+| ## Read normalized rational coefficients as a rank-two tensor.
+| fn exact_matrix_entries(matrix: ExactMatrix): Result<Tensor<2, Real>, OpError> =
+|     match Rssn.dynamic("num_native_qmatrix_export", [exact_matrix_to_value(matrix)]) with
+|     | Ok(wire) -> from_value<Tensor<2, Real>>(wire)
+|     | Err(failure) -> Err(failure)
+|
+| ## A row Hermite form with a unimodular transform satisfying transform * A = form.
+| type HermiteForm = { form: Tensor<2, Int>, transform: Tensor<2, Int> }
+|
+| ## A Smith form with unimodular transforms satisfying left * A * right = form.
+| type SmithForm = { left: Tensor<2, Int>, form: Tensor<2, Int>, right: Tensor<2, Int> }
+|
+| ## Truncated higher-order SVD: the core, one factor matrix per mode (`factors[k]` is
+| ## n_k x r_k with orthonormal columns) and the singular values of each mode unfolding.
+| ## The tensor is `core` multiplied by `factors[k]` along mode k.
+| type Hosvd2 = { core: Tensor<2, Float>, factors: Tensor<1, Tensor<2, Float>>, singular_values: Tensor<1, Tensor<1, Float>> }
+| type Hosvd3 = { core: Tensor<3, Float>, factors: Tensor<1, Tensor<2, Float>>, singular_values: Tensor<1, Tensor<1, Float>> }
+| type Hosvd4 = { core: Tensor<4, Float>, factors: Tensor<1, Tensor<2, Float>>, singular_values: Tensor<1, Tensor<1, Float>> }
+|
+| ## The Tucker approximation refined by higher-order orthogonal iteration, with its
+| ## relative Frobenius error.
+| type Hooi2 = { core: Tensor<2, Float>, factors: Tensor<1, Tensor<2, Float>>, error: Float }
+| type Hooi3 = { core: Tensor<3, Float>, factors: Tensor<1, Tensor<2, Float>>, error: Float }
+| type Hooi4 = { core: Tensor<4, Float>, factors: Tensor<1, Tensor<2, Float>>, error: Float }
+|
+| ## A CP decomposition: sum over r of weights[r] times the outer product of column r of
+| ## every factor matrix, and the relative residual. Compare reconstructions, not factors:
+| ## they are fixed only up to permutation and scaling.
+| type CpFit = { weights: Tensor<1, Float>, factors: Tensor<1, Tensor<2, Float>>, residual: Float }
+|
+| ## A tensor train: `cores[k]` has shape (left, n_k, right), and the truncation error.
+| type TensorTrain = { cores: Tensor<1, Tensor<3, Float>>, error: Float }
+|
+| ## The list of parts, checked to have `n` of them. A list of another length is
+| ## answered with the mismatch the decoder would report for a non-list.
+| fn expect_parts(wire: Value, n: Int): Result<Tensor<1, Value>, OpError> =
+|     match from_value<Tensor<1, Value>>(wire) with
+|     | Err(e) -> Err(e)
+|     | Ok(parts) ->
+|         if length(parts) == n then
+|             Ok(parts)
+|         else
+|             match from_value<Float>(wire) with
+|             | Err(e) -> Err(e)
+|             | Ok(_) -> Ok(parts)
+|
+| ## The elements of a kernel list, each decoded by `from_value` (one function per element
+| ## type: `from_value<T>` needs the concrete type at its call site).
+| fn decode_matrices(wire: Value): Result<Tensor<1, Tensor<2, Float>>, OpError> =
+|     match from_value<Tensor<1, Value>>(wire) with
+|     | Err(e) -> Err(e)
+|     | Ok(parts) ->
+|         let decoded = map(fn (p: Value) => from_value<Tensor<2, Float>>(p), parts)
+|         match fold(fn (acc: Result<Bool, OpError>, r: Result<Tensor<2, Float>, OpError>) =>
+|             match acc with
+|             | Err(e) -> Err(e)
+|             | Ok(_) ->
+|                 match r with
+|                 | Err(e) -> Err(e)
+|                 | Ok(_) -> Ok(true), Ok(true), decoded) with
+|         | Err(e) -> Err(e)
+|         | Ok(_) -> Ok(map(fn (r: Result<Tensor<2, Float>, OpError>) => match r with | Ok(x) -> x | Err(_) -> zeros(0, 0), decoded))
+|
+| fn decode_vectors(wire: Value): Result<Tensor<1, Tensor<1, Float>>, OpError> =
+|     match from_value<Tensor<1, Value>>(wire) with
+|     | Err(e) -> Err(e)
+|     | Ok(parts) ->
+|         let decoded = map(fn (p: Value) => from_value<Tensor<1, Float>>(p), parts)
+|         match fold(fn (acc: Result<Bool, OpError>, r: Result<Tensor<1, Float>, OpError>) =>
+|             match acc with
+|             | Err(e) -> Err(e)
+|             | Ok(_) ->
+|                 match r with
+|                 | Err(e) -> Err(e)
+|                 | Ok(_) -> Ok(true), Ok(true), decoded) with
+|         | Err(e) -> Err(e)
+|         | Ok(_) -> Ok(map(fn (r: Result<Tensor<1, Float>, OpError>) => match r with | Ok(x) -> x | Err(_) -> zeros(0), decoded))
+|
+| fn decode_cores(wire: Value): Result<Tensor<1, Tensor<3, Float>>, OpError> =
+|     match from_value<Tensor<1, Value>>(wire) with
+|     | Err(e) -> Err(e)
+|     | Ok(parts) ->
+|         let decoded = map(fn (p: Value) => from_value<Tensor<3, Float>>(p), parts)
+|         match fold(fn (acc: Result<Bool, OpError>, r: Result<Tensor<3, Float>, OpError>) =>
+|             match acc with
+|             | Err(e) -> Err(e)
+|             | Ok(_) ->
+|                 match r with
+|                 | Err(e) -> Err(e)
+|                 | Ok(_) -> Ok(true), Ok(true), decoded) with
+|         | Err(e) -> Err(e)
+|         | Ok(_) -> Ok(map(fn (r: Result<Tensor<3, Float>, OpError>) => match r with | Ok(x) -> x | Err(_) -> zeros(0, 0, 0), decoded))
+|
+| fn hosvd2_from_value(wire: Value): Result<Hosvd2, OpError> =
+|     match expect_parts(wire, 3) with
+|     | Err(e) -> Err(e)
+|     | Ok(ps) ->
+|         let core = from_value<Tensor<2, Float>>(at(ps, 0))?
+|         let factors = decode_matrices(at(ps, 1))?
+|         let sv = decode_vectors(at(ps, 2))?
+|         Ok({ core = core, factors = factors, singular_values = sv })
+|
+| fn hooi2_from_value(wire: Value): Result<Hooi2, OpError> =
+|     match expect_parts(wire, 3) with
+|     | Err(e) -> Err(e)
+|     | Ok(ps) ->
+|         let core = from_value<Tensor<2, Float>>(at(ps, 0))?
+|         let factors = decode_matrices(at(ps, 1))?
+|         let err = from_value<Float>(at(ps, 2))?
+|         Ok({ core = core, factors = factors, error = err })
+|
+| fn hosvd3_from_value(wire: Value): Result<Hosvd3, OpError> =
+|     match expect_parts(wire, 3) with
+|     | Err(e) -> Err(e)
+|     | Ok(ps) ->
+|         let core = from_value<Tensor<3, Float>>(at(ps, 0))?
+|         let factors = decode_matrices(at(ps, 1))?
+|         let sv = decode_vectors(at(ps, 2))?
+|         Ok({ core = core, factors = factors, singular_values = sv })
+|
+| fn hooi3_from_value(wire: Value): Result<Hooi3, OpError> =
+|     match expect_parts(wire, 3) with
+|     | Err(e) -> Err(e)
+|     | Ok(ps) ->
+|         let core = from_value<Tensor<3, Float>>(at(ps, 0))?
+|         let factors = decode_matrices(at(ps, 1))?
+|         let err = from_value<Float>(at(ps, 2))?
+|         Ok({ core = core, factors = factors, error = err })
+|
+| fn hosvd4_from_value(wire: Value): Result<Hosvd4, OpError> =
+|     match expect_parts(wire, 3) with
+|     | Err(e) -> Err(e)
+|     | Ok(ps) ->
+|         let core = from_value<Tensor<4, Float>>(at(ps, 0))?
+|         let factors = decode_matrices(at(ps, 1))?
+|         let sv = decode_vectors(at(ps, 2))?
+|         Ok({ core = core, factors = factors, singular_values = sv })
+|
+| fn hooi4_from_value(wire: Value): Result<Hooi4, OpError> =
+|     match expect_parts(wire, 3) with
+|     | Err(e) -> Err(e)
+|     | Ok(ps) ->
+|         let core = from_value<Tensor<4, Float>>(at(ps, 0))?
+|         let factors = decode_matrices(at(ps, 1))?
+|         let err = from_value<Float>(at(ps, 2))?
+|         Ok({ core = core, factors = factors, error = err })
+|
+| fn cpfit_from_value(wire: Value): Result<CpFit, OpError> =
+|     match expect_parts(wire, 3) with
+|     | Err(e) -> Err(e)
+|     | Ok(ps) ->
+|         let weights = from_value<Tensor<1, Float>>(at(ps, 0))?
+|         let factors = decode_matrices(at(ps, 1))?
+|         let residual = from_value<Float>(at(ps, 2))?
+|         Ok({ weights = weights, factors = factors, residual = residual })
+|
+| fn tensortrain_from_value(wire: Value): Result<TensorTrain, OpError> =
+|     match expect_parts(wire, 2) with
+|     | Err(e) -> Err(e)
+|     | Ok(ps) ->
+|         let cores = decode_cores(at(ps, 0))?
+|         let err = from_value<Float>(at(ps, 1))?
+|         Ok({ cores = cores, error = err })
+|
+codec BezoutBig - bezout_big_from_value
+codec CrtSolution - crt_solution_from_value
+
+prelude NumberTheory
+| ## Nonnegative gcd and the two coefficients in a * x + b * y = gcd.
+| type BezoutBig = { gcd: Int, x: Int, y: Int }
+|
+| fn bezout_big_from_value(wire: Value): Result<BezoutBig, OpError> =
+|     match from_value<{ item0: Int, item1: Int, item2: Int }>(wire) with
+|     | Ok(result) -> Ok({ gcd = result.item0, x = result.item1, y = result.item2 })
+|     | Err(failure) -> Err(failure)
+|
+| ## Least nonnegative solution and positive least common multiple of the moduli.
+| type CrtSolution = { residue: Int, modulus: Int }
+|
+| fn crt_solution_from_value(wire: Value): Result<CrtSolution, OpError> =
+|     match from_value<{ item0: Int, item1: Int }>(wire) with
+|     | Ok(result) -> Ok({ residue = result.item0, modulus = result.item1 })
+|     | Err(failure) -> Err(failure)
+|
+| type Bezout64 = { gcd: Int, x: Int, y: Int }
+|
+| ## An element of Z/nZ. The residue and its modulus travel together, so combining two
+| ## moduli is an `Err`, never a silently wrong answer. The arithmetic is the kernel's
+| ## (`modulo`, `invmod`, `powmod`); a residue is always in [0, n).
+| type Zmod = | Zmod(Int, Int)
+| derive Eq, Show for Zmod
+|
+| fn zmod(a: Int, n: Int): Result<Zmod, String> =
+|     if n < 1 then
+|         Err("zmod: the modulus must be positive")
+|     else
+|         match modulo(a, n) with
+|         | Ok(r) -> Ok(Zmod(r, n))
+|         | Err(e) -> Err("{e}")
+|
+| fn zmod_value(x: Zmod): Int =
+|     match x with
+|     | Zmod(a, _) -> a
+|
+| fn zmod_modulus(x: Zmod): Int =
+|     match x with
+|     | Zmod(_, n) -> n
+|
+| fn zmod_same(x: Zmod, y: Zmod): Result<Int, String> =
+|     if zmod_modulus(x) == zmod_modulus(y) then
+|         Ok(zmod_modulus(x))
+|     else
+|         Err("zmod: operands have different moduli")
+|
+| fn zmod_add(x: Zmod, y: Zmod): Result<Zmod, String> =
+|     match zmod_same(x, y) with
+|     | Ok(n) -> zmod(zmod_value(x) + zmod_value(y), n)
+|     | Err(e) -> Err(e)
+|
+| fn zmod_sub(x: Zmod, y: Zmod): Result<Zmod, String> =
+|     match zmod_same(x, y) with
+|     | Ok(n) -> zmod(zmod_value(x) - zmod_value(y), n)
+|     | Err(e) -> Err(e)
+|
+| fn zmod_mul(x: Zmod, y: Zmod): Result<Zmod, String> =
+|     match zmod_same(x, y) with
+|     | Ok(n) -> zmod(zmod_value(x) * zmod_value(y), n)
+|     | Err(e) -> Err(e)
+|
+| fn zmod_neg(x: Zmod): Result<Zmod, String> = zmod(0 - zmod_value(x), zmod_modulus(x))
+|
+| ## The multiplicative inverse; `Err` when x is not a unit.
+| fn zmod_inv(x: Zmod): Result<Zmod, String> =
+|     match invmod(zmod_value(x), zmod_modulus(x)) with
+|     | Ok(r) -> Ok(Zmod(r, zmod_modulus(x)))
+|     | Err(e) -> Err("zmod_inv: {zmod_value(x)} is not invertible modulo {zmod_modulus(x)}")
+|
+| fn zmod_div(x: Zmod, y: Zmod): Result<Zmod, String> =
+|     match zmod_inv(y) with
+|     | Ok(inverse) -> zmod_mul(x, inverse)
+|     | Err(e) -> Err(e)
+|
+| ## x^e for any integer e; a negative exponent inverts first.
+| fn zmod_pow(x: Zmod, e: Int): Result<Zmod, String> =
+|     if e < 0 then
+|         match zmod_inv(x) with
+|         | Ok(inverse) -> zmod_pow(inverse, 0 - e)
+|         | Err(msg) -> Err(msg)
+|     else
+|         match powmod(zmod_value(x), e, zmod_modulus(x)) with
+|         | Ok(r) -> Ok(Zmod(r, zmod_modulus(x)))
+|         | Err(err) -> Err("{err}")
+|
+| ## The multiplicative order of x, when x is a unit.
+| fn zmod_order(x: Zmod): Result<Int, String> =
+|     match mult_order(zmod_value(x), zmod_modulus(x)) with
+|     | Ok(k) -> Ok(k)
+|     | Err(e) -> Err("{e}")
+|
+
+# --- Group and Graph: handle types ------------------------------------------
+# Finite groups and graphs are inert kernel terms (`group(elements, table)`,
+# `graph(n, edges)`). The Aevia types are nominal wrappers around the opaque
+# `Value` handle, so a graph cannot be passed where a group is expected; the
+# codec is one pair of functions per type, and every operator that mentions
+# the type is converted by the generator.
+codec Graph graph_to_value graph_from_value
+codec Group group_to_value group_from_value
+codec PermGroup permgroup_to_value permgroup_from_value
+
+prelude Graph
+| ## A graph as a kernel term. Vertices are 0..n-1; build one with `graph_complete`,
+| ## `graph_cycle`, `graph_path`, `graph_empty` and `graph_add_edge`.
+| type Graph = | Graph(Value)
+|
+| fn graph_to_value(g: Graph): Value =
+|     match g with
+|     | Graph(v) -> v
+|
+| fn graph_from_value(v: Value): Result<Graph, OpError> = Ok(Graph(v))
+|
+
+prelude Group
+| import Rssn_Combinatorics { Perm, perm_to_value, perm_from_value }
+|
+| ## A finite group as a kernel term (`group(elements, table)`).
+| type Group = | Group(Value)
+|
+| fn group_to_value(g: Group): Value =
+|     match g with
+|     | Group(v) -> v
+|
+| fn group_from_value(v: Value): Result<Group, OpError> = Ok(Group(v))
+|
+| ## A permutation group given by generators, one 0-based permutation per row. The
+| ## kernel counts points from 1; the codec shifts at the boundary.
+| type PermGroup = | PermGroup(Tensor<2, Int>)
+|
+| fn permgroup_to_value(g: PermGroup): Value =
+|     match g with
+|     | PermGroup(rows) -> to_value(rows + 1)
+|
+| fn permgroup_from_value(v: Value): Result<PermGroup, OpError> =
+|     match from_value<Tensor<2, Int>>(v) with
+|     | Ok(rows) -> Ok(PermGroup(rows - 1))
+|     | Err(e) -> Err(e)
+|
+
+sig graph_empty(n: Int) -> Result<Graph, OpError>
+sig graph_complete(n: Int) -> Result<Graph, OpError>
+sig graph_path(n: Int) -> Result<Graph, OpError>
+sig graph_cycle(n: Int) -> Result<Graph, OpError>
+sig graph_node_count(g: Graph) -> Result<Int, OpError>
+sig graph_is_directed(g: Graph) -> Result<Bool, OpError>
+sig graph_add_node(g: Graph) -> Result<Graph, OpError>
+sig graph_add_edge(g: Graph, u: Int, v: Int) -> Result<Graph, OpError>
+sig graph_out_degree(g: Graph, u: Int) -> Result<Int, OpError>
+sig graph_in_degree(g: Graph, u: Int) -> Result<Int, OpError>
+sig graph_adjacency(g: Graph) -> Result<Tensor<2, Int>, OpError>
+sig graph_laplacian(g: Graph) -> Result<Tensor<2, Int>, OpError>
+sig graph_bfs(g: Graph, start: Int) -> Result<Tensor<1, Int>, OpError>
+sig graph_dfs(g: Graph, start: Int) -> Result<Tensor<1, Int>, OpError>
+sig graph_is_connected(g: Graph) -> Result<Bool, OpError>
+sig graph_has_cycle(g: Graph) -> Result<Bool, OpError>
+sig graph_chromatic_number(g: Graph) -> Result<Int, OpError>
+sig graph_isomorphic(g: Graph, h: Graph) -> Result<Bool, OpError>
+sig graph_complement(g: Graph) -> Result<Graph, OpError>
+sig graph_disjoint_union(g: Graph, h: Graph) -> Result<Graph, OpError>
+sig graph_join(g: Graph, h: Graph) -> Result<Graph, OpError>
+
+sig cyclic_group(n: Int) -> Result<Group, OpError>
+sig dihedral_group(n: Int) -> Result<Group, OpError>
+sig symmetric_group(n: Int) -> Result<Group, OpError>
+sig klein_four_group() -> Result<Group, OpError>
+sig group_order(g: Group) -> Result<Int, OpError>
+sig group_is_abelian(g: Group) -> Result<Bool, OpError>
+sig group_is_simple(g: Group) -> Result<Bool, OpError>
+sig group_is_solvable(g: Group) -> Result<Bool, OpError>
+sig group_is_nilpotent(g: Group) -> Result<Bool, OpError>
+sig group_is_valid(g: Group) -> Result<Bool, OpError>
+sig group_class_count(g: Group) -> Result<Int, OpError>
+sig group_exponent(g: Group) -> Result<Int, OpError>
+sig group_sylow_count(g: Group, p: Int) -> Result<Int, OpError>
+
+sig perm_compose(p: Perm, q: Perm) -> Result<Perm, OpError>
+sig perm_inverse(p: Perm) -> Result<Perm, OpError>
+sig perm_order(p: Perm) -> Result<Int, OpError>
+sig perm_sign(p: Perm) -> Result<Int, OpError>
+sig perm_group_order(g: PermGroup) -> Result<Int, OpError>
+sig perm_group_is_abelian(g: PermGroup) -> Result<Bool, OpError>
+sig perm_group_is_transitive(g: PermGroup) -> Result<Bool, OpError>
+sig perm_group_is_solvable(g: PermGroup) -> Result<Bool, OpError>
+sig perm_group_is_nilpotent(g: PermGroup) -> Result<Bool, OpError>
+sig perm_group_contains(g: PermGroup, p: Perm) -> Result<Bool, OpError>
+
+# --- Multiprecision ----------------------------------------------------------
+prelude Multiprecision
+| ## A finite exact dyadic equal to mantissa * 2^exponent.
+| ## Nonzero mantissas have precision bits. Zero has exponent zero.
+| type Dyadic = { mantissa: Int, exponent: Int, precision: Int }
+|
+| ## A closed interval with a nonnegative dyadic radius.
+| type DyadicBall = { midpoint: Dyadic, radius: Dyadic }
+|
+| ## Endpoints rounded outward to the requested bit precision.
+| type DyadicBounds = { lower: Dyadic, upper: Dyadic }
+|
+
+sig num_mp_real_zero as zero_dyadic(precision: Int) -> Result<Dyadic, OpError>
+sig num_mp_real_one as one_dyadic(precision: Int) -> Result<Dyadic, OpError>
+sig num_mp_real_from_i64 as dyadic_from_i64(value: Int, precision: Int) -> Result<Dyadic, OpError>
+sig num_mp_real_from_bigint as dyadic_from_int(value: Int, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_real_from_f64 as dyadic_from_float(value: Float, precision: Int) -> Result<Dyadic, OpError>
+sig num_mp_real_to_f64 as dyadic_to_float(value: Dyadic) -> Result<Float, OpError>
+sig num_mp_real_sign as dyadic_sign(value: Dyadic) -> Result<Int, OpError>
+sig num_mp_real_round as round_dyadic(mantissa: Int, exponent: Int, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_real_compare as compare_dyadic(left: Dyadic, right: Dyadic) -> Result<Int, OpError>
+sig num_mp_real_add as add_dyadic(left: Dyadic, right: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_real_sub as subtract_dyadic(left: Dyadic, right: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_real_mul as multiply_dyadic(left: Dyadic, right: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_real_div as divide_dyadic(left: Dyadic, right: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_ball_add as add_balls(left: DyadicBall, right: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_sub as subtract_balls(left: DyadicBall, right: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_mul as multiply_balls(left: DyadicBall, right: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_div as divide_balls(numerator: DyadicBall, divisor: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_real_abs as abs_dyadic(value: Dyadic) -> Result<Dyadic, OpError>
+sig num_mp_real_neg as negate_dyadic(value: Dyadic) -> Result<Dyadic, OpError>
+sig num_mp_real_is_zero as dyadic_is_zero(value: Dyadic) -> Result<Bool, OpError>
+sig num_mp_real_is_integer as dyadic_is_integer(value: Dyadic) -> Result<Bool, OpError>
+sig num_mp_real_floor_log2 as dyadic_floor_log2(value: Dyadic) -> Result<Option<Int>, OpError>
+sig num_mp_real_trunc_to_bigint as truncate_dyadic(value: Dyadic) -> Result<Int, OpError>
+sig num_mp_real_with_precision as requantize_dyadic(value: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_real_sqrt as sqrt_dyadic(value: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_real_scale_pow2 as scale_dyadic_pow2(value: Dyadic, shift: Int) -> Result<Dyadic, OpError>
+sig num_mp_ball_new as make_ball(midpoint: Dyadic, radius: Dyadic) -> Result<DyadicBall, OpError>
+sig num_mp_ball_point as point_ball(value: Dyadic) -> Result<DyadicBall, OpError>
+sig num_mp_ball_contains_zero as ball_contains_zero(interval: DyadicBall) -> Result<Bool, OpError>
+sig num_mp_ball_width as ball_width(interval: DyadicBall) -> Result<Dyadic, OpError>
+sig num_mp_ball_neg as negate_ball(interval: DyadicBall) -> Result<DyadicBall, OpError>
+sig num_mp_ball_abs as abs_ball(interval: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_endpoints as ball_endpoints(interval: DyadicBall, precision: Int) -> Result<DyadicBounds, OpError>

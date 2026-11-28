@@ -1,0 +1,202 @@
+## The `Plot` module of §8.20.
+# Generated standard library; do not edit.
+# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+module Plot
+
+## Collects a vector of series in one plot specification.
+##
+## **Signature:** `combine : Tensor<1, Series> -> PlotSpec`
+##
+## The renderer uses shared axes and checks dimensions and explicit axis settings.
+##
+## **Examples:**
+## ```text
+## combine([line([0.0, 1.0], [0.0, 1.0]), scatter([0.0, 1.0], [1.0, 0.0])])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let combine = combine
+## A plot options record with linear axes and automatic limits.
+##
+## **Signature:** `default_plot_opts : PlotOpts`
+##
+## Use a record update to set labels, color, display units, scales or limits for a *_with constructor.
+##
+## **Examples:**
+## ```text
+## { default_plot_opts with color = Some("blue"), xlim = Some((0.0, 10.0)) }
+## ```
+##
+## *Source: Aevia standard library guide.*
+let default_plot_opts = default_plot_opts
+## Draws central points and vertical whiskers using nonnegative error magnitudes.
+##
+## **Signature:** `errorbar : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<1, Scalar<ρ,e>>) -> Series`
+##
+## The three vectors have equal lengths, and the error has the same dimension as y. Non-finite errors omit the corresponding whisker.
+##
+## **Examples:**
+## ```text
+## errorbar([0.0, 1.0, 2.0], [1.0, 2.0, 3.0], [0.1, 0.2, 0.1])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let errorbar = errorbar
+## Like errorbar, with a PlotOpts record for label, colour, units, scales and limits.
+##
+## **Signature:** `errorbar_with : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<1, Scalar<ρ,e>>, PlotOpts) -> Series`
+##
+## **Examples:**
+## ```text
+## errorbar_with([0.0, 1.0], [1.0, 2.0], [0.1, 0.2], default_plot_opts)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let errorbar_with = errorbar_with
+## Draws a color-scaled matrix with row zero at the top and columns increasing to the right.
+##
+## **Signature:** `heatmap : (Tensor<2, Scalar<ρ,d>>) -> Series`
+##
+## Non-finite cells are left blank.
+##
+## **Examples:**
+## ```text
+## heatmap([[1.0, 2.0], [3.0, 4.0]])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let heatmap = heatmap
+## Like heatmap, with a PlotOpts record for label, units, scales and limits.
+##
+## **Signature:** `heatmap_with : (Tensor<2, Scalar<ρ,d>>, PlotOpts) -> Series`
+##
+## **Examples:**
+## ```text
+## heatmap_with([[1.0, 2.0], [3.0, 4.0]], default_plot_opts)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let heatmap_with = heatmap_with
+## Draws counts in a positive number of equal-width bins.
+##
+## **Signature:** `hist : (Tensor<1, Scalar<ρ,d>>, Int) -> Series`
+##
+## Pass at least one finite observation. Non-finite observations are skipped.
+##
+## **Examples:**
+## ```text
+## hist([1.0, 2.0, 2.5, 3.0, 9.0], 4)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let hist = hist
+## Like hist, with a PlotOpts record for label, colour, units, scales and limits.
+##
+## **Signature:** `hist_with : (Tensor<1, Scalar<ρ,d>>, Int, PlotOpts) -> Series`
+##
+## **Examples:**
+## ```text
+## hist_with([1.0, 2.0, 2.5, 3.0, 9.0], 4, default_plot_opts)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let hist_with = hist_with
+## Sets the series tooltip shown by SVG and HTML output.
+##
+## **Signature:** `label : (Series, String) -> Series`
+##
+## **Examples:**
+## ```text
+## label(line([0.0, 1.0], [0.0, 1.0]), "y = x")
+## ```
+##
+## *Source: Aevia standard library guide.*
+let label = label
+## Builds a line series from equal-length vectors of concrete real coordinates.
+##
+## **Signature:** `line : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Series`
+##
+## Rendering skips pairs with a non-finite coordinate and connects the surviving pairs. SVG axis captions include the coordinate units.
+##
+## **Examples:**
+## ```text
+## line([0.0, 1.0, 2.0], [0.0, 1.0, 4.0])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let line = line
+## Builds a line series with a PlotOpts record.
+##
+## **Signature:** `line_with : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, PlotOpts) -> Series`
+##
+## Copy default_plot_opts to set a label, color, display units, scales or axis limits.
+##
+## **Examples:**
+## ```text
+## line_with([0.0, 1.0], [1.0, 10.0], { default_plot_opts with color = Some("blue") })
+## ```
+##
+## *Source: Aevia standard library guide.*
+let line_with = line_with
+## Renders a plot specification to plot.html with inline SVG when the IO action runs.
+##
+## **Signature:** `plot : PlotSpec -> IO Unit`
+##
+## Rendering or writing failures report E0905.
+##
+## **Examples:**
+## ```text
+## plot(combine([line([0.0, 1.0], [0.0, 1.0])]))
+## ```
+##
+## *Source: Aevia standard library guide.*
+let plot = plot
+## Renders a nonempty vector of plot specifications as looping 800 by 400 GIF frames.
+##
+## **Signature:** `plot_save_gif : (String, Tensor<1, PlotSpec>, Int) -> IO Result<Unit, IOError>`
+##
+## Pass an Int delay from 0 through 65535 in hundredths of a second. The unqualified two-argument call uses a delay of 10. The allocation limit permits up to 312 frames. The IO action returns Ok(()) or Err(IOError).
+##
+## **Examples:**
+## ```text
+## import Plot as Plots
+## Plots.plot_save_gif("anim.gif", [Plots.combine([Plots.line([0.0, 1.0], [0.0, 1.0])])], 25)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let plot_save_gif = plot_save_gif
+## Writes standalone SVG to a path with a case-insensitive .svg extension.
+##
+## **Signature:** `save : (String, PlotSpec) -> IO Unit`
+##
+## Other paths receive HTML with inline SVG. Rendering or writing failures report E0905.
+##
+## **Examples:**
+## ```text
+## save("plot.svg", combine([line([0.0, 1.0], [0.0, 1.0])]))
+## ```
+##
+## *Source: Aevia standard library guide.*
+let save = save
+## Builds an individual marker from each finite coordinate pair in two equal-length vectors.
+##
+## **Signature:** `scatter : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Series`
+##
+## **Examples:**
+## ```text
+## scatter([0.0, 1.0, 2.0], [0.0, 1.0, 4.0])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let scatter = scatter
+## Like scatter, with a PlotOpts record for label, colour, units, scales and limits.
+##
+## **Signature:** `scatter_with : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, PlotOpts) -> Series`
+##
+## **Examples:**
+## ```text
+## scatter_with([0.0, 1.0], [1.0, 10.0], default_plot_opts)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let scatter_with = scatter_with

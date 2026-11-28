@@ -1,0 +1,497 @@
+# `FFT`
+
+Source: `stdlib/FFT.aev`
+
+The `FFT` module of §8.20.
+
+## `type Norm`
+
+```aevia
+type Norm
+```
+
+Chooses how a Fourier transform is scaled: Backward leaves the forward transform unscaled and divides the inverse by the number of points (the default of fft and ifft), Forward divides the forward transform instead, and Unitary divides both by the square root of the number of points so that the transform preserves energy.
+## `type AxisScale`
+
+```aevia
+type AxisScale
+```
+
+The scale of a plot axis: Linear or Log. It is a field of PlotOpts.
+## `let fft`
+
+```aevia
+let fft = fft
+```
+
+Discrete Fourier transform of a vector.
+
+**Signature:** `fft : Tensor<1, X[d]> -> Tensor<1, Complex[d]>`
+
+Real or integer input is treated as complex. The result is not normalised; ifft divides by the length, so ifft(fft(x)) recovers x. The output keeps the input's dimension.
+
+**Examples:**
+```text
+fft([1.0, 0.0, -1.0, 0.0])
+```
+
+*Source: Aevia standard library guide.*
+## `let fft2`
+
+```aevia
+let fft2 = fft2
+```
+
+Two-dimensional Fourier transform over the last two axes of a tensor.
+
+**Signature:** `fft2 : Tensor<n, X[d]> -> Tensor<n, Complex[d]>`
+
+**Examples:**
+```text
+fft2([[1.0, 2.0], [3.0, 4.0]])
+```
+
+*Source: Aevia standard library guide.*
+## `let fft_axis`
+
+```aevia
+let fft_axis = fft_axis
+```
+
+Fourier transform along a single axis of a tensor; axes count from 0 and negative values count from the end.
+
+**Signature:** `fft_axis : (Tensor<n, X[d]>, Int) -> Tensor<n, Complex[d]>`
+
+**Examples:**
+```text
+fft_axis([[1.0, 2.0], [3.0, 4.0]], 1)
+```
+
+*Source: Aevia standard library guide.*
+## `let fft_norm`
+
+```aevia
+let fft_norm = fft_norm
+```
+
+Like fft, with the scaling convention chosen by the second argument: Backward (none going forward, 1/n back), Forward (1/n going forward) or Unitary (1/sqrt(n) both ways).
+
+**Signature:** `fft_norm : (Tensor<1, X[d]>, Norm) -> Tensor<1, Complex[d]>`
+
+**Examples:**
+```text
+import FFT { Unitary }
+fft_norm([1.0, 2.0, 3.0, 4.0], Unitary)
+```
+
+*Source: Aevia standard library guide.*
+## `let fftfreq`
+
+```aevia
+let fftfreq = fftfreq
+```
+
+fftfreq(n, dt) lists the frequencies matching an n-point fft of samples taken dt apart, in the order fft returns them.
+
+**Signature:** `fftfreq : (Int, Float[T]) -> Tensor<1, Float[1/T]>`
+
+The dimension is the reciprocal of dt, so a spacing in seconds gives hertz.
+
+**Examples:**
+```text
+fftfreq(4, 0.5 s)
+```
+
+*Source: Aevia standard library guide.*
+## `let fftn`
+
+```aevia
+let fftn = fftn
+```
+
+Fourier transform over every axis of a tensor.
+
+**Signature:** `fftn : Tensor<n, X[d]> -> Tensor<n, Complex[d]>`
+
+**Examples:**
+```text
+fftn([[1.0, 2.0], [3.0, 4.0]])
+```
+
+*Source: Aevia standard library guide.*
+## `let fftn_axes`
+
+```aevia
+let fftn_axes = fftn_axes
+```
+
+Fourier transform over a chosen list of axes, such as [0, 2].
+
+**Signature:** `fftn_axes : (Tensor<n, X[d]>, Tensor<1, Int>) -> Tensor<n, Complex[d]>`
+
+An out-of-range or repeated axis is a runtime error.
+
+**Examples:**
+```text
+fftn_axes([[1.0, 2.0], [3.0, 4.0]], [0, 1])
+```
+
+*Source: Aevia standard library guide.*
+## `let fftn_norm`
+
+```aevia
+let fftn_norm = fftn_norm
+```
+
+Fourier transform over every axis with a chosen normalisation (Backward, Forward or Unitary).
+
+**Signature:** `fftn_norm : (Tensor<n, X[d]>, Norm) -> Tensor<n, Complex[d]>`
+
+**Examples:**
+```text
+import FFT { Unitary }
+fftn_norm([[1.0, 2.0], [3.0, 4.0]], Unitary)
+```
+
+*Source: Aevia standard library guide.*
+## `let fftshift`
+
+```aevia
+let fftshift = fftshift
+```
+
+Rotates every axis of a spectrum so the zero frequency sits in the middle, which is how spectra are usually plotted.
+
+**Signature:** `fftshift : Tensor<n, a> -> Tensor<n, a>`
+
+ifftshift undoes it.
+
+**Examples:**
+```text
+fftshift([0, 1, 2, 3])
+```
+
+*Source: Aevia standard library guide.*
+## `let fftshift_axis`
+
+```aevia
+let fftshift_axis = fftshift_axis
+```
+
+Fftshift applied to one axis only.
+
+**Signature:** `fftshift_axis : (Tensor<n, a>, Int) -> Tensor<n, a>`
+
+**Examples:**
+```text
+fftshift_axis([[0, 1, 2, 3]], 1)
+```
+
+*Source: Aevia standard library guide.*
+## `let ifft`
+
+```aevia
+let ifft = ifft
+```
+
+Inverse discrete Fourier transform, divided by the vector length so that ifft(fft(x)) recovers x.
+
+**Signature:** `ifft : Tensor<1, X[d]> -> Tensor<1, Complex[d]>`
+
+**Examples:**
+```text
+ifft(fft([1.0, 2.0, 3.0, 4.0]))
+```
+
+*Source: Aevia standard library guide.*
+## `let ifft2`
+
+```aevia
+let ifft2 = ifft2
+```
+
+Inverse two-dimensional Fourier transform over the last two axes.
+
+**Signature:** `ifft2 : Tensor<n, X[d]> -> Tensor<n, Complex[d]>`
+
+**Examples:**
+```text
+ifft2([[1.0, 2.0], [3.0, 4.0]])
+```
+
+*Source: Aevia standard library guide.*
+## `let ifft_axis`
+
+```aevia
+let ifft_axis = ifft_axis
+```
+
+Inverse Fourier transform along a single axis of a tensor.
+
+**Signature:** `ifft_axis : (Tensor<n, X[d]>, Int) -> Tensor<n, Complex[d]>`
+
+**Examples:**
+```text
+ifft_axis([[1.0, 2.0], [3.0, 4.0]], 1)
+```
+
+*Source: Aevia standard library guide.*
+## `let ifft_norm`
+
+```aevia
+let ifft_norm = ifft_norm
+```
+
+Inverse transform with the same Norm convention you used for fft_norm; pass the same value for a round trip.
+
+**Signature:** `ifft_norm : (Tensor<1, X[d]>, Norm) -> Tensor<1, Complex[d]>`
+
+**Examples:**
+```text
+import FFT { Unitary }
+ifft_norm([1.0, 2.0, 3.0, 4.0], Unitary)
+```
+
+*Source: Aevia standard library guide.*
+## `let ifftn`
+
+```aevia
+let ifftn = ifftn
+```
+
+Inverse Fourier transform over every axis of a tensor.
+
+**Signature:** `ifftn : Tensor<n, X[d]> -> Tensor<n, Complex[d]>`
+
+**Examples:**
+```text
+ifftn([[1.0, 2.0], [3.0, 4.0]])
+```
+
+*Source: Aevia standard library guide.*
+## `let ifftn_axes`
+
+```aevia
+let ifftn_axes = ifftn_axes
+```
+
+Inverse Fourier transform over a chosen list of axes.
+
+**Signature:** `ifftn_axes : (Tensor<n, X[d]>, Tensor<1, Int>) -> Tensor<n, Complex[d]>`
+
+**Examples:**
+```text
+ifftn_axes([[1.0, 2.0], [3.0, 4.0]], [0, 1])
+```
+
+*Source: Aevia standard library guide.*
+## `let ifftn_norm`
+
+```aevia
+let ifftn_norm = ifftn_norm
+```
+
+Inverse Fourier transform over every axis with a chosen normalisation; use the same Norm as the forward transform.
+
+**Signature:** `ifftn_norm : (Tensor<n, X[d]>, Norm) -> Tensor<n, Complex[d]>`
+
+**Examples:**
+```text
+import FFT { Unitary }
+ifftn_norm([[1.0, 2.0], [3.0, 4.0]], Unitary)
+```
+
+*Source: Aevia standard library guide.*
+## `let ifftshift`
+
+```aevia
+let ifftshift = ifftshift
+```
+
+Undoes fftshift: moves the zero frequency from the middle back to the first position.
+
+**Signature:** `ifftshift : Tensor<n, a> -> Tensor<n, a>`
+
+**Examples:**
+```text
+ifftshift([2, 3, 0, 1])
+```
+
+*Source: Aevia standard library guide.*
+## `let ifftshift_axis`
+
+```aevia
+let ifftshift_axis = ifftshift_axis
+```
+
+Ifftshift applied to one axis only.
+
+**Signature:** `ifftshift_axis : (Tensor<n, a>, Int) -> Tensor<n, a>`
+
+**Examples:**
+```text
+ifftshift_axis([[2, 3, 0, 1]], 1)
+```
+
+*Source: Aevia standard library guide.*
+## `let irfft`
+
+```aevia
+let irfft = irfft
+```
+
+Inverse of rfft: rebuilds the real signal from the half spectrum.
+
+**Signature:** `irfft : Tensor<1, Complex[d]> -> Tensor<1, Float[d]>`
+
+**Signature:** `irfft : (Tensor<1, Complex[d]>, Int) -> Tensor<1, Float[d]>`
+
+The length defaults to an even number, 2(m - 1); pass the original length as a second argument for odd-length signals.
+
+**Examples:**
+```text
+irfft(rfft([1.0, 2.0, 3.0, 4.0]))
+irfft(rfft([1.0, 2.0, 3.0]), 3)
+```
+
+*Source: Aevia standard library guide.*
+## `let irfft2`
+
+```aevia
+let irfft2 = irfft2
+```
+
+Inverse of rfft2.
+
+**Signature:** `irfft2 : Tensor<n, Complex[d]> -> Tensor<n, Float[d]>`
+
+**Signature:** `irfft2 : (Tensor<n, Complex[d]>, Int) -> Tensor<n, Float[d]>`
+
+An optional second argument gives the original length of the last axis when it was odd.
+
+**Examples:**
+```text
+irfft2(rfft2([[1.0, 2.0], [3.0, 4.0]]))
+```
+
+*Source: Aevia standard library guide.*
+## `let irfftn`
+
+```aevia
+let irfftn = irfftn
+```
+
+Inverse of rfftn.
+
+**Signature:** `irfftn : Tensor<n, Complex[d]> -> Tensor<n, Float[d]>`
+
+**Signature:** `irfftn : (Tensor<n, Complex[d]>, Int) -> Tensor<n, Float[d]>`
+
+An optional second argument gives the original length of the last axis when it was odd.
+
+**Examples:**
+```text
+irfftn(rfftn([[1.0, 2.0], [3.0, 4.0]]))
+```
+
+*Source: Aevia standard library guide.*
+## `let irfftn_axes`
+
+```aevia
+let irfftn_axes = irfftn_axes
+```
+
+Inverse of rfftn_axes.
+
+**Signature:** `irfftn_axes : (Tensor<n, Complex[d]>, Tensor<1, Int>) -> Tensor<n, Float[d]>`
+
+**Signature:** `irfftn_axes : (Tensor<n, Complex[d]>, Tensor<1, Int>, Int) -> Tensor<n, Float[d]>`
+
+A third argument gives the original length of the last listed axis when it was odd.
+
+**Examples:**
+```text
+irfftn_axes(rfftn_axes([[1.0, 2.0], [3.0, 4.0]], [0, 1]), [0, 1])
+```
+
+*Source: Aevia standard library guide.*
+## `let rfft`
+
+```aevia
+let rfft = rfft
+```
+
+Fourier transform of real data that keeps only the n/2 + 1 non-redundant frequencies, roughly halving the work and the output size compared with fft.
+
+**Signature:** `rfft : Tensor<1, Float[d]> -> Tensor<1, Complex[d]>`
+
+**Examples:**
+```text
+rfft([1.0, 2.0, 3.0, 4.0])
+```
+
+*Source: Aevia standard library guide.*
+## `let rfft2`
+
+```aevia
+let rfft2 = rfft2
+```
+
+Real two-dimensional Fourier transform over the last two axes, keeping the non-redundant half along the last one.
+
+**Signature:** `rfft2 : Tensor<n, Float[d]> -> Tensor<n, Complex[d]>`
+
+**Examples:**
+```text
+rfft2([[1.0, 2.0], [3.0, 4.0]])
+```
+
+*Source: Aevia standard library guide.*
+## `let rfftfreq`
+
+```aevia
+let rfftfreq = rfftfreq
+```
+
+rfftfreq(n, dt) lists the n/2 + 1 non-negative frequencies matching rfft of n samples taken dt apart.
+
+**Signature:** `rfftfreq : (Int, Float[T]) -> Tensor<1, Float[1/T]>`
+
+**Examples:**
+```text
+rfftfreq(4, 0.5 s)
+```
+
+*Source: Aevia standard library guide.*
+## `let rfftn`
+
+```aevia
+let rfftn = rfftn
+```
+
+Real Fourier transform over every axis, keeping the non-redundant half along the last axis.
+
+**Signature:** `rfftn : Tensor<n, Float[d]> -> Tensor<n, Complex[d]>`
+
+**Examples:**
+```text
+rfftn([[1.0, 2.0], [3.0, 4.0]])
+```
+
+*Source: Aevia standard library guide.*
+## `let rfftn_axes`
+
+```aevia
+let rfftn_axes = rfftn_axes
+```
+
+Real Fourier transform over a chosen list of axes; the last axis listed keeps only the half spectrum and the others get full complex transforms.
+
+**Signature:** `rfftn_axes : (Tensor<n, Float[d]>, Tensor<1, Int>) -> Tensor<n, Complex[d]>`
+
+**Examples:**
+```text
+rfftn_axes([[1.0, 2.0], [3.0, 4.0]], [0, 1])
+```
+
+*Source: Aevia standard library guide.*

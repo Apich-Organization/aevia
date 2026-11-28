@@ -1,0 +1,240 @@
+load("@rssn//bazel:rules.bzl", "cargo_artifact", "scientific_run", "scientific_test")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["Cargo.toml"])
+
+filegroup(
+    name = "sources",
+    srcs = glob([
+        ".cargo/**",
+        "Cargo.*",
+        "crates/**",
+        "editors/**",
+        "examples/**",
+        "platform/**",
+        "scripts/**",
+        "spec/**",
+        "tests/**",
+        "tools/**",
+        "*.md",
+        "*.html",
+        "*.toml",
+        "LICENSE",
+    ], exclude = [
+        "**/.git/**",
+        "**/.gradle/**",
+        "**/.idea/**",
+        "**/__pycache__/**",
+        "**/node_modules/**",
+        "**/target/**",
+        "**/*.pyc",
+        "editors/jetbrains/build/**",
+    ]),
+)
+
+config_setting(
+    name = "optimized",
+    values = {"compilation_mode": "opt"},
+)
+
+config_setting(
+    name = "llvm_overlay",
+    define_values = {"aevia_llvm_optimizer": "1"},
+)
+
+_RELEASE_ARGUMENTS = select({
+    ":optimized": ["--release"],
+    "//conditions:default": [],
+})
+
+_RELEASE_PASS = select({
+    ":llvm_overlay": "@rssn//:llvm_optimizer",
+    "//conditions:default": None,
+})
+
+_TASKS = ["//bazel:aevia_tasks.py"]
+
+config_setting(
+    name = "release_distribution",
+    values = {"compilation_mode": "opt"},
+    define_values = {
+        "aevia_llvm_optimizer": "1",
+        "rssn_codegen_units": "1",
+        "rssn_lto": "fat",
+    },
+)
+
+_RELEASE_PREREQUISITES = select({
+    ":release_distribution": ["@rssn//:release_pass_gate"],
+    "//conditions:default": [],
+})
+
+[
+    cargo_artifact(
+        name = name,
+        workflow = name,
+        project = "aevia",
+        aevia = ":sources",
+        rssn = "@rssn//:sources" if name == "toolchain" else None,
+        scope = "" if name == "toolchain" else "platform",
+        data = _TASKS + _RELEASE_PREREQUISITES,
+        arguments = _RELEASE_ARGUMENTS,
+        plugin = _RELEASE_PASS,
+        outputs = ["bin"],
+        directories = ["bin"],
+    )
+    for name in ["toolchain", "platform_cli", "platform_binaries"]
+]
+
+scientific_run(
+    name = "package_release",
+    workflow = "package-release",
+    project = "aevia",
+    aevia = ":sources",
+    rssn = "@rssn//:sources",
+    scope = "release",
+    data = _TASKS + [":toolchain"] + select({
+        "@platforms//os:linux": [":platform_binaries"],
+        "//conditions:default": [":platform_cli"],
+    }),
+    target_compatible_with = select({
+        ":release_distribution": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    tags = ["manual"],
+)
+
+[
+    scientific_run(
+        name = name,
+        workflow = workflow,
+        project = "aevia",
+        aevia = ":sources",
+        scope = "release",
+        data = _TASKS,
+        tags = ["manual"],
+    )
+    for name, workflow in [
+        ("package_release_from_binaries", "package-release-from-binaries"),
+        ("release_smoke", "release-smoke"),
+    ]
+]
+
+scientific_run(
+    name = "aevia",
+    workflow = "cli",
+    project = "aevia",
+    aevia = ":sources",
+    rssn = "@rssn//:sources",
+    data = _TASKS + [":toolchain"],
+)
+
+scientific_test(
+    name = "release_inputs_test",
+    workflow = "release-inputs-test",
+    project = "aevia",
+    aevia = ":sources",
+    scope = "release-inputs-test",
+    data = _TASKS,
+    tags = ["local"],
+    size = "small",
+)
+
+[
+    scientific_test(
+        name = name,
+        workflow = workflow,
+        project = "aevia",
+        aevia = ":sources",
+        rssn = "@rssn//:sources" if workflow in ["rust-tests", "clippy", "editor-protocol", "toolchain-test", "contracts"] else None,
+        scope = "platform" if workflow.startswith("platform-") else "editors" if workflow.startswith("editor-") or workflow == "editors" else "",
+        data = _TASKS + data,
+        arguments = arguments + _RELEASE_ARGUMENTS if workflow in ["rust-tests", "platform-test"] else arguments,
+        plugin = _RELEASE_PASS if workflow in ["rust-tests", "platform-test"] else None,
+        tags = ["local"] + tags,
+        size = "enormous",
+        timeout = "eternal",
+    )
+    for name, workflow, data, arguments, tags in [
+        ("clippy_test", "clippy", [], [], ["manual"]),
+        ("platform_clippy_test", "platform-clippy", [], [], ["manual"]),
+        ("rust_tests", "rust-tests", [], [], []),
+        ("rust_all_features_test", "rust-tests", [], ["--all-features"], ["manual", "gpu"]),
+        ("platform_test", "platform-test", [], [], ["manual", "external", "no-cache"]),
+        ("platform_scripts_test", "platform-scripts", [], [], []),
+        ("editor_config_test", "editors", [], [], ["manual", "external"]),
+        ("editor_kate_test", "editor-kate", [], [], ["manual", "external"]),
+        ("editor_zed_runnables_test", "editor-zed-runnables", [], [], ["manual", "external"]),
+        ("editor_zed_wasm_test", "editor-zed-wasm", [], [], ["manual", "external"]),
+        ("editor_protocol_test", "editor-protocol", [":toolchain"], [], ["manual", "external"]),
+        ("editor_package_test", "editor-packages", [], [], ["manual", "external"]),
+        ("toolchain_test", "toolchain-test", [":toolchain"], [], []),
+        ("contracts_test", "contracts", [":toolchain"], [], []),
+    ]
+]
+
+[
+    scientific_run(
+        name = name,
+        workflow = workflow,
+        project = "aevia",
+        aevia = ":sources",
+        rssn = "@rssn//:sources" if workflow in ["refresh-kernel", "refresh-stdlib"] else None,
+        scope = "editors" if workflow == "editor-packages" else "spec" if workflow == "refresh-spec" else "",
+        data = _TASKS + data,
+        tags = ["manual"],
+    )
+    for name, workflow, data in [
+        ("refresh_kernel", "refresh-kernel", []),
+        ("refresh_stdlib", "refresh-stdlib", []),
+        ("refresh_spec", "refresh-spec", []),
+        ("editor_packages", "editor-packages", []),
+    ]
+]
+
+test_suite(
+    name = "test",
+    tests = [":rust_tests", ":toolchain_test", ":contracts_test", ":release_inputs_test"],
+)
+
+test_suite(
+    name = "joint_test",
+    tests = [
+        ":test",
+        "@rssn//:test",
+    ],
+)
+
+test_suite(
+    name = "joint_all_features_test",
+    tags = ["manual"],
+    tests = [":rust_all_features_test", "@rssn//:rust_all_features_test"],
+)
+
+scientific_run(
+    name = "check",
+    workflow = "check",
+    project = "aevia",
+    aevia = ":sources",
+    rssn = "@rssn//:sources",
+    data = _TASKS,
+)
+
+test_suite(
+    name = "integration_test",
+    tags = ["manual"],
+    tests = [
+        ":joint_test",
+        ":rust_all_features_test",
+        ":platform_test",
+        ":platform_scripts_test",
+        ":editor_config_test",
+        ":editor_protocol_test",
+        ":editor_package_test",
+        ":editor_kate_test",
+        ":editor_zed_runnables_test",
+        ":editor_zed_wasm_test",
+        "@rssn//:integration_test",
+    ],
+)

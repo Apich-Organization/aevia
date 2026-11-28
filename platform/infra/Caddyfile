@@ -1,0 +1,61 @@
+# Aevia registry — edge proxy.
+#
+# Caddy manages certificates and terminates public TLS on ports 80 and 443.
+# The registry listens on the container network. Its host port is published
+# on loopback for local health checks.
+{
+	# The admin API is unused at run time and would expose an unauthenticated
+	# configuration endpoint on the container network.
+	admin off
+
+	# ACME account contact — where Let's Encrypt sends expiry and revocation
+	# notices. Change it to a mailbox someone reads.
+	email {$AEVIA_ACME_EMAIL:ops@apich.org}
+}
+
+{$AEVIA_DOMAIN:aevia.apich.org} {
+	# No `tls` directive: with a public DNS name Caddy provisions and renews a
+	# Let's Encrypt certificate on first start and redirects :80 to :443.
+
+	# Offer zstd and gzip to clients according to their accepted encodings.
+	encode zstd gzip
+
+	header {
+		# Caddy redirects HTTP to HTTPS. This header covers the configured
+		# host and its subdomains.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# The registry supplies its browser policies for all deployment modes.
+		-Server
+	}
+
+	# A 16 MiB package plus multipart boundaries, the signed statement and the
+	# manifest. Rejecting here is the only place an oversized upload is stopped
+	# before it reaches the application's buffers. 24 MB leaves ~50% headroom.
+	request_body {
+		max_size 24MB
+	}
+
+	# JSON to stdout. The container runtime already collects stdout, and JSON
+	# survives a trip through journald or Loki without a re-parsing stage.
+	log {
+		output stdout
+		format json
+		level INFO
+	}
+	@private_auth path /auth/* /activate /api/v1/auth/device/*
+	log_skip @private_auth
+
+	# Plain HTTP to the registry container. X-Forwarded-For is *overwritten* with
+	# the connection's peer address rather than appended: the app trusts that
+	# header when AEVIA_TRUST_PROXY=true, so appending would let a client choose
+	# its own IP.
+	reverse_proxy registry:8080 {
+		# X-Forwarded-Proto and X-Forwarded-Host are set by Caddy already; only
+		# the client address needs to be replaced.
+		header_up X-Forwarded-For {client_ip}
+		header_up -Accept-Encoding
+		transport http {
+			compression off
+		}
+	}
+}

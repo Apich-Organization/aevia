@@ -1,0 +1,22 @@
+[
+  {
+    "label": "Run Aevia file",
+    "command": "aevia",
+    "args": ["run", "$ZED_FILE"],
+    "save": "current",
+    "tags": ["aevia-run"]
+  },
+  {
+    "label": "Test Aevia file",
+    "command": "aevia",
+    "args": ["test", "$ZED_FILE"],
+    "save": "current",
+    "tags": ["aevia-test"]
+  },
+  {
+    "label": "Aevia REPL",
+    "command": "aevia",
+    "args": ["repl"],
+    "use_new_terminal": true
+  }
+]

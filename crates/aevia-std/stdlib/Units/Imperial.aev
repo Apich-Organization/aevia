@@ -1,0 +1,7 @@
+## The `Units/Imperial` module of §8.20.
+# Generated standard library; do not edit.
+# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+module Units.Imperial
+
+## Imperial unit names are ambient Unit values from the kernel registry.
+## This module declares no bindings.

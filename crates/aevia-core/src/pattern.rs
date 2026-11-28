@@ -1,0 +1,327 @@
+//! One iterative, transactional matcher for source and Core IR patterns.
+//! A failed match never commits bindings to a lexical environment or slot frame.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
+use crate::value::NumKind;
+use crate::value::TensorData;
+use crate::value::Value;
+use crate::value::VariantValue;
+use aevia_syntax::ast::Pat;
+use aevia_syntax::ast::PatKind;
+use aevia_syntax::ast::PatLit;
+use aevia_types::adt;
+use aevia_types::adt::AdtId;
+use num_bigint::BigInt;
+use num_rational::BigRational;
+use num_traits::FromPrimitive;
+use num_traits::One;
+use num_traits::ToPrimitive;
+use std::borrow::Cow;
+use std::rc::Rc;
+
+#[derive(Clone, Copy)]
+enum Node<'a> {
+    Ast(&'a Pat),
+    Ir(&'a aevia_ir::Pattern),
+}
+enum Target<'a> {
+    Name(&'a str),
+    Slot(u32),
+}
+enum Work<'a> {
+    Match(Node<'a>, Cow<'a, Value>),
+    Bind(Target<'a>, Cow<'a, Value>),
+}
+pub enum Binding {
+    Name(String, Value),
+    Slot(u32, Value),
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "Entry point for the source interpreter"
+)]
+pub fn ast(
+    pattern: &Pat,
+    value: &Value,
+    constructors: &crate::evidence::SpanMap<(AdtId, usize)>,
+) -> Option<Vec<Binding>> {
+    execute(Node::Ast(pattern), value, constructors)
+}
+#[allow(
+    clippy::single_call_fn,
+    reason = "Entry point for the Core IR interpreter"
+)]
+pub fn ir(
+    pattern: &aevia_ir::Pattern,
+    value: &Value,
+) -> Option<Vec<Binding>> {
+    execute(
+        Node::Ir(pattern),
+        value,
+        &crate::evidence::SpanMap::default(),
+    )
+}
+fn constructor<'a>(
+    value: &'a Value,
+    name: &str,
+    expected: Option<(AdtId, usize)>,
+    arity: usize,
+) -> Option<&'a VariantValue> {
+    let (Value::Variant(value), Some((id, index))) = (value, expected) else {
+        return None;
+    };
+    (adt::same_type(value.adt, id)
+        && value.index == index
+        && value.name == name
+        && value.fields.len() == arity)
+        .then_some(value)
+}
+
+fn literal(
+    literal: &PatLit,
+    value: &Value,
+) -> bool {
+    match (literal, value) {
+        | (PatLit::Int(expected), Value::Num(number)) => {
+            match &number.kind {
+                | NumKind::Int(actual) => actual == expected,
+                | NumKind::Exact(actual) if actual.denom().is_one() => actual.numer() == expected,
+                | NumKind::Exact(actual) => {
+                    actual.as_ref() == &BigRational::from_integer(expected.clone())
+                },
+                | NumKind::Float(actual) if actual.fract() == 0.0 => {
+                    expected.to_i64().map_or_else(
+                        || BigInt::from_f64(*actual).as_ref() == Some(expected),
+                        |expected| actual.to_i64() == Some(expected),
+                    )
+                },
+                | _ => false,
+            }
+        },
+        | (PatLit::Str(expected), Value::Str(actual)) => actual.as_ref() == expected,
+        | (PatLit::Bool(expected), Value::Bool(actual)) => expected == actual,
+        | (PatLit::Unit, Value::Unit) => true,
+        | _ => false,
+    }
+}
+fn tensor(
+    value: &Value,
+    count: usize,
+    rest: bool,
+) -> Option<&Rc<TensorData>> {
+    let Value::Tensor(tensor) = value else {
+        return None;
+    };
+    let &[length] = tensor.shape.as_slice() else {
+        return None;
+    };
+    if length != tensor.storage.len() || length < count || (!rest && length != count) {
+        return None;
+    }
+    Some(tensor)
+}
+#[allow(
+    clippy::too_many_lines,
+    reason = "The transactional loop handles both pattern representations together"
+)]
+fn execute(
+    node: Node<'_>,
+    value: &Value,
+    constructors: &crate::evidence::SpanMap<(AdtId, usize)>,
+) -> Option<Vec<Binding>> {
+    let mut first = Some(Work::Match(node, Cow::Borrowed(value)));
+    let mut pending = Vec::new();
+    let mut bindings = Vec::new();
+    while let Some(work) = first.take().or_else(|| pending.pop()) {
+        let (node, value) = match work {
+            | Work::Bind(target, value) => {
+                bindings.push(match target {
+                    | Target::Name(name) => Binding::Name(name.to_string(), value.into_owned()),
+                    | Target::Slot(slot) => Binding::Slot(slot, value.into_owned()),
+                });
+                continue;
+            },
+            | Work::Match(node, value) => (node, value),
+        };
+        match node {
+            | Node::Ast(pattern) => {
+                match &pattern.kind {
+                    | PatKind::Error => return None,
+                    | PatKind::Wildcard => {},
+                    | PatKind::Var(name) => {
+                        bindings.push(Binding::Name(name.clone(), value.into_owned()));
+                    },
+                    | PatKind::Lit(expected) => {
+                        if !literal(expected, value.as_ref()) {
+                            return None;
+                        }
+                    },
+                    | PatKind::Ctor { name, args } => {
+                        let value = constructor(
+                            value.as_ref(),
+                            name,
+                            constructors.get(&pattern.span).copied(),
+                            args.len(),
+                        )?;
+                        for (pattern, field) in args.iter().zip(&value.fields).rev() {
+                            pending
+                                .push(Work::Match(Node::Ast(pattern), Cow::Owned(field.clone())));
+                        }
+                    },
+                    | PatKind::Record(fields) => {
+                        let Value::Record(value) = value.as_ref() else {
+                            return None;
+                        };
+                        for (name, pattern) in fields.iter().rev() {
+                            let field = Cow::Owned(value.fields.get(name)?.clone());
+                            pending.push(match pattern {
+                                | Some(pattern) => Work::Match(Node::Ast(pattern), field),
+                                | None => Work::Bind(Target::Name(name), field),
+                            });
+                        }
+                    },
+                    | PatKind::Tuple(items) => {
+                        let Value::Record(value) = value.as_ref() else {
+                            return None;
+                        };
+                        if value.fields.len() != items.len() {
+                            return None;
+                        }
+                        for (index, pattern) in items.iter().enumerate().rev() {
+                            pending.push(Work::Match(
+                                Node::Ast(pattern),
+                                Cow::Owned(value.fields.get(&index.to_string())?.clone()),
+                            ));
+                        }
+                    },
+                    | PatKind::Tensor { items, rest } => {
+                        let tensor = tensor(value.as_ref(), items.len(), rest.is_some())?;
+                        if let Some(name) = rest {
+                            pending.push(Work::Bind(
+                                Target::Name(name),
+                                Cow::Owned(Value::Tensor(tensor.tail_view(items.len())?)),
+                            ));
+                        }
+                        for (index, pattern) in items.iter().enumerate().rev() {
+                            pending.push(Work::Match(
+                                Node::Ast(pattern),
+                                Cow::Owned(tensor.get_flat(index)?),
+                            ));
+                        }
+                    },
+                    | PatKind::As { pattern, name } => {
+                        pending.push(Work::Bind(Target::Name(name), value.clone()));
+                        pending.push(Work::Match(Node::Ast(pattern), value));
+                    },
+                    | PatKind::Annot { pattern, .. } => {
+                        pending.push(Work::Match(Node::Ast(pattern), value));
+                    },
+                }
+            },
+            | Node::Ir(pattern) => {
+                match pattern {
+                    | aevia_ir::Pattern::Error => return None,
+                    | aevia_ir::Pattern::Wildcard => {},
+                    | aevia_ir::Pattern::Bind { slot, inner } => {
+                        if let Some(inner) = inner {
+                            pending.push(Work::Bind(Target::Slot(*slot), value.clone()));
+                            pending.push(Work::Match(Node::Ir(inner), value));
+                        } else {
+                            bindings.push(Binding::Slot(*slot, value.into_owned()));
+                        }
+                    },
+                    | aevia_ir::Pattern::Lit(expected) => {
+                        if !literal(expected, value.as_ref()) {
+                            return None;
+                        }
+                    },
+                    | aevia_ir::Pattern::Ctor { name, identity, args } => {
+                        let value = constructor(value.as_ref(), name, *identity, args.len())?;
+                        for (pattern, field) in args.iter().zip(&value.fields).rev() {
+                            pending.push(Work::Match(Node::Ir(pattern), Cow::Owned(field.clone())));
+                        }
+                    },
+                    | aevia_ir::Pattern::Record(fields) => {
+                        let Value::Record(value) = value.as_ref() else {
+                            return None;
+                        };
+                        for (name, pattern) in fields.iter().rev() {
+                            pending.push(Work::Match(
+                                Node::Ir(pattern),
+                                Cow::Owned(value.fields.get(name)?.clone()),
+                            ));
+                        }
+                    },
+                    | aevia_ir::Pattern::Tuple(items) => {
+                        let Value::Record(value) = value.as_ref() else {
+                            return None;
+                        };
+                        if value.fields.len() != items.len() {
+                            return None;
+                        }
+                        for (index, pattern) in items.iter().enumerate().rev() {
+                            pending.push(Work::Match(
+                                Node::Ir(pattern),
+                                Cow::Owned(value.fields.get(&index.to_string())?.clone()),
+                            ));
+                        }
+                    },
+                    | aevia_ir::Pattern::Tensor { items, rest } => {
+                        let tensor = tensor(value.as_ref(), items.len(), rest.is_some())?;
+                        if let Some(slot) = rest {
+                            pending.push(Work::Bind(
+                                Target::Slot(*slot),
+                                Cow::Owned(Value::Tensor(tensor.tail_view(items.len())?)),
+                            ));
+                        }
+                        for (index, pattern) in items.iter().enumerate().rev() {
+                            pending.push(Work::Match(
+                                Node::Ir(pattern),
+                                Cow::Owned(tensor.get_flat(index)?),
+                            ));
+                        }
+                    },
+                }
+            },
+        }
+    }
+    Some(bindings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn deeply_nested_bind_patterns_use_an_explicit_work_stack() {
+        let mut pattern = aevia_ir::Pattern::Wildcard;
+        for slot in 0..10_000 {
+            pattern = aevia_ir::Pattern::Bind {
+                slot,
+                inner: Some(Box::new(pattern)),
+            };
+        }
+        let bindings = ir(&pattern, &Value::Unit).unwrap();
+        assert_eq!(bindings.len(), 10_000);
+        // The matcher is iterative. Drop the synthetic host-created pattern
+        // iteratively too; source syntax has a separate parser depth contract.
+        while let aevia_ir::Pattern::Bind {
+            inner: Some(inner), ..
+        } = pattern
+        {
+            pattern = *inner;
+        }
+    }
+}

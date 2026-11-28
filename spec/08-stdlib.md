@@ -1,0 +1,1678 @@
+# 08 — 标准库
+
+标准库是语言的一部分：它定义 Prelude、数学函数、单位、线性代数、微积分、
+统计、数据、绘图和仿真。本章给出**规范性签名**；实现可以增加函数，但不能
+改变已有函数的类型或量纲规则。
+
+签名中的 `ρ` 是数值表示（`Int`、`Real`、`Float`、`Complex`），`d`、`e` 是
+量纲，`n` 是秩，`a`、`b` 是类型。`Scalar<ρ,d>` 在表面写成 `Real[d]` 等。
+
+## 8.1 Prelude
+
+Prelude 自动导入，无需 `open`。
+
+### 8.1.1 函数组合
+
+```
+id       : a -> a
+const    : (a, b) -> a
+compose  : ((b -> c), (a -> b)) -> (a -> c)
+flip     : ((a, b) -> c) -> ((b, a) -> c)
+curry    : ((a, b) -> c) -> (a -> (b -> c))
+uncurry  : ((a -> (b -> c))) -> ((a, b) -> c)
+apply    : ((a -> b), a) -> b
+```
+
+`compose(f, g)(x) = f(g(x))`。`|>` 和 `<|` 是语法糖，不是函数。
+
+### 8.1.2 布尔与比较
+
+```
+not      : Bool -> Bool
+xor      : (Bool, Bool) -> Bool
+(&&)     : (Bool, Bool) -> Bool
+(||)     : (Bool, Bool) -> Bool
+(==)     : Eq a => (a, a) -> Bool
+(!=)     : Eq a => (a, a) -> Bool
+(<)      : Ord a => (a, a) -> Bool
+(<=)     : Ord a => (a, a) -> Bool
+(>)      : Ord a => (a, a) -> Bool
+(>=)     : Ord a => (a, a) -> Bool
+compare  : Ord a => (a, a) -> Option<Ordering>
+partial_compare : (Float, Float) -> Option<Ordering>   # NaN -> None
+total_compare   : TotalOrd a => (a, a) -> Ordering
+
+sym_eq   : (Real[d], Real[d]) -> Prop
+sym_ne   : (Real[d], Real[d]) -> Prop
+sym_lt   : (Real[d], Real[d]) -> Prop
+decide   : Prop -> Option<Bool>
+assuming : (Prop, () -> a) -> a
+by_cases : (Prop, () -> Real[d], () -> Real[d]) -> Real[d]
+```
+
+`by_cases(p, yes, no)` 在 `p` 可判定时选分支；不可判定时构造符号
+`ite` 项（用于分段函数的符号推导）。`assuming` 只支持单元谓词
+（`x > 0`、`x >= 0`、`x != 0`、`x ∈ ℤ`）。
+
+`Real` 没有 `Eq`/`Ord` 实例；它的比较是 `Prop`。`Int`/`Float`/`String`
+返回 `Bool`。`TotalOrd` 用于 `Set`/`sort`，`Float` 需要 `TotalFloat` 包装。
+
+### 8.1.3 数值
+
+```
+abs      : Scalar<ρ,d> -> Scalar<ρ,d>        # ρ ≠ Complex
+sign     : Scalar<ρ,d> -> Int                 # ρ ≠ Complex
+min      : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,d>   # ρ ≠ Complex
+max      : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,d>   # ρ ≠ Complex
+clamp    : (Scalar<ρ,d>, Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,d>
+floor    : Scalar<ρ,d> -> Scalar<ρ,d>         # ρ ≠ Complex
+ceil     : Scalar<ρ,d> -> Scalar<ρ,d>         # ρ ≠ Complex
+round    : Scalar<ρ,d> -> Scalar<ρ,d>         # ρ ≠ Complex
+round    : (Scalar<ρ,d>, Int) -> Scalar<ρ,d>   # 保留 n 位小数；n 为负时舍入到十、百……
+is_nan   : Scalar<ρ,d> -> Bool
+is_finite : Scalar<ρ,d> -> Bool
+is_infinite : Scalar<ρ,d> -> Bool
+trunc    : Scalar<ρ,d> -> Scalar<ρ,d>         # ρ ≠ Complex
+mod      : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,d>   # ρ ≠ Complex
+rem      : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,d>   # ρ ≠ Complex
+div      : (Int, Int) -> Int
+quot     : (Int, Int) -> Int
+gcd      : (Int, Int) -> Int
+lcm      : (Int, Int) -> Int
+factorial: Int -> Int
+to_float : Scalar<ρ,d> -> Result<Float[d], EvalError>   # 符号/自由符号时失败
+to_real  : Scalar<ρ,d> -> Real[d]
+to_int   : Scalar<ρ,1> -> Int
+zero     : Scalar<ρ,d>                 # 该表示/量纲的零，用于 fold/sum
+rng      : Int -> (() -> Float[1])     # 纯、确定；返回“下一个数”函数
+```
+
+`min`/`max` 是二元函数；张量归约用 `min_all`/`max_all`。`zero` 是
+`fold((+), zero, xs)` 的起点；`sum([])` 内部使用对应表示/量纲的零。
+
+`rng(seed)` 是**纯**的伪随机数生成器：同一个 seed 在同一程序里给出同一
+序列，与执行顺序/线程数无关。它返回一个无参函数，每次调用给出下一个
+`Float[1]`；`random()`（§6.8.2）是 `IO` 版本，不保证可复现。
+
+### 8.1.4 字符串
+
+```
+length   : String -> Int
+concat   : (String, String) -> String
+join     : (String, Tensor<1, String>) -> String
+split    : (String, String) -> Tensor<1, String>
+replace  : (String, String, String) -> String
+trim     : String -> String
+upper    : String -> String
+lower    : String -> String
+contains : (String, String) -> Bool
+starts_with : (String, String) -> Bool
+ends_with   : (String, String) -> Bool
+parse_int   : String -> Result<Int, ParseError>
+parse_float : String -> Result<Float, ParseError>
+format      : (String, Tensor<1, String>) -> String
+```
+
+字符串索引按 grapheme cluster 计；`chars(s)` 返回 `Tensor<1, String>`。
+`length(s)`、`chars(s)`、`s[i]`、`s[i..j]`/`s[i:j:k]` 都以 grapheme cluster 为
+单位（`"e\u{301}"` 是一个位置）；`s[i]` 与切片都是 `String`，负下标从末尾数，
+越界是 `E0802`。
+
+`format(template, args)` 的占位符是 `{0}`、`{1}`（按位置）与 `{}`（取下一个）；
+其他花括号内容和超出参数个数的占位符原样保留。普通字符串字面量里的 `{…}`
+是插值，所以模板通常写成原始字符串 `r"{} m"` 或从文件读入；空插值 `"{}"`
+是 `E0104`，提示这两种写法。
+
+### 8.1.5 容器
+
+```
+map      : ((a -> b), Tensor<n, a>) -> Tensor<n, b>
+map2     : ((a, b) -> c, Tensor<n, a>, Tensor<n, b>) -> Tensor<n, c>
+par_map  : Parallel a => ((a -> b), Tensor<1, a>) -> Tensor<1, b>
+filter   : ((a -> Bool), Tensor<1, a>) -> Tensor<1, a>
+fold     : ((b, a) -> b, b, Tensor<1, a>) -> b
+fold_left: 同上
+zip      : (Tensor<1, a>, Tensor<1, b>) -> Tensor<1, (a, b)>
+zip_with : ((a, b) -> c, Tensor<n, a>, Tensor<n, b>) -> Tensor<n, c>
+enumerate: Tensor<1, a> -> Tensor<1, (Int, a)>
+range    : (Int, Int) -> Tensor<1, Int>
+range    : (Int, Int, Int) -> Tensor<1, Int>
+take     : (Int, Tensor<1, a>) -> Tensor<1, a>
+drop     : (Int, Tensor<1, a>) -> Tensor<1, a>
+reverse  : Tensor<1, a> -> Tensor<1, a>
+reverse  : Tensor<n, a> -> Tensor<n, a>                  # n ≥ 2：翻转第一个轴
+reverse_axis : (Tensor<n, a>, Int) -> Tensor<n, a>       # n ≥ 1：翻转指定轴
+filter   : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Tensor<n, a>   # n ≥ 2：谓词看一行
+take     : (Int, Tensor<n, a>) -> Tensor<n, a>           # n ≥ 2：取前几行
+drop     : (Int, Tensor<n, a>) -> Tensor<n, a>
+concat   : (Tensor<n, a>, Tensor<n, a>) -> Tensor<n, a>  # n ≥ 2：沿第一个轴堆叠
+any      : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Bool
+all      : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Bool
+find     : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Option<Tensor<n-1, a>>
+first    : Tensor<n, a> -> Option<Tensor<n-1, a>>
+last     : Tensor<n, a> -> Option<Tensor<n-1, a>>
+sort     : TotalOrd a => Tensor<1, a> -> Tensor<1, a>
+sort     : TotalOrd a => Tensor<n, a> -> Tensor<n, a>      # n ≥ 2：行按字典序
+sort_by  : ((a, a) -> Ordering, Tensor<1, a>) -> Tensor<1, a>
+sort_by  : ((Tensor<n-1, a>, Tensor<n-1, a>) -> Ordering, Tensor<n, a>) -> Tensor<n, a>
+sort_by_key : TotalOrd k => ((a -> k), Tensor<1, a>) -> Tensor<1, a>
+sort_by_key : TotalOrd k => ((Tensor<n-1, a> -> k), Tensor<n, a>) -> Tensor<n, a>
+sort_float : (Tensor<1, Float>, Bool) -> Tensor<1, Float>   # NaN last/first
+sort_float : (Tensor<n, Float>, Bool) -> Tensor<n, Float>   # n ≥ 2：行按字典序
+sort_axis : TotalOrd a => (Tensor<n, a>, Int) -> Tensor<n, a>   # 沿一个轴把每条一维切片排序
+argsort  : TotalOrd a => Tensor<n, a> -> Tensor<1, Int>        # 稳定排序的置换（行的下标）
+fold     : ((b, Tensor<n-1, a>) -> b, b, Tensor<n, a>) -> b    # n ≥ 2：累加器看一行
+zip      : (Tensor<n, a>, Tensor<m, b>) -> Tensor<1, (Tensor<n-1, a>, Tensor<m-1, b>)>   # 逐行配对
+enumerate : Tensor<n, a> -> Tensor<1, (Int, Tensor<n-1, a>)>    # n ≥ 2：下标与行
+concat   : (Tensor<1, a>, Tensor<1, a>) -> Tensor<1, a>
+flatten  : Tensor<n, Tensor<m, a>> -> Tensor<n+m, a>   # 仅规则嵌套
+any      : ((a -> Bool), Tensor<1, a>) -> Bool
+all      : ((a -> Bool), Tensor<1, a>) -> Bool
+find     : ((a -> Bool), Tensor<1, a>) -> Option<a>
+sum      : Tensor<n, Scalar<ρ,d>> -> Scalar<ρ,d>
+prod     : Tensor<n, Scalar<ρ,1>> -> Scalar<ρ,1>
+mean     : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>
+length   : Tensor<n, a> -> Int
+shape    : Tensor<n, a> -> Tensor<1, Int>
+rank     : Tensor<n, a> -> Int
+first    : Tensor<1, a> -> Option<a>
+last     : Tensor<1, a> -> Option<a>
+cumsum   : Tensor<1, Scalar<ρ,d>> -> Tensor<1, Scalar<ρ,d>>
+cumprod  : Tensor<1, Scalar<ρ,1>> -> Tensor<1, Scalar<ρ,1>>
+argmax   : Tensor<1, Scalar<ρ,d>> -> Int      # 首个最大值的下标
+argmin   : Tensor<1, Scalar<ρ,d>> -> Int
+```
+
+**任意秩。** 规范里写成 `Tensor<n, …>` 的操作对**任意秩** `n` 都有类型：`sum`、`prod`、`mean`、`var`、`std`、`norm`、`normalize`、`map`、`map2`/`zip_with`（同形）、
+`flatten`（秩 ≥ 2）、`transpose`、`sum(a, axis)` 的 keepdims 形式、§8.8 的整个 FFT 族和下面的序列操作。秩不是一等类型参数，所以这些签名是**对秩的模板**：类型表列出秩 1 到 4 的实例
+（`builtins::schemes`，供悬停与首类函数使用），调用时检查器按实参的秩实例化模板；实参的秩与任何实例都不符是 `E0302`，并带期望/实际类型。`first`/`last` 对空张量给 `None`；
+`argmax`/`argmin` 对空张量是 `E0802`，NaN 不会胜出，相等时取最前的下标。
+
+`range(start, stop, step)` 从 `start` 开始生成精确整数，不含终点 `stop`。
+步长默认为 `1`，负步长产生降序序列，朝终点反方向前进时得到空张量。
+步长为零或结果超过张量大小上限时报告 `E0802`。
+
+**序列操作按第一个轴。** 秩 `n ≥ 2` 的张量是沿第一个轴的 `n−1` 秩切片（“行”）的序列（`Tensor<0, a>` 即 `a`，所以秩 1 的“行”是元素）：
+
+- `reverse` 翻转第一个轴并保持形状（展平请显式写 `reverse(flatten(m))`）；`reverse_axis(t, k)` 翻转第 `k` 轴（负数从末尾数，越界 `E0802`）。`f64` 张量上两者都是视图，不复制缓冲区（§9.5）。
+- `filter(p, m)`：`p` 接受一行（秩 `n−1`），结果保持秩 `n`；全部拒绝得到第一轴长度为 0 的同秩张量。`any`/`all`/`find` 逐行测试，`find`、`first`、`last` 返回 `Option<Tensor<n-1, a>>`。
+- `take(k, m)`/`drop(k, m)` 按行取舍；`concat(a, b)` 沿第一个轴堆叠，其余轴长度必须一致（否则 `E0802`）。
+- `fold(f, init, m)`/`fold_left`：`f(acc, row)` 从第一行到最后一行。
+- `zip(a, b)` 逐行配对，长度取较短者，得到 `Tensor<1, (行或元素, 行或元素)>`（两个操作数的秩可以不同）；`enumerate(m)` 给出字段名为 `index`、`value` 的记录序列。
+- `sort(m)`：行按字典序稳定排序，结果与 `m` 同形；元素类型要 `TotalOrd`（`Float` 用 `sort_float`）。`sort_by(cmp, m)` 的比较函数接受两行；`sort_by_key(f, m)` 按 `f(行)` 的键稳定排序
+  （秩 1 时 `f` 接受元素）；`sort_float(m, nan_last)` 同 `sort`，NaN 前置或后置；`argsort(m)` 返回稳定排序的置换 `Tensor<1, Int>`（秩 1 是元素下标，秩 ≥ 2 是行下标）；
+  `sort_axis(t, k)` 把沿第 `k` 轴的每条一维切片分别排序，形状不变。
+- **元素级操作不变：** `map`/`map2`/`zip_with` 逐元素作用并保持形状；`sum`/`prod`/`mean`/`var`/`std`/`norm`/`normalize` 对全部元素归约；`cumsum`/`cumprod`/`argmax`/`argmin` 只对秩 1 定义。
+  需要元素级的 `fold`/`sort`/`zip`，先 `flatten`。
+
+`length` 对 `String` 和 `Tensor` 重载，由类型类 `Sized` 解析。
+
+`par_map(f, xs)` 并行映射，结果顺序与输入一致（线程数不改变结果）。它
+要求 `Parallel a`：`Int`、`Float[d]` 及其张量可以并行，符号 `Real` 不并行
+（§3.8.4/§6.10）。元素类型由调用点决定，所以约束在调用点检查，而不是一个
+全局实例。`par_tabulate`、`par_reduce` 与 `rng` 属于同一族；`par_reduce` 的块边界只取决于长度（§9.7.2）。
+
+### 8.1.5.1 集合
+
+```
+set_of       : TotalOrd a => Tensor<1, a> -> Set<a>   # 去重，按 total_compare 排序
+elements     : Set<a> -> Tensor<1, a>                 # 升序
+length       : Set<a> -> Int                          # length 的第三个重载
+member       : (a, Set<a>) -> Bool                    # O(log n)
+set_insert   : (Set<a>, a) -> Set<a>
+set_remove   : (Set<a>, a) -> Set<a>
+union        : (Set<a>, Set<a>) -> Set<a>
+intersection : (Set<a>, Set<a>) -> Set<a>
+difference   : (Set<a>, Set<a>) -> Set<a>
+is_subset    : (Set<a>, Set<a>) -> Bool
+```
+
+`Set<a>`（§3.2、§6.6）是持久有序集合，要求 `TotalOrd a`（`Set<Float>` 是
+`E0310`）。表示是规范的——元素按 `total_compare` 升序且唯一——所以集合的 `==`
+就是集合相等，与插入顺序无关；`show` 打印为 `{1, 2, 3}`，`repr` 打印为
+`set_of([1, 2, 3])`。集合运算是线性归并，`member` 是二分查找。修改不在原处进行：`set_insert` 返回新集合，旧值不变（§0.4 原则三）。
+
+### 8.1.6 Option / Result
+
+```
+Some     : a -> Option<a>
+None     : Option<a>
+Ok       : a -> Result<a, e>
+Err      : e -> Result<a, e>
+map      : ((a -> b), Option<a>) -> Option<b>
+and_then : ((a -> Option<b>), Option<a>) -> Option<b>
+unwrap_or: (Option<a>, a) -> a
+is_some  : Option<a> -> Bool
+is_ok    : Result<a, e> -> Bool
+is_err   : Result<a, e> -> Bool
+ok       : Result<a, e> -> Option<a>
+ok_or    : (Option<a>, e) -> Result<a, e>
+map      : ((a -> b), Result<a, e>) -> Result<b, e>
+and_then : ((a -> Result<b, e>), Result<a, e>) -> Result<b, e>
+unwrap_or: (Result<a, e>, a) -> a
+is_none  : Option<a> -> Bool
+map_err  : ((e -> f), Result<a, e>) -> Result<a, f>
+```
+
+`?` 是语法，不是函数。
+
+### 8.1.7 显示
+
+```
+show     : Show a => a -> String
+repr     : Show a => a -> String
+to_pretty : Show a => a -> String
+to_latex : Show a => a -> String
+to_typst : Show a => a -> String
+print    : Show a => a -> IO Unit
+println  : Show a => a -> IO Unit
+eprintln : Show a => a -> IO Unit
+```
+
+### 8.1.8 程序参数
+
+```
+args : () -> Tensor<1, String>
+```
+
+`args()` 返回宿主传给程序的参数向量，**只包含 `aevia run file -- a b` 中
+`--` 之后的参数**（`--` 本身不是参数）；没有参数时是空张量
+（`length(args()) == 0`，打印 `[]`）。它按位序保留参数的原始字符串，不做
+shell 解析（引号、空格、通配符已由 shell/宿主处理）；值在进程内不变，多次
+调用返回同一组。类型是 `Tensor<1, String>`，因此可以 `map`/索引/`length`。
+
+## 8.2 Math
+
+```
+pi       : Real[1]
+e        : Real[1]
+i        : Complex[1]
+oo       : Real[1]
+nan      : Float[1]
+```
+
+`oo` 是 `Real[1]`，不是量纲多态；`oo m` 是 `Real[L]`。`-oo` 由一元负号
+得到。`nan` 是 `Float[1]`。**无穷的运算语义见 §6.3.4**：那里给出哪些边界
+值会折叠（`ln(0)=-oo`、`ln(oo)=oo`、`exp(oo)=oo`、`exp(-oo)=0`）、哪些含
+`oo` 的 `+ - * / ^` 保留为符号项（精确相位不发明 NaN），以及 `Float` 相位
+按 IEEE 给出 `inf`/`nan`；本章只声明 `oo`/`nan` 的类型与量纲。
+
+### 8.2.1 初等函数
+
+```
+sqrt     : Scalar<ρ,d> -> Scalar<ρ,d^(1/2)>        # ρ ∈ {Real,Float}
+cbrt     : Scalar<ρ,d> -> Scalar<ρ,d^(1/3)>        # ρ ∈ {Real,Float}
+exp      : Scalar<ρ,1> -> Scalar<ρ,1>
+ln       : Scalar<ρ,1> -> Scalar<ρ,1>
+log      : Scalar<ρ,1> -> Scalar<ρ,1>              # 自然对数
+log2     : Scalar<ρ,1> -> Scalar<ρ,1>
+log10    : Scalar<ρ,1> -> Scalar<ρ,1>
+sin cos tan          : Scalar<ρ,1> -> Scalar<ρ,1>
+asin acos atan        : Scalar<ρ,1> -> Scalar<ρ,1>
+atan2                : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,1>
+sinh cosh tanh        : Scalar<ρ,1> -> Scalar<ρ,1>
+asinh acosh atanh     : Scalar<ρ,1> -> Scalar<ρ,1>
+hypot                : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,d>
+```
+
+### 8.2.2 特殊函数
+
+```
+gamma        : Scalar<ρ,1> -> Scalar<ρ,1>
+lgamma       : Scalar<ρ,1> -> Scalar<ρ,1>
+beta         : (Scalar<ρ,1>, Scalar<ρ,1>) -> Scalar<ρ,1>
+erf erfc     : Scalar<ρ,1> -> Scalar<ρ,1>
+fresnel_s fresnel_c : Scalar<ρ,1> -> Scalar<ρ,1>   # S(x)=∫₀ˣ sin(πt²/2)dt，C 同理（DLMF 7.2.7）
+zeta         : Scalar<ρ,1> -> Scalar<ρ,1>
+bessel_j0 j1 : Scalar<ρ,1> -> Scalar<ρ,1>
+bessel_jn    : (Int, Scalar<ρ,1>) -> Scalar<ρ,1>
+bessel_y0 y1 : Scalar<ρ,1> -> Scalar<ρ,1>
+bessel_yn    : (Int, Scalar<ρ,1>) -> Scalar<ρ,1>
+legendre_p   : (Int, Scalar<ρ,1>) -> Scalar<ρ,1>
+hermite_h    : (Int, Scalar<ρ,1>) -> Scalar<ρ,1>
+laguerre_l   : (Int, Scalar<ρ,1>) -> Scalar<ρ,1>
+chebyshev_t  : (Int, Scalar<ρ,1>) -> Scalar<ρ,1>
+chebyshev_u  : (Int, Scalar<ρ,1>) -> Scalar<ρ,1>
+```
+
+特殊函数的参数必须无量纲；结果无量纲。
+
+## 8.3 函数工具
+
+```
+curry    : ((a, b) -> c) -> (a -> (b -> c))
+uncurry  : (a -> (b -> c)) -> ((a, b) -> c)
+partial  : ((a, b) -> c, a) -> (b -> c)
+```
+
+`partial(f, a)` 是 `f(a, _)` 的函数版本。
+
+## 8.4 LinearAlgebra
+
+```
+dot      : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Scalar<ρ,d*e>
+matmul   : (Tensor<2, Scalar<ρ,d>>, Tensor<2, Scalar<ρ,e>>) -> Tensor<2, Scalar<ρ,d*e>>
+matvec   : (Tensor<2, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Tensor<1, Scalar<ρ,d*e>>
+vecmat   : (Tensor<1, Scalar<ρ,d>>, Tensor<2, Scalar<ρ,e>>) -> Tensor<1, Scalar<ρ,d*e>>
+outer    : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Tensor<2, Scalar<ρ,d*e>>
+transpose: Tensor<n, a> -> Tensor<n, a>          # 反转轴序
+trace    : Tensor<2, Scalar<ρ,d>> -> Scalar<ρ,d>
+det      : Tensor<2, Scalar<ρ,1>> -> Scalar<ρ,1>
+inv      : Tensor<2, Scalar<ρ,d>> -> Result<Tensor<2, Scalar<div_rep(ρ),1/d>>, LinAlgError>
+linsolve : (Tensor<2, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>)
+         -> Result<Tensor<1, Scalar<div_rep(ρ),e/d>>, LinAlgError>
+lstsq    : (Tensor<2, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>)
+         -> Result<Tensor<1, Scalar<div_rep(ρ),e/d>>, LinAlgError>
+eig      : Tensor<2, Scalar<ρ,d>> -> (Tensor<1, Complex[d]>, Tensor<2, Complex<1>>)
+eigvals  : Tensor<2, Scalar<ρ,d>> -> Tensor<1, Complex[d]>
+svd      : Tensor<2, Scalar<ρ,d>> -> (Tensor<2, Scalar<ρ,1>>, Tensor<1, Scalar<ρ,d>>, Tensor<2, Scalar<ρ,1>>)
+qr       : Tensor<2, Scalar<ρ,d>> -> (Tensor<2, Scalar<ρ,1>>, Tensor<2, Scalar<ρ,d>>)
+lu       : Tensor<2, Scalar<ρ,d>> -> (Tensor<2, Scalar<ρ,1>>, Tensor<2, Scalar<ρ,1>>, Tensor<2, Scalar<ρ,d>>)
+cholesky : Tensor<2, Scalar<ρ,d>> -> Result<Tensor<2, Scalar<ρ,d^(1/2)>>, LinAlgError>
+norm     : Tensor<n, Scalar<ρ,d>> -> Scalar<ρ,d>
+norm     : (Tensor<n, Scalar<ρ,d>>, Int) -> Scalar<ρ,d>
+normalize: Tensor<n, Scalar<ρ,d>> -> Tensor<n, Scalar<ρ,1>>
+rank     : Tensor<2, a> -> Int
+diag     : Tensor<1, a> -> Tensor<2, a>
+diag     : Tensor<2, a> -> Tensor<1, a>
+tril     : Tensor<2, a> -> Tensor<2, a>
+triu     : Tensor<2, a> -> Tensor<2, a>
+eye      : Int -> Tensor<2, Float>
+zeros    : (Int, ..., Int) -> Tensor<n, Float>       # n = 参数个数
+zeros_of<shape>() : Tensor<shape, Float>              # 细化形状构造
+ones_of<shape>()  : Tensor<shape, Float>
+ones     : (Int, ..., Int) -> Tensor<n, Float>
+fill     : (Scalar<ρ,d>, Int, ..., Int) -> Tensor<n, Scalar<ρ,d>>
+linspace : (Scalar<ρ,d>, Scalar<ρ,d>, Int) -> Tensor<1, Float[d]>
+reshape<shape> : Tensor<shape0, τ> -> Result<Tensor<shape, τ>, ShapeError>
+reshape_dyn : (Tensor<n, τ>, Tensor<1, Int>) -> Result<Tensor<n, τ>, ShapeError>
+refine_shape<shape> : Tensor<n, τ> -> Option<Tensor<shape, τ>>
+flatten  : Tensor<n, a> -> Tensor<1, a>
+at       : (Tensor<n, a>, Int) -> Tensor<n-1, a>     # 要求 n >= 1
+set      : (Tensor<n, a>, Tensor<1, Int>, a) -> Tensor<n, a>
+map_indexed : ((Int, a) -> b, Tensor<1, a>) -> Tensor<1, b>
+approx_map : ((Real[d] -> Real[e]), Tensor<1, Real[d]>)
+           -> Result<Tensor<1, Float[e]>, EvalError>
+sum      : Tensor<n, Scalar<ρ,d>> -> Scalar<ρ,d>
+sum      : (Tensor<n, Scalar<ρ,d>>, Int) -> Tensor<n, Scalar<ρ,d>>   # keepdims
+mean     : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>
+var      : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d^2>
+std      : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>
+```
+
+`transpose` 在秩 ≥ 2 的张量上反转轴序（秩 3 的 `[a, b, c]` 变成 `[c, b, a]`，细化形状同样反转）；
+秩 1 是 `E0302`（向量没有第二个轴，提示里说明了这一点）。`norm` 在秩 ≥ 2 上是对全部元素的
+范数（`p = 2` 即 Frobenius 范数），`var`/`std`/`mean`/`sum`/`prod` 对全部元素归约（见 §8.1.5）。
+
+`zeros<Float>(3, 4)` 的 `n=2`；`zeros<Int>` 显式指定元素类型。`zeros`/
+`ones`/`fill` 是**内建可变参数**：`n` 由 `Int` 实参的个数决定。它们可从
+`Tensor` 或 `LinearAlgebra` 导入并通过值别名再导出；类型参数可在调用前
+或调用时给出（`let z = zeros<Int>; z(2, 3)`）。局部同名定义照常遮蔽内建；
+构造器经泛型恒等函数传递时保留身份。相同类型特化的 `zeros` 与 `ones`
+可作为同一条件表达式的分支；运行时按实际值选择操作。`fill` 属于另一
+签名族，不同特化也不能混合。需要固定函数签名的高阶参数不能直接接受可变
+参数构造器，应写固定参数的 lambda，例如 `fn (n) => zeros(n)`。`reshape<[n1, ..., nk]>(a)` 的目标形状
+显式给出；元素数在编译期（形状已知时）或运行时检查。`reshape_dyn(a,
+shape)` 用运行时形状向量，返回 `Result`。
+
+**形状分支：`refine_shape`。** `refine_shape<[3, ?]>(a)` 在运行时检查 `a` 的各
+extent 是否等于类型实参里写出的字面量（`?` 表示任意 extent），相符得
+`Some(b)`（`b : Tensor<[3, ?], τ>`），否则 `None`；秩在编译期检查（秩不符是 `E0302`）。
+因此"依形状分支"写成对 `Option` 的 `match`，每个分支里的 `b` 在**类型**中已
+带有具体 extent，后续的矩阵乘法、索引、`reshape` 都按它做静态检查：
+
+```
+match refine_shape<[3, 3]>(m) with
+| Some(sq) -> sq @ sq            # sq : Tensor<[3, 3], Float>，乘法维度静态已知
+| None -> m
+```
+
+extent 必须是字面量或 `?`：类型级变量在运行时没有值，`refine_shape<[n]>(a)` 是
+`E0304`（变量 extent 的细化只能由签名里的等式求解，不能靠运行时测试）。
+
+`@` 按秩分派：`A @ B`（2×2）、`A @ x`（2×1）、`x @ A`（1×2）、
+`x @ y`（1×1 点积）。`matmul` 只做 2×2；`matvec`/`vecmat`/`dot` 是显式
+版本。
+
+`diag(v)` 把数值向量或布尔向量放在方阵的主对角线上，其余位置使用输入表示中的零或 `false`。`diag(A)` 将矩阵的主对角线取为向量，并保留元素类型。`eye(n)` 返回 `n` 行 `n` 列的浮点单位矩阵。密集矩阵构造函数在分配前检查结果大小。`linspace(start, end, n)` 返回 `n` 个浮点采样值，量纲与端点一致。对有限端点，`n ≥ 2` 时包含两个端点，`n = 1` 时只取 `start`，`n ≤ 0` 时返回空张量。
+
+`det` 只接受无量纲；带量纲用 `det_unit`：
+
+```
+det_unit : (Tensor<2, Scalar<ρ,d>>, Unit[d]) -> Dyn<ρ>
+
+type LinAlgError = | Singular | NotConverged | NotPositiveDefinite | ShapeMismatch
+```
+
+### 8.4.1 稀疏
+
+```
+type Sparse<F, shape, τ>
+
+from_dense<F> : Tensor<shape, τ> -> Sparse<F, shape, τ>
+to_dense      : Sparse<F, shape, τ> -> Tensor<shape, τ>
+convert<G>    : Sparse<F, shape, τ> -> Sparse<G, shape, τ>
+to_bcsr       : (Sparse<F, [m,n], τ>, Int, Int) -> Sparse<Bcsr, [m,n], τ>
+block_size    : Sparse<F, shape, τ> -> (Int, Int)
+nnz           : Sparse<F, shape, τ> -> Int
+density       : Sparse<F, shape, τ> -> Float
+format_of     : Sparse<F, shape, τ> -> String
+sparse_coo    : (Tensor<1, Int>, Tensor<2, Int>, Tensor<1, Scalar<ρ,d>>)
+              -> Sparse<Coo, shape, Scalar<ρ,d>>
+sparse_csr    : (Int, Int, Tensor<1, Int>, Tensor<1, Int>, Tensor<1, Scalar<ρ,d>>)
+              -> Sparse<Csr, [m,n], Scalar<ρ,d>>
+speye<F>      : Int -> Sparse<F, [n,n], Float>
+spdiag<F>     : Tensor<1, Scalar<ρ,d>> -> Sparse<F, [n,n], Scalar<ρ,d>>
+transpose     : Sparse<F, [m,n], τ> -> Sparse<F, [n,m], τ>
+matmul        : (Sparse<F, [m,k], Scalar<ρ,d>>, Sparse<G, [k,n], Scalar<ρ,e>>)
+              -> Sparse<Csr, [m,n], Scalar<ρ,d*e>>
+kron          : (Sparse<F, [m,n], Scalar<ρ,d>>, Sparse<G, [p,q], Scalar<ρ,e>>)
+              -> Sparse<Csr, [m*p,n*q], Scalar<ρ,d*e>>
+spsolve       : (Sparse<F, [n,n], Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>)
+              -> Tensor<1, Scalar<div_rep(ρ),e/d>>
+cg            : (Sparse<F, [n,n], Float[d]>, Tensor<1, Float[e]>, Float, Int)
+              -> { x: Tensor<1, Float[e/d]>, iterations: Int, residual: Float, converged: Bool }
+type Precond = | Identity | Jacobi | BlockJacobi | Ilu0 | Ic0 | Auto
+gmres_with    : (Sparse<F, [n,n], Float[d]>, Tensor<1, Float[e]>, { tol: Float, maxiter: Int, restart: Int, precond: Precond })
+              -> { x: Tensor<1, Float[e/d]>, iterations: Int, residual: Float, converged: Bool, precond: String }
+bicgstab_with : (Sparse<F, [n,n], Float[d]>, Tensor<1, Float[e]>, { tol: Float, maxiter: Int, precond: Precond })
+              -> { x: Tensor<1, Float[e/d]>, iterations: Int, residual: Float, converged: Bool, precond: String }
+cg_with       : (Sparse<F, [n,n], Float[d]>, Tensor<1, Float[e]>, { tol: Float, maxiter: Int, precond: Precond })
+              -> { x: Tensor<1, Float[e/d]>, iterations: Int, residual: Float, converged: Bool, precond: String }
+contract      : (Sparse<F, shape, τ>, Sparse<G, shape, τ>, [Int], [Int]) -> Sparse<Coo, shape, τ>
+map_nonzero   : ((Scalar<ρ,d>) -> Scalar<σ,e>, Sparse<F, shape, Scalar<ρ,d>>)
+              -> Sparse<F, shape, Scalar<σ,e>>
+nonzeros      : Sparse<F, shape, Scalar<ρ,d>> -> Tensor<1, (Tensor<1, Int>, Scalar<ρ,d>)>
+```
+
+**非对称系统：`gmres_with` 与 `bicgstab_with`。** `cg`/`cg_with` 要求对称正定；一般方阵用 `gmres_with(A, b, { tol, maxiter, restart, precond })`（重启 GMRES，右预条件，残差范数单调不增，
+内存 `O(restart·n)`）或 `bicgstab_with(A, b, { tol, maxiter, precond })`（短递推、常数内存，残差历史可能不规则）。两者来自 rssn 的 Krylov 内核，从零向量起步，返回与 `cg_with` 同形的记录
+（`x`、`iterations`、`residual`、`converged`、`precond`）；未达容差是 `converged = false` 而非错误，`restart = 0` 是 `E0802`。对非对称矩阵，`Ic0` 与 `Auto` 都改用 `Ilu0`（`Auto` 对 `Bcsr`
+先试块 ILU(0)）；分解失败退回 `Jacobi`，`precond` 字段报告实际用的一种。元素必须是 `Float`（精确元素用 `spsolve`），结果量纲是 `e/d`。
+
+**预条件共轭梯度。** `cg_with(A, b, { tol, maxiter, precond })` 是带预条件子的 `cg`（`cg` 本身不变）。`Precond` 是标准库变体（`import LinearAlgebra.Sparse { Precond, Jacobi, cg_with }`）：
+`Identity`（无预条件子；不叫 `None` 是为了不与 `Option` 的 `None` 冲突）、`Jacobi`（对角缩放）、`BlockJacobi`（对角块求逆）、`Ilu0`（保持稀疏模式的不完全 LU）、`Ic0`（不完全 Cholesky）、
+`Auto`（IC(0) → ILU(0) → Jacobi 中第一个能建成的；`Bcsr` 先试块 ILU(0) 再试块 Jacobi）。只接受 `Float`，要求对称正定。某个分解失败（零主元、不定）时退回 Jacobi，结果的 `precond` 字段
+（`"Identity"`、`"Jacobi"`、`"BlockJacobi"`、`"BlockIlu0"`、`"Ilu0"`、`"Ic0"`）报告实际使用的一种。直接法是 `spsolve`：对 `Float` 元素调用 `faer` 的稀疏 LU（COLAMD 排序，不稠密化，
+10^5 阶三对角系统是毫秒级）；对称正定矩阵（先检查严格对称与正对角线）先试稀疏 Cholesky，失败再退回 LU；精确元素（`Int`/`Real`/`Complex`/混合）用稀疏高斯消元，结果保持精确；
+奇异矩阵是 `E0806`。`cg(A, b, tol, maxiter)` 是无预条件版本，返回 `{ x, iterations, residual, converged }`。
+
+**并行与确定性。** `sparse @ dense`（含 `Bcsr` 的块内核）在乘加量不小于 2^17 时按行分块并行：块大小是常数（256 行，`Bcsr` 为一个块行），每个输出行由恰好一个工作项按列序累加，
+所以结果与线程数无关，且与顺序内核逐位相同。Krylov 迭代本身是顺序的（只有 `A @ x` 并行），迭代序列同样与线程数无关。
+
+**切片与重载。** 稀疏值支持切片：`A[i, :]`、`A[:, j]`、`A[r0..r1, c0..c1]`、`A[::2, 1..]`（语法与稠密张量相同）。整数下标去掉该轴，区间保留该轴并重新编号，所以 `A[i, :]` 是秩 1 的
+`Sparse<Coo, [n], τ>`；结果秩不是 2 时一律是 `Coo`。切片只过滤并重新编址已存储项，**不稠密化**，代价 `O(nnz)`；越界整数下标是 `E0802`，下标个数必须等于秩。另有三个对 `Sparse` 重载的既有名字：
+`sum(A)`、`sum(A, axis)`（结果是稠密张量）和 `get(A, i, j, …)`（也写 `A[i, j, …]`，未存储位置返回**隐式零**）。
+
+**类型与格式。** `Csr`/`Csc`/`Coo`/`Block`/`Bcsr` 是内建 `Format` 标签（§3.1），不是值构造器。`Sparse` 是核心类型构造器，`F` 是 `Format` kind；它**不**擦除为 `Tensor`：二者之间没有隐式转换，格式是类型的一部分
+（`Sparse<Csr, …>` 不能当作 `Sparse<Coo, …>` 传递，要用 `convert<G>`）。`from_dense<F>`/`speye<F>`/`spdiag<F>` 的 `F` 缺省为 `Csr`；`convert<G>` 必须写出目标格式。`Csr`/`Csc` 是二维格式，
+`Coo` 是任意秩的稀疏张量。`Block` 是 `Bcsr` 的另一种写法，二者是同一个格式标签，`format_of` 一律报告 `Bcsr`。`Sparse<F, [m,n], τ>` 的细化形状会被检查与传播（`A @ B` 的内维、`A ± B`、
+`spsolve`、`transpose`、`kron` 的 `[m*p, n*q]`、`to_dense`/`from_dense`），不符是编译错误。
+
+**块压缩稀疏行（`Bcsr`）。** 矩阵被切成 `br × bc` 的稠密小块，只存含非零元素的块，块之间按 CSR 压缩：`ptr` 是块行指针（长 `m/br + 1`），`idx` 是每个已存储块的块列下标（块行内严格递增），
+值缓冲每个块占 `br·bc` 个槽位（块内行主序）。块形状要求 `br | m`、`bc | n`，可用 `block_size(A)` 读回（非 `Bcsr` 格式是 `(1, 1)`）。适用于每个结点带多个未知量的系统（弹性、Navier–Stokes、耦合反应扩散）。
+
+- **填充。** “已存储项永不等于隐式零”在 `Bcsr` 里只放宽到块内：已存储的**块**至少含一个非零元素，其余槽位可以是零（填充）。填充不是逻辑项：`nnz(A)` 数逻辑非零，`A[i, j]` 在填充处回答隐式零，
+  `nonzeros`、`==`、`show`/`repr`、`to_dense` 与到内核的边界都只看到逻辑非零。其它运算经由按字典序排列的规范项形式进行，该形式跳过填充，因此对 `Bcsr` 的行为与 `Csr` 完全相同；结果保持 `Bcsr`
+  （原块形状——转置时为 `(bc, br)`——仍整除结果形状就沿用，否则按下面的规则重选）。装箱元素的填充是该元素类的零，精确值永不舍入。
+- **块形状。** `to_bcsr(A, br, bc)` 显式指定；`br`/`bc` 为零、不整除 `A` 的形状、或 `A` 的秩不是 2 是 `E0802`。`convert<Bcsr>`、`from_dense<Bcsr>`、`speye<Bcsr>`、`spdiag<Bcsr>` 与需要重选块形状的运算结果
+  按**填充率**自动选取：候选是 `{4, 3, 2, 1}²` 中整除形状的块（方块在前），填充率 = 已存储槽位数 / 逻辑非零数；取面积最大且填充率不超过 `1.5` 者，面积相同取填充率低者，仍相同取靠前者，
+  都不满足则 `(1, 1)`。rssn 内核的 `kernels::bsr::choose_block_size` 用同一规则。
+- **复杂度。** 记 `B = br·bc`，`nb` 为已存储块数：存储 `nb·B + nb + m/br` 个字；`A @ x`（`k` 列）为 `O(nb·B·k)`，且只对非零槽位乘加，结果与同一矩阵的 `Csr` 内核逐位相同；
+  转为规范项形式 `O(nb·B)`；构造 `O(nnz + nb·B)`（自动选取至多 15 趟 `O(nnz)` 扫描）。填充率接近 1 时最省；块太大则浪费，应换小块或用 `Csr`。
+
+**运行时表示。** `Value::Sparse` 是一等运行时值。它保存形状、元素量纲、格式，以及按字典序排列、无重复的已存储项（CSR/CSC 用压缩指针，COO 用平铺坐标，`Bcsr` 用块指针与块列下标）；
+已存储项永不等于隐式零（`Bcsr` 块内填充除外；`SparseData::validate` 在 debug 构建里检查）。元素存储与稠密张量同一规则：当且仅当每个已存储元素都是 `Float`（隐式零也是 `0.0`）时是 `f64`
+缓冲，否则是装箱的 `Int`/`Real`/`Complex`/符号标量，所有运算经语言自己的标量算术，精确值**永不**舍入。隐式零是元素表示与量纲的零。
+
+**构造与校验。** `sparse_coo(shape, indices, values)` 的 `indices` 可以是 `[nnz, rank]` 的 `Int` 矩阵、`Int` 元组列表，秩为 1 时也可以是 `Int` 列表；越界、负下标、长度不符是 `E0802`。
+**重复坐标按求和合并**（有限元装配的语义），合并后等于零的项被丢弃。`sparse_csr(rows, cols, row_ptr, col_indices, values)` 要求 `row_ptr` 长 `rows+1`、以 `0` 开始、单调、以 `nnz` 结束，
+且每行列下标严格递增且小于 `cols`，否则 `E0802`。`from_dense` 丢弃零元素，`to_dense` 填回隐式零；稠密结果的元素个数超过实现上限（10^8）报 `E0802`，所以意外的稠密化被拒绝而不是耗尽内存。
+
+**算术与布局分派**（元素量纲规则与稠密张量完全一致：和要求量纲相等 `E0401`，积相乘，`spsolve` 相除）：
+
+| 运算 | 结果 |
+|---|---|
+| `sparse ± sparse` | `Sparse`，格式取左操作数 |
+| `sparse ± dense`、`dense ± sparse` | 稠密 `Tensor` |
+| `sparse * s`、`s * sparse`、`sparse / s`（`s` 为标量或单位，含带量纲标量） | `Sparse` |
+| `sparse * sparse`、`sparse * dense`、`dense * sparse`（Hadamard 积） | `Sparse`；只遍历已存储项，稠密一侧在未存储位置的值被忽略 |
+| `sparse @ dense`（向量或矩阵）、`dense @ sparse` | 稠密 `Tensor` |
+| `sparse @ sparse`、`matmul`、`kron` | `Sparse<Csr, …>` |
+| `-A`、`transpose(A)` | `Sparse`，格式不变 |
+
+`sparse / sparse`、标量除以稀疏、`sparse + 标量` 没有定义（会稠密化或产生无穷零），报 `E0302`；需要时先 `to_dense`。`==`/`!=` 比较两个稀疏值的**逻辑内容**（形状相同且已存储项相同，数值按与稠密张量
+相同的规则比较，所以 `1` 等于 `1.0`），**与格式无关**。`show` 写成 `sparse(Csr, [3, 3], { (0, 0) = 4.0, … })`；`repr` 是能重建同一个值的表达式 `convert<Csr>(sparse_coo([3, 3], [(0, 0), …], [4.0, …]))`，
+`Bcsr` 的 `repr` 带块形状：`to_bcsr(sparse_coo([4, 4], […], […]), 2, 2)`。
+
+**秩 N 与收缩。** `contract(A, B, axes_a, axes_b)` 是成对张量收缩（`tensordot`）：`axes_a`/`axes_b` 是**列表字面量**（结果的秩由长度静态决定），结果的轴是 `A` 的自由轴再接 `B` 的自由轴。两个稀疏操作数得到
+`Sparse<Coo, …>`；一个稀疏一个稠密得到稠密 `Tensor`；全部轴收缩得到标量；两个都稠密是类型错误。`map_nonzero(f, A)` 只对**已存储项**调用 `f`，因此要求 `f(0) = 0`（返回零的项被丢弃）；
+`nonzeros(A)` 返回 `(下标, 值)` 元组的列表。
+
+**与内核的边界。** rssn 的 `TypeExpr::Sparse` 只有 `rank`，所以 `Sparse<F, shape, τ>` 在边界降为 rank + 运行时格式；`aevia-rssn` 的 `Val::Sparse` 与 rssn 的 `Value::Sparse` 一一对应，**不稠密化**。
+rssn 的 `term_of_value` 不接受 `Value::Sparse` 进入项图（`manifest.value_kinds` 里 `in_term_graph = false`），所以稀疏值不能直接喂给通用重写算子；Aevia 负责布局转换，RSSN 负责稀疏算法与其 `faer` 稀疏 LU 后端。
+稀疏格式构成封闭集合（§13.9.5）。
+
+注：`storage.sparse` 能力启用稀疏运算；`gmres_with`/`bicgstab_with` 仅接受浮点元素；标准库不提供稀疏特征值与 SVD。
+
+## 8.5 Calculus
+
+```
+diff          : (Real[d] -> Real[e]) -> (Real[d] -> Real[e/d])
+diff_at       : ((Real[d] -> Real[e]), Real[d]) -> Real[e/d]
+numeric_deriv : (Float[d] -> Float[e]) -> (Float[d] -> Float[e/d])   # 数值/AD
+antiderivative: (Real[d] -> Real[e]) -> (Real[d] -> Real[e*d])
+defint        : (Real[d] -> Real[e], Real[d], Real[d]) -> Result<Real[e*d], MathError>
+quadrature    : (Float[d] -> Float[e], Float[d], Float[d]) -> Result<Float[e*d], MathError>
+limit         : (Real[d] -> Real[e], Real[d]) -> Result<Real[e], MathError>
+series        : (Real[d] -> Real[e], Real[d], Int) -> Real[e]
+sum           : (Real[1] -> Real[d], Real[1], Real[1]) -> Real[d]
+sum_f         : (Float[1] -> Float[d], Float[1], Float[1]) -> Float[d]
+product       : (Real[1] -> Real[1], Real[1], Real[1]) -> Real[1]
+product_dyn   : (Real[1] -> Real[d], Real[1], Real[1]) -> Dyn<Real>
+grad          : ((Tensor<1, Real[d]> -> Real[e]), Tensor<1, Real[d]>)
+              -> Tensor<1, Real[e/d]>
+grad_f        : ((Tensor<1, Float[d]> -> Float[e]), Tensor<1, Float[d]>)
+              -> Tensor<1, Float[e/d]>
+jacobian      : ((Tensor<1, Real[d]> -> Tensor<1, Real[e]>), Tensor<1, Real[d]>)
+              -> Tensor<2, Real[e/d]>
+hessian       : ((Tensor<1, Real[d]> -> Real[e]), Tensor<1, Real[d]>)
+              -> Tensor<2, Real[e/d^2]>
+divergence    : ((Tensor<1, Real[d]> -> Tensor<1, Real[e]>), Tensor<1, Real[d]>)
+              -> Real[e/d]
+curl          : ((Tensor<1, Real[L]> -> Tensor<1, Real[d]>), Tensor<1, Real[L]>)
+              -> Tensor<1, Real[d/L]>
+laplacian     : ((Tensor<1, Real[d]> -> Real[e]), Tensor<1, Real[d]>)
+              -> Real[e/d^2]
+```
+
+`diff`/`antiderivative`/`defint`/`limit`/`series`/`grad` 走符号相位，参数是
+`Real`。数值数据用 `numeric_deriv`/`quadrature`/`grad_f`/`sum_f`，走 `Float` 内核
+（有限差分/自动微分/求积），不把 `Float` 数据转成 `Real`。
+
+`sum` 的索引是无量纲的 `Real`，所以 `k` 可以是符号；`product` 只支持
+无量纲，带量纲用 `product_dyn` 返回 `Dyn<Real>`。
+
+`sum(f, a, b)`/`product(f, a, b)` 的两个界都是整数（精确非整数界是 `E0302`）。
+不超过 10^4 项的具体区间逐项精确求和；无穷界（`oo`）、符号界或更长的区间向
+内核请求闭式（`sum(fn k => 1/k^2, 1, oo) = pi^2/6`、
+`sum(fn k => k, 1, n) = n^2/2 + n/2`、几何级数 `sum(fn k => 2^(-k), 0, oo) = 2`）；
+内核找不到闭式时报 `E0808`，不会返回未求值的 `sum(…)` 冒充答案。
+
+### 8.5.1 代数形式
+
+```
+expand   : Real[d] -> Real[d]
+factor   : Real[d] -> Real[d]            # 有理数域上的因式分解；Int 重载见 §8.16
+cancel   : Real[d] -> Real[d]            # 有理函数约去公因子：p/q，gcd(p, q) = 1
+together : Real[d] -> Real[d]            # 通分为单个分式
+apart    : (Real[d], Real[e]) -> Real[d] # 对变量做部分分式分解
+collect  : (Real[d], Real[e]) -> Real[d] # 按变量的幂合并同类项
+degree   : (Real[d], Real[e]) -> Int     # 关于变量的多项式次数
+```
+
+这些函数改变精确表达式的**形式**而不改变它的值，因此结果的量纲就是参数的
+量纲。它们是 `simplify` 的补充：`simplify` 让内核选“最好”的等价形式（通常是
+最短的），而用户需要的往往是某个特定形式——展开后读系数、分解后读根、部分
+分式后逐项积分。每个函数直接调用内核 `poly` 规则集的同名算子，而不是发出
+`simplify` 请求（后者会把 `factor(x^4 - 1)` 抽取回更短的 `x^4 - 1`）。内核
+没有给出该形式时报 `E0808`，不返回未求值的 `factor(…)`。`factor` 对 `Int`
+参数仍是 §8.16 的整数分解：`factor(360)` 是 `[(2, 3), (3, 2), (5, 1)]`，
+`factor(x^4 - 1)` 是 `(x - 1)*(x + 1)*(x^2 + 1)`。
+
+## 8.6 Solve / Optimize
+
+```
+solve        : (Real[d] -> Real[e]) -> Result<Solutions<Real,d>, MathError>
+solve_complex: (Real[d] -> Complex[e]) -> Result<Solutions<Complex,d>, MathError>
+nsolve       : (Real[d] -> Real[e], Real[d]) -> Result<Real[d], MathError>
+nsolve_f     : (Float[d] -> Float[e], Float[d]) -> Result<Float[d], MathError>
+root         : 同上
+solve_system : (Tensor<1, Real[d]> -> Tensor<1, Real[e]>, Tensor<1, Real[d]>)
+             -> Result<Tensor<1, Real[d]>, MathError>
+minimize     : (Tensor<1, Real[d]> -> Real[e], Tensor<1, Real[d]>)
+             -> Result<Tensor<1, Real[d]>, MathError>
+minimize_f   : (Tensor<1, Float[d]> -> Float[e], Tensor<1, Float[d]>)
+             -> Result<Tensor<1, Float[d]>, MathError>
+maximize     : (Tensor<1, Real[d]> -> Real[e], Tensor<1, Real[d]>)
+             -> Result<Tensor<1, Real[d]>, MathError>    # 与 minimize 同型（Real 形式），不是 minimize_f
+least_squares: ((Tensor<1, Real[d]> -> Tensor<1, Real[e]>), Tensor<1, Real[d]>)
+             -> Result<Tensor<1, Real[d]>, MathError>
+linsolve     : (Tensor<2, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>)
+             -> Result<Tensor<1, Scalar<div_rep(ρ),e/d>>, LinAlgError>
+```
+
+`Solutions<ρ,d>` 是
+`{ variable: Option<String>, roots: Tensor<1, Scalar<ρ,d>>,
+   multiplicities: Tensor<1, Int>, conditions: Tensor<1, Condition>,
+   complete: Bool }`，保留重数与参数条件；它不是 `Set`。
+
+这个记录就是 RSSN `Solutions` 的记录（`Solutions::to_value`）：字段名、顺序和
+含义一一对应，桥不做重新解释，因此内核说“没报告重数”就是空表，说“不完整”
+就是 `false`。唯一的改形是 `variable`——RSSN 侧是符号（无未知量时是空串），
+Aevia 侧是 `Option<String>`。
+
+- `multiplicities` 是求解器给出的重数表，空表示**未报告**。RSSN 的
+  `multiplicity()` 访问器对空表返回 1，但那是“没有信息时的默认回答”，
+  不是声明；Aevia 保留空语义，不把它当“全 1”，也不从重复的根里反推重数。
+  当前 kernel 在**能证明**时填它：方程是一元有理多项式、且每个根都是精确
+  数时，用精确 square-free 分解给出重数（`(x-1)^2*(x+2)` → `[1, 2]`）；
+  根是无理/符号表达式时保持空表（把符号根数值匹配到因式是猜测）。
+- `conditions` 只填求解器**由构造就能声明**的条件，例如
+  `solve(a*x + b = 0, x)` 的根 `-b/a` 带 `a != 0`；实性/分支条件不填。
+  `complete = false` 时 `multiplicities`/`conditions` 都保持空表：沿途找到的
+  单个根不足以声明重数或合法性。
+- `complete` 是求解器的声明：`true` 表示它返回了穷尽形式（RSSN 的
+  `list(...)`），返回单个值时 RSSN 给 `false`。桥原样传递这个值，不写成常量。
+  `list(...)` 里的符号根由桥逐个展开为 `roots` 的元素（不再把整张表当作
+  一个不透明根），所以“求解器给了穷尽列表”与“桥只拿到一个根”是可区分的。
+  **`complete` 不是数学证明**，只是“求解器没有声明不完整”。
+
+`Condition` 是 `{ kind: String, text: String, expression: Option<Value> }`：
+`kind` 是 RSSN `ConditionKind` 的小写名（`nonzero`、`positive`、`real` 等），
+`text` 是给人读的谓词，`expression` 是求解器保留的结构化条件值（RSSN 侧是
+`Value`），求解器没有保留时该字段缺省。语言里没有与 `ConditionKind` 同名的
+类型，所以元素类型是不透明的 `Condition`，字段按值读取。
+
+`solve` 返回实解；`solve_complex` 返回复解。数值求解失败返回 `Err`。
+`linsolve` 是线性方程组求解，避免与符号 `solve` 同名。
+
+## 8.7 Stats
+
+```
+mean      : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>
+median    : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,d>
+centroid  : Tensor<1, Point[d]> -> Point[d]
+quantile  : (Tensor<1, Scalar<ρ,d>>, Scalar<ρ,1>) -> Scalar<ρ,d>
+quantiles : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,1>>) -> Tensor<1, Scalar<div_rep(ρ),d>>
+var       : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d^2>
+var       : (Tensor<n, Scalar<ρ,d>>, Bool) -> Scalar<div_rep(ρ),d^2>   # population
+std       : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>
+cov       : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Scalar<div_rep(ρ),d*e>
+corr      : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Scalar<div_rep(ρ),1>
+skewness  : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,1>
+kurtosis  : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,1>
+histogram : (Tensor<1, Scalar<ρ,d>>, Int) -> { counts: Tensor<1, Int>, edges: Tensor<1, Float[d]> }
+mode      : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,d>
+```
+
+`quantiles(xs, qs)` 批量计算 Hyndman–Fan 第 7 型分位数。查询向量 `qs` 的元素必须无量纲，且均位于 `[0, 1]`。结果沿用样本量纲，保留查询顺序和重复项。批量查询共用一次样本排序。精确输入使用有理数插值。样本非空且各元素有限时，空查询向量得到空结果。
+
+### 8.7.1 分布
+
+分布是**名义类型**，不是多参数类型类（多参数类不在语言中，§3.8.1）：
+
+```
+type Distribution<d> =
+    | Normal(Normal<d>)
+    | Uniform(Uniform<d>)
+    | Exponential(Exponential<d>)
+    | Gamma(Gamma<d>)
+    | Beta(Beta)
+    | ChiSquared(ChiSquared)
+    | StudentT(StudentT)
+    | Poisson(Poisson)
+    | Binomial(Binomial)
+    | LogNormal(LogNormal)
+    | Weibull(Weibull<d>)
+    | Cauchy(Cauchy<d>)
+    | F(F)
+    | NegativeBinomial(NegativeBinomial)
+    | Geometric(Geometric)
+
+type Normal<d>      = { mu: Real[d], sigma: Real[d] }
+type Uniform<d>     = { lo: Real[d], hi: Real[d] }
+type Exponential<d> = { rate: Real[1/d] }
+type Gamma<d>       = { shape: Real[1], rate: Real[1/d] }
+type Beta           = { alpha: Real[1], beta: Real[1] }
+type ChiSquared     = { df: Real[1] }
+type StudentT       = { df: Real[1] }
+type Poisson        = { lambda: Real[1] }
+type Binomial       = { n: Int, p: Real[1] }
+type LogNormal       = { mu: Real[1], sigma: Real[1] }
+type Weibull<d>      = { shape: Real[1], scale: Real[d] }
+type Cauchy<d>       = { loc: Real[d], scale: Real[d] }
+type F               = { df1: Real[1], df2: Real[1] }
+type NegativeBinomial = { r: Real[1], p: Real[1] }
+type Geometric       = { p: Real[1] }
+
+```
+
+这些声明是 `Stats.Distributions` 模块的源码（`open Stats.Distributions` 后
+`Normal({ mu = 1.7 m, sigma = 0.1 m })` 是一个 `Distribution<L>` 值）。
+分布运算是对这个封闭 ADT 的**内建重载**：
+
+```
+pdf       : (Distribution<d>, Real[d]) -> Real[1/d]
+cdf       : (Distribution<d>, Real[d]) -> Real[1]
+cdf_batch : (Distribution<d>, Tensor<1, Real[d]>) -> Tensor<1, Real[1]>
+dist_quantile : (Distribution<d>, Real[1]) -> Real[d]
+sample    : Distribution<d> -> IO Real[d]
+sample_n  : (Distribution<d>, Int, Option<Int>) -> Tensor<1, Real[d]>
+```
+
+`Normal<L>` 的 `pdf` 量纲是 `1/L`；`cdf` 无量纲；`sample` 返回 `Real[L]`。`Weibull` 取其 `scale` 的量纲，`Cauchy` 取 `loc`/`scale` 的量纲；`LogNormal` 的参数描述无量纲的对数；
+`NegativeBinomial` 与 `Geometric` 数成功前的失败次数，支撑集为 `0, 1, ...`。十五个构造器均支持上述运算。
+
+`cdf_batch(dist, xs)` 对每个查询点计算与 `cdf` 相同的累积概率，保留 `xs` 的顺序和重复项。查询点必须具有分布的量纲。分布参数有效时，空查询向量返回空结果。无效的分布参数或 NaN 查询点会引发定义域错误。
+
+`dist_quantile(dist, p)` 返回分布在概率 `p` 下的分位数，结果量纲与分布相同。离散分布在 `0 < p < 1` 时返回累积概率至少为 `p` 的最小支撑点。`p = 0` 和 `p = 1` 返回支撑集的下端和上端，端点可以是无穷。`p` 必须无量纲且在 `[0, 1]` 内。无效的分布参数、越界概率或 NaN 概率会报告 `E0806`。
+
+**用户自定义分布不是语言扩展点。** 多参数类已被移除（§3.8.1），而“分布参数 → 量纲”的映射需要类型函数（类似 `RateOf`），那是另一个设计。用户自定义分布在 §12.8.13 的扩展边界之外；
+标准库可以为新的分布形态增加内建构造器，但那是库的封闭集合，不是语言扩展点。
+
+## 8.8 FFT / Interpolate
+
+```
+fft      : Tensor<1, X[d]> -> Tensor<1, Complex[d]>       # 无归一化；X ∈ {Complex, Float, Int}
+ifft     : Tensor<1, X[d]> -> Tensor<1, Complex[d]>       # 1/N
+fft_norm : (Tensor<1, X[d]>, Norm) -> Tensor<1, Complex[d]>
+ifft_norm : (Tensor<1, X[d]>, Norm) -> Tensor<1, Complex[d]>
+fft_axis : (Tensor<n, X[d]>, Int) -> Tensor<n, Complex[d]>      # 沿一个轴
+ifft_axis : (Tensor<n, X[d]>, Int) -> Tensor<n, Complex[d]>
+fft2     : Tensor<n, X[d]> -> Tensor<n, Complex[d]>             # 最后两个轴
+ifft2    : Tensor<n, X[d]> -> Tensor<n, Complex[d]>
+fftn     : Tensor<n, X[d]> -> Tensor<n, Complex[d]>             # 全部轴
+ifftn    : Tensor<n, X[d]> -> Tensor<n, Complex[d]>
+fftn_axes : (Tensor<n, X[d]>, Tensor<1, Int>) -> Tensor<n, Complex[d]>   # 任意轴列表
+ifftn_axes : (Tensor<n, X[d]>, Tensor<1, Int>) -> Tensor<n, Complex[d]>
+fftn_norm : (Tensor<n, X[d]>, Norm) -> Tensor<n, Complex[d]>
+ifftn_norm : (Tensor<n, X[d]>, Norm) -> Tensor<n, Complex[d]>
+rfft     : Tensor<1, Float[d]> -> Tensor<1, Complex[d]>
+irfft    : Tensor<1, Complex[d]> -> Tensor<1, Float[d]>
+irfft    : (Tensor<1, Complex[d]>, Int) -> Tensor<1, Float[d]>  # 显式长度（奇数长度）
+rfft2    : Tensor<n, Float[d]> -> Tensor<n, Complex[d]>         # 最后两个轴
+irfft2   : Tensor<n, Complex[d]> -> Tensor<n, Float[d]>
+irfft2   : (Tensor<n, Complex[d]>, Int) -> Tensor<n, Float[d]>
+rfftn    : Tensor<n, Float[d]> -> Tensor<n, Complex[d]>         # 全部轴
+irfftn   : Tensor<n, Complex[d]> -> Tensor<n, Float[d]>
+irfftn   : (Tensor<n, Complex[d]>, Int) -> Tensor<n, Float[d]>
+rfftn_axes : (Tensor<n, Float[d]>, Tensor<1, Int>) -> Tensor<n, Complex[d]>   # 半谱在列表最后一个轴
+irfftn_axes : (Tensor<n, Complex[d]>, Tensor<1, Int>) -> Tensor<n, Float[d]>
+irfftn_axes : (Tensor<n, Complex[d]>, Tensor<1, Int>, Int) -> Tensor<n, Float[d]>   # 显式长度（奇数长度）
+fftshift : Tensor<n, a> -> Tensor<n, a>                         # 全部轴
+ifftshift : Tensor<n, a> -> Tensor<n, a>
+fftshift_axis : (Tensor<n, a>, Int) -> Tensor<n, a>
+ifftshift_axis : (Tensor<n, a>, Int) -> Tensor<n, a>
+fftfreq  : (Int, Float[T]) -> Tensor<1, Float[1/T]>
+rfftfreq : (Int, Float[T]) -> Tensor<1, Float[1/T]>             # n/2 + 1 个非负频率
+
+interp1  : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Scalar<ρ,d>) -> Scalar<ρ,e>
+interp2  : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<2, Scalar<ρ,f>>,
+            Scalar<ρ,d>, Scalar<ρ,e>) -> Scalar<ρ,f>
+interp2Batch : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<2, Scalar<ρ,f>>,
+                Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Tensor<1, Float[f]>
+spline   : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Scalar<ρ,d>) -> Scalar<ρ,e>
+polyfit  : (Tensor<1, Scalar<ρ,1>>, Tensor<1, Scalar<ρ,e>>, Int) -> Tensor<1, Scalar<ρ,e>>
+polyval  : (Tensor<1, Scalar<ρ,e>>, Scalar<ρ,1>) -> Scalar<ρ,e>
+chebyshev_fit : (Tensor<1, Scalar<ρ,1>>, Tensor<1, Scalar<ρ,e>>, Int) -> Tensor<1, Scalar<ρ,e>>
+```
+
+`fft` 不归一化，`ifft` 除以 `N`，因此 `ifft(fft(x)) == x`。需要
+`1/√N` 或其他约定时用 `fft_norm(x, Unitary)`（`import FFT { Unitary }`，或写 `FFT.Unitary`）。
+
+**变换族。** 所有正向/逆向变换接受复数、`Float` 或 `Int` 张量（实数、整数按虚部为 0 提升），结果总是复数，量纲与样本相同；频率轴的量纲只出现在 `fftfreq`/`rfftfreq` 的结果里（它们取采样间隔
+`Float[T]`，返回 `Float[1/T]`，`fftfreq(4, 0.5 s)` 的单位是 `Hz`）。多维变换由行列分解实现，沿每个被变换的轴依次做一维变换；任意秩都有类型（§8.1.5）。
+
+- `fft2`/`ifft2` 变换最后两个轴；`fftn`/`ifftn` 变换全部轴；`fft_axis(t, k)` 一个轴；`fftn_axes(t, axes)` 任意轴列表。轴号从 0 开始，负数从末尾数；越界或重复的轴是 `E0802`。
+- 归一化按被变换的总点数 `N`（各变换轴长度之积）：`Backward` 正向 1、逆向 `1/N`；`Forward` 正向 `1/N`、逆向 1；`Unitary` 两向都是 `1/√N`。
+- `rfft`/`rfft2`/`rfftn` 取实数输入，最后一个被变换的轴只保留 `n/2 + 1` 个非冗余频点。逆变换由该轴的 `m` 个频点重建实数张量。只有一个频点时，默认重建一个样本。有多个频点时，默认原长度为偶数 `2(m − 1)`，其他奇数长度用 `Int` 显式给出。长度与 `m` 不相容时返回 `E0802`。
+- `rfftn_axes(t, axes)`/`irfftn_axes(s, axes)`/`irfftn_axes(s, axes, n)` 是任意轴子集的实数变换（与 numpy 的 `rfftn(a, axes=…)` 一致）：列表里**最后一个**轴是半谱轴，其余轴做完整复数变换；
+  `irfftn_axes` 在最后一个列出的轴上做 Hermitian 还原，`n` 是该轴的原长度，缺省规则与 `irfftn` 相同。列表为空、轴越界或重复时返回 `E0802`。
+- `fftshift`/`ifftshift` 把零频率移到中间（每个被移位的轴循环平移 `⌊n/2⌋`，逆操作反向），对任意元素类型成立；`*_axis` 形式只移一个轴。
+
+```
+type Norm = | Backward | Forward | Unitary
+type AxisScale = | Linear | Log
+```
+
+`polyfit` 要求自变量无量纲；带量纲时先除以单位 `x/u`，系数保持 `y` 的
+量纲。这是量纲系统对 API 的约束：多项式系数 `a_i` 的量纲是 `e/d^i`，
+不同次幂不同，无法放进同质张量。
+
+`interp2` 和 `interp2Batch` 使用严格递增的坐标轴，并把有限的越界坐标限制到网格边界。
+`table[j][i]` 存储 `(xs[i], ys[j])` 处的采样值。
+`interp2Batch(xs, ys, table, query_xs, query_ys)` 只预处理一次网格。
+两个查询张量必须等长，并分别具有对应坐标轴的量纲。返回的 Float 张量保持查询顺序，
+每个坐标对对应一个元素，量纲与采样表相同。两个空查询张量返回空张量。
+坐标轴为空、采样表形状不符或查询长度不等时报 `E0802`。
+坐标轴仅有一个节点或节点未严格递增，以及任何输入非有限时报 `E0806`。
+
+## 8.9 ODE
+
+```
+type OdeMethod =
+    | Rk4 | Dopri5 | Radau | Bdf | Rosenbrock23 | AutoSwitch
+    | StormerVerlet | Ruth4 | GaussLegendre4 | GaussLegendre6
+    | ImplicitMidpoint | AdaptiveRk4 | AdaptiveStormerVerlet | AdaptiveRuth4
+    | AdaptiveImplicitMidpoint | AdaptiveGaussLegendre4 | AdaptiveGaussLegendre6
+type OdeOpts<s> = {
+    rtol: Float[1],
+    atol: Float[1],
+    method: OdeMethod,
+    steps: Option<Int>,                 # Rk4 / 几何积分器：定步长子步数
+    events: Option<(Float[T], s) -> Float[1]>,
+}
+```
+
+```
+type OdeAdaptiveOpts<s> = {
+    rtol: Float[1],
+    atol: Float[1],
+    method: OdeMethod,
+    steps: Option<Int>,
+    events: Option<(Float[T], s) -> Float[1]>,
+    h0: Float[T],
+    h_min: Float[T],
+    h_max: Float[T],
+    max_steps: Int,
+    max_evaluations: Int,
+}
+
+type OdePhysicalOpts<s> = {
+    rtol: Float[1],
+    atol: s,
+    method: OdeMethod,
+    steps: Option<Int>,
+    events: Option<(Float[T], s) -> Float[1]>,
+    h0: Float[T],
+    h_min: Float[T],
+    h_max: Float[T],
+    max_steps: Int,
+    max_evaluations: Int,
+}
+```
+
+```
+odeint   : (((Float[T], s) -> RateOf<s>), s, Tensor<1, Float[T]>)
+         -> Tensor<1, s>
+odeint_with : (((Float[T], s) -> RateOf<s>), s, Tensor<1, Float[T]>, OdeOpts<s>)
+           -> { t: Tensor<1, Float[T]>, y: Tensor<1, s> }
+solve_ivp: (((Float[T], s) -> RateOf<s>), s, (Float[T], Float[T]), OdeOpts<s>)
+         -> { t: Tensor<1, Float[T]>, y: Tensor<1, s> }
+```
+
+`odeint_with`、`solve_ivp`、`ode_solve` 也接受 `OdeAdaptiveOpts<s>` 或 `OdePhysicalOpts<s>`。
+`h0 = 0.0 s` 自动选择初步长；`h_min`/`h_max` 限制自适应步长（最终到达端点的截断步可小于 `h_min`）。
+`max_steps` 包括被拒绝的尝试步，`max_evaluations` 限制真实 RHS 调用次数，耗尽时返回数值错误。
+`OdePhysicalOpts<s>` 的 `atol` 必须与初始状态的结构、张量形状和各叶节点量纲完全一致，
+各分量为有限正值；运行时按该分量的容差归一化，使用 `atol_i + rtol * abs(y_i)` 的误差尺度，
+在 RHS、事件与返回值边界恢复物理单位。旧的无量纲标量 `atol` 仍作用于各分量的规范单位数值。
+`AdaptiveRk4`、`AdaptiveStormerVerlet`、`AdaptiveRuth4`、`AdaptiveImplicitMidpoint`、
+`AdaptiveGaussLegendre4`、`AdaptiveGaussLegendre6` 用所选方法的一整步与两半步进行误差控制，
+并检查三次 Hermite 连续扩展的中点缺陷；接受两半步的结果，不切换方法、不进行 Richardson 外推。
+自适应状态依赖步长通常不保持定步长辛映射的长期几何性质。固定方法 `Rk4`、`StormerVerlet`、
+`Ruth4`、`ImplicitMidpoint`、`GaussLegendre4`、`GaussLegendre6` 仍然使用 `steps`。
+
+`RateOf<s>` 是内建类型函数，递归定义：
+
+```
+RateOf<Scalar<ρ,d>>        = Scalar<ρ,d/T>
+RateOf<Tensor<n, τ>>       = Tensor<n, RateOf<τ>>
+RateOf<{ l1: τ1, ..., ln: τn }> = { l1: RateOf<τ1>, ..., ln: RateOf<τn> }
+```
+
+若 `s = { x: Float[L], v: Float[L/T] }`，则
+`RateOf<s> = { x: Float[L/T], v: Float[L/T^2] }`。标量状态
+`Float[1]` 的 `RateOf` 是 `Float[1/T]`。含 `Int`/`Bool`/函数字段的状态
+不合法，报 `E0302`；把常量参数捕获在 `rhs` 的闭包里。编译器按字段检查；
+不需要用户写实例，也不需要 `OdeState` 类。ODE 右端函数（例如 `rhs`）必须
+是双参 `(t, s)`；时间参数即使不用也要写 `_`。
+
+`events` 在 `Float[1]` 变号时终止并插值。`Dopri5`、`Radau`、`Bdf`、
+`Rosenbrock23` 与定步长的 `Rk4` 都支持事件（RSSN 的
+`solve_fixed_events`）；差别是定步长必须给 `steps`，事件定位精度也随
+步长而定。`odeint_with` 返回实际到达的 `t`/`y`。`odeint` 是默认参数
+（`rtol=1e-8`、`atol=1e-10`、`Dopri5`）的简写。
+
+`StormerVerlet` 与 `Ruth4` 是二阶、四阶定步长辛积分器；展平状态须为偶数长度，
+前半为位置 `q`，后半为动量 `p`，右端满足可分离的正则 Hamilton 系统。
+`ImplicitMidpoint`、`GaussLegendre4`、`GaussLegendre6` 分别为二、四、六阶隐式 Gauss–Legendre RK，
+支持一般状态。固定方法用 `steps` 指定子步数；非线性阶段不收敛时报错。
+记录状态的各字段保留独立量纲，因此物理 `q`/`p` 可使用异质量纲记录；
+单个数值张量只能有一种元素量纲。高级 `num_ode_*`、`num_dae_*`、`num_dde_*`
+张量接口必须先显式归一化异质量纲分量，不能把不同物理量直接放入同一张量。
+
+**展平契约**：桥接层按记录的**字段声明顺序**、深度优先、张量行主序，把
+`s` 展平成 `Vec<f64>`；求解后按同一顺序还原。嵌套记录递归展平；`Tensor<n,
+Float[d]>` 按行主序展平。当前只支持 `Float` 标量/张量字段；含 `Int`/
+`Bool`/函数字段的状态报 `E0302`，把常量参数捕获在 `rhs` 闭包里。`Tensor<1,
+s>` 用 `Boxed` 存储；数值内核只看到扁平 `f64`，Aevia 负责装箱/拆箱。
+
+**8.9.0 解对象、稠密输出、多事件、高阶方程、边值问题**
+
+`odeint`/`solve_ivp` 只给离散输出和一个终止事件。需要在**任意时刻**取值、多个事件
+（带方向、可终止或不终止）、高阶方程或边值问题时用下面的入口；它们与
+`odeint_with` 共用 `OdeOpts<s>`、`RateOf<s>` 和展平契约，并与 §8.9.1 的 SDE 事件/
+稠密输出 API 同形（`{ g, terminal, direction }`、`{ index, t, y }`、`at`）。
+
+```
+type OdeEvent<s> = {
+    g: (Float[T], s) -> Float[1],   # 变号即事件；必须返回无量纲数
+    terminal: Bool,                 # true：积分在该事件处停止
+    direction: Int,                 # -1 只认下降穿越，0 两个方向，1 只认上升穿越
+}
+type OdeHit<s> = { index: Int, t: Float[T], y: s }
+type OdeSolution<s> = {
+    t: Tensor<1, Float[T]>, y: Tensor<1, s>,        # 接受的步节点
+    at: (Float[T]) -> s,                            # 连续扩展：任意 t 处取值
+    events: Tensor<1, OdeHit<s>>,                   # 按时间排序的事件
+    nfev: Int, rejected: Int, method: String,
+}
+
+ode_solve : (((Float[T], s) -> RateOf<s>), s, (Float[T], Float[T]), OdeOpts<s>, Tensor<1, OdeEvent<s>>)
+          -> OdeSolution<s>
+odeint_order : (((Float[T], y0, y1, ..., yk) -> RateOf^(k+1)<y0>), (y0, y1, ..., yk), Tensor<1, Float[T]>)
+          -> { t: Tensor<1, Float[T]>, y: Tensor<1, y0>, d: Tensor<1, (y0, y1, ..., yk)> }
+odeint_order_with : (rhs, (y0, y1, ..., yk), Tensor<1, Float[T]>, OdeOpts<y0>)
+          -> { t: Tensor<1, Float[T]>, y: Tensor<1, y0>, d: Tensor<1, (y0, y1, ..., yk)> }
+ode_bvp : (((Float[T], s) -> RateOf<s>), s, (Float[T], Float[T]), ((s, s) -> Tensor<1, Float[d]>), OdeOpts<s>)
+          -> OdeSolution<s>
+```
+
+**连续输出。** `ode_solve(rhs, y0, (t0, t1), opts, events)` 在整个区间上积分
+（`t1 ≥ t0`；反向积分不支持）并保留方法自带的连续扩展，`sol.at(t)` 在
+`[t0, t_end]` 内任意时刻取值（区间外是 `E0802`，量纲不是 `T` 是 `E0401`）。`Dopri5`
+用 RSSN 的 4 阶连续扩展；`Radau`/`Bdf`/`Rosenbrock23` 用各自的配置多项式/向后差分
+插值；`Rk4` 没有级数据，用节点上的三次 Hermite 插值（插值误差 `O(h^4)`，随步长
+四阶收敛）。`Rk4` 的 `steps` 在这里是**整个区间的总步数**（`odeint_with` 里是每个
+输出区间的子步数）。`at` 是一个函数值（不是数据），所以含 `at` 的解不能跨线程
+返回；要在 `par_map` 里返回，只取 `t`/`y`。
+
+**事件。** `events` 是 `OdeEvent` 的列表，可以为空（`[]`）。每个事件的 `g` 在接受的
+步之间变号（`g0 < 0 ≤ g1` 为上升，`g0 > 0 ≥ g1` 为下降，`direction` 过滤）时由根
+查找在连续扩展上定位（`Rk4`：重积分的二分），命中记入 `events`（`index` 是列表下
+标）；`terminal = true` 的事件让积分在该点结束，`t`/`y` 的最后一个节点就是命中点，
+`at` 的有效区间随之截断。同一步内的多个命中按时间排序，终止事件之后的命中丢弃。
+`g` 返回有量纲的值是 `E0302`；方向取值不是 -1/0/1 是 `E0802`。
+
+**刚性求解器选择。** `AutoSwitch` 先给 `Dopri5` 至多 `min(max_steps, 20000)` 次尝试；该额度耗尽且总预算仍有
+余额时，用剩余尝试步额度从区间起点运行 `Radau`。两次尝试共享回调预算，`sol.method` 报告最终的方法。
+选择依据是步数预算，不是特征值估计；已知刚性时可直接选 `Radau`、`Bdf` 或 `Rosenbrock23`。
+
+**高阶方程。** `odeint_order(f, (y0, y1, …, y_{n-1}), times)` 积分
+`y⁽ⁿ⁾ = f(t, y, y′, …, y⁽ⁿ⁻¹⁾)`（`n` 是 `f` 的参数个数减一，`n ≥ 1`），内部化成
+堆叠状态 `z = (y, y′, …, y⁽ⁿ⁻¹⁾)` 上的一阶系统，除了 `y⁽ⁿ⁾ = f` 之外每个分量
+都是平凡的 `zₖ′ = zₖ₊₁`。**量纲逐阶追踪**：第 `k` 阶导数的类型是 `RateOf` 作用 `k` 次，
+`y : Float[L]` 时 `y′ : Float[L/T]`、`y″ : Float[L/T^2]`，`f` 必须返回 `L/T^n`
+（检查期 `E0401`/`E0302`；运行期再核对初值每一项的量纲与结构，量纲不符 `E0401`）。
+`y` 可以是标量、张量或记录，各阶导数结构相同。返回 `d` 是各阶导数的元组历史，
+`y` 是第 0 阶。`odeint_order_with` 多一个 `OdeOpts<y0>`（方法、容差；`events` 必须为
+`None`，要事件请手工化阶后用 `ode_solve`）。例（弹簧 `x″ = -(k/m) x`）：
+
+```
+let sol = odeint_order(fn (_t, x, v) => -(k / m) * x, (1.0 m, 0.0 m/s), times)
+# x : Float[L]，v : Float[L/T]，返回值 Float[L/T^2]
+```
+
+**边值问题（单步打靶）。** `ode_bvp(rhs, guess, (t0, t1), bc, opts)` 求解
+`y′ = rhs(t, y)`、`bc(y(t0), y(t1)) = 0`：`bc` 返回与状态分量个数相同的残差张量。
+算法是对初始状态的牛顿迭代（前向差分 Jacobian，每个未知量一次积分；带回溯线搜索），
+`guess` 是牛顿的起点，收敛判据 `‖r‖∞ ≤ 1e-9 (1 + ‖y0‖∞)`，最多 60 次迭代；返回
+最后一次积分的 `OdeSolution`（所以有 `at`）。二阶边值问题先用 `odeint_order` 的化阶
+思路写成状态 `(y, y′)`。残差个数不符是 `E0802`，雅可比奇异或不收敛是
+`NotConverged`。**限制**：这是单步打靶，只适用于 `y(t1)` 对 `y(t0)` 的灵敏度不爆炸的
+问题；指数不稳定（长区间、刚性）的边值问题需要多重打靶或配置法，此处**没有**提供。
+
+导入的 `odeint`/`odeint_with`/`solve_ivp`（以及 §8.9.1 的 `sdeint_*`，例如
+`import Ode { odeint }`）**保持类型函数语义**：`RateOf<s>`/`DiffusionOf<s>`
+的检查由入口点本身决定，标准库模块只是再导出，不改变签名；只有本地重新
+定义同名函数才会遮蔽它。
+
+**高级回调求解。** 下列 `Rssn_numerical_callback` 入口使用 §8.19 的已认证回调；状态张量同质，
+不同量纲分量须显式归一化。时间、状态、残差量纲分别独立；导数是状态/时间，绝对容差具有所控状态的量纲。
+
+| 入口族 | 方法与限制 |
+|---|---|
+| `num_ode_{rk4,verlet,ruth4,midpoint,gauss4,gauss6}_adaptive_typed` | 所选方法的步长加倍控制；端点、Hermite 历史与明确工作预算 |
+| `num_dae_implicit_adaptive_typed` | 残差 `F(t,y,y') = 0`；BDF1 起步、变步长 BDF2、Newton 与步长加倍；代数初态须一致 |
+| `num_dae_index{1,2}_adaptive_typed` | 半显式约束；时间、状态、代数变量与约束各有正参考尺度 |
+| `num_dde_constant_adaptive_typed` | 正延迟的步进法、Dormand–Prince；步长不超过最小延迟并停在可达不连续点 |
+
+这些入口有步长上下限、试探/回调预算与拒绝计数；预算耗尽或最小步仍不达标即失败，不强行接受。
+DAE/DDE 回调入口不提供事件回调。纯函数 `Rssn_numerical_vector.num_ode_history_eval` 用物理时间、状态、
+导数历史在区间内查询。可运行断言见 `examples/ode_adaptive_{geometric,dae,dde}.aev`。
+
+## 8.9.1 SDE
+
+SDE 与 ODE 共用 `RateOf`/展平契约（§8.9），但多了噪声结构与随机积分约定。
+方法名本身编码积分约定：名字里带 `stratonovich` 的收敛到 Stratonovich 解，
+其余是 Itô；没有与方法正交的 `calculus` 选项（名称不说明积分约定的方案
+几乎都会被误用）。
+
+```
+type SdeMethod =
+    | EulerMaruyama | Milstein | MilsteinStratonovich
+    | HeunStratonovich | SrkPlaten | MilsteinNoncommutative
+    | MilsteinNoncommutativeStratonovich
+    | DriftImplicitEuler | ThetaMaruyama | DriftImplicitMilstein
+
+type SdeStructure =
+    | Diagonal                     # 每个状态分量一个噪声通道，m = n
+    | General(Int)                 # (m)；调用者声明噪声可交换
+    | GeneralNoncommutative(Int)   # (m)；噪声不可交换：方法名分派到 Lévy 面积内核
+
+type SdeFixedOpts<T> = {
+    structure: SdeStructure,
+    method: SdeMethod,
+    seed: Int,
+    t0: Float[T], dt: Float[T], steps: Int,
+    terms: Int,                    # Lévy 面积的 Fourier 模数；0 = 默认 clamp(ceil(1/√h), 16, 4096)，h 为步长
+}
+
+type SdeAdaptiveOpts<T> = {
+    structure: SdeStructure,
+    method: SdeMethod,
+    seed: Int,
+    t0: Float[T], t1: Float[T],
+    rtol: Float[1], atol: Float[1],
+    max_steps: Int,
+    cells: Int,                    # 所有自适应方法的最细噪声 cell；向上取二次幂，0 = 4096
+    terms: Int,                    # 同上；h 取 cell 宽度 (t1 - t0)/cells
+}
+
+type SdeOpts<T> = | Fixed(SdeFixedOpts<T>) | Adaptive(SdeAdaptiveOpts<T>)
+
+type SdePath<s> = {
+    t: Tensor<1, Float[T]>, y: Tensor<1, s>,
+    steps: Int, rejected: Int, nfev: Int,
+    seed: Int, noise: Int, method: SdeMethod,
+}
+
+sdeint_diag : (((Float[T], s) -> RateOf<s>),
+               ((Float[T], s) -> DiffusionOf<s>),
+               s, SdeOpts<T>) -> Result<SdePath<s>, SdeError>
+
+sdeint_general : (((Float[T], s) -> RateOf<s>),
+                  ((Float[T], s) -> GeneralDiffusionOf<s>),
+                  s, SdeOpts<T>) -> Result<SdePath<s>, SdeError>
+                  # s = Float[d]       : GeneralDiffusionOf<s> = Tensor<2, Scalar<ρ, d/T^(1/2)>>  (1×m)
+                  # s = Tensor<1, τ>   : Tensor<2, DiffusionOf<τ>>                               (n×m)
+                  # s = { l: τ, … }    : { l: GeneralDiffusionOf<τ>, … }（记录状态，见下）
+
+wiener           : (Int, Int, Int, Float[T]) -> Tensor<2, Float[T^(1/2)]>
+                   # (seed, m, steps, dt)；与 manifest 的 sde_wiener(seed, m, steps, h) 同序
+sde_order        : SdeMethod -> { strong: Float[1], weak: Float[1] }
+                   # 可交换噪声下的阶
+sde_order_with   : (SdeMethod, SdeStructure) -> { strong: Float[1], weak: Float[1] }
+                   # 按结构给阶：HeunStratonovich 在不可交换噪声上只有强 1/2
+sde_ensemble_seed: (Int, Int) -> Int     # (seed, index)，纯函数
+
+type SdeEvent<s> = {
+    g: (Float[T], s) -> Float[1],  # 变号即事件，无量纲
+    terminal: Bool,                # true：路径在第一个这样的事件处截断
+    direction: Int,                # -1 下降，0 两个方向，1 上升
+}
+type SdeHit<s> = { index: Int, t: Float[T], y: s }
+
+sde_at       : (SdePath<s>, Float[T]) -> s
+sde_resample : (SdePath<s>, Tensor<1, Float[T]>) -> Tensor<1, s>
+sde_interp   : SdePath<s> -> ((Float[T]) -> s)
+sde_events   : (SdePath<s>, Tensor<1, SdeEvent<s>>) -> { path: SdePath<s>, hits: Tensor<1, SdeHit<s>> }
+sde_ensemble_diag    : (((Float[T], s) -> RateOf<s>), ((Float[T], s) -> DiffusionOf<s>), s, SdeOpts<T>, Int)
+                       -> Tensor<1, Result<SdePath<s>, SdeError>>
+sde_ensemble_general : (((Float[T], s) -> RateOf<s>), ((Float[T], s) -> GeneralDiffusionOf<s>), s, SdeOpts<T>, Int)
+                       -> Tensor<1, Result<SdePath<s>, SdeError>>
+```
+
+**连续输出（`saveat`、可在任意 `t` 调用的路径）。** 数值 SDE 路径只在节点上已知。
+`sde_at(path, t)` 取 `t` 处的状态，`sde_resample(path, ts)` 是 `saveat`（逐个时刻取值，
+结果 `Tensor<1, s>`），`sde_interp(path)` 返回可调用的 `Float[T] -> s`。插值是节点之间的
+**线性弦**：连续、确定、节点处精确，精度与格式本身同阶（强阶至多 1，Brownian 路径在
+节点间本来只有 Hölder-1/2）；它**不**补回步内的 Brownian 桥方差，所以节点之间的统计量
+比真过程低 `O(dt)`，需要精确的节点分布统计时直接用 `y`。区间外是 `E0802`，`t` 的量纲
+不是路径的时间量纲是 `E0401`。路径本身仍是**纯数据**（没有闭包字段），因此可以跨线程
+返回；可调用对象由 `sde_interp` 单独构造。
+
+**事件。** `sde_events(path, events)` 在离散路径上检测 `g` 的符号变化（节点上
+`g0 < 0 ≤ g1` 上升、`g0 > 0 ≥ g1` 下降，`direction` 过滤；与 ODE 事件同约定），
+穿越时刻是弦上 `g` 的根（二分），状态是弦上的插值。返回 `{ path, hits }`：`hits` 按时间
+排序；若有 `terminal` 事件，`path` 在第一个终止命中处截断（命中点作为最后一个节点，
+`steps` 随之更新），其后命中丢弃，否则 `path` 原样返回。因为只观察离散路径，两个节点
+之间"穿越后又返回"的连续过程事件是看不见的（任何离散格式都如此）。终止事件是**事后**
+截断：同一随机流上与"在事件处停止"得到相同的路径，但不会节省被丢弃部分的计算。
+`g` 返回有量纲的值是 `E0302`，`direction` 越界是 `E0802`。
+
+**集合（并行、确定）。** `sde_ensemble_diag/general(drift, diffusion, y0, opts, n)` 积分 `n`
+条路径，第 `i` 条使用种子 `sde_ensemble_seed(seed, i)`，其余选项相同；返回长度 `n`
+的 `Tensor<1, Result<SdePath<s>, SdeError>>`（`n ≤ 0` 是 `E0802`；个别成员的失败是该
+成员的 `Err`）。成员 `i` 只依赖 `(seed, i)`，所以**结果与执行顺序、线程数无关**。成员
+经 §9.7.2 的无共享副本并行执行（成员数不少于 32、drift/diffusion 可跨线程、未
+`--jobs 1` 时），否则在本线程顺序执行，两条路径给出逐位相同的值（回退由
+`AEVIA_PARALLEL_TRACE=1` 报告）。等价的手写形式是
+`par_tabulate(n, fn i => sdeint_diag(drift, diffusion, y0, <opts 的种子换成 sde_ensemble_seed(seed, i)>))`。
+
+**分派规则**：**方法名选择方案族和积分约定，结构选择可交换还是不可交换
+内核**。本节列出的方法都可用于这些结构：
+
+| method | calculus | 可交换（`Diagonal`、`General`） | 不可交换（`GeneralNoncommutative`） | strong/weak |
+|---|---|---|---|---|
+| `EulerMaruyama` | Itô | Euler–Maruyama | Euler–Maruyama | 1/2, 1 |
+| `Milstein` | Itô | Milstein | Milstein + Lévy 面积（`milstein_noncommutative`） | 1, 1 |
+| `MilsteinStratonovich` | Stratonovich | Milstein (Strat.) | Milstein (Strat.) + Lévy 面积（`milstein_noncommutative_stratonovich`） | 1, 1 |
+| `HeunStratonovich` | Stratonovich | Heun | Heun | 1, 1；**不可交换时 1/2, 1** |
+| `SrkPlaten` | Itô | Platen 无导数 SRK | Kloeden–Platen SRK（11.1.7，`srk_noncommutative`）+ Lévy 面积 | 1, 1 |
+| `MilsteinNoncommutative` | Itô | 同下（显式别名，任何结构） | Milstein + Lévy 面积 | 1, 1 |
+| `MilsteinNoncommutativeStratonovich` | Stratonovich | 同下（显式别名，任何结构） | Strat. Milstein + Lévy 面积 | 1, 1 |
+| `DriftImplicitEuler` | Itô | 隐式漂移、显式扩散 | 同左 | 1/2, 1 |
+| `ThetaMaruyama` | Itô | theta = 1/2 的隐式漂移、显式扩散 | 同左 | 1/2, 1 |
+| `DriftImplicitMilstein` | Itô | 隐式漂移、Milstein 交叉项 | 加 Lévy 面积 | 1, 1 |
+
+内核文档明确没有强于一阶的方案，Milstein 系也只是弱一阶，因此不声称弱二阶。
+`sde_order(method)` 给可交换噪声下的阶；`sde_order_with(method, structure)`
+按结构给阶（`HeunStratonovich` 没有 Lévy 面积项，在不可交换噪声上降为强
+1/2——允许调用，但阶如实报告）。迭代积分：Itô `I_jl = ½ΔW_jΔW_l − ½δ_jl h + A_jl`，
+Stratonovich `J_jl = I_jl + ½δ_jl h = ½ΔW_jΔW_l + A_jl`（`A` 是 Lévy 面积）。
+SRK 的支持值 `Υ^j = Y + a h + b^j √h`（每个噪声通道一个，每步多 `m` 次扩散
+求值），`Y' = Y + a h + Σ_j b^j ΔW_j + h^(-1/2) Σ_{j,l} (b^l(Υ^j) − b^l(Y)) I_jl`
+（Stratonovich 版用 `J_jl` 与 Stratonovich 漂移）。
+
+**Lévy 面积的 `terms` 默认值**：需要面积的路径（不可交换结构上的
+`Milstein`/`MilsteinStratonovich`/`SrkPlaten`/`DriftImplicitMilstein`，以及两个 `*Noncommutative*`
+方法）在 `terms == 0` 时取 `clamp(ceil(1/√h), 16, 4096)`，`h` 为步长（自适应
+时为 Brownian cell 宽度 `(t1 − t0)/cells`）；显式 `terms > 0` 原样使用。
+`terms` 字段必须存在；`0` 选择默认值。
+
+`General`/`GeneralNoncommutative` 的 `m` 是噪声通道数；`sdeint_general` 在
+运行时检查扩散矩阵形状是 `n × m`（`E0802`），`SdePath.noise` 报告实际
+`m`（对角时是 `n`）。
+
+**记录状态 + 一般噪声**：`sdeint_general` 接受记录状态。扩散返回**同形状
+的记录**，其中每个标量字段是 `m` 个系数的 `Tensor<1, Float[d/T^(1/2)]>`，
+秩 `r` 的张量字段变成秩 `r+1` 的张量（末尾多一个噪声轴 `[.., m]`）：
+`GeneralDiffusionOf<{ l: τ, … }> = { l: GeneralDiffusionOf<τ>, … }`。运行时
+按**状态记录的字段顺序**取字段、深度优先、行主序展平，恰好是内核的
+`n × m` 行主序矩阵（标量字段是一行）。例：`{ x: Float, v: Tensor<1, Float> }`
+（`n = 1 + k`）+ `General(2)` 的扩散返回 `{ x: [σx1, σx2], v: Tensor<2> [k×2] }`。
+
+**自适应步长。** `Fixed` 保持均匀网格；`Adaptive` 保留请求的方法，包括三个漂移隐式方案。
+每次用同一条已采样噪声比较一整步与两半步，接受两半步的状态，不把 Euler、SRK 或 Heun 替换成 Milstein。
+所有自适应方法都使用 `cells`：`0` 为 4096，否则向上取二次幂且至少为 2。粗增量由固定的最细独立增量求和，
+迭代积分服从 Chen 关系；拒绝不重采已实现的噪声。最细可耦合区间仍不满足容差时报 `E0807`，不得强行接受。
+
+Brownian 误差使用 `sqrt(dt/span)` 的局部二阶矩分配，独立的漂移误差使用 `dt/span`；相对尺度取初值、当前值、
+试探值的分量最大模。这是局部估计，不保证全局误差。`max_steps` 限制试探与接受步；分配/工作上限分别为
+1048576 个最细 cell、8388608 个存储系数/状态值、268435456 次 Lévy 面积更新。
+
+**跳跃与稳定噪声。** 复合 Poisson 的到达时刻与标记在拒绝前一次采样，连续积分停在每次到达点并记录跳后状态；
+非恒定补偿须提供期望跳跃回调。稳定噪声的粗增量由最细独立增量求和，局部矩阶取 `q = 0.9 alpha`。
+`alpha < 2` 只支持 Euler、漂移隐式 Euler 和 theta；Brownian Milstein/Stratonovich 修正不适用。
+`alpha = 2` 表示 `sqrt(2) W`，可使用所有 Brownian 方案。
+
+`Rssn_numerical_callback` 提供 `num_sde_adaptive_{diag,general}_typed`、
+`num_sde_jump_adaptive_{diag,general}_typed`、`num_sde_levy_adaptive_{diag,general}_typed`。
+控制量包括物理端点/参考时间、状态量纲的绝对容差、相对容差、最细网格/试探/回调预算、种子和方法编号
+（`SdeMethod` 声明顺序 0–9）；一般噪声另带通道数和可交换性。Brownian 系数为 `state/sqrt(time)`；
+稳定噪声用无量纲 `L_(t/reference_time)`，系数为状态量纲，不用浮点 `alpha` 构造量纲幂。
+
+**确定性。** 种子必须显式给出；固定/自适应的可交换 Brownian 路径使用语言 LCG/Box–Muller 流，
+需要迭代面积的路径使用内核 xoshiro。种子与最细分辨率固定后，拒绝不改变已采样路径；系综种子只依赖
+`(seed,index)`。只承诺同构建可复现。可运行断言见 `examples/sde_adaptive_*.aev`。
+
+**错误表**：`E0802` 形状/参数（含 `General` 的 `m` 与扩散矩阵不符、非均匀网格、缺失必填项）；`E0806` 状态非有限；`E0807` 自适应步长塌缩或步数预算耗尽；`E1001` 保留给未实现的能力。`SdeError` 是不透明错误类型（像 `SimError`），语言层不暴露构造器。
+
+**不提供**：用户自定义噪声结构、显式非均匀定步长网格、Brownian 桥稠密输出，以及标准
+`sde_events` 在积分过程中的提前停止（它是事后截断）。回调求解器通过 §8.19 的高阶接口调用。
+`Sde` 模块声明选项 ADT 并再导出本节入口；`terms`、`cells` 必须存在，值 `0` 选择默认值。
+`sde_scheme_info` 只查询方案元数据；弱阶使用 `sde_order`/`sde_order_with`。
+
+原生 Rust API 的可达性由 §8.19 的清单与源码分类分别报告。
+
+## 8.10 PDE
+
+PDE 求解器的参数是记录，包含网格、系数、边界条件。签名较长，这里给出
+入口：
+
+```
+solve_poisson : PoissonSpec -> Result<Field, PdeError>
+solve_heat    : HeatSpec -> Result<Tensor<1, Field>, PdeError>
+solve_wave    : WaveSpec -> Result<Tensor<1, Field>, PdeError>
+solve_advection : AdvectionSpec -> Result<Tensor<1, Field>, PdeError>
+```
+
+`Field` 是 `{ grid: Grid, values: Tensor<n, Float[d]> }`。系数和边界条件的
+量纲在 `Spec` 记录中逐字段标注；求解器在运行时检查网格与系数量纲一致。
+PDE 的完整类型规则见 `Pde` 模块文档；当前不把 PDE 规格放进核心类型系统。
+
+简式二维 `solve_heat` 从 `initial` 按行读取 `nx * ny` 个样本，固定初始场的四边，并返回包含初始时刻和末步的 `steps + 1` 个快照。`method` 省略时采用 `"explicit"`，扩散数 `alpha * dt / h^2` 不得超过 `1/4`。设为 `"adi"` 时选用交替方向隐式法，允许超过显式限制的有限扩散数。隐式步要求扩散率非负、步长为正且二者有限。未知方法或无效隐式参数返回 `Err(PdeError)`。
+
+### 8.10.1 清单接口的时间自适应
+
+`Rssn_numerical_callback.num_pde_*_adaptive` 在固定空间离散上比较一整步与两半步，接受所选方法的两半步；
+不替换积分器，不做 Richardson 外推。误差用场量纲的正绝对容差和无量纲相对容差缩放；拒绝的试探丢弃。
+无终止事件时必须到达精确终点。初始/最小/最大步长、接受/拒绝步预算、单步内核调用与串行回调预算显式给出；
+预算耗尽或最小步仍不达标即失败。
+
+| 空间族 | 时间方法 | 空间维数 | 边界范围 |
+|---|---|---|---|
+| 规则差分：热 | 显式 Euler、完整后向 Euler、完整 Crank–Nicolson、Douglas ADI | 1–3 | 成对周期、静态 Dirichlet/Neumann/Robin；检查角点数据 |
+| 规则差分：波 | 速度 Verlet（可重启的变步长 leapfrog） | 1–3 | 同上；位移与速度容差量纲独立 |
+| 规则差分：平流 | 一阶迎风 | 1–3 | 同上；外向通量与多维 CFL 限制 |
+| 单纯形有限元：热/反应 | theta：后向 Euler 或 Crank–Nicolson | 1–3 | 标记边界；ABI 构造结构化 P1/P2 单纯形网格；可选节点源回调 |
+| 标量有限体积 | 迎风/Rusanov、经典 Lax–Friedrichs、MUSCL minmod/van Leer | 1 | 周期或透射；通量/波速回调 |
+| 节点间断 Galerkin：标量平流 | SSPRK3 | 1–2 | 周期 |
+| Fourier 伪谱 | ETDRK4 | 1–3 | 周期；非线性回调返回场/时间 |
+
+Lax–Friedrichs 的空间粘性依赖步长，固定网格下可能无法达到紧时间容差，此时失败，不改变通量。
+FEM 源在 theta 两端串行求值 `(time, coordinates) -> nodal field/time`，再对节点插值应用一致质量矩阵；
+源与事件共享回调预算。DG 多维入口接收各轴单元数、物理盒长、多项式阶与各轴速度。
+空间收敛须单独研究网格；空间细化不是时间自适应。Poisson、静态 Helmholtz/FEM 与椭圆 Chebyshev 求解没有时间步。
+
+坐标、时间、场量纲独立为 `L`、`T`、`U`；扩散率为 `L^2/T`，平流/波速为 `L/T`，反应为 `1/T`，波速度为 `U/T`。
+边界记录的向量字段为 `kind`、`value: U`、`flux: U/L`、`alpha: 1`、`beta: L`、`gamma: U`；
+种类 0–3 为 Dirichlet、Neumann、Robin、周期。单项广播至活动面，否则每轴提供两个面；周期面须成对。
+Robin 表示 `alpha*u + beta*du/dn = gamma`。FVM 通量为 `U*L/T`，特征速度为 `L/T`。
+返回接受的 `times`/`states`、物理 `coordinates`、真实工作计数、最终误差比及可选终止事件时刻；波另返回 `velocities`。
+可运行断言见 `examples/pde_adaptive_{heat,wave_event,advanced}.aev`。
+
+## 8.11 Data
+
+```
+type Table<ρ>                  # 带行类型参数的不透明表格类型
+
+read_csv<ρ>   : String -> IO (Result<Table<ρ>, DataError>)
+read_csv_dyn  : String -> IO (Result<Table<Dynamic>, DataError>)
+write_csv     : (String, Table<ρ>) -> IO (Result<(), DataError>)
+read_npy<n>   : String -> IO (Result<Tensor<n, Float>, DataError>)
+write_npy     : (String, Tensor<n, Float>) -> IO (Result<(), DataError>)
+read_json     : String -> IO (Result<Json, DataError>)
+write_json    : (String, Json) -> IO (Result<(), DataError>)
+
+column        : (Table<ρ>, String) -> Result<Tensor<1, a>, DataError>
+column_dyn    : (Table<ρ>, String) -> Result<Tensor<1, Value>, DataError>
+row           : (Table<ρ>, Int) -> Result<ρ, DataError>
+select        : (Table<ρ>, Tensor<1, String>) -> Table<σ>
+filter        : ((ρ -> Bool), Table<ρ>) -> Table<ρ>
+join          : (Table<ρ>, Table<σ>, String) -> Table<τ>
+schema        : Table<ρ> -> Tensor<1, ColumnInfo>
+to_table<ρ>   : Tensor<1, ρ> -> Result<Table<ρ>, DataError>
+to_dynamic    : Table<ρ> -> Table<Dynamic>
+
+type ColumnInfo = { name: String, dtype: String, unit: Option<String> }
+```
+
+对于运行时才获知列的文件，`read_csv_dyn` 返回 `Table<Dynamic>`。`read_csv` 的行类型参数由显式类型实参或外围表达式给出。两种读取函数都接受以逗号分隔的 `.csv` 文件和以制表符分隔的 `.tsv` 文件，并校验引号格式和各行的列数。`schema(t)` 返回运行时列名、检测到的单元格类型和可选的单位。表头 `time [s]` 将 `s` 保留为列元数据。数值单元格读为无量纲 `Float`，其余读为 `String`。
+
+`column` 和 `column_dyn` 在运行时按字符串查找列名，列不存在时返回错误。`column` 的结果元素类型 `a` 由外围类型上下文给出，与表的行类型参数独立。`row` 从所选行构造记录。`filter` 保留行类型参数。`select` 和 `join` 在运行时确定结果列。连接时两张表必须各自包含键列，其余列名必须互异。`to_table` 从记录向量构造表格，`to_dynamic` 将同一表格表示为 `Table<Dynamic>`。
+
+`read_npy` 的秩必须是具体自然数，例如 `read_npy<2>(path)`。省略时报告 `E0314`。文件的实际秩不符时，IO 动作返回 `Err(DataError)`。
+
+`read_json` 接受 `.json` 文件。`read_csv`、`read_csv_dyn` 和 `read_json` 遇到不支持的扩展名时，在 IO 动作执行后返回含 `E0904` 的 `Err(DataError)`。
+
+NPY 支持 1.0/2.0/3.0、小端与大端 float32/float64、C 与 Fortran 排列（Fortran 输入转换为行优先存储；写出用小端 float64、C 排列）；`read_npy<n>` 保存并验证具体秩，`write_npy` 接受任意秩的无量纲 `Float` 张量；未具体化的泛型秩报 `E0304`。
+IO 错误码：文件不存在 `E0901`，非法参数 `E0902`，损坏/截断/秩不匹配/大小溢出 `E0903`，不支持的格式、dtype 或扩展名 `E0904`，绘图写出失败 `E0905`；NPY 错误在 IO 动作执行后作为 `Err(DataError)` 返回。
+
+## 8.12 Plot
+
+```
+type PlotSpec
+type Series
+
+line          : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Series
+line_with     : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, PlotOpts) -> Series
+scatter       : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Series
+scatter_with  : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, PlotOpts) -> Series
+errorbar      : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<1, Scalar<ρ,e>>) -> Series
+errorbar_with : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<1, Scalar<ρ,e>>, PlotOpts) -> Series
+hist          : (Tensor<1, Scalar<ρ,d>>, Int) -> Series
+hist_with     : (Tensor<1, Scalar<ρ,d>>, Int, PlotOpts) -> Series
+heatmap       : (Tensor<2, Scalar<ρ,d>>) -> Series
+heatmap_with  : (Tensor<2, Scalar<ρ,d>>, PlotOpts) -> Series
+label         : (Series, String) -> Series
+combine       : Tensor<1, Series> -> PlotSpec
+plot          : PlotSpec -> IO Unit
+save          : (String, PlotSpec) -> IO Unit
+plot_save_gif : (String, Tensor<1, PlotSpec>, Int) -> IO Result<Unit, IOError>
+default_plot_opts : PlotOpts
+```
+
+`line`、`scatter` 和 `errorbar` 接受等长向量，坐标须能求值为实数。含 NaN 或无穷大的坐标对会被跳过。折线连接相邻的有效坐标对，散点图逐点绘制标记。误差量须非负且与 `y` 同量纲。误差量为非有限值时仍绘制中心点，并省略该点的误差条。
+
+`hist(data, bins)` 使用正整数个等宽区间，至少需要一个有限观测值，并跳过非有限观测值。`heatmap` 将矩阵的每个元素映射到一个单元格，第零行位于顶部。非有限值对应的单元格留空。
+
+`PlotOpts` 是一个记录。`label`、`color`、`xunit` 和 `yunit` 的类型为 `Option<String>`。`xscale` 和 `yscale` 可取 `Linear` 或 `Log`。`xlim` 和 `ylim` 的类型为 `Option<(Float, Float)>`。可用记录更新从 `default_plot_opts` 设置字段。显式指定刻度时，可从 `FFT` 导入 `Linear` 和 `Log`。颜色接受六位十六进制 RGB 字符串和名称 `red`、`blue`、`green`、`orange`、`purple`、`black`。SVG 将标签显示为提示文字，并在坐标轴上标注单位。`label(series, text)` 可覆盖提示文字。
+
+同一帧内的系列共用坐标轴，坐标量纲和显式指定的轴设置须一致。默认采用相干单位、线性刻度和自动轴限。指定单位时使用已注册的单位名，支持有效的 SI 前缀。轴限以显示单位给出，须是有限且递增的一对值。`Log` 表示以十为底的对数刻度，要求轴限为正，并跳过该轴坐标非正的点。
+
+SVG 和 GIF 均使用 800 × 400 画布，绘图区为 720 × 340。`plot` 将内嵌 SVG 的 HTML 写入 `plot.html`。`save` 对扩展名为 `.svg` 的路径写入独立 SVG，扩展名匹配不区分大小写。其他路径写入内嵌 SVG 的 HTML。无效图形或写入失败报 `E0905`。
+
+`plot_save_gif` 按顺序渲染非空的图形规格向量，动画持续循环。`Plot.plot_save_gif(path, frames, delay_cs)` 显式指定帧延时，单位为百分之一秒，可取 0 到 65535 的整数。直接调用 `plot_save_gif(path, frames)` 时，延时为 10。栅格分配上限允许最多 312 帧。IO 动作返回 `Ok(())` 或 `Err(IOError)`。帧数据或延时不合法时，错误值包含 `E0902`。
+
+## 8.13 Test
+
+```
+assert      : Bool -> IO Unit
+assert_eq   : (Eq a, Show a) => (a, a) -> IO Unit
+approx_eq   : (Scalar<ρ,d>, Scalar<ρ,d>, Scalar<ρ,d>) -> Bool
+forall      : (a -> Prop) -> Bool
+compile_fail: String -> Bool
+```
+
+`approx_eq(a, b, tol)` 要求三个实参的量纲相同。`tol` 是绝对容差。
+
+`forall` 的谓词应接受一个无量纲的 `Real`。样本依次为 `0`、`1`、`-1`、`2`、`-3` 和 `1/2`。
+若每个样本均满足命题，返回 `true`。遇到第一个反例时返回 `false`。没有反例但存在无法判定的样本时报 `E0804`。
+谓词必须返回 `Prop`，而 `Real` 上的比较会产生 `Prop`。类型检查器允许参数类型为泛型，运行时始终提供上述无量纲数值。
+
+`compile_fail` 接受一段源码字符串，在**隔离**环境中编译（无导入、
+无调用模块声明，仅 Prelude），产生至少一个错误时返回 `true`；它不检查
+错误码——需要断言错误码时用 doctest 的 `compile_fail EXXXX` 标记
+（§7.5.5/§9.12）。
+
+## 8.14 Measurement
+
+```
+type Measurement<d> = { value: Real[d], uncertainty: Real[d] }
+
+measure   : (Real[d], Real[d]) -> Measurement<d>
+value     : Measurement<d> -> Real[d]
+uncertainty : Measurement<d> -> Real[d]
+(+) (-)   : (Measurement<d>, Measurement<d>) -> Measurement<d>
+(*)       : (Measurement<d>, Measurement<e>) -> Measurement<d*e>
+(/)       : (Measurement<d>, Measurement<e>) -> Measurement<d/e>
+```
+
+不确定度按独立误差传播（平方和开根）。对 `a = (v₁, u₁)`、`b = (v₂, u₂)`：
+
+- `a + b` / `a - b`：值 `v₁ ± v₂`，不确定度 `√(u₁² + u₂²)`；两边量纲必须
+  相同，否则 `E0401`。
+- `a * b`：值 `v₁·v₂`，不确定度 `√((u₁·v₂)² + (u₂·v₁)²)`（量纲 `d*e`）。
+- `a / b`：值 `v₁/v₂`，不确定度 `√((u₁/v₂)² + (u₂·v₁/v₂²)²)`（量纲 `d/e`）。
+
+相关误差需要协方差矩阵，核心库不提供。`Measurement` 是库类型：checker 把它当普通记录 `{ value, uncertainty }` **结构化识别**（不是新的名义类型），字段名/顺序因此是边界的一部分。
+上面的是**算子**（重载），不是名字，所以不在名字覆盖审计里。checker（`binary_type`）与运行时（`apply_binary`）都已实现（`aevia-core/tests/measurement.rs`）。实现还支持一元 `-` 与“测量 ×/÷ 标量”
+（不确定度乘 `|scalar|`）；`Measurement + number`（或 `-`）仍是 `E0302`，`number / measurement` 也被拒绝（提示用测量的值相除）。
+
+## 8.15 Complex
+
+```
+complex   : (Real[d], Real[d]) -> Complex[d]
+re im     : Complex[d] -> Real[d]
+conj      : Complex[d] -> Complex[d]
+magnitude : Complex[d] -> Real[d]
+arg       : Complex[d] -> Real[1]
+complex_sqrt : Complex[d] -> Complex[d^(1/2)]
+complex_exp  : Complex[1] -> Complex[1]
+complex_ln   : Complex[1] -> Complex[1]
+complex_sin cos : Complex[1] -> Complex[1]
+```
+
+`complex(re, im)` 的实部和虚部须有相同的量纲。结果保留该量纲，例如 `complex(3 m, 400 cm)` 的模为 `5 m`。
+
+`abs` 只用于实数；复数的模用 `magnitude`，避免 `abs : Complex[d] ->
+Real[d]` 与 `abs : Scalar<ρ,d> -> Scalar<ρ,d>` 冲突。`complex_sqrt` 的结果
+量纲是 `d^(1/2)`；类型显示/诊断里的维度变量指数保留下标（`:type
+complex_sqrt` → `Complex[d0] -> Complex[d0^(1/2)]`，不会塌成 `d0^1`）。
+
+## 8.16 NumberTheory / Combinatorics / Geometry
+
+```
+factor      : Int -> Tensor<1, (Int, Int)>       # (prime, exponent)
+is_prime    : Int -> Bool
+primes      : Int -> Tensor<1, Int>
+binomial    : (Int, Int) -> Int
+permutations: Int -> Int
+gcd lcm     : (Int, Int) -> Int
+mod_pow     : (Int, Int, Int) -> Int
+polygon_area: Tensor<2, Real[L]> -> Real[L^2]
+distance    : (Tensor<1, Real[L]>, Tensor<1, Real[L]>) -> Real[L]
+tetrahedron_volume : Tensor<[4, 3], Real[d]> -> Real[d^3]
+```
+
+`mod_pow(base, exponent, modulus)` 直接计算 `[0, modulus)` 内的精确余数，无需展开整个幂。
+三个参数都支持任意精度整数，底数可以为负。指数为零时返回 `1 mod modulus`。
+指数为负或模数非正时报告定义域错误 `E0806`。
+
+`polygon_area` 接收按边界顺序排列的顶点，每行包含两个相同量纲的坐标。结果非负，量纲为坐标量纲的平方。零至两行的有效矩阵返回零。其他列数报告形状错误 `E0802`。
+
+`tetrahedron_volume` 接收四行三列的坐标矩阵，所有坐标具有相同量纲 `d`。体积非负，量纲为 `d^3`，与顶点顺序无关。共面或重复顶点的体积为零。形状不符时报告形状错误，坐标或计算所得体积非有限时报告定义域错误。
+
+运行 `aevia doc Math.NumberTheory` 查看模块算子。
+
+## 8.17 Physics / Simulate
+
+```
+simulate : (String, Json) -> Result<Json, SimError>
+
+to_json   : a -> Json                              # 动态边界：把可表示值编码为 JSON 值
+from_json : Json -> Result<a, SimError>            # 动态边界：解码；a 在运行时擦除
+```
+
+`Json` 是不透明的动态值类型；`to_json`/`from_json` 是它唯一的语言内构造/
+窄化通道，语义与 `Rssn.typed` + `from_value` 相同：`to_json` 不检查 `a`，
+`from_json` 在运行期解码并把失败报成 `SimError`。类型化包装器用它们把记录
+参数送进 `simulate` 再把结果取回（不是把 `simulate` 本身改成多态签名）。
+
+类型化包装器（每个都是独立模块，顶层声明，无缩进）：
+
+| 模块 | 参数 | 结果 | 入口 |
+|---|---|---|---|
+| `Physics.Ising` | `{ width: Int, height: Int, temperature: Float[1], mc_steps: Int, seed: Option<Int> }` | `{ spins: Tensor<2, Int>, magnetization: Float[1] }` | `run : Params -> Result<IsingResult, SimError>` |
+| `Physics.Geodesic` | `{ black_hole_mass: Float[M], initial_state: Tensor<1, Float[1]>, proper_time_end: Float[T], initial_dt: Float[T] }` | `{ orbit: Tensor<2, Float[1]> }` | `run : Params -> Result<GeodesicResult, SimError>` |
+
+实际源码形如 `src/Physics/Ising.aev`：
+
+```aevia
+module Physics.Ising
+
+type Params = {
+    width: Int,
+    height: Int,
+    temperature: Float[1],
+    mc_steps: Int,
+    seed: Option<Int>,
+}
+
+type IsingResult = {
+    spins: Tensor<2, Int>,
+    magnetization: Float[1],
+}
+
+fn run(p: Params): Result<IsingResult, SimError> = ...
+```
+
+`simulate` 是动态入口，接受 rssn 的场景名和 JSON；类型化包装器在
+`Physics.*` 中，逐字段标注量纲。场景名以下面 rssn 的 live `SCENARIOS`
+列表为准（2026-11-04 测量为 29 个）：`ising`、`ising_wolff`、`geodesic`、
+`gpe`、`schrodinger`、`fdtd`、`elasticity`、`lid_driven_cavity`、
+`channel_flow`、`sod_shock_tube`、`kepler_symplectic`、`poisson_multigrid`、
+`heat_nd`、`wave_nd`、`euler_fv`、`dg_conservation`、`acoustics_pml`、
+`yee_fdtd`、`navier_stokes_mac`、`split_step`、`fem_simplex`、
+`elasticity_fem`、`bem_laplace`、`sph`、`dpd`、`md_lj`、`spin_model`、
+`nbody_gravity`、`kerr_geodesic`。宿主不应手写第二份场景清单：运行时
+从 `rssn::sim::scenario::SCENARIOS` 读。
+
+> **生成的仿真模块**：`import Rssn_Sim_<Name>`（如 `Rssn_Sim_PoissonMultigrid`、`Rssn_Sim_HeatNd`）在导入时由 rssn 的场景目录（`rssn::sim::schema`）生成类型化模块：`Params`/`Output` 记录、
+> 每个方法名字段一个变体类型（`P.W`、`S.Metropolis`）、`defaults()` 与 `run(p)`。参数类型与默认值从场景自己的请求类型推断，结果类型来自一次见证运行，注解表补充推断看不到的部分；
+> rssn 新增场景、参数或方法时无需手写代码。
+
+## 8.18 Device
+
+```
+type Device = | Cpu | Gpu(Int) | Distributed(Cluster)
+type Cluster                      # 不透明运行时拓扑
+type Mesh                         # 不透明分片拓扑
+to_device : (Tensor<n,τ>, Device) -> IO (Tensor<n,τ>)
+on        : (Device, () -> a) -> IO a
+device_of : Tensor<n,τ> -> Device
+```
+
+设备是运行时值，不是张量类型参数；没有 `core.gpu` 时 `to_device`/`on`
+报 `E1001`。分布式用 `Sharded<Mesh, Tensor<n,τ>>` 库类型。
+
+## 8.19 Rssn 动态接口
+
+```
+Rssn.Version       : String
+Rssn.ManifestHash  : String
+Rssn.Capabilities  : Tensor<1, String>          # 本构建 enabled 的 capability 名
+Rssn.Units         : Tensor<1, String>          # 单位名；单位值由生成的 Units 模块导出
+Rssn.Constants     : Tensor<1, String>          # 常数符号；数值由生成的 Constants 模块导出
+Rssn.ValueKinds    : Tensor<1, String>          # Value 的 17 个变体名
+
+Rssn.call          : (String, Tensor<1, Value>) -> Result<Value, OpError>
+Rssn.dynamic       : (String, Tensor<1, Value>) -> Result<Value, OpError>
+Rssn.typed         : (String, Tensor<1, Value>, TypeRep) -> Result<Value, OpError>
+Rssn.call_key      : (String, String, Tensor<1, Value>) -> Result<Value, OpError>
+Rssn.resolve_overload : (String, Tensor<1, Value>) -> Result<String, OpError>
+Rssn.overloads     : String -> Tensor<1, String>
+to_value           : a -> Value
+from_value         : Value -> Result<a, OpError>
+type_rep<a>()      : TypeRep
+to_callback        : 已检查的具体函数 -> Callback   # 编译器 intrinsic，函数参数个数不限
+Rssn.call_ho       : (String, Tensor<1, Value>, Tensor<1, Callback>)
+                   -> Result<Value, OpError>
+Rssn.call_ho_key   : (String, String, Tensor<1, Value>, Tensor<1, Callback>)
+                   -> Result<Value, OpError>
+Rssn.register        : Plugin -> Result<PluginId, PluginError>
+Rssn.register_plugin : Plugin -> Result<PluginId, PluginError>   # alias
+```
+
+`OpKey` 在 Aevia 侧是 `(rule_set, name, signature_hash)`：`call_key` 收 name + `signature_hash`（32 个 hex 字符，全零表示该算子没有声明重载）；`resolve_overload` 成功时返回
+`"rule_set.name@signature_hash"`；`overloads` 返回渲染后的签名文本。`Rssn.call` 是 `Rssn.dynamic` 的别名（两者都收短名 + `Value` 数组）。
+
+`Rssn` 的成员由 Kernel Manifest 生成（规则见 §13.2.2）：具有精确 `Declared`/`Overlay` 签名、源码可表达且桥接支持的重载生成类型化声明，调用钉死生成时的 `signature_hash`；`Derived`、`None` 及无法认证的签名保留动态入口；别名生成 `Rssn.<alias>`，冲突时用 `Rssn.<rule_set>.<name>`（命名空间，不是运行时键）。生成的声明调用内部形式 `Rssn.invoke(name, signature_hash, args)`（同样钉死 overload，但错误通道不同：
+生成的 `fn` 必须返回声明类型，所以 kernel 失败会 raise 而不是返回 `Err`；它不是固定入口）。manifest 规模由 `aevia rssn` 实测（§10.8）。`Derived` 是由注册信息推出的保守签名，不区分 `Tensor`/`Quantity`/`Int`，IDE 标“保守推断”（§13.2.2）。SDE 的两个噪声原语 `sde_wiener`/`sde_levy_areas`
+与方案元数据 `sde_scheme_info`（`(String) -> Tensor<1, Real>`，只给强阶与 flag）是 overlay 精确签名的 typed 声明；SDE 回调求解器使用受限高阶 ABI（§8.9.1）；噪声原语与方案元数据不是求解器的替代品。
+
+公开 Rust API 不自动成为清单算子。具体数值函数从源码及逐项量纲策略生成绑定；泛型回调、状态对象和不透明模型需要显式适配。
+清单可达性与原生源码分类分别报告，不据清单覆盖推断全部原生功能已覆盖。
+
+仅当结构变体恰好为无载荷的 `None` 和单载荷的 `Some` 时，生成器递归映射为 `Option<T>`；其他变体保持动态表示。
+载荷仍须通过类型和量纲校验，空 `None` 不提供载荷单位证据；此映射不扩大回调桥可接受的 ADT 签名。
+
+固定入口的可达性与限制：
+
+- `type_rep<T>()` 从具体的检查后类型生成不可伪造的 `TypeRep`；未解析的泛型不能在没有运行时类型字典时反射。`Rssn.typed` 执行动态调用并用该见证检查返回值；不匹配或证据不足返回 `Err(OpError)`，
+  成功结果仍为不透明 `Value`，需用 `from_value<T>` 验证并转换。
+- `to_callback(f)` 对当前 evaluator 会话中已检查的源码闭包验证具体函数类型，构造不透明的 `Callback`（别名和已具体化的泛型函数保留此证据；内建函数先包装在源码 lambda 中）。回调桥支持具体数值、
+  `Bool`、`String`、密封宿主类型 `NativeAdVar` 及由它们递归组成的张量和闭合记录；源码同名类型及其他不透明回调类型仍拒绝。具体量纲、秩和完整已知形状都会校验，空结构张量需要独立的元素类型及量纲证据。各算子可进一步限制签名，例如当前数值求解器使用 `Float` 标量与向量。
+  调用在原线程同步执行，句柄在外层调用返回后失效；跨线程、同一作用域重入及回调错误均返回错误；空回调列表等价于动态调用。
+  在 `Rssn.call_ho` 和 `Rssn.call_ho_key` 中，普通值和回调分别按各自在 manifest 签名中的顺序传入。桥接层按签名将两组参数合并。
+- `Plugin` 接口供 RSSN 宿主使用。用 Aevia 值调用 `Rssn.register` 或 `Rssn.register_plugin` 时报告 `E0302`。Aevia 在模块加载时注册 `@op` 和 `@rule` 函数。`load_plugin(path) : String -> IO (Result<Int, String>)` 按 §13.5.2 和 §13.5.3 的条件加载本地源码文件。
+- `core.callback` 标记受限回调桥可用，`core.plugin.source` 标记源码插件可用。生成的高阶绑定保留显式 `(values, callbacks)` 动态接口；对声明精确、回调和结果结构均可认证的单重载，另生成钉住签名的 typed
+  别名，在调用时认证回调的具体签名并按实例化结果类型验证返回值；无法证明类型或维度的签名只提供动态入口。例如 `Rssn_numerical_callback` 的 `num_least_squares` 别名：参数与残差分别具有量纲 `D`、`E`，
+  残差容差用 `E`，其余控制量无量纲，结果带 `converged` 与 `status`（残差/梯度收敛、预算耗尽、停滞）。
+
+`Rssn.dynamic` 是**正式能力**，不是降级路径：插件算子、叶子算子、实验性入口都走它。多注册时 rssn 在运行时按 `Exact > Widened > Shaped > Generic > No` 选择，并列报 `E1002`；参数不被任何 overload 接受报
+`OpError::Type`（`check_args`）。标准集每个名字只有 1 个注册，所以这条路径不做注册级评分，但会做签名级校验。`Rssn.call_key` 则不解析，直接执行 name + `signature_hash` 指定的 overload。
+
+### 8.19.1 数值域模块 `Rssn_Numeric`
+
+rssn 的 `numeric` 规则集把一批数值内核做成算子（表驱动，只对字面数字求值；符号参数、
+参差列表、被拒绝的参数、不收敛都让调用保持为请求，包装器报告 `Err(NotReduced(..))`）。
+Aevia 把它们归入 `Rssn_Numeric`，其中每个算子都有手写的 typed 签名（`domains.overlay` 的 `sig`，一律 `Result<_, OpError>`；规则见 §10.3.8）。
+`import Rssn_Numeric as N` 之后：
+
+| 组 | 算子（Aevia 签名） |
+|---|---|
+| 稳健统计 | `mad`、`mad_sigma(xs: Tensor<1, Float>): Float`，`trimmed_mean`、`winsorized_mean(xs, proportion)`，`huber_location(xs, k)`，`biweight_location(xs, c)`，`ecdf(xs, x)`，`kde(xs, x, bandwidth)`，`bandwidth_silverman`、`bandwidth_scott(xs)`，`quantile_hf(xs, p, kind: Int)`（Hyndman–Fan 1–9），`bootstrap_ci(xs, statistic, alpha, resamples, seed): Tensor<1, Float>`（种子固定，可复现） |
+| 窗与谱 | `hann_window`、`hamming_window`、`blackman_window(n: Int)`，`cross_correlation`、`fftconv(xs, ys)`，`fft_abs`、`fft_re`、`fft_im(xs)`，`ifft_re`、`ifft_im(re, im)`，`frft_re`、`frft_im(re, im, order)`（分数傅里叶），`interpolate(xs, ys, x)` |
+| 小波 | `dwt_approx`、`dwt_detail(xs, wavelet)`，`idwt(approx, detail, wavelet)`，`wavedec(xs, wavelet, levels): Tensor<1, Tensor<1, Float>>`，`waverec(coefficients, wavelet)`，`dwt2(m, wavelet): Tensor<3, Float>`（`[LL, LH, HL, HH]`），`idwt2(ll, lh, hl, hh, wavelet)` |
+| Krylov、低秩、排序 | `minres_solve`、`fgmres_solve`、`bicgstab_l_solve(a, b, tol)`，`sparse_solve`、`amg_solve(entries, b, tol, method)`（三元组 `(i, j, v)`，0 起始），`randomized_singular_values(a, k)`，`lobpcg_eigenvalues(a, k, tol)`，`qr_pivoted_rank`、`qr_pivoted_permutation`、`qr_pivoted_diagonal`，`nested_dissection_order(adjacency)`，`polynomial_system_roots(system): Tensor<3, Float>`（同伦延拓） |
+| 采样函数 | `function_l1_norm`、`function_l2_norm`、`function_inf_norm(points: Tensor<2, Float>)`，`function_inner`、`function_project(f, g)`，`function_normalize(f)`；函数是升序的 `(x, y)` 行表 |
+| 复变特殊函数 | `lgamma_complex`、`gamma_complex`、`digamma_complex(re, im)`，`lambert_w_complex(re, im, branch: Int)`，`bessel_j_complex`、`bessel_i_complex(order, re, im)`；结果是 `[re, im]` |
+| 表达式算子 | `oscillatory_integral`（Levin 配点），`anderson_fixed_point`，`newton_cg_minimize`（符号梯度与 Hessian），初值问题 `ode_solve`（`dopri5`、`rosenbrock23`、`radau5`、`bdf`、`sdirk3`、`exprb32`）、`ode_symplectic`（Verlet 与 Yoshida 组合）、`ode_imex`、`ode_etdrk4`；右端项与变量是 `Real` 符号项，其余参数是数字 |
+
+约定与限制：
+
+- **结果是 `Float`**。内核对这些算子只编码浮点数，所以计数与 0 起始下标
+  （`qr_pivoted_rank`、`qr_pivoted_permutation`、`nested_dissection_order`）也以 `Float` 返回；
+  `from_value<Int>` 不会接受它们。`Real`（精确）不是它们的结果类型。
+- **方法、小波、统计量用符号命名**，符号在 Aevia 里是 `Real`：
+  `let haar = symbol("haar")`，再 `N.dwt_approx(xs, haar)`。**每次** `symbol("haar")` 都造一个新符号
+  （`haar#2`、`haar#3`…），内核不认识；所以每个名字只在顶层 `let` 一次再复用。
+- **维度无关，按维数/秩命名。** `heat_fd`、`wave_fd`、`poisson_fd`、`advect_fd` 在内核里不分维度：空间维数就是场数据的嵌套深度（列表一维，列表的列表二维，三层三维；定义域是单位区间/方块/立方体）。
+  一个 Aevia 签名只有一个字面量秩，所以一个内核算子带**多条签名，各用自己的名字**：不带后缀的名字是一维形式（`poisson_fd(f: Tensor<1, Float>, boundary: Float)`），`_2d`/`_3d` 取
+  `Tensor<2, Float>`/`Tensor<3, Float>` 场（`heat_fd_2d`、`wave_fd_3d`、`advect_fd_3d` …），答案与场同形状；平流速度仍是 `Tensor<1, Float>`，每个空间维一个分量。秩多态的张量算子同理按秩命名：
+  `tensor_norm_<r>`、`tensor_inner_<r>`（r = 1..4）与 `tensordot_<ra>_<rb>_<k>`（收缩 k 个轴，`axes_a`/`axes_b: Tensor<1, Int>` 从 0 起，结果秩 ra + rb − 2k，0 时为 `Float`；结果秩至多 4）。
+  分解 `hosvd_<r>`、`hooi_<r>`、`cp_als_<r>`、`tt_svd_<r>`、`tt_dense_<r>`（r = 2、3、4）的结果是记录 `Hosvd<r>`、`Hooi<r>`、`CpFit`、`TensorTrain`（因子表是 `Tensor<1, Tensor<2, Float>>`），
+  混合列表由列表访问器 `from_value<Tensor<1, Value>>` 拆开再逐部分解码（§10.3.8）。符号 PDE 只有一个名字：`solve_heat_equation`、`solve_wave_equation`、`solve_laplace_equation`、
+  `solve_poisson_equation`（维数由方程的变量决定，旧的 `_1d`/`_2d`/`_3d` 是别名）；仿射变换 `translation`、`scaling`、`shear`、`reflection`、`rotation` 同理，归入 `Rssn_Graphics`。
+- 参差输入（邻接表、项数不同的多项式方程）没有字面量写法，用 `map(f, range(0, n))` 构造
+  `Tensor<1, Tensor<1, Float>>`。
+
+端到端示例与封闭形式核对：`tests/domain_numeric.aev`（`mad([1,2,3,4,100]) = 1`、`ifft(fft(x)) = x`、小波往返、`poisson_fd` 的 `-u'' = 1` 得 `x(1-x)/2`、`heat_fd` 的 `exp(-π²t)` 衰减、
+`tensordot_2_2_1` 对手算矩阵乘、`hosvd_3`/`tt_svd_3` 的重构、`ode_solve` 的 `y' = -2y` 得 `e^-2`、`lambert_w_complex(1,0,0) = 0.5671…` 等），由 `cargo test -p aevia-rssn --test aev_suites` 运行。
+
+### 8.19.2 原生数值模型
+
+以下入口由清单生成；它们调用 RSSN 的关联方法或明确的泛型实例，不在 Aevia 中实现数值算法。
+`D`、`E` 表示独立的元素量纲，`X` 表示坐标量纲。
+
+| 入口族 | 值与量纲契约 |
+|---|---|
+| `Rssn_numerical_matrix.num_matrix_{float,real}_*` | `Matrix<f64>` / 精确有理数实例；记录携带格式版本、后端与元素。`real` 拒绝近似 `Float`，只用 Native 后端；`decompose_*` 使用 Float 实例。`get_mut`、后端更新返回新模型。 |
+| `num_dense_lu_model_*`、`num_sparse_{lu,ilu,ic,auto}_model_*`、`num_csr_model_*` | 保存定义矩阵与因子种类，调用时重建原生因子；`A x = b` 与预条件应用返回 `E/D`。CSR 下标、置换和计数是 `Int`，不是有量纲元素。 |
+| `Rssn_numerical_vector.num_polynomial_model_*` | 系数按降幂排列，具有同一输出量纲；在 `x/coordinate_scale` 上求值。导数与积分分别恢复 `D/X`、`D*X`；二元运算要求相同的物理坐标尺度。 |
+| `num_native_cubic_spline_*`、`num_native_pchip_*`、`num_native_cheb_*`、`num_native_aaa_*` | 坐标与输出量纲独立；第 `k` 阶导数为 `D/X^k`，积分为 `D*X`，根具有坐标量纲。 |
+| `Rssn_numerical_callback.num_native_cheb_{from_fn,adaptive}_typed` | 已认证的串行回调构造同一 Chebyshev 模型；显式次数、求值预算、非有限值与原始回调错误均受检查。 |
+| `Rssn_numerical_matrix.num_backend_*` | 会话持有后端、编译程序和标量句柄；各坐标按正的物理参考值归一化，再乘输出参考值。解释器编译有明确工作界限；不支持的后端报错。进程默认后端变更须显式选择。 |
+| `num_ad_*` / `NativeAdVar` | 会话持有反向 AD tape、变量与梯度；异质量纲坐标使用显式参考尺度，输出量纲为 `E`、输入量纲为 `D` 时梯度为 `E/D`。 |
+
+模型检查格式/版本、字段、形状、下标、有限数据与分配界限；无效定义在调用原生方法前失败。可移植定义不含进程内指针，重复查询可有重建成本。
+行列式返回 `normalized`、`entry_unit`、`order`，表示 `normalized * entry_unit^order`；打包 LU 在规范输入单位下存储混合因子，不能把整个打包数组解释为同一物理量纲。
+会话句柄检查种类、所属会话、存活状态与配额；释放有依赖的对象时先释放依赖句柄，可移植定义不能与会话句柄互换。可运行断言见 `examples/native_algebra_models.aev`；完整入口与当前限制以生成的清单签名和描述为准。
+
+## 8.20 库的组织
+
+```
+Prelude
+Math
+  Special
+  Complex
+  NumberTheory
+  Combinatorics
+  Geometry
+Units
+  SI
+  Imperial
+  Astronomy
+  CGS
+  Natural
+  Planck
+  Atomic
+  Geometrized
+  Constants
+Tensor
+LinearAlgebra
+  Sparse
+Calculus
+Solve
+Optimize
+Stats
+  Distributions
+FFT
+Interpolate
+Ode
+Sde
+Pde
+Data
+  Csv
+  Npy
+  Json
+  Table
+Plot
+Test
+Measurement
+Device
+Physics
+  Ising
+  Geodesic
+```
+
+标准库的模块在 `aevia-std` 包中；Prelude 自动导入，其他按需 `import`。
+模块名就是路径：`import A.B` 解析 `A/B.aev`（§7），`import Math { sqrt }`
+只引入 `sqrt`，`open Units.SI` 把 `Units.SI` 的导出名放进当前作用域。本地文件优先于嵌入标准库模块。
+`Units/*` 是文档性模块：单位名本来就是 ambient 的 `Unit[d]` 值，导出数量绑定会遮蔽它们并改变 `Tensor / Unit` 的语义，因此不导出（§5.3.4）。`Sde` 模块再导出
+§8.9.1 的五个入口并声明选项 ADT；`Physics.Ising`/`Physics.Geodesic` 提供 §8.17 的类型化包装器。函数名、`Sde` 的名义变体构造器与透明类型别名（`type X = { … }`，如 `Physics.Ising` 的 `Params`）
+都可经 `import { X }`/`open` 引入。
+
+`Rssn` 是**生成的模块**，不是手写库：构建时从 Kernel Manifest 生成
+`Rssn.<op>` 类型化声明和 `Rssn.dynamic` 动态入口（§13.2）。`Rssn` 的
+内容随 RSSN 版本变化，Aevia 源码不硬编码算子清单。`Sparse` 提供
+`Csr`/`Csc`/`Coo`/`Block`/`Bcsr` 格式标签与 §8.4.1 的稀疏内建函数。布局分派见 §13.9.5。
+`Device` 提供 `Cpu`/`Gpu`/`Distributed` 与
+`on`/`to_device`（§13.9.4，无 `core.gpu` 时 `E1001`）。
+
+下一章定义运行时：从源码到值，从值到 rssn 项，从 REPL 到 JIT。

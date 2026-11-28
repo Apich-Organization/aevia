@@ -1,0 +1,24 @@
+## Run: cargo run -p aevia-cli -- test examples/pde_adaptive_wave_event.aev
+## These assertions control temporal error on a fixed spatial discretization.
+import Rssn_numerical_callback as N
+
+let control = { t0 = 0.0 s, t1 = 0.2 s, rtol = 0.000001, atol = 0.000000001 m, h0 = 0.2 s, h_min = 0.000000001 s, h_max = 0.2 s, max_steps = 100000, max_rejections = 1000, max_step_calls = 1000000, max_evaluations = 1000000 }
+
+let periodic = { kind = [3], value = [0.0 m], flux = [0.0], alpha = [0.0], beta = [1.0 m], gamma = [0.0 m] }
+
+let initial = [1.0 m, 0.0 m, -1.0 m, 0.0 m]
+
+fn threshold(_t: Float[Time], u: Tensor<1, Float[Length]>): Float = (at(u, 0) - 0.9 m) / 1.0 m
+
+test "wave evolution retains physical velocity and rejects inaccurate trials" =
+    let r = N.num_pde_wave_adaptive([4], 1.0 m, 1.0 m/s, initial, [0.0 m/s, 0.0 m/s, 0.0 m/s, 0.0 m/s], 0.000000001 m/s, periodic, control)
+    approx_eq(at(at(r.states, length(r.times) - 1), 0), cos(sqrt(2.0) * 0.2) * 1.0 m, 0.0001 m) && approx_eq(at(at(r.velocities, length(r.times) - 1), 0), -sqrt(2.0) * sin(sqrt(2.0) * 0.2) * 1.0 m/s, 0.0001 m/s) && r.rejected > 0
+
+test "terminal heat event is located by reintegration" =
+    match N.num_pde_heat_cn_adaptive_event_typed([4], 1.0 m, 1.0 m^2/s, initial, periodic, control, -1, threshold) with
+    | Ok(r) -> approx_eq(at(r.times, length(r.times) - 1), -ln(0.9) / 2.0 * 1.0 s, 0.0001 s) && approx_eq(at(at(r.states, length(r.times) - 1), 0), 0.9 m, 0.000001 m)
+    | Err(_) -> false
+
+test "upwind advection has tolerance controlled time stepping" =
+    let r = N.num_pde_advection_adaptive([4], 1.0 m, [1.0 m/s], initial, periodic, control)
+    approx_eq(at(at(r.states, length(r.times) - 1), 0), exp(-0.2) * cos(0.2) * 1.0 m, 0.002 m)

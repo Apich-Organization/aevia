@@ -1,0 +1,16 @@
+## Run: aevia test examples/symbolic_bessel_roots.aev
+import Rssn_Differential as D
+
+let regular_zero =
+    match D.bessel_zero(0.5, 2) with
+    | Ok(root) -> approx_eq(root, 6.283185307179586, 3e-10)
+    | Err(_) -> false
+
+let robin_root =
+    match D.bessel_root(0.5, -0.5, 1) with
+    | Ok(root) -> approx_eq(root, 4.493409457909064, 3e-10)
+    | Err(_) -> false
+
+test "the second positive zero of J_(1/2) is 2π" = regular_zero
+
+test "the first positive root of the half-order Robin eigencondition" = robin_root

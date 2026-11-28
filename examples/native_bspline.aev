@@ -1,0 +1,18 @@
+## Run: aevia test examples/native_bspline.aev
+import Rssn_numerical_vector as V
+
+test "portable cubic B-spline retains independent axis and ordinate units" =
+    match V.num_bspline_build([to_value([0.0 m, 1.0 m, 2.0 m, 3.0 m]), to_value([0.0 s, 1.0 s, 4.0 s, 9.0 s]), to_value(3)]) with
+    | Ok(model) ->
+        match V.num_bspline_query([model, to_value(1.5 m)]) with
+        | Ok(result) ->
+            match from_value<Float[Time]>(result) with
+            | Ok(value) -> approx_eq(value, 2.25 s, 1e-12 s)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "degree-zero fit selects the right interval and retains ordinate units" =
+    let fit = V.num_approx_bspline_interpolate([0.0 m, 1.0 m, 3.0 m], [2.0 s, 4.0 s, 7.0 s], 0)
+    let value: Float[Time] = V.num_approx_bspline_eval(fit.item0, fit.item1, 0, 0.5 m)
+    approx_eq(value, 4.0 s, 1e-12 s)

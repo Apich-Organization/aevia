@@ -1,0 +1,25 @@
+## Run: aevia test examples/sde_adaptive_implicit.aev
+## The requested implicit method is retained. Rejected steps reuse the same
+## bounded Brownian realization; cells is an explicit finest noise resolution.
+open Units.SI
+open Sde
+
+fn drift(_t: Float[Time], y: Tensor<[1], Float[Length]>): Tensor<[1], Float[Length/Time]> = y * (-20.0 / (1.0 s))
+fn diffusion(_t: Float[Time], _y: Tensor<[1], Float[Length]>): Tensor<[1], Float[Length/Time^(1/2)]> = [0.0 m / sqrt(1.0 s)]
+
+let opts = Adaptive({ structure = Diagonal, method = DriftImplicitEuler, seed = 2718, t0 = 0.0 s, t1 = 0.2 s, rtol = 0.03, atol = 0.001, max_steps = 20000, cells = 16384, terms = 0 })
+let solution = sdeint_diag(drift, diffusion, [1.0 m], opts)
+
+test "adaptive implicit Euler reaches the exact endpoint and resolves stiffness" =
+    match solution with
+    | Ok(path) -> path.t[length(path.t) - 1] == 0.2 s && path.rejected > 0 && abs(path.y[length(path.y) - 1][0] - exp(-4.0) * (1.0 m)) < 0.01 m
+    | Err(_) -> false
+
+test "method identity survives the language constructor boundary" =
+    match solution with
+    | Ok(path) -> match path.method with
+        | DriftImplicitEuler -> true
+        | _ -> false
+    | Err(_) -> false
+
+fn main(): IO Unit = println(solution)

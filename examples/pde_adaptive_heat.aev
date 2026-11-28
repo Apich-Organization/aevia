@@ -1,0 +1,33 @@
+## Run: cargo run -p aevia-cli -- test examples/pde_adaptive_heat.aev
+## These assertions control temporal error on a fixed spatial discretization.
+import Rssn_numerical_callback as N
+
+let control = { t0 = 0.0 s, t1 = 0.2 s, rtol = 0.000001, atol = 0.000000001 m, h0 = 0.2 s, h_min = 0.000000001 s, h_max = 0.2 s, max_steps = 100000, max_rejections = 1000, max_step_calls = 1000000, max_evaluations = 1000000 }
+
+let periodic = { kind = [3], value = [0.0 m], flux = [0.0], alpha = [0.0], beta = [1.0 m], gamma = [0.0 m] }
+
+let initial = [1.0 m, 0.0 m, -1.0 m, 0.0 m]
+
+test "explicit heat honors its error tolerance and exact endpoint" =
+    let r = N.num_pde_heat_explicit_adaptive([4], 1.0 m, 1.0 m^2/s, initial, periodic, control)
+    at(r.times, length(r.times) - 1) == 0.2 s && approx_eq(at(at(r.states, length(r.times) - 1), 0), exp(-0.4) * 1.0 m, 0.002 m) && r.rejected > 0 && r.error_ratio <= 1.0
+
+test "be heat honors its error tolerance and exact endpoint" =
+    let r = N.num_pde_heat_be_adaptive([4], 1.0 m, 1.0 m^2/s, initial, periodic, control)
+    at(r.times, length(r.times) - 1) == 0.2 s && approx_eq(at(at(r.states, length(r.times) - 1), 0), exp(-0.4) * 1.0 m, 0.002 m) && r.rejected > 0 && r.error_ratio <= 1.0
+
+test "cn heat honors its error tolerance and exact endpoint" =
+    let r = N.num_pde_heat_cn_adaptive([4], 1.0 m, 1.0 m^2/s, initial, periodic, control)
+    at(r.times, length(r.times) - 1) == 0.2 s && approx_eq(at(at(r.states, length(r.times) - 1), 0), exp(-0.4) * 1.0 m, 0.002 m) && r.rejected > 0 && r.error_ratio <= 1.0
+
+test "adi heat honors its error tolerance and exact endpoint" =
+    let r = N.num_pde_heat_adi_adaptive([4], 1.0 m, 1.0 m^2/s, initial, periodic, control)
+    at(r.times, length(r.times) - 1) == 0.2 s && approx_eq(at(at(r.states, length(r.times) - 1), 0), exp(-0.4) * 1.0 m, 0.002 m) && r.rejected > 0 && r.error_ratio <= 1.0
+
+test "ADI supports spatial rank 2" =
+    let r = N.num_pde_heat_adi_adaptive([4, 4], 1.0 m, 1.0 m^2/s, map(fn (_: Int) => 1.0 m, range(0, 16)), periodic, control)
+    at(r.times, length(r.times) - 1) == 0.2 s && all(fn (v: Float[Length]) => approx_eq(v, 1.0 m, 0.000001 m), flatten(r.states))
+
+test "ADI supports spatial rank 3" =
+    let r = N.num_pde_heat_adi_adaptive([4, 4, 4], 1.0 m, 1.0 m^2/s, map(fn (_: Int) => 1.0 m, range(0, 64)), periodic, control)
+    at(r.times, length(r.times) - 1) == 0.2 s && all(fn (v: Float[Length]) => approx_eq(v, 1.0 m, 0.000001 m), flatten(r.states))

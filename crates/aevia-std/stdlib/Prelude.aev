@@ -1,0 +1,1513 @@
+## The `Prelude` module of §8.20.
+# Generated standard library; do not edit.
+# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+module Prelude
+
+## Absolute value; the dimension is unchanged, so abs(-3 m) is 3 m.
+##
+## **Signature:** `abs : Scalar<ρ,d> -> Scalar<ρ,d>`
+##
+## **Kernel signature** (derived):
+## - `abs : (Real) -> Real`
+## - `abs : (Dyn<term>) -> Dyn<term>`
+## - `abs : (Int) -> Int`
+##
+## **Dimensions:** the result has the dimension of argument 1
+##
+## For a Complex number use magnitude.
+##
+## **Examples:**
+## ```text
+## abs(-3)
+## abs(-2.5 m)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let abs = abs
+## True if the predicate holds for every element; true for an empty tensor.
+##
+## **Signature:** `all : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Bool`
+##
+## **Signature:** `all : ((a -> Bool), Tensor<1, a>) -> Bool`
+##
+## **Examples:**
+## ```text
+## all(fn x => x > 0, [1, 2, 3])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let all = all
+## Chains a step that may itself fail: on Some(x) or Ok(x) it applies f to x and returns that result, otherwise it passes None or the Err through unchanged.
+##
+## **Signature:** `and_then : ((a -> Option<b>), Option<a>) -> Option<b>`
+##
+## **Signature:** `and_then : ((a -> Result<b, e>), Result<a, e>) -> Result<b, e>`
+##
+## Unlike map, f returns an Option or Result of its own.
+##
+## **Examples:**
+## ```text
+## and_then(fn x => if x > 0 then Some(x) else None, Some(3))
+## ```
+##
+## *Source: Aevia standard library guide.*
+let and_then = and_then
+## True if the predicate holds for at least one element; false for an empty tensor.
+##
+## **Signature:** `any : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Bool`
+##
+## **Signature:** `any : ((a -> Bool), Tensor<1, a>) -> Bool`
+##
+## **Examples:**
+## ```text
+## any(fn x => x > 2, [1, 2, 3])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let any = any
+## apply(f, x) calls f on x.
+##
+## **Signature:** `apply : ((a -> b), a) -> b`
+##
+## It is mainly useful for passing function application itself as a value.
+##
+## **Examples:**
+## ```text
+## apply(fn x => x + 1, 4)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let apply = apply
+## The index of the first largest element of a vector.
+##
+## **Signature:** `argmax : Tensor<1, Scalar<ρ,d>> -> Int`
+##
+## NaN never wins; an empty vector is a runtime error.
+##
+## **Examples:**
+## ```text
+## argmax([1, 5, 2])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let argmax = argmax
+## The index of the first smallest element of a vector.
+##
+## **Signature:** `argmin : Tensor<1, Scalar<ρ,d>> -> Int`
+##
+## NaN never wins; an empty vector is a runtime error.
+##
+## **Examples:**
+## ```text
+## argmin([4, 1, 7])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let argmin = argmin
+## The positions that would sort the data: indexing the data with them gives it in ascending order.
+##
+## **Signature:** `argsort : TotalOrd a => Tensor<n, a> -> Tensor<1, Int>`
+##
+## The sort is stable.
+##
+## **Examples:**
+## ```text
+## argsort([30, 10, 20])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let argsort = argsort
+## assuming(p, thunk) runs the zero-argument function thunk with the proposition p taken as true, so symbolic simplifications inside it may use it.
+##
+## **Signature:** `assuming : (Prop, () -> a) -> a`
+##
+## Only simple predicates such as x > 0 are supported.
+##
+## **Examples:**
+## ```text
+## assuming(sym_lt(0, 1), fn () => 1)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let assuming = assuming
+## by_cases(p, yes, no) picks yes() or no() when p can be decided, and otherwise builds a symbolic if-then-else expression.
+##
+## **Signature:** `by_cases : (Prop, () -> Real[d], () -> Real[d]) -> Real[d]`
+##
+## Use it for piecewise definitions in symbolic code.
+##
+## **Examples:**
+## ```text
+## by_cases(sym_lt(1, 2), fn () => 10, fn () => 20)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let by_cases = by_cases
+## Rounds up to the nearest whole number, keeping the type and dimension: ceil(-2.2) is -2.
+##
+## **Signature:** `ceil : Scalar<ρ,d> -> Scalar<ρ,d>`
+##
+## **Kernel signature** (overlay):
+## - `ceil : (Real) -> Real`
+## - `ceil : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result has the dimension of argument 1
+##
+## **Examples:**
+## ```text
+## ceil(2.1)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let ceil = ceil
+## clamp(x, lo, hi) limits x to the interval [lo, hi].
+##
+## **Signature:** `clamp : (Scalar<ρ,d>, Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,d>`
+##
+## All three arguments must have the same dimension.
+##
+## **Examples:**
+## ```text
+## clamp(15, 0, 10)
+## clamp(-1.5 m, 0 m, 2 m)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let clamp = clamp
+## Compares two values, returning Some(Less), Some(Equal) or Some(Greater), or None when they cannot be ordered (for example a NaN).
+##
+## **Signature:** `compare : Ord a => (a, a) -> Option<Ordering>`
+##
+## For a comparison that never fails use total_compare.
+##
+## **Examples:**
+## ```text
+## compare(1, 2)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let compare = compare
+## compose(f, g) is the function x => f(g(x)): g runs first.
+##
+## **Signature:** `compose : ((b -> c), (a -> b)) -> (a -> c)`
+##
+## For left-to-right pipelines write x |> g |> f instead.
+##
+## **Examples:**
+## ```text
+## compose(fn x => x + 1, fn x => x * 2)(5)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let compose = compose
+## Concatenate two strings or two compatible rank-1 collections.
+##
+## **Signature:** `concat : (String, String) -> String`
+##
+## **Signature:** `concat : (Tensor<n, a>, Tensor<n, a>) -> Tensor<n, a>`
+##
+## **Signature:** `concat : (Tensor<1, a>, Tensor<1, a>) -> Tensor<1, a>`
+##
+## String interpolation is useful when combining labels and values.
+##
+## **Examples:**
+## ```text
+## concat("hello ", "world")
+## ```
+##
+## *Source: Aevia standard library guide.*
+let concat = concat
+## const(a, b) returns a and ignores b.
+##
+## **Signature:** `const : (a, b) -> a`
+##
+## const(a) cannot be partially applied this way; use it as a two-argument function, for instance when you need a function that ignores its input.
+##
+## **Examples:**
+## ```text
+## const(1, 2)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let const = const
+## contains(s, part) is true when part occurs anywhere inside s.
+##
+## **Signature:** `contains : (String, String) -> Bool`
+##
+## **Examples:**
+## ```text
+## contains("hello", "ell")
+## ```
+##
+## *Source: Aevia standard library guide.*
+let contains = contains
+## Running products of a dimensionless vector: [1, 2, 3] becomes [1, 2, 6].
+##
+## **Signature:** `cumprod : Tensor<1, Scalar<ρ,1>> -> Tensor<1, Scalar<ρ,1>>`
+##
+## **Examples:**
+## ```text
+## cumprod([1, 2, 3])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let cumprod = cumprod
+## Running totals of a vector: [1, 2, 3] becomes [1, 3, 6].
+##
+## **Signature:** `cumsum : Tensor<1, Scalar<ρ,d>> -> Tensor<1, Scalar<ρ,d>>`
+##
+## The dimension is kept.
+##
+## **Examples:**
+## ```text
+## cumsum([1, 2, 3])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let cumsum = cumsum
+## curry(f) turns a two-argument function into a function that takes one argument and returns a function waiting for the other.
+##
+## **Signature:** `curry : ((a, b) -> c) -> (a -> (b -> c))`
+##
+## **Examples:**
+## ```text
+## curry(fn (a, b) => a + b)(1)(2)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let curry = curry
+## Decides whether a symbolic proposition is true.
+##
+## **Signature:** `decide : Prop -> Option<Bool>`
+##
+## It returns Some(true) or Some(false) when the kernel can settle it and None when it cannot. Plain Bool values are always settled.
+##
+## **Examples:**
+## ```text
+## decide(sym_lt(1, 2))
+## ```
+##
+## *Source: Aevia standard library guide.*
+let decide = decide
+## Floored integer division: div(-7, 2) is -4.
+##
+## **Signature:** `div : (Int, Int) -> Int`
+##
+## It pairs with mod, so a == div(a, b) * b + mod(a, b). Compare quot, which rounds toward zero. The / operator on Ints gives an exact Real instead.
+##
+## **Examples:**
+## ```text
+## div(-7, 2)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let div = div
+## drop(n, xs) removes the first n elements, giving an empty tensor if there are fewer.
+##
+## **Signature:** `drop : (Int, Tensor<1, a>) -> Tensor<1, a>`
+##
+## **Signature:** `drop : (Int, Tensor<n, a>) -> Tensor<n, a>`
+##
+## On a matrix it removes rows.
+##
+## **Examples:**
+## ```text
+## drop(1, [1, 2, 3])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let drop = drop
+## ends_with(s, suffix) is true when s ends with suffix.
+##
+## **Signature:** `ends_with : (String, String) -> Bool`
+##
+## **Examples:**
+## ```text
+## ends_with("hello", "lo")
+## ```
+##
+## *Source: Aevia standard library guide.*
+let ends_with = ends_with
+## Pairs each element with its position as a record { index, value }, starting at 0.
+##
+## **Signature:** `enumerate : Tensor<1, a> -> Tensor<1, (Int, a)>`
+##
+## **Signature:** `enumerate : Tensor<n, a> -> Tensor<1, (Int, Tensor<n-1, a>)>`
+##
+## **Examples:**
+## ```text
+## enumerate([5, 6, 7])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let enumerate = enumerate
+## Print a value followed by a newline to standard error.
+##
+## **Signature:** `eprintln : Show a => a -> IO Unit`
+##
+## Useful for progress and diagnostics while standard output carries results.
+##
+## **Examples:**
+## ```text
+## eprintln("checking inputs")
+## ```
+##
+## *Source: Aevia standard library guide.*
+let eprintln = eprintln
+## N! for a non-negative Int, computed exactly with no overflow: factorial(25) has all its digits.
+##
+## **Signature:** `factorial : Int -> Int`
+##
+## **Kernel signature** (derived):
+## - `factorial : (Real) -> Real`
+## - `factorial : (Dyn<term>) -> Dyn<term>`
+## - `factorial : (Int) -> Int`
+##
+## **Dimensions:** the result is dimensionless
+##
+## For non-integers use gamma.
+##
+## **Examples:**
+## ```text
+## factorial(5)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let factorial = factorial
+## Keeps the elements for which the predicate is true, in order.
+##
+## **Signature:** `filter : ((a -> Bool), Tensor<1, a>) -> Tensor<1, a>`
+##
+## **Signature:** `filter : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Tensor<n, a>`
+##
+## **Signature:** `filter : ((ρ -> Bool), Table<ρ>) -> Table<ρ>`
+##
+## On a matrix the predicate sees one row at a time; on a Table it sees one row record.
+##
+## **Examples:**
+## ```text
+## filter(fn x => x > 1, [1, 2, 3])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let filter = filter
+## Returns Some of the first element satisfying the predicate, or None when there is none.
+##
+## **Signature:** `find : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Option<Tensor<n-1, a>>`
+##
+## **Signature:** `find : ((a -> Bool), Tensor<1, a>) -> Option<a>`
+##
+## **Examples:**
+## ```text
+## find(fn x => x > 1, [1, 2, 3])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let find = find
+## The first element as an Option, None for an empty tensor.
+##
+## **Signature:** `first : Tensor<n, a> -> Option<Tensor<n-1, a>>`
+##
+## **Signature:** `first : Tensor<1, a> -> Option<a>`
+##
+## On a matrix it is the first row.
+##
+## **Examples:**
+## ```text
+## first([1, 2, 3])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let first = first
+## Collapses a tensor of rank 2 or more into a vector, reading the elements row by row.
+##
+## **Signature:** `flatten : Tensor<n, Tensor<m, a>> -> Tensor<n+m, a>`
+##
+## **Signature:** `flatten : Tensor<n, a> -> Tensor<1, a>`
+##
+## To change the shape instead of dropping it use reshape.
+##
+## **Examples:**
+## ```text
+## flatten([[1, 2], [3, 4]])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let flatten = flatten
+## flip(f) returns f with its two arguments swapped.
+##
+## **Signature:** `flip : ((a, b) -> c) -> ((b, a) -> c)`
+##
+## **Examples:**
+## ```text
+## flip(fn (a, b) => a - b)(1, 10)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let flip = flip
+## Rounds down to the nearest whole number, keeping the type and dimension: floor(-2.7) is -3.
+##
+## **Signature:** `floor : Scalar<ρ,d> -> Scalar<ρ,d>`
+##
+## **Kernel signature** (overlay):
+## - `floor : (Real) -> Real`
+## - `floor : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result has the dimension of argument 1
+##
+## **Examples:**
+## ```text
+## floor(2.7)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let floor = floor
+## Combine a collection with an initial accumulator, from left to right.
+##
+## **Signature:** `fold : ((b, a) -> b, b, Tensor<1, a>) -> b`
+##
+## **Signature:** `fold : ((b, Tensor<n-1, a>) -> b, b, Tensor<n, a>) -> b`
+##
+## The combining function receives the accumulator and the next element.
+##
+## **Examples:**
+## ```text
+## fold(fn (a, x) => a + x, 0, [1, 2, 3])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let fold = fold
+## Combine a collection with an initial accumulator, from left to right.
+##
+## **Signature:** `fold_left : 同上`
+##
+## The combining function receives the accumulator and the next element.
+##
+## **Examples:**
+## ```text
+## fold(fn (a, x) => a + x, 0, [1, 2, 3])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let fold_left = fold_left
+## Build formatted text from a template and arguments.
+##
+## **Signature:** `format : (String, Tensor<1, String>) -> String`
+##
+## The template uses positional or sequential placeholders.
+##
+## **Examples:**
+## ```text
+## format(r"answer: {}", ["42"])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let format = format
+## Greatest common divisor of two Ints; the result is never negative, and gcd(0, 0) is 0.
+##
+## **Signature:** `gcd : (Int, Int) -> Int`
+##
+## **Kernel signature** (derived):
+## - `gcd : (Real, Real) -> Real`
+## - `gcd : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+## - `gcd : (Int, Int) -> Int`
+##
+## **Dimensions:** the result is dimensionless
+##
+## **Examples:**
+## ```text
+## gcd(12, 18)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let gcd = gcd
+## The identity function: returns its argument unchanged.
+##
+## **Signature:** `id : a -> a`
+##
+## Handy as a default function argument.
+##
+## **Examples:**
+## ```text
+## id(5)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let id = id
+## True when a Result is Err.
+##
+## **Signature:** `is_err : Result<a, e> -> Bool`
+##
+## **Examples:**
+## ```text
+## is_err(parse_int("x"))
+## ```
+##
+## *Source: Aevia standard library guide.*
+let is_err = is_err
+## True when a number is neither infinite nor NaN.
+##
+## **Signature:** `is_finite : Scalar<ρ,d> -> Bool`
+##
+## Exact integers and rational values remain finite at any magnitude.
+##
+## **Examples:**
+## ```text
+## is_finite(1.5)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let is_finite = is_finite
+## True for positive or negative infinity.
+##
+## **Signature:** `is_infinite : Scalar<ρ,d> -> Bool`
+##
+## NaN and ordinary numbers give false.
+##
+## **Examples:**
+## ```text
+## is_infinite(1.0 / 0.0)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let is_infinite = is_infinite
+## True when a Float is NaN.
+##
+## **Signature:** `is_nan : Scalar<ρ,d> -> Bool`
+##
+## It is the only reliable test, because NaN is never equal to anything.
+##
+## **Examples:**
+## ```text
+## is_nan(0.0 / 0.0)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let is_nan = is_nan
+## True when an Option is None.
+##
+## **Signature:** `is_none : Option<a> -> Bool`
+##
+## **Examples:**
+## ```text
+## is_none(None)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let is_none = is_none
+## True when a Result is Ok.
+##
+## **Signature:** `is_ok : Result<a, e> -> Bool`
+##
+## **Examples:**
+## ```text
+## is_ok(parse_int("7"))
+## ```
+##
+## *Source: Aevia standard library guide.*
+let is_ok = is_ok
+## True when an Option holds a value.
+##
+## **Signature:** `is_some : Option<a> -> Bool`
+##
+## **Examples:**
+## ```text
+## is_some(Some(3))
+## ```
+##
+## *Source: Aevia standard library guide.*
+let is_some = is_some
+## join(sep, parts) joins a vector of strings with sep between them.
+##
+## **Signature:** `join : (String, Tensor<1, String>) -> String`
+##
+## **Signature:** `join : (Table<ρ>, Table<σ>, String) -> Table<τ>`
+##
+## It is the inverse of split.
+##
+## join(left, right, key) joins two tables on a named column in each table. Each pair of matching rows contributes one output row. The left rows keep their order and each left row's matches follow the order of the right table. The output keeps the left columns in order and appends the right non-key columns. A missing key or an ambiguous column name raises E0903.
+##
+## **Examples:**
+## ```text
+## join(", ", ["a", "b", "c"])
+## fn joined(left: Table<{ id: Float, x: Float }>, right: Table<{ id: Float, y: Float }>): Table<{ id: Float, x: Float, y: Float }> = join(left, right, "id")
+## ```
+##
+## *Source: Aevia standard library guide.*
+let join = join
+## The last element as an Option, None for an empty tensor.
+##
+## **Signature:** `last : Tensor<n, a> -> Option<Tensor<n-1, a>>`
+##
+## **Signature:** `last : Tensor<1, a> -> Option<a>`
+##
+## On a matrix it is the last row.
+##
+## **Examples:**
+## ```text
+## last([1, 2, 3])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let last = last
+## Least common multiple of two Ints; zero if either argument is zero.
+##
+## **Signature:** `lcm : (Int, Int) -> Int`
+##
+## **Kernel signature** (derived):
+## - `lcm : (Real, Real) -> Real`
+## - `lcm : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+## - `lcm : (Int, Int) -> Int`
+##
+## **Dimensions:** the result is dimensionless
+##
+## **Examples:**
+## ```text
+## lcm(4, 6)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let lcm = lcm
+## Return the collection length.
+##
+## **Signature:** `length : String -> Int`
+##
+## **Signature:** `length : Tensor<n, a> -> Int`
+##
+## **Signature:** `length : Set<a> -> Int`
+##
+## For strings, count Unicode grapheme clusters rather than UTF-8 bytes.
+##
+## **Examples:**
+## ```text
+## length([1, 2, 3])
+## length("hello")
+## ```
+##
+## *Source: Aevia standard library guide.*
+let length = length
+## Converts a string to lower case.
+##
+## **Signature:** `lower : String -> String`
+##
+## **Examples:**
+## ```text
+## lower("HeLLo")
+## ```
+##
+## *Source: Aevia standard library guide.*
+let lower = lower
+## Apply a function to collection elements, preserving their order.
+##
+## **Signature:** `map : ((a -> b), Tensor<n, a>) -> Tensor<n, b>`
+##
+## **Signature:** `map : ((a -> b), Option<a>) -> Option<b>`
+##
+## **Signature:** `map : ((a -> b), Result<a, e>) -> Result<b, e>`
+##
+## The function receives a row for supported higher-rank tensor overloads.
+##
+## **Examples:**
+## ```text
+## map(fn (x) => x * x, [1, 2, 3])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let map = map
+## map2(f, a, b) applies a two-argument function to corresponding elements of two tensors of the same shape and returns a tensor of that shape.
+##
+## **Signature:** `map2 : ((a, b) -> c, Tensor<n, a>, Tensor<n, b>) -> Tensor<n, c>`
+##
+## **Examples:**
+## ```text
+## map2(fn (x, y) => x + y, [1, 2, 3], [10, 20, 30])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let map2 = map2
+## Transforms the error of a Result and leaves an Ok untouched.
+##
+## **Signature:** `map_err : ((e -> f), Result<a, e>) -> Result<a, f>`
+##
+## Useful for converting one error type into another before using ?.
+##
+## **Examples:**
+## ```text
+## map_err(fn e => "failed: {e}", parse_int("x"))
+## ```
+##
+## *Source: Aevia standard library guide.*
+let map_err = map_err
+## The larger of two numbers of the same dimension.
+##
+## **Signature:** `max : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,d>`
+##
+## To reduce a whole tensor use max_all.
+##
+## **Examples:**
+## ```text
+## max(3, 5)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let max = max
+## The arithmetic mean of every element of a tensor of any rank; the result has the elements' dimension.
+##
+## **Signature:** `mean : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>`
+##
+## **Kernel signature** (derived):
+## - `mean : (Dyn<term>) -> Dyn<term>`
+## - `mean : (Tensor<1, Int>) -> Real`
+##
+## **Dimensions:** the result has the dimension of argument 1
+##
+## An Int tensor gives an exact Real quotient.
+##
+## **Examples:**
+## ```text
+## mean([1.0, 2.0, 3.0, 6.0])
+## mean([1.0 m, 2.0 m, 3.0 m])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let mean = mean
+## The smaller of two numbers of the same dimension.
+##
+## **Signature:** `min : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,d>`
+##
+## To reduce a whole tensor use min_all.
+##
+## **Examples:**
+## ```text
+## min(3, 5)
+## min(2 m, 150 cm)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let min = min
+## Remainder that takes the sign of the divisor (floored): mod(-7, 3) is 2.
+##
+## **Signature:** `mod : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,d>`
+##
+## **Kernel signature** (derived):
+## - `mod : (Real, Real) -> Real`
+## - `mod : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+## - `mod : (Int, Int) -> Int`
+##
+## **Dimensions:** the result is dimensionless
+##
+## For a positive divisor the result is always in [0, b), which suits wrapping an index around a ring. Compare rem, which follows the dividend.
+##
+## **Examples:**
+## ```text
+## mod(-7, 3)
+## mod(7.5, 2.0)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let mod = mod
+## Logical negation of a Bool.
+##
+## **Signature:** `not : Bool -> Bool`
+##
+## **Kernel signature** (overlay):
+## - `not : (Bool) -> Bool`
+##
+## **Dimensions:** kernel rule `NonMetric`
+##
+## **Examples:**
+## ```text
+## not(true)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let not = not
+## Turns a Result into an Option, keeping the Ok value and discarding the error.
+##
+## **Signature:** `ok : Result<a, e> -> Option<a>`
+##
+## **Examples:**
+## ```text
+## ok(parse_int("7"))
+## ```
+##
+## *Source: Aevia standard library guide.*
+let ok = ok
+## Turns an Option into a Result, using the second argument as the error for None.
+##
+## **Signature:** `ok_or : (Option<a>, e) -> Result<a, e>`
+##
+## **Examples:**
+## ```text
+## ok_or(None, "missing")
+## ```
+##
+## *Source: Aevia standard library guide.*
+let ok_or = ok_or
+## Like map, but the work may be spread over threads.
+##
+## **Signature:** `par_map : Parallel a => ((a -> b), Tensor<1, a>) -> Tensor<1, b>`
+##
+## The result order always matches the input, so the answer never depends on the thread count. It applies to Int and Float data, not to symbolic Reals.
+##
+## **Examples:**
+## ```text
+## par_map(fn x => x * 2.0, [1.0, 2.0, 3.0])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let par_map = par_map
+## Parses a decimal or scientific-notation number such as "2.5" or "1e-3", returning Ok or Err(ParseError).
+##
+## **Signature:** `parse_float : String -> Result<Float, ParseError>`
+##
+## **Examples:**
+## ```text
+## parse_float("2.5")
+## ```
+##
+## *Source: Aevia standard library guide.*
+let parse_float = parse_float
+## Parses a decimal integer, returning Ok(n) or Err(ParseError) when the text is not a valid Int.
+##
+## **Signature:** `parse_int : String -> Result<Int, ParseError>`
+##
+## Surrounding whitespace is ignored.
+##
+## **Examples:**
+## ```text
+## parse_int("42")
+## parse_int("4x")
+## ```
+##
+## *Source: Aevia standard library guide.*
+let parse_int = parse_int
+## Compares two Floats, returning None when either is NaN.
+##
+## **Signature:** `partial_compare : (Float, Float) -> Option<Ordering>`
+##
+## Prefer it to < and > when NaNs may occur and you need to notice.
+##
+## **Examples:**
+## ```text
+## partial_compare(1.0, nan)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let partial_compare = partial_compare
+## Print a value to standard output without a trailing newline.
+##
+## **Signature:** `print : Show a => a -> IO Unit`
+##
+## This returns IO Unit and executes when the REPL runs the IO expression.
+##
+## **Examples:**
+## ```text
+## print("answer: ")
+## println(42)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let print = print
+## Print a value to standard output followed by a newline.
+##
+## **Signature:** `println : Show a => a -> IO Unit`
+##
+## This returns IO Unit; the REPL executes the action once. String interpolation is useful for labels and mixed values.
+##
+## **Examples:**
+## ```text
+## println("answer: {6 * 7}")
+## println([1, 2, 3])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let println = println
+## The product of every element of a tensor of any rank.
+##
+## **Signature:** `prod : Tensor<n, Scalar<ρ,1>> -> Scalar<ρ,1>`
+##
+## The elements must be dimensionless, since the dimension of a product would depend on the length.
+##
+## **Examples:**
+## ```text
+## prod([1, 2, 3, 4])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let prod = prod
+## Integer division that rounds toward zero: quot(-7, 2) is -3.
+##
+## **Signature:** `quot : (Int, Int) -> Int`
+##
+## It pairs with rem. Compare div, which rounds down.
+##
+## **Examples:**
+## ```text
+## quot(-7, 2)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let quot = quot
+## Construct an integer sequence with an exclusive end.
+##
+## **Signature:** `range : (Int, Int) -> Tensor<1, Int>`
+##
+## **Signature:** `range : (Int, Int, Int) -> Tensor<1, Int>`
+##
+## An optional step may be positive or negative and cannot be zero.
+##
+## **Examples:**
+## ```text
+## range(0, 5)
+## range(5, 0, -1)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let range = range
+## The number of axes of a tensor: 1 for a vector, 2 for a matrix.
+##
+## **Signature:** `rank : Tensor<n, a> -> Int`
+##
+## **Signature:** `rank : Tensor<2, a> -> Int`
+##
+## A scalar has rank 0. Use shape for the length of each axis.
+##
+## **Examples:**
+## ```text
+## rank([[1, 2], [3, 4]])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let rank = rank
+## Remainder that takes the sign of the dividend (truncated): rem(-7, 3) is -1.
+##
+## **Signature:** `rem : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,d>`
+##
+## Compare mod, which follows the divisor.
+##
+## **Examples:**
+## ```text
+## rem(-7, 3)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let rem = rem
+## replace(s, from, to) replaces every occurrence of from in s with to and returns the new string.
+##
+## **Signature:** `replace : (String, String, String) -> String`
+##
+## **Examples:**
+## ```text
+## replace("hello", "l", "L")
+## ```
+##
+## *Source: Aevia standard library guide.*
+let replace = replace
+## Return a source representation that preserves numeric phase, unlike display-oriented show.
+##
+## **Signature:** `repr : Show a => a -> String`
+##
+## It does not print by itself.
+##
+## **Examples:**
+## ```text
+## repr(1.0)
+## println(repr(1.0))
+## ```
+##
+## *Source: Aevia standard library guide.*
+let repr = repr
+## Reverses the first axis of a tensor.
+##
+## **Signature:** `reverse : Tensor<1, a> -> Tensor<1, a>`
+##
+## **Signature:** `reverse : Tensor<n, a> -> Tensor<n, a>`
+##
+## For a matrix that reverses the rows; use reverse_axis to choose the axis.
+##
+## **Examples:**
+## ```text
+## reverse([1, 2, 3])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let reverse = reverse
+## Reverses a tensor along a chosen axis, e.g.
+##
+## **Signature:** `reverse_axis : (Tensor<n, a>, Int) -> Tensor<n, a>`
+##
+## reverse_axis(m, 1) flips every row.
+##
+## **Examples:**
+## ```text
+## reverse_axis([[1, 2], [3, 4]], 1)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let reverse_axis = reverse_axis
+## rng(seed) returns a pseudo-random number generator: a function with no arguments that gives the next number in [0, 1) each time you call it.
+##
+## **Signature:** `rng : Int -> (() -> Float[1])`
+##
+## The sequence depends only on the seed, so runs are reproducible. For unseeded randomness use random().
+##
+## **Examples:**
+## ```text
+## let next = rng(42)
+## next()
+## ```
+##
+## *Source: Aevia standard library guide.*
+let rng = rng
+## Rounds to the nearest whole number, with halves going away from zero (round(2.5) is 3, round(-2.5) is -3).
+##
+## **Signature:** `round : Scalar<ρ,d> -> Scalar<ρ,d>`
+##
+## **Signature:** `round : (Scalar<ρ,d>, Int) -> Scalar<ρ,d>`
+##
+## **Kernel signature** (overlay):
+## - `round : (Real) -> Real`
+## - `round : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result has the dimension of argument 1
+##
+## A second Int argument keeps that many decimals; a negative one rounds to tens, hundreds and so on.
+##
+## **Examples:**
+## ```text
+## round(2.5)
+## round(3.14159, 2)
+## round(1234, -2)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let round = round
+## Inspect the extents of a tensor.
+##
+## **Signature:** `shape : Tensor<n, a> -> Tensor<1, Int>`
+##
+## Shapes are checked separately from the dimensions carried by its elements.
+##
+## **Examples:**
+## ```text
+## shape([[1, 2], [3, 4]])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let shape = shape
+## Convert a value to display text without printing it.
+##
+## **Signature:** `show : Show a => a -> String`
+##
+## Use println to emit that text, or interpolate the value directly. For phase-preserving source notation use repr.
+##
+## **Examples:**
+## ```text
+## show(3 m)
+## println("distance: {3 m}")
+## ```
+##
+## *Source: Aevia standard library guide.*
+let show = show
+## The sign of a number as an Int: -1, 0 or 1.
+##
+## **Signature:** `sign : Scalar<ρ,d> -> Int`
+##
+## **Kernel signature** (derived):
+## - `sign : (Real) -> Real`
+## - `sign : (Dyn<term>) -> Dyn<term>`
+## - `sign : (Int) -> Int`
+##
+## **Dimensions:** kernel rule `Custom("")`
+##
+## The dimension is ignored.
+##
+## **Examples:**
+## ```text
+## sign(-2.5)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let sign = sign
+## Sorts ascending, stably.
+##
+## **Signature:** `sort : TotalOrd a => Tensor<1, a> -> Tensor<1, a>`
+##
+## **Signature:** `sort : TotalOrd a => Tensor<n, a> -> Tensor<n, a>`
+##
+## Elements need a total order, so Int, String and Bool qualify but Float does not (use sort_float). On a matrix it sorts the rows lexicographically.
+##
+## **Examples:**
+## ```text
+## sort([3, 1, 2])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let sort = sort
+## Sorts every one-dimensional slice of a tensor along the given axis, keeping the shape.
+##
+## **Signature:** `sort_axis : TotalOrd a => (Tensor<n, a>, Int) -> Tensor<n, a>`
+##
+## **Examples:**
+## ```text
+## sort_axis([[3, 1], [4, 2]], 1)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let sort_axis = sort_axis
+## sort_by(cmp, xs) sorts with your own comparison, which returns an Ordering.
+##
+## **Signature:** `sort_by : ((a, a) -> Ordering, Tensor<1, a>) -> Tensor<1, a>`
+##
+## **Signature:** `sort_by : ((Tensor<n-1, a>, Tensor<n-1, a>) -> Ordering, Tensor<n, a>) -> Tensor<n, a>`
+##
+## The sort is stable, so ties keep their input order.
+##
+## **Examples:**
+## ```text
+## sort_by(fn (a, b) => total_compare(b, a), [3, 1, 2])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let sort_by = sort_by
+## sort_by_key(f, xs) sorts by the key f(x) of each element (stable), which is shorter than writing a full comparison with sort_by.
+##
+## **Signature:** `sort_by_key : TotalOrd k => ((a -> k), Tensor<1, a>) -> Tensor<1, a>`
+##
+## **Signature:** `sort_by_key : TotalOrd k => ((Tensor<n-1, a> -> k), Tensor<n, a>) -> Tensor<n, a>`
+##
+## **Examples:**
+## ```text
+## sort_by_key(fn x => -x, [1, 3, 2])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let sort_by_key = sort_by_key
+## sort_float(xs, nan_last) sorts Floats in ascending order, which plain sort will not do because Float has no total order.
+##
+## **Signature:** `sort_float : (Tensor<1, Float>, Bool) -> Tensor<1, Float>`
+##
+## **Signature:** `sort_float : (Tensor<n, Float>, Bool) -> Tensor<n, Float>`
+##
+## The Bool decides whether NaNs go last (true) or first.
+##
+## **Examples:**
+## ```text
+## sort_float([3.0, nan, 1.0], true)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let sort_float = sort_float
+## split(s, sep) cuts a string at every occurrence of sep and returns the pieces as a vector of strings.
+##
+## **Signature:** `split : (String, String) -> Tensor<1, String>`
+##
+## **Examples:**
+## ```text
+## split("a,b,c", ",")
+## ```
+##
+## *Source: Aevia standard library guide.*
+let split = split
+## starts_with(s, prefix) is true when s begins with prefix.
+##
+## **Signature:** `starts_with : (String, String) -> Bool`
+##
+## **Examples:**
+## ```text
+## starts_with("hello", "he")
+## ```
+##
+## *Source: Aevia standard library guide.*
+let starts_with = starts_with
+## Sum tensor elements, or use the function-and-bounds overload for a finite summation.
+##
+## **Signature:** `sum : Tensor<n, Scalar<ρ,d>> -> Scalar<ρ,d>`
+##
+## **Signature:** `sum : (Tensor<n, Scalar<ρ,d>>, Int) -> Tensor<n, Scalar<ρ,d>>`
+##
+## **Signature:** `sum : (Real[1] -> Real[d], Real[1], Real[1]) -> Real[d]`
+##
+## **Kernel signature** (overlay):
+## - `sum : (Tensor<_, Real>) -> Real`
+## - `sum : (Tensor<_, Real>, Int) -> Tensor<_, Real>`
+## - `sum : (Dyn<term>, Symbol, Dyn<term>, Dyn<term>) -> Dyn<term>`
+## - `sum : (Dyn<term>) -> Dyn<term>`
+## - ... and 1 more overloads
+##
+## **Dimensions:** kernel rule `SumOver { f: 0, index: 1 }`
+##
+## Empty tensor reductions return a phase-appropriate zero.
+##
+## **Examples:**
+## ```text
+## sum([1, 2, 3])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let sum = sum
+## Builds the symbolic proposition that two exact numbers are equal.
+##
+## **Signature:** `sym_eq : (Real[d], Real[d]) -> Prop`
+##
+## Real has no Bool equality, because equality of symbolic expressions is not always decidable; use decide to ask for a verdict.
+##
+## **Examples:**
+## ```text
+## sym_eq(1 + 1, 2)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let sym_eq = sym_eq
+## Builds the symbolic proposition that the first exact number is smaller than the second.
+##
+## **Signature:** `sym_lt : (Real[d], Real[d]) -> Prop`
+##
+## Use decide to ask for a verdict.
+##
+## **Examples:**
+## ```text
+## sym_lt(1, 2)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let sym_lt = sym_lt
+## Builds the symbolic proposition that two exact numbers are different.
+##
+## **Signature:** `sym_ne : (Real[d], Real[d]) -> Prop`
+##
+## Use decide to ask for a verdict.
+##
+## **Examples:**
+## ```text
+## sym_ne(1, 2)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let sym_ne = sym_ne
+## take(n, xs) keeps the first n elements, or all of them if there are fewer.
+##
+## **Signature:** `take : (Int, Tensor<1, a>) -> Tensor<1, a>`
+##
+## **Signature:** `take : (Int, Tensor<n, a>) -> Tensor<n, a>`
+##
+## On a matrix it keeps the first n rows.
+##
+## **Examples:**
+## ```text
+## take(2, [1, 2, 3])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let take = take
+## Converts a number to a Float, keeping its dimension.
+##
+## **Signature:** `to_float : Scalar<ρ,d> -> Result<Float[d], EvalError>`
+##
+## It returns a Result, because a value that still contains free symbols has no Float to convert to; handle the Err or unwrap it with unwrap_or.
+##
+## **Examples:**
+## ```text
+## to_float(1 / 3)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let to_float = to_float
+## Converts a dimensionless number to an Int by truncating toward zero.
+##
+## **Signature:** `to_int : Scalar<ρ,1> -> Int`
+##
+## Use round, floor or ceil first if you want a different rounding.
+##
+## **Examples:**
+## ```text
+## to_int(3.7)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let to_int = to_int
+## Render a value as LaTeX text.
+##
+## **Signature:** `to_latex : Show a => a -> String`
+##
+## Use println to print the markup, or :latex EXPR to inspect it in the REPL.
+##
+## **Examples:**
+## ```text
+## to_latex(1/2)
+## :latex 1/2
+## ```
+##
+## *Source: Aevia standard library guide.*
+let to_latex = to_latex
+## Return formatted, multiline text for structured values without printing it.
+##
+## **Signature:** `to_pretty : Show a => a -> String`
+##
+## Use println to emit the resulting String, or :pretty EXPR in the REPL.
+##
+## **Examples:**
+## ```text
+## println(to_pretty([[1, 2], [3, 4]]))
+## ```
+##
+## *Source: Aevia standard library guide.*
+let to_pretty = to_pretty
+## Converts an Int or Float to an exact Real, keeping its dimension.
+##
+## **Signature:** `to_real : Scalar<ρ,d> -> Real[d]`
+##
+## A Float converts to the exact rational it holds, so to_real(0.5) is 1/2.
+##
+## **Examples:**
+## ```text
+## to_real(0.5)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let to_real = to_real
+## Render a value as Typst markup text; this does not print or render a document by itself.
+##
+## **Signature:** `to_typst : Show a => a -> String`
+##
+## **Examples:**
+## ```text
+## println(to_typst(1/2))
+## ```
+##
+## *Source: Aevia standard library guide.*
+let to_typst = to_typst
+## Compares two values with a total order, always returning an Ordering.
+##
+## **Signature:** `total_compare : TotalOrd a => (a, a) -> Ordering`
+##
+## Use it with sort_by and for deterministic ordering of sets.
+##
+## **Examples:**
+## ```text
+## total_compare(2, 1)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let total_compare = total_compare
+## Removes leading and trailing whitespace from a string.
+##
+## **Signature:** `trim : String -> String`
+##
+## **Examples:**
+## ```text
+## trim("  hi  ")
+## ```
+##
+## *Source: Aevia standard library guide.*
+let trim = trim
+## Drops the fractional part, rounding toward zero: trunc(-2.7) is -2.
+##
+## **Signature:** `trunc : Scalar<ρ,d> -> Scalar<ρ,d>`
+##
+## **Examples:**
+## ```text
+## trunc(-2.7)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let trunc = trunc
+## uncurry(f) turns a function of the form a => b => c into one that takes both arguments together.
+##
+## **Signature:** `uncurry : ((a -> (b -> c))) -> ((a, b) -> c)`
+##
+## **Signature:** `uncurry : (a -> (b -> c)) -> ((a, b) -> c)`
+##
+## **Examples:**
+## ```text
+## uncurry(fn a => fn b => a + b)(1, 2)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let uncurry = uncurry
+## Returns the value inside Some or Ok, or the supplied default for None or Err.
+##
+## **Signature:** `unwrap_or : (Option<a>, a) -> a`
+##
+## **Signature:** `unwrap_or : (Result<a, e>, a) -> a`
+##
+## **Examples:**
+## ```text
+## unwrap_or(None, 0)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let unwrap_or = unwrap_or
+## Converts a string to upper case.
+##
+## **Signature:** `upper : String -> String`
+##
+## **Examples:**
+## ```text
+## upper("hello")
+## ```
+##
+## *Source: Aevia standard library guide.*
+let upper = upper
+## True when exactly one of the two Bools is true.
+##
+## **Signature:** `xor : (Bool, Bool) -> Bool`
+##
+## **Kernel signature** (overlay):
+## - `xor : (Bool, Bool) -> Bool with 0... x Bool`
+##
+## **Dimensions:** kernel rule `NonMetric`
+##
+## **Examples:**
+## ```text
+## xor(true, false)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let xor = xor
+## The additive identity in whatever numeric type and dimension the context needs.
+##
+## **Signature:** `zero : Scalar<ρ,d>`
+##
+## It is the natural starting value for a fold that sums numbers.
+##
+## **Examples:**
+## ```text
+## fold(fn (acc, x) => acc + x, zero, [1, 2, 3])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let zero = zero
+## Pairs the elements of two tensors by position, stopping at the shorter one: zip([1, 2], [3, 4]) is [(1, 3), (2, 4)].
+##
+## **Signature:** `zip : (Tensor<1, a>, Tensor<1, b>) -> Tensor<1, (a, b)>`
+##
+## **Signature:** `zip : (Tensor<n, a>, Tensor<m, b>) -> Tensor<1, (Tensor<n-1, a>, Tensor<m-1, b>)>`
+##
+## Combine with map to process pairs, or use zip_with to apply a function directly.
+##
+## **Examples:**
+## ```text
+## zip([1, 2], [3, 4])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let zip = zip
+## zip_with(f, a, b) applies f to corresponding elements of two tensors of the same shape; it behaves like map2.
+##
+## **Signature:** `zip_with : ((a, b) -> c, Tensor<n, a>, Tensor<n, b>) -> Tensor<n, c>`
+##
+## **Examples:**
+## ```text
+## zip_with(fn (x, y) => x * y, [1, 2, 3], [4, 5, 6])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let zip_with = zip_with
+
+## Not re-exported (see the module header of `tests/stdlib_modules.rs`):
+##   Err — constructor or qualified name: ambient from the Prelude
+##   None — constructor or qualified name: ambient from the Prelude
+##   Ok — constructor or qualified name: ambient from the Prelude
+##   Some — constructor or qualified name: ambient from the Prelude

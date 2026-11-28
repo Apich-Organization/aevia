@@ -1,0 +1,10 @@
+import Rssn_numerical_vector as V
+
+test "ordinary inverse-square Shepard weight retains ordinate units" =
+    let result: Float[Time] = V.num_interp_ext_shepard_idw([[0.0 m], [2.0 m]], [0.0 s, 10.0 s], [0.5 m], 2.0)
+    approx_eq(result, 1.0 s, 1e-12 s)
+
+test "distinct tiny coordinates do not become exact hits" =
+    let result: Float[Time] = V.num_interp_ext_shepard_idw([[0.0 m], [2e-200 m]], [0.0 s, 10.0 s], [5e-201 m], 2.0)
+    let hit: Float[Time] = V.num_interp_ext_shepard_idw([[0.0 m], [2e-200 m]], [0.0 s, 10.0 s], [2e-200 m], 2.0)
+    approx_eq(result, 1.0 s, 1e-12 s) && approx_eq(hit, 10.0 s, 1e-12 s)

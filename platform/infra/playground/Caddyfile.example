@@ -1,0 +1,20 @@
+{
+	admin off
+}
+
+{$AEVIA_PLAYGROUND_DOMAIN} {
+	@registry {
+		remote_ip {$AEVIA_REGISTRY_ADDRESS}
+		method POST
+		path /run
+	}
+	handle @registry {
+		request_body {
+			max_size 100KB
+		}
+		reverse_proxy 127.0.0.1:9081
+	}
+	handle {
+		respond 404
+	}
+}

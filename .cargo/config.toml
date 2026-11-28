@@ -1,0 +1,13 @@
+# The interpreter is recursive; deep but legal programs need more stack than
+# the default test threads provide. The CLI runs on its own thread (`--max-stack`, 1024 MiB by default).
+[env]
+RUST_MIN_STACK = "67108864"
+
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"
+
+[target.aarch64-pc-windows-msvc]
+linker = "rust-lld"
+
+[build]
+rustflags = ["-C", "target-cpu=native"]

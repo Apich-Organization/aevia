@@ -1,0 +1,63 @@
+# SYNTAX TEST "Packages/Aevia/Aevia.sublime-syntax"
+
+let label = "  ## text #- literal -# \0 \u{1F600} {1 + 2} tail"
+#              ^ string.quoted.double.aevia - comment
+#                      ^ string.quoted.double.aevia - comment
+#                                    ^ constant.character.escape.aevia
+#                                       ^ constant.character.escape.aevia
+#                                                  ^ meta.interpolation.aevia constant.numeric.aevia
+#                                                         ^ string.quoted.double.aevia - meta.interpolation.aevia
+
+let label = """
+  # text
+# ^ string.quoted.triple.aevia - comment
+  usual "quote" and ""doubled""
+#                     ^ string.quoted.triple.aevia
+  "{1} \0
+#   ^ constant.numeric.aevia
+#      ^ constant.character.escape.aevia
+  #- text -#
+# ^ string.quoted.triple.aevia - comment
+  """
+let count = 2
+# <- keyword.control.aevia - string
+
+let nested = "{ { first = { inner = 1 }, b = r"# raw {}" }.first.inner }"
+#                                              ^ string.quoted.raw.aevia - comment
+#                                                        ^ punctuation.section.group.end.aevia
+#                                                         ^ meta.interpolation.aevia - meta.interpolation.group
+let protected = "{show(\"one\")} tail"
+#                        ^ string.quoted.double.aevia meta.interpolation.aevia
+#                              ^ punctuation.section.interpolation.end.aevia
+#                                ^ string.quoted.double.aevia - meta.interpolation.aevia
+let fields = "{(\{ a = 1 \}).a}"
+#               ^ punctuation.section.group.begin.aevia
+#                        ^ punctuation.section.group.end.aevia
+let raw = "{format(r\"{}\", [5])}"
+#                     ^ string.quoted.raw.aevia - punctuation.section.interpolation
+#                            ^ constant.numeric.aevia
+let message = "{ "nested {[\"ok\", 2.75]}" }"
+#                                  ^ meta.interpolation.aevia constant.numeric.aevia
+
+let label = "prefix #- literal -# {1 #- block #- nested -# -# + 2 # line
+#                   ^ string.quoted.double.aevia - comment
+#                                             ^ meta.interpolation.aevia comment.block.aevia
+#                                                                 ^ meta.interpolation.aevia comment.line.number-sign.aevia
+} suffix"
+# <- punctuation.section.interpolation.end.aevia
+# ^ string.quoted.double.aevia - meta.interpolation.aevia
+
+let ordinary = "never closed
+#               ^ string.quoted.double.aevia
+let raw = r"never closed \0 {x}
+# <- keyword.control.aevia - string
+#                        ^ string.quoted.raw.aevia - constant.character.escape
+#                           ^ string.quoted.raw.aevia - meta.interpolation
+let after = 4
+# <- keyword.control.aevia - string
+#           ^ constant.numeric.aevia - string
+
+let invalid = "\q \u{Q} tail"
+#              ^ invalid.illegal.escape.aevia
+#                   ^ invalid.illegal.escape.aevia - meta.interpolation
+#                       ^ string.quoted.double.aevia

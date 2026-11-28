@@ -1,0 +1,30 @@
+## This module's doctests are deliberately wrong; the test suite checks that
+## the runner reports each kind of failure.
+##
+## ```aevia
+## let ok = 1
+## ```
+fn ok_note(): Int = 1
+
+## A block with no `compile_fail` marker must compile, and this one does not.
+##
+## ```aevia
+## let broken = 1 m + 1
+## ```
+fn unexpected_error(): Int = 1
+
+## The marker names `E0302`, but the snippet fails with `E0401`.
+##
+## ```aevia
+## compile_fail E0302
+## let broken = 1 m + 1
+## ```
+fn wrong_code(): Int = 1
+
+## The marker says this block is expected to fail, but it compiles.
+##
+## ```aevia
+## compile_fail E0401
+## let fine = 1
+## ```
+fn should_have_failed(): Int = 1

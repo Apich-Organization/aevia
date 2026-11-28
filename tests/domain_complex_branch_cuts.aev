@@ -1,0 +1,39 @@
+## Checked branch cuts, with one cut angle used by all four operations.
+import Rssn_Special as Special
+
+let ray = complex(4.0, 0.0)
+
+let signed_ray = complex(4.0, -0.0)
+
+let exponent = complex(0.5, 0.0)
+
+let half_turn = 3.141592653589793
+
+test "points above and below the cut pick different sides" =
+    let upper = Special.arg_branch(complex(4.0, 1e-12), 0.0)
+    let lower = Special.arg_branch(complex(4.0, -1e-12), 0.0)
+    match (upper, lower) with
+    | (Ok(a), Ok(b)) -> a < half_turn && b > half_turn
+    | _ -> false
+
+test "both signed zeros on the cut choose its upper endpoint" =
+    let expected = Ok(2.0 * half_turn)
+    Special.arg_branch(ray, 0.0) == expected && Special.arg_branch(signed_ray, 0.0) == expected
+
+test "logarithm and power agree with the chosen branch" =
+    let log = Special.log_cut(ray, 0.0)
+    let power = Special.pow_cut(ray, exponent, 0.0)
+    match (log, power) with
+    | (Ok(value), Ok(root)) -> approx_eq(re(value), ln(4.0), 1e-12) && approx_eq(im(value), 6.283185307179586, 1e-12) && approx_eq(magnitude(root + complex(2.0, 0.0)), 0.0, 1e-12)
+    | _ -> false
+
+test "square roots preserve the rooted dimension even on the cut" =
+    let length: Result<Complex[Length], OpError> = Special.sqrt_cut(complex(4.0 m^2, 0.0 m^2), 0.0)
+    let time: Result<Complex[Time], OpError> = Special.sqrt_cut(complex(9.0 s^2, 0.0 s^2), 0.0)
+    match (length, time) with
+    | (Ok(x), Ok(t)) -> approx_eq(re(x), -2.0 m, 1e-12 m) && approx_eq(im(x), 0.0 m, 1e-12 m) && approx_eq(re(t), -3.0 s, 1e-12 s)
+    | _ -> false
+
+test "zero is admitted by the square root and rejected by log and power" =
+    let zero = complex(0.0, 0.0)
+    Special.sqrt_cut(zero, 0.0) == Ok(zero) && is_err(Special.log_cut(zero, 0.0)) && is_err(Special.pow_cut(zero, exponent, 0.0))

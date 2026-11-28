@@ -1,0 +1,31 @@
+## Three-dimensional finite-volume advection with measured fields and boundary masks.
+import Rssn_numerical_vector as Native
+open Units.SI
+
+test "unmarked advection faces use zero inflow and retain the measured mesh" =
+    let frame = unwrap_or(Native.num_grid_frame_new([to_value(2.0 m), to_value(4.0 s), to_value(3.0 K)]), to_value(0))
+    let cells = range(0, 60)
+    let initial = map(fn (_: Int) => 6.0 K, cells)
+    let mesh = unwrap_or(Native.num_grid_legacy_fvm_mesh3_new([frame, to_value([5, 4, 3]), to_value([5.0 m, 4.0 m, 3.0 m]), to_value(initial)]), to_value(0))
+    let velocity = to_value([1.0 m/s, 0.0 m/s, 0.0 m/s])
+    let args = [mesh, velocity, to_value(1.0 s), to_value(1), to_value(map(fn (cell: Int) => cell == 2, cells))]
+    match Native.num_grid_legacy_fvm_advection3(args) with
+    | Ok(result) ->
+        let clear = to_value(map(fn (_: Int) => false, cells))
+        let next = Native.num_grid_legacy_fvm_advection3([mesh, velocity, to_value(1.0 s), to_value(1), clear])
+        match (from_value<Tensor<1, Float[Temperature]>>(result), next) with
+        | (Ok(first), Ok(value)) ->
+            match from_value<Tensor<1, Float[Temperature]>>(value) with
+            | Ok(second) ->
+                let correct_shape = length(first) == 60 && length(second) == 60
+                let first_step = first[0] == 0.0 K && first[1] == 6.0 K && first[2] == 0.0 K && first[59] == 6.0 K
+                let second_step = second[1] == 0.0 K && second[2] == 6.0 K && second[3] == 0.0 K
+                correct_shape && first_step && second_step
+            | Err(_) -> false
+        | _ -> false
+    | Err(_) -> false
+
+test "the canned Gaussian uses a fixed outer layer" =
+    match Native.num_grid_legacy_fvm_scenario_advection3() with
+    | Ok(field) -> length(field) == 27000 && field[0] == 0.0 && field[26999] == 0.0 && field[13965] > 0.0
+    | Err(_) -> false

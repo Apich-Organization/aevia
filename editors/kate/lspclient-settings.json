@@ -1,0 +1,10 @@
+{
+    "servers": {
+        "aevia": {
+            "command": ["aevia-lsp", "--stdio"],
+            "highlightingModeRegex": "^Aevia$",
+            "rootIndicationFileNames": ["aevia.toml"],
+            "url": "https://github.com/Apich-Organization/aevia"
+        }
+    }
+}

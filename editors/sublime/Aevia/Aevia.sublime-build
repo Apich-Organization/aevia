@@ -1,0 +1,16 @@
+{
+    "cmd": ["aevia", "run", "$file"],
+    "selector": "source.aevia",
+    "working_dir": "$file_path",
+    "file_regex": "^  --> (.+):([0-9]+):([0-9]+)$",
+    "variants": [
+        {
+            "name": "Test",
+            "cmd": ["aevia", "test", "$file"]
+        },
+        {
+            "name": "Check",
+            "cmd": ["aevia", "check", "$file"]
+        }
+    ]
+}

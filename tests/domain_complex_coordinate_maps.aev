@@ -1,0 +1,59 @@
+## Typed complex coordinates and conformal transforms use dimensionless inputs.
+import Rssn_Special as Special
+
+let origin = complex(0.0, 0.0)
+
+let one = complex(1.0, 0.0)
+
+let point = complex(1e10, -2e10)
+
+let projection = Special.riemann_sphere_project(point)
+
+test "sphere projection preserves coordinates even near the north pole" =
+    match projection with
+    | Ok(p) ->
+        match Special.riemann_sphere_unproject(p.x, p.y, p.z) with
+        | Ok(Some(restored)) -> approx_eq(magnitude(restored - point) / magnitude(point), 0.0, 1e-12)
+        | _ -> false
+    | Err(_) -> false
+
+test "the north pole has no finite preimage and off-sphere coordinates are invalid" =
+    match (Special.riemann_sphere_unproject(0.0, 0.0, 1.0), Special.riemann_sphere_unproject(0.0, 0.0, 0.0)) with
+    | (Ok(None), Err(_)) -> true
+    | _ -> false
+
+test "inverse Joukowsky exposes both branches including the small root" =
+    match Special.joukowsky_inverse(point) with
+    | Ok(branches) ->
+        match (Special.joukowsky(branches.plus), Special.joukowsky(branches.minus)) with
+        | (Ok(a), Ok(b)) -> approx_eq(magnitude(a - point) / magnitude(point), 0.0, 1e-12) && approx_eq(magnitude(b - point) / magnitude(point), 0.0, 1e-12) && approx_eq(magnitude(branches.plus * branches.minus - one), 0.0, 1e-12)
+        | _ -> false
+    | Err(_) -> false
+
+test "unit complex construction and sphere metrics are dimensionless" =
+    let axis = Rssn.num_complex_coords_cis(0.0)
+    match (Special.chordal_distance(origin, one), Special.spherical_metric_factor(one)) with
+    | (Ok(distance), Ok(factor)) -> approx_eq(magnitude(axis - one), 0.0, 1e-12) && approx_eq(distance, sqrt(2.0), 1e-12) && approx_eq(factor, 1.0, 1e-12)
+    | _ -> false
+
+test "conformal maps expose their finite values and reject poles" =
+    let z = complex(2.0, 0.5)
+    match (Special.karman_trefftz(z, 1.0), Special.koebe_map(origin), Special.cayley_transform(complex(0.0, -1.0))) with
+    | (Ok(karman), Ok(koebe), Err(_)) -> approx_eq(magnitude(karman - z), 0.0, 1e-12) && approx_eq(magnitude(koebe), 0.0, 1e-12)
+    | _ -> false
+
+test "the general Cayley map also reaches points outside the open hyperbolic chart" =
+    match Special.cayley_transform(complex(0.0, -2.0)) with
+    | Ok(image) -> approx_eq(magnitude(image - complex(3.0, 0.0)), 0.0, 1e-12)
+    | Err(_) -> false
+
+test "cross ratio reaches the typed domain and preserves its dimensionless value" =
+    match Special.cross_ratio(origin, one, complex(2.0, 0.0), complex(3.0, 0.0)) with
+    | Ok(ratio) -> approx_eq(magnitude(ratio - complex(4.0 / 3.0, 0.0)), 0.0, 1e-12)
+    | Err(_) -> false
+
+test "dynamic calls enforce the same coordinate dimensions" =
+    let measured = complex(2.0 m, 1.0 m)
+    match Rssn.dynamic("num_complex_coords_to_riemann_sphere", [to_value(measured)]) with
+    | Err(_) -> true
+    | Ok(_) -> false

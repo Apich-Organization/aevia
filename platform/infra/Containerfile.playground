@@ -1,0 +1,7 @@
+FROM docker.io/library/debian:trixie-slim
+
+# The build context contains the Linux aevia CLI for this image's architecture.
+COPY --chmod=0755 aevia /usr/local/bin/aevia
+
+USER 1000:1000
+ENTRYPOINT ["/usr/local/bin/aevia"]

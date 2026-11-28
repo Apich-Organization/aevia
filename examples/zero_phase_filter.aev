@@ -1,0 +1,18 @@
+## Smooth an impulse in a short measured pressure trace with a symmetric FIR.
+import Rssn_numerical_vector as Signal
+
+let numerator = [0.25, 0.5, 0.25]
+
+let denominator = [1.0]
+
+let pressure = [0.0 Pa, 0.0 Pa, 0.0 Pa, 8.0 Pa, 0.0 Pa, 0.0 Pa, 0.0 Pa]
+
+let smoothed = Signal.num_signal_filtfilt(numerator, denominator, pressure)
+
+fn main(): IO Unit = do
+    println("Input pressure: {pressure}")
+    println("Filtered pressure: {smoothed}")
+
+test "zero-phase filtering preserves pressure units" = at(smoothed, 3) == 3.0 Pa
+
+test "the impulse peak stays centered" = at(smoothed, 2) == at(smoothed, 4)

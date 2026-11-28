@@ -1,0 +1,73 @@
+Data	column	在运行时按名称查找列，将单元格组成一维张量。预期的元素类型由外围表达式给出，独立于表的行类型。数值单元格为无量纲 `Float`，其余为 `String`。找不到列时返回 `Err(DataError)`。当单元格类型由运行时确定时，使用 `column_dyn`。
+Data	column_dyn	在运行时按名称查找列，返回由动态 `Value` 单元格组成的一维张量。数值单元格为无量纲 `Float`，其余为 `String`。适用于任何行类型的表。找不到列时返回 `Err(DataError)`。
+Data	filter	按原顺序保留满足条件的元素或行。对向量逐元素应用谓词，对矩阵逐行应用谓词，对 `Table` 则将一行作为记录传给谓词。
+Data	join	`join(sep, parts)` 在字符串向量的元素之间插入分隔符 `sep`，是 `split` 的逆操作。\n\n`join(left, right, key)` 按指定列对两张表做内连接。每对键值相同的行产生一行。结果按左表行顺序排列，同一左表行的匹配按右表顺序排列。列按原顺序保留左表各列，并追加右表的非键列。缺少键列或出现有歧义的列名时，报 `E0903`。
+Data	read_csv	读取以逗号分隔的 `.csv` 文件或以制表符分隔的 `.tsv` 文件。显式类型实参或外围表达式给出行类型，该类型仅用于静态检查。读取时按文件表头检查引号格式和各行列数。表头 `time [s]` 中的 `s` 由 `schema` 作为列元数据返回，数值单元格仍为无量纲 `Float`。执行此 `IO` 操作后得到 `Ok(table)` 或 `Err(DataError)`。
+Data	read_csv_dyn	将以逗号分隔的 `.csv` 文件或以制表符分隔的 `.tsv` 文件读取为 `Table<Dynamic>`。读取时检查引号格式和各行列数。表头 `time [s]` 中的 `s` 由 `schema` 作为列元数据返回，数值单元格仍为无量纲 `Float`。执行此 `IO` 操作后得到 `Ok(table)` 或 `Err(DataError)`。使用 `column_dyn` 按列名读取。
+Data	read_json	读取 JSON 文件为动态的 `Json` 值。执行此 `IO` 操作后得到 `Ok(json)` 或 `Err(DataError)`。使用 `from_json` 将值转换为 Aevia 类型。
+Data	read_npy	从 NumPy `.npy` 文件中读取浮点张量。必须指定具体秩，例如 `read_npy<2>(path)`，以确定结果类型。文件的秩与类型实参不一致时，此 `IO` 操作返回 `Err(DataError)`。
+Data	row	将选中的一行读为记录。行下标从零开始，`-1` 选择最后一行。下标越界时返回 `Err(DataError)`。
+Data	schema	返回运行时各列的名称、检测到的单元格类型和可选单位。整列单元格均可解析为数值时，`dtype` 为 `Float`，其余列为 `String`。单位是列标题中保存的文本。
+Data	select	按给定列名选取表中的列。例如 `select(table, ["time", "speed"])` 返回含时间和速度列的表。
+Data	to_dynamic	将表格的静态行类型改为 `Dynamic`，保留所有行、列名和单位元数据。使用 `column_dyn` 按列名读取单元格。
+Data	to_table	从记录向量构造表。字段名成为表列，字段值转为单元格文本。元素不是记录时返回 `Err(DataError)`，成功时返回 `Ok(table)`。
+Data	write_csv	将表写成以逗号分隔的 CSV 文件，表头保留各列的单位信息。执行此 `IO` 操作后得到 `Ok(())` 或 `Err(DataError)`。
+Data	write_json	将 `Json` 值写入文件。可先用 `to_json` 构造要写入的值。执行此 `IO` 操作后得到 `Ok(())` 或 `Err(DataError)`。
+Data	write_npy	将任意秩的无量纲 `Float` 张量写为 NumPy `.npy` 文件，使用小端序 64 位浮点数。执行此 `IO` 操作后得到 `Ok(())` 或 `Err(DataError)`。
+Data	Table	由带名称的列组成的表格，带有行类型参数。对 `Table<{ time: Float }>` 调用 `row` 等操作时使用该静态行类型。读取文件时，实际列名和可选单位来自文件表头。可用 `schema` 查看列信息，用 `column_dyn` 读取类型由运行时确定的单元格。
+Data.Csv	column	在运行时按名称查找列，将单元格组成一维张量。预期的元素类型由外围表达式给出，独立于表的行类型。数值单元格为无量纲 `Float`，其余为 `String`。找不到列时返回 `Err(DataError)`。当单元格类型由运行时确定时，使用 `column_dyn`。
+Data.Csv	column_dyn	在运行时按名称查找列，返回由动态 `Value` 单元格组成的一维张量。数值单元格为无量纲 `Float`，其余为 `String`。适用于任何行类型的表。找不到列时返回 `Err(DataError)`。
+Data.Csv	read_csv	读取以逗号分隔的 `.csv` 文件或以制表符分隔的 `.tsv` 文件。显式类型实参或外围表达式给出行类型，该类型仅用于静态检查。读取时按文件表头检查引号格式和各行列数。表头 `time [s]` 中的 `s` 由 `schema` 作为列元数据返回，数值单元格仍为无量纲 `Float`。执行此 `IO` 操作后得到 `Ok(table)` 或 `Err(DataError)`。
+Data.Csv	read_csv_dyn	将以逗号分隔的 `.csv` 文件或以制表符分隔的 `.tsv` 文件读取为 `Table<Dynamic>`。读取时检查引号格式和各行列数。表头 `time [s]` 中的 `s` 由 `schema` 作为列元数据返回，数值单元格仍为无量纲 `Float`。执行此 `IO` 操作后得到 `Ok(table)` 或 `Err(DataError)`。使用 `column_dyn` 按列名读取。
+Data.Csv	write_csv	将表写成以逗号分隔的 CSV 文件，表头保留各列的单位信息。执行此 `IO` 操作后得到 `Ok(())` 或 `Err(DataError)`。
+Data.Csv	Table	由带名称的列组成的表格，带有行类型参数。对 `Table<{ time: Float }>` 调用 `row` 等操作时使用该静态行类型。读取文件时，实际列名和可选单位来自文件表头。可用 `schema` 查看列信息，用 `column_dyn` 读取类型由运行时确定的单元格。
+Data.Npy	read_npy	从 NumPy `.npy` 文件中读取浮点张量。必须指定具体秩，例如 `read_npy<2>(path)`，以确定结果类型。文件的秩与类型实参不一致时，此 `IO` 操作返回 `Err(DataError)`。
+Data.Npy	write_npy	将任意秩的无量纲 `Float` 张量写为 NumPy `.npy` 文件，使用小端序 64 位浮点数。执行此 `IO` 操作后得到 `Ok(())` 或 `Err(DataError)`。
+Data.Json	from_json	将 `Json` 值解码为指定的 Aevia 类型。用类型标注指定目标类型。数据结构与目标不匹配时返回 `Err(SimError)`。
+Data.Json	read_json	读取 JSON 文件为动态的 `Json` 值。执行此 `IO` 操作后得到 `Ok(json)` 或 `Err(DataError)`。使用 `from_json` 将值转换为 Aevia 类型。
+Data.Json	to_json	将 Aevia 值编码成动态 `Json`，可交给 `write_json` 或 `simulate`。能否用 JSON 表示该值，在后续使用它时检查。
+Data.Json	write_json	将 `Json` 值写入文件。可先用 `to_json` 构造要写入的值。执行此 `IO` 操作后得到 `Ok(())` 或 `Err(DataError)`。
+Data.Table	column	在运行时按名称查找列，将单元格组成一维张量。预期的元素类型由外围表达式给出，独立于表的行类型。数值单元格为无量纲 `Float`，其余为 `String`。找不到列时返回 `Err(DataError)`。当单元格类型由运行时确定时，使用 `column_dyn`。
+Data.Table	column_dyn	在运行时按名称查找列，返回由动态 `Value` 单元格组成的一维张量。数值单元格为无量纲 `Float`，其余为 `String`。适用于任何行类型的表。找不到列时返回 `Err(DataError)`。
+Data.Table	filter	按原顺序保留满足条件的元素或行。对向量逐元素应用谓词，对矩阵逐行应用谓词，对 `Table` 则将一行作为记录传给谓词。
+Data.Table	join	`join(sep, parts)` 在字符串向量的元素之间插入分隔符 `sep`，是 `split` 的逆操作。\n\n`join(left, right, key)` 按指定列对两张表做内连接。每对键值相同的行产生一行。结果按左表行顺序排列，同一左表行的匹配按右表顺序排列。列按原顺序保留左表各列，并追加右表的非键列。缺少键列或出现有歧义的列名时，报 `E0903`。
+Data.Table	row	将选中的一行读为记录。行下标从零开始，`-1` 选择最后一行。下标越界时返回 `Err(DataError)`。
+Data.Table	schema	返回运行时各列的名称、检测到的单元格类型和可选单位。整列单元格均可解析为数值时，`dtype` 为 `Float`，其余列为 `String`。单位是列标题中保存的文本。
+Data.Table	select	按给定列名选取表中的列。例如 `select(table, ["time", "speed"])` 返回含时间和速度列的表。
+Data.Table	to_dynamic	将表格的静态行类型改为 `Dynamic`，保留所有行、列名和单位元数据。使用 `column_dyn` 按列名读取单元格。
+Data.Table	to_table	从记录向量构造表。字段名成为表列，字段值转为单元格文本。元素不是记录时返回 `Err(DataError)`，成功时返回 `Ok(table)`。
+Data.Table	Table	由带名称的列组成的表格，带有行类型参数。对 `Table<{ time: Float }>` 调用 `row` 等操作时使用该静态行类型。读取文件时，实际列名和可选单位来自文件表头。可用 `schema` 查看列信息，用 `column_dyn` 读取类型由运行时确定的单元格。
+Plot	combine	将一维数据系列张量合成一个图形规格。各系列共用坐标轴，坐标量纲和显式指定的轴设置须一致。
+Plot	default_plot_opts	包含默认绘图选项的记录。坐标轴采用线性刻度和自动轴限。可用记录更新设置标签、颜色、显示单位、刻度和轴限，再传给带 _with 的构造器。
+Plot	errorbar	绘制中心点和竖直误差条。三个向量须等长，误差量须非负且与 y 同量纲。误差量为非有限值时省略该点的误差条。
+Plot	errorbar_with	创建带竖直误差条的数据系列，并通过 `PlotOpts` 指定标签、颜色、单位、坐标轴刻度和轴限。
+Plot	heatmap	按值给矩阵单元格着色。第零行位于顶部，列索引向右递增。非有限值对应的单元格留空。
+Plot	heatmap_with	将矩阵转换为热图系列，并通过 `PlotOpts` 指定标签、单位、坐标轴刻度和轴限。
+Plot	hist	将数据分入正整数个等宽区间并绘制计数。至少需要一个有限观测值，其他观测值会被跳过。
+Plot	hist_with	创建直方图系列，并通过 `PlotOpts` 指定标签、颜色、单位、坐标轴刻度和轴限。
+Plot	label	设置 SVG 和 HTML 输出中该系列的提示文字。
+Plot	line	从两个等长向量构建折线系列。渲染时跳过含非有限坐标的坐标对，并连接其余坐标对。SVG 坐标轴标注单位。
+Plot	line_with	使用 PlotOpts 构造折线系列。可从 default_plot_opts 更新标签、颜色、显示单位、刻度或轴限。
+Plot	plot	执行时将内嵌 SVG 的 HTML 写入 plot.html。渲染或写入失败报 E0905。
+Plot	plot_save_gif	将非空图形规格向量渲染为循环播放的 800 × 400 GIF。显式指定帧延时，单位为百分之一秒，可取 0 到 65535 的整数。直接调用不带模块限定的 `plot_save_gif(path, frames)` 时，延时为 10。最多 312 帧。IO 动作返回 Ok(()) 或 Err(IOError)。
+Plot	save	扩展名为 .svg 时保存独立 SVG，匹配不区分大小写。其他路径保存内嵌 SVG 的 HTML。渲染或写入失败报 E0905。
+Plot	scatter	从两个等长向量构建散点系列。每对有限坐标对应一个独立的标记。
+Plot	scatter_with	创建散点系列，并通过 `PlotOpts` 指定标签、颜色、单位、坐标轴刻度和轴限。
+Test	approx_eq	当 `a` 与 `b` 的绝对差不超过容差 `tol` 时返回 `true`。三个参数必须具有相同量纲。例如比较两个长度时，容差也应当是长度。
+Test	assert	断言布尔条件成立。条件为 `false` 时停止程序并显示诊断。此函数是 `IO` 操作，可放在 `do` 块或测试的顶层。
+Test	assert_eq	断言两个值相等。断言失败时，诊断会同时显示两个值。浮点计算容易积累舍入误差，宜使用 `approx_eq` 和适当的绝对容差。
+Test	compile_fail	将字符串作为独立的 Aevia 源码编译。如果编译失败，返回 `true`。编译时作用域中只有 Prelude，可用它测试类型检查器能否拒绝量纲不匹配等写法。
+Test	forall	对固定的数值样本检查命题。谓词接受一个无量纲的 `Real`。样本依次是 `0`、`1`、`-1`、`2`、`-3` 和 `1/2`。遇到反例时返回 `false`。没有反例但存在无法判定的样本时报 `E0804`。
+Measurement	measure	用测量值和标准不确定度构造 `Measurement<d>`。两个实参具有相同的物理量纲。
+Measurement	uncertainty	返回测量值的标准不确定度，也就是一个标准差（1σ）对应的误差量，量纲与测量值相同。
+Measurement	value	返回 `Measurement<d>` 中的测量值，保留其物理量纲。用 `uncertainty` 单独读取不确定度。
+Device	device_of	返回张量当前所在的计算设备。
+Device	on	`on(device, thunk)` 在请求的 CPU 设备上执行零参数函数 `thunk`，并返回 `IO` 结果。目前支持 `Cpu`，请求 `Gpu` 或 `Distributed` 会报 `E1001`。
+Device	to_device	将张量放置在请求的 CPU 设备上，并以 `IO` 返回张量。用 `device_of` 查询张量位置。目前支持 `Cpu`。即使 RSSN 宿主已发现 GPU，`Gpu` 或 `Distributed` 放置请求仍会报 `E1001`。
+Physics	simulate	按名称运行科学计算内核中的模拟场景，例如 `"ising"`。从 `Json` 读取参数并以 `Json` 返回结果。场景未知或参数无效时返回 `Err(SimError)`。可优先使用相应的类型化模块，例如 `Physics.Ising`。
+Physics.Ising	Params	伊辛模型模拟的输入。`width` 和 `height` 指定格点网格的尺寸，`temperature` 是无量纲温度，`mc_steps` 是蒙特卡洛步数，`seed` 是可选随机种子。
+Physics.Ising	IsingResult	伊辛模拟的输出，包含保存各格点自旋的二维整型张量 `spins`，以及无量纲的磁化量 `magnetization`。
+Physics.Ising	run	用 `Params` 运行伊辛模型模拟，返回包含自旋与磁化量的 `IsingResult`。参数无效时返回 `Err(SimError)`。
+Physics.Geodesic	Params	测地线模拟的输入。`black_hole_mass` 是黑洞质量，`initial_state` 是无量纲的一维初始状态张量，`proper_time_end` 是积分的终止固有时，`initial_dt` 是初始时间步长。
+Physics.Geodesic	GeodesicResult	测地线模拟的输出。`orbit` 是存放轨迹的二维无量纲浮点张量。
+Physics.Geodesic	run	用指定初始状态和时间区间运行测地线模拟，返回轨迹 `GeodesicResult`。参数无效时返回 `Err(SimError)`。

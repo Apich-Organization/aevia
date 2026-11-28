@@ -1,0 +1,108 @@
+## The `Math/NumberTheory` module of §8.20.
+# Generated standard library; do not edit.
+# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+module Math.NumberTheory
+
+## On an Int, returns its prime factorisation as a vector of (prime, exponent) pairs: factor(12) is [(2, 2), (3, 1)].
+##
+## **Signature:** `factor : Real[d] -> Real[d]`
+##
+## **Signature:** `factor : Int -> Tensor<1, (Int, Int)>`
+##
+## **Kernel signature** (overlay):
+## - `factor : (Real) -> Real`
+## - `factor : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result has the dimension of argument 1
+##
+## On an exact expression, factors it over the rationals.
+##
+## **Examples:**
+## ```text
+## factor(12)
+## let x = symbol("x")
+## factor(x^2 - 1)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let factor = factor
+## Greatest common divisor of two Ints; the result is never negative, and gcd(0, 0) is 0.
+##
+## **Signature:** `gcd : (Int, Int) -> Int`
+##
+## **Kernel signature** (derived):
+## - `gcd : (Real, Real) -> Real`
+## - `gcd : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+## - `gcd : (Int, Int) -> Int`
+##
+## **Dimensions:** the result is dimensionless
+##
+## **Examples:**
+## ```text
+## gcd(12, 18)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let gcd = gcd
+## True when an Int is prime.
+##
+## **Signature:** `is_prime : Int -> Bool`
+##
+## Negative numbers, 0 and 1 are not.
+##
+## **Examples:**
+## ```text
+## is_prime(97)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let is_prime = is_prime
+## Least common multiple of two Ints; zero if either argument is zero.
+##
+## **Signature:** `lcm : (Int, Int) -> Int`
+##
+## **Kernel signature** (derived):
+## - `lcm : (Real, Real) -> Real`
+## - `lcm : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+## - `lcm : (Int, Int) -> Int`
+##
+## **Dimensions:** the result is dimensionless
+##
+## **Examples:**
+## ```text
+## lcm(4, 6)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let lcm = lcm
+## Computes the exact residue of base raised to exponent modulo modulus.
+##
+## **Signature:** `mod_pow : (Int, Int, Int) -> Int`
+##
+## The result lies in [0, modulus). All arguments support arbitrary-size integers. The exponent must be nonnegative and the modulus positive.
+##
+## **Examples:**
+## ```text
+## mod_pow(-3, 3, 7)
+## mod_pow(2, 1000000, 97)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let mod_pow = mod_pow
+## All primes up to and including n, as a vector.
+##
+## **Signature:** `primes : Int -> Tensor<1, Int>`
+##
+## **Kernel signature** (derived):
+## - `primes : (Dyn<term>) -> Dyn<term>`
+## - `primes : (Int) -> Tensor<1, Int>`
+##
+## **Dimensions:** kernel rule `List`
+##
+## **Examples:**
+## ```text
+## primes(30)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let primes = primes

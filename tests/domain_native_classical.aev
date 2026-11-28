@@ -1,0 +1,77 @@
+## Exercises measured callbacks in native heat, motion and spectral operators.
+import Rssn_numerical_vector as Native
+
+type Motion = { positions: Tensor<2, Float[Length]>, velocities: Tensor<2, Float[Length/Time]> }
+type Particle = { position: Tensor<1, Float[Length]>, velocity: Tensor<1, Float[Length/Time]> }
+fn force(t: Float[Time], state: Particle): Tensor<1, Float[Mass*Length/Time^2]> =
+    if t >= 0.0 s && at(state.position, 0) >= 0.0 m && at(state.velocity, 0) >= 3.0 m/s then [2.0 N, 0.0 N, 0.0 N] else [0.0 N, 0.0 N, 0.0 N]
+
+fn motion(budget: Int): Result<Value, OpError> =
+    Native.num_native_classical_simulate_particle_motion([to_value(2.0 kg), to_value([0.0 m, 0.0 m, 0.0 m]), to_value([3.0 m/s, 0.0 m/s, 0.0 m/s]), to_value([0.0 s, 0.25 s]), to_value(4), to_value(budget)], [to_callback(force)])
+
+test "RK4 force callback receives both measured state fields and physical time" =
+    match motion(16) with
+    | Ok(result) -> match from_value<Motion>(result) with
+        | Ok(r) -> approx_eq(at(at(r.positions, 4), 0), 0.78125 m, 1e-12 m) && approx_eq(at(at(r.velocities, 4), 0), 3.25 m/s, 1e-12 m/s)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "RK4 rejects a callback budget below the required stages" =
+    match motion(15) with
+    | Ok(_) -> false
+    | Err(_) -> true
+
+fn initial_1d(x: Float[Length]): Float[Length] = x + 2.0 m
+fn initial_nd(x: Tensor<1, Float[Length]>): Float[Length] = at(x, 0) + 2.0 m
+
+fn stationary_heat(call: Result<Value, OpError>, points: Int, center: Int): Bool =
+    match call with
+    | Ok(result) -> match from_value<Tensor<2, Float[Length]>>(result) with
+        | Ok(r) -> shape(r) == [3, points] && approx_eq(at(at(r, 2), center), 3.0 m, 1e-12 m)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "1d zero-diffusivity heat keeps measured callback values and output shape" =
+    stationary_heat(Native.num_native_classical_solve_heat_equation_1d_crank_nicolson([to_value(0.0 m^2/s), to_value([[0.0 m, 2.0 m]]), to_value([3]), to_value([0.0 s, 0.4 s]), to_value(2), to_value(3)], [to_callback(initial_1d)]), 3, 1)
+
+test "2d zero-diffusivity heat keeps measured callback values and output shape" =
+    stationary_heat(Native.num_native_classical_solve_heat_equation_2d_crank_nicolson([to_value(0.0 m^2/s), to_value([[0.0 m, 2.0 m], [0.0 m, 2.0 m]]), to_value([3, 3]), to_value([0.0 s, 0.4 s]), to_value(2), to_value(9)], [to_callback(initial_nd)]), 9, 4)
+
+test "3d zero-diffusivity heat keeps measured callback values and output shape" =
+    stationary_heat(Native.num_native_classical_solve_heat_equation_3d_crank_nicolson([to_value(0.0 m^2/s), to_value([[0.0 m, 2.0 m], [0.0 m, 2.0 m], [0.0 m, 2.0 m]]), to_value([3, 3, 3]), to_value([0.0 s, 0.4 s]), to_value(2), to_value(27)], [to_callback(initial_nd)]), 27, 13)
+
+test "nd zero-diffusivity heat keeps measured callback values and output shape" =
+    stationary_heat(Native.num_native_classical_solve_heat_equation_nd_crank_nicolson([to_value(0.0 m^2/s), to_value([[0.0 m, 2.0 m], [0.0 m, 2.0 m]]), to_value([3, 3]), to_value([0.0 s, 0.4 s]), to_value(2), to_value(9)], [to_callback(initial_nd)]), 9, 4)
+
+
+test "heat stops when the initialization budget cannot cover the grid" =
+    match Native.num_native_classical_solve_heat_equation_1d_crank_nicolson([to_value(0.0 m^2/s), to_value([[0.0 m, 2.0 m]]), to_value([3]), to_value([0.0 s, 0.4 s]), to_value(2), to_value(2)], [to_callback(initial_1d)]) with
+    | Err(_) -> true
+    | Ok(_) -> false
+
+type Spectrum = { energies: Tensor<1, Float[Mass*Length^2/Time^2]>, discrete_eigenvectors: Tensor<2, Float>, coordinate_reference: Float[Length] }
+fn zero1(_x: Float[Length]): Float[Mass*Length^2/Time^2] = 0.0 J
+fn zero2(_x: Float[Length], _y: Float[Length]): Float[Mass*Length^2/Time^2] = 0.0 J
+fn zero3(_x: Float[Length], _y: Float[Length], _z: Float[Length]): Float[Mass*Length^2/Time^2] = 0.0 J
+fn constant1(_x: Float[Length]): Float[Mass*Length^2/Time^2] = 2e-20 J
+fn constant2(_x: Float[Length], _y: Float[Length]): Float[Mass*Length^2/Time^2] = 2e-20 J
+fn constant3(_x: Float[Length], _y: Float[Length], _z: Float[Length]): Float[Mass*Length^2/Time^2] = 2e-20 J
+
+fn constant_shifts_spectrum(reference: Result<Value, OpError>, updated: Result<Value, OpError>, nodes: Int): Bool =
+    match (reference, updated) with
+    | (Ok(base), Ok(shifted)) -> match (from_value<Spectrum>(base), from_value<Spectrum>(shifted)) with
+        | (Ok(a), Ok(b)) -> shape(a.energies) == [nodes] && shape(b.discrete_eigenvectors) == [nodes, nodes] && b.coordinate_reference == 1e-9 m && approx_eq(min_all(b.energies) - min_all(a.energies), 2e-20 J, 1e-30 J)
+        | _ -> false
+    | _ -> false
+
+test "1d Schrodinger adds a measured potential to the lowest energy" =
+    let args = [to_value([[0.0 m, 1e-9 m]]), to_value([3]), to_value(9.109e-31 kg), to_value(1e-9 m), to_value(3)]
+    constant_shifts_spectrum(Native.num_native_classical_solve_1d_schrodinger(args, [to_callback(zero1)]), Native.num_native_classical_solve_1d_schrodinger(args, [to_callback(constant1)]), 3)
+
+test "2d Schrodinger adds a measured potential to the lowest energy" =
+    let args = [to_value([[0.0 m, 1e-9 m], [0.0 m, 1e-9 m]]), to_value([3, 3]), to_value(9.109e-31 kg), to_value(1e-9 m), to_value(9)]
+    constant_shifts_spectrum(Native.num_native_classical_solve_2d_schrodinger(args, [to_callback(zero2)]), Native.num_native_classical_solve_2d_schrodinger(args, [to_callback(constant2)]), 9)
+
+test "3d Schrodinger adds a measured potential to the lowest energy" =
+    let args = [to_value([[0.0 m, 1e-9 m], [0.0 m, 1e-9 m], [0.0 m, 1e-9 m]]), to_value([3, 3, 3]), to_value(9.109e-31 kg), to_value(1e-9 m), to_value(27)]
+    constant_shifts_spectrum(Native.num_native_classical_solve_3d_schrodinger(args, [to_callback(zero3)]), Native.num_native_classical_solve_3d_schrodinger(args, [to_callback(constant3)]), 27)

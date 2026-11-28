@@ -1,0 +1,5 @@
+# deploy.sh stages snapshots under .backup-* and publishes a matching
+# aevia-db-*.sql.gz and aevia-data-*.tar.gz pair. Keep off-host copies of
+# both files with the same timestamp.
+*
+!.gitignore

@@ -1,0 +1,17 @@
+# Build-context filter for the platform repository.
+#
+# Without this file the context is ~4 GB (target/) and every build spends
+# minutes hashing build artefacts that no COPY instruction asks for.
+# The pattern syntax is Docker/BuildKit's, not .gitignore's: no negation tricks,
+# one pattern per line, directories end in "/".
+target/
+**/target/
+
+.git/
+.github/
+
+# Never ship the operator's secrets into the build context. They are not COPYed
+# by any Containerfile, but the daemon still receives the whole context.
+infra/.env
+infra/secrets/
+infra/backups/

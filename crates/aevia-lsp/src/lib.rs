@@ -1,0 +1,208 @@
+//! `aevia-lsp` — the editor adapter.
+//!
+//! This crate is the *only* place in the tree that knows what a client is. It
+//! reads `Content-Length`-framed JSON-RPC over a byte stream, keeps a document
+//! store, and translates between the protocol's vocabulary and
+//! [`aevia_analysis`]. Every semantic answer comes from that crate; nothing
+//! here type-checks anything.
+//!
+//! The split is deliberate. `aevia-analysis` must be usable by a web
+//! playground, a CLI and a Zed extension that never speak this protocol, so it
+//! has no `lsp-types`, no JSON and no `textDocument` vocabulary — a test in
+//! that crate fails the build if one appears. Conversely, every protocol
+//! decision (which capability to advertise, what `-32601` means, when to clear
+//! diagnostics) lives here and nowhere else.
+//!
+//! ```
+//! use std::io::Cursor;
+//!
+//! let mut stream = Vec::new();
+//! for message in [
+//!     r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+//!     r#"{"jsonrpc":"2.0","method":"exit"}"#,
+//! ] {
+//!     stream.extend(format!("Content-Length: {}\r\n\r\n{message}", message.len()).into_bytes());
+//! }
+//! let replies = Vec::new();
+//! let exit = aevia_lsp::serve(Cursor::new(stream), replies);
+//! assert_eq!(exit, aevia_lsp::Exit::Ungraceful);
+//! ```
+//!
+//! # Multi-module documents
+//!
+//! A `file:` URI is analysed through the real loader —
+//! `aevia_analysis::Analysis::from_path` — so its imports resolve. An unsaved
+//! buffer is loaded against one snapshot of **all open physical buffers**,
+//! including imported modules and imports that do not exist on disk yet.
+//! Only a document with no path to load from
+//! (`untitled:`, a scratch buffer) uses single-file analysis; the `initialize`
+//! result states this under `experimental.multiModuleAnalysis`.
+//!
+//! Loaded programs are kept in a per-server [`AnalysisCache`]: a request for the
+//! same file reuses the program while observed source contents, import
+//! candidates and package resolution are unchanged. It scans no unrelated
+//! directories and notices same-size edits even with restored mtimes.
+//! Opening, editing or closing an imported buffer republishes diagnostics for
+//! its open dependents. Incremental edits reuse the text of unaffected buffers.
+//! If two open URIs name one physical file, the last opened buffer supplies
+//! imports, while each focused entry uses its own text. Rename edits carry the
+//! versions and positions of the buffers used by analysis. `workspace/symbol`
+//! answers from all open documents' loaded modules, with each declaration's own
+//! file and range.
+//! Formatting operates directly on the buffer's syntax.
+//!
+//! # Navigation beyond a single name
+//!
+//! `references`, `prepareRename` and `rename` work over the loaded program (a
+//! declaration and its qualified or `open`ed uses in importers are one symbol),
+//! and `rename` returns a `WorkspaceEdit` with `documentChanges`.
+//! `documentHighlight` uses the same declaration identity in the focused
+//! document. `signatureHelp`
+//! resolves the call under the cursor — user functions, constructors, prelude
+//! overloads, `Rssn` operator overloads, class methods — and completion offers
+//! a record's fields after `.` and expression-starting keywords. Each of these
+//! is claimed in `initialize` only because a handler and a test exist.
+//!
+//! Semantic highlighting supports both full-document and viewport requests.
+//! A viewport response encodes only overlapping tokens and keeps their ranges
+//! intact when the viewport starts or ends inside a token.
+//!
+//! # Concurrency
+//!
+//! Reading and writing are separate threads, joined by channels, and the
+//! dispatcher sits between them. That is not decoration: a client that sends a
+//! request while the server is publishing diagnostics for a large file must
+//! not be able to deadlock the pair, and a single-threaded loop that writes
+//! synchronously can.
+
+#![forbid(unsafe_code)]
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
+pub mod protocol;
+pub mod server;
+pub mod transport;
+
+mod command;
+
+use std::io::BufReader;
+use std::io::Read;
+use std::io::Write;
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::Sender;
+use std::sync::mpsc::channel;
+use std::sync::mpsc::sync_channel;
+use std::thread;
+
+pub use server::Control;
+pub use server::Server;
+
+/// How the session ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Exit {
+    /// `shutdown` then `exit`, or the client closed the stream.
+    Graceful,
+    /// `exit` without `shutdown`: the protocol asks the process to exit 1.
+    Ungraceful,
+}
+
+/// One message on its way in.
+enum Incoming {
+    /// A parsed message.
+    Message(serde_json::Value),
+    /// A frame whose body was not JSON.
+    Malformed(String),
+}
+
+/// Runs one session to completion.
+///
+/// Reads framed messages from `input`, writes framed messages to `output`, and
+/// returns when the client sends `exit` or closes the stream.
+pub fn serve<R, W>(
+    input: R,
+    output: W,
+) -> Exit
+where
+    R: Read + Send + 'static,
+    W: Write + Send + 'static,
+{
+    let (to_client, from_server): (Sender<serde_json::Value>, Receiver<serde_json::Value>) =
+        channel();
+    let (to_server, from_client) = sync_channel(16);
+
+    // The writer owns the output for the whole session. Nothing in the
+    // dispatcher can block on it: `send` hands the message to this thread and
+    // returns.
+    let writer = thread::spawn(move || {
+        let mut writer = transport::Writer::new(output);
+        for message in from_server {
+            if writer.send(&message).is_err() {
+                break;
+            }
+        }
+    });
+
+    // The reader owns the input. It ends at end of stream or at the first
+    // framing error it cannot recover from; either way the dispatcher sees the
+    // channel close.
+    thread::spawn(move || {
+        let mut reader = transport::Reader::new(BufReader::new(input));
+        loop {
+            let incoming = match reader.next_message() {
+                | Ok(Some(message)) => Incoming::Message(message),
+                | Err(transport::TransportError::Json(error)) => {
+                    Incoming::Malformed(error.to_string())
+                },
+                // A broken frame cannot be resynchronised, so the session ends
+                // rather than inventing message boundaries.
+                | Ok(None) | Err(_) => break,
+            };
+            if to_server.send(incoming).is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut server = Server::new(to_client.clone());
+    let mut exit = Exit::Graceful;
+    for incoming in &from_client {
+        match incoming {
+            | Incoming::Message(message) => {
+                if let Control::Exit { graceful } = server.handle(message) {
+                    if !graceful {
+                        exit = Exit::Ungraceful;
+                    }
+                    break;
+                }
+            },
+            | Incoming::Malformed(detail) => server.parse_error(&detail),
+        }
+    }
+
+    // Dropping the last sender closes the writer's channel, which is what lets
+    // the join below finish: a server that returned before its last
+    // `publishDiagnostics` was written would lose it.
+    drop(server);
+    drop(from_client);
+    drop(to_client);
+    let _ = writer.join();
+    exit
+}
+
+/// Runs a session on the process's standard streams.
+#[must_use]
+pub fn serve_stdio() -> Exit {
+    serve(std::io::stdin(), std::io::stdout())
+}

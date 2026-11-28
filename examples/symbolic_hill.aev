@@ -1,0 +1,22 @@
+## Run: aevia test examples/symbolic_hill.aev
+import Rssn_pde as Pde
+
+fn ground(period: Float): Option<Float> =
+    ## Nine grid points resolve four sine/cosine pairs and the constant mode.
+    let args = [to_value(1.0), to_value(period), to_value(4.0), to_value(2.0), to_value(2.0), to_value(2.0), to_value(2.0), to_value(2.0), to_value(2.0), to_value(2.0), to_value(2.0), to_value(2.0)]
+    match Pde.hill_eigen(args) with
+    | Ok(result) ->
+        match from_value<Float>(result) with
+        | Ok(value) -> Some(value)
+        | Err(_) -> None
+    | Err(_) -> None
+
+let finite_ground =
+    approx_eq(unwrap_or(ground(6.0), -1.0), 2.0, 1e-12)
+
+let long_period_ground =
+    unwrap_or(ground(1e308), -1.0) == 2.0
+
+test "a Hill eigenvalue is a usable unitless scalar" = finite_ground
+
+test "the generated Hill wrapper handles very large periods" = long_period_ground

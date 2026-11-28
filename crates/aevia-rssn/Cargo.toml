@@ -1,0 +1,47 @@
+[package]
+name = "aevia-rssn"
+description = "Bridge between Aevia and the rssn scientific computing kernel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["jit", "gpu-wgpu", "npy"]
+jit = ["rssn/jit"]
+gpu-wgpu = ["rssn/gpu-wgpu"]
+npy = ["rssn/npy"]
+# Expose every RSSN feature to Aevia distribution builds.
+all-kernel-features = ["rssn/default", "rssn/dev-headers", "rssn/full", "rssn/gpu-wgpu"]
+
+[dependencies]
+aevia-dim.workspace = true
+num-bigint.workspace = true
+num-rational.workspace = true
+num-traits.workspace = true
+# Reading the scenario catalog (`sim`): defaults and examples are JSON.
+serde_json.workspace = true
+rssn ={ path = "../../../rssn", default-features = false }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# Native kernel conformance tests share the kernel array type. The optimizer
+# moved from `argmin` to `basin`, whose solvers are reached through
+# `rssn::kernels::optimize`, so no solver crate is needed here.
+ndarray = { version = "0.17", features = ["serde"] }
+num-traits.workspace = true
+rayon = "1"
+# Test-only edge: the conformance test feeds the generated modules back through
+# the real parser and the real checker. `aevia-types` depends on this crate, so
+# this is a dev-dependency cycle, which cargo allows and the library build never
+# sees.
+aevia-syntax.workspace = true
+aevia-types.workspace = true
+# The domain tests run the `tests/rssn_*.aev` suites through the real interpreter
+# and compare the coverage report with the chapter-8 names. `aevia-core` depends
+# on this crate, so this is a dev-dependency cycle, which cargo allows.
+aevia-core.workspace = true
+aevia-stdlib-model = { path = "../aevia-stdlib-model" }

@@ -1,0 +1,13 @@
+[Unit]
+Description=Aevia Book execution worker
+
+[Service]
+EnvironmentFile=%h/.config/aevia/playground.env
+ExecStart=%h/.local/bin/aevia-playground
+UMask=0077
+Delegate=yes
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target

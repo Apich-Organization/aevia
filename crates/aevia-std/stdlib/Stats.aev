@@ -1,0 +1,212 @@
+## The `Stats` module of §8.20.
+# Generated standard library; do not edit.
+# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+module Stats
+
+## The mean point of a vector of Points.
+##
+## **Signature:** `centroid : Tensor<1, Point[d]> -> Point[d]`
+##
+## **Examples:**
+## ```text
+## centroid([point(0.0, degC), point(10.0, degC)])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let centroid = centroid
+## Pearson correlation coefficient of two vectors of equal length, a dimensionless number between -1 and 1.
+##
+## **Signature:** `corr : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Scalar<div_rep(ρ),1>`
+##
+## **Examples:**
+## ```text
+## corr([1.0, 2.0, 3.0], [2.0, 4.0, 7.0])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let corr = corr
+## Sample covariance of two vectors of equal length.
+##
+## **Signature:** `cov : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Scalar<div_rep(ρ),d*e>`
+##
+## The result's dimension is the product of the two element dimensions.
+##
+## **Examples:**
+## ```text
+## cov([1.0, 2.0, 3.0], [2.0, 4.0, 7.0])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let cov = cov
+## `histogram(xs, bins)` counts finite sample values in a positive number of equal-width bins.
+##
+## **Signature:** `histogram : (Tensor<1, Scalar<ρ,d>>, Int) -> { counts: Tensor<1, Int>, edges: Tensor<1, Float[d]> }`
+##
+## Returns integer counts and `bins + 1` Float edges in the sample’s dimension.
+##
+## **Examples:**
+## ```text
+## histogram([1.0, 2.0, 2.5, 3.0, 9.0], 4)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let histogram = histogram
+## Sample kurtosis of a vector, a dimensionless measure of how heavy the tails are.
+##
+## **Signature:** `kurtosis : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,1>`
+##
+## **Kernel signature** (derived):
+## - `kurtosis : (Dyn<term>) -> Dyn<term>`
+## - `kurtosis : (Tensor<1, Int>) -> Real`
+##
+## **Dimensions:** the result is dimensionless
+##
+## **Examples:**
+## ```text
+## kurtosis([1.0, 2.0, 2.0, 3.0, 9.0])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let kurtosis = kurtosis
+## The arithmetic mean of every element of a tensor of any rank; the result has the elements' dimension.
+##
+## **Signature:** `mean : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>`
+##
+## **Kernel signature** (derived):
+## - `mean : (Dyn<term>) -> Dyn<term>`
+## - `mean : (Tensor<1, Int>) -> Real`
+##
+## **Dimensions:** the result has the dimension of argument 1
+##
+## An Int tensor gives an exact Real quotient.
+##
+## **Examples:**
+## ```text
+## mean([1.0, 2.0, 3.0, 6.0])
+## mean([1.0 m, 2.0 m, 3.0 m])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let mean = mean
+## The middle value of a vector; for an even length, the mean of the two middle values.
+##
+## **Signature:** `median : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,d>`
+##
+## **Kernel signature** (derived):
+## - `median : (Dyn<term>) -> Dyn<term>`
+## - `median : (Tensor<1, Int>) -> Real`
+## - `median : (Tensor<1, Real>) -> Real`
+##
+## **Dimensions:** the result has the dimension of argument 1
+##
+## The dimension is kept.
+##
+## **Examples:**
+## ```text
+## median([3.0, 1.0, 2.0, 10.0])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let median = median
+## The most frequent value of a vector; ties go to the smallest value.
+##
+## **Signature:** `mode : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,d>`
+##
+## **Kernel signature** (derived):
+## - `mode : (Dyn<term>) -> Dyn<term>`
+## - `mode : (Tensor<1, Int>) -> Int`
+## - `mode : (Tensor<1, Symbol>) -> Symbol`
+##
+## **Dimensions:** the result has the dimension of argument 1
+##
+## **Examples:**
+## ```text
+## mode([1, 2, 2, 3])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let mode = mode
+## quantile(xs, q) is the value below which a fraction q (between 0 and 1) of the data falls, with linear interpolation; quantile(xs, 0.5) is the median.
+##
+## **Signature:** `quantile : (Tensor<1, Scalar<ρ,d>>, Scalar<ρ,1>) -> Scalar<ρ,d>`
+##
+## **Kernel signature** (derived):
+## - `quantile : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+## - `quantile : (Tensor<1, Int>, Real) -> Real`
+## - `quantile : (Tensor<1, Int>, Int) -> Int`
+## - `quantile : (Tensor<1, Int>, Float) -> Float`
+##
+## **Dimensions:** the result has the dimension of argument 1
+##
+## **Examples:**
+## ```text
+## quantile([1.0, 2.0, 3.0, 4.0], 0.25)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let quantile = quantile
+## Compute Type-7 quantiles for a vector of dimensionless probabilities in [0, 1].
+##
+## **Signature:** `quantiles : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,1>>) -> Tensor<1, Scalar<div_rep(ρ),d>>`
+##
+## The batch shares one ordered sample and keeps the sample dimension and query order, including duplicates. Exact inputs use rational interpolation. The sample must be finite and nonempty. An empty probability vector returns an empty result.
+##
+## **Examples:**
+## ```text
+## quantiles([4.0 m, 1.0 m, 3.0 m, 2.0 m], [0.75, 0.25, 0.5])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let quantiles = quantiles
+## Sample skewness of a vector: positive when the long tail is on the right.
+##
+## **Signature:** `skewness : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,1>`
+##
+## **Kernel signature** (overlay):
+## - `skewness : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result is dimensionless
+##
+## The result is dimensionless.
+##
+## **Examples:**
+## ```text
+## skewness([1.0, 2.0, 2.0, 3.0, 9.0])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let skewness = skewness
+## Computes sample standard deviation in the elements’ dimension.
+##
+## **Signature:** `std : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>`
+##
+## **Kernel signature** (overlay):
+## - `std : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result has the dimension of argument 1
+##
+## A singleton has zero standard deviation.
+##
+## **Examples:**
+## ```text
+## std([1.0, 2.0, 3.0, 4.0])
+## ```
+##
+## *Source: Aevia standard library guide.*
+let std = std
+## Computes sample variance with divisor `n - 1` for two or more observations.
+##
+## **Signature:** `var : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d^2>`
+##
+## **Signature:** `var : (Tensor<n, Scalar<ρ,d>>, Bool) -> Scalar<div_rep(ρ),d^2>`
+##
+## A singleton has zero variance. The result dimension is the element dimension squared. A second Bool argument chooses the population variance when true.
+##
+## **Examples:**
+## ```text
+## var([1.0, 2.0, 3.0, 4.0])
+## var([1.0, 2.0, 3.0, 4.0], true)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let var = var

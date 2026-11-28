@@ -1,0 +1,546 @@
+//! Documents, their revisions, and the store a client keeps them in.
+//!
+//! A [`Document`] is a name (the client's URI, used only as an opaque key), a
+//! revision, the text, and a [`LineIndex`] kept in step with that text.
+//! [`Document::replace`] and [`Document::apply`] update them together.
+//! [`Document::apply_batch`] commits an ordered group of changes atomically.
+
+use crate::position::LineIndex;
+use crate::position::Position;
+use crate::position::Range;
+use crate::types::TextEdit;
+
+/// One edit to a document.
+///
+/// `range` is `None` for a whole-document replacement, which is what a client
+/// that does not support incremental sync sends. The range is expressed in
+/// positions rather than byte offsets because that is what the edit describes:
+/// the bytes it means depend on the text the edit is applied to, and that text
+/// is the document's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Change {
+    /// The text to replace, or `None` to replace the whole document.
+    pub range: Option<Range>,
+    /// The replacement text.
+    pub text: String,
+}
+
+impl Change {
+    /// A whole-document replacement.
+    #[must_use]
+    pub fn full(text: impl Into<String>) -> Self {
+        Self {
+            range: None,
+            text: text.into(),
+        }
+    }
+
+    /// A replacement of one range.
+    #[must_use]
+    pub fn ranged(
+        range: Range,
+        text: impl Into<String>,
+    ) -> Self {
+        Self {
+            range: Some(range),
+            text: text.into(),
+        }
+    }
+}
+
+/// Why an edit was refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EditError {
+    /// The range names a line the document does not have.
+    UnknownLine(u32),
+    /// The column lies beyond its line or inside a UTF-16 surrogate pair.
+    InvalidPosition(Position),
+    /// The range ends before it starts.
+    Reversed,
+}
+
+impl std::fmt::Display for EditError {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        match self {
+            | Self::UnknownLine(line) => {
+                write!(
+                    f,
+                    "the edit names line {}, which does not exist",
+                    u64::from(*line).saturating_add(1)
+                )
+            },
+            | Self::InvalidPosition(position) => {
+                write!(
+                    f,
+                    "the edit is not on a character boundary at {}:{}",
+                    position.line.saturating_add(1),
+                    position.column
+                )
+            },
+            | Self::Reversed => f.write_str("the edit ends before it starts"),
+        }
+    }
+}
+
+impl std::error::Error for EditError {}
+
+/// One open document.
+#[derive(Clone, Debug)]
+pub struct Document {
+    name: String,
+    version: i64,
+    text: String,
+    index: LineIndex,
+}
+
+impl Document {
+    /// Creates a document at revision `version`.
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        version: i64,
+        text: impl Into<String>,
+    ) -> Self {
+        let text = text.into();
+        let index = LineIndex::new(&text);
+        Self {
+            name: name.into(),
+            version,
+            text,
+            index,
+        }
+    }
+
+    /// The name the client opened it under.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The revision this text belongs to.
+    #[must_use]
+    pub const fn version(&self) -> i64 {
+        self.version
+    }
+
+    /// The text.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// The length in bytes.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.text.len()
+    }
+
+    /// True when the document is empty.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+
+    /// The line index, for callers that need more than one conversion.
+    #[must_use]
+    pub const fn index(&self) -> &LineIndex {
+        &self.index
+    }
+
+    /// The position of a byte offset.
+    #[must_use]
+    pub fn position(
+        &self,
+        offset: u32,
+    ) -> Position {
+        self.index.position(&self.text, offset)
+    }
+
+    /// The byte offset of a position.
+    #[must_use]
+    pub fn offset(
+        &self,
+        position: Position,
+    ) -> Option<u32> {
+        self.index.offset(&self.text, position)
+    }
+
+    /// The range covering a byte range.
+    #[must_use]
+    pub fn range_of(
+        &self,
+        start: u32,
+        end: u32,
+    ) -> Range {
+        Range::new(self.position(start), self.position(end))
+    }
+
+    /// The text of one line, without its terminator.
+    #[must_use]
+    pub fn line_text(
+        &self,
+        line: u32,
+    ) -> Option<&str> {
+        self.index.line_text(&self.text, line)
+    }
+
+    /// The range covering the whole document.
+    #[must_use]
+    pub fn full_range(&self) -> Range {
+        Range::new(Position::origin(), self.position(u32::MAX))
+    }
+
+    /// A whole-document replacement when the formatter changes the text.
+    ///
+    /// Formatting is syntactic. It can be requested without loading imports
+    /// or type-checking the document. A parse error yields no edit.
+    #[must_use]
+    pub fn formatting(&self) -> Option<TextEdit> {
+        let formatted = aevia_fmt::format_source(self.text()).ok()?;
+        if formatted == self.text() {
+            return None;
+        }
+        Some(TextEdit {
+            range: self.full_range(),
+            new_text: formatted,
+        })
+    }
+
+    /// Replaces the document's text and bumps the revision to `version`.
+    pub fn replace(
+        &mut self,
+        text: impl Into<String>,
+        version: i64,
+    ) {
+        self.text = text.into();
+        self.index = LineIndex::new(&self.text);
+        self.version = version;
+    }
+
+    /// Applies one edit at revision `version`.
+    ///
+    /// # Errors
+    ///
+    /// [`EditError`] when the range does not describe a place in the text. A
+    /// refused edit leaves the document untouched — half-applying an edit
+    /// would leave the client and the server disagreeing about every later
+    /// offset.
+    pub fn apply(
+        &mut self,
+        change: &Change,
+        version: i64,
+    ) -> Result<(), EditError> {
+        let Some(range) = change.range else {
+            self.replace(change.text.clone(), version);
+            return Ok(());
+        };
+        if range.end < range.start {
+            return Err(EditError::Reversed);
+        }
+        let lines = self.index.line_count();
+        for position in [range.start, range.end] {
+            if position.line >= lines {
+                return Err(EditError::UnknownLine(position.line));
+            }
+        }
+        let start = self.edit_offset(range.start)?;
+        let end = self.edit_offset(range.end)?;
+        self.text.replace_range(start..end, &change.text);
+        self.index = LineIndex::new(&self.text);
+        self.version = version;
+        Ok(())
+    }
+
+    fn edit_offset(
+        &self,
+        position: Position,
+    ) -> Result<usize, EditError> {
+        self.index
+            .exact_offset(&self.text, position)
+            .and_then(|offset| usize::try_from(offset).ok())
+            .ok_or(EditError::InvalidPosition(position))
+    }
+
+    /// Applies one revision's ordered changes atomically. Ranges are measured
+    /// against the preceding change's result; any invalid edit rolls back text,
+    /// line index and version for the entire batch.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first [`EditError`] if a change has an invalid range.
+    pub fn apply_batch(
+        &mut self,
+        changes: &[Change],
+        version: i64,
+    ) -> Result<(), EditError> {
+        match changes {
+            | [] => {
+                self.version = version;
+                return Ok(());
+            },
+            | [change] => return self.apply(change, version),
+            | _ => {},
+        }
+        let mut next = self.clone();
+        for change in changes {
+            next.apply(change, version)?;
+        }
+        next.version = version;
+        *self = next;
+        Ok(())
+    }
+}
+
+/// The documents a client has open.
+///
+/// Insertion order is preserved: a completion list, a symbol list or a log
+/// line that reorders itself between runs is a list that cannot be tested.
+#[derive(Clone, Debug, Default)]
+pub struct DocumentStore {
+    documents: Vec<Document>,
+}
+
+impl DocumentStore {
+    /// An empty store.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds a document, replacing any document with the same name.
+    pub fn open(
+        &mut self,
+        document: Document,
+    ) {
+        match self
+            .documents
+            .iter_mut()
+            .find(|open| open.name == document.name)
+        {
+            | Some(existing) => *existing = document,
+            | None => self.documents.push(document),
+        }
+    }
+
+    /// Removes a document and returns it.
+    pub fn close(
+        &mut self,
+        name: &str,
+    ) -> Option<Document> {
+        let index = self.documents.iter().position(|doc| doc.name == name)?;
+        Some(self.documents.remove(index))
+    }
+
+    /// The document opened under `name`.
+    #[must_use]
+    pub fn get(
+        &self,
+        name: &str,
+    ) -> Option<&Document> {
+        self.documents.iter().find(|doc| doc.name == name)
+    }
+
+    /// The document opened under `name`, mutably.
+    pub fn get_mut(
+        &mut self,
+        name: &str,
+    ) -> Option<&mut Document> {
+        self.documents.iter_mut().find(|doc| doc.name == name)
+    }
+
+    /// The open documents, in the order they were opened.
+    pub fn iter(&self) -> impl Iterator<Item = &Document> {
+        self.documents.iter()
+    }
+
+    /// How many documents are open.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.documents.len()
+    }
+
+    /// True when nothing is open.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.documents.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_incremental_edit_replaces_exactly_its_range() {
+        let mut doc = Document::new("a.aev", 1, "let x = 1\nlet y = 2\n");
+        // Replace `1` on line 0 with `41`.
+        doc.apply(
+            &Change::ranged(Range::new(Position::new(0, 8), Position::new(0, 9)), "41"),
+            2,
+        )
+        .expect("applies");
+        assert_eq!(doc.text(), "let x = 41\nlet y = 2\n");
+        assert_eq!(doc.version(), 2);
+    }
+
+    #[test]
+    fn an_edit_after_an_astral_character_lands_on_the_right_byte() {
+        let mut doc = Document::new("a.aev", 1, "let s = \"😀\"\nlet y = 2\n");
+        // The closing quote is column 11: nine units before the emoji, two for
+        // it. Its byte is 13, not 10 — that is the whole point of the index.
+        let start = doc.offset(Position::new(0, 11)).expect("offset");
+        assert_eq!(start, 13);
+        doc.apply(
+            &Change::ranged(
+                Range::new(Position::new(0, 11), Position::new(0, 12)),
+                "!\"",
+            ),
+            2,
+        )
+        .expect("applies");
+        assert_eq!(doc.text(), "let s = \"😀!\"\nlet y = 2\n");
+    }
+
+    #[test]
+    fn a_full_replacement_ignores_the_previous_text() {
+        let mut doc = Document::new("a.aev", 1, "let x = 1\n");
+        doc.apply(&Change::full("let z = 3"), 2).expect("applies");
+        assert_eq!(doc.text(), "let z = 3");
+        assert_eq!(doc.full_range().end, Position::new(0, 9));
+    }
+
+    #[test]
+    fn a_refused_edit_leaves_the_document_alone() {
+        let mut doc = Document::new("a.aev", 1, "let x = 1\n");
+        let error = doc
+            .apply(
+                &Change::ranged(Range::new(Position::new(5, 0), Position::new(5, 1)), "q"),
+                2,
+            )
+            .expect_err("refuses");
+        assert_eq!(error, EditError::UnknownLine(5));
+        assert_eq!(doc.text(), "let x = 1\n");
+        assert_eq!(doc.version(), 1);
+    }
+
+    #[test]
+    fn batches_preserve_text_and_revision_when_a_later_edit_is_invalid() {
+        let mut doc = Document::new("a.aev", 3, "let x = 1\n");
+        let changes = [
+            Change::full("let x = true\n"),
+            Change::ranged(Range::new(Position::new(9, 0), Position::new(9, 1)), "bad"),
+        ];
+        assert!(doc.apply_batch(&changes, 4).is_err());
+        assert_eq!(doc.text(), "let x = 1\n");
+        assert_eq!(doc.version(), 3);
+        let valid = [
+            Change::full("let x = 2\n"),
+            Change::ranged(Range::new(Position::new(0, 8), Position::new(0, 9)), "3"),
+        ];
+        doc.apply_batch(&valid, 5).unwrap();
+        assert_eq!(doc.text(), "let x = 3\n");
+        assert_eq!(doc.version(), 5);
+    }
+
+    #[test]
+    fn empty_and_one_change_batches_match_direct_revision_and_error_rules() {
+        let original = "header\r😀z\r\nlast";
+        let mut doc = Document::new("aevia-test", 1, original);
+        doc.apply_batch(&[], 2).unwrap();
+        assert_eq!(doc.version(), 2);
+        assert_eq!(doc.text(), original);
+
+        let before = doc.full_range();
+        for (start, end, error) in [
+            (
+                Position::new(1, 3),
+                Position::new(1, 2),
+                EditError::Reversed,
+            ),
+            (
+                Position::new(4, 0),
+                Position::new(4, 1),
+                EditError::UnknownLine(4),
+            ),
+            (
+                Position::new(1, 1),
+                Position::new(1, 2),
+                EditError::InvalidPosition(Position::new(1, 1)),
+            ),
+        ] {
+            let change = Change::ranged(Range::new(start, end), "bad");
+            assert_eq!(doc.apply_batch(&[change], 3), Err(error));
+            assert_eq!(doc.text(), original);
+            assert_eq!(doc.full_range(), before);
+            assert_eq!(doc.version(), 2);
+        }
+
+        let change = Change::ranged(Range::new(Position::new(1, 2), Position::new(1, 3)), "✓");
+        let mut direct = doc.clone();
+        direct.apply(&change, 4).unwrap();
+        doc.apply_batch(&[change], 4).unwrap();
+        assert_eq!(doc.text(), "header\r😀✓\r\nlast");
+        assert_eq!(doc.text(), direct.text());
+        assert_eq!(doc.version(), direct.version());
+        assert_eq!(doc.full_range(), direct.full_range());
+        assert_eq!(
+            doc.offset(Position::new(2, 0)),
+            direct.offset(Position::new(2, 0))
+        );
+
+        doc.apply_batch(&[Change::full("new\nline")], 5).unwrap();
+        assert_eq!(doc.text(), "new\nline");
+        assert_eq!(doc.version(), 5);
+        assert_eq!(doc.line_text(1), Some("line"));
+    }
+
+    #[test]
+    fn edits_require_exact_utf16_boundaries_and_columns() {
+        let mut doc = Document::new("a.aev", 1, "😀x\n");
+        for position in [Position::new(0, 1), Position::new(0, 8)] {
+            assert_eq!(
+                doc.apply(&Change::ranged(Range::new(position, position), "bad"), 2),
+                Err(EditError::InvalidPosition(position))
+            );
+            assert_eq!(doc.text(), "😀x\n");
+            assert_eq!(doc.version(), 1);
+        }
+        doc.apply(
+            &Change::ranged(Range::new(Position::new(0, 0), Position::new(0, 2)), "👍"),
+            3,
+        )
+        .unwrap();
+        assert_eq!(doc.text(), "👍x\n");
+    }
+
+    #[test]
+    fn edits_across_mixed_line_endings_reindex_the_updated_text() {
+        let mut doc = Document::new("a.aev", 1, "a\r😀x\r\nb\nc");
+        let changes = [
+            Change::ranged(Range::new(Position::new(0, 1), Position::new(1, 2)), "\r"),
+            Change::ranged(
+                Range::new(Position::new(2, 0), Position::new(3, 0)),
+                "Ω\r\n",
+            ),
+        ];
+        doc.apply_batch(&changes, 2).unwrap();
+        assert_eq!(doc.text(), "a\rx\r\nΩ\r\nc");
+        assert_eq!(doc.line_text(2), Some("Ω"));
+        assert_eq!(doc.offset(Position::new(3, 0)), Some(9));
+        assert_eq!(doc.version(), 2);
+    }
+
+    #[test]
+    fn the_store_keeps_opening_order() {
+        let mut store = DocumentStore::new();
+        store.open(Document::new("b.aev", 1, ""));
+        store.open(Document::new("a.aev", 1, ""));
+        let names: Vec<&str> = store.iter().map(Document::name).collect();
+        assert_eq!(names, ["b.aev", "a.aev"]);
+        assert!(store.close("b.aev").is_some());
+        assert!(store.get("b.aev").is_none());
+    }
+}

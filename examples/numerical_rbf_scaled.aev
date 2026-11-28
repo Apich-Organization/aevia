@@ -1,0 +1,10 @@
+## Run: aevia test examples/numerical_rbf_scaled.aev
+import Rssn_numerical_vector as V
+
+test "measured Gaussian RBF uses independent coordinate and ordinate units" =
+    let midpoint: Float[Time] = V.num_rbf_scaled([[0.0 m], [1.0 m]], [2.0 s, 2.0 s], [0.5 m], "gaussian", 1.0 m)
+    approx_eq(midpoint, 2.277395974032464 s, 1e-12 s)
+
+test "far inverse multiquadric keeps a representable measured weight" =
+    let distant: Float[Time] = V.num_rbf_scaled([[0.0 m]], [2.0 s], [1e200 m], "inverse_multiquadric", 1.0 m)
+    approx_eq(distant / (1e-200 s), 2.0, 1e-12)

@@ -1,0 +1,38 @@
+## The `Measurement` module of §8.20.
+# Generated standard library; do not edit.
+# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+module Measurement
+
+## Construct a measurement record containing a value and an uncertainty with the same physical dimension.
+##
+## **Signature:** `measure : (Real[d], Real[d]) -> Measurement<d>`
+##
+## **Examples:**
+## ```text
+## measure(3 m, 0.1 m)
+## ```
+##
+## *Source: Aevia standard library guide.*
+let measure = measure
+## The uncertainty field of a measurement: its one-sigma error, in the measurement's dimension.
+##
+## **Signature:** `uncertainty : Measurement<d> -> Real[d]`
+##
+## **Examples:**
+## ```text
+## uncertainty(measure(1.5 m, 0.1 m))
+## ```
+##
+## *Source: Aevia standard library guide.*
+let uncertainty = uncertainty
+## The value field of a measurement, the number without its uncertainty.
+##
+## **Signature:** `value : Measurement<d> -> Real[d]`
+##
+## **Examples:**
+## ```text
+## value(measure(1.5 m, 0.1 m))
+## ```
+##
+## *Source: Aevia standard library guide.*
+let value = value

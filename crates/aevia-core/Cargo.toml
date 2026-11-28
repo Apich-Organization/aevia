@@ -1,0 +1,41 @@
+[package]
+name = "aevia-core"
+description = "Values, interpreter and tensor runtime for the Aevia language"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["jit", "gpu-wgpu", "npy"]
+jit = ["aevia-rssn/jit"]
+gpu-wgpu = ["aevia-rssn/gpu-wgpu"]
+npy = ["aevia-rssn/npy"]
+
+[dependencies]
+aevia-dim.workspace = true
+aevia-syntax.workspace = true
+aevia-types.workspace = true
+aevia-ir.workspace = true
+aevia-resolve.workspace = true
+aevia-rssn.workspace = true
+aevia-std = { path = "../aevia-std" }
+rssn = { path = "../../../rssn", default-features = false }
+num-bigint.workspace = true
+num-integer.workspace = true
+num-rational.workspace = true
+num-traits.workspace = true
+indexmap.workspace = true
+serde.workspace = true
+bincode-next.workspace = true
+unicode-segmentation.workspace = true
+# Worker pool for parallel evaluation (§9.7); already in the build through faer.
+rayon = "1"
+
+[[bench]]
+name = "interp"
+harness = false
+
+[lints]
+workspace = true

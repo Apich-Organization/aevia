@@ -1,0 +1,611 @@
+//! Immutable lexical checking evidence and revision-local implementation code.
+//!
+//! A source identity survives editing; this snapshot belongs to one successful
+//! check. Closures retain it through their scope, rather than consulting mutable
+//! span tables belonging to a later check of the same file.
+
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+use crate::eval::InstanceEntry;
+use crate::value::Closure;
+use crate::value::ClosureBody;
+use crate::value::ClosureEnv;
+use crate::value::IrEnv;
+use crate::value::Scope;
+use crate::value::Value;
+use aevia_syntax::Expr;
+use aevia_syntax::Pat;
+use aevia_syntax::Span;
+use aevia_types::CheckedModule;
+use aevia_types::DictionaryUse;
+use aevia_types::Type;
+use std::cell::Cell;
+use std::cell::OnceCell;
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::rc::Weak;
+
+/// A span-keyed table on the per-call path (see [`crate::fxhash`]).
+pub type SpanMap<V> = crate::fxhash::FxHashMap<Span, V>;
+
+#[derive(Debug)]
+pub struct ModuleEvidence {
+    pub(crate) expr_types: SpanMap<Type>,
+    pub(crate) literal_reps: SpanMap<aevia_types::Rep>,
+    pub(crate) constant_regions: SpanMap<aevia_types::Rep>,
+    pub(crate) dyn_calls: SpanMap<aevia_dim::Dim>,
+    pub(crate) system_calls: SpanMap<(String, aevia_dim::Dim)>,
+    pub(crate) rssn_calls: SpanMap<aevia_rssn::OpKey>,
+    pub(crate) dictionaries: SpanMap<Vec<DictionaryUse>>,
+    pub(crate) method_refs: SpanMap<aevia_types::check::ClassMethodRef>,
+    pub(crate) constructor_refs: SpanMap<(aevia_types::adt::AdtId, usize)>,
+    pub(crate) functions: SpanMap<aevia_types::check::FunctionEvidence>,
+    pub(crate) callable_refs: SpanMap<aevia_types::CallableProjection>,
+    pub(crate) try_targets: SpanMap<aevia_types::check::TryTarget>,
+    pub(crate) units: aevia_dim::UnitTable,
+}
+#[derive(Debug)]
+pub struct ModuleContext {
+    pub(crate) evidence: ModuleEvidence,
+    pub(crate) session: Weak<()>,
+    pub(crate) instances: RefCell<InstanceTemplates>,
+}
+fn respan<V: Clone>(table: &std::collections::HashMap<Span, V>) -> SpanMap<V> {
+    table
+        .iter()
+        .map(|(span, value)| (*span, value.clone()))
+        .collect()
+}
+
+impl ModuleContext {
+    pub(crate) fn new(
+        checked: &CheckedModule,
+        session: &Rc<()>,
+    ) -> Rc<Self> {
+        let mut dictionaries: SpanMap<Vec<DictionaryUse>> = SpanMap::default();
+        for site in &checked.dictionaries {
+            dictionaries
+                .entry(site.span)
+                .or_default()
+                .push(site.clone());
+        }
+        Rc::new(Self {
+            evidence: ModuleEvidence {
+                expr_types: respan(&checked.expr_types),
+                literal_reps: respan(&checked.literal_reps),
+                constant_regions: respan(&checked.constant_regions),
+                system_calls: respan(&checked.system_calls),
+                dyn_calls: checked
+                    .dyn_calls
+                    .iter()
+                    .map(|site| (site.span, site.dim.clone()))
+                    .collect(),
+                rssn_calls: checked
+                    .rssn_calls
+                    .iter()
+                    .map(|site| (site.span, site.key.clone()))
+                    .collect(),
+                dictionaries,
+                method_refs: respan(&checked.method_refs),
+                constructor_refs: respan(&checked.constructor_refs),
+                functions: respan(&checked.functions),
+                callable_refs: respan(&checked.callable_refs),
+                try_targets: respan(&checked.try_targets),
+                units: checked.units.clone(),
+            },
+            session: Rc::downgrade(session),
+            instances: RefCell::default(),
+        })
+    }
+}
+#[derive(Clone, Debug)]
+pub enum MethodCode {
+    Ast {
+        site: Span,
+        params: Vec<Pat>,
+        body: Expr,
+        name: String,
+    },
+    Ir(Rc<aevia_ir::Function>),
+}
+/// The code owns no lexical environment; that is retained by closures and the
+/// acyclic imported-scope graph. Reconstructing a method cannot create a new
+/// environment/reference cycle.
+#[derive(Clone, Debug)]
+pub struct InstanceTemplate {
+    pub(crate) entry: InstanceEntry,
+    pub(crate) method: String,
+    pub(crate) code: Rc<MethodCode>,
+    pub(crate) scope: Weak<Scope>,
+    pub(crate) cached: Rc<RefCell<Weak<Closure>>>,
+}
+
+/// Instance order and its optional lookup index belong to the same snapshot.
+/// A rollback can restore an equally sized list of different implementations.
+#[derive(Clone, Debug, Default)]
+pub struct InstanceTemplates {
+    entries: Vec<InstanceTemplate>,
+    scanned: Cell<usize>,
+    by_global: OnceCell<Rc<crate::fxhash::FxHashMap<String, usize>>>,
+}
+
+const INDEX_MINIMUM: usize = 64;
+const INDEX_RECENT: usize = 8;
+// Defer indexing until repeated deep scans spend at least this many passes.
+const INDEX_SCAN_PASSES: usize = 12;
+
+impl InstanceTemplates {
+    pub(crate) fn push(
+        &mut self,
+        template: InstanceTemplate,
+    ) {
+        self.entries.push(template);
+        self.scanned.set(0);
+        let _ = self.by_global.take();
+    }
+
+    pub(crate) fn iter(&self) -> std::slice::Iter<'_, InstanceTemplate> {
+        self.entries.iter()
+    }
+
+    #[inline]
+    fn find(
+        &self,
+        global: &str,
+    ) -> Option<&InstanceTemplate> {
+        // Small contexts retain the reverse scan. Larger ones also resolve
+        // the most recent definition directly before building the index.
+        if self.entries.len() < INDEX_MINIMUM {
+            return self
+                .entries
+                .iter()
+                .rev()
+                .find(|template| template.entry.global == global);
+        }
+        let (last, earlier) = self.entries.split_last()?;
+        if last.entry.global == global {
+            return Some(last);
+        }
+        if let Some(index) = self.by_global.get() {
+            return self.entries.get(*index.get(global)?);
+        }
+        self.find_scanned(earlier, global)
+    }
+
+    #[inline(never)]
+    #[allow(
+        clippy::single_call_fn,
+        reason = "keeps scan accounting and index construction outside the inlined lookup"
+    )]
+    fn find_scanned<'a>(
+        &self,
+        earlier: &'a [InstanceTemplate],
+        global: &str,
+    ) -> Option<&'a InstanceTemplate> {
+        let found = earlier
+            .iter()
+            .rposition(|template| template.entry.global == global);
+        let length = self.entries.len();
+        let examined = length.saturating_sub(found.unwrap_or(0));
+        if examined > INDEX_RECENT {
+            let total = self.scanned.get().saturating_add(examined);
+            self.scanned.set(total);
+            if total >= length.saturating_mul(INDEX_SCAN_PASSES) {
+                // A later insertion replaces an earlier key, as in a reverse walk.
+                self.by_global.get_or_init(|| {
+                    Rc::new(
+                        self.entries
+                            .iter()
+                            .enumerate()
+                            .map(|(index, template)| (template.entry.global.clone(), index))
+                            .collect(),
+                    )
+                });
+            }
+        }
+        earlier.get(found?)
+    }
+}
+
+impl InstanceTemplate {
+    pub(crate) fn instantiate(&self) -> Option<Value> {
+        if let Some(closure) = self.cached.borrow().upgrade() {
+            return Some(Value::Closure(closure));
+        }
+        let scope = self.scope.upgrade()?;
+        let closure = match &*self.code {
+            | MethodCode::Ast {
+                params,
+                body,
+                name,
+                site,
+            } => {
+                let mut closure = Closure::ast(
+                    params.clone(),
+                    body.clone(),
+                    scope.clone(),
+                    Some(name.clone()),
+                );
+                closure.proof = scope.context.as_ref().and_then(|context| {
+                    crate::generics::FunctionProof::at(context, *site, scope.types.as_ref())
+                });
+                closure
+            },
+            | MethodCode::Ir(function) => {
+                Closure {
+                    canonical_origin: Weak::new(),
+                    params: Vec::new(),
+                    body: ClosureBody::Ir(function.clone()),
+                    env: ClosureEnv::Ir(Rc::new(IrEnv {
+                        slots: RefCell::new(Vec::new()),
+                        scope: Some(scope.clone()),
+                    })),
+                    name: Some(function.name.clone()),
+                    captured_bindings: scope.types.clone(),
+                    proof: scope.context.as_ref().and_then(|context| {
+                        crate::generics::FunctionProof::at(
+                            context,
+                            function.span,
+                            scope.types.as_ref(),
+                        )
+                    }),
+                }
+            },
+        };
+        let closure = Rc::new(closure);
+        *self.cached.borrow_mut() = Rc::downgrade(&closure);
+        Some(Value::Closure(closure))
+    }
+}
+
+pub type PreviousContext = (
+    Rc<ModuleContext>,
+    Option<Rc<Scope>>,
+    Option<Rc<crate::generics::CallBindings>>,
+);
+impl crate::Interp {
+    /// A span locates evidence within the current lexical revision. This getter
+    /// does not authenticate the provenance of a host-origin call or argument.
+    pub(crate) fn expr_type(
+        &self,
+        span: Span,
+    ) -> Option<&Type> {
+        self.context.evidence.expr_types.get(&span)
+    }
+
+    pub(crate) fn enter_scope(
+        &mut self,
+        scope: &Rc<Scope>,
+    ) -> Result<Option<PreviousContext>, crate::eval::EvalError> {
+        if self
+            .active_scope
+            .as_ref()
+            .is_some_and(|active| Rc::ptr_eq(active, scope))
+        {
+            return Ok(None);
+        }
+        let context = scope.context.as_ref().unwrap_or(&self.context);
+        if !context
+            .session
+            .upgrade()
+            .is_some_and(|session| Rc::ptr_eq(&session, &self.session))
+        {
+            return Err(crate::eval::EvalError::new(
+                "E0809",
+                "a closure belongs to a different or reset interpreter session",
+            ));
+        }
+        let old = (
+            self.context.clone(),
+            self.active_scope.clone(),
+            self.bindings.clone(),
+        );
+        self.context = context.clone();
+        self.active_scope = Some(scope.clone());
+        self.bindings.clone_from(&scope.types);
+        Ok(Some(old))
+    }
+
+    pub(crate) fn restore_context(
+        &mut self,
+        previous: Option<PreviousContext>,
+    ) {
+        if let Some((context, scope, bindings)) = previous {
+            self.context = context;
+            self.active_scope = scope;
+            self.bindings = bindings;
+        }
+    }
+
+    pub(crate) fn remember_scope(
+        &mut self,
+        scope: &Rc<Scope>,
+    ) {
+        self.module_scopes
+            .insert(self.current_module.clone(), scope.clone());
+    }
+
+    pub(crate) fn module_scope(
+        &mut self,
+        imports: Vec<Rc<Scope>>,
+    ) -> Rc<Scope> {
+        let scope = Scope::module(self.context.clone(), imports);
+        self.remember_scope(&scope);
+        scope
+    }
+
+    /// The instantiated body of the first visible template whose global is
+    /// `global`, in the order [`Self::instance_templates`] lists them.
+    ///
+    /// An expired defining scope returns `None` and still shadows later templates.
+    pub(crate) fn find_instance_template(
+        &self,
+        global: &str,
+    ) -> Option<Value> {
+        // The innermost context is searched first by the full walk below, so
+        // a hit there needs none of the walk's bookkeeping.
+        if let Some(context) = self
+            .active_scope
+            .as_ref()
+            .and_then(|scope| scope.context.as_ref())
+            && let Some(template) = context.instances.borrow().find(global)
+        {
+            return template.instantiate();
+        }
+        let mut pending = self.active_scope.iter().cloned().collect::<Vec<_>>();
+        let mut scopes = std::collections::HashSet::new();
+        let mut contexts = std::collections::HashSet::new();
+        while let Some(scope) = pending.pop() {
+            if !scopes.insert(Rc::as_ptr(&scope)) {
+                continue;
+            }
+            if let Some(context) = &scope.context
+                && contexts.insert(Rc::as_ptr(context))
+                && let Some(template) = context.instances.borrow().find(global)
+            {
+                return template.instantiate();
+            }
+            pending.extend(scope.imports.iter().rev().cloned());
+            if let Some(parent) = &scope.parent {
+                pending.push(parent.clone());
+            }
+        }
+        None
+    }
+
+    /// The mangled global of `key`'s `method`, formatted once per call site.
+    ///
+    /// Mangling renders the whole key through `Debug`, which was a large share
+    /// of every instance method call. The cache is keyed by the call's span and
+    /// verified against the key itself, so a re-checked module that reuses a
+    /// span for a different instance cannot be answered from a stale entry.
+    pub(crate) fn cached_instance_global(
+        &self,
+        span: Span,
+        key: &aevia_types::InstanceKey,
+        method: &str,
+    ) -> Rc<str> {
+        let mut cache = self.instance_globals.borrow_mut();
+        if cache.len() >= 4096 {
+            cache.clear();
+        }
+        let entries = cache.entry(span).or_default();
+        if let Some((_, _, global)) = entries
+            .iter()
+            .find(|(cached, name, _)| cached == key && name == method)
+        {
+            return global.clone();
+        }
+        let global: Rc<str> = Self::instance_global(key, method).into();
+        entries.push((key.clone(), method.to_string(), global.clone()));
+        global
+    }
+
+    /// An empty buffer with room for `capacity` values, reused when one is free.
+    ///
+    /// Every call builds an argument list and a frame; both are dropped when
+    /// the call ends, so a one-slot-per-call allocation pair is recycled
+    /// instead.
+    pub(crate) fn take_buffer(
+        &self,
+        capacity: usize,
+    ) -> Vec<Value> {
+        let mut buffer = self.buffer_pool.borrow_mut().pop().unwrap_or_default();
+        buffer.reserve(capacity);
+        buffer
+    }
+
+    /// Returns a buffer taken with [`Self::take_buffer`] (or any `Vec`) to the pool.
+    pub(crate) fn recycle_buffer(
+        &self,
+        mut buffer: Vec<Value>,
+    ) {
+        // Dropping the values may run arbitrary destructors, so it happens
+        // before the pool is borrowed.
+        buffer.clear();
+        if buffer.capacity() != 0 && buffer.capacity() <= 256 {
+            let mut pool = self.buffer_pool.borrow_mut();
+            if pool.len() < 64 {
+                pool.push(buffer);
+            }
+        }
+    }
+
+    pub(crate) fn instance_templates(&self) -> Vec<InstanceTemplate> {
+        let mut pending = self.active_scope.iter().cloned().collect::<Vec<_>>();
+        let mut scopes = std::collections::HashSet::new();
+        let mut contexts = std::collections::HashSet::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut result = Vec::new();
+        while let Some(scope) = pending.pop() {
+            if !scopes.insert(Rc::as_ptr(&scope)) {
+                continue;
+            }
+            if let Some(context) = &scope.context
+                && contexts.insert(Rc::as_ptr(context))
+            {
+                for template in context.instances.borrow().iter().rev() {
+                    // Newest lexical implementation wins only within this
+                    // revision's scope graph, never via mutable globals.
+                    if seen.insert(template.entry.global.clone()) {
+                        result.push(template.clone());
+                    }
+                }
+            }
+            pending.extend(scope.imports.iter().rev().cloned());
+            if let Some(parent) = &scope.parent {
+                pending.push(parent.clone());
+            }
+        }
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn template(
+        global: &str,
+        name: &str,
+        scope: &Rc<Scope>,
+    ) -> InstanceTemplate {
+        InstanceTemplate {
+            entry: InstanceEntry {
+                key: None,
+                checked_head: None,
+                shape: crate::eval::HeadShape::Scalar("Int"),
+                global: global.into(),
+            },
+            method: "test".into(),
+            scope: Rc::downgrade(scope),
+            cached: Rc::new(RefCell::new(Weak::new())),
+            code: Rc::new(MethodCode::Ast {
+                site: Span::default(),
+                params: Vec::new(),
+                body: Expr {
+                    kind: aevia_syntax::ExprKind::UnitLit,
+                    span: Span::default(),
+                },
+                name: name.into(),
+            }),
+        }
+    }
+
+    #[test]
+    fn implementation_templates_do_not_keep_their_defining_scope_alive() {
+        let session = Rc::new(());
+        let context = ModuleContext::new(&CheckedModule::default(), &session);
+        let scope = Scope::module(context.clone(), Vec::new());
+        let weak = Rc::downgrade(&scope);
+        context
+            .instances
+            .borrow_mut()
+            .push(template("test", "test", &scope));
+        let instances = context.instances.borrow();
+        let entry = instances.find("test").unwrap();
+        assert!(entry.instantiate().is_some());
+        drop(scope);
+        assert!(weak.upgrade().is_none());
+        assert!(entry.instantiate().is_none());
+    }
+
+    #[test]
+    fn near_tail_scans_stay_unindexed_and_repeated_misses_promote() {
+        let session = Rc::new(());
+        let context = ModuleContext::new(&CheckedModule::default(), &session);
+        let scope = Scope::module(context.clone(), Vec::new());
+        let mut instances = context.instances.borrow_mut();
+        for i in 0..INDEX_MINIMUM {
+            instances.push(template(&format!("global_{i}"), "body", &scope));
+        }
+        let near = format!("global_{}", INDEX_MINIMUM - INDEX_RECENT);
+        for _ in 0..INDEX_SCAN_PASSES * INDEX_MINIMUM {
+            assert!(instances.find(&near).is_some());
+        }
+        assert_eq!(instances.scanned.get(), 0);
+        for _ in 1..INDEX_SCAN_PASSES {
+            assert!(instances.find("absent").is_none());
+            assert!(instances.by_global.get().is_none());
+        }
+        assert!(instances.find("absent").is_none());
+        assert!(instances.by_global.get().is_some());
+        assert!(instances.find(&near).is_some());
+    }
+
+    #[test]
+    fn indexed_shadowing_and_rollback_preserve_lexical_order() {
+        let checked = CheckedModule::default();
+        let mut interp = crate::Interp::new(&checked);
+        let context = interp.context.clone();
+        let imported_context = ModuleContext::new(&checked, &interp.session);
+        let imported = Scope::module(imported_context.clone(), Vec::new());
+        imported_context
+            .instances
+            .borrow_mut()
+            .push(template("shared", "imported", &imported));
+        let local = Scope::module(context.clone(), vec![imported]);
+        interp.active_scope = Some(local.clone());
+        context
+            .instances
+            .borrow_mut()
+            .push(template("shared", "original", &local));
+        for i in 0..INDEX_MINIMUM {
+            context.instances.borrow_mut().push(template(
+                &format!("unrelated_{i}"),
+                "other",
+                &local,
+            ));
+        }
+        let read_name = || {
+            match interp.find_instance_template("shared") {
+                | Some(Value::Closure(value)) => value.name.as_deref().map(str::to_owned),
+                | _ => None,
+            }
+        };
+        assert_eq!(read_name().as_deref(), Some("original"));
+        assert!(context.instances.borrow().by_global.get().is_none());
+        for _ in 1..INDEX_SCAN_PASSES {
+            assert_eq!(read_name().as_deref(), Some("original"));
+        }
+        assert!(context.instances.borrow().by_global.get().is_some());
+        let snapshot = context.instances.borrow().clone();
+        let temporary = Scope::child(&local);
+        context
+            .instances
+            .borrow_mut()
+            .push(template("shared", "temporary", &temporary));
+        for i in 0..INDEX_RECENT {
+            context
+                .instances
+                .borrow_mut()
+                .push(template(&format!("later_{i}"), "other", &local));
+        }
+        assert!(context.instances.borrow().by_global.get().is_none());
+        for _ in 0..INDEX_SCAN_PASSES * 20 {
+            assert_eq!(read_name().as_deref(), Some("temporary"));
+        }
+        assert!(context.instances.borrow().by_global.get().is_some());
+        drop(temporary);
+        assert_eq!(
+            read_name(),
+            None,
+            "the expired definition still shadows both bodies"
+        );
+        *context.instances.borrow_mut() = snapshot;
+        assert!(context.instances.borrow().by_global.get().is_some());
+        assert_eq!(read_name().as_deref(), Some("original"));
+    }
+}

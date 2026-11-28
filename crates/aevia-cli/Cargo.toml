@@ -1,0 +1,59 @@
+[package]
+name = "aevia-cli"
+description = "Command line interface for the Aevia language"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "aevia"
+path = "src/main.rs"
+
+[features]
+default = ["jit", "gpu-wgpu", "npy"]
+jit = ["aevia-core/jit"]
+gpu-wgpu = ["aevia-core/gpu-wgpu"]
+npy = ["aevia-core/npy"]
+
+[dependencies]
+aevia-dim.workspace = true
+aevia-syntax.workspace = true
+aevia-types.workspace = true
+aevia-stdlib-model.workspace = true
+aevia-ir.workspace = true
+aevia-core.workspace = true
+aevia-resolve.workspace = true
+aevia-rssn.workspace = true
+aevia-std = { path = "../aevia-std" }
+aevia-fmt.workspace = true
+aevia-doc.workspace = true
+aevia-lint.workspace = true
+# `aevia lsp` starts the server from this binary. The server is a library as
+# well as a binary precisely so that the CLI can host it.
+aevia-lsp.workspace = true
+# Baseline files for `aevia bench --save-baseline/--compare-baseline`; the
+# workspace already owns the dependency through the LSP.
+serde_json.workspace = true
+serde.workspace = true
+# Terminal editor: history stays in memory; bracketed paste is one submission.
+rustyline = { version = "19", default-features = false }
+# A REPL signal handler sets the runtime cancellation token.
+ctrlc = "3.5"
+
+[target.'cfg(unix)'.dependencies]
+# Poll foreground program input without blocking past an interrupt.
+nix = { version = "0.31", features = ["poll"] }
+
+[target.'cfg(windows)'.dependencies]
+crossterm = { version = "0.29", default-features = false, features = ["events", "windows"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_System_Com",
+    "Win32_System_Registry",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[lints]
+workspace = true

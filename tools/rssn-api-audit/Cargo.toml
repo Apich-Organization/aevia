@@ -1,0 +1,24 @@
+[package]
+name = "rssn-api-audit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["jit", "gpu-wgpu", "npy"]
+jit = ["aevia-rssn/jit"]
+gpu-wgpu = ["aevia-rssn/gpu-wgpu"]
+npy = ["aevia-rssn/npy"]
+
+[dependencies]
+aevia-rssn.workspace = true
+aevia-stdlib-model.workspace = true
+rssn-api-model = { path = "../../../rssn/tools/rssn-api-model" }
+rssn = { path = "../../../rssn", default-features = false }
+syn = { version = "2", features = ["full", "visit"] }
+quote = "1"
+
+[lints]
+workspace = true

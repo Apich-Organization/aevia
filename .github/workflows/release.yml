@@ -1,0 +1,312 @@
+# Version tags prepare an immutable release draft. Nightly runs publish one
+# prerelease per UTC day after all required checks and builds pass.
+
+name: Release
+
+"on":
+  push:
+    tags: ['v[0-9]*']
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Release channel"
+        type: choice
+        options: [versioned, nightly]
+        default: versioned
+      version:
+        description: "Release version (e.g. 0.1.0-beta.1); defaults to Cargo.toml version if empty"
+        type: string
+        required: false
+        default: ""
+      dry_run:
+        description: "Build the artifacts without creating a release or pushing the image"
+        type: boolean
+        default: true
+      rssn_ref:
+        description: "RSSN version tag (defaults to the locked version); dry runs also accept a branch or commit"
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.100.0"
+
+jobs:
+  verify:
+    name: Verify release metadata and select RSSN
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      distribution: ${{ steps.version.outputs.distribution }}
+      nightly: ${{ steps.version.outputs.nightly }}
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      rssn_commit: ${{ steps.rssn.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          version=$(sed -n '/^\[workspace\.package\]/,/^\[/{s/^version = "\(.*\)"$/\1/p}' Cargo.toml)
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::invalid Cargo.toml release version"
+            exit 1
+          fi
+          if [ -n "$INPUT_VERSION" ] && [ "${INPUT_VERSION#v}" != "$version" ]; then
+            echo "::error::the requested version must match Cargo.toml ($version)"
+            exit 1
+          fi
+          nightly=false
+          if [[ "$GITHUB_EVENT_NAME" == schedule || "$CHANNEL" == nightly ]]; then
+            nightly=true
+            tag="nightly-$(date -u +%F)"
+            distribution="$tag"
+            pre=true
+          else
+            tag="v$version"
+            distribution="$version"
+            case "$version" in *-*) pre=true ;; *) pre=false ;; esac
+            python3 scripts/extract_changelog.py --required --version "$version" >/dev/null
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" != "refs/tags/$tag" ]]; then
+            echo "::error::The pushed tag must match $tag"
+            exit 1
+          fi
+          {
+            echo "version=$version"
+            echo "distribution=$distribution"
+            echo "tag=$tag"
+            echo "nightly=$nightly"
+            echo "prerelease=$pre"
+          } >> "$GITHUB_OUTPUT"
+      - name: Select the RSSN ref
+        id: kernel-ref
+        env:
+          INPUT_RSSN_REF: ${{ inputs.rssn_ref }}
+          DRY_RUN: ${{ inputs.dry_run || steps.version.outputs.nightly == 'true' }}
+          NIGHTLY: ${{ steps.version.outputs.nightly }}
+          DEV_RSSN_REF: ${{ vars.RSSN_REF || 'v0.3' }}
+        run: |
+          if [[ "$NIGHTLY" == true && -z "$INPUT_RSSN_REF" ]]; then INPUT_RSSN_REF="$DEV_RSSN_REF"; fi
+          python3 scripts/release_kernel.py select --ref="$INPUT_RSSN_REF" \
+            --dry-run="$DRY_RUN" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: Apich-Organization/rssn
+          ref: ${{ steps.kernel-ref.outputs.ref }}
+          path: .release-rssn
+      - name: Verify RSSN version and record the kernel commit
+        id: rssn
+        env:
+          SELECTED_RSSN_REF: ${{ steps.kernel-ref.outputs.ref }}
+        run: |
+          python3 scripts/release_kernel.py verify --ref="$SELECTED_RSSN_REF" \
+            .release-rssn >> "$GITHUB_OUTPUT"
+
+  quality:
+    needs: verify
+    uses: ./.github/workflows/ci.yml
+    with:
+      rssn_commit: ${{ needs.verify.outputs.rssn_commit }}
+
+  binaries:
+    name: Binaries (${{ matrix.target }})
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, target: linux-x86_64, rust_target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, target: linux-aarch64, rust_target: aarch64-unknown-linux-gnu }
+          - { os: windows-latest, target: windows-x86_64, rust_target: x86_64-pc-windows-msvc }
+          - { os: windows-11-arm, target: windows-aarch64, rust_target: aarch64-pc-windows-msvc }
+          - { os: macos-15-intel, target: macos-x86_64, rust_target: x86_64-apple-darwin }
+          - { os: macos-latest, target: macos-aarch64, rust_target: aarch64-apple-darwin }
+    defaults:
+      run:
+        shell: bash
+        working-directory: aevia
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: aevia
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: Apich-Organization/rssn
+          ref: ${{ needs.verify.outputs.rssn_commit }}
+          path: rssn
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.rust_target }}
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+        with:
+          module-root: aevia
+          bazelisk-cache: true
+          repository-cache: true
+      - name: System dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y fontconfig libfontconfig1-dev libvulkan1 mesa-vulkan-drivers
+      - name: Build, package and verify the optimized distribution
+        env:
+          RSSN_TARGET_ENV: ${{ vars.RSSN_TARGET_ENV }}
+          RUSTC: ${{ fromJSON(vars.RSSN_RELEASE_RUSTCS || '{}')[matrix.rust_target] || vars.RSSN_RUSTC }}
+          CARGO: ${{ fromJSON(vars.RSSN_RELEASE_CARGOS || '{}')[matrix.rust_target] || vars.RSSN_CARGO }}
+          RSSN_LLVM_CONFIG: ${{ fromJSON(vars.RSSN_RELEASE_LLVM_CONFIGS || '{}')[matrix.rust_target] || vars.RSSN_LLVM_CONFIG }}
+          RSSN_LLVM_IMPORT_LIBRARY: ${{ fromJSON(vars.RSSN_RELEASE_LLVM_IMPORT_LIBRARIES || '{}')[matrix.rust_target] || vars.RSSN_LLVM_IMPORT_LIBRARY }}
+          DISTRIBUTION: ${{ needs.verify.outputs.distribution }}
+          RSSN_COMMIT: ${{ needs.verify.outputs.rssn_commit }}
+        run: |
+          flags=(--config=release-max --define=rust_target=${{ matrix.rust_target }})
+          for variable in RSSN_TARGET_ENV RUSTC CARGO RSSN_LLVM_CONFIG RSSN_LLVM_IMPORT_LIBRARY; do
+            if [[ -n "${!variable}" ]]; then flags+=("--repo_env=$variable"); fi
+          done
+          bazel run "${flags[@]}" //:package_release -- \
+            --distribution "$DISTRIBUTION" --rssn-commit "$RSSN_COMMIT" --source-commit "$GITHUB_SHA"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: aevia-${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            aevia/dist/*.tar.gz
+            aevia/dist/*.zip
+            aevia/dist/*.sha256
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: matrix.target == 'linux-x86_64'
+        with:
+          name: aevia-registry-linux-x86_64
+          if-no-files-found: error
+          path: aevia/dist/registry/aevia-registry
+
+  github-release:
+    name: GitHub release
+    needs: [verify, quality, binaries]
+    if: ${{ !inputs.dry_run }}
+    concurrency:
+      group: release-publish-${{ needs.verify.outputs.tag }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The reusable CI run also uploads the tested editor packages.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          merge-multiple: true
+          pattern: "!aevia-registry-linux-x86_64"
+      - name: Prepare release notes
+        env:
+          NIGHTLY: ${{ needs.verify.outputs.nightly }}
+          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          if [[ "$NIGHTLY" == true ]]; then
+            printf 'Daily build from commit `%s`.\n' "$GITHUB_SHA" > release_notes.md
+          else
+            python3 scripts/extract_changelog.py --required \
+              --version "$RELEASE_VERSION" --output release_notes.md
+          fi
+      - name: Create the draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.verify.outputs.tag }}
+          NIGHTLY: ${{ needs.verify.outputs.nightly }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+        run: |
+          tag="$TAG"
+          ref="refs/tags/$tag"
+          git check-ref-format "$ref"
+          if [[ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]]; then
+            echo "::error::Release checkout does not match the workflow commit $GITHUB_SHA"
+            exit 1
+          fi
+          remote_refs=$(git ls-remote --tags origin "$ref" "$ref^{}")
+          tag_commit=$(awk -v ref="$ref" '
+            $2 == ref { tag = $1 }
+            $2 == (ref "^{}") { peeled = $1 }
+            END { print peeled ? peeled : tag }
+          ' <<< "$remote_refs")
+          flags=(--target "$GITHUB_SHA")
+          if [[ -n "$tag_commit" ]]; then
+            if [[ "$tag_commit" != "$GITHUB_SHA" ]]; then
+              echo "::error::Tag $tag points to $tag_commit, expected $GITHUB_SHA"
+              exit 1
+            fi
+            flags+=(--verify-tag)
+          fi
+          existing_targets=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
+            jq -r --arg tag "$tag" '.[] | select(.tag_name == $tag) | .target_commitish')
+          if [[ -n "$existing_targets" ]]; then
+            if [[ -z "$tag_commit" ]] && grep -Fqxv "$GITHUB_SHA" <<< "$existing_targets"; then
+              echo "::error::An existing release or draft for $tag has a different or unpinned target"
+            else
+              echo "::error::A release or draft already exists for $tag"
+            fi
+            exit 1
+          fi
+          if [[ "$PRERELEASE" == "true" ]]; then flags+=(--prerelease --latest=false); fi
+          gh release create "$tag" dist/* \
+            Aevia-Language-Specification.md Aevia-Language-Specification.html \
+            Aevia-Language-Specification.en.md Aevia-Language-Specification.en.html \
+            --title "aevia $tag" \
+            --draft \
+            --notes-file release_notes.md \
+            "${flags[@]}"
+          if [[ "$NIGHTLY" == true ]]; then
+            gh release edit "$tag" --draft=false --latest=false
+            gh release verify "$tag"
+          fi
+
+  registry-image:
+    name: Registry image (GHCR)
+    needs: [verify, quality, binaries, github-release]
+    if: >-
+      ${{ !cancelled() && needs.verify.result == 'success' && needs.quality.result == 'success' &&
+          needs.binaries.result == 'success' &&
+          needs.verify.outputs.nightly != 'true' && (inputs.dry_run || needs.github-release.result == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8094 # v4
+        with:
+          name: aevia-registry-linux-x86_64
+          path: platform/optimized
+      - name: Build
+        working-directory: platform
+        run: |
+          owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          image="ghcr.io/${owner}/aevia-registry"
+          echo "IMAGE=${image}" >> "$GITHUB_ENV"
+          chmod +x optimized/aevia-registry
+          docker build -f infra/Containerfile.server --target optimized-runtime \
+            --build-context optimized=optimized \
+            -t "${image}:${{ needs.verify.outputs.version }}" \
+            -t "${image}:latest" .
+      - name: Push
+        if: ${{ !inputs.dry_run }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker push "${IMAGE}:${{ needs.verify.outputs.version }}"
+          if [ "${{ needs.verify.outputs.prerelease }}" = "false" ]; then
+            docker push "${IMAGE}:latest"
+          fi

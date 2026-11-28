@@ -1,0 +1,29 @@
+## Run: aevia test examples/ode_adaptive_dde.aev
+## The method of steps never substitutes Euler-predicted unknown history.
+## Constant-delay steps stop at all reachable discontinuity breakpoints and
+## never exceed the smallest delay. RHS and prehistory calls share a hard budget.
+open Units.SI
+
+import Rssn_numerical_callback as N
+
+import Rssn_numerical_vector as V
+
+fn history(_t: Float[Time]): Tensor<[1], Float[Length]> = [1.0 m]
+
+fn delayed_rate(_t: Float[Time], _y: Tensor<[1], Float[Length]>, past: Tensor<[1, 1], Float[Length]>): Tensor<[1], Float[Length/Time]> = [-past[0, 0] / 1.0 s]
+
+let delayed = N.num_dde_constant_adaptive_typed(0.0 s, 2.0 s, [1.0 m], [1.0 s], 0.00000001 m, 0.0000001, 1.5 s, 0.000000001 s, 2.0 s, 10000, 100000, delayed_rate, history)
+
+test "retarded equation reaches the exact final endpoint" =
+    match delayed with
+    | Ok(path) -> path.times[length(path.times) - 1] == 2.0 s && abs(path.states[length(path.times) - 1, 0] + 0.5 m) < 0.000001 m
+    | Err(_) -> false
+
+test "dimension-aware Hermite history remains available between accepted nodes" =
+    match delayed with
+    | Ok(path) ->
+        let value = V.num_ode_history_eval(path.times, path.states, path.rates, 1.5 s)
+        abs(value[0] + 0.375 m) < 0.000001 m
+    | Err(_) -> false
+
+fn main(): IO Unit = println(delayed)

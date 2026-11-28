@@ -1,0 +1,393 @@
+//! Round-trip tests for constructs the example corpus does not contain.
+//!
+//! The corpus proves the formatter handles the programs the specification is
+//! written against; these snippets cover the rest of appendix A, one construct
+//! at a time, so a gap names itself.
+
+use aevia_fmt::fingerprint;
+use aevia_fmt::format_source;
+use aevia_syntax::Module;
+use aevia_syntax::lex;
+use aevia_syntax::parse_module;
+
+fn parse(source: &str) -> Module {
+    let lexed = lex(0, source).unwrap_or_else(|diagnostics| {
+        panic!(
+            "does not lex: {:?}",
+            diagnostics
+                .items
+                .iter()
+                .map(|item| (&item.code, &item.message))
+                .collect::<Vec<_>>()
+        )
+    });
+    let (module, diagnostics) = parse_module(0, source, &lexed);
+    assert!(
+        !diagnostics.has_errors(),
+        "does not parse: {:?}",
+        diagnostics
+            .items
+            .iter()
+            .map(|item| (&item.code, &item.message))
+            .collect::<Vec<_>>()
+    );
+    module
+}
+
+/// Formats `source`, then checks the tree survived and the result is stable.
+///
+/// The exact layout is a choice, not a contract, so only snippets already
+/// written in the canonical form are compared to their own text.
+fn round_trip(source: &str) -> String {
+    let formatted = format_source(source).unwrap_or_else(|error| panic!("{error}\n{source}"));
+    assert_eq!(
+        fingerprint::module(&parse(source)),
+        fingerprint::module(&parse(&formatted)),
+        "the tree changed:\n{source}\n--- became ---\n{formatted}"
+    );
+    assert_eq!(
+        format_source(&formatted).expect("formats again"),
+        formatted,
+        "not idempotent"
+    );
+    formatted
+}
+
+#[test]
+fn imports_and_opens() {
+    for source in [
+        "import A.B\n",
+        "import A.B as C\n",
+        "import A.B { x, y }\n",
+        "open A.B\n",
+        "open A.B { x }\n",
+        "module A.B\n\nimport C.D\n",
+    ] {
+        assert_eq!(round_trip(source), source);
+    }
+}
+
+#[test]
+fn dimensions_and_units() {
+    for source in [
+        "dimension Currency\n",
+        "dimension Area = L^2\n",
+        "dimension Speed = L/T\n",
+        "unit EUR : Currency = 27/25 USD\n",
+        "unit deg : 1 = pi/180 rad prefixable\n",
+        // A scale is a reduced rational, so `27315/100` is written `5463/20`:
+        // the same number, and the only form the tree can reproduce.
+        "unit K : Temp = 1 K offset 5463/20\n",
+    ] {
+        assert_eq!(round_trip(source), source);
+    }
+}
+
+#[test]
+fn types_and_classes() {
+    for source in [
+        "type Vec2 = { x: Real[L], y: Real[L] }\n",
+        "type Shape = | Circle(Real[L]) | Rect(Real[L], Real[L])\n",
+        "type Table2<r>\n",
+        "type Tree<a> = | Leaf | Node(Tree<a>, a, Tree<a>)\n",
+        // §8.9.1: `DiffusionOf<τ>` is a type constructor with one argument.
+        "fn d(x: DiffusionOf<Real[L]>): DiffusionOf<Real[L]> = x\n",
+        "fn d(x: DiffusionOf<Tensor<[2], Float>>): Int = 1\n",
+        // A lowercase type variable in a signature.
+        "fn f(x: a): a = x\n",
+        "fn g(x: Vec<a>): a = x\n",
+        "class Pretty a where\n    pretty: a -> String\n",
+        "instance Pretty for Vec2 where\n    pretty(v: Vec2): String = \"v\"\n",
+        "derive Eq, Show for Vec2\n",
+        "fn area(s: Shape): Real[L^2] =\n    match s with\n    | Circle(r) -> r ^ 2\n    | Rect(w, h) -> w * h\n",
+    ] {
+        assert_eq!(round_trip(source), source);
+    }
+}
+
+#[test]
+fn every_expression_form() {
+    for source in [
+        "let a = if 1 < 2 then 1 else 2\n",
+        // A `match` after `=` starts on the next line, like a block.
+        "let a =\n    match b with\n    | 1 -> 0\n    | n if n > 2 -> n\n    | _ -> -1\n",
+        "let a = let x = 1 in x + 1\n",
+        "let a = fn (x: Int, y: Int): Int => x + y\n",
+        "let a = fn x => x\n",
+        "let a = { x = 1, y = 2 }\n",
+        "let a = { b with x = 3 }\n",
+        "let a = (1, 2.0, \"s\")\n",
+        "let a = [1, 2, 3]\n",
+        "let a = b[0]\n",
+        "let a = b[0, 1]\n",
+        "let a = b[0..2]\n",
+        "let a = b[..]\n",
+        "let a = b[1..=2]\n",
+        "let a = b[..2]\n",
+        "let a = c.x\n",
+        "let a = f(1)(2)\n",
+        "let a = zeros<Float>(2, 3)\n",
+        "let a = x?\n",
+        "let a = 5!\n",
+        "let a = 5!!\n",
+        "let a = -x\n",
+        "let a = \u{221a}x\n",
+        "let a = !true\n",
+        "let a = 1 :: rest\n",
+        "let a = 1 + 2 * 3 - 4 / 5 @ m\n",
+        "let a = (1 + 2) * 3\n",
+        "let a = 2 ^ (1 + 1)\n",
+        "let a = (-2) ^ 2\n",
+        "let a = 3 m/s^2\n",
+        "let a = 50 %\n",
+        "let a = ()\n",
+        "let a = x : Real[L]\n",
+        "let a = \"tab\\there {x + 1} and \\{literal\\}\"\n",
+        "let a = 0.1\n",
+        "let a = 1e-12\n",
+        "let a = 255\n",
+    ] {
+        assert_eq!(round_trip(source), source);
+    }
+}
+
+#[test]
+fn quantity_powers_keep_the_base_grouped() {
+    for source in [
+        "let a = (2 m) ^ 2\n",
+        "let a = (2 J*s) ^ -2\n",
+        "let a = ((2 m) ^ 2) ^ 3\n",
+        "let a = 2 m^2\n",
+    ] {
+        assert_eq!(round_trip(source), source);
+    }
+}
+
+#[test]
+fn the_pipe_operators_are_written_as_the_call_they_are() {
+    // `x |> f` is sugar for `f(x)`: the parser builds the call, so the tree
+    // cannot tell the two apart and the formatter writes the call. This is a
+    // normalisation of the surface syntax, not a change of meaning.
+    assert_eq!(round_trip("let a = x |> f\n"), "let a = f(x)\n");
+    assert_eq!(round_trip("let a = f <| x\n"), "let a = f(x)\n");
+}
+
+#[test]
+fn patterns() {
+    // A lambda body follows `=>` on the same line, so the arms of the `match`
+    // it contains are written at the enclosing indentation.
+    for source in [
+        "let f = fn p => match p with\n| _ -> 0\n",
+        "let f = fn p => match p with\n| Some(x) -> x\n| None -> 0\n",
+        "let f = fn p => match p with\n| { x, y = q } -> x\n",
+        "let f = fn p => match p with\n| (a, b) -> a\n",
+        "let f = fn p => match p with\n| [a, b, ..rest] -> a\n",
+        "let f = fn p => match p with\n| 1 -> 1\n| \"s\" -> 2\n| true -> 3\n| () -> 4\n",
+        "let f = fn p => match p with\n| x as y -> y\n",
+        // An annotation pattern keeps its brackets; the space before `:` is
+        // not part of the tree.
+        "let f = fn p => match p with\n| (x: Int) -> x\n",
+    ] {
+        assert_eq!(round_trip(source), source);
+    }
+}
+
+#[test]
+fn blocks_do_and_tests() {
+    for source in [
+        "fn f(): Int =\n    let x = 1\n    x + 1\n",
+        "fn f(): IO Unit = do\n    let x = 1\n    y <- read()\n    println(\"{x} {y}\")\n",
+        "test \"adds\" = 1 + 1 == 2\n",
+        // A block branch ends the line, so `else` starts the next one.
+        "fn f(): Int = if true then\n    let x = 1\n    x\nelse 0\n",
+        "fn f(): Int =\n    fn g(x: Int): Int = x + 1\n    g(1)\n",
+    ] {
+        assert_eq!(round_trip(source), source);
+    }
+}
+
+#[test]
+fn attributes_are_kept() {
+    let source = "@bench\nfn f(): Int = 1\n\n@deprecated(\"use g\")\nfn h(): Int = 2\n";
+    assert_eq!(round_trip(source), source);
+}
+
+#[test]
+fn a_program_that_does_not_lex_is_refused() {
+    let error = format_source("let s = \"unclosed\n").expect_err("refuses");
+    assert_eq!(error.failure, aevia_fmt::Failure::Lex);
+}
+
+#[test]
+fn a_comment_inside_an_expression_is_moved_but_kept() {
+    // The AST has no place for a comment inside an expression, so it becomes
+    // leading trivia of the next statement rather than being deleted.
+    let source = "fn f(): Int =\n    let x = g(1, # why\n        2)\n    x\n";
+    let formatted = round_trip(source);
+    assert!(formatted.contains("# why"), "{formatted}");
+}
+
+#[test]
+fn interpolation_comments_survive_with_their_literals_unchanged() {
+    let literal = r#""{1 #- 保留注释 -# +2}""#;
+    let source = format!("let  total={literal} # outside\n");
+    let actual = round_trip(&source);
+    assert!(
+        actual.contains(&format!("let total = {literal}\n")),
+        "{actual}"
+    );
+    assert!(actual.contains("# outside"), "{actual}");
+
+    let multiline =
+        "\"\"\"\r\n    你好 {1 # comment in interpolation\r\n         +2}\r\n    \"\"\"";
+    let source = format!("let  greeting={multiline}\r\n");
+    assert_eq!(
+        round_trip(&source),
+        format!("let greeting = {multiline}\r\n")
+    );
+
+    let source = r##"@doc(title="{1 #- explanation -# +2}")
+let  record=1
+"##;
+    assert!(round_trip(source).contains(r#"@doc(title = "{1 #- explanation -# +2}")"#));
+}
+
+#[test]
+fn quoted_hashes_inside_interpolation_do_not_disable_formatting() {
+    let source = r##"let  nested = "{  r"#文字"  }"
+"##;
+    let expected = r##"let nested = "{"#文字"}"
+"##;
+    assert_eq!(round_trip(source), expected);
+}
+
+#[test]
+fn source_sensitive_interpolations_allow_surrounding_formatting() {
+    let nested_braces = r#""{ r"{text}" }""#;
+    let multiline_decimal = "\"\"\"\n    value {1.25}\n    \"\"\"";
+    for literal in [nested_braces, multiline_decimal] {
+        assert_eq!(
+            round_trip(&format!("let  result={literal}\n")),
+            format!("let result = {literal}\n")
+        );
+    }
+}
+
+#[test]
+fn empty_and_unattached_documentation_lines_survive() {
+    let source = "##\r## introduction\r##\rlet  answer=42\r## unattached\r# ordinary\r";
+    let expected = "##\r## introduction\r##\rlet answer = 42\r## unattached\r# ordinary\r";
+    assert_eq!(round_trip(source), expected);
+    assert_eq!(
+        round_trip("##\n## notes\n# third\n"),
+        "##\n## notes\n# third\n"
+    );
+}
+
+#[test]
+fn bare_cr_preserves_comments_blank_lines_and_the_shebang() {
+    let source = "#!/usr/bin/env aevia\rmodule Example\rfn f()=\r    let x=1 # trailing\r\r    #- first line\r      continuation -#\r    let y=2\r    x+y\r";
+    let formatted = round_trip(source);
+    assert!(!formatted.contains('\n'), "{formatted:?}");
+    assert!(formatted.starts_with("#!/usr/bin/env aevia\rmodule Example\r"));
+    assert!(formatted.contains("let x = 1\r\r"), "{formatted:?}");
+    assert!(formatted.contains("# trailing\r"), "{formatted:?}");
+    assert!(formatted.contains("#- first line\r      continuation -#"));
+    assert!(formatted.ends_with("    x + y\r"));
+    let err = format_source("let x = 1\rlet y = 2\r`\r").unwrap_err();
+    assert!(err.message.starts_with("line 3:"), "{}", err.message);
+}
+
+#[test]
+fn a_slice_step_round_trips() {
+    // A step is written in the `a:b:s` spelling, which is the only one that
+    // carries one; the fingerprint includes it, so a printer that dropped it
+    // would fail the tree comparison rather than only the text comparison.
+    for source in [
+        "let a = b[1:5:2]
+",
+        "let a = b[::-1]
+",
+        "let a = b[::2]
+",
+        "let a = b[:3:2]
+",
+    ] {
+        assert_eq!(round_trip(source), source);
+    }
+}
+
+#[test]
+fn a_type_level_nat_product_round_trips() {
+    // §3.5.1 gained `*`; `*` binds tighter than `+`, and a sum operand keeps
+    // its brackets because the AST drops bracket nodes but not their shape.
+    for source in [
+        "fn f(x: Tensor<[n * 2], Float>): Tensor<[n * 2], Float> = x\n",
+        "let a: Tensor<[n + 1 * 2], Float> = b\n",
+        "let a: Tensor<[(n + 1) * 2], Float> = b\n",
+        "let a: Tensor<[n * (m + 1)], Float> = b\n",
+        "let a: Tensor<[2 * (3 * n)], Float> = b\n",
+    ] {
+        assert_eq!(round_trip(source), source);
+    }
+}
+
+#[test]
+fn a_colon_slice_without_a_step_is_the_range_it_means() {
+    // `b[1:5]` and `b[1..5]` are the same node, so the formatter writes the
+    // older spelling and the tree is unchanged.
+    assert_eq!(
+        round_trip(
+            "let a = b[1:5]
+"
+        ),
+        "let a = b[1..5]
+"
+    );
+    // The same rule on an axis of a matrix: a full slice with no step is the
+    // `..` form, while the stepped axis keeps its `:` spelling.
+    assert_eq!(
+        round_trip(
+            "let a = m[::, ::-1]
+"
+        ),
+        "let a = m[.., ::-1]
+"
+    );
+}
+
+#[test]
+fn inline_match_arms_round_trip_inside_expressions() {
+    // §2.3.4: inside brackets there is no line to end, so the arms share the
+    // `with` line; at the end of a line the block form is kept.
+    let source = "let v = [match o with | Some(n) -> n | None -> 0, 1]\n";
+    assert_eq!(round_trip(source), source);
+    let nested =
+        "let w = f(match a with | Some(x) -> (match x with | 0 -> 1 | _ -> 2) | None -> 3)\n";
+    assert_eq!(round_trip(nested), nested);
+    let block = "let u = match o with\n    | Some(n) -> n\n    | None -> 0\n";
+    let formatted = round_trip(block);
+    assert!(formatted.contains("\n    | None -> 0"), "{formatted}");
+}
+
+/// A blank line the author left between two statements of a `do` or layout
+/// block is a paragraph break and survives formatting; runs of blank lines
+/// collapse to one, and the result is stable.
+#[test]
+fn blank_lines_between_statements_are_kept() {
+    let source = "module T\n\nfn main(): IO Unit = do\n    let a = 1\n\n\n    let b = 2\n    println(\"{a + b}\")\n\nfn f(x: Int): Int =\n    let y = x\n\n    y + 1\n";
+    let formatted = format_source(source).expect("formats");
+    let expected = "module T\n\nfn main(): IO Unit = do\n    let a = 1\n\n    let b = 2\n    println(\"{a + b}\")\n\nfn f(x: Int): Int =\n    let y = x\n\n    y + 1\n";
+    assert_eq!(formatted, expected);
+    assert_eq!(format_source(&formatted).expect("formats again"), formatted);
+}
+
+#[test]
+fn stochastic_fractional_dimension_powers_round_trip() {
+    round_trip(
+        "fn diffusion(t: Float[Time], y: Float[Length]): Float[Length/Time^(1/2)] = y / sqrt(t)\n",
+    );
+    round_trip(
+        "fn diffusion(t: Float[Time], y: Float[Length]): Float[Length*Time^(-1/2)] = y / sqrt(t)\n",
+    );
+}

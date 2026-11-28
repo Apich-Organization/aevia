@@ -1,0 +1,117 @@
+## Run: aevia test examples/native_flow_conservation.aev
+## States use explicit reference coordinates; flux outputs carry field*Length/Time.
+import Rssn_numerical_vector as N
+
+import Rssn_numerical_matrix as B
+
+let frame = unwrap_or(N.num_grid_frame_new([to_value(2.0 m), to_value(4.0 s), to_value(3.0 kg)]), to_value(0))
+
+let law = unwrap_or(N.num_dg_advection([frame, to_value([1.0])]), to_value(0))
+
+test "native DG flux restores mass times velocity" =
+    match N.num_dg_flux([law, to_value([2.0]), to_value(0)]) with
+    | Ok(value) ->
+        match from_value<{ component0: Float[Mass*Length/Time] }>(value) with
+        | Ok(flux) -> approx_eq(flux.component0, 3.0 kg*m/s, 1e-12 kg*m/s)
+        | Err(_) -> false
+    | Err(_) -> false
+
+let backend = unwrap_or(B.num_backend_interpreter([]), to_value(0))
+
+let xref = unwrap_or(B.num_backend_reference([to_value(1.0 m)]), to_value(0))
+
+let outref = unwrap_or(B.num_backend_reference([to_value(3.0 kg)]), to_value(0))
+
+let initial = unwrap_or(B.num_backend_compile([backend, to_value("2"), to_value(["x", "y"]), to_value([xref, xref]), outref, to_value(100000)]), to_value(0))
+
+let mesh = unwrap_or(N.num_dg_mesh_line([frame, to_value(2), to_value(0.0), to_value(1.0), to_value(2)]), to_value(0))
+
+let bcs = unwrap_or(N.num_dg_bcs([law, to_value(["Periodic", "Periodic", "Outflow", "Outflow"])]), to_value(0))
+
+let filter_options = to_value({ filter = false, filter_alpha = 36.0, filter_order = 8 })
+
+test "finite-volume Euler accepts the two-wave HLLE flux" =
+    let measured = [to_value(2.0 m), to_value(4.0 s), to_value(3.0 kg), to_value(1.0 K)]
+    match Rssn.dynamic("num_grid_mechanical_references", measured) with
+    | Ok(references) ->
+        let options = { cfl = 0.4, reconstruction = "Weno5", riemann = "Hlle" }
+        match Rssn.dynamic("num_fv_config_euler", [references, to_value(1.4), to_value(options)]) with
+        | Ok(_) -> true
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "periodic finite-volume Burgers conserves cell averages with measured velocity" =
+    match Rssn.dynamic("num_grid_frame_new", [to_value(2.0 m), to_value(2.0 s), to_value(2.0 m/s)]) with
+    | Ok(velocity_frame) ->
+        let args = [velocity_frame, to_value([1.0, 2.0, 3.0, 4.0]), to_value([4]), to_value([1.0]), to_value(0.0625), to_value(1), to_value(["Periodic"])]
+        match Rssn.dynamic("num_grid_physics_fvm_burgers_nd_with_boundaries", args) with
+        | Ok(value) ->
+            match from_value<{ shape: Tensor<1, Int>, data: Tensor<1, Float>, length_reference: Float[Length], time_reference: Float[Time], value_reference: Float[Length/Time] }>(value) with
+            | Ok(result) ->
+                let first = at(result.data, 0) * result.value_reference
+                let total = (at(result.data, 0) + at(result.data, 1) + at(result.data, 2) + at(result.data, 3)) * result.value_reference
+                result.shape == [4] && approx_eq(first, 6.75 m/s, 1e-12 m/s) && approx_eq(total, 20.0 m/s, 1e-12 m/s)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "native DG constant solution retains physical integral" =
+    match N.num_solve_dg([mesh, bcs, to_value([initial]), to_value(0.25), to_value(0.2), filter_options, to_value(10000), to_value(100000)]) with
+    | Ok(solution) ->
+        match N.num_dg_integral([solution, to_value(0)]) with
+        | Ok(value) ->
+            match from_value<Float[Mass*Length]>(value) with
+            | Ok(total) -> approx_eq(total, 12.0 kg*m, 1e-10 kg*m)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "native DG work budget rejects excessive evaluation" =
+    match N.num_solve_dg([mesh, bcs, to_value([initial]), to_value(0.25), to_value(0.2), filter_options, to_value(10000), to_value(1)]) with
+    | Ok(_) -> false
+    | Err(_) -> true
+
+test "prepared periodic DG advection preserves the field unit and mass mode" =
+    let cell = unwrap_or(N.num_dg_mesh_line([frame, to_value(1), to_value(0.0), to_value(1.0), to_value(1)]), to_value(0))
+    match Rssn.dynamic("num_dg_advection_prepare1d", [cell, to_value(1.0 m/s)]) with
+    | Ok(plan) ->
+        let z = -0.25
+        let gain = 1.0 + z + z*z/2.0 + z*z*z/6.0
+        match Rssn.dynamic("num_dg_advection_step_prepared1d", [plan, to_value([0.75 kg, 5.25 kg]), to_value(0.25 s)]) with
+        | Ok(value) ->
+            match from_value<Tensor<1, Float[Mass]>>(value) with
+            | Ok(advanced) ->
+                let left = approx_eq(at(advanced, 0), 3.0 kg - gain * (2.25 kg), 1e-12 kg)
+                let right = approx_eq(at(advanced, 1), 3.0 kg + gain * (2.25 kg), 1e-12 kg)
+                left && right
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "prepared gas Riemann samples preserve physical components and the vacuum trace" =
+    match Rssn.dynamic("num_grid_mechanical_references", [to_value(2.0 m), to_value(0.5 s), to_value(8.0 kg), to_value(1.0 K)]) with
+    | Ok(references) ->
+        match Rssn.dynamic("num_grid_gas_prepare_riemann", [references, to_value([1.0, -10.0, 1.0]), to_value([2.0, 10.0, 2.0]), to_value(1.4)]) with
+        | Ok(plan) ->
+            let batch = Rssn.dynamic("num_grid_gas_sample_riemann_batch", [plan, to_value([48.0 m/s, -48.0 m/s, 2.0 m/s, 0.0 m/s])])
+            let single = Rssn.dynamic("num_grid_gas_sample_riemann", [plan, to_value(2.0 m/s)])
+            match batch with
+            | Ok(value) ->
+                match from_value<{ density: Tensor<1, Float[Mass/Length^3]>, velocity: Tensor<1, Float[Length/Time]>, pressure: Tensor<1, Float[Mass/(Length*Time^2)]> }>(value) with
+                | Ok(states) ->
+                    match single with
+                    | Ok(sample) ->
+                        match from_value<{ density: Float[Mass/Length^3], velocity: Float[Length/Time], pressure: Float[Mass/(Length*Time^2)] }>(sample) with
+                        | Ok(vacuum) ->
+                            let ordered = states.velocity == [40.0 m/s, -40.0 m/s, 2.0 m/s, 0.0 m/s]
+                            let denser = at(states.density, 0) > at(states.density, 1)
+                            let higher_pressure = at(states.pressure, 0) > at(states.pressure, 1)
+                            let vacuum_density = at(states.density, 2) == vacuum.density
+                            let vacuum_pressure = at(states.pressure, 2) == vacuum.pressure
+                            ordered && denser && higher_pressure && vacuum_density && vacuum_pressure && vacuum.velocity == 2.0 m/s
+                        | Err(_) -> false
+                    | Err(_) -> false
+                | Err(_) -> false
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false

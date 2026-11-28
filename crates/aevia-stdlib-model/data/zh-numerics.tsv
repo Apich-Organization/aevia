@@ -1,0 +1,172 @@
+# Module	Name	简体中文说明
+LinearAlgebra	approx_map	把向量中每个精确值转换为 Float。全部成功时返回 Ok(浮点向量)，某个元素无法求近似值时返回 Err。
+LinearAlgebra	at	取张量第 i 行；对向量返回一个元素。下标从零开始。
+LinearAlgebra	cholesky	对称正定矩阵的 Cholesky 分解，返回满足 A = L Lᵀ 的下三角因子 L。
+LinearAlgebra	det	计算无量纲方阵的行列式。含物理量纲的矩阵使用 det_unit。
+LinearAlgebra	det_unit	计算方阵行列式。若矩阵为 n 阶、元素量纲为 d，则结果量纲为 d 的 n 次幂。
+LinearAlgebra	diag	输入向量时，以它为对角线构造方阵；输入矩阵时，把对角线提取成向量。
+LinearAlgebra	dot	计算两个等长向量的内积。结果量纲为两个向量元素量纲之积。
+LinearAlgebra	eig	对方阵作特征分解。特征值保留矩阵元素的量纲，使用结果中的特征向量验证 A v = λ v。
+LinearAlgebra	eigvals	返回方阵的复数特征值向量。各特征值与矩阵元素有相同量纲。
+LinearAlgebra	eye	构造 n × n、元素为 Float 的单位矩阵。
+LinearAlgebra	fill	将同一个值填充到指定形状的张量中，保留值的类型与量纲。fill(2.0 m, 3) 产生三个 2 m。
+LinearAlgebra	flatten	将秩至少为二的张量按行顺序展平为向量，保留元素类型与量纲。
+LinearAlgebra	inv	返回方阵的逆，结果为 Result。矩阵奇异时返回 Err(LinAlgError)。
+LinearAlgebra	linsolve	求解 A x = b，返回 Result。系数矩阵奇异或非方阵时返回 Err(LinAlgError)。解的量纲为右端量纲除以系数元素量纲。
+LinearAlgebra	linspace	返回等距浮点采样值，量纲与端点相同。对有限端点，至少采样两次时包含两个端点，只采样一次时返回起点，采样次数为非正整数时返回空张量。
+LinearAlgebra	lstsq	用最小二乘法求解高矩阵 A 的系统 A x = b，寻找使残差 A x − b 的范数最小的 x。
+LinearAlgebra	lu	带主元选择的 LU 分解。结果区分置换与三角因子，验证分解时要考虑置换。
+LinearAlgebra	map_indexed	对张量元素调用 f(i, x)，同时传入位置 i 与元素 x。
+LinearAlgebra	matmul	计算 n × k 矩阵与 k × m 矩阵的乘积，共同轴的长度必须相同。
+LinearAlgebra	matvec	用 n × k 矩阵乘长度为 k 的列向量，返回 n 个行内积。
+LinearAlgebra	mean	计算任意秩张量中全部元素的算术平均值。结果保留元素量纲。
+LinearAlgebra	norm	返回向量的欧几里得范数或矩阵的 Frobenius 范数，量纲与元素相同。
+LinearAlgebra	normalize	用张量除以其范数。对于非零范数，结果无量纲，范数为一。
+LinearAlgebra	ones	以每个参数作为一条轴的长度，构造所有元素为一的张量。
+LinearAlgebra	ones_of	根据类型参数中的形状构造全一张量，如 ones_of<[2, 3]>()。
+LinearAlgebra	outer	计算两个向量的外积。第 (i, j) 项为 a[i] * b[j]，输出形状为两个向量的长度。
+LinearAlgebra	qr	对矩阵作 A = Q R 分解，得到正交因子 Q 与上三角因子 R。
+LinearAlgebra	rank	返回张量的轴数。向量为一阶，矩阵为二阶。
+LinearAlgebra	refine_shape	依据类型参数检查运行时形状，使用 ? 表示该轴长度不限。若匹配则可在后续计算中使用已验证的形状。
+LinearAlgebra	reshape	根据类型参数转换形状，保留原有元素及顺序。新旧形状必须对应相同元素数量。
+LinearAlgebra	reshape_dyn	使用运行时计算得到的轴长度重塑张量。每条输入轴对应一个非负 Int 长度。保持元素总数和行主序，成功时返回 `Ok(t)`，形状无效时返回错误。
+LinearAlgebra	set	返回替换了一个元素的新张量。每条轴提供一个 Int 下标。下标从 0 开始，负数从轴末尾倒数。
+LinearAlgebra	std	计算样本标准差，即样本方差的平方根，结果使用元素自身的量纲。
+LinearAlgebra	sum	对所有张量元素求和。传入函数及有限上下界，可对该函数做有限求和。
+LinearAlgebra	svd	计算奇异值分解 A = U S Vᵀ。可用奇异值判断有效秩或构造低秩近似。
+LinearAlgebra	trace	计算方阵对角线上元素之和，结果保留元素量纲。
+LinearAlgebra	transpose	交换矩阵的行和列。
+LinearAlgebra	tril	保留矩阵的下三角及对角线，将对角线上方元素置零。
+LinearAlgebra	triu	保留矩阵的上三角及对角线，将对角线下方元素置零。
+LinearAlgebra	var	返回样本方差，除数为 n−1，输出是元素量纲的平方。
+LinearAlgebra	vecmat	用长度为 n 的行向量乘 n × m 矩阵，返回 m 个列内积。
+LinearAlgebra	zeros	以每个参数作为一条轴的长度，构造全零张量。zeros(2, 3) 得到 2 × 3 矩阵。
+LinearAlgebra	zeros_of	根据类型参数中的形状构造全零张量，如 zeros_of<[2, 3]>()。
+LinearAlgebra.Sparse	Precond	稀疏迭代求解器的预条件器。Identity 不作预处理，Jacobi 按对角线缩放，BlockJacobi 使用对角块的逆，Ilu0 使用零填充不完全 LU，Ic0 适用于对称正定矩阵，Auto 由求解器选择。
+LinearAlgebra.Sparse	bicgstab_with	用 BiCGSTAB 求解一般稀疏系统。选项包括 tol、maxiter、precond。检查收敛标记和残差后再使用解。
+LinearAlgebra.Sparse	block_size	返回块压缩稀疏张量中每个稠密块的行数与列数。
+LinearAlgebra.Sparse	cg	用共轭梯度法求解稀疏对称正定系统。指定容差和最大迭代次数。
+LinearAlgebra.Sparse	cg_with	对稀疏对称正定系统使用带预条件的共轭梯度法。设置 tol、maxiter 与 precond。
+LinearAlgebra.Sparse	contract	沿指定轴对收缩两个张量。配对轴长度必须匹配；每个输出元素累加这些轴上的乘积。
+LinearAlgebra.Sparse	convert	将稀疏张量转换到类型参数指定的存储格式，如 convert<Coo>(a)。
+LinearAlgebra.Sparse	density	返回已存储项占全部位置的比例，取值在零和一之间。
+LinearAlgebra.Sparse	format_of	返回稀疏布局的名称 Csr、Csc、Coo 或 Bcsr。
+LinearAlgebra.Sparse	from_dense	将稠密张量转换为稀疏张量，只存储非零项。
+LinearAlgebra.Sparse	gmres_with	用重启 GMRES 解一般稀疏系统，也可处理非对称矩阵。选项包括 tol、maxiter、restart 和 precond。
+LinearAlgebra.Sparse	kron	计算两个稀疏矩阵的 Kronecker 积。输出第 (i, j) 个块为 a[i][j] 乘以 b。
+LinearAlgebra.Sparse	map_nonzero	将函数应用到每个已存储项，隐式零保持原样。若希望结果等同于在稠密张量上映射，函数须满足 f(0)=0。
+LinearAlgebra.Sparse	matmul	计算稀疏矩阵乘积。共同轴长度必须一致；适用的布局组合可返回稀疏结果。
+LinearAlgebra.Sparse	nnz	返回稀疏张量中已存储的非零项数量。
+LinearAlgebra.Sparse	nonzeros	按存储顺序列出稀疏张量的条目，将每项表示为索引向量与值的二元组。
+LinearAlgebra.Sparse	sparse_coo	从形状、索引和值构造坐标格式张量。每个值对应一组索引。
+LinearAlgebra.Sparse	sparse_csr	由行数、列数、行指针、列下标与数据构造压缩稀疏行矩阵。
+LinearAlgebra.Sparse	spdiag	构造以给定向量为对角线的稀疏方阵，保留元素量纲。
+LinearAlgebra.Sparse	speye	构造 n × n、元素为 Float 的稀疏单位矩阵。
+LinearAlgebra.Sparse	spsolve	经稀疏 LU 直接求解方阵系统 A x = b。结果量纲为 b 的量纲除以 A 的元素量纲。
+LinearAlgebra.Sparse	to_bcsr	用大小为 br × bc 的稠密块重新存储稀疏矩阵。
+LinearAlgebra.Sparse	to_dense	把稀疏张量转为稠密表示，将隐式零填为显式的零。
+LinearAlgebra.Sparse	transpose	交换稀疏矩阵的行与列。
+FFT	Norm	傅里叶变换的归一化约定。Backward 在逆变换除以 n，Forward 在正变换除以 n，Unitary 两个方向都除以 √n。正逆变换应选同一约定。
+FFT	AxisScale	绘图坐标轴的刻度，可以是 Linear 或 Log，用于 PlotOpts。
+FFT	fft	计算向量的离散傅里叶变换。
+FFT	fft2	在张量的最后两条轴上作二维傅里叶变换。
+FFT	fft_axis	沿张量的一条轴作傅里叶变换。轴号从零开始，负轴号从末尾数起。
+FFT	fft_norm	计算离散傅里叶变换并显式选择 Backward、Forward 或 Unitary 归一化。
+FFT	fftfreq	对于采样间隔 dt、长度 n 的离散序列，按 fft 的输出顺序给出频率。频率量纲为 dt 的倒数。
+FFT	fftn	沿张量的全部轴执行多维傅里叶变换。
+FFT	fftn_axes	沿给定的轴列表执行傅里叶变换，例如 [0, 2]。
+FFT	fftn_norm	沿全部轴执行傅里叶变换，并采用所选归一化。
+FFT	fftshift	循环移动频谱各轴，使零频位于中央，便于绘图。
+FFT	fftshift_axis	仅在指定轴上执行 fftshift。
+FFT	ifft	计算逆离散傅里叶变换并除以向量长度，配合默认 fft 还原原始序列。
+FFT	ifft2	在最后两条轴上执行二维逆傅里叶变换。
+FFT	ifft_axis	沿张量的指定轴执行逆傅里叶变换。
+FFT	ifft_norm	用指定归一化执行逆变换。与 fft_norm 往返时使用同一个 Norm。
+FFT	ifftn	沿全部轴执行多维逆傅里叶变换。
+FFT	ifftn_axes	沿指定的轴列表执行逆傅里叶变换。
+FFT	ifftn_norm	沿全部轴执行逆傅里叶变换。使用正变换的归一化约定进行往返。
+FFT	ifftshift	撤销 fftshift，将中央的零频移回起始位置。
+FFT	ifftshift_axis	仅在指定轴上撤销 fftshift。
+FFT	irfft	由 rfft 的非冗余半频谱重建实数信号。保留原长度以辨别偶数与奇数信号。
+FFT	irfft2	由 rfft2 的频谱重建实数张量。
+FFT	irfftn	由 rfftn 的频谱重建实数张量。
+FFT	irfftn_axes	由 rfftn_axes 的频谱按相同轴列表重建实数张量。
+FFT	rfft	对实数向量作傅里叶变换。对长度 n 的信号，只保留 n/2 + 1 个非冗余频点。
+FFT	rfft2	在最后两条轴作实数二维傅里叶变换，最后一条轴保留非冗余半频谱。
+FFT	rfftfreq	为采样间隔 dt、长度 n 的实序列给出 rfft 对应的 n/2 + 1 个非负频率。
+FFT	rfftn	沿全部轴作实数傅里叶变换，最后一轴仅保留非冗余半频谱。
+FFT	rfftn_axes	沿指定轴列表作实数傅里叶变换。列表末尾的轴保留半频谱，其余轴使用完整复数变换。
+Interpolate	chebyshev_fit	对样本 (xs, ys) 拟合给定次数的 Chebyshev 级数。高阶拟合通常比幂基底的 polyfit 条件更好。
+Interpolate	interp1	依据严格递增的样本坐标 xs，在相邻节点间线性插值 ys，以求 x 处的值。
+Interpolate	interp2	在矩形网格的 (x, y) 处执行双线性插值。table[j][i] 是 (xs[i], ys[j]) 处的采样值。有限的越界坐标限制到网格边界。
+Interpolate	interp2Batch	对多个坐标对执行双线性插值。坐标轴必须严格递增，table[j][i] 存储 (xs[i], ys[j]) 处的采样值。两个查询张量等长并各自匹配坐标轴量纲。有限的越界坐标限制到网格边界。返回的 Float 张量保留查询顺序和采样表量纲。
+Interpolate	polyfit	对样本坐标和值进行给定次数的最小二乘多项式拟合。
+Interpolate	polyval	按从常数项开始的顺序接收多项式系数，并计算给定 x 处的值。
+Interpolate	spline	对严格递增的 xs 与对应 ys 拟合三次样条，返回 x 处的值。
+Ode	OdeMethod	选择常微分方程积分方法。Dopri5 是光滑问题的自适应默认方法，Rk4 是固定步长方法。Radau、Bdf、Rosenbrock23 适用于刚性问题。AutoSwitch 先尝试 Dopri5，必要时转为 Radau。StormerVerlet、Ruth4、GaussLegendre 和 ImplicitMidpoint 方法用于几何积分。
+Ode	OdeOpts	指定相对容差 rtol、绝对容差 atol 与 method。固定步长方法可设置 steps。可选 events 在事件函数过零时停止积分。
+Ode	OdeAdaptiveOpts	自适应步长控制。h0 为初始步长，零表示由求解器选择；h_min 与 h_max 限定步长。max_steps 包括被拒绝的尝试，max_evaluations 限制右端求值次数。
+Ode	OdePhysicalOpts	与 OdeAdaptiveOpts 类似，但 atol 和状态字段的结构与量纲相同，允许给每个分量设置相应单位的误差。
+Ode	OdeEvent	事件函数 g(t, y) 必须无量纲。terminal 指定是否停止积分。direction 为 −1 时检测下降过零，为 1 时检测上升过零，为 0 时检测两个方向。
+Ode	OdeHit	记录触发的事件编号、触发时刻 t 与当时的状态 y，编号对应传入的事件列表。
+Ode	OdeSolution	包含接受的时刻 t、状态 y、用于区间内求值的 at(t)、事件、右端求值次数 nfev、拒绝步数 rejected 与最终执行的方法。
+Ode	ode_bvp	使用单次打靶方法求解边值问题。输入初值猜测、边界残差函数、时间区间和积分选项。
+Ode	ode_solve	用选定方法、自适应控制和事件列表求解常微分方程，返回包含轨迹和事件的结果。
+Ode	odeint	积分 dy/dt = f(t, y)，并返回指定采样时刻的状态。
+Ode	odeint_order	对 y'' = f(t, y, y') 这样的高阶方程做积分。
+Ode	odeint_order_with	用选项记录指定方法和容差，积分高阶常微分方程。
+Ode	odeint_with	在指定采样点求解常微分方程，可通过选项控制方法、容差、固定步长数和事件。
+Ode	solve_ivp	在给定时间区间积分初值问题，返回所取各步的时刻 t 与状态 y。
+Sde	SdeMethod	选择随机微分方程积分方法。带 Stratonovich 的方法求对应约定的解，其余方法求 Itô 解。EulerMaruyama 强阶为 1/2，Milstein 与 SrkPlaten 等在适用条件下强阶为一。隐式方法可用于刚性漂移。
+Sde	SdeStructure	指定噪声结构。Diagonal 为每个分量设置独立通道。General(m) 有 m 个可交换通道，GeneralNoncommutative(m) 的通道不可交换，高阶方法需要 Lévy 面积。
+Sde	SdeFixedOpts	指定固定步长积分的噪声结构、算法、种子、起始时间 t0、步长 dt 和步数。terms 控制 Lévy 面积的傅里叶项数，零采用默认值。
+Sde	SdeAdaptiveOpts	指定自适应积分的噪声结构、方法、种子、时间区间、相对与绝对容差以及最大步数。cells 控制噪声网格的最细分辨率，零使用 4096，其他数向上取二的幂。
+Sde	SdeOpts	选择步长策略。Fixed 使用等距时间网格，Adaptive 使用误差控制。
+Sde	SdeEvent	由无量纲事件函数 g(t, y) 的符号变化标记事件。terminal 决定是否终止，direction 可选下降、上升或任意方向。
+Sde	SdeHit	在随机轨迹中找到的一个事件，包含事件编号、时刻 t 以及插值得到的状态 y。
+Sde	sde_at	在保存的随机轨迹时间点之间线性插值，返回所查时刻的状态。
+Sde	sde_ensemble_diag	使用从主种子派生的种子积分 n 条独立的对角噪声轨迹，每条轨迹返回一个 Result。
+Sde	sde_ensemble_general	以独立派生种子积分 n 条一般噪声轨迹，返回各轨迹的 Result 向量。
+Sde	sde_ensemble_seed	根据集合主种子和成员编号计算该成员使用的种子。
+Sde	sde_events	找出随机轨迹上事件函数发生符号变化的位置。
+Sde	sde_interp	把保存的随机轨迹变为以时间为自变量的函数，相邻步之间线性插值。
+Sde	sde_order	返回可交换噪声下积分方法的强收敛阶及弱收敛阶，字段为 strong 与 weak。
+Sde	sde_order_with	根据指定噪声结构返回收敛阶。部分算法在不可交换噪声下阶数降低。
+Sde	sde_resample	对给定的时间向量，在随机轨迹已保存的步之间插值以取得各状态。
+Sde	sdeint_diag	积分 dy = drift dt + diffusion dW，其中每个状态分量具有独立噪声。传入漂移、扩散、初态和选项。
+Sde	sdeint_general	积分各分量通过噪声耦合的随机微分方程。扩散函数返回一个矩阵，每条噪声通道对应一列。
+Sde	wiener	从给定种子生成独立布朗运动的增量。返回形状为 steps × channels 的矩阵，dt 是每步时长。
+Pde	solve_advection	在规则网格上求解平流方程。返回各时间步的场，时间步不稳定或场与网格不匹配时返回 Err(PdeError)。
+Pde	solve_heat	在规则二维网格上求解热扩散方程，固定初始场四边，并返回初始场和每个时间步的场值。默认 `method = "explicit"`，扩散数不得超过 `1/4`。设为 `"adi"` 时使用交替方向隐式步进，可超过显式限制。
+Pde	solve_poisson	在规则矩形网格上用有限差分求解 Poisson 方程。按问题设置边界条件并检查返回场。
+Pde	solve_wave	在规则网格上用有限差分求解波动方程。返回各时间步的场，时间步不稳定或网格不匹配时返回 Err(PdeError)。
+Units.Constants	f	法拉第常数。2019 年 SI 定义的精确值。
+Units.Constants	g	牛顿万有引力常数。采用 CODATA 2022 的测得值。
+Units.Constants	g_0	电导量子。2019 年 SI 定义的精确值。
+Units.Constants	k_J	约瑟夫森常数。2019 年 SI 定义的精确值。
+Units.Constants	k_cd	光视效能常数。2019 年 SI 定义的精确值。
+Units.Constants	m_u	摩尔质量常数。采用单位表给出的 SI 参考值。
+Units.Constants	n_A	阿伏伽德罗常数。2019 年 SI 定义的精确值。
+Units.Constants	phi_0	磁通量子。2019 年 SI 定义的精确值。
+Units.Constants	r	摩尔气体常数。由 SI 定义常数给出的精确值。
+Units.Constants	r_K	冯·克利青常数。由 SI 定义常数给出的精确值。
+Units.Constants	r_inf	里德伯常数。采用 CODATA 2022 的测得值。
+Units.Constants	t_tp	水的三相点温度。采用 1954 年国际计量大会的历史参考值。
+Units.Constants	a_0	玻尔半径。采用 CODATA 2022 的测得值。
+Units.Constants	alpha	精细结构常数。采用 CODATA 2022 的测得值。
+Units.Constants	atm	标准大气压。采用 1954 年国际计量大会定义的精确值。
+Units.Constants	c	真空中的光速。2019 年 SI 定义的精确值。
+Units.Constants	dnu_Cs	铯原子超精细跃迁频率。2019 年 SI 定义的精确值。
+Units.Constants	e	基本电荷。2019 年 SI 定义的精确值。
+Units.Constants	epsilon_0	真空介电常数。采用 CODATA 2022 的测得值。
+Units.Constants	g_n	标准重力加速度。采用 1901 年国际计量大会定义的精确值。
+Units.Constants	h	普朗克常数。2019 年 SI 定义的精确值。
+Units.Constants	hbar	约化普朗克常数，即 h / (2π)。
+Units.Constants	k_B	玻尔兹曼常数。2019 年 SI 定义的精确值。
+Units.Constants	m_e	电子质量。采用 CODATA 2022 的测得值。
+Units.Constants	m_n	中子质量。采用 CODATA 2022 的测得值。
+Units.Constants	m_p	质子质量。采用 CODATA 2022 的测得值。
+Units.Constants	m_u_2	原子质量常数。采用 CODATA 2022 的测得值。
+Units.Constants	mu_0	真空磁导率。采用 CODATA 2022 的测得值。
+Units.Constants	mu_B	玻尔磁子。采用 CODATA 2022 的测得值。
+Units.Constants	sigma_SB	斯特藩–玻尔兹曼常数。采用常数表中的 CODATA 2022 值。

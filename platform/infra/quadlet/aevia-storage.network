@@ -1,0 +1,6 @@
+[Unit]
+Description=Aevia storage network (database + registry)
+
+[Network]
+NetworkName=aevia-storage
+Internal=true

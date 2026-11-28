@@ -1,0 +1,32 @@
+## Run: aevia test examples/sde_adaptive_jump.aev
+## Arguments include separate proposal/path and callback budgets. Exact Poisson
+## arrival times and constant marks are sampled once, independently of rejection.
+## Mark extent M=2 is independent of state extent N=1 and is shared by the
+## supplied mark vector and the exact jump callback domain.
+open Units.SI
+import Rssn_numerical_callback as N
+
+fn drift(t: Float[Time], _y: Tensor<[1], Float[Length]>): Tensor<[1], Float[Length/Time]> = [t / (1.0 s) * (1.0 m / (1.0 s))]
+fn diffusion(_t: Float[Time], _y: Tensor<[1], Float[Length]>): Tensor<[1], Float[Length/Time^(1/2)]> = [0.0 m / sqrt(1.0 s)]
+fn jump(_t: Float[Time], _y: Tensor<[1], Float[Length]>, mark: Tensor<[2], Float>): Tensor<[1], Float[Length]> = [(mark[0] + mark[1]) * (0.25 m)]
+
+## Method 7 is drift-implicit Euler; reference_time makes the noise clock explicit.
+let solution = N.num_sde_jump_adaptive_diag_typed(0.0 s, 1.0 s, 1.0 s, [1.0 m], 0.001 m, 0.01, 16384, 20000, 2000000, 2718, 7, 5.0 / (1.0 s), [1.0, 1.0], drift, diffusion, jump)
+
+test "jump-adapted implicit path reaches the endpoint and preserves every mark" =
+    match solution with
+    | Ok(path) -> path.times[length(path.times) - 1] == 1.0 s && path.total_jumps > 0 && path.rejected > 0 && abs(path.states[length(path.times) - 1, 0] - (1.5 + 0.5 * path.total_jumps) * (1.0 m)) < 0.03 m
+    | Err(_) -> false
+
+fn main(): IO Unit = println(solution)
+
+test "native jump batches return physical marks with one sample per row" =
+    let empty_samples: Tensor<1, Float> = []
+    let distribution = unwrap_or(Rssn.dynamic("num_analysis_stochastic_jump_distribution", [to_value("Constant"), to_value([1.0, -2.0]), to_value(empty_samples), to_value(empty_samples), to_value(3.0 m), to_value(2)]), to_value(0))
+    let stream = unwrap_or(Rssn.dynamic("num_analysis_stochastic_stream_new", [to_value(2718)]), to_value(0))
+    match Rssn.dynamic("num_analysis_stochastic_jump_sample_batch", [distribution, stream, to_value(3)]) with
+    | Ok(value) ->
+        match from_value<Tensor<2, Float[Length]>>(value) with
+        | Ok(marks) -> marks == [[3.0 m, -6.0 m], [3.0 m, -6.0 m], [3.0 m, -6.0 m]]
+        | Err(_) -> false
+    | Err(_) -> false

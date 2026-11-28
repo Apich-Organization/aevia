@@ -1,0 +1,40 @@
+[package]
+name = "aevia-std"
+description = "The Aevia standard library: numerics behind chapter 8 of the specification"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aevia-stdlib-model = { path = "../aevia-stdlib-model" }
+num-bigint.workspace = true
+num-rational.workspace = true
+num-traits.workspace = true
+# The simulation scenarios of §8.17 are rssn's; the typed wrappers call them
+# rather than reimplementing twenty solvers.
+rssn = { path = "../../../rssn", default-features = false }
+
+# `tests/exactness.rs` runs an Aevia program end to end, which needs the
+# runtime. A dev-dependency cycle is allowed, and this is the only way to put
+# the exactness contract in a file this crate owns: the property is about a
+# `Value`, and `Value` lives in `aevia-core`.
+#
+# `aevia-rssn` is a test-only dependency for the same reason: the embedded
+# `Units.Constants` module is generated from the live Kernel Manifest, and the
+# test that regenerates it (and the one that checks the checked-in copy against
+# the live manifest) need the manifest index. The library itself must not see
+# the bridge — unit values are ambient and the standard library has no operator
+# table.
+[dev-dependencies]
+nalgebra = { version = "0.35", default-features = false, features = ["std", "macros"] }
+aevia-core = { path = "../aevia-core" }
+aevia-rssn.workspace = true
+# `tests/spec_signatures.rs` compares every §8.1–§8.16 declared signature with
+# the checker's scheme through `aevia_types::builtins::schemes`; the library
+# itself must not see the checker.
+aevia-types = { path = "../aevia-types" }
+
+[lints]
+workspace = true
