@@ -346,7 +346,14 @@ def registry_image_test(build):
 
 
 def build_playground_image(build, cli, tag):
-    build.run(["sh", "platform/infra/build-playground.sh", cli, tag])
+    if not cli.is_file():
+        raise ValueError(f"Missing Aevia executable {cli}")
+    with tempfile.TemporaryDirectory(prefix="aevia-playground-", dir=build.scratch) as directory:
+        executable = Path(directory) / "aevia"
+        shutil.copyfile(cli, executable)
+        executable.chmod(0o755)
+        containerfile = build.root / "platform/infra/Containerfile.playground"
+        build.run(["podman", "build", "--file", containerfile, "--tag", tag, directory])
 
 
 def playground_image(build, args):
