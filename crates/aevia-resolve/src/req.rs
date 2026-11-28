@@ -1,8 +1,8 @@
 //! Version requirements: `^1.2`, `~1.2.3`, `>=1.2, <2`, `1.*`, `=1.2.3`, `*`.
 //!
-//! A requirement is a comma-separated conjunction of comparators. The grammar
-//! and the meaning of every operator follow Cargo's, which is what most people
-//! who write `^1.2` already expect:
+//! A requirement is a comma-separated conjunction using Cargo-style comparator
+//! notation. Aevia applies the intervals below and then checks pre-release
+//! eligibility:
 //!
 //! | written      | means                                        |
 //! |--------------|----------------------------------------------|
@@ -24,7 +24,9 @@
 //! requirement names a pre-release of the *same* `major.minor.patch`
 //! (`>=1.0.0-rc.1` accepts `1.0.0-rc.2`; `^1` never accepts `2.0.0-rc.1`, and
 //! `*` never accepts any pre-release). This is the rule that stops
-//! `aevia update` from silently adopting a release candidate.
+//! `aevia update` from silently adopting a release candidate. The interval
+//! endpoints apply before this rule, so `^1, >=1.0.0-alpha` excludes
+//! `1.0.0-beta`, which precedes the `^1` floor of `1.0.0`.
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -33,6 +35,7 @@ use std::str::FromStr;
 use crate::version::Identifier;
 use crate::version::ParseError;
 use crate::version::Version;
+use crate::version::parse_prerelease;
 
 /// A comparison operator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -107,17 +110,29 @@ impl Interval {
         &self,
         version: &Version,
     ) -> bool {
-        let above = match &self.lower {
+        self.meets_lower(version) && self.meets_upper(version)
+    }
+
+    pub(crate) fn meets_lower(
+        &self,
+        version: &Version,
+    ) -> bool {
+        match &self.lower {
             | Bound::Unbounded => true,
-            | Bound::Included(bound) => version >= bound,
-            | Bound::Excluded(bound) => version > bound,
-        };
-        let below = match &self.upper {
+            | Bound::Included(bound) => !version.cmp_precedence(bound).is_lt(),
+            | Bound::Excluded(bound) => version.cmp_precedence(bound).is_gt(),
+        }
+    }
+
+    pub(crate) fn meets_upper(
+        &self,
+        version: &Version,
+    ) -> bool {
+        match &self.upper {
             | Bound::Unbounded => true,
-            | Bound::Included(bound) => version <= bound,
-            | Bound::Excluded(bound) => version < bound,
-        };
-        above && below
+            | Bound::Included(bound) => !version.cmp_precedence(bound).is_gt(),
+            | Bound::Excluded(bound) => version.cmp_precedence(bound).is_lt(),
+        }
     }
 
     /// The versions inside both.
@@ -140,12 +155,15 @@ impl Interval {
             | Bound::Included(version) => (version, false),
             | Bound::Excluded(version) => (version, true),
         };
+        if low_open && !low.is_prerelease() && low.triple() == (u64::MAX, u64::MAX, u64::MAX) {
+            return true;
+        }
         let (high, high_open) = match &self.upper {
             | Bound::Unbounded => return false,
             | Bound::Included(version) => (version, false),
             | Bound::Excluded(version) => (version, true),
         };
-        match low.cmp(high) {
+        match low.cmp_precedence(high) {
             | Ordering::Greater => true,
             | Ordering::Equal => low_open || high_open,
             | Ordering::Less => false,
@@ -153,6 +171,10 @@ impl Interval {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "lower bound selection mirrors the separate upper bound rule"
+)]
 fn tighter_lower(
     left: &Bound,
     right: &Bound,
@@ -160,7 +182,7 @@ fn tighter_lower(
     match (left, right) {
         | (Bound::Unbounded, other) | (other, Bound::Unbounded) => other.clone(),
         | (Bound::Included(a) | Bound::Excluded(a), Bound::Included(b) | Bound::Excluded(b)) => {
-            match a.cmp(b) {
+            match a.cmp_precedence(b) {
                 | Ordering::Greater => left.clone(),
                 | Ordering::Less => right.clone(),
                 // Equal versions: the open end is the tighter one.
@@ -176,6 +198,10 @@ fn tighter_lower(
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "upper bound selection mirrors the separate lower bound rule"
+)]
 fn tighter_upper(
     left: &Bound,
     right: &Bound,
@@ -183,7 +209,7 @@ fn tighter_upper(
     match (left, right) {
         | (Bound::Unbounded, other) | (other, Bound::Unbounded) => other.clone(),
         | (Bound::Included(a) | Bound::Excluded(a), Bound::Included(b) | Bound::Excluded(b)) => {
-            match a.cmp(b) {
+            match a.cmp_precedence(b) {
                 | Ordering::Less => left.clone(),
                 | Ordering::Greater => right.clone(),
                 | Ordering::Equal => {
@@ -209,12 +235,16 @@ impl Comparator {
         }
     }
 
-    /// `maj.min.0` one minor above, or the next major when the minor is absent.
-    fn next_after_partial(&self) -> Version {
-        match self.minor {
-            | Some(minor) => Version::new(self.major, minor.saturating_add(1), 0),
-            | None => Version::new(self.major.saturating_add(1), 0, 0),
-        }
+    /// The first release after this major or major/minor prefix.
+    fn next_after_partial(&self) -> Option<Version> {
+        self.minor
+            .and_then(|minor| minor.checked_add(1))
+            .map(|minor| Version::new(self.major, minor, 0))
+            .or_else(|| {
+                self.major
+                    .checked_add(1)
+                    .map(|major| Version::new(major, 0, 0))
+            })
     }
 
     /// The versions this comparator admits, before the pre-release rule.
@@ -232,7 +262,9 @@ impl Comparator {
                 } else {
                     Interval {
                         lower: Bound::Included(floor),
-                        upper: Bound::Excluded(self.next_after_partial()),
+                        upper: self
+                            .next_after_partial()
+                            .map_or(Bound::Unbounded, Bound::Excluded),
                     }
                 }
             },
@@ -244,7 +276,10 @@ impl Comparator {
                     }
                 } else {
                     Interval {
-                        lower: Bound::Included(self.next_after_partial()),
+                        lower: self.next_after_partial().map_or_else(
+                            || Bound::Excluded(Version::new(u64::MAX, u64::MAX, u64::MAX)),
+                            Bound::Included,
+                        ),
                         upper: Bound::Unbounded,
                     }
                 }
@@ -270,32 +305,44 @@ impl Comparator {
                 } else {
                     Interval {
                         lower: Bound::Unbounded,
-                        upper: Bound::Excluded(self.next_after_partial()),
+                        upper: self
+                            .next_after_partial()
+                            .map_or(Bound::Unbounded, Bound::Excluded),
                     }
                 }
             },
             | Op::Tilde | Op::Wildcard => {
                 Interval {
                     lower: Bound::Included(floor),
-                    upper: Bound::Excluded(self.next_after_partial()),
+                    upper: self
+                        .next_after_partial()
+                        .map_or(Bound::Unbounded, Bound::Excluded),
                 }
             },
             | Op::Caret => {
                 let upper = if self.major > 0 {
-                    Version::new(self.major.saturating_add(1), 0, 0)
+                    self.major
+                        .checked_add(1)
+                        .map(|major| Version::new(major, 0, 0))
                 } else {
-                    match (self.minor, self.patch) {
+                    Some(match (self.minor, self.patch) {
                         | (None, _) => Version::new(1, 0, 0),
                         | (Some(minor), _) if minor > 0 => {
-                            Version::new(0, minor.saturating_add(1), 0)
+                            minor
+                                .checked_add(1)
+                                .map_or(Version::new(1, 0, 0), |minor| Version::new(0, minor, 0))
                         },
-                        | (Some(_), Some(patch)) => Version::new(0, 0, patch.saturating_add(1)),
+                        | (Some(_), Some(patch)) => {
+                            patch
+                                .checked_add(1)
+                                .map_or(Version::new(0, 1, 0), |patch| Version::new(0, 0, patch))
+                        },
                         | (Some(_), None) => Version::new(0, 1, 0),
-                    }
+                    })
                 };
                 Interval {
                     lower: Bound::Included(floor),
-                    upper: Bound::Excluded(upper),
+                    upper: upper.map_or(Bound::Unbounded, Bound::Excluded),
                 }
             },
         }
@@ -384,7 +431,7 @@ impl VersionReq {
 
     /// Whether this is `*`.
     #[must_use]
-    pub fn is_any(&self) -> bool {
+    pub const fn is_any(&self) -> bool {
         self.comparators.is_empty()
     }
 
@@ -404,18 +451,27 @@ impl VersionReq {
         &self,
         version: &Version,
     ) -> bool {
-        if !self.interval().contains(version) {
-            return false;
-        }
-        if version.is_prerelease() {
-            return self.comparators.iter().any(|comparator| {
+        // Membership is conjunctive. Only callers needing the bounds have
+        // to construct their intersection.
+        self.permits_prerelease(version)
+            && self
+                .comparators
+                .iter()
+                .all(|comparator| comparator.interval().contains(version))
+    }
+
+    /// Applies the pre-release rule after the version interval has matched.
+    pub(crate) fn permits_prerelease(
+        &self,
+        version: &Version,
+    ) -> bool {
+        !version.is_prerelease()
+            || self.comparators.iter().any(|comparator| {
                 !comparator.pre.is_empty()
                     && comparator.major == version.major
                     && comparator.minor == Some(version.minor)
                     && comparator.patch == Some(version.patch)
-            });
-        }
-        true
+            })
     }
 
     /// Whether two requirements can be satisfied by one version (by interval;
@@ -429,6 +485,10 @@ impl VersionReq {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "comparators are the units of the requirement grammar"
+)]
 fn parse_comparator(
     input: &str,
     part: &str,
@@ -455,14 +515,17 @@ fn parse_comparator(
     let mut minor = None;
     let mut patch = None;
     let mut wildcard = false;
-    let fields: Vec<&str> = numbers.split('.').collect();
-    if fields.len() > 3 {
+    // Read one component beyond the maximum so excess fields have the
+    // same diagnostic precedence without collecting the whole input.
+    let mut components = numbers.split('.');
+    let fields = [components.next(), components.next(), components.next()];
+    if components.next().is_some() {
         return Err(ParseError::new(
             input,
             format!("`{part}` has more than three numbers"),
         ));
     }
-    for (index, field) in fields.iter().enumerate() {
+    for (index, field) in fields.into_iter().flatten().enumerate() {
         let field = field.trim();
         if matches!(field, "*" | "x" | "X") {
             if index == 0 {
@@ -508,15 +571,14 @@ fn parse_comparator(
                     format!("`{part}`: a pre-release needs a full `major.minor.patch`"),
                 ));
             }
-            // Reuse the version parser for the identifier rules.
-            let parsed = Version::parse(&format!("0.0.0-{pre}"))
-                .map_err(|error| ParseError::new(input, format!("`{part}`: {}", error.reason)))?;
-            parsed.pre
+            parse_prerelease(input, pre).map_err(|mut error| {
+                error.reason = format!("`{part}`: {}", error.reason);
+                error
+            })?
         },
     };
     let op = match (op, wildcard) {
-        | (None, true) => Op::Wildcard,
-        | (Some(Op::Exact), true) => Op::Wildcard,
+        | (None | Some(Op::Exact), true) => Op::Wildcard,
         | (Some(op), _) => op,
         | (None, false) => Op::Caret,
     };
@@ -529,6 +591,10 @@ fn parse_comparator(
     })
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "operator recognition keeps the longest-first spelling table together"
+)]
 fn split_op(part: &str) -> (Option<Op>, &str) {
     for (prefix, op) in [
         (">=", Op::GreaterEq),
@@ -546,6 +612,10 @@ fn split_op(part: &str) -> (Option<Op>, &str) {
     (None, part)
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "all numeric comparator components share one validation rule"
+)]
 fn parse_component(
     input: &str,
     part: &str,
@@ -782,6 +852,40 @@ mod tests {
     }
 
     #[test]
+    fn excess_components_report_before_individual_field_errors() {
+        let text = format!(">=1, ^01.{}.7", "two.".repeat(2048));
+        let error = VersionReq::parse(&text).unwrap_err();
+        assert_eq!(error.input, text);
+        assert!(error.reason.ends_with("has more than three numbers"));
+        for text in ["^01.two.3.4", "^.2.3.", "^*.1.2.3"] {
+            assert_eq!(
+                VersionReq::parse(text).unwrap_err().reason,
+                format!("`{text}` has more than three numbers")
+            );
+        }
+    }
+
+    #[test]
+    fn prerelease_identifiers_share_version_parsing_and_comparator_errors() {
+        let text = "  >= 1 . 2 . 3-alpha.10.X-7 , <2  ";
+        let parsed = r(text);
+        assert_eq!(parsed.comparators[0].pre, v("1.2.3-alpha.10.X-7").pre);
+        assert_eq!(parsed.to_string(), ">=1.2.3-alpha.10.X-7, <2");
+        assert!(parsed.matches(&v("1.2.3-alpha.10.X-7+pkg.001")));
+        for suffix in ["", "alpha..7", "alpha.007", "alpha_1", " alpha"] {
+            let version = format!("1.2.3-{suffix}");
+            let reason = Version::parse(&version).unwrap_err().reason;
+            let single = format!(">={version}");
+            let conjunction = format!("{single}, <2");
+            assert_eq!(VersionReq::parse(&single).unwrap_err().reason, reason);
+            assert_eq!(
+                VersionReq::parse(&conjunction).unwrap_err().reason,
+                format!("`{single}`: {reason}")
+            );
+        }
+    }
+
+    #[test]
     fn matches_agrees_with_the_interval_on_releases_for_random_requirements() {
         let mut rng = crate::testing::Rng::new(99);
         for _ in 0..300 {
@@ -796,6 +900,55 @@ mod tests {
                     interval.contains(&version),
                     "`{req}` vs {version}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn matching_agrees_with_the_intersection_at_prerelease_and_overflow_boundaries() {
+        let max = u64::MAX;
+        let comparators = [
+            ">=1.0.0-rc.1".to_owned(),
+            "<1.0.0".to_owned(),
+            "<=1.0.0-rc.2".to_owned(),
+            ">1.0.0-rc.2".to_owned(),
+            "=1.0.0-rc.1".to_owned(),
+            "^1.0".to_owned(),
+            "1.2.*".to_owned(),
+            "~1.2.0-alpha".to_owned(),
+            format!(">{max}.{max}"),
+            format!("<{max}.{max}.{max}"),
+            format!("^{max}.{max}.{max}-preview.0"),
+            format!("^0.0.{max}"),
+        ];
+        let versions = [
+            v("0.0.0-alpha"),
+            v("0.0.0"),
+            v("1.0.0-beta.2"),
+            v("1.0.0-rc.1+rebuild.9"),
+            v("1.0.0-rc.2"),
+            v("1.0.0-rc.10"),
+            v("1.0.0+rebuild.9"),
+            v("1.1.1-rc.1"),
+            v("1.2.0-alpha"),
+            v("1.2.0"),
+            v("2.0.0"),
+            v(&format!("0.0.{max}-preview.1")),
+            v(&format!("0.0.{max}")),
+            v(&format!("{max}.{max}.{max}-preview.1")),
+            v(&format!("{max}.{max}.{max}+rebuild.1")),
+        ];
+        for first in &comparators {
+            for second in &comparators {
+                let req = r(&format!("{first}, {second}"));
+                let interval = req.interval();
+                for version in &versions {
+                    assert_eq!(
+                        req.matches(version),
+                        interval.contains(version) && req.permits_prerelease(version),
+                        "`{req}` vs {version}"
+                    );
+                }
             }
         }
     }
@@ -816,6 +969,28 @@ mod tests {
                 assert!(a.overlaps(&b), "`{a}` / `{b}` share a version");
             }
         }
+    }
+
+    #[test]
+    fn extreme_component_bounds_carry_or_remain_unbounded() {
+        let max = u64::MAX;
+        assert!(r(&format!("^{max}")).matches(&v(&format!("{max}.{max}.{max}"))));
+        assert!(r(&format!("~1.{max}")).matches(&v(&format!("1.{max}.9"))));
+        assert!(!r(&format!(">1.{max}")).matches(&v(&format!("1.{max}.9"))));
+        assert!(r(&format!(">1.{max}")).matches(&v("2.0.0")));
+        assert!(r(&format!(">{max}.{max}")).interval().is_empty());
+        assert!(r(&format!(">{max}.{max}.{max}")).interval().is_empty());
+        assert!(r(&format!("^0.0.{max}")).matches(&v(&format!("0.0.{max}"))));
+        assert!(!r(&format!("^0.0.{max}")).matches(&v("0.1.0")));
+    }
+
+    #[test]
+    fn requirements_compare_precedence_without_build_metadata() {
+        let built = v("1.2.3+packaged.1");
+        assert!(r("=1.2.3").matches(&built));
+        assert!(r("<=1.2.3").matches(&built));
+        assert!(!r(">1.2.3").matches(&built));
+        assert!(r("=1.2.3-rc.1").matches(&v("1.2.3-rc.1+packaged.1")));
     }
 
     #[test]

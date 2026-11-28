@@ -3,8 +3,20 @@
 //! The standard library's `RandomState` is SipHash-1-3, which is chosen to
 //! resist adversarial keys. Every map this is used for is keyed by a source
 //! span, a pointer identity or a program identifier, and sits on the
-//! per-call path, where hashing a key with SipHash cost more than the lookup
-//! itself. This is the FxHash scheme (one rotate, xor and multiply per word).
+//! per-call path, where hashing a key with `SipHash` cost more than the lookup
+//! itself. This is the `FxHash` scheme (one rotate, xor and multiply per word).
+
+#![deny(
+    missing_docs,
+    clippy::arithmetic_side_effects,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::nursery,
+    clippy::panic,
+    clippy::pedantic,
+    clippy::single_call_fn,
+    clippy::unwrap_used
+)]
 
 use std::hash::BuildHasherDefault;
 use std::hash::Hasher;
@@ -19,7 +31,7 @@ pub struct FxHasher {
 
 impl FxHasher {
     #[inline]
-    fn add(
+    const fn add(
         &mut self,
         word: u64,
     ) {
@@ -33,17 +45,15 @@ impl Hasher for FxHasher {
         &mut self,
         bytes: &[u8],
     ) {
-        let mut rest = bytes;
-        while rest.len() >= 8 {
-            let (head, tail) = rest.split_at(8);
-            let mut word = [0u8; 8];
-            word.copy_from_slice(head);
+        let (words, rest) = bytes.as_chunks::<8>();
+        for &word in words {
             self.add(u64::from_le_bytes(word));
-            rest = tail;
         }
-        if !rest.is_empty() {
-            let mut word = [0u8; 8];
-            word[..rest.len()].copy_from_slice(rest);
+        let mut word = [0u8; 8];
+        if !rest.is_empty()
+            && let Some(prefix) = word.get_mut(..rest.len())
+        {
+            prefix.copy_from_slice(rest);
             self.add(u64::from_le_bytes(word) ^ ((rest.len() as u64) << 56));
         }
     }

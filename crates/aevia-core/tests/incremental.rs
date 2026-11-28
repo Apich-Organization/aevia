@@ -95,3 +95,98 @@ fn unchanged_modules_are_reused_and_interface_preserving_edits_cut_off() {
     );
     let _ = std::fs::remove_dir_all(directory);
 }
+
+#[test]
+fn a_changed_transitive_interface_invalidates_the_consumer_cache() {
+    let directory = std::env::temp_dir().join(format!(
+        "aevia-incremental-transitive-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let leaf = directory.join("Leaf.aev");
+    let middle = directory.join("Middle.aev");
+    let main = directory.join("main.aev");
+    write(&leaf, "module Leaf\nlet value: Int = 1\n");
+    write(
+        &middle,
+        "module Middle\nimport Leaf\nlet constant: Int = 7\n",
+    );
+    write(&main, "import Middle\nlet result: Int = Middle.constant\n");
+    let cache = Rc::new(RefCell::new(CheckCache::new()));
+    let load = || {
+        let (program, stats) = load_incremental(
+            &main,
+            Roots::adjacent(&main),
+            &SourceOverlays::new(),
+            &CheckOptions::default(),
+            &cache,
+        );
+        assert!(
+            !program.diagnostics.has_errors(),
+            "{:?}",
+            program.diagnostics.items
+        );
+        stats.checks
+    };
+
+    assert_eq!(load(), 3);
+    assert_eq!(load(), 0);
+    write(&leaf, "module Leaf\nlet value: Int = 2\n");
+    assert_eq!(load(), 1);
+    write(&leaf, "module Leaf\nlet value: Float = 2.0\n");
+    assert_eq!(load(), 3, "the entire visible interface closure is checked");
+    assert_eq!(load(), 0);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn cached_syntax_diagnostics_follow_file_ids_and_fresh_text() {
+    let directory =
+        std::env::temp_dir().join(format!("aevia-incremental-syntax-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let main = directory.join("main.aev");
+    let a = directory.join("A.aev");
+    let b = directory.join("B.aev");
+    write(&a, "module A\nlet value: Int = 1\n");
+    write(&b, "module B\nlet invalid = )\n");
+    write(&main, "import A\nimport B\nlet value = A.value\n");
+    let cache = Rc::new(RefCell::new(CheckCache::new()));
+    let load = || {
+        load_incremental(
+            &main,
+            Roots::adjacent(&main),
+            &SourceOverlays::new(),
+            &CheckOptions::default(),
+            &cache,
+        )
+        .0
+    };
+    let error_file = |program: &aevia_core::driver::Program| {
+        program
+            .diagnostics
+            .items
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.severity == aevia_syntax::Severity::Error
+                    && program
+                        .sources
+                        .file(diagnostic.span.file)
+                        .is_some_and(|file| file.name.ends_with("B.aev"))
+            })
+            .expect("the bad source must keep its diagnostic")
+            .span
+            .file
+    };
+
+    let first_file = error_file(&load());
+    assert_eq!(error_file(&load()), first_file);
+    write(&main, "import B\nimport A\nlet value = A.value\n");
+    assert_ne!(error_file(&load()), first_file);
+    write(&b, "module B\nlet valid: Int = 2\n");
+    assert!(!load().diagnostics.has_errors());
+    assert_eq!(cache.borrow().len(), 3);
+    write(&main, "import A\nlet value = A.value\n");
+    assert!(!load().diagnostics.has_errors());
+    assert_eq!(cache.borrow().len(), 2);
+    std::fs::remove_dir_all(directory).unwrap();
+}

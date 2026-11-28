@@ -47,10 +47,18 @@ const REVOKE: Msg = Msg::new("revoke", "吊销");
 // Adding a key.
 const ADD_KEY: Msg = Msg::new("add a signing key", "添加签名密钥");
 const ADD_KEY_NOTE: Msg = Msg::new(
-    "Paste an ASCII-armoured public key. The registry checks that the key can \
-     verify a signature before it binds it.",
-    "粘贴 ASCII 装甲格式的公钥。注册中心会先确认该密钥能够验证签名，再将其绑定。",
+    "Paste an ASCII-armoured OpenPGP (GPG) public key or an OpenSSH `ssh-ed25519` public key line. \
+     The registry validates that the key can verify signatures before binding it.",
+    "粘贴 ASCII 装甲格式的 OpenPGP（GPG）公钥或 OpenSSH `ssh-ed25519` 公钥行。注册中心会在绑定前校验该密钥能否验证签名。",
 );
+const KEY_PREFERENCE_WARNING: Msg = Msg::new(
+    "Warning: SSH (`ssh-ed25519`) keys are accepted for registering and signing releases, \
+     but OpenPGP (GPG) keys are preferred. We recommend using an OpenPGP key backed by a hardware \
+     key (such as a YubiKey or OpenPGP smartcard).",
+    "警告：注册中心支持使用 SSH（`ssh-ed25519`）密钥绑定账户并签署发布，但更推荐优先使用 OpenPGP（GPG）密钥；\
+     为获得更强的发布安全性，建议使用由硬件密钥（如 YubiKey 或 OpenPGP 智能卡）保护的 OpenPGP 密钥。",
+);
+const SSH_BADGE_NOTE: Msg = Msg::new("GPG recommended", "建议改用 GPG");
 const PUBLIC_KEY: Msg = Msg::new("public key", "公钥");
 const LABEL_PLACEHOLDER: Msg = Msg::new("laptop, CI, offline", "笔记本、CI、离线");
 const BIND_KEY: Msg = Msg::new("bind key", "绑定密钥");
@@ -75,6 +83,7 @@ const CANCEL: Msg = Msg::new("cancel", "取消");
 /// The revoke control is a form per key rather than a single form with a
 /// select: revocation is destructive and should take one deliberate click on
 /// the row that names the key, not a choice made in a dropdown.
+#[must_use]
 pub fn account(
     lang: Lang,
     page: &AccountPage,
@@ -113,7 +122,13 @@ pub fn account(
             };
             view! {
                 <tr>
-                    <th scope="row">{kind}</th>
+                    <th scope="row">
+                        {kind.clone()}
+                        {(kind == "ssh").then(|| view! {
+                            " "
+                            <span class="badge badge-yank">{SSH_BADGE_NOTE.of(lang)}</span>
+                        })}
+                    </th>
                     <td>
                         <code class="mono">{fingerprint}</code>
                     </td>
@@ -161,7 +176,7 @@ pub fn account(
         view! {
             <p class="muted">
                 {NO_PACKAGES.of(lang)}
-                <code>"aevia pkg publish"</code>
+                <code>"aevia publish"</code>
                 {NO_PACKAGES_END.of(lang)}
             </p>
         }
@@ -205,13 +220,14 @@ pub fn account(
             <section>
                 <h2>{ADD_KEY.of(lang)}</h2>
                 <p class="muted">{ADD_KEY_NOTE.of(lang)}</p>
+                <p class="notice-warn" role="note">{KEY_PREFERENCE_WARNING.of(lang)}</p>
                 <form class="form-grid" method="post" action="/account/keys">
                     <label>
                         {PUBLIC_KEY.of(lang)}
                         <textarea
                             name="armored"
                             rows="8"
-                            placeholder="-----BEGIN PGP PUBLIC KEY BLOCK-----"
+                            placeholder="-----BEGIN PGP PUBLIC KEY BLOCK----- or ssh-ed25519 AAAA..."
                             required
                         ></textarea>
                     </label>
@@ -241,6 +257,7 @@ pub fn account(
 /// The confirmation is a POST carrying the same code the page was opened with,
 /// so that approving a device is an explicit action by the signed-in viewer and
 /// not a side effect of following a link someone else sent them.
+#[must_use]
 pub fn activate(
     lang: Lang,
     user_code: &str,
@@ -248,6 +265,11 @@ pub fn activate(
     key_kind: &str,
     fingerprint: &str,
 ) -> String {
+    let ssh_warning = (key_kind == "ssh").then(|| {
+        view! {
+            <p class="notice-warn" role="note">{KEY_PREFERENCE_WARNING.of(lang)}</p>
+        }
+    });
     layout::page(
         lang,
         APPROVE.of(lang),
@@ -257,6 +279,7 @@ pub fn activate(
             <section class="activate">
                 <h1>{APPROVE.of(lang)}</h1>
                 <p>{APPROVE_NOTE.of(lang)}</p>
+                {ssh_warning}
                 <p class="code">{user_code.to_string()}</p>
                 <dl class="meta">
                     <div>
@@ -326,5 +349,27 @@ mod tests {
         assert!(html.contains("ABCD-1234"));
         assert!(html.contains("name=\"user_code\" value=\"ABCD-1234\""));
         assert!(html.contains("openpgp"));
+        assert!(!html.contains("notice-warn"));
+
+        let ssh_html = activate(Lang::En, "WXYZ-5678", None, "ssh", "SHA256:example");
+        assert!(ssh_html.contains("notice-warn"));
+        assert!(ssh_html.contains("hardware"));
+    }
+
+    #[test]
+    fn an_account_page_surfaces_ssh_key_and_pgp_hardware_warning() {
+        let mut page = account_page();
+        page.keys.push(KeyView {
+            id: 8,
+            kind: "ssh".to_string(),
+            fingerprint: "SHA256:example".to_string(),
+            label: Some("ssh key".to_string()),
+            created_at: "2026-01-03T00:00:00Z".to_string(),
+            revoked: false,
+        });
+        let html = account(Lang::En, &page);
+        assert!(html.contains("notice-warn"));
+        assert!(html.contains("GPG recommended"));
+        assert!(html.contains("ssh-ed25519"));
     }
 }

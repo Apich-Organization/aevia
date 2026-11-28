@@ -1,7 +1,6 @@
 ## The `Units/SI` module of §8.20.
-##
-## Generated standard library; do not edit.
-## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Generated standard library; do not edit.
+# Regenerate with `bazel run //:refresh_stdlib`.
 module Units.SI
 
 ## SI unit names are ambient Unit values from the kernel registry.

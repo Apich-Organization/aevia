@@ -10,15 +10,16 @@
 //! text alone — the right choice for a buffer that is not on disk. For a saved
 //! file, [`Analysis::from_path`] loads the file **and its import graph**
 //! through `aevia_core::driver`, so imported qualified names, `open`ed names
-//! and their definitions resolve instead of being reported as unbound. The
-//! multi-module answer is only used while the editor's text still matches the
-//! file on disk: a stale disk answer is worse than the single-file fallback.
+//! and their definitions resolve. Unsaved buffers are loaded as source
+//! overlays. A cached program answers queries for the exact source snapshot
+//! it compiled.
 //!
 //! Nothing here knows what a client is. There is no request vocabulary, no
 //! numeric severity, no JSON: a query takes a byte offset and returns a Rust
 //! value from [`crate::types`].
 
 use crate::actions;
+use crate::cursor_index::CursorIndex;
 use crate::diagnostic::Diagnostic;
 use crate::diagnostic::{
     self,
@@ -31,9 +32,11 @@ use crate::occurrence::{
 };
 use crate::position::LineIndex;
 use crate::position::Range;
+use crate::position::split_last_line;
 use crate::prelude;
 use crate::tokens;
 use crate::types::CodeAction;
+use crate::types::CodeLens;
 use crate::types::Completion;
 use crate::types::CompletionKind;
 use crate::types::FileEdit;
@@ -57,13 +60,29 @@ use aevia_syntax::Diagnostics;
 use aevia_syntax::FileId;
 use aevia_syntax::SourceMap;
 use aevia_syntax::Span;
-use aevia_syntax::ast::*;
+use aevia_syntax::ast::BlockStmt;
+use aevia_syntax::ast::Decl;
+use aevia_syntax::ast::DeclKind;
+use aevia_syntax::ast::DoStmt;
+use aevia_syntax::ast::Expr;
+use aevia_syntax::ast::ExprKind;
+use aevia_syntax::ast::Module;
+use aevia_syntax::ast::Pat;
+use aevia_syntax::ast::PatKind;
+use aevia_syntax::ast::Ty;
+use aevia_syntax::ast::TyKind;
+use aevia_syntax::ast::TypeBody;
+use aevia_syntax::token::Punct;
+use aevia_syntax::token::TokenKind;
 use aevia_types::Scheme;
 use aevia_types::Type;
 use aevia_types::builtins;
 use aevia_types::check::CheckedModule;
 use aevia_types::check::Export;
+use std::cell::OnceCell;
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::path::Path;
 use std::rc::Rc;
 use unicode_ident::is_xid_continue;
@@ -73,11 +92,98 @@ use unicode_ident::is_xid_continue;
 enum Source {
     /// The document's text alone — the unsaved-buffer fallback.
     Single(aevia_core::Compilation),
-    /// The file and everything it imports, loaded from disk.
+    /// The file and everything it imports, loaded from disk and overlays.
     ///
     /// Shared with [`crate::AnalysisCache`] so a cached program can be answered
     /// from without copying it.
-    Program(Rc<Program>),
+    Program(Rc<Program>, Rc<ProgramQueryIndex>),
+}
+
+type ModuleImport = (String, usize, Option<Vec<String>>);
+
+#[derive(Default)]
+struct ModuleQueries {
+    occurrences: OnceCell<occurrence::Occurrences>,
+    definitions: OnceCell<HashMap<String, Span>>,
+    imports: OnceCell<Vec<ModuleImport>>,
+    lines: OnceCell<LineIndex>,
+    expressions: OnceCell<CursorIndex<Span>>,
+    symbols: OnceCell<Vec<Symbol>>,
+    semantic_tokens: OnceCell<Vec<SemanticToken>>,
+}
+
+impl ModuleQueries {
+    fn occurrences(
+        &self,
+        module: Option<&Module>,
+        text: &str,
+    ) -> &occurrence::Occurrences {
+        self.occurrences.get_or_init(|| {
+            module.map_or_else(occurrence::Occurrences::default, |module| {
+                occurrence::collect(module, text)
+            })
+        })
+    }
+
+    fn definitions(
+        &self,
+        module: Option<&Module>,
+        text: &str,
+    ) -> &HashMap<String, Span> {
+        self.definitions
+            .get_or_init(|| module.map_or_else(HashMap::new, |module| declarations(module, text)))
+    }
+
+    fn lines(
+        &self,
+        text: &str,
+    ) -> &LineIndex {
+        self.lines.get_or_init(|| LineIndex::new(text))
+    }
+
+    fn symbols(
+        &self,
+        module: &Module,
+        context: &SymbolContext<'_>,
+    ) -> &[Symbol] {
+        self.symbols.get_or_init(|| context.module_symbols(module))
+    }
+}
+
+/// Query tables belong to one immutable program snapshot. Per-module syntax
+/// tables are walked on first use so a local query need not scan dependencies.
+pub(crate) struct ProgramQueryIndex {
+    by_file: HashMap<FileId, usize>,
+    modules: Vec<Rc<ModuleQueries>>,
+}
+
+impl ProgramQueryIndex {
+    pub(crate) fn new(program: &Program) -> Self {
+        let mut by_file = HashMap::with_capacity(program.modules.len());
+        let mut modules = Vec::with_capacity(program.modules.len());
+        for (index, module) in program.modules.iter().enumerate() {
+            by_file.entry(module.file).or_insert(index);
+            modules.push(Rc::new(ModuleQueries::default()));
+        }
+        Self { by_file, modules }
+    }
+
+    fn imports<'a>(
+        &self,
+        queries: &'a ModuleQueries,
+        module: &LoadedModule,
+    ) -> &'a [ModuleImport] {
+        queries.imports.get_or_init(|| {
+            module
+                .imports
+                .iter()
+                .filter_map(|edge| {
+                    let index = *self.by_file.get(&edge.file)?;
+                    Some((edge.prefix.clone(), index, edge.names.clone()))
+                })
+                .collect()
+        })
+    }
 }
 
 /// One compiled document, ready to answer questions.
@@ -87,12 +193,7 @@ pub struct Analysis<'a> {
     /// The file the compiler gave this document. A diagnostic in any other
     /// file is not this document's to report.
     file: FileId,
-    occurrences: occurrence::Occurrences,
-    /// Where each name declared by the module is written.
-    definitions: HashMap<String, Span>,
-    /// In program mode, one declaration table per loaded module (in the
-    /// program's dependency order), for jumping into an imported file.
-    module_definitions: Vec<HashMap<String, Span>>,
+    queries: Rc<ModuleQueries>,
     /// In program mode, every prefix a module's names are reachable under
     /// (`A`, an alias, or the empty string for an `open`) to its index.
     prefixes: HashMap<String, usize>,
@@ -108,24 +209,11 @@ impl<'a> Analysis<'a> {
     pub fn new(document: &'a Document) -> Self {
         let compilation = compile(document.name(), document.text());
         let file = compilation.module.as_ref().map_or(0, |module| module.file);
-        let occurrences = compilation
-            .module
-            .as_ref()
-            .map_or_else(occurrence::Occurrences::default, |module| {
-                occurrence::collect(module, document.text())
-            });
-        let definitions = compilation
-            .module
-            .as_ref()
-            .map_or_else(HashMap::new, |module| declarations(module, document.text()));
-        let module_definitions = vec![definitions.clone()];
         Self {
             document,
             source: Source::Single(compilation),
             file,
-            occurrences,
-            definitions,
-            module_definitions,
+            queries: Rc::new(ModuleQueries::default()),
             prefixes: HashMap::new(),
         }
     }
@@ -153,14 +241,9 @@ impl<'a> Analysis<'a> {
         if !crate::cache::analysable(path) {
             return Self::new(document);
         }
-        let dirty = std::fs::read_to_string(path)
-            .map(|on_disk| on_disk != document.text())
-            .unwrap_or(true);
-        let program = if dirty {
-            crate::cache::load_dirty_program(path, document.text())
-        } else {
-            crate::cache::load_program(path)
-        };
+        let dirty =
+            std::fs::read_to_string(path).map_or(true, |on_disk| on_disk != document.text());
+        let program = crate::cache::load_program(path, dirty.then_some(document.text()));
         Self::from_program(document, Rc::new(program))
     }
 
@@ -177,38 +260,38 @@ impl<'a> Analysis<'a> {
         document: &'a Document,
         program: Rc<Program>,
     ) -> Self {
+        Self::from_indexed_program(document, program, None)
+    }
+
+    pub(crate) fn from_indexed_program(
+        document: &'a Document,
+        program: Rc<Program>,
+        index: Option<Rc<ProgramQueryIndex>>,
+    ) -> Self {
         let Some(entry) = program.entry() else {
             return Self::new(document);
         };
-        let entry_text = program
-            .sources
-            .file(entry.file)
-            .map_or("", |source| source.text.as_str());
-        if entry_text != document.text() {
+        let Some(entry_source) = program.sources.file(entry.file) else {
+            return Self::new(document);
+        };
+        if entry_source.text != document.text() {
             return Self::new(document);
         }
         let file = entry.file;
-        let occurrences = occurrence::collect(&entry.module, document.text());
-        let definitions = declarations(&entry.module, document.text());
-        let module_definitions = program
-            .modules
-            .iter()
-            .map(|module| {
-                let text = program
-                    .sources
-                    .file(module.file)
-                    .map_or("", |file| file.text.as_str());
-                declarations(&module.module, text)
-            })
-            .collect();
-        let prefixes = prefixes(&program, file);
+        let index = index.unwrap_or_else(|| Rc::new(ProgramQueryIndex::new(&program)));
+        let Some(queries) = index.modules.last().cloned() else {
+            return Self::new(document);
+        };
+        let prefixes = prefixes(
+            entry,
+            program.modules.len().saturating_sub(1),
+            &index.by_file,
+        );
         Self {
             document,
-            source: Source::Program(program),
+            source: Source::Program(program, index),
             file,
-            occurrences,
-            definitions,
-            module_definitions,
+            queries,
             prefixes,
         }
     }
@@ -216,13 +299,13 @@ impl<'a> Analysis<'a> {
     /// True when the answers come from a loaded import graph rather than from
     /// the document alone.
     #[must_use]
-    pub fn is_multi_module(&self) -> bool {
-        matches!(self.source, Source::Program(_))
+    pub const fn is_multi_module(&self) -> bool {
+        matches!(self.source, Source::Program(..))
     }
 
     /// The document being analysed.
     #[must_use]
-    pub fn document(&self) -> &Document {
+    pub const fn document(&self) -> &Document {
         self.document
     }
 
@@ -237,17 +320,24 @@ impl<'a> Analysis<'a> {
     fn module(&self) -> Option<&Module> {
         match &self.source {
             | Source::Single(compilation) => compilation.module.as_ref(),
-            | Source::Program(program) => program.entry().map(|entry| &entry.module),
+            | Source::Program(program, _) => program.entry().map(|entry| &entry.module),
         }
     }
 
     /// The document module's checked interface.
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::expect_used,
+            reason = "from_program guarantees an entry in the immutable Rc"
+        )
+    )]
     fn checked_module(&self) -> &CheckedModule {
         match &self.source {
             | Source::Single(compilation) => &compilation.checked,
             // `from_path` only builds the program variant when it has an
             // entry module, and the loader keeps the entry last.
-            | Source::Program(program) => {
+            | Source::Program(program, _) => {
                 &program
                     .modules
                     .last()
@@ -261,7 +351,7 @@ impl<'a> Analysis<'a> {
     fn sources(&self) -> &SourceMap {
         match &self.source {
             | Source::Single(compilation) => &compilation.sources,
-            | Source::Program(program) => &program.sources,
+            | Source::Program(program, _) => &program.sources,
         }
     }
 
@@ -269,7 +359,7 @@ impl<'a> Analysis<'a> {
     fn compiler_diagnostics(&self) -> &Diagnostics {
         match &self.source {
             | Source::Single(compilation) => &compilation.diagnostics,
-            | Source::Program(program) => &program.diagnostics,
+            | Source::Program(program, _) => &program.diagnostics,
         }
     }
 
@@ -277,8 +367,18 @@ impl<'a> Analysis<'a> {
     fn program(&self) -> Option<&Program> {
         match &self.source {
             | Source::Single(_) => None,
-            | Source::Program(program) => Some(program),
+            | Source::Program(program, _) => Some(program),
         }
+    }
+
+    fn occurrences(&self) -> &occurrence::Occurrences {
+        self.queries
+            .occurrences(self.module(), self.document.text())
+    }
+
+    fn definitions(&self) -> &HashMap<String, Span> {
+        self.queries
+            .definitions(self.module(), self.document.text())
     }
 
     /// The declaration table of loaded module `index`.
@@ -286,7 +386,19 @@ impl<'a> Analysis<'a> {
         &self,
         index: usize,
     ) -> Option<&HashMap<String, Span>> {
-        self.module_definitions.get(index)
+        match &self.source {
+            | Source::Single(_) => (index == 0).then(|| self.definitions()),
+            | Source::Program(program, queries) => {
+                let module = program.modules.get(index)?;
+                let source = program.sources.file(module.file)?;
+                Some(
+                    queries
+                        .modules
+                        .get(index)?
+                        .definitions(Some(&module.module), &source.text),
+                )
+            },
+        }
     }
 
     /// Resolves a dotted name such as `Math.sqrt` to the module that exports
@@ -298,7 +410,7 @@ impl<'a> Analysis<'a> {
         let program = self.program()?;
         let (member, prefix) = path.split_last()?;
         for length in (1..=prefix.len()).rev() {
-            let key = prefix[..length].join(".");
+            let key = prefix.get(..length)?.join(".");
             let Some(&index) = self.prefixes.get(&key) else {
                 continue;
             };
@@ -315,11 +427,10 @@ impl<'a> Analysis<'a> {
         &self,
         name: &str,
     ) -> Option<(usize, &Export)> {
-        let program = self.program()?;
-        let entry = program
-            .modules
-            .iter()
-            .find(|module| module.file == self.file)?;
+        let Source::Program(program, index) = &self.source else {
+            return None;
+        };
+        let entry = program.entry()?;
         for edge in entry.imports.iter().rev() {
             if !edge.prefix.is_empty()
                 || edge
@@ -329,11 +440,8 @@ impl<'a> Analysis<'a> {
             {
                 continue;
             }
-            let (index, module) = program
-                .modules
-                .iter()
-                .enumerate()
-                .find(|(_, module)| module.file == edge.file)?;
+            let index = *index.by_file.get(&edge.file)?;
+            let module = program.modules.get(index)?;
             if let Some(export) = module.checked.exports.get(name) {
                 return Some((index, export));
             }
@@ -347,14 +455,9 @@ impl<'a> Analysis<'a> {
         index: usize,
         name: &str,
     ) -> Option<Location> {
-        let program = self.program()?;
-        let module: &LoadedModule = program.modules.get(index)?;
+        let file = self.program()?.modules.get(index)?.file;
         let span = *self.definitions_of(index)?.get(name)?;
-        let file = program.sources.file(module.file)?;
-        Some(Location {
-            document: file.name.clone(),
-            range: range_in_file(&file.text, span),
-        })
+        self.location_in_file(file, span)
     }
 
     /// The location of `span` in `file`, using that file's own text.
@@ -364,9 +467,24 @@ impl<'a> Analysis<'a> {
         span: Span,
     ) -> Option<Location> {
         let source = self.sources().file(file)?;
+        let lines = match &self.source {
+            | _ if file == self.file => Some(self.document.index()),
+            | Source::Program(_, index) => {
+                index.by_file.get(&file).and_then(|index_in_program| {
+                    index
+                        .modules
+                        .get(*index_in_program)
+                        .map(|queries| queries.lines(&source.text))
+                })
+            },
+            | Source::Single(_) => None,
+        };
         Some(Location {
             document: source.name.clone(),
-            range: range_in_file(&source.text, span),
+            range: lines.map_or_else(
+                || range_in_lines(&LineIndex::new(&source.text), &source.text, span),
+                |lines| range_in_lines(lines, &source.text, span),
+            ),
         })
     }
 
@@ -379,8 +497,41 @@ impl<'a> Analysis<'a> {
     /// keeps the editor's squiggles identical to `aevia check`'s report.
     #[must_use]
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
-        let mut diagnostics: Vec<Diagnostic> = self
-            .compiler_diagnostics()
+        let lint_result = self.module().map(|module| {
+            let manifest_lints = self
+                .sources()
+                .file(self.file)
+                .and_then(|f| {
+                    aevia_core::manifest::Package::find(
+                        std::path::Path::new(&f.name)
+                            .parent()
+                            .unwrap_or_else(|| std::path::Path::new(".")),
+                    )
+                    .ok()
+                    .flatten()
+                })
+                .map_or_default(|pkg| pkg.manifest.lints);
+            let store = aevia_lint::LintStore::with_builtins();
+            let config = aevia_lint::LintConfig {
+                manifest_lints,
+                cli_overrides: Vec::new(),
+                run_extra_lints: true,
+            };
+            aevia_lint::Driver::run_module(
+                self.sources(),
+                module,
+                Some(self.checked_module()),
+                self.compiler_diagnostics(),
+                self.file,
+                &store,
+                &config,
+                true,
+            )
+        });
+        let diagnostics = lint_result
+            .as_ref()
+            .map_or_else(|| self.compiler_diagnostics(), |result| &result.diagnostics);
+        let mut diagnostics: Vec<Diagnostic> = diagnostics
             .items
             .iter()
             .filter_map(|item| diagnostic::convert(item, self.file, self.document))
@@ -412,7 +563,7 @@ impl<'a> Analysis<'a> {
         &self,
         offset: u32,
     ) -> Option<Hover> {
-        if let Some(occurrence) = occurrence::at(&self.occurrences, offset) {
+        if let Some(occurrence) = self.occurrences().at(offset) {
             if let Some(contents) = self.describe(occurrence) {
                 return Some(Hover {
                     contents,
@@ -441,14 +592,10 @@ impl<'a> Analysis<'a> {
         })
     }
 
-    /// The names in scope at `offset`: this module's exports and the prelude.
+    /// The names in scope at `offset`.
     ///
-    /// A name the module declares shadows the prelude, which is what the
-    /// checker does. The offset is validated against the document but does not
-    /// narrow the list: a local binding is deliberately absent, because this
-    /// list is the module's interface, not the lexical scope at a position —
-    /// the walk in [`occurrence`] answers that for [`Self::definition`]. See
-    /// `.workbuddy-ai/audit/lsp.md`.
+    /// Local bindings shadow declarations, imports and prelude names. Within
+    /// a block, each binding becomes visible after its initializer.
     #[must_use]
     pub fn completion(
         &self,
@@ -462,17 +609,8 @@ impl<'a> Analysis<'a> {
         if let Some(fields) = self.field_completions(offset) {
             return fields;
         }
-        let mut items = Vec::new();
-        let mut declared = std::collections::HashSet::new();
-        for (name, export) in &self.checked_module().exports {
-            items.push(Completion {
-                label: name.clone(),
-                kind: completion_kind(export),
-                detail: export_detail(export),
-                origin: Origin::Module,
-            });
-            declared.insert(name.clone());
-        }
+        let mut declared = HashSet::new();
+        let mut items = self.direct_completions(offset, &mut declared);
         // Imported names: `A.f` for a module import, and the bare name for an
         // `open`. A module name shadows the prelude like any declared name.
         if let Some(program) = self.program()
@@ -525,7 +663,7 @@ impl<'a> Analysis<'a> {
             if declared.contains(name) {
                 continue;
             }
-            let scheme = builtins::schemes(name).and_then(|mut schemes| schemes.drain(..).next());
+            let scheme = builtins::schemes(name).and_then(|schemes| schemes.into_iter().next());
             items.push(Completion {
                 label: name.to_string(),
                 kind: match &scheme {
@@ -561,6 +699,42 @@ impl<'a> Analysis<'a> {
         items
     }
 
+    fn direct_completions(
+        &self,
+        offset: u32,
+        declared: &mut HashSet<String>,
+    ) -> Vec<Completion> {
+        let mut items: Vec<_> = self
+            .occurrences()
+            .local_bindings(offset)
+            .filter(|(name, _, _)| declared.insert((*name).to_owned()))
+            .map(|(name, span, function)| {
+                let ty = self.recorded_type(span);
+                Completion {
+                    label: name.to_owned(),
+                    kind: if function || matches!(ty, Some(Type::Fn(..))) {
+                        CompletionKind::Function
+                    } else {
+                        CompletionKind::Value
+                    },
+                    detail: ty.map(ToString::to_string),
+                    origin: Origin::Module,
+                }
+            })
+            .collect();
+        for (name, export) in &self.checked_module().exports {
+            if declared.insert(name.clone()) {
+                items.push(Completion {
+                    label: name.clone(),
+                    kind: completion_kind(export),
+                    detail: export_detail(export),
+                    origin: Origin::Module,
+                });
+            }
+        }
+        items
+    }
+
     /// Where the name under the cursor is declared, when it can be found.
     ///
     /// A local name resolves through the walk's scope stack, which knows which
@@ -574,7 +748,7 @@ impl<'a> Analysis<'a> {
         &self,
         offset: u32,
     ) -> Option<Location> {
-        let occurrence = occurrence::at(&self.occurrences, offset)?;
+        let occurrence = self.occurrences().at(offset)?;
         match &occurrence.role {
             | Role::Qualified(path) => {
                 if path.first().map(String::as_str) == Some("Rssn") {
@@ -593,7 +767,7 @@ impl<'a> Analysis<'a> {
                         range: self.range(binding),
                     });
                 }
-                if let Some(span) = self.definitions.get(name).copied() {
+                if let Some(span) = self.definitions().get(name).copied() {
                     return Some(Location {
                         document: self.document.name().to_string(),
                         range: self.range(span),
@@ -605,7 +779,7 @@ impl<'a> Analysis<'a> {
             | Role::Method { name, .. } => {
                 let span = occurrence
                     .binding
-                    .or_else(|| self.definitions.get(name).copied())?;
+                    .or_else(|| self.definitions().get(name).copied())?;
                 Some(Location {
                     document: self.document.name().to_string(),
                     range: self.range(span),
@@ -617,11 +791,21 @@ impl<'a> Analysis<'a> {
     /// The document's outline.
     #[must_use]
     pub fn symbols(&self) -> Vec<Symbol> {
-        let Some(module) = self.module() else {
-            return Vec::new();
-        };
-        SymbolContext::new(self.document.text(), self.file, self.checked_module())
-            .module_symbols(module)
+        self.outline().to_vec()
+    }
+
+    /// The document's outline, borrowed from its analyzed source snapshot.
+    #[must_use]
+    pub fn outline(&self) -> &[Symbol] {
+        self.module().map_or(&[], |module| {
+            let context = SymbolContext::new(
+                self.document.text(),
+                self.document.index(),
+                self.file,
+                self.checked_module(),
+            );
+            self.queries.symbols(module, &context)
+        })
     }
 
     /// The declarations of every module in the loaded program, for a
@@ -639,27 +823,23 @@ impl<'a> Analysis<'a> {
         let needle = query.trim().to_lowercase();
         let mut symbols = Vec::new();
         match &self.source {
-            | Source::Single(compilation) => {
-                let Some(module) = &compilation.module else {
-                    return symbols;
-                };
-                let context =
-                    SymbolContext::new(self.document.text(), self.file, &compilation.checked);
-                collect_workspace(
-                    &context.module_symbols(module),
-                    self.document.name(),
-                    &needle,
-                    &mut symbols,
-                );
+            | Source::Single(_) => {
+                collect_workspace(self.outline(), self.document.name(), &needle, &mut symbols);
             },
-            | Source::Program(program) => {
-                for module in &program.modules {
+            | Source::Program(program, index) => {
+                for (module, queries) in program.modules.iter().zip(&index.modules) {
                     let Some(source) = program.sources.file(module.file) else {
                         continue;
                     };
-                    let context = SymbolContext::new(&source.text, module.file, &module.checked);
+                    let lines = if module.file == self.file {
+                        self.document.index()
+                    } else {
+                        queries.lines(&source.text)
+                    };
+                    let context =
+                        SymbolContext::new(&source.text, lines, module.file, &module.checked);
                     collect_workspace(
-                        &context.module_symbols(&module.module),
+                        queries.symbols(&module.module, &context),
                         &source.name,
                         &needle,
                         &mut symbols,
@@ -676,14 +856,7 @@ impl<'a> Analysis<'a> {
     /// the diagnostics already say why.
     #[must_use]
     pub fn formatting(&self) -> Option<TextEdit> {
-        let formatted = aevia_fmt::format_source(self.document.text()).ok()?;
-        if formatted == self.document.text() {
-            return None;
-        }
-        Some(TextEdit {
-            range: self.document.full_range(),
-            new_text: formatted,
-        })
+        self.document.formatting()
     }
 
     /// The fixes and refactors available at `request`.
@@ -723,12 +896,20 @@ impl<'a> Analysis<'a> {
     /// it.
     #[must_use]
     pub fn semantic_tokens(&self) -> Vec<SemanticToken> {
-        tokens::tokens(
-            self.document,
-            self.file,
-            &self.occurrences,
-            self.checked_module(),
-        )
+        self.highlighted_tokens().to_vec()
+    }
+
+    /// The semantic tokens, borrowed from the analyzed source snapshot.
+    #[must_use]
+    pub fn highlighted_tokens(&self) -> &[SemanticToken] {
+        self.queries.semantic_tokens.get_or_init(|| {
+            tokens::tokens(
+                self.document,
+                self.file,
+                self.occurrences(),
+                self.checked_module(),
+            )
+        })
     }
 
     /// The declaration of the *type* of what the cursor is on (§9.10).
@@ -748,7 +929,7 @@ impl<'a> Analysis<'a> {
             return None;
         };
         let name = aevia_types::adt::name_of(*id);
-        if let Some(span) = self.definitions.get(&name).copied() {
+        if let Some(span) = self.definitions().get(&name).copied() {
             return Some(Location {
                 document: self.document.name().to_string(),
                 range: self.range(span),
@@ -789,41 +970,85 @@ impl<'a> Analysis<'a> {
     ) -> Option<SignatureHelp> {
         let (views, entry) = self.views();
         let view = views.get(entry)?;
-        let (callee, call) = innermost_call(view.module, offset)?;
+        let (callee, call) = innermost_call(view.module, view.text, offset)?;
         let ExprKind::Call { args, .. } = &call.kind else {
             return None;
         };
-        let text = view.text;
-        let call_end = usize::try_from(call.span.end).ok()?.min(text.len());
-        let callee_end = usize::try_from(callee.span.end).ok()?;
-        let open = text.get(callee_end..call_end)?.find('(')? + callee_end;
-        // The matching `)` is found by depth from the call's own `(`, so a
-        // nested call or a tuple argument cannot close the outer call early.
-        let close = matching_paren(text, open)?;
-        let offset = usize::try_from(offset).ok()?;
-        // On the callee name or after the closing parenthesis is not "inside
-        // the call", so an editor's `(` trigger does not pop up a stale list.
-        if offset <= open || offset > close {
-            return None;
-        }
-        let argument = active_argument(args, offset);
-        let (signatures, active_signature) =
-            self.call_signatures(&views, view, callee, call.span, args.len())?;
+        // AST spans keep commas inside nested expressions in their own argument.
+        let argument = args
+            .iter()
+            .position(|argument| offset <= argument.span.end)
+            .unwrap_or(args.len());
+        let (signatures, active_signature) = self
+            .call_signatures(&views, view, callee, call.span, args.len())
+            .or_else(|| {
+                self.declared_signature(view, callee)
+                    .map(|signature| (vec![signature], 0))
+            })?;
         if signatures.is_empty() {
             return None;
         }
-        let active_signature = active_signature.min(signatures.len() - 1);
-        let parameter_count = signatures[active_signature].parameters.len();
-        let active_parameter = if parameter_count == 0 {
-            0
-        } else {
-            argument.min(parameter_count - 1)
-        };
+        let active_signature = active_signature.min(signatures.len().saturating_sub(1));
+        let parameter_count = signatures.get(active_signature)?.parameters.len();
+        let active_parameter = argument.min(parameter_count.saturating_sub(1));
         Some(SignatureHelp {
             signatures,
             active_signature,
-            active_parameter: active_parameter as u32,
+            active_parameter: u32::try_from(active_parameter).unwrap_or(u32::MAX),
         })
+    }
+
+    /// Uses written annotations when recovery produced a parsed call but the
+    /// incomplete document has no checked interface.
+    fn declared_signature(
+        &self,
+        view: &ModuleView<'_>,
+        callee: &Expr,
+    ) -> Option<SignatureInfo> {
+        let ExprKind::Var(name) = &callee.kind else {
+            return None;
+        };
+        for decl in &view.module.decls {
+            let DeclKind::Fn {
+                name: declared,
+                args,
+                ret,
+                ..
+            } = &decl.kind
+            else {
+                continue;
+            };
+            if declared != name {
+                continue;
+            }
+            // A local name can shadow a declaration in the module.
+            let declared_span = occurrence::name_span(view.text, decl.span, declared);
+            if self
+                .occurrences()
+                .at(callee.span.start)
+                .and_then(|found| found.binding)
+                .is_some_and(|span| span != declared_span)
+            {
+                return None;
+            }
+            let parameters: Vec<_> = args
+                .iter()
+                .map(|param| {
+                    let span = param.ty.as_ref().map_or(param.pattern.span, |ty| ty.span);
+                    source_slice(view.text, span).unwrap_or_else(|| "?".to_owned())
+                })
+                .collect();
+            let ret = ret
+                .as_ref()
+                .and_then(|ty| source_slice(view.text, ty.span))
+                .unwrap_or_else(|| "?".to_owned());
+            return Some(SignatureInfo {
+                label: format!("{name}: ({}) -> {ret}", parameters.join(", ")),
+                parameters,
+                documentation: find_decl_doc(view.module, view.text, name),
+            });
+        }
+        None
     }
 
     /// The signatures for one call's callee, and the active overload.
@@ -886,26 +1111,24 @@ impl<'a> Analysis<'a> {
             | _ => {},
         }
         if let Some(parts) = callee_path(callee) {
-            if parts.first().map(String::as_str) == Some("Rssn")
-                && parts.len() > 1
-                && let Some(signatures) = rssn_signatures(view, &parts[1..], call_span)
+            if let [root, tail @ ..] = parts.as_slice()
+                && root == "Rssn"
+                && let Some(signatures) = rssn_signatures(view, tail, call_span)
             {
                 return Some(signatures);
             }
-            let resolved = if parts.len() == 1 {
-                resolve_unqualified_in(views, view, &parts[0])
-            } else {
-                resolve_qualified_in(views, view, &parts)
+            let resolved = match parts.as_slice() {
+                | [name] => resolve_unqualified_in(views, view, name),
+                | _ => resolve_qualified_in(views, view, &parts),
             };
             if let Some((module, _)) = resolved
                 && let Some(signatures) = export_signatures(views, module, &parts)
             {
                 return Some(signatures);
             }
-            if parts.len() == 1
-                && let Some(schemes) = aevia_types::builtins::schemes(&parts[0])
+            if let [name] = parts.as_slice()
+                && let Some(schemes) = aevia_types::builtins::schemes(name)
             {
-                let name = parts[0].as_str();
                 let signatures: Vec<SignatureInfo> = schemes
                     .iter()
                     .map(|scheme| scheme_signature(name, scheme, None))
@@ -927,8 +1150,8 @@ impl<'a> Analysis<'a> {
     /// Every use of the name at `offset`, across every loaded module (§9.10).
     ///
     /// The search is over the **loaded program**: each module's parsed tree is
-    /// walked again in its own text, so a use in an importer is found without
-    /// assuming it looks like the declaration. `include_declaration` adds the
+    /// indexed on demand in its own text, so a use in an importer is found
+    /// without assuming it looks like the declaration. `include_declaration` adds the
     /// declaration site itself, the way editors ask for it. The order is stable
     /// (file, then line) and duplicates are removed.
     ///
@@ -944,9 +1167,37 @@ impl<'a> Analysis<'a> {
     ) -> Vec<Location> {
         let (views, entry) = self.views();
         if let Some(target) = resolve_target(&views, entry, offset) {
-            return collect_references(&views, &target, include_declaration);
+            return collect_references(&views, &target, include_declaration, None);
         }
         field_references(&views, entry, offset).unwrap_or_default()
+    }
+
+    /// The declaration and uses of the cursor's symbol in the current document.
+    ///
+    /// Imported names use the same declaration identity as [`Self::references`].
+    /// The search only visits occurrences in the focused module and returns
+    /// ordered, unique ranges. An unresolved name yields no ranges.
+    #[must_use]
+    pub fn document_highlights(
+        &self,
+        offset: u32,
+    ) -> Vec<Range> {
+        let (views, entry) = self.views();
+        let locations = resolve_target(&views, entry, offset).map_or_else(
+            || field_references(&views, entry, offset).unwrap_or_default(),
+            |target| {
+                collect_references(
+                    &views,
+                    &target,
+                    true,
+                    views.get(entry).map(|view| view.index),
+                )
+            },
+        );
+        locations
+            .into_iter()
+            .map(|location| location.range)
+            .collect()
     }
 
     /// Whether the name at `offset` can be renamed, and the range to preselect.
@@ -956,6 +1207,10 @@ impl<'a> Analysis<'a> {
     /// program may edit; a unit or dimension name would change the unit or type
     /// system rather than an identifier; a module path segment is not a
     /// declaration. Each of those refuses with a sentence, not a silent `None`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`RenameError`] if the selected name or its source cannot be edited.
     pub fn prepare_rename(
         &self,
         offset: u32,
@@ -967,7 +1222,7 @@ impl<'a> Analysis<'a> {
             let view = views.get(entry).ok_or_else(|| {
                 RenameError::NotRenamable("the document has no module to rename in".to_string())
             })?;
-            let occurrence = occurrence::at(&view.occurrences, offset).ok_or_else(|| {
+            let occurrence = view.occurrences().at(offset).ok_or_else(|| {
                 RenameError::NotRenamable("there is no name here to rename".to_string())
             })?;
             let Some(name) = occurrence_name(&occurrence.role) else {
@@ -977,8 +1232,8 @@ impl<'a> Analysis<'a> {
             };
             let span = occurrence_edit_span(view.text, occurrence, name);
             return Ok(RenamePlaceholder {
-                range: range_in_file(view.text, span),
-                placeholder: target.name.clone(),
+                range: view.range(span),
+                placeholder: target.name,
             });
         }
         let field = field_or_refusal(&views, entry, offset)?;
@@ -986,8 +1241,8 @@ impl<'a> Analysis<'a> {
             RenameError::NotRenamable("the document has no module to rename in".to_string())
         })?;
         Ok(RenamePlaceholder {
-            range: range_in_file(view.text, field.span),
-            placeholder: field.name.clone(),
+            range: view.range(field.span),
+            placeholder: field.name,
         })
     }
 
@@ -997,6 +1252,11 @@ impl<'a> Analysis<'a> {
     /// `open`ed uses in importers are all updated. The new name must be a valid
     /// identifier of the same shape (upper-case for types and constructors,
     /// lower-case for values) and must not collide in the scope being renamed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`RenameError`] for an unrenamable target, an invalid or
+    /// conflicting name, or a source that cannot be edited.
     pub fn rename(
         &self,
         offset: u32,
@@ -1008,7 +1268,7 @@ impl<'a> Analysis<'a> {
             validate_new_name(&target.name, new_name)?;
             check_physical_rename(&views, &target, new_name)?;
             return Ok(file_edits(
-                collect_references(&views, &target, true),
+                collect_references(&views, &target, true, None),
                 new_name,
             ));
         }
@@ -1036,19 +1296,18 @@ impl<'a> Analysis<'a> {
                     text,
                     module,
                     checked: &compilation.checked,
-                    definitions: &self.definitions,
-                    occurrences: occurrence::collect(module, text),
-                    imports: Vec::new(),
+                    queries: &self.queries,
+                    imports: &[],
                 };
                 (vec![view], 0)
             },
-            | Source::Program(program) => {
-                let mut views = Vec::new();
-                for (index, module) in program.modules.iter().enumerate() {
+            | Source::Program(program, queries) => {
+                let mut views = Vec::with_capacity(program.modules.len());
+                let entry = program.modules.len().saturating_sub(1);
+                for (index, (module, query)) in
+                    program.modules.iter().zip(&queries.modules).enumerate()
+                {
                     let Some(source) = program.sources.file(module.file) else {
-                        continue;
-                    };
-                    let Some(definitions) = self.module_definitions.get(index) else {
                         continue;
                     };
                     views.push(ModuleView {
@@ -1056,7 +1315,7 @@ impl<'a> Analysis<'a> {
                         file: module.file,
                         // The open buffer keeps the name its client gave it
                         // (the loader names a physical file canonically).
-                        document: if module.file == self.file {
+                        document: if index == entry {
                             self.document.name()
                         } else {
                             source.name.as_str()
@@ -1064,14 +1323,13 @@ impl<'a> Analysis<'a> {
                         text: source.text.as_str(),
                         module: &module.module,
                         checked: &module.checked,
-                        definitions,
-                        occurrences: occurrence::collect(&module.module, &source.text),
-                        imports: module_imports(program, module),
+                        queries: query,
+                        imports: queries.imports(query, module),
                     });
                 }
                 let entry = views
                     .iter()
-                    .position(|view| view.file == self.file)
+                    .position(|view| view.index == entry)
                     .unwrap_or_else(|| views.len().saturating_sub(1));
                 (views, entry)
             },
@@ -1088,7 +1346,7 @@ impl<'a> Analysis<'a> {
         &self,
         offset: u32,
     ) -> Option<&aevia_types::Type> {
-        if let Some(occurrence) = occurrence::at(&self.occurrences, offset) {
+        if let Some(occurrence) = self.occurrences().at(offset) {
             if let Some(ty) = self.recorded_type(occurrence.span) {
                 return Some(ty);
             }
@@ -1117,7 +1375,72 @@ impl<'a> Analysis<'a> {
         self.document.range_of(span.start, span.end)
     }
 
+    /// Code lenses for runnable `fn main` and `test "..."` declarations.
+    #[must_use]
+    pub fn code_lens(
+        &self,
+        uri: &str,
+    ) -> Vec<CodeLens> {
+        let Some(module) = self.module() else {
+            return Vec::new();
+        };
+        let mut lenses = Vec::new();
+        for decl in &module.decls {
+            match &decl.kind {
+                | DeclKind::Fn { name, args, .. } if name == "main" && args.is_empty() => {
+                    lenses.push(CodeLens {
+                        range: self.range(decl.span),
+                        title: "▶ Run".to_string(),
+                        command: "aevia.runFile".to_string(),
+                        arguments: vec![uri.to_string()],
+                    });
+                },
+                | DeclKind::Test { name, .. } => {
+                    lenses.push(CodeLens {
+                        range: self.range(decl.span),
+                        title: "▶ Test".to_string(),
+                        command: "aevia.testFile".to_string(),
+                        arguments: vec![uri.to_string(), name.clone()],
+                    });
+                },
+                | _ => {},
+            }
+        }
+        lenses
+    }
+
+    /// The `##` documentation for a local declaration, respecting `@hidden` / `@doc(hidden)`.
+    fn local_doc(
+        &self,
+        name: &str,
+    ) -> Option<String> {
+        let module = self.module()?;
+        find_decl_doc(module, self.document.text(), name)
+    }
+
+    /// The `##` documentation for a declaration in a loaded module, respecting `@hidden` / `@doc(hidden)`.
+    fn module_doc(
+        &self,
+        module_index: usize,
+        name: &str,
+    ) -> Option<String> {
+        let program = self.program()?;
+        let loaded = program.modules.get(module_index)?;
+        let text = program
+            .sources
+            .file(loaded.file)
+            .map_or("", |source| source.text.as_str());
+        find_decl_doc(&loaded.module, text, name)
+    }
+
     /// The hover text for an occurrence, or `None` when nothing is known.
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::too_many_lines,
+            reason = "render hover text for distinct name-resolution cases"
+        )
+    )]
     fn describe(
         &self,
         occurrence: &Occurrence,
@@ -1142,46 +1465,77 @@ impl<'a> Analysis<'a> {
                 if let Some(export) = checked.exports.get(name) {
                     let text = describe_export(name, export)?;
                     let polymorphic = export_is_polymorphic(export);
-                    return Some(self.with_use_type(text, occurrence.span, polymorphic));
+                    let mut text = self.with_use_type(text, occurrence.span, polymorphic);
+                    if let Some(doc) = self.local_doc(name) {
+                        text.push_str("\n\n");
+                        text.push_str(&doc);
+                    }
+                    return Some(text);
                 }
                 // A name an `open` brought in from another module.
-                if let Some((_, export)) = self.resolve_opened(name) {
+                if let Some((index, export)) = self.resolve_opened(name) {
                     let text = describe_export(name, export)?;
                     let polymorphic = export_is_polymorphic(export);
                     let text = format!("{text}\n\nimported");
-                    return Some(self.with_use_type(text, occurrence.span, polymorphic));
+                    let mut text = self.with_use_type(text, occurrence.span, polymorphic);
+                    if let Some(doc) = self.module_doc(index, name) {
+                        text.push_str("\n\n");
+                        text.push_str(&doc);
+                    }
+                    return Some(text);
                 }
-                let mut schemes = builtins::schemes(name)?;
-                let scheme = schemes.drain(..).next()?;
+                let scheme = builtins::schemes(name)?.into_iter().next()?;
                 let polymorphic = !scheme.vars.is_empty() || !scheme.dims.is_empty();
                 let text = format!("```aevia\n{name}: {scheme}\n```\n\nprelude");
-                Some(self.with_use_type(text, occurrence.span, polymorphic))
+                let mut text = self.with_use_type(text, occurrence.span, polymorphic);
+                if let Some(doc) = prelude::doc(name) {
+                    text.push_str("\n\n");
+                    text.push_str(doc);
+                }
+                Some(text)
             },
             | Role::Constructor(name) => {
                 if let Some(export) = checked.exports.get(name) {
-                    return describe_export(name, export);
+                    let mut text = describe_export(name, export)?;
+                    if let Some(doc) = self.local_doc(name) {
+                        text.push_str("\n\n");
+                        text.push_str(&doc);
+                    }
+                    return Some(text);
                 }
-                let (_, export) = self.resolve_opened(name)?;
-                describe_export(name, export)
+                let (index, export) = self.resolve_opened(name)?;
+                let mut text = describe_export(name, export)?;
+                if let Some(doc) = self.module_doc(index, name) {
+                    text.push_str("\n\n");
+                    text.push_str(&doc);
+                }
+                Some(text)
             },
             | Role::TypeName(name) => {
-                let export = checked
-                    .exports
-                    .get(name)
-                    .or_else(|| self.resolve_opened(name).map(|(_, export)| export))?;
-                match export {
-                    | Export::Type { .. } => Some(format!("type `{name}`")),
+                let (export, doc) = if let Some(export) = checked.exports.get(name) {
+                    (export, self.local_doc(name))
+                } else {
+                    let (index, export) = self.resolve_opened(name)?;
+                    (export, self.module_doc(index, name))
+                };
+                let mut text = match export {
+                    | Export::Type { .. } => format!("type `{name}`"),
                     | Export::Alias { params } => {
-                        Some(format!("type alias `{name}` with {params} parameter(s)"))
+                        format!("type alias `{name}` with {params} parameter(s)")
                     },
                     | Export::TypeCtor { adt, .. } => {
-                        Some(format!(
+                        format!(
                             "type `{name}`\n\nconstructor `{name}` of `{}`",
                             aevia_types::adt::name_of(*adt)
-                        ))
+                        )
                     },
-                    | other => describe_export(name, other),
+                    | other => describe_export(name, other)?,
+                };
+                if let Some(doc) = doc {
+                    text.push_str("\n\n");
+                    text.push_str(&doc);
                 }
+                Some(text)
             },
             | Role::Method { name, class } => {
                 Some(format!("**method** `{name}`\n\nclass `{class}`"))
@@ -1269,29 +1623,30 @@ impl<'a> Analysis<'a> {
         // indent before a block's tail would hover the whole block.
         let text = self.document.text().as_bytes();
         let at = usize::try_from(offset).ok()?;
-        if at >= text.len() || text[at].is_ascii_whitespace() {
+        if text.get(at)?.is_ascii_whitespace() {
             return None;
         }
-        let mut best: Option<(&Span, &aevia_types::Type)> = None;
-        for (span, ty) in &self.checked_module().expr_types {
-            if span.start > offset || offset >= span.end {
-                continue;
-            }
-            let shorter = best.is_none_or(|(best_span, _)| {
-                span.end - span.start < best_span.end - best_span.start
-            });
-            if shorter {
-                best = Some((span, ty));
-            }
-        }
-        let (span, ty) = best?;
+        let types = &self.checked_module().expr_types;
+        let index = self.queries.expressions.get_or_init(|| {
+            let mut spans = types.keys().copied().collect::<Vec<_>>();
+            // Break equally narrow overlaps by their source order. The map's
+            // traversal order differs across compiler runs.
+            spans.sort_unstable_by_key(|span| (span.start, span.end));
+            CursorIndex::new(
+                spans
+                    .into_iter()
+                    .filter_map(|span| Some((span.start, span.end.checked_sub(1)?, span))),
+            )
+        });
+        let span = index.at(offset)?;
+        let ty = types.get(&span)?;
         // The innermost expression is the one the question is about. If *its*
         // type is not decided, the answer is silence — falling back to an
         // enclosing expression would describe a different piece of source.
         if ty.is_error() || aevia_types::class::has_variables(ty) {
             return None;
         }
-        Some((*span, ty))
+        Some((span, ty))
     }
 
     /// Adds the type this occurrence actually has, when the declaration's
@@ -1335,7 +1690,13 @@ impl<'a> Analysis<'a> {
             if let Some(program) = self.program()
                 && let Some(module) = program.modules.get(index)
             {
-                text.push_str(&format!("\n\nimported from `{}`", module.path.join(".")));
+                let _ = write!(text, "\n\nimported from `{}`", module.path.join("."));
+            }
+            if let Some(member) = path.last()
+                && let Some(doc) = self.module_doc(index, member)
+            {
+                text.push_str("\n\n");
+                text.push_str(&doc);
             }
             return Some(text);
         }
@@ -1345,25 +1706,48 @@ impl<'a> Analysis<'a> {
         if root != "Rssn" {
             return None;
         }
-        let call = self.checked_module().rssn_calls.iter().find(|call| {
+        let entry = aevia_rssn::registry().op(op);
+        if let Some(call) = self.checked_module().rssn_calls.iter().find(|call| {
             call.name.as_str() == op.as_str()
                 && call.span.start <= span.start
                 && span.end <= call.span.end
-        })?;
-        let entry = aevia_rssn::registry().op(op);
-        let overloads = entry.map_or(0, |entry| entry.signatures.len());
-        let mut text = format!(
-            "**kernel operator** `Rssn.{op}`\n\npinned overload {} of {overloads} · `{}`",
-            call.overload + 1,
-            call.key
-        );
-        if let Some(signature) = entry.and_then(|entry| entry.signatures.get(call.overload)) {
-            text.push_str(&format!("\n\n```aevia\n{}\n```", signature.render()));
+        }) {
+            let overloads = entry.map_or(0, |entry| entry.signatures.len());
+            let mut text = format!(
+                "**kernel operator** `Rssn.{op}`\n\npinned overload {} of {overloads} · `{}`",
+                call.overload.saturating_add(1),
+                call.key
+            );
+            if let Some(signature) = entry.and_then(|entry| entry.signatures.get(call.overload)) {
+                let _ = write!(text, "\n\n```aevia\n{}\n```", signature.render());
+            }
+            if let Some(entry) = entry
+                && !entry.doc.is_empty()
+            {
+                text.push_str("\n\n");
+                text.push_str(&entry.doc);
+            }
+            return Some(text);
         }
-        if let Some(entry) = entry
-            && !entry.doc.is_empty()
-        {
-            text.push_str(&format!("\n\n{}", entry.doc));
+        let entry = entry?;
+        let mut text = format!(
+            "**kernel operator** `Rssn.{op}`\n\n{} overload(s) · `{}`",
+            entry.signatures.len(),
+            entry.rule_set
+        );
+        if !entry.signatures.is_empty() {
+            text.push_str("\n\n```aevia\n");
+            for (i, sig) in entry.signatures.iter().enumerate() {
+                if i > 0 {
+                    text.push('\n');
+                }
+                text.push_str(&sig.render());
+            }
+            text.push_str("\n```");
+        }
+        if !entry.doc.is_empty() {
+            text.push_str("\n\n");
+            text.push_str(&entry.doc);
         }
         Some(text)
     }
@@ -1378,17 +1762,24 @@ impl<'a> Analysis<'a> {
 /// from disagreeing about a declaration.
 struct SymbolContext<'a> {
     text: &'a str,
+    lines: &'a LineIndex,
     file: FileId,
     checked: &'a CheckedModule,
 }
 
 impl<'a> SymbolContext<'a> {
-    fn new(
+    const fn new(
         text: &'a str,
+        lines: &'a LineIndex,
         file: FileId,
         checked: &'a CheckedModule,
     ) -> Self {
-        Self { text, file, checked }
+        Self {
+            text,
+            lines,
+            file,
+            checked,
+        }
     }
 
     /// The range of a span in this context's file.
@@ -1399,7 +1790,7 @@ impl<'a> SymbolContext<'a> {
         if span.file != self.file {
             return Range::default();
         }
-        range_in_file(self.text, span)
+        range_in_lines(self.lines, self.text, span)
     }
 
     /// The source text a span covers, when it is in this file.
@@ -1454,6 +1845,43 @@ impl<'a> SymbolContext<'a> {
             .collect()
     }
 
+    fn type_symbol(
+        &self,
+        name: &str,
+        body: &TypeBody,
+        span: Span,
+    ) -> Symbol {
+        let (kind, children) = match body {
+            | TypeBody::Alias(_) => (SymbolKind::Struct, Vec::new()),
+            | TypeBody::Abstract => (SymbolKind::Interface, Vec::new()),
+            | TypeBody::Variants(ctors) => {
+                let children = ctors
+                    .iter()
+                    .map(|ctor| {
+                        let range = self.range(ctor.span);
+                        Symbol {
+                            name: ctor.name.clone(),
+                            kind: SymbolKind::EnumMember,
+                            range,
+                            selection: range,
+                            detail: None,
+                            children: Vec::new(),
+                        }
+                    })
+                    .collect();
+                (SymbolKind::Enum, children)
+            },
+        };
+        Symbol {
+            name: name.to_owned(),
+            kind,
+            range: self.range(span),
+            selection: self.name_range(span, name),
+            detail: None,
+            children,
+        }
+    }
+
     /// One declaration as an outline entry.
     fn declaration_symbol(
         &self,
@@ -1461,99 +1889,57 @@ impl<'a> SymbolContext<'a> {
     ) -> Option<Symbol> {
         let name_range = |name: &str| self.name_range(decl.span, name);
         let whole = self.range(decl.span);
-        let detail = |name: &str| self.scheme_of(name);
+        let leaf = |name, kind, selection, detail| {
+            Symbol {
+                name,
+                kind,
+                range: whole,
+                selection,
+                detail,
+                children: Vec::new(),
+            }
+        };
         let symbol = match &decl.kind {
             | DeclKind::Import { path, .. } => {
-                Symbol {
-                    name: path.join("."),
-                    kind: SymbolKind::Namespace,
-                    range: whole,
-                    selection: whole,
-                    detail: None,
-                    children: Vec::new(),
-                }
+                leaf(path.join("."), SymbolKind::Namespace, whole, None)
             },
             | DeclKind::Dimension { name, .. } => {
-                Symbol {
-                    name: name.clone(),
-                    kind: SymbolKind::TypeParameter,
-                    range: whole,
-                    selection: name_range(name),
-                    detail: None,
-                    children: Vec::new(),
-                }
+                leaf(
+                    name.clone(),
+                    SymbolKind::TypeParameter,
+                    name_range(name),
+                    None,
+                )
             },
             | DeclKind::Unit { name, dim, .. } => {
-                Symbol {
-                    name: name.clone(),
-                    kind: SymbolKind::Constant,
-                    range: whole,
-                    selection: name_range(name),
-                    detail: Some(format!("unit: {}", dim.to_source())),
-                    children: Vec::new(),
-                }
+                leaf(
+                    name.clone(),
+                    SymbolKind::Constant,
+                    name_range(name),
+                    Some(format!("unit: {}", dim.to_source())),
+                )
             },
-            | DeclKind::Type { name, body, .. } => {
-                let (kind, children) = match body {
-                    | TypeBody::Alias(_) => (SymbolKind::Struct, Vec::new()),
-                    | TypeBody::Abstract => (SymbolKind::Interface, Vec::new()),
-                    | TypeBody::Variants(ctors) => {
-                        (
-                            SymbolKind::Enum,
-                            ctors
-                                .iter()
-                                .map(|ctor| {
-                                    Symbol {
-                                        name: ctor.name.clone(),
-                                        kind: SymbolKind::EnumMember,
-                                        range: self.range(ctor.span),
-                                        selection: self.range(ctor.span),
-                                        detail: None,
-                                        children: Vec::new(),
-                                    }
-                                })
-                                .collect(),
-                        )
-                    },
-                };
-                Symbol {
-                    name: name.clone(),
-                    kind,
-                    range: whole,
-                    selection: name_range(name),
-                    detail: None,
-                    children,
-                }
-            },
+            | DeclKind::Type { name, body, .. } => self.type_symbol(name, body, decl.span),
             | DeclKind::Class { name, methods, .. } => {
                 Symbol {
-                    name: name.clone(),
-                    kind: SymbolKind::Interface,
-                    range: whole,
-                    selection: name_range(name),
-                    detail: None,
                     children: methods
                         .iter()
-                        .map(|(method, ty)| {
+                        .map(|method| {
                             Symbol {
-                                name: method.clone(),
+                                name: method.name.clone(),
                                 kind: SymbolKind::Method,
                                 range: whole,
-                                selection: self.name_range(decl.span, method),
-                                detail: Some(self.text_of(ty.span)),
+                                selection: self.name_range(decl.span, &method.name),
+                                detail: Some(self.text_of(method.ty.span)),
                                 children: Vec::new(),
                             }
                         })
                         .collect(),
+                    ..leaf(name.clone(), SymbolKind::Interface, name_range(name), None)
                 }
             },
             | DeclKind::Instance { class, ty, methods } => {
                 Symbol {
-                    name: format!("instance {class} for {}", self.text_of(ty.span)),
-                    kind: SymbolKind::Object,
-                    range: whole,
-                    selection: whole,
-                    detail: None,
                     children: methods
                         .iter()
                         .map(|method| {
@@ -1567,42 +1953,38 @@ impl<'a> SymbolContext<'a> {
                             }
                         })
                         .collect(),
+                    ..leaf(
+                        format!("instance {class} for {}", self.text_of(ty.span)),
+                        SymbolKind::Object,
+                        whole,
+                        None,
+                    )
                 }
             },
             | DeclKind::Derive { .. } => return None,
             | DeclKind::Fn { name, body, .. } => {
                 Symbol {
-                    name: name.clone(),
-                    kind: SymbolKind::Function,
-                    range: whole,
-                    selection: name_range(name),
-                    detail: detail(name),
                     children: self.nested(body),
+                    ..leaf(
+                        name.clone(),
+                        SymbolKind::Function,
+                        name_range(name),
+                        self.scheme_of(name),
+                    )
                 }
             },
             | DeclKind::Let { pattern, .. } => {
                 let PatKind::Var(name) = &pattern.kind else {
                     return None;
                 };
-                Symbol {
-                    name: name.clone(),
-                    kind: SymbolKind::Variable,
-                    range: whole,
-                    selection: self.range(pattern.span),
-                    detail: detail(name),
-                    children: Vec::new(),
-                }
+                leaf(
+                    name.clone(),
+                    SymbolKind::Variable,
+                    self.range(pattern.span),
+                    self.scheme_of(name),
+                )
             },
-            | DeclKind::Test { name, .. } => {
-                Symbol {
-                    name: name.clone(),
-                    kind: SymbolKind::Constant,
-                    range: whole,
-                    selection: whole,
-                    detail: None,
-                    children: Vec::new(),
-                }
-            },
+            | DeclKind::Test { name, .. } => leaf(name.clone(), SymbolKind::Constant, whole, None),
         };
         Some(symbol)
     }
@@ -1665,40 +2047,37 @@ fn flatten(
 ///
 /// A module path is always a prefix; an `import … as A` adds `A`; an `open`
 /// adds the empty prefix, which is how a bare name is found.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "index imported module prefixes when opening a program"
+    )
+)]
 fn prefixes(
-    program: &Program,
-    file: FileId,
+    module: &LoadedModule,
+    index: usize,
+    by_file: &HashMap<FileId, usize>,
 ) -> HashMap<String, usize> {
     let mut map = HashMap::new();
-    if let Some((index, module)) = program
-        .modules
-        .iter()
-        .enumerate()
-        .find(|(_, module)| module.file == file)
-    {
-        if !module.path.is_empty() {
-            map.insert(module.path.join("."), index);
-        }
-        for edge in &module.imports {
-            if !edge.prefix.is_empty()
-                && let Some(target) = program
-                    .modules
-                    .iter()
-                    .position(|target| target.file == edge.file)
-            {
-                map.insert(edge.prefix.clone(), target);
-            }
+    if !module.path.is_empty() {
+        map.insert(module.path.join("."), index);
+    }
+    for edge in &module.imports {
+        if !edge.prefix.is_empty()
+            && let Some(&target) = by_file.get(&edge.file)
+        {
+            map.insert(edge.prefix.clone(), target);
         }
     }
     map
 }
 
-/// The range of `span` in a file whose text is `text`.
-fn range_in_file(
+fn range_in_lines(
+    index: &LineIndex,
     text: &str,
     span: Span,
 ) -> Range {
-    let index = LineIndex::new(text);
     Range::new(
         index.position(text, span.start),
         index.position(text, span.end),
@@ -1706,6 +2085,13 @@ fn range_in_file(
 }
 
 /// The scheme of an export, when the checker decided one.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "extract the same scheme from callable export variants"
+    )
+)]
 fn export_scheme(export: &Export) -> Option<&aevia_types::Type> {
     let scheme = match export {
         | Export::Value { scheme, .. }
@@ -1730,6 +2116,13 @@ fn export_scheme(export: &Export) -> Option<&aevia_types::Type> {
 /// that name: with two, the source alone cannot say which one a call reaches —
 /// the checker's `DictionaryUse` is what knows — and pointing at a coin flip
 /// would be worse than pointing at nothing.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "walk declarations behind the shared per-module query cache"
+    )
+)]
 fn declarations(
     module: &Module,
     text: &str,
@@ -1793,7 +2186,7 @@ fn add(
 }
 
 /// True when an export's scheme has variables the occurrence could instantiate.
-fn export_is_polymorphic(export: &Export) -> bool {
+const fn export_is_polymorphic(export: &Export) -> bool {
     match export {
         | Export::Value { scheme, .. }
         | Export::Ctor { scheme, .. }
@@ -1806,7 +2199,7 @@ fn export_is_polymorphic(export: &Export) -> bool {
 }
 
 /// The completion kind of an exported name.
-fn completion_kind(export: &Export) -> CompletionKind {
+const fn completion_kind(export: &Export) -> CompletionKind {
     match export {
         | Export::Value { arity, .. } if *arity > 0 => CompletionKind::Function,
         | Export::Value { .. } => CompletionKind::Value,
@@ -1822,7 +2215,7 @@ fn completion_kind(export: &Export) -> CompletionKind {
 /// A binding whose inference failed is exported with a bare type variable, and
 /// showing `t0` as a type would be a worse answer than showing nothing: it
 /// looks like information.
-fn scheme_is_known(scheme: &aevia_types::Scheme) -> bool {
+const fn scheme_is_known(scheme: &aevia_types::Scheme) -> bool {
     !matches!(
         scheme.ty,
         aevia_types::Type::Var(_) | aevia_types::Type::Error
@@ -1903,7 +2296,7 @@ enum ExportKind {
     Dimension,
 }
 
-fn export_kind(export: &Export) -> ExportKind {
+const fn export_kind(export: &Export) -> ExportKind {
     match export {
         | Export::Value { .. } => ExportKind::Value,
         | Export::Ctor { .. } => ExportKind::Ctor,
@@ -1915,7 +2308,7 @@ fn export_kind(export: &Export) -> ExportKind {
     }
 }
 
-/// One loaded module, re-walked in its own text for a reference search.
+/// One loaded module and the syntax tables for its own source snapshot.
 struct ModuleView<'a> {
     /// Its position in the program's module list, the index the declaration
     /// tables use.
@@ -1927,17 +2320,37 @@ struct ModuleView<'a> {
     /// The parsed module, for the field-label walk.
     module: &'a Module,
     checked: &'a CheckedModule,
-    definitions: &'a HashMap<String, Span>,
-    occurrences: occurrence::Occurrences,
+    queries: &'a ModuleQueries,
     /// The prefixes this module's imports bring other modules in under.
-    imports: Vec<(String, usize, Option<Vec<String>>)>,
+    imports: &'a [ModuleImport],
+}
+
+impl ModuleView<'_> {
+    fn definitions(&self) -> &HashMap<String, Span> {
+        self.queries.definitions(Some(self.module), self.text)
+    }
+
+    fn occurrences(&self) -> &occurrence::Occurrences {
+        self.queries.occurrences(Some(self.module), self.text)
+    }
+
+    fn range(
+        &self,
+        span: Span,
+    ) -> Range {
+        let lines = self.queries.lines(self.text);
+        range_in_lines(lines, self.text, span)
+    }
 }
 
 fn view_of<'v, 'a>(
     views: &'v [ModuleView<'a>],
     module: usize,
 ) -> Option<&'v ModuleView<'a>> {
-    views.iter().find(|view| view.index == module)
+    views
+        .get(module)
+        .filter(|view| view.index == module)
+        .or_else(|| views.iter().find(|view| view.index == module))
 }
 
 fn view_of_file<'v, 'a>(
@@ -1945,24 +2358,6 @@ fn view_of_file<'v, 'a>(
     file: FileId,
 ) -> Option<&'v ModuleView<'a>> {
     views.iter().find(|view| view.file == file)
-}
-
-/// The prefixes `module`'s imports bring other modules in under.
-fn module_imports(
-    program: &Program,
-    module: &LoadedModule,
-) -> Vec<(String, usize, Option<Vec<String>>)> {
-    module
-        .imports
-        .iter()
-        .filter_map(|edge| {
-            let index = program
-                .modules
-                .iter()
-                .position(|target| target.file == edge.file)?;
-            Some((edge.prefix.clone(), index, edge.names.clone()))
-        })
-        .collect()
 }
 
 /// The name a role carries, when it names a declaration or use.
@@ -2009,7 +2404,7 @@ fn decl_span_in(
     name: &str,
 ) -> Option<(FileId, Span)> {
     let view = view_of(views, module)?;
-    let span = *view.definitions.get(name)?;
+    let span = *view.definitions().get(name)?;
     Some((view.file, occurrence::name_span(view.text, span, name)))
 }
 
@@ -2055,7 +2450,7 @@ fn resolve_qualified_in(
 ) -> Option<(usize, ExportKind)> {
     let (member, prefix) = path.split_last()?;
     for length in (1..=prefix.len()).rev() {
-        let key = prefix[..length].join(".");
+        let key = prefix.get(..length)?.join(".");
         if let Some((_, target, _)) = view
             .imports
             .iter()
@@ -2115,7 +2510,7 @@ fn resolve_target(
     offset: u32,
 ) -> Option<Target> {
     let view = views.get(entry)?;
-    let occurrence = occurrence::at(&view.occurrences, offset)?;
+    let occurrence = view.occurrences().at(offset)?;
     let name = occurrence_name(&occurrence.role)?.to_string();
     if let Role::Qualified(path) = &occurrence.role
         && path.first().map(String::as_str) == Some("Rssn")
@@ -2131,7 +2526,7 @@ fn resolve_target(
         // apart. A module declaration renames program-wide; a parameter or
         // `let` renames in its file.
         let declaration = view
-            .definitions
+            .definitions()
             .get(&name)
             .map(|span| occurrence::name_span(view.text, *span, &name));
         if declaration == Some(binding)
@@ -2180,6 +2575,13 @@ fn physical_declaration<'v>(
     Some((view_of_file(views, file)?.document, span.start, span.end))
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::too_many_lines,
+        reason = "validate aliasing across package owners as one operation"
+    )
+)]
 fn check_physical_rename(
     views: &[ModuleView<'_>],
     target: &Target,
@@ -2196,7 +2598,7 @@ fn check_physical_rename(
     check_collision(views, target, new_name)?;
     let mut edited = std::collections::HashSet::new();
     for view in views {
-        for occurrence in &view.occurrences {
+        for occurrence in view.occurrences() {
             let Some(name) = occurrence_name(&occurrence.role) else {
                 continue;
             };
@@ -2208,7 +2610,7 @@ fn check_physical_rename(
             }
             if new_name != target.name
                 && matches!(occurrence.role, Role::Name(_))
-                && let Some(binding) = view.occurrences.lookup(occurrence, new_name)
+                && let Some(binding) = view.occurrences().lookup(occurrence, new_name)
                 && physical_declaration(views, view.file, binding) != Some(target_key)
             {
                 return Err(RenameError::Collision(format!(
@@ -2249,15 +2651,15 @@ fn check_physical_rename(
     // parameter renamed to an opened function already used inside its body.
     if new_name != target.name {
         for view in views {
-            for occurrence in &view.occurrences {
+            for occurrence in view.occurrences() {
                 if !matches!(&occurrence.role, Role::Name(name) if name == new_name)
-                    || view.occurrences.lookup(occurrence, new_name).is_some()
+                    || view.occurrences().lookup(occurrence, new_name).is_some()
                 {
                     continue;
                 }
                 let mut old_name = occurrence.clone();
                 old_name.role = Role::Name(target.name.clone());
-                old_name.binding = view.occurrences.lookup(occurrence, &target.name);
+                old_name.binding = view.occurrences().lookup(occurrence, &target.name);
                 let reachable = canonical_decl_of(views, view, &old_name)
                     .and_then(|(file, span)| physical_declaration(views, file, span));
                 if reachable == Some(target_key) {
@@ -2272,7 +2674,7 @@ fn check_physical_rename(
     // The same bytes can be interpreted differently by another owner. Editing
     // that use for one interpretation would silently break the other one.
     for view in views {
-        for occurrence in &view.occurrences {
+        for occurrence in view.occurrences() {
             let Some(name) = occurrence_name(&occurrence.role) else {
                 continue;
             };
@@ -2298,35 +2700,35 @@ fn collect_references(
     views: &[ModuleView<'_>],
     target: &Target,
     include_declaration: bool,
+    only_module: Option<usize>,
 ) -> Vec<Location> {
     let mut locations: Vec<Location> = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for view in views {
-        for occurrence in &view.occurrences {
+    let target_key = physical_declaration(views, target.file, target.span);
+    for view in views
+        .iter()
+        .filter(|view| only_module.is_none_or(|index| index == view.index))
+    {
+        for occurrence in view.occurrences() {
             let Some(name) = occurrence_name(&occurrence.role) else {
                 continue;
             };
             let Some(canonical) = canonical_decl_of(views, view, occurrence) else {
                 continue;
             };
-            if physical_declaration(views, canonical.0, canonical.1)
-                != physical_declaration(views, target.file, target.span)
-            {
+            if physical_declaration(views, canonical.0, canonical.1) != target_key {
                 continue;
             }
             let span = occurrence_edit_span(view.text, occurrence, name);
-            if !include_declaration
-                && physical_declaration(views, view.file, span)
-                    == physical_declaration(views, target.file, target.span)
-            {
+            if !include_declaration && physical_declaration(views, view.file, span) == target_key {
                 continue;
             }
-            if !seen.insert((view.document.to_string(), span.start, span.end)) {
+            if !seen.insert((view.document, span.start, span.end)) {
                 continue;
             }
             locations.push(Location {
                 document: view.document.to_string(),
-                range: range_in_file(view.text, span),
+                range: view.range(span),
             });
         }
     }
@@ -2389,6 +2791,13 @@ fn validate_new_name(
     Ok(())
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "use lexer validation for a proposed rename"
+    )
+)]
 fn is_identifier(text: &str) -> bool {
     if text == "_" {
         return false;
@@ -2419,19 +2828,18 @@ fn check_collision(
                     view.document
                 )));
             }
-            Ok(())
         },
         | Reach::Local => {
             let Some(view) = view_of_file(views, target.file) else {
                 return Ok(());
             };
-            if view.definitions.contains_key(new_name) {
+            if view.definitions().contains_key(new_name) {
                 return Err(RenameError::Collision(format!(
                     "`{new_name}` is already declared in `{}`",
                     view.document
                 )));
             }
-            let taken = view.occurrences.iter().any(|occurrence| {
+            let taken = view.occurrences().iter().any(|occurrence| {
                 let (Role::Name(name) | Role::TypeName(name) | Role::Constructor(name)) =
                     &occurrence.role
                 else {
@@ -2445,9 +2853,9 @@ fn check_collision(
                     view.document
                 )));
             }
-            Ok(())
         },
     }
+    Ok(())
 }
 
 // --- Record-field labels ---------------------------------------------------
@@ -2528,7 +2936,7 @@ fn field_labels(
                     name: name.clone(),
                     span: last_name_span(text, expr.span, name),
                     owner: None,
-                })
+                });
             },
             | _ => {},
         }
@@ -2579,18 +2987,14 @@ fn labels_in_pattern(
                 labels_in_pattern(text, arg, out);
             }
         },
-        | PatKind::Tuple(items) => {
+        | PatKind::Tuple(items) | PatKind::Tensor { items, .. } => {
             for item in items {
                 labels_in_pattern(text, item, out);
             }
         },
-        | PatKind::Tensor { items, .. } => {
-            for item in items {
-                labels_in_pattern(text, item, out);
-            }
+        | PatKind::As { pattern, .. } | PatKind::Annot { pattern, .. } => {
+            labels_in_pattern(text, pattern, out);
         },
-        | PatKind::As { pattern, .. } => labels_in_pattern(text, pattern, out),
-        | PatKind::Annot { pattern, .. } => labels_in_pattern(text, pattern, out),
         | PatKind::Wildcard | PatKind::Error | PatKind::Var(_) | PatKind::Lit(_) => {},
     }
 }
@@ -2620,15 +3024,15 @@ fn label_before(
                 .chars()
                 .next_back()
                 .is_some_and(identifier_continue);
-        let after = at + name.len();
+        let after = at.saturating_add(name.len());
         let after_ok = after >= slice.len()
             || !slice[after..]
                 .chars()
                 .next()
                 .is_some_and(identifier_continue);
         if before_ok && after_ok {
-            let start = window_start + at;
-            return Span::new(file, start, start + name.len());
+            let start = window_start.saturating_add(at);
+            return Span::new(file, start, start.saturating_add(name.len()));
         }
     }
     Span::new(file, end, end)
@@ -2708,7 +3112,7 @@ fn field_or_refusal(
         | Ok(field) => Ok(field),
         | Err(error) => {
             match views.get(entry) {
-                | Some(view) if occurrence::at(&view.occurrences, offset).is_some() => {
+                | Some(view) if view.occurrences().at(offset).is_some() => {
                     Err(undeclarable_error(view, offset))
                 },
                 | _ => Err(error),
@@ -2718,11 +3122,18 @@ fn field_or_refusal(
 }
 
 /// Why a name the occurrence walk found cannot be renamed.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "explain why a syntactic name has no editable declaration"
+    )
+)]
 fn undeclarable_error(
     view: &ModuleView<'_>,
     offset: u32,
 ) -> RenameError {
-    let Some(occurrence) = occurrence::at(&view.occurrences, offset) else {
+    let Some(occurrence) = view.occurrences().at(offset) else {
         return RenameError::NotRenamable(
             "there is no declaration here that a rename could change".to_string(),
         );
@@ -2782,7 +3193,7 @@ fn field_references(
         }
         locations.push(Location {
             document: view.document.to_string(),
-            range: range_in_file(view.text, label.span),
+            range: view.range(label.span),
         });
     }
     locations.sort_by(|left, right| {
@@ -2795,6 +3206,10 @@ fn field_references(
     Ok(locations)
 }
 
+#[cfg_attr(
+    not(test),
+    expect(clippy::single_call_fn, reason = "validate record-field rename scope")
+)]
 fn check_field_collision(
     views: &[ModuleView<'_>],
     entry: usize,
@@ -2835,69 +3250,82 @@ fn file_edits(
 // --- Signature help --------------------------------------------------------
 
 /// The innermost call expression containing `offset`, as `(callee, call)`.
-fn innermost_call(
-    module: &Module,
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "select the smallest callable expression"
+    )
+)]
+fn innermost_call<'a>(
+    module: &'a Module,
+    text: &str,
     offset: u32,
-) -> Option<(&Expr, &Expr)> {
-    let mut best: Option<(&Expr, &Expr)> = None;
+) -> Option<(&'a Expr, &'a Expr)> {
+    let cursor = usize::try_from(offset).ok()?;
+    if !text.is_char_boundary(cursor) {
+        return None;
+    }
+    let mut candidates = Vec::new();
     walk::module_exprs(module, |expr| {
         let ExprKind::Call { callee, .. } = &expr.kind else {
             return;
         };
-        if !(expr.span.start <= offset && offset <= expr.span.end) {
+        if callee.span.end > offset {
             return;
         }
-        let length = expr.span.end.saturating_sub(expr.span.start);
-        let replace = match best {
-            | None => true,
-            | Some((_, current)) => length < current.span.end.saturating_sub(current.span.start),
-        };
-        if replace {
-            best = Some((callee.as_ref(), expr));
+        // The parser can stop an unfinished call's span at a trailing comma.
+        // Whitespace after that token is still at the unfinished call site.
+        if offset <= expr.span.end
+            || usize::try_from(expr.span.end)
+                .ok()
+                .and_then(|end| text.get(end..cursor))
+                .is_some_and(|gap| gap.chars().all(char::is_whitespace))
+        {
+            candidates.push((callee.as_ref(), expr));
         }
     });
-    best
+    candidates.sort_by_key(|(_, call)| call.span.end.saturating_sub(call.span.start));
+    candidates.into_iter().find(|(callee, call)| {
+        call_contains_cursor(text, callee.span, call.span, offset).unwrap_or(false)
+    })
 }
 
-/// The index of the `)` matching the `(` at `open`, by nesting depth.
-fn matching_paren(
+/// Checks the cursor against the parsed call's actual delimiter tokens.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "bound signature help to callable parentheses"
+    )
+)]
+fn call_contains_cursor(
     text: &str,
-    open: usize,
-) -> Option<usize> {
-    let mut depth = 0usize;
-    for (index, character) in text.char_indices().skip_while(|(index, _)| *index <= open) {
-        match character {
-            | '(' => depth += 1,
-            | ')' => {
+    callee: Span,
+    call: Span,
+    offset: u32,
+) -> Option<bool> {
+    let start = usize::try_from(callee.end).ok()?;
+    let end = usize::try_from(call.end.max(offset)).ok()?;
+    let lexed = aevia_syntax::lex_inline(call.file, text.get(start..end)?, start);
+    let (open, tokens) = lexed.tokens.split_first()?;
+    if open.kind != TokenKind::Punct(Punct::LParen) || offset < open.span.end {
+        return Some(false);
+    }
+    let mut depth = 0_usize;
+    for token in tokens {
+        match token.kind {
+            | TokenKind::Punct(Punct::LParen) => depth = depth.saturating_add(1),
+            | TokenKind::Punct(Punct::RParen) => {
                 if depth == 0 {
-                    return Some(index);
+                    return Some(offset <= token.span.start);
                 }
-                depth -= 1;
+                depth = depth.saturating_sub(1);
             },
             | _ => {},
         }
     }
-    None
-}
-
-/// Which argument the cursor is in.
-///
-/// The spans are the AST's, so a comma inside a nested call, a tuple or a
-/// record does not split an argument; a cursor between arguments is on the next
-/// one, which is what a trailing comma means.
-fn active_argument(
-    args: &[Expr],
-    offset: usize,
-) -> usize {
-    let offset = u32::try_from(offset).unwrap_or(u32::MAX);
-    let mut active = 0;
-    for (index, argument) in args.iter().enumerate() {
-        if offset <= argument.span.end {
-            return index;
-        }
-        active = index + 1;
-    }
-    active
+    Some(true)
 }
 
 /// The dotted path a callee expression spells, when it spells one.
@@ -2928,6 +3356,13 @@ fn callee_text(
 }
 
 /// Which overload an argument count selects; the first when none is exact.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "rank overloads against the requested arity"
+    )
+)]
 fn active_by_arity(
     signatures: &[SignatureInfo],
     argument_count: usize,
@@ -2953,41 +3388,42 @@ impl VarNames {
         &mut self,
         text: &str,
     ) -> String {
-        let characters: Vec<char> = text.chars().collect();
+        let mut characters = text.chars().peekable();
         let mut out = String::new();
-        let mut index = 0;
-        while index < characters.len() {
-            let character = characters[index];
-            if matches!(character, 't' | 'p' | 'r') {
-                let mut end = index + 1;
-                while end < characters.len() && characters[end].is_ascii_digit() {
-                    end += 1;
+        while let Some(character) = characters.next() {
+            if matches!(character, 't' | 'p' | 'r')
+                && characters.peek().is_some_and(char::is_ascii_digit)
+            {
+                let mut token = String::from(character);
+                while let Some(digit) = characters.next_if(char::is_ascii_digit) {
+                    token.push(digit);
                 }
-                if end > index + 1 {
-                    let token: String = characters[index..end].iter().collect();
-                    let name = self.names.entry(token).or_insert_with(|| {
-                        let name = variable_name(self.next);
-                        self.next += 1;
-                        name
-                    });
-                    out.push_str(name);
-                    index = end;
-                    continue;
-                }
+                let name = self.names.entry(token).or_insert_with(|| {
+                    let name = variable_name(self.next);
+                    self.next = self.next.saturating_add(1);
+                    name
+                });
+                out.push_str(name);
+            } else {
+                out.push(character);
             }
-            out.push(character);
-            index += 1;
         }
         out
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "format the stable sequence of displayed type variables"
+    )
+)]
 fn variable_name(index: usize) -> String {
-    if index < 26 {
-        ((b'a' + u8::try_from(index).unwrap_or(0)) as char).to_string()
-    } else {
-        format!("v{index}")
-    }
+    b"abcdefghijklmnopqrstuvwxyz".get(index).map_or_else(
+        || format!("v{index}"),
+        |&letter| char::from(letter).to_string(),
+    )
 }
 
 /// One signature rendered from a declaration's scheme.
@@ -3028,6 +3464,13 @@ fn scheme_signature(
 }
 
 /// One signature rendered from a decided function type.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "turn a recorded callable type into a signature"
+    )
+)]
 fn type_signature(
     name: &str,
     ty: &Type,
@@ -3050,6 +3493,13 @@ fn type_signature(
 }
 
 /// The signatures of a callable declaration in `module`.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "resolve exported declarations to their callable schemes"
+    )
+)]
 fn export_signatures(
     views: &[ModuleView<'_>],
     module: usize,
@@ -3079,6 +3529,13 @@ fn export_signatures(
 }
 
 /// The manifest overloads of `Rssn.<op>`, with the checker's pinned one active.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "render RSSN overloads with their pinned key"
+    )
+)]
 fn rssn_signatures(
     view: &ModuleView<'_>,
     parts: &[String],
@@ -3114,10 +3571,17 @@ fn rssn_signatures(
         .and_then(|call| entry.key_index(&call.key))
         .unwrap_or(0);
     let count = signatures.len();
-    Some((signatures, pinned.min(count - 1)))
+    Some((signatures, pinned.min(count.saturating_sub(1))))
 }
 
 /// One class method's signature, with the class and proved instance head.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "render the instance chosen by the checker"
+    )
+)]
 fn dictionary_signature(
     views: &[ModuleView<'_>],
     dictionary: &aevia_types::check::DictionaryUse,
@@ -3158,27 +3622,78 @@ fn dictionary_signature(
     })
 }
 
-/// The `##` documentation immediately above a declaration.
-fn declaration_doc(
-    view: &ModuleView<'_>,
+/// The `##` documentation for a declaration named `name` in `module`,
+/// respecting `@hidden` and `@doc(hidden)`.
+fn find_decl_doc(
+    module: &Module,
+    text: &str,
     name: &str,
 ) -> Option<String> {
-    for decl in &view.module.decls {
+    for decl in &module.decls {
         let matches = match &decl.kind {
-            | DeclKind::Fn { name: declared, .. } => declared == name,
+            | DeclKind::Fn { name: declared, .. }
+            | DeclKind::Dimension { name: declared, .. }
+            | DeclKind::Unit { name: declared, .. } => declared == name,
             | DeclKind::Let { pattern, .. } => {
                 matches!(&pattern.kind, PatKind::Var(bound) if bound == name)
             },
-            | _ => false,
+            | DeclKind::Type {
+                name: declared, body, ..
+            } => {
+                if declared == name {
+                    true
+                } else if let TypeBody::Variants(ctors) = body {
+                    ctors.iter().any(|ctor| ctor.name == name)
+                } else {
+                    false
+                }
+            },
+            | DeclKind::Class {
+                name: declared,
+                methods,
+                ..
+            } => declared == name || methods.iter().any(|method| method.name == name),
+            | DeclKind::Import { .. }
+            | DeclKind::Instance { .. }
+            | DeclKind::Derive { .. }
+            | DeclKind::Test { .. } => false,
         };
         if matches {
-            return doc_before(view.text, decl.span.start);
+            if decl.is_doc_hidden() {
+                return None;
+            }
+            return decl
+                .doc
+                .clone()
+                .or_else(|| doc_before(text, decl.span.start));
         }
     }
     None
 }
 
+/// The `##` documentation immediately above a declaration.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "recover documentation at the declaration span"
+    )
+)]
+fn declaration_doc(
+    view: &ModuleView<'_>,
+    name: &str,
+) -> Option<String> {
+    find_decl_doc(view.module, view.text, name)
+}
+
 /// The `##` documentation immediately above a type declaration.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "recover documentation attached to a type declaration"
+    )
+)]
 fn type_declaration_doc(
     view: &ModuleView<'_>,
     name: &str,
@@ -3187,7 +3702,13 @@ fn type_declaration_doc(
         if let DeclKind::Type { name: declared, .. } = &decl.kind
             && declared == name
         {
-            return doc_before(view.text, decl.span.start);
+            if decl.is_doc_hidden() {
+                return None;
+            }
+            return decl
+                .doc
+                .clone()
+                .or_else(|| doc_before(view.text, decl.span.start));
         }
     }
     None
@@ -3199,20 +3720,18 @@ fn doc_before(
     start: u32,
 ) -> Option<String> {
     let start = usize::try_from(start).ok()?;
-    let before = text.get(..start)?;
-    let mut lines: Vec<&str> = before.split('\n').collect();
-    if !lines.last().is_some_and(|line| line.trim().is_empty()) {
+    let (indent, mut before) = split_last_line(text.get(..start)?);
+    if !indent.trim().is_empty() {
         return None;
     }
-    lines.pop();
     let mut documented = Vec::new();
-    while let Some(line) = lines.last() {
-        let trimmed = line.trim();
-        let Some(rest) = trimmed.strip_prefix("##") else {
+    while let Some(text) = before {
+        let (line, preceding) = split_last_line(text);
+        let Some(rest) = line.trim().strip_prefix("##") else {
             break;
         };
-        documented.push(rest.trim().to_string());
-        lines.pop();
+        documented.push(rest.trim());
+        before = preceding;
     }
     documented.reverse();
     if documented.is_empty() {
@@ -3220,6 +3739,19 @@ fn doc_before(
     } else {
         Some(documented.join("\n"))
     }
+}
+
+#[test]
+fn fallback_docs_are_adjacent_physical_lines_with_any_terminator() {
+    let text = "let old = 1\r\n## first\r## second\n## last\r\n    let new = 2";
+    let start = u32::try_from(text.find("let new").unwrap()).unwrap();
+    assert_eq!(
+        doc_before(text, start).as_deref(),
+        Some("first\nsecond\nlast")
+    );
+    let text = "## before a blank\r\n\rlet value = 1";
+    let start = u32::try_from(text.find("let").unwrap()).unwrap();
+    assert_eq!(doc_before(text, start), None);
 }
 
 // --- Completion details ----------------------------------------------------
@@ -3240,9 +3772,9 @@ impl Analysis<'_> {
         let text = self.document.text();
         let mut start = offset;
         while start > 0 {
-            let character = text[..start].chars().next_back()?;
+            let character = text.get(..start)?.chars().next_back()?;
             if character.is_alphanumeric() || character == '_' {
-                start -= character.len_utf8();
+                start = start.saturating_sub(character.len_utf8());
             } else {
                 break;
             }
@@ -3300,13 +3832,20 @@ impl Analysis<'_> {
         let ExprKind::Var(_) = &receiver.kind else {
             return None;
         };
-        let binding = occurrence::at(&self.occurrences, receiver.span.start)?.binding?;
+        let binding = self.occurrences().at(receiver.span.start)?.binding?;
         let annotation = binding_annotation(view.module, binding)?;
         annotation_fields(views, view, annotation)
     }
 }
 
 /// The type annotation written on the binder at `binding`.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "read a local binder annotation from the syntax tree"
+    )
+)]
 fn binding_annotation(
     module: &Module,
     binding: Span,
@@ -3365,6 +3904,13 @@ fn binding_annotation(
 }
 
 /// Field labels of a type annotation, resolving a named alias to its record.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "resolve record fields through the annotation shape"
+    )
+)]
 fn annotation_fields(
     views: &[ModuleView<'_>],
     view: &ModuleView<'_>,
@@ -3426,6 +3972,13 @@ fn source_slice(
 /// `|`, `->`, `do`, `then`, `else` or the pipe operator an expression is
 /// expected; at the top of a file, a declaration is. Loading the world for a
 /// keyword list would cost more than it is worth.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "keep completion syntax distinct from item rendering"
+    )
+)]
 fn expression_keywords(
     text: &str,
     offset: u32,
@@ -3437,6 +3990,13 @@ fn expression_keywords(
     KEYWORDS.to_vec()
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "check which syntactic positions accept expressions"
+    )
+)]
 fn expression_position(
     text: &str,
     offset: u32,
@@ -3444,16 +4004,19 @@ fn expression_position(
     let offset = usize::try_from(offset).unwrap_or(0).min(text.len());
     let mut start = offset;
     while start > 0 {
-        let Some(character) = text[..start].chars().next_back() else {
-            break;
+        let Some(character) = text
+            .get(..start)
+            .and_then(|prefix| prefix.chars().next_back())
+        else {
+            return false;
         };
         if character.is_alphanumeric() || character == '_' {
-            start -= character.len_utf8();
+            start = start.saturating_sub(character.len_utf8());
         } else {
             break;
         }
     }
-    let before = text[..start].trim_end();
+    let before = text.get(..start).unwrap_or_default().trim_end();
     if before.is_empty() {
         return false;
     }

@@ -17,26 +17,166 @@ use num_rational::BigRational;
 use num_traits::ToPrimitive;
 use rssn::api::Config;
 use rssn::api::Session;
+use rssn::graph::DimensionMode;
 use rssn::kernel::call::CallCtx;
 use rssn::kernel::call::OpError;
 use rssn::kernel::manifest::KernelManifest;
 use rssn::kernel::result::Solutions;
+use rssn::kernel::signature::DimRuleInfo;
 use rssn::kernel::signature::OpKey;
 use rssn::kernel::signature::Signature;
+use rssn::kernel::signature::TypeExpr;
 use rssn::kernel::value::SessionId;
+use rssn::kernel::value::TensorValue;
 use rssn::kernel::value::TermRef;
 use rssn::kernel::value::Value;
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+type KeyedSessionCall = fn(&Session, &OpKey, &[Value], &CallCtx<'_>) -> Result<Value, OpError>;
+
+const SCRATCH_VALUE_POOL_CAP: usize = 8;
+const SCRATCH_VALUE_ELEMS_CAP: usize = 256;
+
+std::thread_local! {
+    static VALUE_SCRATCH_POOL: RefCell<Vec<Vec<Value>>> = const { RefCell::new(Vec::new()) };
+}
+
+struct ValueScratchGuard(Vec<Value>);
+
+impl ValueScratchGuard {
+    fn with_capacity(min_capacity: usize) -> Self {
+        let mut buf = VALUE_SCRATCH_POOL
+            .try_with(|pool| pool.try_borrow_mut().ok().and_then(|mut guard| guard.pop()))
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        buf.clear();
+        buf.reserve(min_capacity);
+        Self(buf)
+    }
+}
+
+impl Drop for ValueScratchGuard {
+    fn drop(&mut self) {
+        let mut buf = std::mem::take(&mut self.0);
+        buf.clear();
+        if buf.capacity() > 0 && buf.capacity() <= SCRATCH_VALUE_ELEMS_CAP {
+            let _ = VALUE_SCRATCH_POOL.try_with(|pool| {
+                if let Ok(mut guard) = pool.try_borrow_mut()
+                    && guard.len() < SCRATCH_VALUE_POOL_CAP
+                {
+                    guard.push(buf);
+                }
+            });
+        }
+    }
+}
+
+fn coherent_tensor_len(
+    shape: &[usize],
+    len: usize,
+) -> bool {
+    let Some(expected) = shape
+        .iter()
+        .try_fold(1_usize, |acc, &extent| acc.checked_mul(extent))
+    else {
+        return false;
+    };
+    len != 0 && expected == len
+}
+
+/// An argument to a pinned or dynamic native call, optionally borrowing a host buffer.
+pub struct NativeArgument<'a>(NativeArgumentData<'a>);
+
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Keeps ordinary arguments inline without a separate allocation"
+)]
+enum NativeArgumentData<'a> {
+    Value(Val),
+    DenseFloat {
+        shape: &'a [usize],
+        data: Cow<'a, [f64]>,
+    },
+    DenseBool {
+        shape: &'a [usize],
+        data: &'a [bool],
+    },
+}
+
+impl<'a> NativeArgument<'a> {
+    /// Borrows a nonempty, coherent Float tensor in row-major order.
+    ///
+    /// Returns `None` if the shape is invalid or the tensor is empty. Empty
+    /// tensors need the existing neutral conversion and dimension witness.
+    #[must_use]
+    pub fn dense_float(
+        shape: &'a [usize],
+        data: &'a [f64],
+    ) -> Option<Self> {
+        Self::dense_float_cow(shape, Cow::Borrowed(data))
+    }
+
+    /// Passes a nonempty, coherent Float tensor (borrowed contiguous slice or
+    /// logical row-major buffer) without building an intermediate `Val::Tensor`.
+    #[must_use]
+    pub fn dense_float_cow(
+        shape: &'a [usize],
+        data: Cow<'a, [f64]>,
+    ) -> Option<Self> {
+        coherent_tensor_len(shape, data.len())
+            .then_some(Self(NativeArgumentData::DenseFloat { shape, data }))
+    }
+
+    /// Borrows a nonempty, coherent Bool tensor without building an
+    /// intermediate `Val::Tensor`.
+    #[must_use]
+    pub fn dense_bool(
+        shape: &'a [usize],
+        data: &'a [bool],
+    ) -> Option<Self> {
+        coherent_tensor_len(shape, data.len())
+            .then_some(Self(NativeArgumentData::DenseBool { shape, data }))
+    }
+}
+
+impl From<Val> for NativeArgument<'_> {
+    fn from(value: Val) -> Self {
+        Self(NativeArgumentData::Value(value))
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ArgumentSlice<'b, 'a> {
+    Neutral(&'b [Val]),
+    Native(&'b [NativeArgument<'a>]),
+}
+
+impl ArgumentSlice<'_, '_> {
+    const fn len(self) -> usize {
+        match self {
+            | Self::Neutral(args) => args.len(),
+            | Self::Native(args) => args.len(),
+        }
+    }
+}
+
 /// A scoped host function using the neutral bridge value model.
+///
 /// Implementations may carry only thread-safe handles; interpreter state stays
 /// in its owning thread and may not be borrowed across this boundary.
 pub trait BridgeCallback: Send + Sync {
     /// A concrete, immutable signature captured at registration.
     fn signature(&self) -> crate::Sig;
     /// Invoke with explicit runtime dimension witnesses.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bridge error when the arguments or witnesses are invalid
+    /// or the callback fails.
     fn call(
         &self,
         args: &[Val],
@@ -50,12 +190,156 @@ struct CallbackAdapter {
     session: SessionId,
 }
 
+// Native handles carry their unit domain inside the checked session
+// object store. Numeric dimension witnesses are neither required nor inferred
+// for their wire bytes. Validate the precise declared kind, never generic Value.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Isolates the opaque native tensor envelope check at the ABI boundary"
+)]
+fn backend_scalar_handle_tensor(
+    value: &Value,
+    signature: &crate::SigType,
+) -> bool {
+    let crate::SigType::Tensor {
+        rank: Some(rank),
+        shape,
+        elem,
+    } = signature
+    else {
+        return false;
+    };
+    let crate::SigType::Opaque(kind) = elem.as_ref() else {
+        return false;
+    };
+    if !kind.starts_with("rssn/native/") {
+        return false;
+    }
+    let expected_kind = kind;
+    let Value::Tensor(tensor) = value else {
+        return false;
+    };
+    if tensor.shape.len() != *rank
+        || shape
+            .as_ref()
+            .is_some_and(|expected| expected != &tensor.shape)
+        || tensor
+            .shape
+            .iter()
+            .try_fold(1usize, |count, extent| count.checked_mul(*extent))
+            != Some(tensor.data.len())
+        || !matches!(&tensor.elem, rssn::kernel::signature::TypeExpr::Opaque(kind) if kind == expected_kind)
+    {
+        return false;
+    }
+    tensor.data.iter().all(|value| {
+        let Value::Opaque(handle) = value else {
+            return false;
+        };
+        if &handle.kind != expected_kind {
+            return false;
+        }
+        let Ok(bytes) = <&[u8; 16]>::try_from(handle.bytes.as_slice()) else {
+            return false;
+        };
+        // The store independently authenticates the owning scope and live id.
+        bytes[..8].iter().any(|byte| *byte != 0) && bytes[8..].iter().any(|byte| *byte != 0)
+    })
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps the empty-list schema distinct from validation of actual handles"
+)]
+fn attach_erased_empty_handle_schema(
+    value: &mut Value,
+    witness: &crate::witness::DimensionWitness,
+    kind: &str,
+) {
+    use crate::witness::DimensionWitness as W;
+    use rssn::kernel::signature::TypeExpr;
+
+    if let (
+        Value::Tensor(tensor),
+        W::Tensor {
+            dimension,
+            element: None,
+            element_repr,
+            elements,
+        },
+    ) = (value, witness)
+        && tensor.data.is_empty()
+        && elements.is_empty()
+        && dimension.as_ref().is_none_or(aevia_dim::Dim::is_one)
+        && matches!(element_repr, None | Some(crate::SigType::Dyn))
+        && matches!(tensor.elem, TypeExpr::Real | TypeExpr::Dyn(_))
+    {
+        // An empty erased tensor contains no handles to authenticate. The
+        // caller still checks its actual rank, extents, and storage length.
+        tensor.elem = TypeExpr::Opaque(kind.to_owned());
+    }
+}
+
+// Closed String/Bool arrays have no physical scalar leaves. Authenticate their
+// actual payload and complete shape rather than inventing a numeric witness.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Checks non-metric tensors without inventing scalar dimension evidence"
+)]
+fn closed_nonmetric_tensor(
+    value: &Value,
+    signature: &crate::SigType,
+) -> bool {
+    let crate::SigType::Tensor {
+        rank: Some(rank),
+        shape,
+        elem,
+    } = signature
+    else {
+        return false;
+    };
+    if !matches!(elem.as_ref(), crate::SigType::Str | crate::SigType::Bool) {
+        return false;
+    }
+    let Value::Tensor(tensor) = value else {
+        return false;
+    };
+    if tensor.shape.len() != *rank
+        || shape
+            .as_ref()
+            .is_some_and(|expected| expected != &tensor.shape)
+        || tensor
+            .shape
+            .iter()
+            .try_fold(1usize, |count, extent| count.checked_mul(*extent))
+            != Some(tensor.data.len())
+    {
+        return false;
+    }
+    match (elem.as_ref(), &tensor.elem) {
+        | (crate::SigType::Str, rssn::kernel::signature::TypeExpr::String) => {
+            tensor
+                .data
+                .iter()
+                .all(|value| matches!(value, Value::String(_)))
+        },
+        | (crate::SigType::Bool, rssn::kernel::signature::TypeExpr::Bool) => {
+            tensor
+                .data
+                .iter()
+                .all(|value| matches!(value, Value::Bool(_)))
+        },
+        | _ => false,
+    }
+}
+
 /// Public callback implementations supply their own schema. Validate it
-/// before conversion to RSSN TypeExpr: malformed or unsupported metadata must
+/// before conversion to RSSN `TypeExpr`: malformed or unsupported metadata must
 /// never be silently weakened into a rank-only or opaque signature.
 fn supported_callback_schema(ty: &crate::SigType) -> bool {
     use crate::SigType as S;
     match ty {
+        | S::Opaque(name) if name == crate::registry::NATIVE_AD_VAR_KIND => true,
         | S::Int | S::Real | S::Float | S::Complex | S::Bool | S::Str => true,
         | S::Dim(inner, dim) => {
             dim.is_concrete() && matches!(inner.as_ref(), S::Int | S::Real | S::Float | S::Complex)
@@ -74,9 +358,12 @@ fn supported_callback_schema(ty: &crate::SigType) -> bool {
         },
         | S::Record(fields) => {
             fields.iter().enumerate().all(|(index, (name, ty))| {
-                !fields[..index].iter().any(|(other, _)| other == name)
+                !fields.iter().take(index).any(|(other, _)| other == name)
                     && supported_callback_schema(ty)
             })
+        },
+        | S::Variant(cases) => {
+            crate::registry::option_payload(cases).is_some_and(supported_callback_schema)
         },
         | _ => false,
     }
@@ -142,6 +429,13 @@ fn apply_callback_schema(
                 }
             }
         },
+        | (Value::Variant(variant), crate::SigType::Variant(cases)) => {
+            if let Some((_, fields)) = cases.iter().find(|(tag, _)| *tag == variant.tag) {
+                for (value, sig) in variant.payload.iter_mut().zip(fields) {
+                    apply_callback_schema(value, sig);
+                }
+            }
+        },
         | _ => {},
     }
 }
@@ -159,6 +453,11 @@ fn callback_schema_proves(
     use crate::SigType as S;
     use crate::witness::DimensionWitness as W;
     match (expected, actual, witness) {
+        | (S::Opaque(expected), S::Opaque(actual), _)
+            if expected == crate::registry::NATIVE_AD_VAR_KIND && actual == expected =>
+        {
+            true
+        },
         | (S::Dim(inner, dim), repr, W::Scalar(actual_dim)) => {
             dim.is_concrete()
                 && dim == actual_dim
@@ -216,14 +515,25 @@ fn callback_schema_proves(
                     }
                 })
         },
+        | (S::Variant(expected), S::Variant(actual), W::OptionSchema(proof)) => {
+            match (
+                crate::registry::option_payload(expected),
+                crate::registry::option_payload(actual),
+            ) {
+                | (Some(expected), Some(actual)) => callback_schema_proves(expected, actual, proof),
+                | _ => false,
+            }
+        },
         | _ => false,
     }
 }
 
-// Input signatures may contain dimension variables. A witness proves the
+// Ordinary higher-order operator arguments may contain native handles; these
+// handles never enter a callback schema. Input signatures may contain dimension
+// variables. A witness proves the
 // actual concrete dimension; RSSN's pinned signature check then enforces all
 // declared relationships between inputs and callback signatures.
-fn callback_input_dimension(
+fn ordinary_input_dimension(
     sig: &crate::SigType,
     witness: &crate::witness::DimensionWitness,
 ) -> bool {
@@ -237,7 +547,7 @@ fn callback_input_dimension(
         | _ => false,
     }
 }
-fn callback_input_schema_proves(
+fn ordinary_input_schema_proves(
     expected: &crate::SigType,
     actual: &crate::SigType,
     witness: &crate::witness::DimensionWitness,
@@ -245,14 +555,19 @@ fn callback_input_schema_proves(
     use crate::SigType as S;
     use crate::witness::DimensionWitness as W;
     match (expected, actual) {
+        | (S::Opaque(expected), S::Opaque(actual))
+            if crate::registry::native_object_kind(expected) && actual == expected =>
+        {
+            true
+        },
         | (S::Dim(inner, _), actual) => {
-            callback_input_dimension(expected, witness)
-                && callback_input_schema_proves(inner, actual, &W::Scalar(aevia_dim::Dim::one()))
+            ordinary_input_dimension(expected, witness)
+                && ordinary_input_schema_proves(inner, actual, &W::Scalar(aevia_dim::Dim::one()))
         },
         | (S::Int, S::Int)
         | (S::Real, S::Int | S::Real)
         | (S::Float, S::Float)
-        | (S::Complex, S::Complex) => callback_input_dimension(expected, witness),
+        | (S::Complex, S::Complex) => ordinary_input_dimension(expected, witness),
         | (S::Bool, S::Bool) | (S::Str, S::Str) => true,
         | (
             S::Tensor {
@@ -280,7 +595,7 @@ fn callback_input_schema_proves(
                     .as_ref()
                     .is_none_or(|shape| actual_shape.as_ref() == Some(shape))
                 && ae.as_ref() == repr
-                && callback_input_schema_proves(ee, ae, element)
+                && ordinary_input_schema_proves(ee, ae, element)
         },
         | (S::Record(expected), S::Record(actual)) => {
             let W::Record(witnesses) = witness else {
@@ -289,14 +604,14 @@ fn callback_input_schema_proves(
             expected.len() == actual.len()
                 && expected.len() == witnesses.len()
                 && expected.iter().enumerate().all(|(index, (name, field))| {
-                    if expected[..index].iter().any(|(other, _)| other == name) {
+                    if expected.iter().take(index).any(|(other, _)| other == name) {
                         return false;
                     }
                     let mut fields = actual.iter().filter(|(n, _)| n == name);
                     let mut proofs = witnesses.iter().filter(|(n, _)| n == name);
                     match (fields.next(), fields.next(), proofs.next(), proofs.next()) {
                         | (Some((_, repr)), None, Some((_, proof)), None) => {
-                            callback_input_schema_proves(field, repr, proof)
+                            ordinary_input_schema_proves(field, repr, proof)
                         },
                         | _ => false,
                     }
@@ -305,7 +620,111 @@ fn callback_input_schema_proves(
         | _ => false,
     }
 }
-fn validate_callback_input(
+#[allow(
+    clippy::single_call_fn,
+    clippy::cognitive_complexity,
+    reason = "validates ordinary callback arguments including native dense Float/Bool tensors in O(1)"
+)]
+fn validate_ordinary_callback_arg(
+    arg: &NativeArgument<'_>,
+    witness: &crate::witness::DimensionWitness,
+    sig: &crate::SigType,
+) -> Result<(), KernelError> {
+    use crate::SigType as S;
+    use crate::witness::DimensionWitness as W;
+    let missing = || {
+        KernelError::new(
+            "E1001",
+            "callback input lacks matching type or dimension evidence",
+        )
+    };
+    match &arg.0 {
+        | NativeArgumentData::Value(value) => validate_ordinary_callback_input(value, witness, sig),
+        | NativeArgumentData::DenseFloat { shape, data } => {
+            match sig {
+                | S::Dyn => Ok(()),
+                | S::Tensor {
+                    rank: Some(rank),
+                    shape: expected_shape,
+                    elem,
+                } => {
+                    let W::Tensor {
+                        dimension, elements, ..
+                    } = witness
+                    else {
+                        return Err(missing());
+                    };
+                    if shape.len() != *rank
+                        || expected_shape
+                            .as_ref()
+                            .is_some_and(|expected| expected != shape)
+                    {
+                        return Err(missing());
+                    }
+                    if matches!(elem.as_ref(), S::Dyn) {
+                        return if elements.is_empty() || elements.len() == data.len() {
+                            Ok(())
+                        } else {
+                            Err(missing())
+                        };
+                    }
+                    let valid_float_elem = match elem.as_ref() {
+                        | S::Float => true,
+                        | S::Dim(inner, _) => matches!(inner.as_ref(), S::Float),
+                        | _ => false,
+                    };
+                    if !valid_float_elem {
+                        return Err(missing());
+                    }
+                    let dim = dimension.as_ref().ok_or_else(missing)?;
+                    let proof = W::Scalar(dim.clone());
+                    if !ordinary_input_dimension(elem, &proof) {
+                        return Err(missing());
+                    }
+                    if !elements.is_empty()
+                        && (elements.len() != data.len()
+                            || elements.iter().any(|item| item != &proof))
+                    {
+                        return Err(missing());
+                    }
+                    Ok(())
+                },
+                | _ => Err(missing()),
+            }
+        },
+        | NativeArgumentData::DenseBool { shape, data } => {
+            match sig {
+                | S::Dyn => Ok(()),
+                | S::Tensor {
+                    rank: Some(rank),
+                    shape: expected_shape,
+                    elem,
+                } => {
+                    let W::Tensor { elements, .. } = witness else {
+                        return Err(missing());
+                    };
+                    if shape.len() != *rank
+                        || expected_shape
+                            .as_ref()
+                            .is_some_and(|expected| expected != shape)
+                        || !matches!(elem.as_ref(), S::Bool | S::Dyn)
+                        || (!elements.is_empty() && elements.len() != data.len())
+                    {
+                        return Err(missing());
+                    }
+                    Ok(())
+                },
+                | _ => Err(missing()),
+            }
+        },
+    }
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "Checks each concrete input shape against its runtime witness"
+)]
+fn validate_ordinary_callback_input(
     value: &Val,
     witness: &crate::witness::DimensionWitness,
     sig: &crate::SigType,
@@ -333,16 +752,23 @@ fn validate_callback_input(
         )
     };
     match (value, sig) {
-        | (Val::Bool(_), S::Bool) | (Val::Str(_), S::Str) => Ok(()),
+        | (Val::Opaque { kind, bytes }, S::Opaque(name))
+            if name == kind && crate::registry::native_handle_envelope(kind, bytes) =>
+        {
+            Ok(())
+        },
+        // An explicitly dynamic parameter delegates its representation checks
+        // to the kernel codec. Attaching runtime witnesses is still required.
+        | (Val::Bool(_), S::Bool) | (Val::Str(_), S::Str) | (_, S::Dyn) => Ok(()),
         | (
             Val::Num(_) | Val::Complex { .. },
             S::Int | S::Real | S::Float | S::Complex | S::Dim(_, _),
-        ) if scalar_representation(value, sig) && callback_input_dimension(sig, witness) => Ok(()),
+        ) if scalar_representation(value, sig) && ordinary_input_dimension(sig, witness) => Ok(()),
         | (Val::Quantity { value, unit }, S::Dim(inner, _))
             if matches!(witness, W::Scalar(dim) if dim == &unit.dim)
-                && callback_input_dimension(sig, witness) =>
+                && ordinary_input_dimension(sig, witness) =>
         {
-            validate_callback_input(value, &W::Scalar(aevia_dim::Dim::one()), inner)
+            validate_ordinary_callback_input(value, &W::Scalar(aevia_dim::Dim::one()), inner)
         },
         | (
             Val::Tensor { shape, data },
@@ -378,7 +804,7 @@ fn validate_callback_input(
                     .as_ref()
                     .map_or(W::Unknown, |dim| W::Scalar(dim.clone()));
                 let proof = element.as_deref().unwrap_or(&fallback);
-                if callback_input_schema_proves(elem, actual, proof) {
+                if ordinary_input_schema_proves(elem, actual, proof) {
                     return Ok(());
                 }
                 return Err(missing());
@@ -389,7 +815,7 @@ fn validate_callback_input(
             ) {
                 let dim = dimension.as_ref().ok_or_else(missing)?;
                 let proof = W::Scalar(dim.clone());
-                if !callback_input_dimension(elem, &proof) {
+                if !ordinary_input_dimension(elem, &proof) {
                     return Err(missing());
                 }
                 if !elements.is_empty()
@@ -398,7 +824,7 @@ fn validate_callback_input(
                     return Err(missing());
                 }
                 for item in data {
-                    validate_callback_input(item, &proof, elem)?;
+                    validate_ordinary_callback_input(item, &proof, elem)?;
                 }
             } else {
                 if !elements.is_empty() && elements.len() != data.len() {
@@ -409,8 +835,16 @@ fn validate_callback_input(
                         .get(index)
                         .or(element.as_deref())
                         .unwrap_or(&W::Unknown);
-                    validate_callback_input(item, proof, elem)?;
+                    validate_ordinary_callback_input(item, proof, elem)?;
                 }
+            }
+            Ok(())
+        },
+        | (Val::Variant { tag, payload }, S::Variant(cases)) => {
+            let (declared, fields) =
+                option_packet_fields(tag, payload.len(), witness, cases).ok_or_else(missing)?;
+            for ((value, proof), ty) in payload.iter().zip(fields).zip(declared) {
+                validate_ordinary_callback_input(value, proof, ty)?;
             }
             Ok(())
         },
@@ -422,14 +856,14 @@ fn validate_callback_input(
                 return Err(missing());
             }
             for (index, (name, field)) in schema.iter().enumerate() {
-                if schema[..index].iter().any(|(other, _)| other == name) {
+                if schema.iter().take(index).any(|(other, _)| other == name) {
                     return Err(missing());
                 }
                 let mut values = fields.iter().filter(|(n, _)| n == name);
                 let mut proofs = witnesses.iter().filter(|(n, _)| n == name);
                 match (values.next(), values.next(), proofs.next(), proofs.next()) {
                     | (Some((_, value)), None, Some((_, proof)), None) => {
-                        validate_callback_input(value, proof, field)?
+                        validate_ordinary_callback_input(value, proof, field)?;
                     },
                     | _ => return Err(missing()),
                 }
@@ -440,6 +874,31 @@ fn validate_callback_input(
     }
 }
 
+// Native Option tags are permitted only with exactly the declared payload and a
+// matching witness. Both boundary directions verify every field recursively.
+fn option_packet_fields<'a>(
+    tag: &str,
+    arity: usize,
+    witness: &'a crate::witness::DimensionWitness,
+    cases: &'a [(String, Vec<crate::SigType>)],
+) -> Option<(&'a [crate::SigType], &'a [crate::witness::DimensionWitness])> {
+    crate::registry::option_payload(cases)?;
+    let crate::witness::DimensionWitness::Variant {
+        tag: witnessed_tag,
+        fields,
+    } = witness
+    else {
+        return None;
+    };
+    let (_, declared) = cases.iter().find(|(name, _)| name == tag)?;
+    (witnessed_tag == tag && arity == declared.len() && fields.len() == arity)
+        .then_some((declared.as_slice(), fields.as_slice()))
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "Keeps all callback result witness rules in one exhaustive check"
+)]
 fn validate_callback_result(
     value: &Val,
     witness: &crate::witness::DimensionWitness,
@@ -448,7 +907,7 @@ fn validate_callback_result(
     use crate::Num;
     use crate::SigType as S;
     use crate::witness::DimensionWitness as W;
-    fn scalar(
+    const fn scalar(
         value: &Val,
         sig: &S,
     ) -> bool {
@@ -460,9 +919,6 @@ fn validate_callback_result(
                 | (Val::Complex { .. }, S::Complex)
         )
     }
-    fn is_numeric(sig: &S) -> bool {
-        matches!(sig, S::Int | S::Real | S::Float | S::Complex | S::Dim(_, _))
-    }
     let mismatch = || {
         KernelError::new(
             "E1003",
@@ -470,6 +926,11 @@ fn validate_callback_result(
         )
     };
     match (value, sig) {
+        | (Val::Opaque { kind, bytes }, S::Opaque(name))
+            if kind == crate::registry::NATIVE_AD_VAR_KIND && name == kind && bytes.len() == 16 =>
+        {
+            Ok(())
+        },
         | (_, S::Dim(inner, dim))
             if dim.is_concrete()
                 && scalar(value, inner)
@@ -522,7 +983,10 @@ fn validate_callback_result(
                 }
                 return Ok(());
             }
-            if is_numeric(elem) {
+            if matches!(
+                elem.as_ref(),
+                S::Int | S::Real | S::Float | S::Complex | S::Dim(_, _)
+            ) {
                 let dim = match elem.as_ref() {
                     | S::Dim(_, dim) if dim.is_concrete() => dim.clone(),
                     | S::Dim(_, _) => return Err(mismatch()),
@@ -550,6 +1014,14 @@ fn validate_callback_result(
                         .unwrap_or(&W::Unknown);
                     validate_callback_result(item, w, elem)?;
                 }
+            }
+            Ok(())
+        },
+        | (Val::Variant { tag, payload }, S::Variant(cases)) => {
+            let (declared, fields) =
+                option_packet_fields(tag, payload.len(), witness, cases).ok_or_else(mismatch)?;
+            for ((value, proof), ty) in payload.iter().zip(fields).zip(declared) {
+                validate_callback_result(value, proof, ty)?;
             }
             Ok(())
         },
@@ -590,6 +1062,7 @@ fn validate_callback_result(
             _,
             S::Tensor { .. }
             | S::Record(_)
+            | S::Variant(_)
             | S::Dim(_, _)
             | S::Int
             | S::Real
@@ -619,8 +1092,7 @@ pub fn kernel() -> Rc<Kernel> {
             *slot = Some(Rc::new(Kernel::new()));
         }
         slot.as_ref()
-            .map(Rc::clone)
-            .unwrap_or_else(|| Rc::new(Kernel::new()))
+            .map_or_else(|| Rc::new(Kernel::new()), Rc::clone)
     })
 }
 
@@ -669,7 +1141,7 @@ impl Opts {
 
     /// A numeric request within `tolerance`.
     #[must_use]
-    pub fn numeric(tolerance: f64) -> Self {
+    pub const fn numeric(tolerance: f64) -> Self {
         Self {
             numeric: Some(tolerance),
             bindings: Vec::new(),
@@ -710,10 +1182,10 @@ pub struct Computed {
     pub reduced: bool,
 }
 
-/// The dimension signature of an operator defined from Aevia source
-/// (§13.5.2): its parameters' and result's dimensions as signature
-/// dimensions, with the source function's dimension variables as
-/// `DimExpr::Var`.
+/// The dimension signature of an operator defined from Aevia source.
+///
+/// Parameter and result dimensions follow §13.5.2. Source dimension
+/// variables are represented by `DimExpr::Var`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceOpSignature {
     /// The operator name (`demo/area`).
@@ -731,6 +1203,19 @@ pub struct Kernel {
 }
 
 impl Kernel {
+    /// Evaluates a host action and releases native objects it creates.
+    ///
+    /// # Errors
+    /// Returns an error when the underlying native object scope cannot start.
+    pub fn with_native_object_scope<T>(
+        &self,
+        action: impl FnOnce() -> T,
+    ) -> Result<T, String> {
+        self.session
+            .with_native_object_scope(action)
+            .map_err(|error| error.to_string())
+    }
+
     /// Creates a session with every standard rule set.
     #[must_use]
     pub fn new() -> Self {
@@ -941,10 +1426,95 @@ impl Kernel {
     }
 
     /// Calls the dynamic ABI while preserving explicit input and output witnesses.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bridge error if the operator is unavailable, the arguments
+    /// or dimension witnesses fail validation, or the kernel call fails.
     pub fn call_with_witnesses(
         &self,
         name: &str,
         args: &[Val],
+        witnesses: &[crate::witness::DimensionWitness],
+    ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
+        self.call_with_witnesses_inner(name, ArgumentSlice::Neutral(args), witnesses)
+    }
+
+    /// Calls the dynamic ABI with checked, optionally borrowed native inputs
+    /// while preserving explicit input and output witnesses.
+    ///
+    /// # Errors
+    ///
+    /// Reports the same capability, witness, conversion, and kernel errors as
+    /// [`Self::call_with_witnesses`].
+    pub fn call_with_native_arguments(
+        &self,
+        name: &str,
+        args: &[NativeArgument<'_>],
+        witnesses: &[crate::witness::DimensionWitness],
+    ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
+        self.call_with_witnesses_inner(name, ArgumentSlice::Native(args), witnesses)
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "shared dynamic conversion path for both neutral Val and native dense buffers"
+    )]
+    fn convert_native_argument(
+        &self,
+        name: &str,
+        arg: &NativeArgument<'_>,
+    ) -> Result<Value, KernelError> {
+        match &arg.0 {
+            | NativeArgumentData::Value(value) => self.one(name, value),
+            | NativeArgumentData::DenseFloat { shape, data } => {
+                Ok(Value::Tensor(TensorValue {
+                    shape: shape.to_vec(),
+                    elem: TypeExpr::Float,
+                    data: data.iter().copied().map(Value::Float).collect(),
+                }))
+            },
+            | NativeArgumentData::DenseBool { shape, data } => {
+                Ok(Value::Tensor(TensorValue {
+                    shape: shape.to_vec(),
+                    elem: TypeExpr::Bool,
+                    data: data.iter().copied().map(Value::Bool).collect(),
+                }))
+            },
+        }
+    }
+
+    fn convert_slice_into(
+        &self,
+        name: &str,
+        args: ArgumentSlice<'_, '_>,
+        out: &mut Vec<Value>,
+    ) -> Result<(), KernelError> {
+        out.clear();
+        out.reserve(args.len());
+        match args {
+            | ArgumentSlice::Neutral(vals) => {
+                for val in vals {
+                    out.push(self.one(name, val)?);
+                }
+            },
+            | ArgumentSlice::Native(native_args) => {
+                for arg in native_args {
+                    out.push(self.convert_native_argument(name, arg)?);
+                }
+            },
+        }
+        Ok(())
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keeps witness validation, plugin lookup and dispatch in call order"
+    )]
+    fn call_with_witnesses_inner(
+        &self,
+        name: &str,
+        args: ArgumentSlice<'_, '_>,
         witnesses: &[crate::witness::DimensionWitness],
     ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
         if args.len() != witnesses.len() {
@@ -960,8 +1530,16 @@ impl Kernel {
             // plugin registered in *this session* afterwards (§13.5.2) is
             // still callable by name; it carries no dimension witness.
             if self.session.manifest().ops.iter().any(|op| op.name == name) {
-                let value = self.call(name, args)?;
-                return Ok((value, crate::witness::DimensionWitness::Unknown));
+                let mut converted = ValueScratchGuard::with_capacity(args.len());
+                self.convert_slice_into(name, args, &mut converted.0)?;
+                let value = self
+                    .session
+                    .call_value(name, &converted.0, &CallCtx::new())
+                    .map_err(|error| from_op_error(&error).at_operator(name))?;
+                return Ok((
+                    Val::from_rssn(&value, self.id)?,
+                    crate::witness::DimensionWitness::Unknown,
+                ));
             }
             return Err(KernelError::new(
                 "E1003",
@@ -969,10 +1547,12 @@ impl Kernel {
             ));
         };
         registry.capabilities.require_op(entry)?;
-        let mut converted = self.convert(name, args)?;
-        if entry.source.is_exact() && entry.signatures.len() == 1 {
-            let signature = &entry.signatures[0];
-            for (index, (value, witness)) in converted.iter_mut().zip(witnesses).enumerate() {
+        let mut converted = ValueScratchGuard::with_capacity(args.len());
+        self.convert_slice_into(name, args, &mut converted.0)?;
+        if entry.source.is_exact()
+            && let [signature] = entry.signatures.as_slice()
+        {
+            for (index, (value, witness)) in converted.0.iter_mut().zip(witnesses).enumerate() {
                 if let Some(param) = signature
                     .params
                     .get(index)
@@ -992,14 +1572,6 @@ impl Kernel {
                                 | crate::SigType::Complex,
                                 W::Scalar(d),
                             ) => d.is_concrete(),
-                            | (
-                                crate::SigType::Dim(_, _)
-                                | crate::SigType::Int
-                                | crate::SigType::Real
-                                | crate::SigType::Float
-                                | crate::SigType::Complex,
-                                _,
-                            ) => false,
                             | (
                                 crate::SigType::Tensor { elem, .. }
                                 | crate::SigType::Sparse { elem, .. },
@@ -1030,6 +1602,23 @@ impl Kernel {
                                     elements.iter().all(|w| known(elem, w))
                                 }
                             },
+                            | (crate::SigType::Variant(cases), W::Variant { tag, fields })
+                                if crate::registry::option_payload(cases).is_some() =>
+                            {
+                                cases.iter().find(|(name, _)| name == tag).is_some_and(
+                                    |(_, schema)| {
+                                        schema.len() == fields.len()
+                                            && schema
+                                                .iter()
+                                                .zip(fields)
+                                                .all(|(sig, proof)| known(sig, proof))
+                                    },
+                                )
+                            },
+                            | (crate::SigType::Variant(cases), W::OptionSchema(proof)) => {
+                                crate::registry::option_payload(cases)
+                                    .is_some_and(|payload| known(payload, proof))
+                            },
                             | (crate::SigType::Record(fields), W::Record(values)) => {
                                 fields.iter().all(|(name, ty)| {
                                     values
@@ -1041,13 +1630,65 @@ impl Kernel {
                             | (
                                 crate::SigType::Tensor { .. }
                                 | crate::SigType::Sparse { .. }
-                                | crate::SigType::Record(_),
+                                | crate::SigType::Record(_)
+                                | crate::SigType::Dim(_, _)
+                                | crate::SigType::Int
+                                | crate::SigType::Real
+                                | crate::SigType::Float
+                                | crate::SigType::Complex,
                                 _,
                             ) => false,
                             | _ => true,
                         }
                     }
-                    if !known(param, witness) {
+                    // Graph-backed signatures consume symbolic handles directly.
+                    // Aevia supplies a scalar witness even when a Real is symbolic.
+                    // The graph can consume the term as-is only for a unitless witness.
+                    if !entry.is_value_native()
+                        && matches!(witness, crate::witness::DimensionWitness::Scalar(d) if d.is_one())
+                        && matches!(
+                            (&*value, param),
+                            (Value::Term(_), crate::SigType::Dyn)
+                                | (
+                                    Value::Symbol(_),
+                                    crate::SigType::Dyn | crate::SigType::Symbol
+                                )
+                        )
+                    {
+                        continue;
+                    }
+                    if let crate::SigType::Tensor { elem, .. } = param
+                        && let crate::SigType::Opaque(kind) = elem.as_ref()
+                        && kind.starts_with("rssn/native/")
+                    {
+                        attach_erased_empty_handle_schema(value, witness, kind);
+                        if !backend_scalar_handle_tensor(value, param) {
+                            return Err(KernelError::new(
+                                "E1003",
+                                "native handle tensor has invalid shape, schema or handle cells",
+                            ));
+                        }
+                    } else if matches!(param, crate::SigType::Tensor { elem, .. }
+                        if matches!(elem.as_ref(), crate::SigType::Str | crate::SigType::Bool))
+                    {
+                        // Empty conversion initially has no element representation;
+                        // restore only independently witnessed String/Bool metadata.
+                        crate::witness::attach(value, witness, param)?;
+                        if !closed_nonmetric_tensor(value, param) {
+                            return Err(KernelError::new(
+                                "E1003",
+                                "String/Bool tensor has invalid shape, element schema or actual cells",
+                            ));
+                        }
+                    } else if !known(param, witness)
+                        // There are no leaf unit claims in an empty Value
+                        // tensor. Nonempty erased tensors retain the ordinary
+                        // witness checks; attachment and the native decoder
+                        // still validate shape and rank in the empty case.
+                        && !matches!((&*value, param),
+                            (Value::Tensor(t), crate::SigType::Tensor { elem, .. })
+                            if t.data.is_empty() && matches!(elem.as_ref(), crate::SigType::Dyn))
+                    {
                         return Err(KernelError::capability("dim.dynamic_input_witness"));
                     }
                     crate::witness::attach(value, witness, param)?;
@@ -1070,15 +1711,33 @@ impl Kernel {
                             && elements.iter().all(dimensionless)
                     },
                     | W::Record(fields) => fields.iter().all(|(_, w)| dimensionless(w)),
+                    | W::OptionSchema(payload) => dimensionless(payload),
+                    | W::Variant { fields, .. } => fields.iter().all(dimensionless),
                 }
             }
             if !witnesses.iter().all(dimensionless) {
+                if entry.dim_rule == Some(DimRuleInfo::Dimensionless)
+                    && let Some((index, dimension)) =
+                        witnesses.iter().enumerate().find_map(|(index, witness)| {
+                            measured_dimension(witness).map(|d| (index, d))
+                        })
+                {
+                    return Err(KernelError::of(
+                        "E0401",
+                        crate::error::Failure::Type,
+                        format!(
+                            "argument {} must be dimensionless, got {dimension}",
+                            index.saturating_add(1)
+                        ),
+                    )
+                    .at_operator(name));
+                }
                 return Err(KernelError::capability("dim.dynamic_input_witness"));
             }
         }
         let raw = self
             .session
-            .call_value(name, &converted, &CallCtx::new())
+            .call_value(name, &converted.0, &witnessed_call_context(entry))
             .map_err(|error| from_op_error(&error).at_operator(name))?;
         self.refuse_declined(name, &raw)?;
         let trusted = (entry.source.is_exact() && entry.is_value_native())
@@ -1142,15 +1801,13 @@ impl Kernel {
             let mut element_repr = crate::SigType::Int;
             for (value, _) in &items {
                 match repr(value)? {
-                    | crate::SigType::Int => {},
                     | crate::SigType::Real if element_repr == crate::SigType::Int => {
                         element_repr = crate::SigType::Real;
                     },
-                    | crate::SigType::Real => {},
                     | crate::SigType::Float if element_repr == crate::SigType::Int => {
                         element_repr = crate::SigType::Float;
                     },
-                    | crate::SigType::Float => {},
+                    | crate::SigType::Int | crate::SigType::Real | crate::SigType::Float => {},
                     | _ => return None,
                 }
             }
@@ -1169,20 +1826,14 @@ impl Kernel {
             ));
         }
         let n = items.len();
-        let first_shape = match &items[0].0 {
-            | Val::Tensor { shape, .. } => Some(shape.clone()),
-            | _ => None,
-        };
-        let uniform = first_shape.as_ref().is_some_and(|first| {
-            items.iter().all(|(value, witness)| {
-                matches!(value, Val::Tensor { shape, .. } if shape == first)
-                    && *witness == items[0].1
+        if let Some(((Val::Tensor { shape: first, .. }, witness), rest)) = items.split_first()
+            && rest.iter().all(|(value, proof)| {
+                matches!(value, Val::Tensor { shape, .. } if shape == first) && proof == witness
             })
-        });
-        if uniform {
+        {
             let mut shape = vec![n];
-            shape.extend(first_shape?);
-            let witness = items[0].1.clone();
+            shape.extend(first);
+            let witness = witness.clone();
             let mut data = Vec::new();
             for (value, _) in items {
                 if let Val::Tensor { data: inner, .. } = value {
@@ -1226,14 +1877,33 @@ impl Kernel {
         key: &OpKey,
         args: &[Val],
     ) -> Result<Val, KernelError> {
+        self.call_key_inner(key, args, Session::call_key)
+    }
+
+    /// Calls the pinned overload with argument diagnostics for source callers.
+    ///
+    /// # Errors
+    /// Reports capability, conversion, stale-key, argument and evaluator errors.
+    pub fn call_key_diagnosed(
+        &self,
+        key: &OpKey,
+        args: &[Val],
+    ) -> Result<Val, KernelError> {
+        self.call_key_inner(key, args, Session::call_key_diagnosed)
+    }
+
+    fn call_key_inner(
+        &self,
+        key: &OpKey,
+        args: &[Val],
+        call: KeyedSessionCall,
+    ) -> Result<Val, KernelError> {
         let registry = crate::registry::registry();
         if let Some(entry) = registry.op(&key.name) {
             registry.capabilities.require_op(entry)?;
         }
         let converted = self.convert(&key.name, args)?;
-        let value = self
-            .session
-            .call_key(key, &converted, &CallCtx::new())
+        let value = call(&self.session, key, &converted, &CallCtx::new())
             .map_err(|error| from_op_error(&error).at_operator(&key.name))?;
         self.refuse_declined(&key.name, &value)?;
         Val::from_rssn(&value, self.id)
@@ -1281,6 +1951,59 @@ impl Kernel {
         args: &[Val],
         witnesses: &[crate::witness::DimensionWitness],
     ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
+        self.call_key_attaching_witnesses(
+            key,
+            ArgumentSlice::Neutral(args),
+            witnesses,
+            Session::call_key,
+        )
+    }
+
+    /// Calls the pinned native overload with checked, optionally borrowed input.
+    ///
+    /// # Errors
+    ///
+    /// Reports the same capability, overload, conversion and witness errors as
+    /// [`Self::call_key_with_witnesses`].
+    pub fn call_key_with_native_arguments(
+        &self,
+        key: &OpKey,
+        args: &[NativeArgument<'_>],
+        witnesses: &[crate::witness::DimensionWitness],
+    ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
+        self.call_key_attaching_witnesses(
+            key,
+            ArgumentSlice::Native(args),
+            witnesses,
+            Session::call_key,
+        )
+    }
+
+    /// Calls the pinned native overload with source-level argument diagnostics.
+    ///
+    /// # Errors
+    /// Reports capability, witness, stale-key, argument and evaluator errors.
+    pub fn call_key_with_native_arguments_diagnosed(
+        &self,
+        key: &OpKey,
+        args: &[NativeArgument<'_>],
+        witnesses: &[crate::witness::DimensionWitness],
+    ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
+        self.call_key_attaching_witnesses(
+            key,
+            ArgumentSlice::Native(args),
+            witnesses,
+            Session::call_key_diagnosed,
+        )
+    }
+
+    fn call_key_attaching_witnesses(
+        &self,
+        key: &OpKey,
+        args: ArgumentSlice<'_, '_>,
+        witnesses: &[crate::witness::DimensionWitness],
+        call: KeyedSessionCall,
+    ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
         if args.len() != witnesses.len() {
             return Err(KernelError::new(
                 "E0899",
@@ -1298,8 +2021,9 @@ impl Kernel {
             .signatures
             .get(index)
             .ok_or_else(|| KernelError::new("E0899", "kernel signature is missing"))?;
-        let mut converted = self.convert(&key.name, args)?;
-        for (index, (value, witness)) in converted.iter_mut().zip(witnesses).enumerate() {
+        let mut converted = ValueScratchGuard::with_capacity(args.len());
+        self.convert_slice_into(&key.name, args, &mut converted.0)?;
+        for (index, (value, witness)) in converted.0.iter_mut().zip(witnesses).enumerate() {
             if let Some(param) = signature
                 .params
                 .get(index)
@@ -1308,10 +2032,13 @@ impl Kernel {
                 crate::witness::attach(value, witness, param)?;
             }
         }
-        let raw = self
-            .session
-            .call_key(key, &converted, &CallCtx::new())
-            .map_err(|error| from_op_error(&error).at_operator(&key.name))?;
+        let raw = call(
+            &self.session,
+            key,
+            &converted.0,
+            &witnessed_call_context(entry),
+        )
+        .map_err(|error| from_op_error(&error).at_operator(&key.name))?;
         self.refuse_declined(&key.name, &raw)?;
         let witness = crate::witness::extract(&raw, entry.source.is_exact());
         Ok((Val::from_rssn(&raw, self.id)?, witness))
@@ -1348,7 +2075,13 @@ impl Kernel {
 
     /// Calls a higher-order operator with explicitly scoped callbacks and
     /// physical input/output witnesses. Callback registrations live only for
-    /// this call and each bank entry snapshots its concrete signature.
+    /// this call and each bank entry snapshots its concrete signature. Values
+    /// and callbacks each follow the order of their slots in the manifest.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bridge error if the operator, callback signatures, inputs or
+    /// witnesses fail validation, or the callback or kernel operation fails.
     pub fn call_ho_scoped(
         &self,
         name: &str,
@@ -1356,7 +2089,36 @@ impl Kernel {
         witnesses: &[crate::witness::DimensionWitness],
         callbacks: &[Arc<dyn BridgeCallback>],
     ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
-        self.call_ho_scoped_inner(name, None, args, witnesses, callbacks)
+        self.call_ho_scoped_inner(
+            name,
+            None,
+            ArgumentSlice::Neutral(args),
+            witnesses,
+            callbacks,
+        )
+    }
+
+    /// Calls a higher-order operator with explicitly scoped callbacks,
+    /// physical input/output witnesses, and optionally borrowed native buffers.
+    ///
+    /// # Errors
+    ///
+    /// Reports the same capability, witness, callback, and kernel errors as
+    /// [`Self::call_ho_scoped`].
+    pub fn call_ho_scoped_native(
+        &self,
+        name: &str,
+        args: &[NativeArgument<'_>],
+        witnesses: &[crate::witness::DimensionWitness],
+        callbacks: &[Arc<dyn BridgeCallback>],
+    ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
+        self.call_ho_scoped_inner(
+            name,
+            None,
+            ArgumentSlice::Native(args),
+            witnesses,
+            callbacks,
+        )
     }
 
     /// Calls exactly the manifest-pinned higher-order overload with scoped callbacks.
@@ -1370,14 +2132,67 @@ impl Kernel {
         witnesses: &[crate::witness::DimensionWitness],
         callbacks: &[Arc<dyn BridgeCallback>],
     ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
-        self.call_ho_scoped_inner(&key.name, Some(key), args, witnesses, callbacks)
+        self.call_ho_scoped_inner(
+            &key.name,
+            Some((key, Session::call_key)),
+            ArgumentSlice::Neutral(args),
+            witnesses,
+            callbacks,
+        )
     }
 
+    /// Calls exactly the manifest-pinned higher-order overload with scoped
+    /// callbacks and optionally borrowed native buffers.
+    ///
+    /// # Errors
+    ///
+    /// Reports the same stale-key, witness, callback, or kernel execution errors
+    /// as [`Self::call_ho_scoped_key`].
+    pub fn call_ho_scoped_key_native(
+        &self,
+        key: &OpKey,
+        args: &[NativeArgument<'_>],
+        witnesses: &[crate::witness::DimensionWitness],
+        callbacks: &[Arc<dyn BridgeCallback>],
+    ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
+        self.call_ho_scoped_inner(
+            &key.name,
+            Some((key, Session::call_key)),
+            ArgumentSlice::Native(args),
+            witnesses,
+            callbacks,
+        )
+    }
+
+    /// Calls the exact higher-order key with source-level argument diagnostics.
+    ///
+    /// # Errors
+    /// Reports stale-key, witness, callback, argument and evaluator errors.
+    pub fn call_ho_scoped_key_native_diagnosed(
+        &self,
+        key: &OpKey,
+        args: &[NativeArgument<'_>],
+        witnesses: &[crate::witness::DimensionWitness],
+        callbacks: &[Arc<dyn BridgeCallback>],
+    ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
+        self.call_ho_scoped_inner(
+            &key.name,
+            Some((key, Session::call_key_diagnosed)),
+            ArgumentSlice::Native(args),
+            witnesses,
+            callbacks,
+        )
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps higher-order callback registration, argument validation, and kernel invocation in call order"
+    )]
     fn call_ho_scoped_inner(
         &self,
         name: &str,
-        key: Option<&OpKey>,
-        args: &[Val],
+        key: Option<(&OpKey, KeyedSessionCall)>,
+        args: ArgumentSlice<'_, '_>,
         witnesses: &[crate::witness::DimensionWitness],
         callbacks: &[Arc<dyn BridgeCallback>],
     ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
@@ -1392,10 +2207,13 @@ impl Kernel {
         let entry = registry
             .op(name)
             .ok_or_else(|| KernelError::new("E1003", format!("rssn has no operator `{name}`")))?;
-        if !entry.higher_order || !entry.source.is_exact() || entry.signatures.len() != 1 {
+        if !entry.higher_order || !entry.source.is_exact() {
             return Err(KernelError::capability("core.callback.signature"));
         }
-        if let Some(key) = key
+        let [signature] = entry.signatures.as_slice() else {
+            return Err(KernelError::capability("core.callback.signature"));
+        };
+        if let Some((key, _)) = key
             && entry.key_index(key) != Some(0)
         {
             return Err(KernelError::new(
@@ -1403,31 +2221,37 @@ impl Kernel {
                 "kernel callback overload key is not registered",
             ));
         }
-        let signature = &entry.signatures[0];
-        for (index, (value, witness)) in args.iter().zip(witnesses).enumerate() {
-            let param = signature
-                .params
-                .get(index)
-                .ok_or_else(|| KernelError::new("E1003", "too many callback operator arguments"))?;
-            validate_callback_input(value, witness, param)?;
+        let ordinary = signature
+            .params
+            .iter()
+            .filter(|param| !matches!(param, crate::SigType::Func(..)));
+        let ordinary_count = ordinary.clone().count();
+        if ordinary_count != args.len()
+            || signature.params.len().saturating_sub(ordinary_count) != callbacks.len()
+        {
+            return Err(KernelError::new(
+                "E1003",
+                "ordinary argument or callback count disagrees with the kernel signature",
+            )
+            .at_operator(name));
         }
-        let mut converted = self.convert(name, args)?;
-        for (index, (value, witness)) in converted.iter_mut().zip(witnesses).enumerate() {
-            let param = signature
-                .params
-                .get(index)
-                .ok_or_else(|| KernelError::new("E1003", "too many callback operator arguments"))?;
-            if matches!(
-                param,
-                crate::SigType::Dim(_, _)
-                    | crate::SigType::Int
-                    | crate::SigType::Real
-                    | crate::SigType::Float
-                    | crate::SigType::Complex
-            ) && !matches!(witness, crate::witness::DimensionWitness::Scalar(dim) if dim.is_concrete())
-            {
-                return Err(KernelError::capability("dim.callback_input_witness"));
-            }
+        match args {
+            | ArgumentSlice::Neutral(vals) => {
+                for ((value, witness), param) in vals.iter().zip(witnesses).zip(ordinary.clone()) {
+                    validate_ordinary_callback_input(value, witness, param)?;
+                }
+            },
+            | ArgumentSlice::Native(native_args) => {
+                for ((arg, witness), param) in
+                    native_args.iter().zip(witnesses).zip(ordinary.clone())
+                {
+                    validate_ordinary_callback_arg(arg, witness, param)?;
+                }
+            },
+        }
+        let mut converted = ValueScratchGuard::with_capacity(args.len());
+        self.convert_slice_into(name, args, &mut converted.0)?;
+        for ((value, witness), param) in converted.0.iter_mut().zip(witnesses).zip(ordinary) {
             crate::witness::attach(value, witness, param)?;
         }
         let mut ctx = CallCtx::new();
@@ -1452,10 +2276,32 @@ impl Kernel {
                     .map_err(|e| from_op_error(&e))?,
             );
         }
-        let raw = if let Some(key) = key {
-            rssn::kernel::call::Kernel::call_ho(&self.session, key, &converted, &handles, &ctx)
+        let raw = if handles.is_empty() {
+            key.map_or_else(
+                || self.session.call_value(name, &converted.0, &ctx),
+                |(key, call)| call(&self.session, key, &converted.0, &ctx),
+            )
         } else {
-            self.session.call_ho(name, &converted, &handles, &ctx)
+            // The kernel's host call_ho API appends handles. Use the exact
+            // manifest positions here so leading and interleaved callbacks work.
+            let mut values = converted.0.drain(..);
+            let mut handles = handles.into_iter();
+            let mut combined = ValueScratchGuard::with_capacity(signature.params.len());
+            for param in &signature.params {
+                let next = if matches!(param, crate::SigType::Func(..)) {
+                    handles.next().map(Value::Function)
+                } else {
+                    values.next()
+                };
+                let item = next.ok_or_else(|| {
+                    KernelError::new("E0899", "missing validated kernel argument")
+                })?;
+                combined.0.push(item);
+            }
+            key.map_or_else(
+                || self.session.call_value(name, &combined.0, &ctx),
+                |(key, call)| call(&self.session, key, &combined.0, &ctx),
+            )
         }
         .map_err(|e| from_op_error(&e).at_operator(name))?;
         let witness = crate::witness::extract(&raw, true);
@@ -1674,17 +2520,15 @@ impl Kernel {
                     | None => self.parse_term(&number.to_string())?,
                 }
             },
-            | Val::Num(Num::Rat(number)) => {
-                match (number.numer().to_i64(), number.denom().to_i64()) {
+            | Val::Num(Num::Rat(ratio)) => {
+                match (ratio.numer().to_i64(), ratio.denom().to_i64()) {
                     | (Some(numer), Some(denom)) => {
                         match self.session.rational(numer, denom) {
                             | Some(term) => term,
                             | None => self.parse_term(&format!("({numer})/({denom})"))?,
                         }
                     },
-                    | _ => {
-                        self.parse_term(&format!("({})/({})", number.numer(), number.denom()))?
-                    },
+                    | _ => self.parse_term(&format!("({})/({})", ratio.numer(), ratio.denom()))?,
                 }
             },
             | Val::Num(Num::Float(number)) => self.session.float(*number),
@@ -1883,6 +2727,59 @@ impl Kernel {
         Ok(Sym::new(self.id.0, term.id()))
     }
 
+    /// Renders a structured value as a multi-line Unicode mathematical drawing.
+    ///
+    /// # Errors
+    /// A stale symbolic handle or a value without a mathematical term form.
+    pub fn to_pretty(
+        &self,
+        val: &Val,
+    ) -> Result<String, KernelError> {
+        let sym = self.term_of(val)?;
+        Ok(self.term(sym)?.to_pretty())
+    }
+
+    /// Renders a structured value as LaTeX math without parsing display text.
+    ///
+    /// # Errors
+    /// A stale symbolic handle or a value without a mathematical term form.
+    pub fn to_latex(
+        &self,
+        val: &Val,
+    ) -> Result<String, KernelError> {
+        let sym = self.term_of(val)?;
+        // RSSN's symbol printer assumes identifier-like names. Aevia's
+        // generated identity suffix uses '#'; keep it literal in LaTeX rather
+        // than emitting a TeX parameter/comment/math-delimiter token.
+        let rendered = self.term(sym)?.to_latex();
+        let mut out = String::with_capacity(rendered.len());
+        let mut escaped = false;
+        for ch in rendered.chars() {
+            if ch == '\\' {
+                escaped = !escaped;
+            } else {
+                if !escaped && matches!(ch, '#' | '%' | '$') {
+                    out.push('\\');
+                }
+                escaped = false;
+            }
+            out.push(ch);
+        }
+        Ok(out)
+    }
+
+    /// Renders a structured value as Typst math without parsing display text.
+    ///
+    /// # Errors
+    /// A stale symbolic handle or a value without a mathematical term form.
+    pub fn to_typst(
+        &self,
+        val: &Val,
+    ) -> Result<String, KernelError> {
+        let sym = self.term_of(val)?;
+        Ok(self.term(sym)?.to_typst())
+    }
+
     /// The value of a term.
     ///
     /// # Errors
@@ -1984,6 +2881,255 @@ pub fn rational(
     Num::Rat(BigRational::new(BigInt::from(numer), BigInt::from(denom)))
 }
 
+fn measured_dimension(witness: &crate::witness::DimensionWitness) -> Option<&aevia_dim::Dim> {
+    use crate::witness::DimensionWitness as W;
+    let known = |d: &&aevia_dim::Dim| d.is_concrete() && !d.is_one();
+    match witness {
+        | W::Unknown => None,
+        | W::Scalar(d) => Some(d).filter(known),
+        | W::Tensor {
+            dimension,
+            element,
+            elements,
+            ..
+        } => {
+            dimension
+                .as_ref()
+                .filter(known)
+                .or_else(|| element.as_deref().and_then(measured_dimension))
+                .or_else(|| elements.iter().find_map(measured_dimension))
+        },
+        | W::Record(fields) => {
+            fields
+                .iter()
+                .find_map(|(_, witness)| measured_dimension(witness))
+        },
+        | W::OptionSchema(payload) => measured_dimension(payload),
+        | W::Variant { fields, .. } => fields.iter().find_map(measured_dimension),
+    }
+}
+
+fn witnessed_call_context(entry: &crate::registry::OpEntry) -> CallCtx<'static> {
+    let context = CallCtx::new();
+    // These rules certify a pure result only after the kernel validates the
+    // input dimensions, including compatibility for probabilities and angles.
+    if matches!(
+        entry.dim_rule,
+        Some(
+            DimRuleInfo::Dimensionless | DimRuleInfo::CompatibleDimensionless | DimRuleInfo::Angle
+        )
+    ) {
+        context.dimensions(DimensionMode::Strict)
+    } else {
+        context
+    }
+}
+
+/// Whether the kernel's *own dimension rule* makes a bare numeric result
+/// dimensionless.
+///
+/// A `Derived` signature never states a dimension, so before this rule a
+/// derived operator's number could not "prove" `Int` or `Float` at
+/// `from_value`, however obviously dimensionless it was (`invmod`, `binomial`,
+/// `totient`). The manifest does state the rule, though:
+///
+/// * `Dimensionless`, `CompatibleDimensionless` and `Angle` give a pure
+///   number after the kernel validates the arguments.
+/// * `Same(index)` follows the dimension of the designated argument.
+/// * `List`, `NonMetric` and `Compare` yield pure numbers only when
+///   every argument is itself *known* to be dimensionless.
+///
+/// The remaining rules require more evidence than this check evaluates.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Separates the dimensionless result proof from term evaluation"
+)]
+fn result_is_dimensionless(
+    entry: &crate::registry::OpEntry,
+    witnesses: &[crate::witness::DimensionWitness],
+) -> bool {
+    use crate::witness::DimensionWitness as W;
+    use rssn::kernel::signature::DimRuleInfo as R;
+    fn known_one(w: &W) -> bool {
+        match w {
+            | W::Unknown => false,
+            | W::Scalar(d) => d.is_one(),
+            | W::Tensor {
+                dimension,
+                element,
+                elements,
+                ..
+            } => {
+                dimension.as_ref().is_none_or(aevia_dim::Dim::is_one)
+                    && element.as_ref().is_none_or(|w| known_one(w))
+                    && elements.iter().all(known_one)
+            },
+            | W::Record(fields) => fields.iter().all(|(_, w)| known_one(w)),
+            | W::OptionSchema(payload) => known_one(payload),
+            | W::Variant { fields, .. } => fields.iter().all(known_one),
+        }
+    }
+    // A curated signature (`domains.overlay`) is the overlay's statement that
+    // the operator is a pure function of dimensionless arguments, whatever its
+    // (often `Custom`) kernel dimension rule says. Inputs were already checked
+    // dimensionless by the caller.
+    if crate::domains::overlay().sigs.contains_key(&entry.name) {
+        return true;
+    }
+    // A witnessed overload was observed on bare numbers and bare lists and
+    // answered with one: with every argument known to be dimensionless, an
+    // operator whose value is a function of its arguments cannot produce a
+    // dimension. This is what lets the witnessed tier of the domain modules
+    // decode `Int` and `Tensor<_, Int>` results; a dimensioned argument still
+    // gets no such evidence.
+    if (!entry.witnessed.is_empty() || !entry.refinements.is_empty())
+        && !witnesses.is_empty()
+        && witnesses.iter().all(known_one)
+    {
+        return true;
+    }
+    // The same operators, when the kernel itself says the value is not a
+    // physical scalar (a count, a flag, a structure): an opaque handle among
+    // the arguments carries no dimension witness, and needs none.
+    if (!entry.witnessed.is_empty() || !entry.refinements.is_empty())
+        && matches!(&entry.dim_rule, Some(R::NonMetric | R::Container))
+    {
+        return true;
+    }
+    match &entry.dim_rule {
+        | Some(R::Dimensionless | R::CompatibleDimensionless | R::Angle) => true,
+        | Some(R::Same(index)) => witnesses.get(usize::from(*index)).is_some_and(known_one),
+        | Some(R::List | R::NonMetric | R::Compare) => witnesses.iter().all(known_one),
+        | _ => false,
+    }
+}
+
+#[cfg(test)]
+mod graph_result_witness_tests {
+    use super::NativeArgument;
+    use super::Num;
+    use super::Val;
+    use super::result_is_dimensionless;
+    use crate::SigType;
+    use crate::witness::DimensionWitness as W;
+    use aevia_dim::Dim;
+
+    #[test]
+    fn borrowed_dense_arguments_share_pinned_witness_validation() {
+        let entry = crate::registry::registry().op("num_l1_norm").unwrap();
+        let key = entry.key(0).unwrap();
+        let kernel = super::kernel();
+        let raw = [-0.0, 2.25, -2.5, 1.25];
+        let shape = [raw.len()];
+        let native = NativeArgument::dense_float(&shape, &raw).unwrap();
+        let neutral = Val::list(raw.map(|item| Val::Num(Num::Float(item))).to_vec());
+        let proof = W::Tensor {
+            dimension: Some(Dim::base("Length")),
+            element: None,
+            element_repr: Some(SigType::Float),
+            elements: Vec::new(),
+        };
+        let old = kernel
+            .call_key_with_witnesses(key, &[neutral], std::slice::from_ref(&proof))
+            .unwrap();
+        let new = kernel
+            .call_key_with_native_arguments(key, &[native], std::slice::from_ref(&proof))
+            .unwrap();
+        assert_eq!(old, new);
+        assert!(NativeArgument::dense_float(&[3], &raw).is_none());
+        assert!(NativeArgument::dense_float(&[usize::MAX, 2], &raw).is_none());
+        assert!(NativeArgument::dense_float(&[0], &[]).is_none());
+        let no_witness = kernel
+            .call_key_with_native_arguments(
+                key,
+                &[NativeArgument::dense_float(&[raw.len()], &raw).unwrap()],
+                &[],
+            )
+            .unwrap_err();
+        assert_eq!(no_witness.code, "E0899");
+
+        // Dynamic native call and Cow::Owned buffer preserve exact value & witness.
+        let owned =
+            NativeArgument::dense_float_cow(&shape, std::borrow::Cow::Owned(raw.to_vec())).unwrap();
+        let dyn_native = kernel
+            .call_with_native_arguments("num_l1_norm", &[owned], std::slice::from_ref(&proof))
+            .unwrap();
+        assert_eq!(old, dyn_native);
+
+        // Consecutive calls reuse TLS scratch without changing results.
+        for _ in 0..4 {
+            let borrowed = NativeArgument::dense_float(&shape, &raw).unwrap();
+            let repeated = kernel
+                .call_with_native_arguments(
+                    "num_l1_norm",
+                    &[borrowed],
+                    std::slice::from_ref(&proof),
+                )
+                .unwrap();
+            assert_eq!(old, repeated);
+        }
+    }
+
+    #[test]
+    fn callback_validation_accepts_dense_float_and_bool_native_arguments() {
+        use crate::SigType as S;
+        let floats = [1.5, -2.5];
+        let shape = [2];
+        let proof = W::Tensor {
+            dimension: Some(Dim::base("Length")),
+            element: None,
+            element_repr: Some(S::Float),
+            elements: Vec::new(),
+        };
+        let float_sig = S::Tensor {
+            rank: Some(1),
+            shape: Some(vec![2]),
+            elem: Box::new(S::Dim(Box::new(S::Float), Dim::base("Length"))),
+        };
+        let float_arg = NativeArgument::dense_float(&shape, &floats).unwrap();
+        assert!(super::validate_ordinary_callback_arg(&float_arg, &proof, &float_sig).is_ok());
+
+        let int_sig = S::Tensor {
+            rank: Some(1),
+            shape: Some(vec![2]),
+            elem: Box::new(S::Int),
+        };
+        assert!(super::validate_ordinary_callback_arg(&float_arg, &proof, &int_sig).is_err());
+
+        let bools = [true, false];
+        let bool_arg = NativeArgument::dense_bool(&shape, &bools).unwrap();
+        assert!(NativeArgument::dense_bool(&[3], &bools).is_none());
+        let bool_proof = W::Tensor {
+            dimension: Some(Dim::one()),
+            element: None,
+            element_repr: Some(S::Bool),
+            elements: Vec::new(),
+        };
+        let bool_sig = S::Tensor {
+            rank: Some(1),
+            shape: Some(vec![2]),
+            elem: Box::new(S::Bool),
+        };
+        assert!(super::validate_ordinary_callback_arg(&bool_arg, &bool_proof, &bool_sig).is_ok());
+        assert!(super::validate_ordinary_callback_arg(&bool_arg, &bool_proof, &float_sig).is_err());
+    }
+
+    #[test]
+    fn same_rule_requires_evidence_for_its_declared_argument() {
+        let entry = crate::registry::registry()
+            .op("pde_poisson_integral")
+            .expect("Poisson integral is present in the RSSN manifest");
+        let one = W::Scalar(Dim::one());
+        assert!(result_is_dimensionless(entry, &[one.clone(), W::Unknown]));
+        assert!(!result_is_dimensionless(entry, &[W::Unknown, one.clone()]));
+        assert!(!result_is_dimensionless(
+            entry,
+            &[W::Scalar(Dim::base("Temperature")), one],
+        ));
+        assert!(!result_is_dimensionless(entry, &[]));
+    }
+}
+
 #[cfg(test)]
 mod recursive_callback_witness_tests {
     use super::*;
@@ -2014,8 +3160,10 @@ mod recursive_callback_witness_tests {
     }
     #[test]
     fn callback_input_evidence_is_recursive_and_allows_nonnumeric_unknowns() {
-        assert!(validate_callback_input(&Val::Bool(true), &W::Unknown, &S::Bool).is_ok());
-        assert!(validate_callback_input(&Val::Str("ok".into()), &W::Unknown, &S::Str).is_ok());
+        assert!(validate_ordinary_callback_input(&Val::Bool(true), &W::Unknown, &S::Bool).is_ok());
+        assert!(
+            validate_ordinary_callback_input(&Val::Str("ok".into()), &W::Unknown, &S::Str).is_ok()
+        );
         let length = aevia_dim::Dim::base("Length");
         let schema = S::Record(vec![
             ("flag".into(), S::Bool),
@@ -2038,7 +3186,7 @@ mod recursive_callback_witness_tests {
             ("flag".into(), W::Unknown),
             ("nested".into(), W::Record(vec![("x".into(), W::Unknown)])),
         ]);
-        assert!(validate_callback_input(&value, &missing, &schema).is_err());
+        assert!(validate_ordinary_callback_input(&value, &missing, &schema).is_err());
         let proven = W::Record(vec![
             ("flag".into(), W::Unknown),
             (
@@ -2046,13 +3194,67 @@ mod recursive_callback_witness_tests {
                 W::Record(vec![("x".into(), W::Scalar(length))]),
             ),
         ]);
-        assert!(validate_callback_input(&value, &proven, &schema).is_ok());
+        assert!(validate_ordinary_callback_input(&value, &proven, &schema).is_ok());
         let duplicate = W::Record(vec![
             ("flag".into(), W::Unknown),
             ("flag".into(), W::Unknown),
         ]);
-        assert!(validate_callback_input(&value, &duplicate, &schema).is_err());
+        assert!(validate_ordinary_callback_input(&value, &duplicate, &schema).is_err());
     }
+    #[test]
+    fn callbacks_validate_option_tags_arity_and_payload_dimensions() {
+        let length = aevia_dim::Dim::base("Length");
+        let sig = S::Variant(vec![
+            ("None".into(), vec![]),
+            (
+                "Some".into(),
+                vec![S::Dim(Box::new(S::Float), length.clone())],
+            ),
+        ]);
+        assert!(super::supported_callback_schema(&sig));
+        let variant = |tag: &str, payload| {
+            Val::Variant {
+                tag: tag.to_owned(),
+                payload,
+            }
+        };
+        let proof = |tag: &str, fields| {
+            W::Variant {
+                tag: tag.to_owned(),
+                fields,
+            }
+        };
+        let some = variant("Some", vec![Val::Num(crate::Num::Float(3.0))]);
+        let none = variant("None", Vec::new());
+        assert!(
+            super::validate_callback_result(
+                &some,
+                &proof("Some", vec![W::Scalar(length.clone())]),
+                &sig
+            )
+            .is_ok()
+        );
+        assert!(super::validate_callback_result(&none, &proof("None", Vec::new()), &sig).is_ok());
+        for bad in [
+            proof("None", Vec::new()),
+            proof("Some", Vec::new()),
+            proof("Some", vec![W::Scalar(aevia_dim::Dim::base("Time"))]),
+            proof("Some", vec![W::Scalar(length.clone()), W::Scalar(length)]),
+        ] {
+            assert_eq!(
+                super::validate_callback_result(&some, &bad, &sig)
+                    .unwrap_err()
+                    .code,
+                "E1003"
+            );
+        }
+        let unchecked = S::Variant(vec![("Some".into(), vec![S::Float])]);
+        assert!(!super::supported_callback_schema(&unchecked));
+        assert!(
+            super::validate_callback_result(&none, &proof("None", Vec::new()), &unchecked).is_err()
+        );
+    }
+
     #[test]
     fn callback_empty_tensor_needs_actual_recursive_schema() {
         let element = S::Record(vec![("x".into(), S::Float), ("ok".into(), S::Bool)]);
@@ -2071,7 +3273,7 @@ mod recursive_callback_witness_tests {
             element_repr: None,
             elements: vec![],
         };
-        assert!(validate_callback_input(&value, &unknown, &sig).is_err());
+        assert!(validate_ordinary_callback_input(&value, &unknown, &sig).is_err());
         let proven = W::Tensor {
             dimension: None,
             element: Some(Box::new(W::Record(vec![
@@ -2081,7 +3283,7 @@ mod recursive_callback_witness_tests {
             element_repr: Some(element),
             elements: vec![],
         };
-        assert!(validate_callback_input(&value, &proven, &sig).is_ok());
+        assert!(validate_ordinary_callback_input(&value, &proven, &sig).is_ok());
         let wrong = W::Tensor {
             dimension: None,
             element: Some(Box::new(W::Record(vec![
@@ -2094,7 +3296,7 @@ mod recursive_callback_witness_tests {
             ])),
             elements: vec![],
         };
-        assert!(validate_callback_input(&value, &wrong, &sig).is_err());
+        assert!(validate_ordinary_callback_input(&value, &wrong, &sig).is_err());
     }
     #[test]
     fn nested_record_and_tensor_results_preserve_independent_witnesses() {
@@ -2246,74 +3448,367 @@ mod recursive_callback_witness_tests {
     }
 }
 
-/// Whether the kernel's *own dimension rule* makes a bare numeric result
-/// dimensionless.
-///
-/// A `Derived` signature never states a dimension, so before this rule a
-/// derived operator's number could not "prove" `Int` or `Float` at
-/// `from_value`, however obviously dimensionless it was (`invmod`, `binomial`,
-/// `totient`). The manifest does state the rule, though:
-///
-/// * `Dimensionless` says the result is a pure number whatever the arguments;
-/// * `List`, `NonMetric`, `Compare` and `Angle` yield pure numbers only when
-///   every argument is itself *known* to be dimensionless.
-///
-/// Any other rule (`Same`, `Sum`, `Product`, `Custom`, ...) depends on the
-/// arguments' dimensions and is not trusted here, so a dimensioned result is
-/// still never mislabelled.
-fn result_is_dimensionless(
-    entry: &crate::registry::OpEntry,
-    witnesses: &[crate::witness::DimensionWitness],
-) -> bool {
-    use crate::witness::DimensionWitness as W;
-    use rssn::kernel::signature::DimRuleInfo as R;
-    fn known_one(w: &W) -> bool {
-        match w {
-            | W::Unknown => false,
-            | W::Scalar(d) => d.is_one(),
-            | W::Tensor {
-                dimension,
-                element,
-                elements,
-                ..
-            } => {
-                dimension.as_ref().is_none_or(aevia_dim::Dim::is_one)
-                    && element.as_ref().is_none_or(|w| known_one(w))
-                    && elements.iter().all(known_one)
-            },
-            | W::Record(fields) => fields.iter().all(|(_, w)| known_one(w)),
+#[cfg(test)]
+mod backend_scalar_handle_input_tests {
+    use super::attach_erased_empty_handle_schema;
+    use super::backend_scalar_handle_tensor;
+    use crate::Num;
+    use crate::SigType;
+    use crate::Val;
+    use rssn::kernel::signature::TypeExpr;
+    use rssn::kernel::value::OpaqueValue;
+    use rssn::kernel::value::TensorValue;
+    use rssn::kernel::value::Value;
+    const KIND: &str = "rssn/native/backend-scalar/v1";
+    fn handle() -> Value {
+        let mut bytes = 1_u64.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+        Value::Opaque(OpaqueValue {
+            kind: KIND.into(),
+            bytes,
+        })
+    }
+    fn signature(rank: usize) -> SigType {
+        SigType::Tensor {
+            rank: Some(rank),
+            shape: None,
+            elem: Box::new(SigType::Opaque(KIND.into())),
         }
     }
-    // A curated signature (`domains.overlay`) is the overlay's statement that
-    // the operator is a pure function of dimensionless arguments, whatever its
-    // (often `Custom`) kernel dimension rule says. Inputs were already checked
-    // dimensionless by the caller.
-    if crate::domains::overlay().sigs.contains_key(&entry.name) {
-        return true;
+    fn tensor(data: Vec<Value>) -> Value {
+        Value::Tensor(TensorValue {
+            shape: vec![data.len()],
+            elem: TypeExpr::Opaque(KIND.into()),
+            data,
+        })
     }
-    // A witnessed overload was observed on bare numbers and bare lists and
-    // answered with one: with every argument known to be dimensionless, an
-    // operator whose value is a function of its arguments cannot produce a
-    // dimension. This is what lets the witnessed tier of the domain modules
-    // decode `Int` and `Tensor<_, Int>` results; a dimensioned argument still
-    // gets no such evidence.
-    if (!entry.witnessed.is_empty() || !entry.refinements.is_empty())
-        && !witnesses.is_empty()
-        && witnesses.iter().all(known_one)
-    {
-        return true;
+
+    #[test]
+    fn only_an_erased_empty_tensor_can_take_the_expected_handle_kind() {
+        use crate::witness::DimensionWitness as W;
+
+        let witness = |element_repr| {
+            W::Tensor {
+                dimension: Some(aevia_dim::Dim::one()),
+                element: None,
+                element_repr,
+                elements: vec![],
+            }
+        };
+        let empty = |elem, shape| {
+            Value::Tensor(TensorValue {
+                shape,
+                elem,
+                data: vec![],
+            })
+        };
+        let mut erased = empty(TypeExpr::Real, vec![0]);
+        attach_erased_empty_handle_schema(&mut erased, &witness(None), KIND);
+        assert!(backend_scalar_handle_tensor(&erased, &signature(1)));
+        assert!(!backend_scalar_handle_tensor(&erased, &signature(2)));
+        let mut numeric = empty(TypeExpr::Real, vec![0]);
+        attach_erased_empty_handle_schema(&mut numeric, &witness(Some(SigType::Real)), KIND);
+        assert!(!backend_scalar_handle_tensor(&numeric, &signature(1)));
+        let mut wrong_kind = empty(TypeExpr::Opaque("rssn/native/another/v1".into()), vec![0]);
+        attach_erased_empty_handle_schema(&mut wrong_kind, &witness(None), KIND);
+        assert!(!backend_scalar_handle_tensor(&wrong_kind, &signature(1)));
     }
-    // The same operators, when the kernel itself says the value is not a
-    // physical scalar (a count, a flag, a structure): an opaque handle among
-    // the arguments carries no dimension witness, and needs none.
-    if (!entry.witnessed.is_empty() || !entry.refinements.is_empty())
-        && matches!(&entry.dim_rule, Some(R::NonMetric | R::Container))
-    {
-        return true;
+
+    #[test]
+    fn native_scalar_handle_exception_rejects_mixed_numeric_forged_and_malformed_tensors() {
+        let valid = tensor(vec![handle(), handle()]);
+        assert!(backend_scalar_handle_tensor(&valid, &signature(1)));
+        assert!(!backend_scalar_handle_tensor(
+            &tensor(vec![handle(), Value::Float(1.0)]),
+            &signature(1)
+        ));
+        assert!(!backend_scalar_handle_tensor(&valid, &signature(2)));
+        let constrained = SigType::Tensor {
+            rank: Some(1),
+            shape: Some(vec![3]),
+            elem: Box::new(SigType::Opaque(KIND.into())),
+        };
+        assert!(!backend_scalar_handle_tensor(&valid, &constrained));
+        assert!(!backend_scalar_handle_tensor(
+            &valid,
+            &SigType::Tensor {
+                rank: Some(1),
+                shape: None,
+                elem: Box::new(SigType::Dyn)
+            }
+        ));
+        for (kind, bytes) in [
+            ("rssn/native/backend/v1", vec![1; 16]),
+            (KIND, vec![1; 15]),
+            (KIND, vec![0; 16]),
+        ] {
+            assert!(!backend_scalar_handle_tensor(
+                &tensor(vec![Value::Opaque(OpaqueValue {
+                    kind: kind.into(),
+                    bytes
+                })]),
+                &signature(1)
+            ));
+        }
+        let mut wrong_schema = valid.clone();
+        if let Value::Tensor(t) = &mut wrong_schema {
+            t.elem = TypeExpr::Float;
+        }
+        assert!(!backend_scalar_handle_tensor(&wrong_schema, &signature(1)));
+        let mut wrong_shape = valid;
+        if let Value::Tensor(t) = &mut wrong_shape {
+            t.shape = vec![3];
+        }
+        assert!(!backend_scalar_handle_tensor(&wrong_shape, &signature(1)));
     }
-    match &entry.dim_rule {
-        | Some(R::Dimensionless) => true,
-        | Some(R::List | R::NonMetric | R::Compare | R::Angle) => witnesses.iter().all(known_one),
-        | _ => false,
+    #[test]
+    fn checked_bridge_passes_real_opaque_reference_columns_to_native_compilation() {
+        use crate::witness::DimensionWitness as W;
+        let kernel = crate::kernel();
+        let scalar = |value: f64, dim: aevia_dim::Dim| {
+            kernel
+                .call_with_witnesses(
+                    "num_backend_reference",
+                    &[Val::Num(Num::Float(value))],
+                    &[W::Scalar(dim)],
+                )
+                .unwrap()
+                .0
+        };
+        let backend = kernel
+            .call_with_witnesses("num_backend_interpreter", &[], &[])
+            .unwrap()
+            .0;
+        let x = scalar(2.0, aevia_dim::Dim::base("Length"));
+        let output = scalar(3.0, aevia_dim::Dim::base("Time"));
+        let vector_witness = W::Tensor {
+            dimension: Some(aevia_dim::Dim::one()),
+            element: None,
+            element_repr: None,
+            elements: vec![],
+        };
+        let handle_vector_witness = W::Tensor {
+            dimension: Some(aevia_dim::Dim::one()),
+            element: None,
+            element_repr: None,
+            elements: vec![],
+        };
+        let compiled = kernel
+            .call_with_witnesses(
+                "num_backend_compile",
+                &[
+                    backend,
+                    Val::Str("x*x".into()),
+                    Val::list(vec![Val::Str("x".into())]),
+                    Val::list(vec![x]),
+                    output,
+                    Val::Num(Num::Int(1000.into())),
+                ],
+                &[
+                    W::Unknown,
+                    W::Unknown,
+                    vector_witness,
+                    handle_vector_witness.clone(),
+                    W::Unknown,
+                    W::Scalar(aevia_dim::Dim::one()),
+                ],
+            )
+            .unwrap()
+            .0;
+        let point = scalar(4.0, aevia_dim::Dim::base("Length"));
+        let (value, witness) = kernel
+            .call_with_witnesses(
+                "num_backend_call",
+                &[compiled, Val::list(vec![point])],
+                &[W::Unknown, handle_vector_witness],
+            )
+            .unwrap();
+        assert_eq!(value, Val::Num(Num::Float(12.0)));
+        assert_eq!(witness, W::Scalar(aevia_dim::Dim::base("Time")));
+    }
+}
+
+#[cfg(test)]
+mod nonmetric_tensor_input_tests {
+    use super::closed_nonmetric_tensor;
+    use crate::SigType;
+    use rssn::kernel::signature::TypeExpr;
+    use rssn::kernel::value::TensorValue;
+    use rssn::kernel::value::Value;
+    fn signature(elem: SigType) -> SigType {
+        SigType::Tensor {
+            rank: Some(1),
+            shape: Some(vec![2]),
+            elem: Box::new(elem),
+        }
+    }
+    #[test]
+    fn empty_string_schema_comes_from_an_independent_element_witness() {
+        use crate::witness::DimensionWitness as W;
+        let schema = SigType::Tensor {
+            rank: Some(1),
+            shape: Some(vec![0]),
+            elem: Box::new(SigType::Str),
+        };
+        let mut value = Value::Tensor(TensorValue {
+            shape: vec![0],
+            elem: TypeExpr::Real,
+            data: vec![],
+        });
+        assert!(!closed_nonmetric_tensor(&value, &schema));
+        let proof = W::Tensor {
+            dimension: Some(aevia_dim::Dim::one()),
+            element: Some(Box::new(W::Unknown)),
+            element_repr: Some(SigType::Str),
+            elements: vec![],
+        };
+        crate::witness::attach(&mut value, &proof, &schema).unwrap();
+        assert!(closed_nonmetric_tensor(&value, &schema));
+    }
+    #[test]
+    fn closed_primitive_arrays_require_actual_cells_and_exact_schema_shape() {
+        let strings = Value::Tensor(TensorValue {
+            shape: vec![2],
+            elem: TypeExpr::String,
+            data: vec![Value::String("x".into()), Value::String("t".into())],
+        });
+        let boolean = Value::Tensor(TensorValue {
+            shape: vec![2],
+            elem: TypeExpr::Bool,
+            data: vec![Value::Bool(true), Value::Bool(false)],
+        });
+        assert!(closed_nonmetric_tensor(&strings, &signature(SigType::Str)));
+        assert!(closed_nonmetric_tensor(&boolean, &signature(SigType::Bool)));
+        assert!(!closed_nonmetric_tensor(
+            &strings,
+            &signature(SigType::Float)
+        ));
+        assert!(!closed_nonmetric_tensor(&strings, &signature(SigType::Dyn)));
+        assert!(!closed_nonmetric_tensor(
+            &strings,
+            &signature(SigType::Bool)
+        ));
+        let mut mixed = strings.clone();
+        if let Value::Tensor(t) = &mut mixed {
+            t.data[1] = Value::Float(1.0);
+        }
+        assert!(!closed_nonmetric_tensor(&mixed, &signature(SigType::Str)));
+        let mut malformed = strings;
+        if let Value::Tensor(t) = &mut malformed {
+            t.shape = vec![1, 2];
+        }
+        assert!(!closed_nonmetric_tensor(
+            &malformed,
+            &signature(SigType::Str)
+        ));
+        let mut wrong_schema = boolean;
+        if let Value::Tensor(t) = &mut wrong_schema {
+            t.elem = TypeExpr::Float;
+        }
+        assert!(!closed_nonmetric_tensor(
+            &wrong_schema,
+            &signature(SigType::Bool)
+        ));
+    }
+}
+
+#[cfg(test)]
+mod ordinary_native_callback_arguments {
+    use super::supported_callback_schema;
+    use super::validate_ordinary_callback_input;
+    use crate::SigType as S;
+    use crate::Val;
+    use crate::witness::DimensionWitness as W;
+    fn handle(
+        kind: &str,
+        scope: u64,
+        id: u64,
+    ) -> Val {
+        let mut bytes = scope.to_le_bytes().to_vec();
+        bytes.extend(id.to_le_bytes());
+        Val::Opaque {
+            kind: kind.into(),
+            bytes,
+        }
+    }
+    #[test]
+    fn ordinary_native_envelopes_require_exact_kind_shape_and_nonzero_identifiers() {
+        let kind = "rssn/native/analysis/jacobian/v1";
+        let schema = S::Opaque(kind.into());
+        let valid = handle(kind, 1, 2);
+        assert!(validate_ordinary_callback_input(&valid, &W::Unknown, &schema).is_ok());
+        assert!(!supported_callback_schema(&schema));
+        for invalid in [
+            handle(kind, 0, 2),
+            handle(kind, 1, 0),
+            handle("rssn/native/analysis/mass/v1", 1, 2),
+            handle("User/State", 1, 2),
+            Val::Opaque {
+                kind: kind.into(),
+                bytes: vec![1; 15],
+            },
+        ] {
+            assert!(validate_ordinary_callback_input(&invalid, &W::Unknown, &schema).is_err());
+        }
+        let tensor = S::Tensor {
+            rank: Some(1),
+            shape: Some(vec![1]),
+            elem: Box::new(schema.clone()),
+        };
+        let proof = W::Tensor {
+            dimension: None,
+            element: None,
+            element_repr: Some(schema.clone()),
+            elements: vec![],
+        };
+        assert!(
+            validate_ordinary_callback_input(
+                &Val::Tensor {
+                    shape: vec![1],
+                    data: vec![valid.clone()]
+                },
+                &proof,
+                &tensor
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_ordinary_callback_input(
+                &Val::Tensor {
+                    shape: vec![0],
+                    data: vec![valid]
+                },
+                &proof,
+                &tensor
+            )
+            .is_err()
+        );
+        let empty = S::Tensor {
+            rank: Some(1),
+            shape: Some(vec![0]),
+            elem: Box::new(schema),
+        };
+        assert!(
+            validate_ordinary_callback_input(
+                &Val::Tensor {
+                    shape: vec![0],
+                    data: vec![]
+                },
+                &proof,
+                &empty
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_ordinary_callback_input(
+                &Val::Tensor {
+                    shape: vec![0],
+                    data: vec![]
+                },
+                &W::Unknown,
+                &empty
+            )
+            .is_err()
+        );
     }
 }

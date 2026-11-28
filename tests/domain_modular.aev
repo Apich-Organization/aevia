@@ -1,0 +1,60 @@
+## Exact prepared Montgomery and Barrett reducers through the typed RSSN domain.
+import Rssn_Modular as Mod
+
+fn failed<T>(result: Result<T, OpError>): Bool =
+    match result with
+    | Err(_) -> true
+    | Ok(_) -> false
+
+test "Barrett reduces the largest unsigned words under an even modulus" =
+    let modulus = 18446744073709551614
+    let maximum = 340282366920938463463374607431768211455
+    match Mod.barrett_new(modulus) with
+    | Ok(plan) ->
+        let reduced = Mod.barrett_reduce_u128(plan, maximum)
+        let multiplied = Mod.barrett_mul(plan, modulus - 1, modulus - 1)
+        (reduced == Ok(3) && multiplied == Ok(1)
+            && Mod.release_barrett(plan) == Ok(true))
+    | Err(_) -> false
+
+test "Montgomery arithmetic composes encoded residues without conversion" =
+    match Mod.montgomery_new(15) with
+    | Ok(plan) ->
+        match Mod.montgomery_to_mont(plan, 2) with
+        | Ok(a) ->
+            match Mod.montgomery_to_mont(plan, 4) with
+            | Ok(b) ->
+                match Mod.montgomery_fma_mont(plan, a, b, a) with
+                | Ok(acc) ->
+                    (Mod.montgomery_from_mont(plan, acc) == Ok(10)
+                        && Mod.release_montgomery(plan) == Ok(true))
+                | Err(_) -> false
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "a composite modulus distinguishes nonunits from bad arguments" =
+    match Mod.barrett_new(12) with
+    | Ok(plan) ->
+        (Mod.barrett_inv(plan, 3) == Ok(None)
+            && Mod.barrett_div(plan, 5, 7) == Ok(Some(11))
+            && failed(Mod.barrett_reduce_u64(plan, -1))
+            && Mod.release_barrett(plan) == Ok(true))
+    | Err(_) -> false
+
+test "prime constructors certify the modulus and keep distinct algorithms" =
+    if failed(Mod.montgomery_new_prime(15)) && failed(Mod.barrett_new_prime(12)) then
+        match Mod.barrett_new_prime(2) with
+        | Ok(plan) -> Mod.barrett_modulus(plan) == Ok(2) && Mod.release_barrett(plan) == Ok(true)
+        | Err(_) -> false
+    else false
+
+test "native range checks and release remain visible through typed functions" =
+    match Mod.montgomery_new(17) with
+    | Ok(plan) ->
+        let noncanonical = Mod.montgomery_mul_mont(plan, 0, 17)
+        let out_of_range = Mod.montgomery_redc(plan, 313594649253062377472)
+        let released = Mod.release_montgomery(plan)
+        (failed(noncanonical) && failed(out_of_range) && released == Ok(true)
+            && failed(Mod.montgomery_modulus(plan)))
+    | Err(_) -> false

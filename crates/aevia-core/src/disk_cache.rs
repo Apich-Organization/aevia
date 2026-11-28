@@ -23,14 +23,32 @@
 //! is an early cutoff), the capability set and the compiler identity. A
 //! missing, truncated, corrupt, foreign or old-format file is a silent miss.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
 use aevia_syntax::Diagnostics;
 use aevia_syntax::FileId;
+use aevia_syntax::Span;
 use aevia_types::check::CheckOptions;
 use aevia_types::check::CheckedModule;
 use aevia_types::check::ModuleInterface;
 use aevia_types::persist;
-use serde::Deserialize;
-use serde::Serialize;
+use std::fmt::Write as _;
+use std::io::ErrorKind;
+use std::io::Read as _;
+use std::io::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -38,11 +56,12 @@ use std::sync::OnceLock;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
-/// The `.aevi` layout version; bump it with any change to the encoded types.
-pub const FORMAT_VERSION: u32 = 2;
+/// Version of the `.aevi` layout and key inputs.
+pub const FORMAT_VERSION: u32 = 4;
 
 const MAGIC: &[u8; 4] = b"AEVI";
 const HEADER_LEN: usize = 40;
+const SMALL_ENTRY_LEN: usize = 4096;
 
 /// How many `.aevi` files of one module name are kept (older ones are stale
 /// revisions of the same module and are pruned after a write).
@@ -100,8 +119,12 @@ impl StableHasher {
     #[must_use]
     pub fn finish(&self) -> Digest {
         let mut out = [0u8; 16];
-        out[..8].copy_from_slice(&self.a.to_le_bytes());
-        out[8..].copy_from_slice(&self.b.to_le_bytes());
+        for (dest, byte) in out
+            .iter_mut()
+            .zip(self.a.to_le_bytes().into_iter().chain(self.b.to_le_bytes()))
+        {
+            *dest = byte;
+        }
         out
     }
 }
@@ -114,23 +137,26 @@ fn fnv64(data: &[u8]) -> u64 {
     hash
 }
 
-fn hex(digest: &Digest) -> String {
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 /// What identifies the compiler that wrote an entry: the checker's behaviour
 /// must be a function of this string. The executable's size and modification
 /// time make a rebuilt checker invalidate entries even at an unchanged version.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps process identity generation and caching together"
+)]
 fn compiler_identity() -> &'static str {
     static IDENTITY: OnceLock<String> = OnceLock::new();
     IDENTITY.get_or_init(|| {
         let exe = std::env::current_exe()
             .and_then(std::fs::metadata)
-            .map(|meta| format!("{}|{:?}", meta.len(), meta.modified().ok()))
-            .unwrap_or_default();
+            .map_or_else(
+                |_| String::new(),
+                |meta| format!("{}|{:?}", meta.len(), meta.modified().ok()),
+            );
         format!(
-            "aevia-core {}|aevi-format {FORMAT_VERSION}|rssn {}|exe {exe}",
+            "aevia-core {}|aevi-format {FORMAT_VERSION}|codec {}|rssn {}|exe {exe}",
             env!("CARGO_PKG_VERSION"),
+            persist::codec::CODEC_ID,
             aevia_rssn::registry().manifest_hash
         )
     })
@@ -175,8 +201,8 @@ pub struct KeyInputs<'a> {
     pub identity: &'a Option<aevia_types::ModulePath>,
     /// The import bindings (module, prefix, names).
     pub bindings: &'a [aevia_types::check::InterfaceBinding],
-    /// The prefixes of the flat import table.
-    pub prefixes: &'a [String],
+    /// Resolved re-export origins, in declaration order.
+    pub reexports: &'a [(Span, aevia_types::ModulePath)],
     /// The checker options (capability set).
     pub options: &'a CheckOptions,
     /// The interface digests of its dependency closure, in checker order.
@@ -191,7 +217,7 @@ pub struct Key {
     prefix: String,
 }
 
-#[derive(Serialize)]
+#[derive(bincode_next::Encode)]
 struct EntryRef<'a> {
     file: FileId,
     interface: Digest,
@@ -199,7 +225,11 @@ struct EntryRef<'a> {
     module: &'a CheckedModule,
 }
 
-#[derive(Deserialize)]
+impl<C: bincode_next::config::Config> bincode_next::Fingerprint<C> for EntryRef<'_> {
+    const SCHEMA_HASH: u64 = <Entry as bincode_next::Fingerprint<C>>::SCHEMA_HASH;
+}
+
+#[derive(bincode_next::Decode, bincode_next::Fingerprint)]
 struct Entry {
     file: FileId,
     interface: Digest,
@@ -217,6 +247,10 @@ pub struct Hit {
     pub interface: Digest,
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "separates portable filenames from cache key hashing"
+)]
 fn sanitize(path: &[String]) -> String {
     let joined = if path.is_empty() {
         "entry".to_string()
@@ -244,6 +278,14 @@ pub fn interface_digest(interface: &ModuleInterface) -> Option<Digest> {
     let mut hasher = StableHasher::new();
     hasher.field(&bytes);
     Some(hasher.finish())
+}
+
+fn bincode_bytes<T: bincode_next::Encode + ?Sized>(value: &T) -> Option<Vec<u8>> {
+    bincode_next::encode_to_vec(
+        value,
+        bincode_next::config::standard().with_deterministic_bincode(),
+    )
+    .ok()
 }
 
 impl DiskCache {
@@ -282,18 +324,22 @@ impl DiskCache {
         hasher.field(compiler_identity().as_bytes());
         hasher.field(inputs.text.as_bytes());
         hasher.field(&inputs.file.to_le_bytes());
-        hasher.field(&bincode::serialize(inputs.path).ok()?);
-        hasher.field(&bincode::serialize(inputs.identity).ok()?);
-        hasher.field(&bincode::serialize(inputs.bindings).ok()?);
-        hasher.field(&bincode::serialize(inputs.prefixes).ok()?);
-        hasher.field(&bincode::serialize(inputs.options).ok()?);
+        hasher.field(&bincode_bytes(inputs.path)?);
+        hasher.field(&bincode_bytes(inputs.identity)?);
+        hasher.field(&bincode_bytes(inputs.bindings)?);
+        hasher.field(&bincode_bytes(inputs.reexports)?);
+        hasher.field(&bincode_bytes(inputs.options)?);
         for digest in inputs.interfaces {
             hasher.field(digest);
         }
         let digest = hasher.finish();
         let prefix = sanitize(inputs.path);
+        let mut filename_digest = String::with_capacity(16);
+        for byte in digest.first_chunk::<8>()? {
+            let _ = write!(filename_digest, "{byte:02x}");
+        }
         Some(Key {
-            file_name: format!("{prefix}-{}.aevi", &hex(&digest)[..16]),
+            file_name: format!("{prefix}-{filename_digest}.aevi"),
             prefix,
             digest,
         })
@@ -306,17 +352,49 @@ impl DiskCache {
         key: &Key,
         file: FileId,
     ) -> Option<Hit> {
-        let bytes = std::fs::read(self.dir.join(&key.file_name)).ok()?;
-        if bytes.len() < HEADER_LEN || &bytes[..4] != MAGIC {
+        let mut file_handle = std::fs::File::open(self.dir.join(&key.file_name)).ok()?;
+        // Read the size and data from the opened file even if a writer replaces the path.
+        let size = usize::try_from(file_handle.metadata().ok()?.len()).ok()?;
+        let body_size = size.checked_sub(HEADER_LEN)?;
+        let mut prefix = [0; SMALL_ENTRY_LEN];
+        let prefix_size = if size <= prefix.len() {
+            size
+        } else {
+            HEADER_LEN
+        };
+        let prefix = prefix.get_mut(..prefix_size)?;
+        file_handle.read_exact(prefix).ok()?;
+        let (magic, rest) = prefix.split_first_chunk::<4>()?;
+        let (version, rest) = rest.split_first_chunk::<4>()?;
+        let (digest, rest) = rest.split_first_chunk::<16>()?;
+        if magic != MAGIC || *version != FORMAT_VERSION.to_le_bytes() || *digest != key.digest {
             return None;
         }
-        if bytes[4..8] != FORMAT_VERSION.to_le_bytes() || bytes[8..24] != key.digest {
+        let (length, rest) = rest.split_first_chunk::<8>()?;
+        let (checksum, prefix_body) = rest.split_first_chunk::<8>()?;
+        let length = u64::from_le_bytes(*length);
+        if usize::try_from(length).ok()? != body_size {
             return None;
         }
-        let length = usize::try_from(u64::from_le_bytes(bytes[24..32].try_into().ok()?)).ok()?;
-        let checksum = u64::from_le_bytes(bytes[32..40].try_into().ok()?);
-        let body = bytes.get(HEADER_LEN..)?;
-        if body.len() != length || fnv64(body) != checksum {
+        let mut heap_body = Vec::new();
+        let body = if prefix_body.len() == body_size {
+            prefix_body
+        } else {
+            heap_body.try_reserve_exact(body_size).ok()?;
+            let read = (&mut file_handle)
+                .take(length)
+                .read_to_end(&mut heap_body)
+                .ok()?;
+            if read != body_size {
+                return None;
+            }
+            heap_body.as_slice()
+        };
+        let eof = matches!(
+            file_handle.read_exact(&mut [0]),
+            Err(error) if error.kind() == ErrorKind::UnexpectedEof
+        );
+        if !eof || u64::from_le_bytes(*checksum) != fnv64(body) {
             return None;
         }
         let entry: Entry = persist::decode(body).ok()?;
@@ -337,6 +415,8 @@ impl DiskCache {
         diagnostics: &Diagnostics,
         module: &CheckedModule,
     ) -> bool {
+        static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+
         let Ok(body) = persist::encode(&EntryRef {
             file,
             interface,
@@ -345,24 +425,34 @@ impl DiskCache {
         }) else {
             return false;
         };
-        let mut data = Vec::with_capacity(HEADER_LEN + body.len());
-        data.extend_from_slice(MAGIC);
-        data.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
-        data.extend_from_slice(&key.digest);
-        data.extend_from_slice(&(body.len() as u64).to_le_bytes());
-        data.extend_from_slice(&fnv64(&body).to_le_bytes());
-        data.extend_from_slice(&body);
+        let mut header = [0; HEADER_LEN];
+        let fields = MAGIC
+            .iter()
+            .copied()
+            .chain(FORMAT_VERSION.to_le_bytes())
+            .chain(key.digest)
+            .chain((body.len() as u64).to_le_bytes())
+            .chain(fnv64(&body).to_le_bytes());
+        for (dest, byte) in header.iter_mut().zip(fields) {
+            *dest = byte;
+        }
         if std::fs::create_dir_all(&*self.dir).is_err() {
             return false;
         }
-        static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
         let temporary = self.dir.join(format!(
             "{}.{}.{}.tmp",
             key.file_name,
             std::process::id(),
             SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ));
-        if std::fs::write(&temporary, &data).is_err() {
+        let Ok(mut cache_file) = std::fs::File::create_new(&temporary) else {
+            return false;
+        };
+        let written = cache_file
+            .write_all(&header)
+            .and_then(|()| cache_file.write_all(&body));
+        drop(cache_file);
+        if written.is_err() {
             let _ = std::fs::remove_file(&temporary);
             return false;
         }
@@ -406,5 +496,84 @@ impl DiskCache {
         for (_, path) in files.into_iter().skip(KEEP_PER_MODULE) {
             let _ = std::fs::remove_file(path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aevia_syntax::Diagnostic;
+
+    #[test]
+    fn round_trip_and_corruption_handling() {
+        let dir =
+            std::env::temp_dir().join(format!("aevia-disk-cache-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cache = DiskCache::at(&dir);
+
+        let options = CheckOptions::default();
+        let path = vec!["Demo".to_string()];
+        let key = cache
+            .key(&KeyInputs {
+                text: "let x = 1\n",
+                file: 0,
+                path: &path,
+                identity: &None,
+                bindings: &[],
+                reexports: &[],
+                options: &options,
+                interfaces: &[],
+            })
+            .expect("key");
+
+        let module = CheckedModule::default();
+        let digest = interface_digest(&module.interface()).expect("interface digest");
+        let mut diagnostics = Diagnostics::new();
+        diagnostics.push(Diagnostic::warning("W0101", "unused", Span::new(0, 4, 5)));
+
+        assert!(cache.store(&key, 0, digest, &diagnostics, &module));
+        let hit = cache.load(&key, 0).expect("cache hit");
+        assert_eq!(hit.interface, digest);
+        assert_eq!(hit.diagnostics.items.len(), 1);
+        assert_eq!(hit.diagnostics.items[0].code, "W0101");
+
+        // Corrupt a byte in the stored file and confirm load fails closed.
+        let file = dir.join(&key.file_name);
+        let mut raw = std::fs::read(&file).expect("read cached file");
+        let last = raw.len() - 1;
+        raw[last] ^= 0xff;
+        std::fs::write(&file, &raw).expect("write corrupt");
+        assert!(cache.load(&key, 0).is_none());
+
+        // Wrong FORMAT_VERSION must also fail closed.
+        raw[4..8].copy_from_slice(&(FORMAT_VERSION - 1).to_le_bytes());
+        std::fs::write(&file, &raw).expect("write stale version");
+        assert!(cache.load(&key, 0).is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codec_rejects_trailing_bytes_and_matches_rssn_deterministic_encoding() {
+        let sample = vec![("alpha".to_string(), 1u64), ("beta".to_string(), 2u64)];
+        let encoded = persist::codec::encode(&sample).expect("encode");
+        let decoded: Vec<(String, u64)> = persist::codec::decode(&encoded).expect("decode");
+        assert_eq!(decoded, sample);
+
+        let mut with_trailing = encoded;
+        with_trailing.push(0x00);
+        assert!(persist::codec::decode::<Vec<(String, u64)>>(&with_trailing).is_err());
+
+        // Verify deterministic encoding matches plain standard deterministic config for OpKey.
+        let op = aevia_rssn::OpKey::new("core", "add", None);
+        let det = bincode_next::encode_to_vec(
+            &op,
+            bincode_next::config::standard().with_deterministic_bincode(),
+        )
+        .expect("deterministic encode");
+        let fp = persist::codec::encode(&op).expect("fingerprinted encode");
+        // Fingerprinted payload has an 8-byte schema hash prefix followed by identical deterministic bytes.
+        assert_eq!(fp.len(), det.len() + 8);
+        assert_eq!(&fp[8..], &det[..]);
     }
 }

@@ -5,6 +5,10 @@
 //! identity and package resolution context. No directory walk, timestamp
 //! assumption or unrelated open buffer can keep stale types alive or force a
 //! reload. Unsaved entry and imported buffers share one source snapshot.
+use crate::analysis::Analysis;
+use crate::analysis::ProgramQueryIndex;
+use crate::document::Document;
+use aevia_core::driver::CheckCache;
 use aevia_core::driver::Program;
 use aevia_core::driver::{
     self,
@@ -12,6 +16,8 @@ use aevia_core::driver::{
 use aevia_core::manifest::Package;
 use aevia_core::manifest::Roots;
 use aevia_core::source::SourceOverlays;
+use std::cell::OnceCell;
+use std::cell::RefCell;
 use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -21,8 +27,10 @@ pub const CAPACITY: usize = 4;
 
 struct CacheEntry {
     path: PathBuf,
-    resolution: String,
+    roots: Roots,
     program: Rc<Program>,
+    checks: Rc<RefCell<CheckCache>>,
+    query_index: OnceCell<Rc<ProgramQueryIndex>>,
 }
 
 fn roots_for(path: &Path) -> Roots {
@@ -44,20 +52,29 @@ pub(crate) fn analysable(path: &Path) -> bool {
         || Package::owning(path).ok().flatten().is_some()
 }
 
-pub(crate) fn load_program(path: &Path) -> Program {
-    driver::load_with_roots(path, roots_for(path))
-}
-
-pub(crate) fn load_dirty_program(
-    path: &Path,
-    source: &str,
-) -> Program {
-    driver::load_with_roots_and_source(
-        path,
-        roots_for(path),
-        source,
-        &aevia_types::check::CheckOptions::default(),
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "select the filesystem or overlay loader at the cache boundary"
     )
+)]
+pub(crate) fn load_program(
+    path: &Path,
+    overlay: Option<&str>,
+) -> Program {
+    let roots = roots_for(path);
+    match overlay {
+        | Some(source) => {
+            driver::load_with_roots_and_source(
+                path,
+                roots,
+                source,
+                &aevia_types::check::CheckOptions::default(),
+            )
+        },
+        | None => driver::load_with_roots(path, roots),
+    }
 }
 
 /// Loaded programs by entry path. Source snapshots are compared exactly, so
@@ -77,25 +94,47 @@ impl AnalysisCache {
 
     /// Number of loads; hits do not count.
     #[must_use]
-    pub fn loads(&self) -> u64 {
+    pub const fn loads(&self) -> u64 {
         self.loads
     }
 
     /// Number of retained programs.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// Whether the cache retains no programs.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
     /// Forgets every retained program.
     pub fn clear(&mut self) {
         self.entries.clear();
+    }
+
+    /// Answers queries from `program`, sharing its lazily built syntax tables
+    /// when it is the exact snapshot retained by this cache.
+    #[must_use]
+    pub fn analyze_program<'a>(
+        &self,
+        document: &'a Document,
+        program: Rc<Program>,
+    ) -> Analysis<'a> {
+        let index = self
+            .entries
+            .iter()
+            .find(|entry| Rc::ptr_eq(&entry.program, &program))
+            .map(|entry| {
+                Rc::clone(
+                    entry
+                        .query_index
+                        .get_or_init(|| Rc::new(ProgramQueryIndex::new(&entry.program))),
+                )
+            });
+        Analysis::from_indexed_program(document, program, index)
     }
 
     /// Loads a saved entry and its effective disk imports.
@@ -126,12 +165,9 @@ impl AnalysisCache {
         overlays: &SourceOverlays,
     ) -> Rc<Program> {
         let roots = roots_for(path);
-        // Roots contains ordered, process-local source-resolution data and
-        // nominal owners; retain it exactly rather than accepting hash collisions.
-        let resolution = format!("{roots:?}");
         if let Some(index) = self.entries.iter().position(|entry| {
             entry.path == path
-                && entry.resolution == resolution
+                && entry.roots == roots
                 && !entry.program.dependencies.is_empty()
                 && entry
                     .program
@@ -144,13 +180,20 @@ impl AnalysisCache {
             self.entries.push(entry);
             return program;
         }
-        self.loads += 1;
-        let program = Rc::new(driver::load_with_roots_and_overlays(
+        self.loads = self.loads.saturating_add(1);
+        let checks = self
+            .entries
+            .iter()
+            .find(|entry| entry.path == path && entry.roots == roots)
+            .map_or_else(Rc::default, |entry| Rc::clone(&entry.checks));
+        let (program, _) = driver::load_incremental(
             path,
-            roots,
+            roots.clone(),
             overlays,
             &aevia_types::check::CheckOptions::default(),
-        ));
+            &checks,
+        );
+        let program = Rc::new(program);
         self.entries.retain(|entry| entry.path != path);
         // A file may change while it is being compiled. Cache only the actual
         // observed snapshot if it is still current after the load completes.
@@ -162,8 +205,10 @@ impl AnalysisCache {
         {
             self.entries.push(CacheEntry {
                 path: path.to_path_buf(),
-                resolution,
+                roots,
                 program: program.clone(),
+                checks,
+                query_index: OnceCell::new(),
             });
             while self.entries.len() > CAPACITY {
                 self.entries.remove(0);
@@ -196,8 +241,40 @@ impl AnalysisCache {
         if !analysable(path) {
             return None;
         }
+        if overlays.get(path) == Some(source) {
+            return Some(self.program_with_overlays(path, overlays));
+        }
         let mut snapshot = overlays.clone();
         snapshot.insert(path, source);
         Some(self.program_with_overlays(path, &snapshot))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_changed_buffer_reuses_checked_imports() {
+        let directory =
+            std::env::temp_dir().join(format!("aevia-editor-recheck-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("Helper.aev"),
+            "module Helper\nlet value: Int = 3\n",
+        )
+        .unwrap();
+        let entry = directory.join("main.aev");
+        let mut cache = AnalysisCache::new();
+        let first = cache.program_with_source(&entry, "import Helper\nlet n = Helper.value + 1\n");
+        assert!(!first.diagnostics.has_errors());
+        let second = cache.program_with_source(&entry, "import Helper\nlet n = Helper.value + 2\n");
+        assert!(!second.diagnostics.has_errors());
+        assert!(!Rc::ptr_eq(&first, &second));
+        assert_eq!(cache.loads(), 2);
+        let checks = cache.entries.last().unwrap().checks.borrow();
+        assert_eq!(checks.checked, 1);
+        assert_eq!(checks.reused, 1);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

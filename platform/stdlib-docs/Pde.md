@@ -1,0 +1,79 @@
+# `Pde`
+
+Source: `stdlib/Pde.aev`
+
+The `Pde` module of §8.20.
+
+## `let solve_advection`
+
+```aevia
+let solve_advection = solve_advection
+```
+
+Solves the advection (transport) equation on a regular grid, returning the field at each time step as Ok(fields), or Err(PdeError) for an unstable time step or mismatched grid.
+
+**Signature:** `solve_advection : AdvectionSpec -> Result<Tensor<1, Field>, PdeError>`
+
+See the Pde module for the record fields.
+
+**Examples:**
+```text
+let solver = solve_advection
+```
+
+*Source: Aevia standard library guide.*
+## `let solve_heat`
+
+```aevia
+let solve_heat = solve_heat
+```
+
+Solves heat diffusion on a regular 2D grid and returns the initial field and every time step.
+
+**Signature:** `solve_heat : HeatSpec -> Result<Tensor<1, Field>, PdeError>`
+
+The edges keep their initial values. Set method to "adi" for implicit stepping beyond the explicit stability limit. The default "explicit" requires alpha * dt / h^2 <= 1/4.
+
+**Examples:**
+```text
+import Pde { solve_heat }
+solve_heat({ grid = { nx = 3, ny = 3, h = 1.0 }, alpha = 1.0, dt = 2.0, steps = 1, method = "adi", initial = [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0]] })
+```
+
+*Source: Aevia standard library guide.*
+## `let solve_poisson`
+
+```aevia
+let solve_poisson = solve_poisson
+```
+
+Solves the Poisson equation on a regular rectangular grid by finite differences.
+
+**Signature:** `solve_poisson : PoissonSpec -> Result<Field, PdeError>`
+
+The argument is a record holding the grid and the source field; boundary values are zero. Returns Ok(field) with the grid and the values, or Err(PdeError) when the grid and field disagree. See the Pde module for the record fields.
+
+**Examples:**
+```text
+let solver = solve_poisson
+```
+
+*Source: Aevia standard library guide.*
+## `let solve_wave`
+
+```aevia
+let solve_wave = solve_wave
+```
+
+Solves the wave equation on a regular grid by finite differences, returning the field at each time step as Ok(fields), or Err(PdeError) for an unstable time step or mismatched grid.
+
+**Signature:** `solve_wave : WaveSpec -> Result<Tensor<1, Field>, PdeError>`
+
+See the Pde module for the record fields.
+
+**Examples:**
+```text
+let solver = solve_wave
+```
+
+*Source: Aevia standard library guide.*

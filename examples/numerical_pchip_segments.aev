@@ -1,0 +1,15 @@
+import Rssn_numerical_vector as V
+
+let x = [0.0 m, 1.0 m, 2.0 m, 3.0 m]
+
+test "portable PCHIP recovers the ordinary Hermite value and dimensional derivative" =
+    let model = V.num_native_pchip_new(x, [0.0 s, 1.0 s, 4.0 s, 9.0 s])
+    let y: Float[Time] = V.num_native_pchip_eval(model, 1.5 m)
+    let dy: Float[Time/Length] = V.num_native_pchip_derivative(model, 1.5 m)
+    approx_eq(y, 2.21875 s, 1e-12 s) && approx_eq(dy, 3.1875 s/m, 1e-12 s/m)
+
+test "portable PCHIP preserves very small ordinate scales and units" =
+    let model = V.num_native_pchip_new(x, [0.0 s, 1e-200 s, 4e-200 s, 9e-200 s])
+    let y: Float[Time] = V.num_native_pchip_eval(model, 1.5 m)
+    let dy: Float[Time/Length] = V.num_native_pchip_derivative(model, 1.5 m)
+    approx_eq(y / (1e-200 s), 2.21875, 1e-12) && approx_eq(dy / (1e-200 s/m), 3.1875, 1e-12)

@@ -83,7 +83,6 @@ impl CliError {
     }
 
     /// The exit status this failure maps to.
-    #[must_use]
     pub fn exit_code(&self) -> std::process::ExitCode {
         match self.exit {
             | Exit::Usage => std::process::ExitCode::from(2),

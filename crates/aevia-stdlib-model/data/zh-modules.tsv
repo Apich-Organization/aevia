@@ -1,0 +1,42 @@
+# Module	简体中文说明
+Prelude	默认载入的基本运算、数值处理、集合操作与输入输出。
+Math	初等函数、指数与对数、三角函数及常用数学运算。
+Math.Special	Gamma、Bessel、误差函数等常用特殊函数。
+Math.Complex	复数构造、实虚部分解、复平面运算及复超越函数。
+Math.NumberTheory	质数、因数分解、最大公因数与最小公倍数。
+Math.Combinatorics	二项式系数和排列计数。
+Math.Geometry	距离与多边形面积等几何计算。
+Units.SI	本工具链接受的单位、比例、偏置和别名。
+Units.Imperial	英制与美制常用长度、质量、温度、面积及压力单位。
+Units.Astronomy	天文距离、质量和角度的单位。
+Units.CGS	厘米–克–秒制的力、能量、黏度与电磁常用单位。
+Units.Natural	采用 Heaviside–Lorentz 自然单位给出物理常数，取 `c = ℏ = k_B = ε₀ = 1`，力学、热学和电磁学量纲均可写成能量的幂。使用 `module Example with units natural` 可让模块中的单位字面量和量纲标注采用这套约定。
+Units.Planck	采用高斯电荷约定下的普朗克单位给出物理常数，取 `c = ℏ = G = k_B = 4πε₀ = 1`。在此约定下，力学、热学和电磁学量均无量纲。使用 `module Example with units planck` 可让模块中的单位字面量和量纲标注采用这套约定。
+Units.Atomic	采用 Hartree 原子单位给出物理常数，取 `ℏ = m_e = e = 4πε₀ = 1`，长度用玻尔半径、能量用哈特里表示。使用 `module Example with units atomic` 可让模块中的单位字面量和量纲标注采用这套约定。
+Units.Geometrized	采用广义相对论中的几何化单位给出物理常数，取 `c = G = 1`，质量和时间的量纲均归约为长度。使用 `module Example with units geometrized` 可让模块中的单位字面量和量纲标注采用这套约定。
+Units.Constants	以 SI 单位给出物理常数，注明数值来源以及该值是精确定义还是测得。使用 `import Units.Constants as C` 后，可通过 `C.c` 引用光速、通过 `C.hbar` 引用约化普朗克常数。
+Tensor	构造具有指定形状与元素的张量。
+LinearAlgebra	稠密张量的形状操作、矩阵分解与线性系统求解。
+LinearAlgebra.Sparse	稀疏表示、布局转换、乘积及直接和迭代求解器。
+Calculus	对函数和符号表达式进行求导、积分、求极限与级数展开。
+Solve	使用符号或数值方法解方程、方程组和线性系统。
+Optimize	通过目标函数和初始参数进行数值最小化。
+Stats	为样本计算位置、离散程度、相关性等统计量。
+Stats.Distributions	概率分布的密度、累计概率、分位数和采样。
+FFT	实数和复数张量的傅里叶变换、轴选择、归一化与频率坐标。
+Interpolate	线性插值、样条、二维网格插值和多项式拟合。
+Ode	常微分方程的初值、边值、事件与步长控制。
+Sde	随机微分方程的路径、事件、重采样与多轨迹模拟。
+Pde	在规则网格上求解扩散、波动、平流和 Poisson 方程。
+Data	表格、JSON、CSV、数组文件及结构化数据的入口。
+Data.Csv	带表头单位的 CSV、TSV 读取与 CSV 写入。
+Data.Npy	NumPy 数组文件的导入和导出。
+Data.Json	JSON 值构造、解析和表示转换。
+Data.Table	表格构造、行列筛选、连接和列元数据。
+Plot	绘制折线、散点、误差条、直方图和热图，并输出 SVG、HTML 或 GIF。
+Test	构建断言和属性测试，比较精确与近似结果。
+Measurement	带不确定度的测量值以及传播操作。
+Device	识别或选择执行设备，并控制与设备有关的动作。
+Physics	通过科学内核运行带参数的仿真场景。
+Physics.Ising	Ising 模型模拟及其观测量。
+Physics.Geodesic	曲率时空中的测地线模型及轨迹。

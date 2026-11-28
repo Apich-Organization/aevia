@@ -1,0 +1,15 @@
+import Rssn_numerical_callback as Numeric
+
+fn identity(z: Complex[Length]): Complex[Length] = z
+fn derivative(_position: Complex[Length]): Complex = complex(1.0, 0.0)
+fn half_meter(_position: Complex[Length]): Complex[Length] = complex(0.5 m, 0.0 m)
+
+test "measured circle returns normalized local moments" =
+    match Numeric.num_complex_root_circle_moments_typed(complex(1.0 m, 0.0 m), 2.0 m, 2.0 m, 48, 2, 288, identity, derivative) with
+    | Ok(result) -> result.samples == 96 && result.evaluations == 288 && approx_eq(re(at(result.moments, 0)), 1.0, 1e-10) && approx_eq(re(at(result.moments, 1)), -0.5, 1e-10) && result.sample_delta < 1e-10
+    | Err(_) -> false
+
+test "sampled winding and Rouche report actual work" =
+    match (Numeric.num_complex_root_circle_winding_typed(complex(0.0 m, 0.0 m), 2.0 m, 2.0 m, 16, 96, identity, derivative), Numeric.num_complex_root_circle_rouche_samples_typed(complex(0.0 m, 0.0 m), 2.0 m, 2.0 m, 16, 32, identity, half_meter)) with
+    | (Ok(winding), Ok(rouche)) -> winding.winding == 1 && winding.evaluations == 96 && rouche.satisfied_at_samples && rouche.evaluations == 32
+    | _ -> false

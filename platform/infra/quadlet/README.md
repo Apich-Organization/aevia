@@ -1,114 +1,73 @@
-# Quadlet units
+# Run the registry with Quadlet
 
-The same three services as `../compose.yaml`, expressed as rootless Podman
-systemd units. Use one or the other, not both: compose and Quadlet would fight
-over the same container names and ports.
+[中文部署指南](../../docs/DEPLOY.zh.md) · [Deployment guide](../../docs/DEPLOY.md)
 
-Quadlet is the better fit on a long-lived host. systemd owns the lifecycle, so
-containers start after the network is up, restart on failure, log to journald,
-and survive reboots without `restart: unless-stopped` bookkeeping.
+Quadlet runs the same registry, database and edge as the Compose stack. Choose one service manager on each host. The units use an edge network for Caddy and the registry, and a separate internal network for the registry and PostgreSQL.
 
 ## Install
 
-```sh
-# 1. Units: copy into the user's Quadlet directory.
-mkdir -p ~/.config/containers/systemd
-cp aevia.network aevia-db.volume aevia-data.volume \
-   aevia-db.container aevia-registry.container aevia-caddy.container \
-   ~/.config/containers/systemd/
+Run these commands from `platform/infra/quadlet` as the rootless Podman user. The image build uses Bazel and the adjacent RSSN checkout. Adjust the read-only source mount paths in `aevia-registry.container` if the Aevia checkout is outside `~/aevia`.
 
-# 2. Configuration and TLS material.
-mkdir -p ~/.config/aevia ~/.local/share/aevia/caddy/data ~/.local/share/aevia/caddy/config
+```sh
+umask 077
+mkdir -p ~/.config/containers/systemd ~/.config/aevia
+mkdir -p ~/.local/share/aevia/caddy/data ~/.local/share/aevia/caddy/config
+cp aevia*.network aevia*.volume aevia*.container ~/.config/containers/systemd/
 cp ../.env.example ~/.config/aevia/aevia.env
-chmod 700 ~/.config/aevia
-chmod 600 ~/.config/aevia/aevia.env
-$EDITOR ~/.config/aevia/aevia.env          # DATABASE_URL, POSTGRES_PASSWORD, AEVIA_SESSION_SECRET
 cp ../Caddyfile ~/.config/aevia/Caddyfile
+${EDITOR:-vi} ~/.config/aevia/aevia.env
+```
 
-# 3. Build the two local images (Quadlet never builds; it only runs).
-podman build --build-context lang="$PWD/../../../crates" \
-    -f ../Containerfile.server -t localhost/aevia/registry:0.1.0 ../../..
-podman build -f ../Containerfile.postgres -t localhost/aevia/postgres:18-trixie ..
+Set `AEVIA_BASE_URL` to the public origin in `aevia.env`. Replace the example `AEVIA_SESSION_SECRET` with the output of `openssl rand -hex 32`. Set a database password and use it in `DATABASE_URL`, whose host is `db` on the internal network. Put `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB` in `~/.config/aevia/db.env`. Those values must match `DATABASE_URL`. Restrict the environment files to the current user with mode `600`. To customize the public host or ACME contact, set `AEVIA_DOMAIN` and `AEVIA_ACME_EMAIL` in `~/.config/aevia/caddy.env`. If the file is absent, Caddy uses the defaults from `Caddyfile`.
 
-# 4. Generate the systemd units from the Quadlet files.
+```sh
+../deploy.sh build
+(cd ../../.. && bazel run //:postgres_image)
 systemctl --user daemon-reload
-
-# 5. Start. `enable` is implicit: the generator wires WantedBy=default.target.
 systemctl --user start aevia-caddy.service
+systemctl --user status aevia-db.service aevia-registry.service aevia-caddy.service
 ```
 
-`systemctl --user enable` is not needed and will refuse: Quadlet units are
-generated at `daemon-reload` time and are already wanted by `default.target`.
-Use `systemctl --user start|stop|restart`.
+The user’s `default.target` starts these units. Starting Caddy also starts the registry and PostgreSQL through the service dependencies. The registry publishes `127.0.0.1:8080` for local checks. PostgreSQL is reachable through the internal network. Enable linger if the services should run while the user is logged out. Run `journalctl --user -u aevia-registry.service -f` to follow logs.
 
-To keep the user session (and therefore the containers) alive when you are not
-logged in:
+Rebuild a changed registry image with `../deploy.sh build` and run `systemctl --user restart aevia-registry.service`. The specification, standard-library reference, and manuals refresh from their read-only mounts. Optional tutorial execution uses the separate [worker deployment](../../docs/DEPLOY.md#enable-book-execution).
+
+## Back up
+
+Run `systemctl --user stop aevia-registry.service` before preparing a consistent database and archive pair. Leave `aevia-db.service` running. The shell commands create compressed files in a new private directory and remove the directory if a snapshot fails.
 
 ```sh
-loginctl enable-linger "$USER"
+(
+  set -eu
+  umask 077
+  backup=$(mktemp -d ./aevia-backup.XXXXXXXX)
+  trap 'rm -rf -- "$backup"' EXIT
+  trap 'exit 1' HUP INT TERM
+  podman exec aevia-db sh -c \
+    'pg_dump --format=plain --compress=gzip:9 --no-owner --clean --if-exists -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+    > "$backup/aevia-db.sql.gz"
+  podman run --rm --network=none --user 0:0 -v aevia-data:/data:ro \
+    --entrypoint /usr/bin/tar localhost/aevia/registry:0.1.0 \
+    --exclude='*.partial' -czf - -C /data . > "$backup/aevia-data.tar.gz"
+  test -s "$backup/aevia-db.sql.gz"
+  test -s "$backup/aevia-data.tar.gz"
+  trap - EXIT
+  printf 'Backup written to %s\n' "$backup"
+)
 ```
 
-## Day-to-day
+Restart the registry with `systemctl --user start aevia-registry.service`. Keep the pair off-site and rehearse recovery with an independent database and archive volume. Decompress the entire SQL dump to a private temporary file before passing it to `psql -X --single-transaction --set ON_ERROR_STOP=1 --file=-`. Restore archive files into the corresponding named Podman volume with the registry stopped.
 
-```sh
-systemctl --user status aevia-registry.service aevia-db.service aevia-caddy.service
-journalctl --user -u aevia-registry.service -f
-journalctl --user -u aevia-caddy.service --since '1 hour ago'
-podman ps --filter name=aevia
-```
+## 中文
 
-Rebuild after a source change — the image is local, so `AutoUpdate` does not
-apply to it:
+Quadlet 通过无根 Podman 和 systemd 管理注册中心、数据库和 TLS 代理。Caddy 与注册中心共用边缘网络，PostgreSQL 则位于单独的内部网络。在同一主机上选择 Compose 或 Quadlet 作为服务管理方式。
 
-```sh
-podman build --build-context lang="$PWD/../../../crates" \
-    -f ../Containerfile.server -t localhost/aevia/registry:0.1.0 ../../..
-systemctl --user restart aevia-registry.service
-```
+从 `platform/infra/quadlet` 执行上面的安装命令。镜像构建需要 Bazel 和相邻的 RSSN 工作树。将单元文件复制到 `~/.config/containers/systemd/`，并复制 Caddyfile 和环境配置。仓库检出位置在 `~/aevia` 以外时，修改 `aevia-registry.container` 的只读文档挂载路径。
 
-Caddy tracks `caddy:2` from Docker Hub. `AutoUpdate=registry` makes it eligible
-for `podman auto-update`, which needs a timer:
+`~/.config/aevia/aevia.env` 保存注册中心环境。将 `AEVIA_BASE_URL` 设为公开访问地址，把 `AEVIA_SESSION_SECRET` 替换为 `openssl rand -hex 32` 的输出，并在 `DATABASE_URL` 中使用新设定的密码和主机名 `db`。`db.env` 中的 `POSTGRES_USER`、`POSTGRES_PASSWORD` 和 `POSTGRES_DB` 必须与连接字符串相符。要自定义 TLS 域名或 ACME 邮箱，可在 `caddy.env` 中设置 `AEVIA_DOMAIN` 和 `AEVIA_ACME_EMAIL`。文件不存在时，Caddy 使用 `Caddyfile` 中的默认值。将各环境文件的权限设为 `600`。
 
-```sh
-systemctl --user enable --now podman-auto-update.timer
-podman auto-update --dry-run
-```
+构建注册中心和数据库镜像后，执行 `systemctl --user daemon-reload` 并启动 `aevia-caddy.service`。服务依赖会启动注册中心和数据库。注册中心发布到 `127.0.0.1:8080`，便于在本机验证。PostgreSQL 通过内部网络访问。使用 `journalctl --user -u aevia-registry.service -f` 查看应用日志。如果希望登出后继续运行，启用用户 linger。
 
-## Paths
+更新镜像后重启 `aevia-registry.service` 即可应用二进制改动。语言规范、标准库参考和手册会从只读挂载自动刷新。教程代码运行使用独立的工作进程。 [部署教程运行服务](../../docs/DEPLOY.zh.md#启用教程运行功能)
 
-| What | Where |
-| --- | --- |
-| Units | `~/.config/containers/systemd/aevia-*.{network,volume,container}` |
-| Environment | `~/.config/aevia/aevia.env` (mode 0600) |
-| Caddyfile | `~/.config/aevia/Caddyfile` |
-| Caddy state | `~/.local/share/aevia/caddy/{data,config}` |
-| Database | volume `aevia-db` |
-| Archives | volume `aevia-data` |
-
-`EnvironmentFile=%h/.config/aevia/aevia.env` is read by Podman, not by systemd:
-the file does not need systemd `EnvironmentFile=` syntax beyond `KEY=value`.
-
-## Backup and restore
-
-Quadlet has no compose wrapper, so `../deploy.sh` does not drive it. The
-equivalent commands:
-
-```sh
-podman exec aevia-db sh -c \
-  'pg_dump --no-owner --clean --if-exists -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
-  | gzip -9 > "aevia-db-$(date -u +%Y%m%dT%H%M%SZ).sql.gz"
-
-podman run --rm --user 0:0 -v aevia-data:/data:ro \
-  localhost/aevia/registry:0.1.0 tar -czf - -C /data . > aevia-data.tar.gz
-```
-
-Restore with `gunzip -c file.sql.gz | podman exec -i aevia-db sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'`.
-
-## Notes
-
-- `:U` on both data volumes is what makes the non-root containers able to write.
-  Drop it only if the volumes already carry the right ownership.
-- `Requires=`/`After=` chain the units in dependency order, so starting
-  `aevia-caddy.service` pulls in the registry, which pulls in the database.
-  Stopping the database while the registry runs is still allowed — systemd does
-  not enforce stop ordering across `Requires=`.
+备份时保持 PostgreSQL 运行，并执行 `systemctl --user stop aevia-registry.service` 停止注册中心，以便获得匹配的 SQL 和包归档。上方命令将压缩文件写入新建的专用目录，任一备份命令失败时会清理该目录。完成后执行 `systemctl --user start aevia-registry.service`。恢复 SQL 前，先将整个转储解压到私有临时文件，再交给 `psql`。请另存成对的备份，并在独立数据库和归档卷中演练恢复。 [备份与恢复](../../docs/DEPLOY.zh.md#备份恢复与升级)

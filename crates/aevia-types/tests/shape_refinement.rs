@@ -72,6 +72,15 @@ fn a_solved_factor_turns_a_product_into_a_linear_equation() {
 }
 
 #[test]
+fn a_later_axis_can_disprove_an_earlier_extent_equation() {
+    fails(
+        "fn f<n, m>(a: Tensor<[2 * n + m, m], Float>): Tensor<[3, 2], Float> = a\n",
+        "E0302",
+        "type-level equation has no solution: 2 * n = 1",
+    );
+}
+
+#[test]
 fn broadcasting_follows_the_one_extent_rule() {
     ok("fn f(a: Tensor<[3, 1], Float>, b: Tensor<[1, 4], Float>): Tensor<[3, 4], Float> = a + b\n");
     ok("fn f(a: Tensor<[3, 1], Float>, b: Tensor<[1, 4], Float>): Tensor<[3, 4], Float> = a * b\n");
@@ -171,5 +180,64 @@ fn sparse_shapes_are_propagated_and_checked() {
         "fn f(a: Sparse<Csr, [2, 3], Float>, b: Sparse<Csr, [3, 2], Float>): Sparse<Csr, [2, 3], Float> = a + b\n",
         "E0302",
         "shape mismatch",
+    );
+}
+
+#[test]
+fn range_refinements_follow_the_original_axes() {
+    ok("fn f(a: Tensor<[2, 5, 7], Float>): Tensor<[2, 7], Float> = a[0, 1..3, :]\n");
+    ok("fn f(a: Tensor<[2, 5, 7], Float>): Tensor<[3, 7], Float> = a[0, 1..=3, :]\n");
+    fails(
+        "fn f(a: Tensor<[2, 5], Float>): Tensor<[5], Float> = a[0, :, 0]\n",
+        "E0802",
+        "rank-2 tensor has 3 selectors",
+    );
+}
+
+#[test]
+fn literal_slices_refine_the_extents_of_forward_and_reverse_walks() {
+    ok("fn f(a: Tensor<[6], Float>): Tensor<[3], Float> = a[1:6:2]\n");
+    ok("fn f(a: Tensor<[6], Float>): Tensor<[3], Float> = a[::-2]\n");
+    ok("fn f(a: Tensor<[6], Float>): Tensor<[3], Float> = a[-4..=-2]\n");
+    ok("fn f(a: Tensor<[0], Float>): Tensor<[0], Float> = a[::-1]\n");
+    fails(
+        "fn f(a: Tensor<[6], Float>): Tensor<[2], Float> = a[::2]\n",
+        "E0302",
+        "shape mismatch",
+    );
+    fails(
+        "fn f(a: Tensor<[3], Float>): Float = a[-9223372036854775808]\n",
+        "E0802",
+        "out of bounds",
+    );
+    fails(
+        "fn f(a: String): String = a[::0]\n",
+        "E0802",
+        "slice step of zero",
+    );
+}
+
+#[test]
+fn concrete_extents_and_ranks_do_not_silently_saturate() {
+    fails(
+        &format!("fn f(a: Tensor<[{} + 1], Float>) = a\n", usize::MAX),
+        "E0304",
+        "shape extent exceeds the supported range",
+    );
+    #[cfg(target_pointer_width = "64")]
+    fails(
+        "fn f(a: Tensor<4294967296, Float>) = a\n",
+        "E0304",
+        "tensor rank exceeds the supported range",
+    );
+}
+
+#[test]
+fn nested_literals_keep_large_ranks_compact() {
+    ok("fn f(a: Tensor<4294967294, Float>): Tensor<4294967295, Float> = [a]\n");
+    fails(
+        "fn f(a: Tensor<4294967295, Float>) = [a]\n",
+        "E0302",
+        "tensor literal rank exceeds the supported range",
     );
 }

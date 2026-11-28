@@ -1,0 +1,17 @@
+## Run with aevia run examples/frequency_analysis.aev.
+## Recover a five-sample displacement record and center its frequency axis.
+
+let samples = [1.0 cm, 2.5 cm, -1.0 cm, 0.0 cm, 0.5 cm]
+let interval = 0.2 s
+let half_spectrum = rfft(samples)
+let reconstructed = irfft(half_spectrum, length(samples))
+let frequencies = fftshift(fftfreq(length(samples), interval))
+let spectrum = fftshift(fft(samples))
+
+test "the real inverse recovers the samples" = norm(reconstructed - samples) < 1e-10 cm
+test "the centered frequency axis starts at -2 Hz" = approx_eq(at(frequencies, 0), -2.0 Hz, 1e-12 Hz)
+
+fn main(): IO Unit = do
+    println("Frequencies: {frequencies}")
+    println("Amplitudes:  {map(magnitude, spectrum)}")
+    println("Recovered:   {reconstructed}")

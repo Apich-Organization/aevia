@@ -1,0 +1,241 @@
+## Native source-inventory functions now execute through generated adapters.
+## Run: bazel run //:aevia -- test examples/native_kernel_families.aev
+import Rssn_numerical_vector as N
+import Rssn_numerical_stats as S
+import Rssn_numerical_special as Special
+
+test "native inverse erfc accepts the smallest positive Float probability" =
+    approx_eq(Special.num_inverse_erfc(5e-324), 27.21329321081295, 1e-13)
+
+test "complex Lambert W selects the lower side of the negative real cut" =
+    let w = N.num_analysis_special_complex_lambert_w_complex(complex(-0.36787944117144233, -1e-20), -1)
+    approx_eq(re(w), -3.088843015613044, 1e-13) && approx_eq(im(w), -7.461489285654254, 1e-13)
+
+let inverse = N.num_finite_field_gf256_inv(83)
+test "GF256 operations use checked byte domains" = N.num_finite_field_gf256_mul(83, inverse) == 1
+
+test "ordered selections keep exact integer products near the signed word limit" =
+    let n = 9223372036854775807
+    N.num_native_number_exact_falling_factorial(n, 3) == n * (n - 1) * (n - 2) && N.num_native_number_exact_falling_factorial(2, 3) == 0
+
+test "affine homotopy keeps roots in the coordinate reference units" =
+    let result = N.num_analysis_homotopy_system_scaled([1.0, -1.0], [[1], [0]], [0, 2], 2.0 m, 3.0 s)
+    length(result.roots) == 1 && result.offsets == [0, 1] && result.finite == [true] && approx_eq(N.num_analysis_complex_scalar_method_abs(at(result.roots, 0)), 2.0 m, 1e-12 m)
+
+test "GF256 byte batches use the same field polynomial as scalar arithmetic" =
+    let scaled = N.num_finite_field_gf256_scale(2, [0, 1, 128, 255])
+    let combined = N.num_finite_field_gf256_mul_add(2, [0, 1, 128, 255], [1, 3, 0, 255])
+    scaled == [0, 2, 29, 227] && combined == [1, 1, 29, 28]
+
+test "modular Chebyshev returns both exact residues for a full-width modulus" =
+    let residues = N.num_special_exact_chebyshev_tu_mod(18446744073709551615, -9223372036854775791, 18446744073709551615)
+    let missing = N.num_special_exact_chebyshev_tu_mod(0, 0, 0)
+    match (residues, missing) with
+    | (Some(values), None) -> values.item0 == 8084515612503228864 && values.item1 == 9910403022203829924
+    | _ -> false
+
+test "a holonomic power returns exact truncated binomial coefficients" =
+    let base = unwrap_or(Rssn.dynamic("num_analysis_holonomic_rational_poly", [to_value([1, 1])]), to_value(0))
+    let atom = unwrap_or(Rssn.dynamic("num_analysis_holonomic_atom_new", [to_value("Rational"), base, to_value([0]), to_value(1)]), to_value(0))
+    let expression = unwrap_or(Rssn.dynamic("num_analysis_holonomic_expression_atom", [atom]), to_value(0))
+    let raised = unwrap_or(Rssn.dynamic("num_analysis_holonomic_expression_unary", [expression, to_value("Pow"), to_value(1), to_value(16)]), to_value(0))
+    match Rssn.dynamic("num_analysis_holonomic_expression_series", [raised, to_value(5)]) with
+    | Ok(value) ->
+        let expected: Tensor<1, Real> = [1, 16, 120, 560, 1820]
+        match from_value<Option<Tensor<1, Real>>>(value) with
+        | Ok(Some(coefficients)) -> coefficients == expected
+        | _ -> false
+    | Err(_) -> false
+
+test "complex reciprocal keeps subnormal magnitude and inverse units" =
+    let measured = N.num_analysis_complex_scalar_complex(1e308 m, 1e308 m)
+    let reciprocal = N.num_analysis_complex_scalar_method_recip(measured)
+    let modulus = N.num_analysis_complex_scalar_method_abs(reciprocal)
+    modulus > 0.0 m^-1 && approx_eq(modulus, 7.071067811865475e-309 m^-1, 1e-322 m^-1)
+
+test "a complex square root preserves the measured imaginary component near the real axis" =
+    let input = N.num_analysis_complex_scalar_complex(1e300 m^2, 1.0 m^2)
+    let root = N.num_analysis_complex_scalar_method_sqrt(input)
+    let axis = N.num_analysis_complex_scalar_complex(1e150 m, 0.0 m)
+    let component = N.num_analysis_complex_scalar_method_abs(root - axis)
+    approx_eq(component / 5e-151 m, 1.0, 1e-14)
+
+test "polygon winding counts turns of a tiny measured complex contour" =
+    let east = N.num_analysis_complex_scalar_complex(1e-200 m, 0.0 m)
+    let north = N.num_analysis_complex_scalar_complex(0.0 m, 1e-200 m)
+    let west = N.num_analysis_complex_scalar_complex(-1e-200 m, 0.0 m)
+    let south = N.num_analysis_complex_scalar_complex(0.0 m, -1e-200 m)
+    N.num_complex_winding_number([east, north, west, south]) == 1 && N.num_complex_winding_number([east, south, west, north]) == -1
+
+test "measured Euclidean lengths and unit directions survive extreme scales" =
+    let tiny = [3e-200 m, 4e-200 m]
+    let huge = [3e200 m, 4e200 m]
+    let direction = N.num_normalize(huge)
+    approx_eq(N.num_norm(tiny) / 5e-200 m, 1.0, 1e-14) && approx_eq(N.num_distance(huge, [0.0 m, 0.0 m]) / 5e200 m, 1.0, 1e-14) && approx_eq(at(direction, 0), 0.6, 1e-14) && approx_eq(at(direction, 1), 0.8, 1e-14)
+
+test "a measured reflection retains finite components across intermediate overflow" =
+    let result = N.num_reflect([1.7976931348623157e308 m, 1e-200 m], [1.0, 0.0])
+    at(result, 0) == -1.7976931348623157e308 m && at(result, 1) == 1e-200 m
+
+test "a prepared inverse real FFT reports its sizes and restores measured samples" =
+    let spectrum = [N.num_analysis_complex_scalar_complex(1.0 m, 0.0 m), N.num_analysis_complex_scalar_complex(0.0 m, -1.0 m), N.num_analysis_complex_scalar_complex(-1.0 m, 0.0 m)]
+    match Rssn.dynamic("num_native_irfft_plan_new", [to_value(4)]) with
+    | Ok(plan) ->
+        let output = Rssn.dynamic("num_native_irfft_plan_output_len", [plan])
+        let bins = Rssn.dynamic("num_native_irfft_plan_spectrum_len", [plan])
+        let restored = Rssn.dynamic("num_native_irfft_plan_apply", [plan, to_value(spectrum)])
+        match (output, bins, restored) with
+        | (Ok(n), Ok(k), Ok(samples)) ->
+            match (from_value<Int>(n), from_value<Int>(k), from_value<Tensor<1, Float[Length]>>(samples)) with
+            | (Ok(4), Ok(3), Ok(signal)) -> length(signal) == 4 && approx_eq(at(signal, 0), 0.0 m, 1e-14 m) && approx_eq(at(signal, 1), 1.0 m, 1e-14 m) && approx_eq(at(signal, 2), 0.0 m, 1e-14 m) && approx_eq(at(signal, 3), 0.0 m, 1e-14 m)
+            | _ -> false
+        | _ -> false
+    | Err(_) -> false
+
+test "a prepared wavelet reconstructs a measured odd-length signal" =
+    let plan = unwrap_or(Rssn.dynamic("num_analysis_wavelets_dwt_plan_new", [to_value("Db4"), to_value("Reflect"), to_value(5)]), to_value(0))
+    let source = [2.0 m, -3.0 m, 4.0 m, 1.0 m, -1.0 m]
+    match Rssn.dynamic("num_analysis_wavelets_dwt_plan_analyze", [plan, to_value(source)]) with
+    | Ok(value) ->
+        match from_value<{ approximation: Tensor<1, Float[Length]>, detail: Tensor<1, Float[Length]> }>(value) with
+        | Ok(bands) ->
+            match Rssn.dynamic("num_analysis_wavelets_dwt_plan_synthesize", [plan, to_value(bands.approximation), to_value(bands.detail)]) with
+            | Ok(restored) ->
+                match from_value<Tensor<1, Float[Length]>>(restored) with
+                | Ok(signal) -> length(signal) == 5 && approx_eq(at(signal, 0), 2.0 m, 1e-12 m) && approx_eq(at(signal, 4), -1.0 m, 1e-12 m)
+                | Err(_) -> false
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "CRC32 agrees with the standard ASCII check vector" = N.num_error_correction_crc32_compute_numerical([49, 50, 51, 52, 53, 54, 55, 56, 57]) == 3421780262
+
+let encoded = N.num_error_correction_reed_solomon_encode([1, 2, 3], 4)
+test "Reed-Solomon decoding works on local mutable storage" = N.num_error_correction_reed_solomon_decode(encoded, 4) == encoded
+
+test "prepared Reed-Solomon encoding retains exact bytes and parity length" =
+    match Rssn.dynamic("num_native_rs_encoder_new", [to_value(4)]) with
+    | Ok(encoder) ->
+        let message = [0, 127, 255, 37, 11]
+        let expected = N.num_error_correction_reed_solomon_encode(message, 4)
+        match (Rssn.dynamic("num_native_rs_encoder_encode", [encoder, to_value(message)]), Rssn.dynamic("num_native_rs_encoder_parity_symbols", [encoder])) with
+        | (Ok(codeword), Ok(parity)) ->
+            match (from_value<Tensor<1, Int>>(codeword), from_value<Int>(parity)) with
+            | (Ok(bytes), Ok(count)) -> bytes == expected && count == 4
+            | _ -> false
+        | _ -> false
+    | Err(_) -> false
+
+## CSR offsets preserve mixed simplex dimensions without padding vertices.
+let circle = { offsets = [0, 1, 2, 3, 5, 7, 9], indices = [0, 1, 2, 0, 1, 1, 2, 0, 2] }
+test "triangle boundary has one one-dimensional homology class" = N.num_topology_betti_number(circle, 1) == 1 && N.num_topology_euler_characteristic(circle) == 0
+
+let persistence = N.num_topology_persistent_homology_rips([[0.0 m], [2.0 m]], 3.0 m, 1, 100)
+fn birth_length(x: Float[Length]): Bool = x == 0.0 m
+test "persistence radii carry length and essential intervals have explicit masks" = birth_length(at(persistence.births, 0)) && at(persistence.essential, 1) && at(persistence.deaths, 1) == 0.0 m
+
+test "a repeated simplex enters at its earliest measured filtration level" =
+    let input = { radii = [2.0 m, 0.0 m, 0.0 m, 1.0 m], simplices = { offsets = [0, 1, 2, 3, 5], indices = [0, 0, 1, 1, 0] } }
+    let bars = N.num_topology_persistent_homology(input, 0)
+    bars.offsets == [0, 2] && bars.births == [0.0 m, 0.0 m] && bars.deaths == [1.0 m, 0.0 m] && bars.essential == [false, true]
+
+## These native chaotic maps use normalized, dimensionless coordinates/time.
+let orbit = N.num_fractal_geometry_and_chaos_logistic_map_iterate(0.5, 4.0, 2)
+test "logistic map is evaluated by the native kernel" = orbit == [0.5, 1.0, 0.0]
+
+test "native affine systems round-trip through point tensors" =
+    match N.num_fractal_geometry_and_chaos_barnsley_fern_ifs() with
+    | Ok(fern) ->
+        let points = N.num_fractal_geometry_and_chaos_generate_ifs_fractal(fern.item0, fern.item1, { item0 = 0.0, item1 = 0.0 }, 10, 5)
+        length(points) == 10 && is_finite(points[0, 0])
+    | Err(_) -> false
+
+test "prepared affine sampling reuses weights even when their sum overflows" =
+    let maps = [[0.0, 0.0, 0.0, 0.0, 1.0, -1.0], [0.0, 0.0, 0.0, 0.0, 7.0, -7.0]]
+    let weights = [1.7976931348623157e308, 1.7976931348623157e308]
+    let origin = { item0 = 0.0, item1 = 0.0 }
+    match Rssn.dynamic("num_native_affine_ifs_new", [to_value(maps), to_value(weights)]) with
+    | Ok(plan) ->
+        let draw = Rssn.dynamic("num_native_affine_ifs_generate", [plan, to_value(origin), to_value(3), to_value(1), to_value(12345)])
+        match draw with
+        | Ok(value) ->
+            match from_value<Tensor<2, Float>>(value) with
+            | Ok(points) -> points == [[7.0, -7.0], [1.0, -1.0], [1.0, -1.0]] && points == N.num_fractal_geometry_and_chaos_generate_ifs_fractal(maps, weights, origin, 3, 1)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+let density = N.num_robust_kde([0.0 m, 1.0 m, 2.0 m], 1.0 m, 0.5 m, 0)
+test "native robust KDE has inverse sample units" = density > 0.0 m^-1
+
+test "exact polynomial and descriptive kernels avoid float conversion" = decide(N.num_special_exact_legendre_p_exact(2, 1 / 2) == -1 / 8) == Some(true) && decide(N.num_descriptive_mean_exact([1, 2]) == 3 / 2) == Some(true) && decide(S.num_descriptive_median_exact([1, 2]) == 3 / 2) == Some(true)
+
+let fit = S.num_stats_simple_linear_regression([0.0 s, 1.0 s, 2.0 s], [1.0 m, 3.0 m, 5.0 m])
+test "native regression keeps independent predictor and response dimensions" = approx_eq(fit.item0, 2.0 m/s, 1e-12 m/s) && approx_eq(fit.item1, 1.0 m, 1e-12 m)
+
+test "native regression recovers finite slope and intercept from overflowing moments" =
+    let scaled = S.num_stats_simple_linear_regression([-1e200 s, 0.0 s, 1e200 s], [-1e200 m, 1e200 m, 3e200 m])
+    approx_eq(scaled.item0, 2.0 m/s, 1e-14 m/s) && approx_eq(scaled.item1 / 1e200 m, 1.0, 1e-14)
+
+let anova = S.num_stats_one_way_anova({ offsets = [0, 3, 5], values = [1.0 m, 2.0 m, 3.0 m, 4.0 m, 5.0 m] })
+test "ANOVA accepts independently sized physical groups" = anova.item0 > 0.0 && anova.item1 >= 0.0 && anova.item1 <= 1.0
+
+test "exact sample kernels retain coherent units for prefixed quantities" = decide(N.num_descriptive_mean_exact([100 cm, 3 m]) == 2 m) == Some(true)
+
+let cycles = N.num_permgroup_cycles([1, 0, 2])
+test "native permutation cycles preserve ragged lengths" = cycles.offsets == [0, 2, 3] && cycles.indices == [0, 1, 2] && N.num_permgroup_element_order([1, 0, 2]) == 2
+test "native permutation powers reduce signed exact exponents independently per cycle" =
+    N.num_permgroup_power_exact([1, 2, 0, 4, 5, 6, 7, 3, 8], -340282366920938463463374607431768211463) == [1, 2, 0, 5, 6, 7, 3, 4, 8]
+
+test "native group primitivity uses checked common-degree generators" = N.num_permgroup_is_primitive(3, [[1, 2, 0]])
+
+test "native graphics dot products retain independent vector units" = N.num_computer_graphics_dot_product_nd([1.0 m, 2.0 m], [3.0 s, 4.0 s]) == 11.0 m*s
+
+## Native chain objects stay in this RSSN session. Only checked handles cross
+## the language boundary; no native pointer or mutable matrix is serialized.
+test "opaque circle chains execute exact native homology" =
+    match Rssn.dynamic("num_homology_sphere", [to_value(1)]) with
+    | Ok(complex) ->
+        match Rssn.dynamic("num_homology_complex_chains", [complex]) with
+        | Ok(chains) ->
+            match Rssn.dynamic("num_homology_chain_homology", [chains, to_value(1)]) with
+            | Ok(value) ->
+                match Rssn.dynamic("num_native_release", [chains]) with
+                | Ok(_) ->
+                    match Rssn.dynamic("num_native_release", [complex]) with
+                    | Ok(_) ->
+                        match from_value<{ rank: Int, torsion: Tensor<1, Int> }>(value) with
+                        | Ok(group) -> group.rank == 1 && length(group.torsion) == 0
+                        | Err(_) -> false
+                    | Err(_) -> false
+                | Err(_) -> false
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "native Betti numbers distinguish binary and full-word odd prime coefficients" =
+    match Rssn.dynamic("num_homology_projective_plane", [to_value(0)]) with
+    | Ok(complex) ->
+        match Rssn.dynamic("num_homology_complex_chains", [complex]) with
+        | Ok(chains) ->
+            let binary = Rssn.dynamic("num_homology_chain_betti_mod_p", [chains, to_value(2)])
+            let odd = Rssn.dynamic("num_homology_chain_betti_mod_p", [chains, to_value(18446744073709551557)])
+            match (binary, odd) with
+            | (Ok(a), Ok(b)) ->
+                match (from_value<Tensor<1, Int>>(a), from_value<Tensor<1, Int>>(b)) with
+                | (Ok(mod_two), Ok(mod_odd)) -> mod_two == [1, 1, 1] && mod_odd == [1, 0, 0]
+                | _ -> false
+            | _ -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "opaque filtration witnesses retain physical radius units" =
+    match Rssn.dynamic("num_homology_filtration", [to_value({ radii = [0.0 m, 0.0 m, 2.0 m], simplices = { offsets = [0, 1, 2, 4], indices = [0, 1, 0, 1] } })]) with
+    | Ok(model) ->
+        match Rssn.dynamic("num_homology_persistence_bars", [model, to_value(0)]) with
+        | Ok(value) ->
+            match from_value<Option<{ dimensions: Tensor<1, Int>, births: Tensor<1, Float[Length]>, deaths: Tensor<1, Float[Length]>, essential: Tensor<1, Bool> }>>(value) with
+            | Ok(Some(bars)) -> at(bars.births, 0) == 0.0 m && at(bars.essential, 1) && at(bars.deaths, 1) == 0.0 m
+            | _ -> false
+        | Err(_) -> false
+    | Err(_) -> false

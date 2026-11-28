@@ -1,0 +1,27 @@
+## Multiply polynomials over a prime field using exact 64-bit residues.
+import Rssn_FiniteField as Field
+
+import Rssn_NumberTheory as Number
+
+let prime = 18446744069414584321
+
+let product = Field.poly_mul_ntt_mod([prime - 1, 2, 3], [4, 5], prime)
+
+let generator = Field.primitive_root_prime(prime)
+
+let identity = Number.extended_gcd_u64(prime, 2)
+
+fn main(): IO Unit = do
+    println("Product coefficients: {product}")
+    println("Smallest primitive root: {generator}")
+    println("Bézout identity: {identity}")
+
+test "NTT convolution preserves residues above signed 64-bit range" =
+    match product with
+    | Ok(coefficients) -> coefficients == [prime - 4, 3, 22, 15]
+    | Err(_) -> false
+
+test "Bézout coefficients satisfy the exact identity" =
+    match identity with
+    | Ok(result) -> prime * result.x + 2 * result.y == result.gcd && result.gcd == 1
+    | Err(_) -> false

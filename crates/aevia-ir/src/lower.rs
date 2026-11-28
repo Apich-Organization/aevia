@@ -61,6 +61,8 @@ use aevia_types::check::DictionaryUse;
 use aevia_types::check::RssnCall;
 use aevia_types::ty::Rep;
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::hash::BuildHasher;
 use std::rc::Rc;
 
 /// Lowers a whole module with the checker's per-literal representation table.
@@ -75,7 +77,7 @@ pub fn lower_module_with_literals(
     module: &aevia_syntax::ast::Module,
     rssn_calls: &[RssnCall],
     dictionaries: &[DictionaryUse],
-    literal_reps: &HashMap<Span, Rep>,
+    literal_reps: &HashMap<Span, Rep, impl BuildHasher>,
 ) -> Module {
     lower_module_with_method_refs(
         module,
@@ -92,8 +94,8 @@ pub fn lower_module_with_method_refs(
     module: &aevia_syntax::ast::Module,
     rssn_calls: &[RssnCall],
     dictionaries: &[DictionaryUse],
-    literal_reps: &HashMap<Span, Rep>,
-    method_refs: &HashMap<Span, ClassMethodRef>,
+    literal_reps: &HashMap<Span, Rep, impl BuildHasher>,
+    method_refs: &HashMap<Span, ClassMethodRef, impl BuildHasher>,
 ) -> Module {
     lower_module_with_source_refs(
         module,
@@ -111,9 +113,9 @@ pub fn lower_module_with_source_refs(
     module: &aevia_syntax::ast::Module,
     rssn_calls: &[RssnCall],
     dictionaries: &[DictionaryUse],
-    literal_reps: &HashMap<Span, Rep>,
-    method_refs: &HashMap<Span, ClassMethodRef>,
-    constructor_refs: &HashMap<Span, (aevia_types::adt::AdtId, usize)>,
+    literal_reps: &HashMap<Span, Rep, impl BuildHasher>,
+    method_refs: &HashMap<Span, ClassMethodRef, impl BuildHasher>,
+    constructor_refs: &HashMap<Span, (aevia_types::adt::AdtId, usize), impl BuildHasher>,
 ) -> Module {
     lower_module_with_runtime_evidence(
         module,
@@ -129,36 +131,29 @@ pub fn lower_module_with_source_refs(
 
 /// Preserve source function-value sites used to retain generic specialization.
 #[must_use]
-pub fn lower_module_with_runtime_evidence<
-    S1: std::hash::BuildHasher,
-    S2: std::hash::BuildHasher,
->(
+#[allow(
+    clippy::too_many_arguments,
+    reason = "keeps the existing public entry point and its distinct checker evidence tables"
+)]
+pub fn lower_module_with_runtime_evidence<S1: BuildHasher, S2: BuildHasher>(
     module: &aevia_syntax::ast::Module,
     rssn_calls: &[RssnCall],
     dictionaries: &[DictionaryUse],
-    literal_reps: &HashMap<Span, Rep>,
-    method_refs: &HashMap<Span, ClassMethodRef>,
+    literal_reps: &HashMap<Span, Rep, impl BuildHasher>,
+    method_refs: &HashMap<Span, ClassMethodRef, impl BuildHasher>,
     constructor_refs: &HashMap<Span, (aevia_types::adt::AdtId, usize), S1>,
     expr_types: &HashMap<Span, aevia_types::Type, S2>,
-    constant_regions: &HashMap<Span, Rep>,
+    constant_regions: &HashMap<Span, Rep, impl BuildHasher>,
 ) -> Module {
-    let mut lowerer = Lowerer::new(rssn_calls, dictionaries, literal_reps);
-    lowerer.constant_regions = constant_regions.clone();
-    lowerer.method_refs = method_refs.clone();
-    lowerer.constructor_refs = constructor_refs
-        .iter()
-        .map(|(span, reference)| (*span, *reference))
-        .collect();
-    lowerer.function_values = expr_types
-        .iter()
-        .filter(|(_, ty)| matches!(ty, aevia_types::Type::Fn(..)))
-        .map(|(span, _)| (*span, ()))
-        .collect();
-    lowerer.dynamic_types = expr_types
-        .iter()
-        .filter(|(_, ty)| aevia_types::class::has_variables(ty))
-        .map(|(span, _)| (*span, ()))
-        .collect();
+    let mut lowerer = Lowerer::new(
+        rssn_calls,
+        dictionaries,
+        literal_reps,
+        method_refs,
+        constructor_refs,
+        expr_types,
+        constant_regions,
+    );
     let mut out = Module::default();
     for decl in &module.decls {
         match &decl.kind {
@@ -173,7 +168,7 @@ pub fn lower_module_with_runtime_evidence<
                         decl.has_attribute("jit"),
                     ),
                     span: decl.span,
-                })
+                });
             },
             | DeclKind::Let { pattern, value, .. } => {
                 let (block, nslots) = lowerer.top_value(value);
@@ -185,9 +180,9 @@ pub fn lower_module_with_runtime_evidence<
                 });
             },
             | DeclKind::Instance { class, ty, methods } => {
-                let mut lowered = Vec::with_capacity(methods.len());
+                let mut instance_methods = Vec::with_capacity(methods.len());
                 for method in methods {
-                    lowered.push(MethodDecl {
+                    instance_methods.push(MethodDecl {
                         name: method.name.clone(),
                         function: lowerer.top_function(
                             &method.name,
@@ -203,7 +198,7 @@ pub fn lower_module_with_runtime_evidence<
                     span: decl.span,
                     class: class.clone(),
                     head: ty.clone(),
-                    methods: lowered,
+                    methods: instance_methods,
                 });
             },
             | _ => {},
@@ -253,7 +248,7 @@ pub fn lower_decl_with_literals(
     decl: &Decl,
     rssn_calls: &[RssnCall],
     dictionaries: &[DictionaryUse],
-    literal_reps: &HashMap<Span, Rep>,
+    literal_reps: &HashMap<Span, Rep, impl BuildHasher>,
 ) -> Option<LoweredDecl> {
     lower_decl_with_method_refs(
         decl,
@@ -270,8 +265,8 @@ pub fn lower_decl_with_method_refs(
     decl: &Decl,
     rssn_calls: &[RssnCall],
     dictionaries: &[DictionaryUse],
-    literal_reps: &HashMap<Span, Rep>,
-    method_refs: &HashMap<Span, ClassMethodRef>,
+    literal_reps: &HashMap<Span, Rep, impl BuildHasher>,
+    method_refs: &HashMap<Span, ClassMethodRef, impl BuildHasher>,
 ) -> Option<LoweredDecl> {
     lower_decl_with_source_refs(
         decl,
@@ -289,9 +284,9 @@ pub fn lower_decl_with_source_refs(
     decl: &Decl,
     rssn_calls: &[RssnCall],
     dictionaries: &[DictionaryUse],
-    literal_reps: &HashMap<Span, Rep>,
-    method_refs: &HashMap<Span, ClassMethodRef>,
-    constructor_refs: &HashMap<Span, (aevia_types::adt::AdtId, usize)>,
+    literal_reps: &HashMap<Span, Rep, impl BuildHasher>,
+    method_refs: &HashMap<Span, ClassMethodRef, impl BuildHasher>,
+    constructor_refs: &HashMap<Span, (aevia_types::adt::AdtId, usize), impl BuildHasher>,
 ) -> Option<LoweredDecl> {
     lower_decl_with_runtime_evidence(
         decl,
@@ -307,33 +302,29 @@ pub fn lower_decl_with_source_refs(
 
 /// Incremental counterpart of [`lower_module_with_runtime_evidence`].
 #[must_use]
-pub fn lower_decl_with_runtime_evidence<S1: std::hash::BuildHasher, S2: std::hash::BuildHasher>(
+#[allow(
+    clippy::too_many_arguments,
+    reason = "keeps the existing public entry point and its distinct checker evidence tables"
+)]
+pub fn lower_decl_with_runtime_evidence<S1: BuildHasher, S2: BuildHasher>(
     decl: &Decl,
     rssn_calls: &[RssnCall],
     dictionaries: &[DictionaryUse],
-    literal_reps: &HashMap<Span, Rep>,
-    method_refs: &HashMap<Span, ClassMethodRef>,
+    literal_reps: &HashMap<Span, Rep, impl BuildHasher>,
+    method_refs: &HashMap<Span, ClassMethodRef, impl BuildHasher>,
     constructor_refs: &HashMap<Span, (aevia_types::adt::AdtId, usize), S1>,
     expr_types: &HashMap<Span, aevia_types::Type, S2>,
-    constant_regions: &HashMap<Span, Rep>,
+    constant_regions: &HashMap<Span, Rep, impl BuildHasher>,
 ) -> Option<LoweredDecl> {
-    let mut lowerer = Lowerer::new(rssn_calls, dictionaries, literal_reps);
-    lowerer.constant_regions = constant_regions.clone();
-    lowerer.method_refs = method_refs.clone();
-    lowerer.constructor_refs = constructor_refs
-        .iter()
-        .map(|(span, reference)| (*span, *reference))
-        .collect();
-    lowerer.function_values = expr_types
-        .iter()
-        .filter(|(_, ty)| matches!(ty, aevia_types::Type::Fn(..)))
-        .map(|(span, _)| (*span, ()))
-        .collect();
-    lowerer.dynamic_types = expr_types
-        .iter()
-        .filter(|(_, ty)| aevia_types::class::has_variables(ty))
-        .map(|(span, _)| (*span, ()))
-        .collect();
+    let mut lowerer = Lowerer::new(
+        rssn_calls,
+        dictionaries,
+        literal_reps,
+        method_refs,
+        constructor_refs,
+        expr_types,
+        constant_regions,
+    );
     match &decl.kind {
         | DeclKind::Fn { name, args, body, .. } => {
             Some(LoweredDecl::Fn(FnDecl {
@@ -358,9 +349,9 @@ pub fn lower_decl_with_runtime_evidence<S1: std::hash::BuildHasher, S2: std::has
             }))
         },
         | DeclKind::Instance { class, ty, methods } => {
-            let mut lowered = Vec::with_capacity(methods.len());
+            let mut instance_methods = Vec::with_capacity(methods.len());
             for method in methods {
-                lowered.push(MethodDecl {
+                instance_methods.push(MethodDecl {
                     name: method.name.clone(),
                     function: lowerer.top_function(
                         &method.name,
@@ -376,10 +367,19 @@ pub fn lower_decl_with_runtime_evidence<S1: std::hash::BuildHasher, S2: std::has
                 span: decl.span,
                 class: class.clone(),
                 head: ty.clone(),
-                methods: lowered,
+                methods: instance_methods,
             }))
         },
         | _ => None,
+    }
+}
+
+impl Capture {
+    const fn into_atom(self) -> Atom {
+        match self {
+            | Self::Local(slot) => Atom::Local(slot),
+            | Self::Capture(index) => Atom::Capture(index),
+        }
     }
 }
 
@@ -414,32 +414,41 @@ struct Builder {
 }
 
 /// The lowering state: a stack of functions, innermost last.
-struct Lowerer {
+struct Lowerer<'a, Literals, Methods, Constructors, Types, Constants> {
     /// Spans at which the checker pinned a `Rssn.<op>` overload.
-    rssn: HashMap<Span, ()>,
+    rssn: HashSet<Span>,
     /// Spans at which the checker resolved a class method, with the record.
     dictionaries: HashMap<Span, Vec<DictionaryUse>>,
     /// The instantiated representation of every numeric literal, by span.
-    literal_reps: HashMap<Span, Rep>,
+    literal_reps: &'a HashMap<Span, Rep, Literals>,
     /// Roots of constant regions (§3.10.4) with their static representation.
-    constant_regions: HashMap<Span, Rep>,
-    method_refs: HashMap<Span, ClassMethodRef>,
-    constructor_refs: HashMap<Span, (aevia_types::adt::AdtId, usize)>,
-    function_values: HashMap<Span, ()>,
-    dynamic_types: HashMap<Span, ()>,
+    constant_regions: &'a HashMap<Span, Rep, Constants>,
+    method_refs: &'a HashMap<Span, ClassMethodRef, Methods>,
+    constructor_refs: &'a HashMap<Span, (aevia_types::adt::AdtId, usize), Constructors>,
+    /// Checked types are queried only where lowering needs runtime evidence.
+    expr_types: &'a HashMap<Span, aevia_types::Type, Types>,
     fns: Vec<FnState>,
 }
 
-impl Lowerer {
+impl<'a, Literals, Methods, Constructors, Types, Constants>
+    Lowerer<'a, Literals, Methods, Constructors, Types, Constants>
+where
+    Literals: BuildHasher,
+    Methods: BuildHasher,
+    Constructors: BuildHasher,
+    Types: BuildHasher,
+    Constants: BuildHasher,
+{
     fn new(
         rssn_calls: &[RssnCall],
         dictionaries: &[DictionaryUse],
-        literal_reps: &HashMap<Span, Rep>,
+        literal_reps: &'a HashMap<Span, Rep, Literals>,
+        method_refs: &'a HashMap<Span, ClassMethodRef, Methods>,
+        constructor_refs: &'a HashMap<Span, (aevia_types::adt::AdtId, usize), Constructors>,
+        expr_types: &'a HashMap<Span, aevia_types::Type, Types>,
+        constant_regions: &'a HashMap<Span, Rep, Constants>,
     ) -> Self {
-        let mut rssn = HashMap::with_capacity(rssn_calls.len());
-        for call in rssn_calls {
-            rssn.insert(call.span, ());
-        }
+        let rssn = rssn_calls.iter().map(|call| call.span).collect();
         let mut table: HashMap<Span, Vec<DictionaryUse>> = HashMap::new();
         for use_site in dictionaries {
             table
@@ -450,12 +459,11 @@ impl Lowerer {
         Self {
             rssn,
             dictionaries: table,
-            literal_reps: literal_reps.clone(),
-            constant_regions: HashMap::new(),
-            method_refs: HashMap::new(),
-            constructor_refs: HashMap::new(),
-            function_values: HashMap::new(),
-            dynamic_types: HashMap::new(),
+            literal_reps,
+            constant_regions,
+            method_refs,
+            constructor_refs,
+            expr_types,
             fns: Vec::new(),
         }
     }
@@ -468,16 +476,44 @@ impl Lowerer {
         self.literal_reps.get(&span).copied()
     }
 
+    fn requires_dynamic_literal(
+        &self,
+        span: Span,
+        rep: Option<Rep>,
+    ) -> bool {
+        matches!(rep, Some(Rep::Var(_)))
+            || (rep.is_none()
+                && self
+                    .expr_types
+                    .get(&span)
+                    .is_some_and(aevia_types::class::has_variables))
+    }
+
+    fn has_function_type(
+        &self,
+        span: Span,
+    ) -> bool {
+        matches!(self.expr_types.get(&span), Some(aevia_types::Type::Fn(..)))
+    }
+
     // ----- slots, scopes and captures -------------------------------------
 
+    #[allow(
+        clippy::expect_used,
+        reason = "only entered inside a paired function scope"
+    )]
     fn state(&mut self) -> &mut FnState {
         self.fns.last_mut().expect("a function is being lowered")
     }
 
+    #[allow(
+        clippy::expect_used,
+        reason = "slot exhaustion must fail before two bindings share a slot"
+    )]
     fn fresh_slot(&mut self) -> u32 {
         let state = self.state();
         let slot = state.nslots;
-        state.nslots += 1;
+        state.nslots = slot.checked_add(1).expect("IR slot count exceeds u32");
         slot
     }
 
@@ -489,6 +525,10 @@ impl Lowerer {
         self.state().scopes.pop();
     }
 
+    #[allow(
+        clippy::expect_used,
+        reason = "every active function has a root scope, and nested scopes are paired"
+    )]
     fn declare(
         &mut self,
         name: &str,
@@ -502,16 +542,22 @@ impl Lowerer {
             .insert(name.to_string(), place);
     }
 
+    #[allow(
+        clippy::expect_used,
+        reason = "capture exhaustion must fail before different bindings share an index"
+    )]
+    #[allow(
+        clippy::single_call_fn,
+        reason = "isolates deterministic capture allocation from scope lookup"
+    )]
     fn add_capture(
-        &mut self,
-        level: usize,
+        state: &mut FnState,
         key: Capture,
     ) -> u32 {
-        let state = &mut self.fns[level];
         if let Some(index) = state.capture_index.get(&key) {
             return *index;
         }
-        let index = u32::try_from(state.captures.len()).unwrap_or(u32::MAX);
+        let index = u32::try_from(state.captures.len()).expect("IR capture count exceeds u32");
         state.captures.push(key);
         state.capture_index.insert(key, index);
         index
@@ -523,36 +569,32 @@ impl Lowerer {
         &mut self,
         name: &str,
     ) -> Atom {
-        let last = self.fns.len() - 1;
-        let mut found: Option<(usize, Capture)> = None;
-        for level in (0..=last).rev() {
-            let state = &self.fns[level];
-            for scope in state.scopes.iter().rev() {
-                if let Some(place) = scope.get(name) {
-                    found = Some((level, *place));
-                    break;
-                }
-            }
-            if found.is_some() {
-                break;
-            }
-        }
+        let found = self
+            .fns
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(level, state)| {
+                state
+                    .scopes
+                    .iter()
+                    .rev()
+                    .find_map(|scope| scope.get(name).copied().map(|place| (level, place)))
+            });
         let Some((level, place)) = found else {
             return Atom::Global(name.to_string());
         };
-        if level == last {
-            return match place {
-                | Capture::Local(slot) => Atom::Local(slot),
-                | Capture::Capture(index) => Atom::Capture(index),
-            };
+        let child_level = level.saturating_add(1);
+        if child_level == self.fns.len() {
+            return place.into_atom();
         }
-        let mut key = place;
-        let mut index = 0;
-        for outer in (level + 1)..=last {
-            index = self.add_capture(outer, key);
-            key = Capture::Capture(index);
-        }
-        Atom::Capture(index)
+        self.fns
+            .iter_mut()
+            .skip(child_level)
+            .fold(place, |key, state| {
+                Capture::Capture(Self::add_capture(state, key))
+            })
+            .into_atom()
     }
 
     fn emit(
@@ -568,6 +610,14 @@ impl Lowerer {
 
     // ----- functions ------------------------------------------------------
 
+    #[allow(
+        clippy::expect_used,
+        reason = "lowering finishes only after pushing the matching function state"
+    )]
+    fn finish_function(&mut self) -> FnState {
+        self.fns.pop().expect("lowered function owns a frame")
+    }
+
     fn top_function(
         &mut self,
         name: &str,
@@ -576,11 +626,7 @@ impl Lowerer {
         span: Span,
         jit: bool,
     ) -> Rc<Function> {
-        let mut function = self.lambda(name.to_string(), params, body, span);
-        Rc::get_mut(&mut function)
-            .expect("new function is uniquely owned")
-            .jit = jit;
-        function
+        self.lambda(name.to_string(), params, body, span, jit)
     }
 
     fn top_value(
@@ -589,7 +635,7 @@ impl Lowerer {
     ) -> (Block, u32) {
         self.fns.push(FnState::new("<top>".to_string(), value.span));
         let block = self.block(value);
-        let state = self.fns.pop().expect("the top-level state");
+        let state = self.finish_function();
         debug_assert!(
             state.captures.is_empty(),
             "a top-level value captures nothing"
@@ -603,6 +649,7 @@ impl Lowerer {
         params: &[Param],
         body: &Expr,
         span: Span,
+        jit: bool,
     ) -> Rc<Function> {
         self.fns.push(FnState::new(name, span));
         let patterns: Vec<Pattern> = params
@@ -610,10 +657,11 @@ impl Lowerer {
             .map(|param| self.pattern(&param.pattern))
             .collect();
         let body_block = self.block(body);
-        let state = self.fns.pop().expect("the function state");
+        let state = self.finish_function();
         Rc::new(Function {
             name: Rc::from(state.name),
-            jit: false,
+            jit,
+            native_calls: std::cell::Cell::new(0),
             params: patterns,
             body: Rc::new(body_block),
             captures: state.captures,
@@ -763,7 +811,7 @@ impl Lowerer {
     ) {
         let slot = self.fresh_slot();
         self.declare(name, Capture::Local(slot));
-        let function = self.lambda(name.to_string(), params, body, body_span);
+        let function = self.lambda(name.to_string(), params, body, body_span, false);
         let self_capture = function
             .captures
             .iter()
@@ -907,6 +955,10 @@ impl Lowerer {
 
     // ----- expressions ----------------------------------------------------
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps the exhaustive conversion from source expressions to IR values together"
+    )]
     fn value(
         &mut self,
         expr: &Expr,
@@ -919,17 +971,15 @@ impl Lowerer {
             // runtime's. A literal in a `Float` context is an f64 atom; one in a
             // `Real` context is exact; `Int` stays exact and integral.
             | ExprKind::Int(value) => {
-                if matches!(self.literal_rep(expr.span), Some(Rep::Var(_)))
-                    || (self.literal_rep(expr.span).is_none()
-                        && self.dynamic_types.contains_key(&expr.span))
-                {
+                let rep = self.literal_rep(expr.span);
+                if self.requires_dynamic_literal(expr.span, rep) {
                     return self.emit(
                         builder,
                         Rhs::NumericLiteral(aevia_syntax::ast::NumberLit::Int(value.clone())),
                         expr.span,
                     );
                 }
-                match self.literal_rep(expr.span) {
+                match rep {
                     | Some(Rep::Float) => {
                         Atom::Float(num_traits::ToPrimitive::to_f64(value).unwrap_or(f64::NAN))
                     },
@@ -946,19 +996,17 @@ impl Lowerer {
                 }
             },
             | ExprKind::Float(text) => {
-                if matches!(self.literal_rep(expr.span), Some(Rep::Var(_)))
-                    || (self.literal_rep(expr.span).is_none()
-                        && self.dynamic_types.contains_key(&expr.span))
-                {
+                let rep = self.literal_rep(expr.span);
+                if self.requires_dynamic_literal(expr.span, rep) {
                     return self.emit(
                         builder,
                         Rhs::NumericLiteral(aevia_syntax::ast::NumberLit::Decimal(text.clone())),
                         expr.span,
                     );
                 }
-                match self.literal_rep(expr.span) {
+                match rep {
                     | Some(Rep::Real) => {
-                        Atom::Exact(exact_decimal(text).unwrap_or_else(|| {
+                        Atom::Exact(aevia_dim::parse_decimal(text).unwrap_or_else(|| {
                             num_rational::BigRational::from_integer(num_bigint::BigInt::from(0))
                         }))
                     },
@@ -1021,7 +1069,7 @@ impl Lowerer {
                 } else {
                     let atom = self.resolve(name);
                     if self.constructor_refs.contains_key(&expr.span)
-                        || self.function_values.contains_key(&expr.span)
+                        || self.has_function_type(expr.span)
                     {
                         self.emit(builder, Rhs::Atom(atom), expr.span)
                     } else {
@@ -1040,14 +1088,10 @@ impl Lowerer {
                         expr.span,
                     );
                 }
-                if path.len() == 2 && path[0] == "Rssn" {
-                    self.emit(
-                        builder,
-                        Rhs::RssnMember {
-                            name: path[1].clone(),
-                        },
-                        expr.span,
-                    )
+                if let [root, member] = path.as_slice()
+                    && root == "Rssn"
+                {
+                    self.emit(builder, Rhs::RssnMember { name: member.clone() }, expr.span)
                 } else if let Some((adt, index, name)) = self.saturated_constructor(expr, 0) {
                     self.emit(
                         builder,
@@ -1062,7 +1106,7 @@ impl Lowerer {
                 } else {
                     let atom = Atom::Global(path.join("."));
                     if self.constructor_refs.contains_key(&expr.span)
-                        || self.function_values.contains_key(&expr.span)
+                        || self.has_function_type(expr.span)
                     {
                         self.emit(builder, Rhs::Atom(atom), expr.span)
                     } else {
@@ -1080,12 +1124,11 @@ impl Lowerer {
                 self.emit(builder, Rhs::Unary { op: *op, operand }, expr.span)
             },
             | ExprKind::Binary { op, left, right } => {
+                let left = self.value(left, builder);
                 if matches!(op, BinOp::And | BinOp::Or) {
-                    let left = self.value(left, builder);
                     let right = Rc::new(self.block(right));
                     self.emit(builder, Rhs::AndOr { op: *op, left, right }, expr.span)
                 } else {
-                    let left = self.value(left, builder);
                     let right = self.value(right, builder);
                     self.emit(builder, Rhs::Binary { op: *op, left, right }, expr.span)
                 }
@@ -1106,13 +1149,12 @@ impl Lowerer {
                 )
             },
             | ExprKind::Lambda { params, body, .. } => {
-                let function = self.lambda("<lambda>".to_string(), params, body, expr.span);
+                let function = self.lambda("<lambda>".to_string(), params, body, expr.span, false);
                 self.emit(builder, Rhs::Closure(function), expr.span)
             },
-            | ExprKind::If { .. } | ExprKind::Match { .. } | ExprKind::LetIn { .. } => {
-                let block = self.block(expr);
-                self.emit(builder, Rhs::Block(Rc::new(block)), expr.span)
-            },
+            | ExprKind::If { .. }
+            | ExprKind::Match { .. }
+            | ExprKind::LetIn { .. }
             | ExprKind::Block { .. } => {
                 let block = self.block(expr);
                 self.emit(builder, Rhs::Block(Rc::new(block)), expr.span)
@@ -1341,7 +1383,7 @@ impl Lowerer {
                 },
                 expr.span,
             );
-            let function = self.lambda("<lambda>".to_string(), &params, &body, expr.span);
+            let function = self.lambda("<lambda>".to_string(), &params, &body, expr.span, false);
             return Rhs::Closure(function);
         }
         // Preserve type arguments while evaluating the callee normally, so
@@ -1363,7 +1405,7 @@ impl Lowerer {
             });
         }
         // `Rssn.<op>(…)`: the checker pinned the overload at this span.
-        if self.rssn.contains_key(&expr.span)
+        if self.rssn.contains(&expr.span)
             && let Some(name) = rssn_operator_name(callee)
         {
             let values = self.values(args, builder);
@@ -1455,7 +1497,8 @@ impl Lowerer {
         {
             match &expr.kind {
                 | ExprKind::Var(name) => return self.resolve(name),
-                | ExprKind::QName(path) if !(path.len() == 2 && path[0] == "Rssn") => {
+                | ExprKind::QName(path) if !(matches!(path.as_slice(), [root, _] if root == "Rssn")) =>
+                {
                     return Atom::Global(path.join("."));
                 },
                 | ExprKind::Field { base, name } if !is_rssn_root(base) => {
@@ -1484,7 +1527,7 @@ impl Lowerer {
                     steps.push(DoStep::Action {
                         value: Rc::new(self.block(value)),
                         span: value.span,
-                    })
+                    });
                 },
                 | DoStmt::Let {
                     pattern, value, span, ..
@@ -1508,7 +1551,7 @@ impl Lowerer {
                 },
             }
         }
-        let state = self.fns.pop().expect("do state");
+        let state = self.finish_function();
         DoPlan {
             steps,
             captures: state.captures,
@@ -1516,15 +1559,6 @@ impl Lowerer {
             span,
         }
     }
-}
-
-/// The exact rational a decimal literal denotes (§6.3.2).
-///
-/// `parse_decimal` handles the exponent and `_` forms the lexer accepts, so a
-/// literal in a `Real` context is the same number the exact arithmetic expects
-/// rather than an `f64` that only looks like it.
-fn exact_decimal(text: &str) -> Option<num_rational::BigRational> {
-    aevia_dim::parse_decimal(text)
 }
 
 /// The `f64` a float literal denotes.
@@ -1541,7 +1575,7 @@ fn parse_float_literal(text: &str) -> f64 {
 fn is_rssn_root(expr: &Expr) -> bool {
     match &expr.kind {
         | ExprKind::Var(name) => name == "Rssn",
-        | ExprKind::QName(path) => path.len() == 1 && path[0] == "Rssn",
+        | ExprKind::QName(path) => matches!(path.as_slice(), [root] if root == "Rssn"),
         | _ => false,
     }
 }
@@ -1551,10 +1585,19 @@ fn is_rssn_root(expr: &Expr) -> bool {
 /// Whether the *checker* resolved it is a separate question, answered by the
 /// pinned call table: entry points such as `Rssn.dynamic` are not operators and
 /// have no pinned key.
+#[allow(
+    clippy::single_call_fn,
+    reason = "separates source name recognition from checker-approved call lowering"
+)]
 fn rssn_operator_name(expr: &Expr) -> Option<String> {
     match &expr.kind {
         | ExprKind::Field { base, name } if is_rssn_root(base) => Some(name.clone()),
-        | ExprKind::QName(path) if path.len() == 2 && path[0] == "Rssn" => Some(path[1].clone()),
+        | ExprKind::QName(path) => {
+            match path.as_slice() {
+                | [root, member] if root == "Rssn" => Some(member.clone()),
+                | _ => None,
+            }
+        },
         | _ => None,
     }
 }

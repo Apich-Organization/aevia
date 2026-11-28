@@ -51,6 +51,7 @@ const DEVICE_MINUTES: i64 = 15;
 /// The polling interval the client should use, in seconds.
 const POLL_SECONDS: i64 = 5;
 
+/// Public-key binding request from the package client.
 #[derive(Deserialize)]
 pub struct DeviceRequest {
     /// `openpgp` or `ssh`; the armour is sniffed and must agree.
@@ -61,6 +62,7 @@ pub struct DeviceRequest {
     pub label: Option<String>,
 }
 
+/// Challenge and browser activation details.
 #[derive(Serialize)]
 pub struct DeviceResponse {
     /// The secret the client polls with.
@@ -73,8 +75,13 @@ pub struct DeviceResponse {
     pub expires_at: String,
     /// How often to poll, in seconds.
     pub interval: i64,
+    /// Policy recommendations (for example preferring `OpenPGP` + hardware keys
+    /// when registering an SSH key).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
+/// Current outcome of a device authorisation challenge.
 #[derive(Serialize)]
 pub struct DeviceStatus {
     /// `pending`, `approved`, `denied` or `expired`.
@@ -84,6 +91,7 @@ pub struct DeviceStatus {
     pub publisher: Option<PublisherSummary>,
 }
 
+/// Public identity returned with an approved challenge.
 #[derive(Serialize)]
 pub struct PublisherSummary {
     /// The handle.
@@ -104,6 +112,7 @@ pub async fn start(
     Json(request): Json<DeviceRequest>,
 ) -> ApiResult<Json<DeviceResponse>> {
     let key = SignerKey::detect(&request.public_key).map_err(ApiError::from_core)?;
+    key.validate().map_err(ApiError::from_core)?;
     if let Some(kind) = aevia_registry_core::signature::KeyKind::parse(&request.kind)
         && kind != key.kind
     {
@@ -129,7 +138,9 @@ pub async fn start(
     }
     let device_code = http::random_hex(32);
     let user_code = http::user_code();
-    let expires_at = Utc::now() + chrono::Duration::minutes(DEVICE_MINUTES);
+    let expires_at = Utc::now()
+        .checked_add_signed(chrono::Duration::minutes(DEVICE_MINUTES))
+        .ok_or_else(|| ApiError::internal("cannot calculate the device authorization expiry"))?;
     repo::create_device(
         &state.pool,
         &device_code,
@@ -141,12 +152,19 @@ pub async fn start(
         expires_at,
     )
     .await?;
+    let warnings: Vec<String> = key
+        .kind
+        .preference_warning()
+        .into_iter()
+        .map(str::to_string)
+        .collect();
     Ok(Json(DeviceResponse {
         device_code,
         user_code: user_code.clone(),
         verification_uri: state.config.url(&format!("/activate?code={user_code}")),
         expires_at: expires_at.to_rfc3339(),
         interval: POLL_SECONDS,
+        warnings,
     }))
 }
 

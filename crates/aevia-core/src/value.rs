@@ -6,6 +6,27 @@
 //! carries its constructor tag. Everything else — closures, records, IO
 //! actions — is ordinary data.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
+mod numeric;
+mod views;
+
+pub(crate) use numeric::compensated_sum;
+pub use numeric::kahan_sum;
+
 use crate::sym::Term;
 use aevia_dim::Dim;
 use aevia_dim::DimEnv;
@@ -18,11 +39,9 @@ use aevia_types::adt::{
     self,
 };
 use indexmap::IndexMap;
-use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::One;
 use num_traits::Signed;
-use num_traits::ToPrimitive;
 use num_traits::Zero;
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -34,10 +53,11 @@ use std::rc::Rc;
 /// The representation of a numeric value.
 #[derive(Clone, Debug)]
 pub enum NumKind {
-    /// An arbitrary-precision integer.
-    Int(BigInt),
-    /// An exact rational.
-    Exact(BigRational),
+    /// An arbitrary-precision integer (inline when it fits in `i64`).
+    Int(crate::int::Int),
+    /// An exact rational (shared: rarely on a hot path, and inline it
+    /// would make every `Value` four times larger).
+    Exact(Rc<BigRational>),
     /// An IEEE-754 double.
     Float(f64),
     /// A symbolic expression.
@@ -49,7 +69,7 @@ pub enum NumKind {
 impl NumKind {
     /// The runtime type name, for diagnostics.
     #[must_use]
-    pub fn type_name(&self) -> &'static str {
+    pub const fn type_name(&self) -> &'static str {
         match self {
             | Self::Int(_) => "Int",
             | Self::Exact(_) | Self::Sym(_) => "Real",
@@ -73,9 +93,9 @@ pub struct NumVal {
 impl NumVal {
     /// An exact integer.
     #[must_use]
-    pub fn int(value: BigInt) -> Self {
+    pub fn int(value: impl Into<crate::int::Int>) -> Self {
         Self {
-            kind: NumKind::Int(value),
+            kind: NumKind::Int(value.into()),
             dim: Dim::one(),
             display: None,
         }
@@ -88,7 +108,7 @@ impl NumVal {
         dim: Dim,
     ) -> Self {
         Self {
-            kind: NumKind::Exact(value),
+            kind: NumKind::Exact(Rc::new(value)),
             dim,
             display: None,
         }
@@ -96,7 +116,7 @@ impl NumVal {
 
     /// A float.
     #[must_use]
-    pub fn float(
+    pub const fn float(
         value: f64,
         dim: Dim,
     ) -> Self {
@@ -134,7 +154,7 @@ impl NumVal {
     #[must_use]
     pub fn to_f64(&self) -> Option<f64> {
         match &self.kind {
-            | NumKind::Int(value) => value.to_f64(),
+            | NumKind::Int(value) => Some(value.to_f64()),
             | NumKind::Exact(value) => Some(aevia_dim::rat::to_f64(value)),
             | NumKind::Float(value) => Some(*value),
             | NumKind::Complex(re, im) => {
@@ -152,8 +172,8 @@ impl NumVal {
     #[must_use]
     pub fn to_rational(&self) -> Option<BigRational> {
         match &self.kind {
-            | NumKind::Int(value) => Some(BigRational::from_integer(value.clone())),
-            | NumKind::Exact(value) => Some(value.clone()),
+            | NumKind::Int(value) => Some(value.to_rational()),
+            | NumKind::Exact(value) => Some(value.as_ref().clone()),
             | NumKind::Float(value) => BigRational::from_float(*value),
             | _ => None,
         }
@@ -172,7 +192,7 @@ impl NumVal {
 
     /// True when the value contains free symbols.
     #[must_use]
-    pub fn is_symbolic(&self) -> bool {
+    pub const fn is_symbolic(&self) -> bool {
         matches!(self.kind, NumKind::Sym(_))
     }
 }
@@ -256,13 +276,13 @@ pub struct SharedSlice {
 impl SharedSlice {
     /// The original tensor whose storage this window retains.
     #[must_use]
-    pub fn source(&self) -> &Rc<TensorData> {
+    pub const fn source(&self) -> &Rc<TensorData> {
         &self.source
     }
 
     /// The logical start within the original tensor.
     #[must_use]
-    pub fn offset(&self) -> usize {
+    pub const fn offset(&self) -> usize {
         self.offset
     }
 }
@@ -286,10 +306,8 @@ impl SharedSlice {
 /// signed number, because the sign is orthogonal to every question the rest of
 /// the module asks of a stride: [`TensorData::dense`] compares the magnitudes
 /// against [`row_major_strides`] to decide whether a window is contiguous, and
-/// [`TensorData::strides`] publishes them as `&[usize]`. Splitting the sign out
-/// keeps that comparison about layout and makes the direction impossible to
-/// drop: a signed multiply that silently went negative would be caught by
-/// `checked_add` at the *wrong* address rather than by the direction flag.
+/// [`TensorData::strides`] publishes them as `&[usize]`. Coordinate movement
+/// uses checked offsets in the stored direction.
 ///
 /// A reversed axis — `xs[::-1]`, a flipped convolution kernel, an axis a fold
 /// ran backwards — moves no element: the offset starts at the far end of the
@@ -311,88 +329,6 @@ pub struct View {
     pub reversed: Vec<bool>,
     /// The number of logical elements.
     pub len: usize,
-}
-
-impl View {
-    /// The signed step along `axis`, in elements.
-    ///
-    /// `None` when the magnitude does not fit an `isize`, which no buffer the
-    /// runtime can allocate reaches: the window is rejected rather than
-    /// wrapped.
-    fn step(
-        &self,
-        axis: usize,
-    ) -> Option<isize> {
-        signed_stride(self.strides[axis], self.reversed[axis])
-    }
-}
-
-/// A stride magnitude and its direction as one signed step.
-///
-/// The only place a direction becomes a sign. `usize → isize` is checked, so a
-/// magnitude that cannot be negated rejects the window instead of wrapping to
-/// `isize::MIN`.
-fn signed_stride(
-    stride: usize,
-    reversed: bool,
-) -> Option<isize> {
-    let magnitude = isize::try_from(stride).ok()?;
-    Some(if reversed {
-        -magnitude
-    } else {
-        magnitude
-    })
-}
-
-/// True when every position a window can reach lies inside a buffer of
-/// `data_len` elements.
-///
-/// The reachable positions are `offset + Σ cₖ·sₖ` for `0 ≤ cₖ < extentₖ`, so
-/// the two extremes of that sum are the two ends of every axis at once: a
-/// positive step puts its largest coordinate on the maximum and zero on the
-/// minimum, a negative step does the opposite. The bound check this replaces
-/// assumed the furthest element was "the last coordinate of every axis", which
-/// is only true while every stride is non-negative — a reversed axis puts the
-/// furthest element at coordinate `0`, so that check would accept a window
-/// whose low end lies before the buffer and reject one whose high end is
-/// merely the first element.
-///
-/// The sum is taken in `i128` because the minimum is legitimately negative
-/// before the final comparison: a coordinate before the start of the buffer is
-/// exactly the case that has to be rejected, and a `usize` cannot hold it.
-fn window_fits(
-    shape: &[usize],
-    strides: &[usize],
-    reversed: &[bool],
-    offset: usize,
-    data_len: usize,
-) -> bool {
-    if shape.len() != strides.len() || shape.len() != reversed.len() {
-        return false;
-    }
-    let mut lowest = offset as i128;
-    let mut highest = lowest;
-    for ((extent, stride), reversed) in shape.iter().zip(strides.iter()).zip(reversed.iter()) {
-        let Some(step) = signed_stride(*stride, *reversed) else {
-            return false;
-        };
-        let last = (*extent).max(1) as i128 - 1;
-        let Some(span) = (step as i128).checked_mul(last) else {
-            return false;
-        };
-        if span < 0 {
-            let Some(low) = lowest.checked_add(span) else {
-                return false;
-            };
-            lowest = low;
-        } else {
-            let Some(high) = highest.checked_add(span) else {
-                return false;
-            };
-            highest = high;
-        }
-    }
-    lowest >= 0 && highest < data_len as i128
 }
 
 impl Storage {
@@ -429,13 +365,13 @@ impl Storage {
 
     /// True when the elements are a contiguous `f64` buffer.
     #[must_use]
-    pub fn is_dense(&self) -> bool {
+    pub const fn is_dense(&self) -> bool {
         matches!(self, Self::Dense(_))
     }
 
     /// True when the elements are a strided window.
     #[must_use]
-    pub fn is_view(&self) -> bool {
+    pub const fn is_view(&self) -> bool {
         matches!(self, Self::View(_) | Self::SharedSlice(_))
     }
 }
@@ -464,48 +400,34 @@ pub struct TensorData {
 /// The row-major strides of a shape: `strides[last] = 1`, and each earlier
 /// stride is the product of the extents after it.
 #[must_use]
-pub(crate) fn row_major_strides(shape: &[usize]) -> Vec<usize> {
-    let mut strides = vec![1usize; shape.len()];
-    for axis in (0..shape.len().saturating_sub(1)).rev() {
-        strides[axis] = strides[axis + 1] * shape[axis + 1];
+pub(crate) fn row_major_strides(shape: &[usize]) -> Option<Vec<usize>> {
+    let mut strides = vec![1; shape.len()];
+    let mut stride = 1usize;
+    for (slot, extent) in strides
+        .iter_mut()
+        .rev()
+        .skip(1)
+        .zip(shape.iter().skip(1).rev())
+    {
+        stride = stride.checked_mul(*extent)?;
+        *slot = stride;
     }
-    strides
+    Some(strides)
 }
 
-/// The compensated (Kahan–Babuška/Neumaier) sum of an `f64` sequence
-/// (§6.6.6, §9.5).
-///
-/// A plain left-to-right fold loses the small terms as soon as one term is
-/// much larger than the running total: ten tenths sum to `0.9999999999999999`
-/// and `1e16 + 1 - 1e16` folds to `0`, while the exact answers are `1` and `1`.
-/// The compensation accumulates the rounding error of each step in a second
-/// accumulator, which is what makes the reduction "pairwise/Kahan" in the sense
-/// the standard requires: the error no longer grows with the sequence length,
-/// and a result that is exactly representable comes out exactly.
-#[must_use]
-pub fn kahan_sum(data: &[f64]) -> f64 {
-    let mut total = 0.0f64;
-    let mut compensation = 0.0f64;
-    for value in data {
-        let next = total + value;
-        // Add back the part of the addition that was rounded away. The branch
-        // is Neumaier's correction: it also recovers the small term when the
-        // large term comes last, which the original Kahan step does not.
-        if total.abs() >= value.abs() {
-            compensation += (total - next) + value;
-        } else {
-            compensation += (value - next) + total;
-        }
-        total = next;
-    }
-    total + compensation
+/// The physical element count, allowing zero extents and rejecting overflow.
+pub(crate) fn checked_element_count(shape: &[usize]) -> Option<usize> {
+    shape
+        .iter()
+        .try_fold(1usize, |count, extent| count.checked_mul(*extent))
+        .or_else(|| shape.contains(&0).then_some(0))
 }
 
 impl TensorData {
     /// Build an unverified tensor from host data. No element schema is inferred
     /// for empty boxed storage; use the checked constructor for explicit proof.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         shape: Vec<usize>,
         storage: Storage,
         dim: Dim,
@@ -547,15 +469,22 @@ impl TensorData {
         Ok(tensor)
     }
 
-    /// The number of elements implied by the shape.
+    /// The number of elements implied by the shape, saturated at `usize::MAX`.
+    /// Use [`Self::checked_element_count`] to reject overflow.
     #[must_use]
     pub fn element_count(shape: &[usize]) -> usize {
-        shape.iter().product()
+        checked_element_count(shape).unwrap_or(usize::MAX)
+    }
+
+    /// The element count, or `None` if a nonempty shape overflows `usize`.
+    #[must_use]
+    pub fn checked_element_count(&self) -> Option<usize> {
+        checked_element_count(&self.shape)
     }
 
     /// The rank.
     #[must_use]
-    pub fn rank(&self) -> usize {
+    pub const fn rank(&self) -> usize {
         self.shape.len()
     }
 
@@ -578,20 +507,18 @@ impl TensorData {
                 let mut value = view.source.get_flat(view.offset.checked_add(index)?)?;
                 if let Value::Num(number) = &mut value {
                     number.dim = self.dim.clone();
-                    number.display = self.display.clone();
+                    number.display.clone_from(&self.display);
                 }
                 Some(value)
             },
             | Storage::View(view) => {
-                let position = self.view_position(view, index)?;
-                view.data
-                    .get(position)
-                    .map(|value| self.float_value(*value))
+                view.element_at(&self.shape, index)
+                    .map(|value| self.float_value(value))
             },
             | Storage::Exact(items) | Storage::TypedExact(items, ExactRep::Real) => {
                 items.get(index).map(|value| {
                     let mut num = NumVal::exact(value.clone(), self.dim.clone());
-                    num.display = self.display.clone();
+                    num.display.clone_from(&self.display);
                     Value::Num(num)
                 })
             },
@@ -601,7 +528,7 @@ impl TensorData {
                     return None;
                 }
                 Some(Value::Num(NumVal {
-                    kind: NumKind::Int(value.to_integer()),
+                    kind: NumKind::Int(value.to_integer().into()),
                     dim: self.dim.clone(),
                     display: self.display.clone(),
                 }))
@@ -617,36 +544,8 @@ impl TensorData {
         value: f64,
     ) -> Value {
         let mut num = NumVal::float(value, self.dim.clone());
-        num.display = self.display.clone();
+        num.display.clone_from(&self.display);
         Value::Num(num)
-    }
-
-    /// The buffer position of a logical index, for a view.
-    ///
-    /// The step along a reversed axis is negative, so the walk is signed:
-    /// `checked_add_signed` rejects a position that would fall below the start
-    /// of the buffer instead of wrapping it to a huge `usize` that happens to
-    /// land inside the buffer.
-    fn view_position(
-        &self,
-        view: &View,
-        index: usize,
-    ) -> Option<usize> {
-        if index >= view.len
-            || view.strides.len() != self.shape.len()
-            || view.reversed.len() != self.shape.len()
-        {
-            return None;
-        }
-        let mut rest = index;
-        let mut position = view.offset;
-        for axis in (0..view.strides.len()).rev() {
-            let extent = self.shape[axis].max(1);
-            let coordinate = isize::try_from(rest % extent).ok()?;
-            position = position.checked_add_signed(view.step(axis)?.checked_mul(coordinate)?)?;
-            rest /= extent;
-        }
-        Some(position)
     }
 
     /// The `f64` buffer, when the tensor's elements are contiguous in one.
@@ -662,9 +561,14 @@ impl TensorData {
     #[must_use]
     pub fn dense(&self) -> Option<&[f64]> {
         match &self.storage {
-            | Storage::Dense(items) => Some(items.as_slice()),
-            | Storage::View(view) => self.contiguous_window(view),
+            | Storage::Dense(items) => {
+                (self.checked_element_count()? == items.len()).then_some(items.as_slice())
+            },
+            | Storage::View(view) => view.contiguous_slice(&self.shape),
             | Storage::SharedSlice(view) => {
+                if self.checked_element_count()? != view.len {
+                    return None;
+                }
                 view.source
                     .dense()?
                     .get(view.offset..view.offset.checked_add(view.len)?)
@@ -675,59 +579,29 @@ impl TensorData {
 
     /// The `f64` elements in row-major order, borrowing when possible.
     ///
-    /// This is the boundary every `f64` kernel uses. A contiguous tensor —
-    /// dense, or a view with row-major strides — is borrowed, so the fast path
-    /// costs nothing extra. A strided view is walked once into an owned
-    /// buffer: materialising at the kernel boundary is what keeps a kernel
-    /// that cannot walk strides from computing a wrong value. A *reversed*
-    /// view takes the same owned path even when its strides are otherwise
-    /// row-major, because its elements are not adjacent in the buffer.
+    /// Kernels that require a contiguous slice use this boundary. Dense
+    /// storage and forward row-major views are borrowed. Strided and
+    /// reversed views are materialised in logical order.
     ///
-    /// Returns `None` for a class that is not `f64` at all.
+    /// Returns `None` when storage is neither `f64` nor a view of it, when the
+    /// storage disagrees with the shape, or when materialisation fails.
     #[must_use]
     pub fn dense_flat(&self) -> Option<Cow<'_, [f64]>> {
         match &self.storage {
-            | Storage::Dense(items) => Some(Cow::Borrowed(items.as_slice())),
+            | Storage::Dense(_) => self.dense().map(Cow::Borrowed),
             | Storage::SharedSlice(view) => {
+                if self.checked_element_count()? != view.len {
+                    return None;
+                }
                 let end = view.offset.checked_add(view.len)?;
                 match view.source.dense_flat()? {
                     | Cow::Borrowed(data) => Some(Cow::Borrowed(data.get(view.offset..end)?)),
                     | Cow::Owned(data) => Some(Cow::Owned(data.get(view.offset..end)?.to_vec())),
                 }
             },
-            | Storage::View(view) => {
-                match self.contiguous_window(view) {
-                    | Some(window) => Some(Cow::Borrowed(window)),
-                    | None => {
-                        let mut out = Vec::with_capacity(view.len);
-                        for index in 0..view.len {
-                            out.push(*view.data.get(self.view_position(view, index)?)?);
-                        }
-                        Some(Cow::Owned(out))
-                    },
-                }
-            },
+            | Storage::View(view) => view.dense_flat(&self.shape),
             | _ => None,
         }
-    }
-
-    /// The contiguous window a view names, when its strides are row-major.
-    ///
-    /// A reversed axis is never contiguous, even when its magnitude is 1: the
-    /// window's elements run backwards through the buffer, so no single slice
-    /// of it holds them in logical order.
-    fn contiguous_window<'a>(
-        &self,
-        view: &'a View,
-    ) -> Option<&'a [f64]> {
-        if view.reversed.iter().any(|reversed| *reversed) {
-            return None;
-        }
-        if view.strides != row_major_strides(&self.shape) {
-            return None;
-        }
-        view.data
-            .get(view.offset..view.offset.checked_add(view.len)?)
     }
 
     /// The buffer this tensor's elements live in, when it has one.
@@ -735,7 +609,7 @@ impl TensorData {
     /// Two tensors share storage exactly when these are `Rc::ptr_eq`: that is
     /// the property a slice must have, and the one a copying slice lacks.
     #[must_use]
-    pub fn buffer(&self) -> Option<&Rc<Vec<f64>>> {
+    pub const fn buffer(&self) -> Option<&Rc<Vec<f64>>> {
         match &self.storage {
             | Storage::Dense(data) => Some(data),
             | Storage::View(view) => Some(&view.data),
@@ -745,13 +619,13 @@ impl TensorData {
 
     /// True when the tensor is a contiguous `f64` buffer.
     #[must_use]
-    pub fn is_dense(&self) -> bool {
+    pub const fn is_dense(&self) -> bool {
         self.storage.is_dense()
     }
 
     /// True when the elements are a strided window.
     #[must_use]
-    pub fn is_view(&self) -> bool {
+    pub const fn is_view(&self) -> bool {
         self.storage.is_view()
     }
 
@@ -764,7 +638,7 @@ impl TensorData {
 
     /// The offset of a view, or `0` for a contiguous class.
     #[must_use]
-    pub fn offset(&self) -> usize {
+    pub const fn offset(&self) -> usize {
         match &self.storage {
             | Storage::View(view) => view.offset,
             | _ => 0,
@@ -795,22 +669,6 @@ impl TensorData {
         }
     }
 
-    /// A dense tensor with the same shape, dimension and display.
-    fn dense_with(
-        &self,
-        data: Vec<f64>,
-        dim: Dim,
-        display: Option<Rc<UnitDef>>,
-    ) -> Value {
-        Value::Tensor(Rc::new(Self {
-            verified_element: None,
-            shape: self.shape.clone(),
-            storage: Storage::Dense(Rc::new(data)),
-            dim,
-            display,
-        }))
-    }
-
     /// The element at a multi-dimensional index, with negative indices counted
     /// from the end (§6.6.4).
     #[must_use]
@@ -822,7 +680,7 @@ impl TensorData {
         self.get_flat(flat)
     }
 
-    fn flat_index(
+    pub(crate) fn flat_index(
         &self,
         indices: &[isize],
     ) -> Option<usize> {
@@ -831,16 +689,15 @@ impl TensorData {
         }
         let mut flat = 0usize;
         for (index, extent) in indices.iter().zip(self.shape.iter()) {
-            let extent = isize::try_from(*extent).ok()?;
             let normalized = if *index < 0 {
-                extent + index
+                extent.checked_add_signed(*index)?
             } else {
-                *index
+                usize::try_from(*index).ok()?
             };
-            if normalized < 0 || normalized >= extent {
+            if normalized >= *extent {
                 return None;
             }
-            flat = flat * usize::try_from(extent).ok()? + usize::try_from(normalized).ok()?;
+            flat = flat.checked_mul(*extent)?.checked_add(normalized)?;
         }
         Some(flat)
     }
@@ -853,13 +710,16 @@ impl TensorData {
         self: &Rc<Self>,
         start: usize,
     ) -> Option<Rc<Self>> {
-        if self.rank() != 1 || self.shape[0] != self.storage.len() || start > self.shape[0] {
+        let [extent] = self.shape.as_slice() else {
+            return None;
+        };
+        if *extent != self.storage.len() {
             return None;
         }
+        let len = extent.checked_sub(start)?;
         if start == 0 {
             return Some(self.clone());
         }
-        let len = self.shape[0] - start;
         let (source, offset) = match &self.storage {
             | Storage::SharedSlice(view) => (view.source.clone(), view.offset.checked_add(start)?),
             | _ => (self.clone(), start),
@@ -876,571 +736,12 @@ impl TensorData {
     /// The elements in row-major order.
     #[must_use]
     pub fn elements(&self) -> Vec<Value> {
-        (0..self.storage.len())
-            .filter_map(|index| self.get_flat(index))
-            .collect()
+        self.iter_elements().collect()
     }
 
-    /// Elementwise `op` over two `f64` tensors of the same shape.
-    ///
-    /// Returns `None` — leaving the caller on the boxed path — unless both
-    /// operands are `f64` tensors, their shapes are equal (no broadcasting),
-    /// and the buffer is non-empty. A strided operand is materialised first
-    /// ([`TensorData::dense_flat`]), so a non-contiguous view takes the same
-    /// loop over the same values in the same order. Every result is produced
-    /// with the same IEEE operation, in the same order, as the boxed loop, so
-    /// the two paths are bit-identical.
-    ///
-    /// The display unit is dropped, exactly as the boxed path drops it: the
-    /// elementwise result is a fresh `NumVal::float`, and a `NumVal` built by
-    /// arithmetic carries no display unit.
-    #[must_use]
-    pub fn dense_binary(
-        &self,
-        op: BinOp,
-        right: &Self,
-    ) -> Option<Value> {
-        let (left_data, right_data) = (self.dense_flat()?, right.dense_flat()?);
-        if self.shape != right.shape || left_data.is_empty() {
-            return None;
-        }
-        let dim = match op {
-            | BinOp::Add | BinOp::Sub => self.dim.clone(),
-            | BinOp::Mul => self.dim.mul(&right.dim),
-            | BinOp::Div => self.dim.div(&right.dim),
-            | BinOp::Pow => {
-                // The boxed path takes the tensor's dimension from the first
-                // element it builds, so the first exponent decides it here too.
-                let exponent = BigRational::from_float(right_data[0])?;
-                self.dim.pow(&exponent)
-            },
-            | _ => return None,
-        };
-        let mut data = Vec::with_capacity(left_data.len());
-        for (a, b) in left_data.iter().zip(right_data.iter()) {
-            data.push(match op {
-                | BinOp::Add => a + b,
-                | BinOp::Sub => a - b,
-                | BinOp::Mul => a * b,
-                | BinOp::Div => a / b,
-                | BinOp::Pow => a.powf(*b),
-                | _ => return None,
-            });
-        }
-        Some(self.dense_with(data, dim, None))
-    }
-
-    /// Elementwise `op` between an `f64` tensor and a `Float` scalar.
-    ///
-    /// `flipped` means the scalar was on the left (`2.0 - xs`). This fast
-    /// path handles a `Float` scalar. Integer scalars use the generic path,
-    /// whose elementwise arithmetic applies the same Int/Float promotion.
-    ///
-    /// `scalar ^ tensor` is excluded: its dimension depends on every
-    /// exponent, so no single result dimension exists.
-    #[must_use]
-    pub fn dense_scalar(
-        &self,
-        op: BinOp,
-        scalar: &NumVal,
-        flipped: bool,
-    ) -> Option<Value> {
-        let data = self.dense_flat()?;
-        let NumKind::Float(number) = &scalar.kind else {
-            return None;
-        };
-        let number = *number;
-        if data.is_empty() || (flipped && op == BinOp::Pow) {
-            return None;
-        }
-        let dim = match op {
-            | BinOp::Add | BinOp::Sub => {
-                if flipped {
-                    scalar.dim.clone()
-                } else {
-                    self.dim.clone()
-                }
-            },
-            | BinOp::Mul => self.dim.mul(&scalar.dim),
-            | BinOp::Div => {
-                if flipped {
-                    scalar.dim.div(&self.dim)
-                } else {
-                    self.dim.div(&scalar.dim)
-                }
-            },
-            | BinOp::Pow => self.dim.pow(&BigRational::from_float(number)?),
-            | _ => return None,
-        };
-        let mut out = Vec::with_capacity(data.len());
-        for element in data.iter() {
-            let (a, b) = if flipped {
-                (number, *element)
-            } else {
-                (*element, number)
-            };
-            out.push(match op {
-                | BinOp::Add => a + b,
-                | BinOp::Sub => a - b,
-                | BinOp::Mul => a * b,
-                | BinOp::Div => a / b,
-                | BinOp::Pow => a.powf(b),
-                | _ => return None,
-            });
-        }
-        Some(self.dense_with(out, dim, None))
-    }
-
-    /// The `+` reduction over an `f64` tensor, using the compensated
-    /// summation §6.6.6 and §9.5 ask for.
-    ///
-    /// A strided view is materialised first, so the fold order — and
-    /// therefore the bits — is the one the boxed reduction produces.
-    ///
-    /// A one-element tensor keeps its display unit, because the boxed
-    /// reduction returns the element it started from unchanged.
-    #[must_use]
-    pub fn dense_sum(&self) -> Option<NumVal> {
-        let data = self.dense_flat()?;
-        if data.is_empty() {
-            return None;
-        }
-        let total = kahan_sum(&data);
-        let mut num = NumVal::float(total, self.dim.clone());
-        if data.len() == 1 {
-            num.display = self.display.clone();
-        }
-        Some(num)
-    }
-
-    /// The `*` reduction over an `f64` tensor, folded left to right.
-    #[must_use]
-    pub fn dense_prod(&self) -> Option<NumVal> {
-        let data = self.dense_flat()?;
-        let (&first, rest) = data.split_first()?;
-        let mut total = first;
-        for value in rest {
-            total *= value;
-        }
-        let mut num = NumVal::float(total, self.dim.clone());
-        if rest.is_empty() {
-            num.display = self.display.clone();
-        }
-        Some(num)
-    }
-
-    /// The `f64` `@` for the rank pairs §3.5.3a defines, or `None`.
-    ///
-    /// `matrix @ matrix` runs on `aevia_std::linalg::matmul`, a blocked kernel,
-    /// which reassociates the inner sum: it agrees with the sequential loop to
-    /// rounding, not bit for bit. Every other rank pair is a vector kernel and
-    /// is still the loop — it is memory-bound, was not measured, and its call
-    /// overhead would dominate at the sizes the language uses it at. A zero
-    /// inner extent is left to the boxed path, which answers a dimensionless
-    /// zero.
-    #[must_use]
-    pub fn dense_matmul(
-        &self,
-        right: &Self,
-    ) -> Option<Value> {
-        let (a, b) = (self.dense_flat()?, right.dense_flat()?);
-        match (self.rank(), right.rank()) {
-            | (2, 2) => {
-                let (m, k) = (self.shape[0], self.shape[1]);
-                let (k2, n) = (right.shape[0], right.shape[1]);
-                if k != k2 || k == 0 || m == 0 || n == 0 {
-                    return None;
-                }
-                let data = aevia_std::linalg::matmul(m, k, n, &a, &b)
-                    .unwrap_or_else(|_| matmul_f64_loop(m, k, n, &a, &b));
-                // The result is `m × n`, which is not `self.shape` unless
-                // `k == n`: `dense_with` would keep the left operand's shape.
-                Some(Value::Tensor(Rc::new(Self {
-                    verified_element: None,
-                    shape: vec![m, n],
-                    storage: Storage::Dense(Rc::new(data)),
-                    dim: self.dim.mul(&right.dim),
-                    display: None,
-                })))
-            },
-            | (2, 1) => {
-                let (m, k) = (self.shape[0], self.shape[1]);
-                if k != right.shape[0] || k == 0 || m == 0 {
-                    return None;
-                }
-                let mut data = vec![0.0; m];
-                for row in 0..m {
-                    let mut total = a[row * k] * b[0];
-                    for inner in 1..k {
-                        total += a[row * k + inner] * b[inner];
-                    }
-                    data[row] = total;
-                }
-                Some(Value::Tensor(Rc::new(Self {
-                    verified_element: None,
-                    shape: vec![m],
-                    storage: Storage::Dense(Rc::new(data)),
-                    dim: self.dim.mul(&right.dim),
-                    display: None,
-                })))
-            },
-            | (1, 2) => {
-                let k = self.shape[0];
-                let (k2, n) = (right.shape[0], right.shape[1]);
-                if k != k2 || k == 0 || n == 0 {
-                    return None;
-                }
-                let mut data = vec![0.0; n];
-                for column in 0..n {
-                    let mut total = a[0] * b[column];
-                    for inner in 1..k {
-                        total += a[inner] * b[inner * n + column];
-                    }
-                    data[column] = total;
-                }
-                Some(Value::Tensor(Rc::new(Self {
-                    verified_element: None,
-                    shape: vec![n],
-                    storage: Storage::Dense(Rc::new(data)),
-                    dim: self.dim.mul(&right.dim),
-                    display: None,
-                })))
-            },
-            | (1, 1) => {
-                let k = self.shape[0];
-                if k != right.shape[0] || k == 0 {
-                    return None;
-                }
-                let mut total = a[0] * b[0];
-                for index in 1..k {
-                    total += a[index] * b[index];
-                }
-                Some(Value::Num(NumVal::float(total, self.dim.mul(&right.dim))))
-            },
-            | _ => None,
-        }
-    }
-
-    /// The `f64` buffer a slice of this tensor would walk, with the offset,
-    /// strides and directions that describe its current layout.
-    ///
-    /// A dense tensor answers with its buffer and the row-major strides of its
-    /// shape, every axis forward; a view answers with the buffer, offset,
-    /// strides and directions it already has, which is what makes a slice of a
-    /// view a view of the *same* buffer — including a slice of a reversed one.
-    fn f64_window(&self) -> Option<(Rc<Vec<f64>>, usize, Vec<usize>, Vec<bool>)> {
-        match &self.storage {
-            | Storage::Dense(data) => {
-                Some((
-                    data.clone(),
-                    0,
-                    row_major_strides(&self.shape),
-                    vec![false; self.rank()],
-                ))
-            },
-            | Storage::SharedSlice(view) => {
-                let (data, offset, strides, reversed) = view.source.f64_window()?;
-                if strides.len() != 1 || reversed.len() != 1 {
-                    return None;
-                }
-                let step = signed_stride(*strides.first()?, *reversed.first()?)?;
-                let shift = step.checked_mul(isize::try_from(view.offset).ok()?)?;
-                let start = offset.checked_add_signed(shift)?;
-                if self.rank() != 1 {
-                    // A host may reuse logical suffix storage under a new
-                    // shape. Only a contiguous range has a strided f64 layout
-                    // in that shape; other layouts use the logical fallback.
-                    self.dense()?;
-                    return Some((
-                        data,
-                        start,
-                        row_major_strides(&self.shape),
-                        vec![false; self.rank()],
-                    ));
-                }
-                Some((data, start, strides, reversed))
-            },
-            | Storage::View(view) => {
-                Some((
-                    view.data.clone(),
-                    view.offset,
-                    view.strides.clone(),
-                    view.reversed.clone(),
-                ))
-            },
-            | _ => None,
-        }
-    }
-
-    /// The sub-tensor named by one `(start, end)` range per axis, as a view.
-    ///
-    /// Slicing moves the offset and keeps the parent's strides and directions,
-    /// so nothing is copied and `xs[1:3]` shares `xs`'s buffer. A range along a
-    /// reversed axis keeps that axis reversed — `xs[::-1][0:2]` is the last two
-    /// elements, in the order the reversal gave them — because a slice selects
-    /// a sub-sequence of the sequence it was given, not of the buffer.
-    ///
-    /// The result is a view even when its window happens to be contiguous: the
-    /// class is not observable, and a contiguous view already takes the `f64`
-    /// path through [`TensorData::dense_flat`].
-    ///
-    /// Returns `None` when the elements are not in an `f64` buffer, when the
-    /// ranges do not match the rank, when a range is out of bounds, or when
-    /// the result is empty (an empty tensor stays [`Storage::Boxed`], as
-    /// everywhere else).
-    #[must_use]
-    pub fn slice_view(
-        &self,
-        ranges: &[(usize, usize)],
-    ) -> Option<Self> {
-        let (data, offset, strides, reversed) = self.f64_window()?;
-        if ranges.len() != self.rank() {
-            return None;
-        }
-        let mut shape = Vec::with_capacity(ranges.len());
-        let mut start = offset;
-        for (axis, (begin, end)) in ranges.iter().enumerate() {
-            let extent = self.shape[axis];
-            if *begin > *end || *end > extent {
-                return None;
-            }
-            shape.push(*end - *begin);
-            // The offset moves by whole logical steps, so a reversed axis moves
-            // it backwards; `checked_add_signed` refuses a start before the
-            // buffer rather than wrapping it.
-            let step = signed_stride(strides[axis], reversed[axis])?;
-            let begin = isize::try_from(*begin).ok()?;
-            start = start.checked_add_signed(step.checked_mul(begin)?)?;
-        }
-        let len: usize = shape.iter().product();
-        // Both ends of the window must be inside the buffer: with a reversed
-        // axis the furthest element is at coordinate 0, not at the last one.
-        if len == 0 || !window_fits(&shape, &strides, &reversed, start, data.len()) {
-            return None;
-        }
-        Some(Self {
-            verified_element: self.verified_element.clone(),
-            shape,
-            storage: Storage::View(View {
-                data,
-                offset: start,
-                strides,
-                reversed,
-                len,
-            }),
-            dim: self.dim.clone(),
-            display: self.display.clone(),
-        })
-    }
-
-    /// The sub-tensor named by one `(first, count, step)` walk per axis, as a
-    /// view (§6.6.4).
-    ///
-    /// The stride of an axis is multiplied by the step and a negative step
-    /// flips the axis's direction, so a stepped slice moves no data: `xs[::2]`
-    /// reads every second element of the same buffer and `xs[::-1]` is that
-    /// buffer walked backwards from its end. That is what makes a negative
-    /// step a view rather than a copy, and why `Rc::ptr_eq` holds between it
-    /// and its source.
-    ///
-    /// Returns `None` for a class that is not in an `f64` buffer, for a walk
-    /// that leaves the buffer, and for an empty result (an empty tensor stays
-    /// [`Storage::Boxed`], as everywhere else).
-    #[must_use]
-    pub fn slice_step_view(
-        &self,
-        walks: &[(usize, usize, isize)],
-    ) -> Option<Self> {
-        let (data, offset, strides, reversed) = self.f64_window()?;
-        if walks.len() != self.rank() {
-            return None;
-        }
-        let mut shape = Vec::with_capacity(walks.len());
-        let mut new_strides = Vec::with_capacity(walks.len());
-        let mut new_reversed = Vec::with_capacity(walks.len());
-        let mut start = offset;
-        for (axis, (first, count, step)) in walks.iter().enumerate() {
-            if *count > 0 && *first >= self.shape[axis] {
-                return None;
-            }
-            let magnitude = step.unsigned_abs();
-            if magnitude == 0 {
-                return None;
-            }
-            // The first element of the walk, in the parent's window.
-            let base = signed_stride(strides[axis], reversed[axis])?;
-            start = start.checked_add_signed(base.checked_mul(isize::try_from(*first).ok()?)?)?;
-            shape.push(*count);
-            new_strides.push(strides[axis].checked_mul(magnitude)?);
-            // The walk runs backwards exactly when the parent's direction and
-            // the step's sign disagree.
-            new_reversed.push(reversed[axis] != (*step < 0));
-        }
-        let len: usize = shape.iter().product();
-        if len == 0 || !window_fits(&shape, &new_strides, &new_reversed, start, data.len()) {
-            return None;
-        }
-        Some(Self {
-            verified_element: self.verified_element.clone(),
-            shape,
-            storage: Storage::View(View {
-                data,
-                offset: start,
-                strides: new_strides,
-                reversed: new_reversed,
-                len,
-            }),
-            dim: self.dim.clone(),
-            display: self.display.clone(),
-        })
-    }
-
-    /// The sub-tensor at `fixed` coordinates, keeping the trailing axes, as a
-    /// view.
-    ///
-    /// This is `m[0]` on a matrix: the leading axes are pinned and the rest
-    /// are the window, so the result shares the parent's buffer instead of
-    /// copying a row out of it. Pinning a reversed axis moves the offset
-    /// backwards, and the trailing axes keep the direction they had.
-    ///
-    /// Returns `None` when the elements are not in an `f64` buffer, when
-    /// `fixed` names more axes than the tensor has, when a coordinate is out
-    /// of range, or when the result is empty.
-    #[must_use]
-    pub fn index_view(
-        &self,
-        fixed: &[usize],
-    ) -> Option<Self> {
-        let (data, offset, strides, reversed) = self.f64_window()?;
-        if fixed.len() > self.rank() {
-            return None;
-        }
-        let mut start = offset;
-        for (axis, coordinate) in fixed.iter().enumerate() {
-            if *coordinate >= self.shape[axis] {
-                return None;
-            }
-            let step = signed_stride(strides[axis], reversed[axis])?;
-            let coordinate = isize::try_from(*coordinate).ok()?;
-            start = start.checked_add_signed(step.checked_mul(coordinate)?)?;
-        }
-        let shape = self.shape[fixed.len()..].to_vec();
-        let len: usize = shape.iter().product();
-        if len == 0
-            || !window_fits(
-                &shape,
-                &strides[fixed.len()..],
-                &reversed[fixed.len()..],
-                start,
-                data.len(),
-            )
-        {
-            return None;
-        }
-        Some(Self {
-            verified_element: self.verified_element.clone(),
-            shape,
-            storage: Storage::View(View {
-                data,
-                offset: start,
-                strides: strides[fixed.len()..].to_vec(),
-                reversed: reversed[fixed.len()..].to_vec(),
-                len,
-            }),
-            dim: self.dim.clone(),
-            display: self.display.clone(),
-        })
-    }
-
-    /// The rank-2 transpose as a view: the strides are permuted, not the data.
-    ///
-    /// `mᵀ[i, j] == m[j, i]` holds by construction — the strides and the
-    /// directions swap with the extents — so a transpose moves no element. It
-    /// is not contiguous unless the matrix is 1×n or n×1, which is exactly the
-    /// case where [`TensorData::dense_flat`] can still borrow. A transpose of
-    /// a reversed matrix keeps the reversal on the axis it moved to.
-    ///
-    /// Returns `None` when the elements are not in an `f64` buffer, when the
-    /// tensor is not rank 2, or when it is empty.
-    #[must_use]
-    pub fn transposed_view(&self) -> Option<Self> {
-        let (data, offset, strides, reversed) = self.f64_window()?;
-        if self.rank() != 2 {
-            return None;
-        }
-        let shape = vec![self.shape[1], self.shape[0]];
-        let strides = vec![strides[1], strides[0]];
-        let reversed = vec![reversed[1], reversed[0]];
-        let len: usize = shape.iter().product();
-        if len == 0 || !window_fits(&shape, &strides, &reversed, offset, data.len()) {
-            return None;
-        }
-        Some(Self {
-            verified_element: self.verified_element.clone(),
-            shape,
-            storage: Storage::View(View {
-                data,
-                offset,
-                strides,
-                reversed,
-                len,
-            }),
-            dim: self.dim.clone(),
-            display: self.display.clone(),
-        })
-    }
-
-    /// The same window with one axis running the other way, as a view.
-    ///
-    /// This is `xs[::-1]` on a vector, a flipped convolution kernel, or an axis
-    /// a fold walked backwards: no element moves and the buffer is still the
-    /// parent's, so `Rc::ptr_eq` holds against the source. The offset moves to
-    /// the far end of the axis and the axis' direction flips, which is why two
-    /// reversals of one axis are the identity and give the original offset
-    /// back.
-    ///
-    /// The result is never contiguous, even for a vector of stride 1: its
-    /// elements are adjacent in the buffer but in the opposite order, so
-    /// [`TensorData::dense_flat`] materialises it before a kernel sees it.
-    ///
-    /// Returns `None` when the elements are not in an `f64` buffer, when
-    /// `axis` is not a dimension, or when the tensor is empty.
-    #[must_use]
-    pub fn reversed_view(
-        &self,
-        axis: usize,
-    ) -> Option<Self> {
-        let (data, offset, strides, mut reversed) = self.f64_window()?;
-        let extent = *self.shape.get(axis)?;
-        let len: usize = self.shape.iter().product();
-        if len == 0 || extent == 0 {
-            return None;
-        }
-        let step = signed_stride(strides[axis], reversed[axis])?;
-        let span = step.checked_mul(isize::try_from(extent - 1).ok()?)?;
-        let start = offset.checked_add_signed(span)?;
-        // An axis of extent 1 has no direction to flip: every coordinate on it
-        // names the same element, and flipping would make a contiguous view
-        // look strided for nothing.
-        if extent > 1 {
-            reversed[axis] = !reversed[axis];
-        }
-        if !window_fits(&self.shape, &strides, &reversed, start, data.len()) {
-            return None;
-        }
-        Some(Self {
-            verified_element: self.verified_element.clone(),
-            shape: self.shape.clone(),
-            storage: Storage::View(View {
-                data,
-                offset: start,
-                strides,
-                reversed,
-                len,
-            }),
-            dim: self.dim.clone(),
-            display: self.display.clone(),
-        })
+    /// Reads each available element in row-major order as it is needed.
+    pub(crate) fn iter_elements(&self) -> impl Iterator<Item = Value> + '_ {
+        (0..self.storage.len()).filter_map(|index| self.get_flat(index))
     }
 
     /// A contiguous copy of this tensor's elements, when they are `f64`.
@@ -1472,19 +773,19 @@ impl TensorData {
     /// reversed view has no single contiguous buffer to point into, so it is
     /// materialised in row-major order.
     ///
-    /// Returns `None` for a view over a buffer that is not `f64`, which cannot
-    /// be constructed today.
+    /// Returns `None` when the element count is inconsistent or overflows,
+    /// or a view cannot be read.
     #[must_use]
     pub fn reshape_storage(
         &self,
         shape: &[usize],
     ) -> Option<Storage> {
-        let len = Self::element_count(shape);
+        let len = checked_element_count(shape)?;
+        if len != self.storage.len() || self.checked_element_count() != Some(len) {
+            return None;
+        }
         match &self.storage {
             | Storage::SharedSlice(_) => {
-                if len != self.storage.len() {
-                    return None;
-                }
                 if len == 0 {
                     return Some(match self.storage.backing() {
                         | Storage::Dense(_) | Storage::View(_) => {
@@ -1494,15 +795,15 @@ impl TensorData {
                         | Storage::TypedExact(_, rep) => Storage::TypedExact(Vec::new(), *rep),
                         | Storage::Bool(_) => Storage::Bool(Vec::new()),
                         | Storage::Boxed(_) => Storage::Boxed(Vec::new()),
-                        | Storage::SharedSlice(_) => unreachable!("unwrapped storage"),
+                        | Storage::SharedSlice(_) => return None,
                     });
                 }
                 if self.dense().is_some() {
-                    let (data, offset, _, _) = self.f64_window()?;
+                    let View { data, offset, .. } = self.f64_window()?;
                     return Some(Storage::View(View {
                         data,
                         offset,
-                        strides: row_major_strides(shape),
+                        strides: row_major_strides(shape)?,
                         reversed: vec![false; shape.len()],
                         len,
                     }));
@@ -1522,7 +823,7 @@ impl TensorData {
                     return Some(Storage::View(View {
                         data: view.data.clone(),
                         offset: view.offset,
-                        strides: row_major_strides(shape),
+                        strides: row_major_strides(shape)?,
                         reversed: vec![false; shape.len()],
                         len,
                     }));
@@ -1532,32 +833,6 @@ impl TensorData {
             | other => Some(other.clone()),
         }
     }
-}
-
-/// The sequential `rows × inner` by `inner × cols` product.
-///
-/// This is the loop `@` ran before the dispatcher existed. It is kept as the
-/// answer for a call `aevia_std::linalg::matmul` declines (a buffer whose
-/// length disagrees with its shape), so a shape this crate cannot express
-/// still produces a value rather than an error.
-fn matmul_f64_loop(
-    rows: usize,
-    inner: usize,
-    cols: usize,
-    a: &[f64],
-    b: &[f64],
-) -> Vec<f64> {
-    let mut data = vec![0.0; rows * cols];
-    for row in 0..rows {
-        for column in 0..cols {
-            let mut total = a[row * inner] * b[column];
-            for step in 1..inner {
-                total += a[row * inner + step] * b[step * cols + column];
-            }
-            data[row * cols + column] = total;
-        }
-    }
-    data
 }
 
 /// A record value; fields keep their insertion order.
@@ -1649,9 +924,37 @@ impl DynValue {
     pub fn as_scalar(&self) -> NumVal {
         let mut scalar = self.value.clone();
         scalar.dim = self.dim.clone();
-        scalar.display = self.display.clone();
+        scalar.display.clone_from(&self.display);
         scalar
     }
+}
+
+/// A reserved source name either awaits initialization or intentionally hides
+/// its first nonrecursive initializer's own binding in favor of the Prelude.
+pub(crate) enum SourceLookupFailure {
+    Uninitialized,
+    Prelude,
+}
+
+thread_local! {
+    static ENVIRONMENT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Records that a binding table name resolution reads (a scope's variables or
+/// source revisions, the interpreter's globals or method classes) changed.
+///
+/// Global references are resolved through an inline cache
+/// (`Interp::lookup_global_at`) whose entries are only valid for the epoch
+/// they were filled in; every mutation of such a table calls this first.
+/// Scopes are `Rc` and never cross threads, so a thread-local counter covers
+/// every table a thread's interpreter can read.
+pub fn bump_environment() {
+    ENVIRONMENT.with(|epoch| epoch.set(epoch.get().wrapping_add(1)));
+}
+
+/// The current environment epoch; see [`bump_environment`].
+pub(crate) fn environment_epoch() -> u64 {
+    ENVIRONMENT.with(std::cell::Cell::get)
 }
 
 /// A lexical environment: a persistent chain of scopes.
@@ -1661,14 +964,20 @@ impl DynValue {
 #[derive(Debug, Default)]
 pub struct Scope {
     /// The enclosing scope.
-    pub parent: Option<Rc<Scope>>,
+    pub parent: Option<Rc<Self>>,
     /// Bindings introduced here.
     pub vars: RefCell<crate::fxhash::FxHashMap<String, Value>>,
+    /// Top-level source revisions, including reserved forward declarations.
+    /// `None` spans hold bindings inherited from an earlier incremental batch.
+    source_revisions:
+        RefCell<crate::fxhash::FxHashMap<String, Vec<(Option<aevia_syntax::Span>, Option<Value>)>>>,
+    /// Ranges whose first nonrecursive initializer hides its own reservation.
+    source_initializers: RefCell<crate::fxhash::FxHashMap<String, Vec<aevia_syntax::Span>>>,
     /// Exact checked revision used by this lexical environment.
     pub(crate) context: Option<Rc<crate::evidence::ModuleContext>>,
     /// Imported module environments retain their own implementation revision.
     /// Module imports are acyclic, so these edges create no ownership cycle.
-    pub(crate) imports: Vec<Rc<Scope>>,
+    pub(crate) imports: Vec<Rc<Self>>,
     pub(crate) types: Option<Rc<crate::generics::CallBindings>>,
 }
 
@@ -1705,6 +1014,8 @@ impl Scope {
         Rc::new(Self {
             parent: Some(parent.clone()),
             vars: RefCell::default(),
+            source_revisions: RefCell::default(),
+            source_initializers: RefCell::default(),
             context: parent.context.clone(),
             imports: Vec::new(),
             types: parent.types.clone(),
@@ -1713,11 +1024,13 @@ impl Scope {
 
     pub(crate) fn module(
         context: Rc<crate::evidence::ModuleContext>,
-        imports: Vec<Rc<Scope>>,
+        imports: Vec<Rc<Self>>,
     ) -> Rc<Self> {
         Rc::new(Self {
             parent: None,
             vars: RefCell::default(),
+            source_revisions: RefCell::default(),
+            source_initializers: RefCell::default(),
             context: Some(context),
             imports,
             types: None,
@@ -1731,10 +1044,190 @@ impl Scope {
         Rc::new(Self {
             parent: Some(parent.clone()),
             vars: RefCell::default(),
+            source_revisions: RefCell::default(),
+            source_initializers: RefCell::default(),
             context: parent.context.clone(),
             imports: Vec::new(),
             types,
         })
+    }
+
+    /// Reserve every declaration before initialization so a deferred forward
+    /// reference cannot accidentally resolve to another revision of the name.
+    pub(crate) fn reserve_source(
+        &self,
+        name: &str,
+        visible: aevia_syntax::Span,
+    ) {
+        self.update_source_revision(name, visible, None);
+    }
+
+    pub(crate) fn reserve_initializer(
+        &self,
+        name: &str,
+        initializer: aevia_syntax::Span,
+    ) {
+        crate::value::bump_environment();
+        let mut initializers = self.source_initializers.borrow_mut();
+        let ranges = initializers.entry(name.to_string()).or_default();
+        if !ranges.contains(&initializer) {
+            ranges.push(initializer);
+        }
+    }
+
+    /// Install a source revision, keeping the public table ordered by source
+    /// position even when deferred initializers complete out of order.
+    pub(crate) fn bind_source(
+        &self,
+        name: &str,
+        value: Value,
+        visible: aevia_syntax::Span,
+    ) {
+        self.update_source_revision(name, visible, Some(value));
+    }
+
+    fn update_source_revision(
+        &self,
+        name: &str,
+        visible: aevia_syntax::Span,
+        value: Option<Value>,
+    ) {
+        bump_environment();
+        let mut revisions = self.source_revisions.borrow_mut();
+        let entries = revisions.entry(name.to_string()).or_insert_with(|| {
+            self.vars
+                .borrow()
+                .get(name)
+                .cloned()
+                .map_or_else(Vec::new, |value| vec![(None, Some(value))])
+        });
+        let publishing = value.is_some();
+        if let Some((_, target)) = entries.iter_mut().find(|(site, _)| *site == Some(visible)) {
+            if publishing {
+                *target = value;
+            }
+        } else {
+            entries.push((Some(visible), value));
+        }
+        if publishing
+            && let Some((_, Some(latest))) = entries
+                .iter()
+                .filter(|(_, value)| value.is_some())
+                .max_by_key(|(site, _)| site.map(|span| (span.file, span.start)))
+        {
+            self.vars
+                .borrow_mut()
+                .insert(name.to_string(), latest.clone());
+        }
+    }
+
+    /// Replace the declaration visible at `reference`, retaining all other
+    /// revisions. Source plugins use their attribute site so a later function
+    /// with the same name cannot steal the registration or its wrapper.
+    pub(crate) fn replace_source_at(
+        &self,
+        name: &str,
+        reference: aevia_syntax::Span,
+        replacement: Value,
+    ) -> Option<Value> {
+        crate::value::bump_environment();
+        let mut revisions = self.source_revisions.borrow_mut();
+        if let Some(entries) = revisions.get_mut(name) {
+            let preceding = entries
+                .iter()
+                .enumerate()
+                .filter(|(_, (site, _))| {
+                    site.is_some_and(|span| {
+                        span.file == reference.file && span.start <= reference.start
+                    })
+                })
+                .max_by_key(|(_, (site, _))| site.map(|span| span.start))
+                .map(|(index, _)| index);
+            let baseline = entries.iter().position(|(site, _)| site.is_none());
+            let first = entries
+                .iter()
+                .enumerate()
+                .filter(|(_, (site, _))| site.is_some_and(|span| span.file == reference.file))
+                .min_by_key(|(_, (site, _))| site.map(|span| span.start))
+                .map(|(index, _)| index);
+            if let Some((_, target)) = preceding
+                .or(baseline)
+                .or(first)
+                .and_then(|index| entries.get_mut(index))
+            {
+                let original = target.replace(replacement);
+                if let Some((_, Some(latest))) = entries
+                    .iter()
+                    .filter(|(_, value)| value.is_some())
+                    .max_by_key(|(site, _)| site.map(|span| (span.file, span.start)))
+                {
+                    self.vars
+                        .borrow_mut()
+                        .insert(name.to_string(), latest.clone());
+                }
+                return original;
+            }
+        }
+        self.vars.borrow_mut().insert(name.to_string(), replacement)
+    }
+
+    /// Resolve top-level references at their lexical source site. Local
+    /// scopes retain ordinary lexical shadowing. An unavailable selected
+    /// revision asks module initialization to defer, rather than falling back
+    /// to a differently typed revision from the public globals table.
+    pub(crate) fn lookup_at(
+        self: &Rc<Self>,
+        name: &str,
+        reference: aevia_syntax::Span,
+    ) -> Result<Option<Value>, SourceLookupFailure> {
+        let mut scope: &Self = self;
+        loop {
+            {
+                let revisions = scope.source_revisions.borrow();
+                if let Some(entries) = revisions.get(name) {
+                    let same_file = |site: &Option<aevia_syntax::Span>| {
+                        site.is_some_and(|span| span.file == reference.file)
+                    };
+                    let preceding = entries
+                        .iter()
+                        .filter(|(site, _)| {
+                            same_file(site)
+                                && site.is_some_and(|span| span.start <= reference.start)
+                        })
+                        .max_by_key(|(site, _)| site.map(|span| span.start));
+                    let baseline = entries.iter().find(|(site, _)| site.is_none());
+                    let first = entries
+                        .iter()
+                        .filter(|(site, _)| same_file(site))
+                        .min_by_key(|(site, _)| site.map(|span| span.start));
+                    // The checker hides the first nonrecursive definition
+                    // while checking its initializer. Its own references may
+                    // therefore denote a Prelude function/constant, while a
+                    // forward reference outside it still selects this source
+                    // reservation. Repeated definitions see the preceding one.
+                    if preceding.is_none()
+                        && baseline.is_none()
+                        && let Some((Some(first_site), _)) = first
+                        && self_initializes(scope, name, *first_site, reference)
+                    {
+                        return Err(SourceLookupFailure::Prelude);
+                    }
+                    if let Some((_, value)) = preceding.or(baseline).or(first) {
+                        return value
+                            .clone()
+                            .map(Some)
+                            .ok_or(SourceLookupFailure::Uninitialized);
+                    }
+                }
+            }
+            if let Some(value) = scope.vars.borrow().get(name) {
+                return Ok(Some(value.clone()));
+            }
+            let Some(parent) = scope.parent.as_deref() else {
+                return Ok(None);
+            };
+            scope = parent;
+        }
     }
 
     /// Looks a name up through the chain.
@@ -1745,7 +1238,7 @@ impl Scope {
     ) -> Option<Value> {
         // Walk by reference: cloning the `Rc` at every level was a refcount
         // round trip per scope for every global read.
-        let mut scope: &Scope = self;
+        let mut scope: &Self = self;
         loop {
             if let Some(value) = scope.vars.borrow().get(name) {
                 return Some(value.clone());
@@ -1753,6 +1246,34 @@ impl Scope {
             scope = scope.parent.as_deref()?;
         }
     }
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps the three distinct source-span predicates together"
+)]
+fn self_initializes(
+    scope: &Scope,
+    name: &str,
+    visible: aevia_syntax::Span,
+    reference: aevia_syntax::Span,
+) -> bool {
+    scope
+        .source_initializers
+        .borrow()
+        .get(name)
+        .is_some_and(|initializers| {
+            initializers.iter().any(|initializer| {
+                let in_reference_file = initializer.file == reference.file;
+                let surrounds_reference =
+                    initializer.start <= reference.start && reference.end <= initializer.end;
+                // The visibility site starts where this initializer ends.
+                // This ties the reference to this definition, not another one
+                // of the same name whose initializer happens to contain it.
+                let opens_definition = initializer.end == visible.start;
+                in_reference_file && surrounds_reference && opens_definition
+            })
+        })
 }
 
 /// What a closure runs.
@@ -1811,7 +1332,7 @@ pub struct Closure {
     pub(crate) captured_bindings: Option<Rc<crate::generics::CallBindings>>,
     /// Proof specialization copies preserve the original callable allocation.
     /// Weak pointer identity remains valid after its strong value is dropped.
-    pub(crate) canonical_origin: std::rc::Weak<Closure>,
+    pub(crate) canonical_origin: std::rc::Weak<Self>,
 }
 
 impl Closure {
@@ -1835,6 +1356,10 @@ impl Closure {
         }
     }
 
+    #[allow(
+        clippy::single_call_fn,
+        reason = "part of the callable identity API, shared with the JIT feature"
+    )]
     pub(crate) fn origin(closure: &Rc<Self>) -> std::rc::Weak<Self> {
         if std::rc::Weak::ptr_eq(&closure.canonical_origin, &std::rc::Weak::new()) {
             Rc::downgrade(closure)
@@ -1844,6 +1369,10 @@ impl Closure {
     }
 
     #[cfg(feature = "jit")]
+    #[allow(
+        clippy::single_call_fn,
+        reason = "canonical closure identity belongs with closure storage"
+    )]
     pub(crate) fn same_origin(
         left: &Rc<Self>,
         right: &Rc<Self>,
@@ -1938,6 +1467,26 @@ pub enum IoAction {
     },
     /// Reads one line from stdin.
     ReadLine,
+    /// Prints a prompt without a newline, flushes stdout, and reads one line from stdin.
+    Input(String),
+    /// Reads and validates an SVG file, returning its XML source.
+    ReadSvg(String),
+    /// Writes an SVG string to a file.
+    WriteSvg {
+        /// The path.
+        path: String,
+        /// The SVG contents.
+        contents: String,
+    },
+    /// Reads and decodes an animated GIF file.
+    ReadGif(String),
+    /// Encodes and writes an animated GIF file.
+    WriteGif {
+        /// The path.
+        path: String,
+        /// The animation frames and metadata.
+        animation: rssn::io::GifAnimation,
+    },
     /// Loads a source plugin (§13.5.2) and publishes its registrations.
     LoadPlugin(String),
     /// Starts `thunk()` as a concurrent task (§9.7.3); produces a `Task`.
@@ -1947,12 +1496,12 @@ pub enum IoAction {
     /// Runs an action and passes its result to a function.
     Bind {
         /// The action.
-        action: Rc<IoAction>,
+        action: Rc<Self>,
         /// The continuation.
         func: Value,
     },
     /// Runs actions in order, keeping the last result.
-    Seq(Vec<Rc<IoAction>>),
+    Seq(Vec<Rc<Self>>),
     /// Renders a plot specification to `plot.html`.
     Plot(String),
     /// Writes a plot to a named file.
@@ -1983,7 +1532,7 @@ pub enum IoAction {
         /// The capability bits that stay granted.
         allowed: u8,
         /// The sandboxed action.
-        action: Rc<IoAction>,
+        action: Rc<Self>,
     },
 }
 
@@ -2067,7 +1616,9 @@ pub struct Comparison {
 /// A kernel value retains the payload and independently established dimension evidence.
 #[derive(Clone, Debug)]
 pub struct KernelValue {
+    /// The retained kernel value.
     pub payload: aevia_rssn::Val,
+    /// Dimension information established independently of the payload.
     pub witness: aevia_rssn::witness::DimensionWitness,
     /// Aevia-side evidence exists only for a verified host-origin value.
     pub(crate) host_witness: Option<Rc<HostWitness>>,
@@ -2107,8 +1658,35 @@ pub(crate) enum HostWitnessNode {
 /// A value-level kernel error, retaining its original code and message.
 #[derive(Clone, Debug)]
 pub struct KernelErrorValue {
+    /// The kernel's original error code.
     pub code: String,
+    /// A human-readable description from the kernel.
     pub message: String,
+}
+
+/// A constructor, possibly partially applied (see [`Value::Ctor`]).
+#[derive(Clone, Debug)]
+pub struct CtorValue {
+    /// The type.
+    pub adt: AdtId,
+    /// The constructor index.
+    pub index: usize,
+    /// The name.
+    pub name: String,
+    /// How many fields it takes.
+    pub arity: usize,
+    /// Fields collected so far.
+    pub args: Vec<Value>,
+    /// Provenance for constructors resolved from checked source.
+    pub origin: Option<SourceCtorToken>,
+}
+
+impl Value {
+    /// A constructor value.
+    #[must_use]
+    pub fn ctor(ctor: CtorValue) -> Self {
+        Self::Ctor(Rc::new(ctor))
+    }
 }
 
 /// A runtime value.
@@ -2135,20 +1713,10 @@ pub enum Value {
     /// A Rust-implemented function.
     Native(Rc<NativeFn>),
     /// A constructor, possibly partially applied.
-    Ctor {
-        /// The type.
-        adt: AdtId,
-        /// The constructor index.
-        index: usize,
-        /// The name.
-        name: String,
-        /// How many fields it takes.
-        arity: usize,
-        /// Fields collected so far.
-        args: Vec<Value>,
-        /// Provenance for constructors resolved from checked source.
-        origin: Option<SourceCtorToken>,
-    },
+    ///
+    /// Shared: builtins are constructor values too (`arity == usize::MAX`),
+    /// so every reference to `map` or `mod` clones one.
+    Ctor(Rc<CtorValue>),
     /// A unit value such as `m`.
     UnitOf(Rc<UnitDef>),
     /// An IO action.
@@ -2181,7 +1749,7 @@ impl Value {
     /// An integer scalar.
     #[must_use]
     pub fn int(value: i64) -> Self {
-        Self::Num(NumVal::int(BigInt::from(value)))
+        Self::Num(NumVal::int(value))
     }
 
     /// A string.
@@ -2192,7 +1760,7 @@ impl Value {
 
     /// The scalar, when this is one.
     #[must_use]
-    pub fn as_num(&self) -> Option<&NumVal> {
+    pub const fn as_num(&self) -> Option<&NumVal> {
         match self {
             | Self::Num(num) => Some(num),
             | _ => None,
@@ -2207,13 +1775,13 @@ impl Value {
 
     /// True when the value is an IO action.
     #[must_use]
-    pub fn is_io(&self) -> bool {
+    pub const fn is_io(&self) -> bool {
         matches!(self, Self::Io(_))
     }
 
     /// The runtime type name, for diagnostics.
     #[must_use]
-    pub fn type_name(&self) -> &'static str {
+    pub const fn type_name(&self) -> &'static str {
         match self {
             | Self::Unit => "()",
             | Self::Bool(_) => "Bool",
@@ -2343,84 +1911,41 @@ fn format_scalar_in(
     num: &NumVal,
     repr: bool,
 ) -> String {
-    // A symbolic term prints itself; the display unit only adds a suffix.
-    if let NumKind::Sym(term) = &num.kind {
-        let text = if repr {
-            term.to_string_repr()
-        } else {
-            term.to_string()
-        };
-        let suffix = num
-            .display
-            .as_ref()
-            .map(|unit| unit.display.clone())
-            .unwrap_or_else(|| si_unit_text(&num.dim));
-        return if suffix.is_empty() {
-            text
-        } else {
-            format!("{text} {suffix}")
-        };
-    }
-    let (text, unit) = match (&num.kind, &num.display) {
-        | (kind, Some(unit)) => {
-            let text = match kind {
-                | NumKind::Int(value) => {
-                    display_exact(&BigRational::from_integer(value.clone()), unit, repr)
-                },
-                | NumKind::Exact(value) => display_exact(value, unit, repr),
-                | NumKind::Float(value) => {
-                    let shown = float_in_display_unit(*value, unit);
-                    if repr {
-                        format_float_repr(shown)
-                    } else {
-                        format_float(shown)
-                    }
-                },
-                | NumKind::Complex(re, im) => {
-                    let sign = if *im < 0.0 { "-" } else { "+" };
-                    format!("{} {sign} {}*i", format_float(*re), format_float(im.abs()))
-                },
-                | NumKind::Sym(_) => unreachable!("handled above"),
-            };
-            (text, Some(unit.display.clone()))
-        },
-        | (NumKind::Int(value), None) => (value.to_string(), None),
-        | (NumKind::Exact(value), None) => {
+    let unit = num.display.as_deref();
+    let (text, unit) = match &num.kind {
+        | NumKind::Int(value) if unit.is_some() => display_exact(&value.to_rational(), unit, repr),
+        | NumKind::Int(value) => (value.to_string(), None),
+        | NumKind::Exact(value) => display_exact(value, unit, repr),
+        | NumKind::Float(value) => {
+            let shown = unit.map_or(*value, |unit| float_in_display_unit(*value, unit));
             (
                 if repr {
-                    // `repr` of an exact value is a rational: an integral one is
-                    // its integer (`Int ⊂ Real`, so the text is the same), and the
-                    // rest keep their denominator.
-                    aevia_dim::rat::format_rational(value)
+                    format_float_repr(shown)
                 } else {
-                    aevia_dim::format_rational_decimal(value)
+                    format_float(shown)
                 },
-                None,
+                unit,
             )
         },
-        | (NumKind::Float(value), None) => {
-            (
-                if repr {
-                    format_float_repr(*value)
-                } else {
-                    format_float(*value)
-                },
-                None,
-            )
-        },
-        | (NumKind::Complex(re, im), None) => {
+        | NumKind::Complex(re, im) => {
             let sign = if *im < 0.0 { "-" } else { "+" };
             (
                 format!("{} {sign} {}*i", format_float(*re), format_float(im.abs())),
-                None,
+                unit,
             )
         },
-        | (NumKind::Sym(_), None) => unreachable!("handled above"),
+        | NumKind::Sym(term) => {
+            (
+                if repr {
+                    term.to_string_repr()
+                } else {
+                    term.to_string()
+                },
+                unit,
+            )
+        },
     };
-    let suffix = match unit {
-        | Some(unit) => unit,
-        | None => si_unit_text(&num.dim),
-    };
+    let suffix = unit.map_or_else(|| si_unit_text(&num.dim), |unit| unit.display.clone());
     if suffix.is_empty() {
         text
     } else {
@@ -2428,15 +1953,13 @@ fn format_scalar_in(
     }
 }
 
-/// A coherent `Float` expressed in a display unit.
-///
-/// Two renderings are within an ulp of the true `(x - offset) / scale`: the
-/// IEEE evaluation (whose rounding of the offset cancels when `x` came from a
-/// literal in the same unit: `25.0 °C` stored as `298.15` reads back `25`),
-/// and the conversion on the exact rationals rounded once (which is right
-/// when it does not cancel: `point(300.0, K)` reads `26.85 °C`, not
-/// `26.850000000000023 °C`). The shorter text is shown. The value itself is
-/// unchanged; only its rendering is.
+/// A coherent `Float` expressed in a display unit. Choose the shorter of IEEE
+/// conversion and exact rational conversion rounded once. The two paths
+/// preserve both a literal's spelling (25 °C) and a computed point (300 K).
+#[allow(
+    clippy::single_call_fn,
+    reason = "isolates the floating-point display rounding policy"
+)]
 fn float_in_display_unit(
     value: f64,
     unit: &UnitDef,
@@ -2448,57 +1971,52 @@ fn float_in_display_unit(
     } else {
         (value - offset) / scale
     };
-    let exact_scale = (unit.scale.pi == 0).then(|| unit.scale.rat.clone());
-    let exact_offset = match &unit.offset {
-        | None => Some(BigRational::zero()),
-        | Some(offset) if offset.pi == 0 => Some(offset.rat.clone()),
-        | Some(_) => None,
-    };
-    if let (Some(scale), Some(offset), Some(exact)) =
-        (exact_scale, exact_offset, BigRational::from_float(value))
-        && !scale.is_zero()
+    if let Some(rounded) = BigRational::from_float(value)
+        .and_then(|exact| rational_in_display_unit(&exact, unit))
+        .map(|exact| aevia_dim::rat::to_f64(&exact))
+        && format_float(rounded).len() < format_float(ieee).len()
     {
-        let rounded = aevia_dim::rat::to_f64(&((exact - offset) / scale));
-        if format_float(rounded).len() < format_float(ieee).len() {
-            return rounded;
-        }
+        return rounded;
     }
     ieee
 }
 
-/// Converts a coherent exact value into a display unit without leaving the
-/// rationals, so `3.2 km` stays `3.2 km` instead of `3.2000000000000006 km`.
-fn display_exact(
+fn rational_in_display_unit(
     value: &BigRational,
     unit: &UnitDef,
+) -> Option<BigRational> {
+    use num_traits::CheckedDiv;
+    use num_traits::CheckedSub;
+
+    let scale = &unit.scale;
+    if scale.pi != 0 || scale.rat.denom().is_zero() || value.denom().is_zero() {
+        return None;
+    }
+    match &unit.offset {
+        | None => value.checked_div(&scale.rat),
+        | Some(offset) if offset.pi == 0 && !offset.rat.denom().is_zero() => {
+            value.checked_sub(&offset.rat)?.checked_div(&scale.rat)
+        },
+        | Some(_) => None,
+    }
+}
+
+/// Converts an exact coefficient when the display unit can represent it
+/// rationally. Otherwise keep its coherent value and coherent unit together.
+fn display_exact<'a>(
+    value: &BigRational,
+    unit: Option<&'a UnitDef>,
     repr: bool,
-) -> String {
-    let offset = unit
-        .offset
-        .as_ref()
-        .map_or_else(BigRational::zero, |scale| {
-            scale.rat.clone()
-                * if scale.pi == 0 {
-                    BigRational::one()
-                } else {
-                    // An affine offset never carries a factor of pi in the SI
-                    // table; a unit that did would not be a temperature.
-                    BigRational::one()
-                }
-        });
-    if unit.scale.rat.is_zero() {
-        return if repr {
-            aevia_dim::rat::format_rational(value)
-        } else {
-            aevia_dim::format_rational_decimal(value)
-        };
-    }
-    let shown = (value - offset) / unit.scale.rat.clone();
-    if repr {
-        aevia_dim::rat::format_rational(&shown)
+) -> (String, Option<&'a UnitDef>) {
+    let shown = unit.and_then(|unit| rational_in_display_unit(value, unit));
+    let shown_unit = unit.filter(|_| shown.is_some());
+    let coefficient = shown.as_ref().unwrap_or(value);
+    let text = if repr {
+        aevia_dim::rat::format_rational(coefficient)
     } else {
-        aevia_dim::format_rational_decimal(&shown)
-    }
+        aevia_dim::format_rational_decimal(coefficient)
+    };
+    (text, shown_unit)
 }
 
 /// Renders a value for `show` and string interpolation.
@@ -2521,33 +2039,41 @@ pub fn repr(value: &Value) -> String {
     render(value, true)
 }
 
-/// Renders a value that sits inside a container (a tensor element).
-fn render_element(
-    value: &Value,
-    repr: bool,
-) -> String {
-    render_at(value, repr, 1)
+/// Limits recursive rendering of values and tensor axes. This also covers
+/// host-created boxed tensors whose elements are themselves tensors.
+const MAX_RENDER_DEPTH: usize = 256;
+
+/// A virtual tensor can name many more positions than its physical buffer
+/// contains. Bound those generated positions separately from stored data.
+const MAX_VIRTUAL_RENDER_ITEMS: usize = 65_536;
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "checks the runtime's consecutive tuple-label convention"
+)]
+fn is_tuple_labels<'a>(mut labels: impl Iterator<Item = &'a str>) -> bool {
+    matches!((labels.next(), labels.next()), (Some("0"), Some("1")))
+        && (2usize..)
+            .zip(labels)
+            .all(|(index, label)| label == index.to_string())
 }
 
-/// The deepest nesting `show` will walk.
-///
-/// A value nested deeper than this would recurse once per level in a path that
-/// cannot report an error (`show` returns a `String`), and an overflow inside
-/// a diagnostic is an uncatchable abort (§9.3.4). The marker is the honest
-/// answer for a value no program prints by hand.
-const MAX_RENDER_DEPTH: usize = 1_024;
-
-/// Whether record labels are exactly `0, 1, …, n-1` in order with `n ≥ 2`:
-/// the labels a tuple expression produces.
-fn is_tuple_labels<'a>(labels: impl Iterator<Item = &'a str>) -> bool {
-    let mut count = 0usize;
-    for (index, label) in labels.enumerate() {
-        if label != index.to_string() {
-            return false;
+fn render_sequence<'a>(
+    items: impl IntoIterator<Item = &'a Value>,
+    repr: bool,
+    depth: usize,
+    start: &str,
+    end: &str,
+) -> String {
+    let mut out = start.to_owned();
+    for (index, item) in items.into_iter().enumerate() {
+        if index != 0 {
+            out.push_str(", ");
         }
-        count += 1;
+        out.push_str(&render_at(item, repr, depth));
     }
-    count >= 2
+    out.push_str(end);
+    out
 }
 
 fn render(
@@ -2565,17 +2091,11 @@ fn render_at(
     if depth > MAX_RENDER_DEPTH {
         return "...".to_string();
     }
+    let next_depth = depth.saturating_add(1);
     match value {
         | Value::Unit => "()".to_string(),
-        | Value::Bool(true) => "true".to_string(),
-        | Value::Bool(false) => "false".to_string(),
-        | Value::Num(num) => {
-            if repr {
-                format_scalar_repr(num)
-            } else {
-                format_scalar(num)
-            }
-        },
+        | Value::Bool(flag) => flag.to_string(),
+        | Value::Num(num) => format_scalar_in(num, repr),
         // A string on its own shows as its text; inside a container it is
         // quoted, so `Err("not found")`, `["a", "b"]` and `{ name = "x" }`
         // say where each string starts and ends (`["a, b"]` is one element).
@@ -2586,28 +2106,20 @@ fn render_at(
                 text.to_string()
             }
         },
-        | Value::Tensor(tensor) => show_tensor_in(tensor, repr),
+        | Value::Tensor(tensor) => show_tensor_in(tensor, repr, depth),
         | Value::Sparse(sparse) => crate::sparse::render(sparse, repr),
         | Value::Record(record) => {
             // Tuples are records labelled `0, 1, …` (deviation 5); they are
             // written `(a, b)`, so they print that way too.
             if is_tuple_labels(record.fields.keys().map(String::as_str)) {
-                let mut out = String::from("(");
-                for (index, value) in record.fields.values().enumerate() {
-                    if index > 0 {
-                        out.push_str(", ");
-                    }
-                    out.push_str(&render_at(value, repr, depth + 1));
-                }
-                out.push(')');
-                return out;
+                return render_sequence(record.fields.values(), repr, next_depth, "(", ")");
             }
             let mut out = String::from("{ ");
             for (index, (name, value)) in record.fields.iter().enumerate() {
                 if index > 0 {
                     out.push_str(", ");
                 }
-                let _ = write!(out, "{name} = {}", render_at(value, repr, depth + 1));
+                let _ = write!(out, "{name} = {}", render_at(value, repr, next_depth));
             }
             out.push_str(" }");
             out
@@ -2615,44 +2127,36 @@ fn render_at(
         | Value::Variant(variant) if variant.adt == aevia_types::adt::set_id() => {
             // §8.1.9: a set shows as `{a, b, c}` in its canonical order.
             let items = match variant.fields.first() {
-                | Some(Value::Tensor(tensor)) => tensor.elements(),
+                | Some(Value::Tensor(tensor)) if renderable_tensor_shape(tensor) => {
+                    tensor.elements()
+                },
+                | Some(Value::Tensor(_)) => return "...".to_string(),
                 | _ => Vec::new(),
             };
-            let rendered: Vec<String> = items
-                .iter()
-                .map(|item| render_at(item, repr, depth + 1))
-                .collect();
-            if repr {
-                format!("set_of([{}])", rendered.join(", "))
+            let (start, end) = if repr {
+                ("set_of([", "])")
             } else {
-                format!("{{{}}}", rendered.join(", "))
-            }
+                ("{", "}")
+            };
+            render_sequence(&items, repr, next_depth, start, end)
         },
+        | Value::Variant(variant) if variant.fields.is_empty() => variant.name.clone(),
         | Value::Variant(variant) => {
-            if variant.fields.is_empty() {
-                variant.name.clone()
-            } else {
-                let mut out = format!("{}(", variant.name);
-                for (index, field) in variant.fields.iter().enumerate() {
-                    if index > 0 {
-                        out.push_str(", ");
-                    }
-                    out.push_str(&render_at(field, repr, depth + 1));
-                }
-                out.push(')');
-                out
-            }
+            render_sequence(
+                &variant.fields,
+                repr,
+                next_depth,
+                &format!("{}(", variant.name),
+                ")",
+            )
         },
         | Value::Closure(_) | Value::Native(_) => "<fn>".to_string(),
-        | Value::Ctor { name, args, .. } => {
+        | Value::Ctor(ctor) => {
+            let CtorValue { name, args, .. } = &**ctor;
             if args.is_empty() {
                 name.clone()
             } else {
-                let rendered: Vec<String> = args
-                    .iter()
-                    .map(|arg| render_at(arg, repr, depth + 1))
-                    .collect();
-                format!("{name}({})", rendered.join(", "))
+                render_sequence(args, repr, next_depth, &format!("{name}("), ")")
             }
         },
         | Value::UnitOf(unit) => unit.display.clone(),
@@ -2660,14 +2164,7 @@ fn render_at(
         | Value::Prop(prop) => prop.text.clone(),
         // §4.9.4: a `Dyn` prints as the scalar it carries, in the unit it was
         // written with, so `show(dyn(3 m))` names the same quantity.
-        | Value::Dyn(dynamic) => {
-            let scalar = dynamic.as_scalar();
-            if repr {
-                format_scalar_repr(&scalar)
-            } else {
-                format_scalar(&scalar)
-            }
-        },
+        | Value::Dyn(dynamic) => format_scalar_in(&dynamic.as_scalar(), repr),
         // A kernel value is not reconstructible from text, so `repr` keeps
         // the opaque marker; `show` renders what it carries (a number, a term
         // in the kernel's syntax) and its dimension when the kernel or the
@@ -2698,8 +2195,12 @@ fn render_at(
 }
 
 /// Quotes a string as Aevia source does.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps Aevia source escaping in one formatting routine"
+)]
 fn quote(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() + 2);
+    let mut out = String::with_capacity(text.len().saturating_add(2));
     out.push('"');
     for character in text.chars() {
         match character {
@@ -2715,45 +2216,86 @@ fn quote(text: &str) -> String {
     out
 }
 
+/// Check backing length and bound output for shapes with synthetic positions:
+/// empty grids with large rows, and host views which repeat a small buffer.
+fn renderable_tensor_shape(tensor: &TensorData) -> bool {
+    let Some(count) = tensor.checked_element_count() else {
+        return false;
+    };
+    if count != tensor.storage.len() {
+        return false;
+    }
+    if count != 0 {
+        return match tensor.storage.backing() {
+            | Storage::View(view) if count > view.data.len() => count <= MAX_VIRTUAL_RENDER_ITEMS,
+            | _ => true,
+        };
+    }
+    tensor
+        .shape
+        .iter()
+        .take_while(|extent| **extent != 0)
+        .try_fold(1usize, |prefix, extent| {
+            prefix
+                .checked_mul(*extent)
+                .filter(|count| *count <= MAX_VIRTUAL_RENDER_ITEMS)
+        })
+        .is_some()
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "contains the shape validation and depth-aware tensor renderer"
+)]
 fn show_tensor_in(
     tensor: &TensorData,
     repr: bool,
+    depth: usize,
 ) -> String {
-    fn render_at(
+    fn write_axes(
         tensor: &TensorData,
-        offset: &mut usize,
-        depth: usize,
+        axes: &[usize],
+        index: &mut usize,
+        out: &mut String,
         repr: bool,
-    ) -> String {
-        let extent = tensor.shape.get(depth).copied().unwrap_or(0);
-        if depth + 1 == tensor.shape.len() {
-            let mut parts = Vec::with_capacity(extent);
-            for _ in 0..extent {
-                parts.push(
-                    tensor
-                        .get_flat(*offset)
-                        .map_or_else(|| "?".to_string(), |value| render_element(&value, repr)),
-                );
-                *offset += 1;
+        depth: usize,
+    ) {
+        let Some((&extent, tail)) = axes.split_first() else {
+            return;
+        };
+        let next_depth = depth.saturating_add(1);
+        out.push('[');
+        for cell in 0..extent {
+            if cell != 0 {
+                out.push_str(", ");
             }
-            format!("[{}]", parts.join(", "))
-        } else {
-            let mut parts = Vec::with_capacity(extent);
-            for _ in 0..extent {
-                parts.push(render_at(tensor, offset, depth + 1, repr));
+            if tail.is_empty() {
+                if let Some(value) = tensor.get_flat(*index) {
+                    out.push_str(&render_at(&value, repr, next_depth));
+                } else {
+                    out.push('?');
+                }
+                *index = index.saturating_add(1);
+            } else {
+                write_axes(tensor, tail, index, out, repr, next_depth);
             }
-            format!("[{}]", parts.join(", "))
         }
+        out.push(']');
+    }
+
+    if !renderable_tensor_shape(tensor) || depth.saturating_add(tensor.rank()) > MAX_RENDER_DEPTH {
+        return "...".to_string();
     }
     if tensor.shape.is_empty() {
-        return tensor
-            .get_flat(0)
-            .map_or_else(|| "[]".to_string(), |value| render(&value, repr));
+        return match tensor.get_flat(0) {
+            | Some(Value::Str(text)) if !repr => text.to_string(),
+            | Some(value) => render_at(&value, repr, depth.saturating_add(1)),
+            | None => "[]".to_string(),
+        };
     }
-    // A deep rank would recurse once per axis; the shape of a value the
-    // runtime can build is bounded by the literal nesting it came from.
-    let mut offset = 0;
-    render_at(tensor, &mut offset, 0, repr)
+    let mut result = String::new();
+    write_axes(tensor, &tensor.shape, &mut 0, &mut result, repr, depth);
+    result
 }
 
 /// Which mathematical typesetting a value is rendered in.
@@ -2778,11 +2320,23 @@ pub fn to_math(
     value: &Value,
     syntax: MathSyntax,
 ) -> Result<String, String> {
+    math_at(value, syntax, 0)
+}
+
+fn math_at(
+    value: &Value,
+    syntax: MathSyntax,
+    depth: usize,
+) -> Result<String, String> {
+    if depth > MAX_RENDER_DEPTH {
+        return Err("the mathematical value is nested too deeply".into());
+    }
+    let next_depth = depth.saturating_add(1);
     let latex = syntax == MathSyntax::Latex;
     match value {
-        | Value::Num(num) => Ok(math_scalar(num, syntax)),
-        | Value::Str(text) if latex => Ok(format!("\\text{{{text}}}")),
-        | Value::Str(text) => Ok(format!("\"{text}\"")),
+        | Value::Num(num) => math_scalar(num, syntax),
+        | Value::Str(text) if latex => Ok(format!("\\text{{{}}}", escape_latex_text(text))),
+        | Value::Str(text) => Ok(quote_typst_text(text)),
         | Value::Bool(flag) => {
             Ok(match (latex, *flag) {
                 | (true, true) => "\\mathrm{true}".to_string(),
@@ -2792,31 +2346,13 @@ pub fn to_math(
             })
         },
         | Value::Unit => Ok("()".to_string()),
-        | Value::Tensor(tensor) => math_tensor(tensor, syntax),
-        | Value::Record(record) => {
-            let mut out = if latex {
-                String::from("\\begin{cases}")
-            } else {
-                String::from("cases(")
-            };
-            for (index, (name, value)) in record.fields.iter().enumerate() {
-                if index > 0 {
-                    out.push_str(if latex { " \\\\ " } else { ", " });
-                }
-                if latex {
-                    let _ = write!(out, "\\mathrm{{{name}}} &= {}", to_math(value, syntax)?);
-                } else {
-                    let _ = write!(out, "{name} &= {}", to_math(value, syntax)?);
-                }
-            }
-            out.push_str(if latex { "\\end{cases}" } else { ")" });
-            Ok(out)
-        },
+        | Value::Tensor(tensor) => math_tensor(tensor, syntax, next_depth),
+        | Value::Record(record) => math_record(record, syntax, next_depth),
         | Value::Variant(variant) if variant.fields.is_empty() => {
             Ok(if latex {
-                format!("\\mathrm{{{}}}", variant.name)
+                format!("\\mathrm{{{}}}", escape_latex_text(&variant.name))
             } else {
-                variant.name.clone()
+                quote_typst_text(&variant.name)
             })
         },
         | Value::Variant(_) => Err("variant payloads have no mathematical form".to_string()),
@@ -2826,32 +2362,115 @@ pub fn to_math(
         | Value::Ctor { .. } => Err("a constructor has no mathematical form".to_string()),
         | Value::UnitOf(unit) => {
             Ok(if latex {
-                format!("\\mathrm{{{}}}", unit.display)
+                format!("\\mathrm{{{}}}", escape_latex_text(&unit.display))
             } else {
-                unit.display.clone()
+                format!("upright({})", quote_typst_text(&unit.display))
             })
         },
         | Value::Sparse(_) => {
             Err("a sparse tensor has no mathematical form; use `to_dense`".to_string())
         },
         | Value::Io(_) => Err("an IO action has no mathematical form".to_string()),
-        | Value::Prop(prop) => Ok(prop.text.clone()),
-        | Value::Dyn(dynamic) => Ok(math_scalar(&dynamic.as_scalar(), syntax)),
-        | Value::KernelValue(_)
-        | Value::KernelError(_)
-        | Value::TypeRep(_)
-        | Value::Callback(_) => Err("an opaque kernel value has no mathematical form".to_string()),
+        | Value::Prop(prop) => math_relation(prop, syntax, next_depth),
+        | Value::Dyn(dynamic) => math_scalar(&dynamic.as_scalar(), syntax),
+        | Value::KernelValue(payload) => {
+            let kernel = aevia_rssn::kernel();
+            (if latex {
+                kernel.to_latex(&payload.payload)
+            } else {
+                kernel.to_typst(&payload.payload)
+            })
+            .map_err(|error| error.message)
+        },
+        | Value::KernelError(_) | Value::TypeRep(_) | Value::Callback(_) => {
+            Err("an opaque kernel value has no mathematical form".to_string())
+        },
         | Value::Task(_) => Err("a task has no mathematical form".to_string()),
         | Value::Error => Err("an error value has no mathematical form".to_string()),
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "record rows use target-specific formatting"
+)]
+fn math_record(
+    record: &RecordValue,
+    syntax: MathSyntax,
+    depth: usize,
+) -> Result<String, String> {
+    let latex = syntax == MathSyntax::Latex;
+    let mut out = if latex {
+        String::from("\\begin{cases}")
+    } else {
+        String::from("cases(")
+    };
+    for (index, (name, value)) in record.fields.iter().enumerate() {
+        if index > 0 {
+            out.push_str(if latex { " \\\\ " } else { ", " });
+        }
+        if latex {
+            let _ = write!(
+                out,
+                "\\mathrm{{{}}} &= {}",
+                escape_latex_text(name),
+                math_at(value, syntax, depth)?
+            );
+        } else {
+            let _ = write!(
+                out,
+                "{} &= {}",
+                quote_typst_text(name),
+                math_at(value, syntax, depth)?
+            );
+        }
+    }
+    out.push_str(if latex { "\\end{cases}" } else { ")" });
+    Ok(out)
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "relation spellings stay together for both typesetting targets"
+)]
+fn math_relation(
+    prop: &PropValue,
+    syntax: MathSyntax,
+    depth: usize,
+) -> Result<String, String> {
+    let latex = syntax == MathSyntax::Latex;
+    if let Some(comparison) = &prop.comparison {
+        let relation = match (syntax, comparison.op) {
+            | (_, BinOp::Eq) => "=",
+            | (MathSyntax::Latex, BinOp::Ne) => "\\ne",
+            | (MathSyntax::Latex, BinOp::Le) => "\\le",
+            | (MathSyntax::Latex, BinOp::Ge) => "\\ge",
+            | (_, BinOp::Lt) => "<",
+            | (_, BinOp::Gt) => ">",
+            | (MathSyntax::Typst, BinOp::Ne) => "!=",
+            | (MathSyntax::Typst, BinOp::Le) => "<=",
+            | (MathSyntax::Typst, BinOp::Ge) => ">=",
+            | _ => return Err("this proposition has no mathematical relation".into()),
+        };
+        Ok(format!(
+            "{} {relation} {}",
+            math_at(&comparison.left, syntax, depth)?,
+            math_at(&comparison.right, syntax, depth)?
+        ))
+    } else if latex {
+        Ok(format!("\\text{{{}}}", escape_latex_text(&prop.text)))
+    } else {
+        Ok(quote_typst_text(&prop.text))
+    }
+}
 fn math_scalar(
     num: &NumVal,
     syntax: MathSyntax,
-) -> String {
+) -> Result<String, String> {
     let body = match &num.kind {
-        | NumKind::Sym(term) => crate::sym::term_to_math(term, syntax == MathSyntax::Latex),
+        | NumKind::Sym(term) => {
+            crate::sym::term_to_math_checked(term, syntax == MathSyntax::Latex)?
+        },
         | NumKind::Int(value) => value.to_string(),
         | NumKind::Exact(value) => {
             if value.denom().is_one() {
@@ -2862,76 +2481,147 @@ fn math_scalar(
                 format!("frac({}, {})", value.numer(), value.denom())
             }
         },
-        | NumKind::Float(value) => format_float(*value),
+        | NumKind::Float(value) => math_float(*value, syntax),
         | NumKind::Complex(re, im) => {
             let sign = if *im < 0.0 { "-" } else { "+" };
-            format!("{}{} {} i", format_float(*re), sign, format_float(im.abs()))
+            format!(
+                "{} {sign} {} i",
+                math_float(*re, syntax),
+                math_float(im.abs(), syntax)
+            )
         },
     };
     let suffix = si_unit_text(&num.dim);
-    if suffix.is_empty() {
+    Ok(if suffix.is_empty() {
         body
+    } else if syntax == MathSyntax::Latex {
+        format!("{body}\\ \\mathrm{{{}}}", escape_latex_text(&suffix))
     } else {
-        format!("{body}\\ \\mathrm{{{suffix}}}")
+        format!("{body} thin upright({})", quote_typst_text(&suffix))
+    })
+}
+
+/// Numeric mathematical output uses the target's scientific notation and
+/// non-finite constants rather than source-language exponent identifiers.
+fn math_float(
+    value: f64,
+    syntax: MathSyntax,
+) -> String {
+    let latex = syntax == MathSyntax::Latex;
+    if value.is_nan() {
+        return if latex {
+            r"\mathrm{NaN}".into()
+        } else {
+            "upright(\"NaN\")".into()
+        };
+    }
+    if value.is_infinite() {
+        let sign = if value.is_sign_negative() {
+            "-"
+        } else {
+            ""
+        };
+        return format!("{sign}{}", if latex { r"\infty" } else { "oo" });
+    }
+    let text = format_float(value);
+    if let Some((mantissa, exponent)) = text.split_once('e') {
+        if latex {
+            format!(r"{mantissa} \times 10^{{{exponent}}}")
+        } else {
+            format!("{mantissa} times 10^({exponent})")
+        }
+    } else {
+        text
     }
 }
 
+/// Escapes literal text used inside LaTeX text/roman/operator labels.
+pub(crate) fn escape_latex_text(text: &str) -> String {
+    let mut out = String::new();
+    for ch in text.chars() {
+        match ch {
+            | '\\' => out.push_str(r"\textbackslash{}"),
+            | '{' => out.push_str(r"\{"),
+            | '}' => out.push_str(r"\}"),
+            | '$' => out.push_str(r"\$"),
+            | '&' => out.push_str(r"\&"),
+            | '#' => out.push_str(r"\#"),
+            | '%' => out.push_str(r"\%"),
+            | '_' => out.push_str(r"\_"),
+            | '^' => out.push_str(r"\textasciicircum{}"),
+            | '~' => out.push_str(r"\textasciitilde{}"),
+            | other => out.push(other),
+        }
+    }
+    out
+}
+
+/// A quoted Typst math text literal. It never enters Typst markup mode.
+pub(crate) fn quote_typst_text(text: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in text.chars() {
+        match ch {
+            | '\\' => out.push_str(r"\\"),
+            | '"' => out.push_str("\\\""),
+            | '\n' => out.push_str(r"\n"),
+            | '\r' => out.push_str(r"\r"),
+            | '\t' => out.push_str(r"\t"),
+            | other => out.push(other),
+        }
+    }
+    out.push('"');
+    out
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "centralizes checked matrix traversal for both typesetting targets"
+)]
 fn math_tensor(
     tensor: &TensorData,
     syntax: MathSyntax,
+    depth: usize,
 ) -> Result<String, String> {
-    if tensor.rank() > 2 {
-        return Err("only rank 1 and 2 tensors have a matrix form".to_string());
+    if !renderable_tensor_shape(tensor) {
+        return Err("tensor shape or backing storage is too large or inconsistent".into());
     }
-    let open = if syntax == MathSyntax::Latex {
-        "\\begin{pmatrix}"
-    } else {
-        "mat("
-    };
-    let close = if syntax == MathSyntax::Latex {
-        "\\end{pmatrix}"
-    } else {
-        ")"
-    };
-    let mut rows = Vec::new();
-    if tensor.rank() == 1 {
-        for index in 0..tensor.shape[0] {
+    let (rows, cols) = match tensor.shape.as_slice() {
+        | [] => {
             let cell = tensor
-                .get(&[index as isize])
-                .ok_or_else(|| "tensor index out of range".to_string())?;
-            rows.push(to_math(&cell, syntax)?);
+                .get_flat(0)
+                .ok_or_else(|| "scalar tensor has no element".to_string())?;
+            return math_at(&cell, syntax, depth);
+        },
+        | &[cols] => (1, cols),
+        | &[rows, cols] => (rows, cols),
+        | _ => return Err("only rank 1 and 2 tensors have a matrix form".to_string()),
+    };
+    let (open, close, row_separator, cell_separator) = if syntax == MathSyntax::Latex {
+        (r"\begin{pmatrix}", r"\end{pmatrix}", r" \\ ", " & ")
+    } else {
+        ("mat(", ")", "; ", ", ")
+    };
+    let mut out = open.to_owned();
+    let mut index = 0usize;
+    for row in 0..rows {
+        if row != 0 {
+            out.push_str(row_separator);
         }
-        return Ok(format!(
-            "{open}{}{close}",
-            rows.join(if syntax == MathSyntax::Latex {
-                " & "
-            } else {
-                ", "
-            })
-        ));
-    }
-    for row in 0..tensor.shape[0] {
-        let mut cells = Vec::with_capacity(tensor.shape[1]);
-        for column in 0..tensor.shape[1] {
+        for column in 0..cols {
+            if column != 0 {
+                out.push_str(cell_separator);
+            }
             let cell = tensor
-                .get(&[row as isize, column as isize])
+                .get_flat(index)
                 .ok_or_else(|| "tensor index out of range".to_string())?;
-            cells.push(to_math(&cell, syntax)?);
+            out.push_str(&math_at(&cell, syntax, depth)?);
+            index = index
+                .checked_add(1)
+                .ok_or_else(|| "tensor index overflow".to_string())?;
         }
-        rows.push(cells.join(if syntax == MathSyntax::Latex {
-            " & "
-        } else {
-            ", "
-        }));
     }
-    Ok(format!(
-        "{open}{}{close}",
-        rows.join(if syntax == MathSyntax::Latex {
-            " \\\\ "
-        } else {
-            "; "
-        })
-    ))
+    out.push_str(close);
+    Ok(out)
 }
 
 /// Why two values are not structurally equal.
@@ -3026,15 +2716,30 @@ pub fn equal(
 ///
 /// A symbolic operand is not decidable here; [`crate::eval::Interp::compare`]
 /// turns that case into a `Prop` before reaching this function.
+#[allow(
+    clippy::float_cmp,
+    clippy::single_call_fn,
+    reason = "structural equality uses IEEE equality and exact rational comparison"
+)]
 fn numbers_equal(
     left: &NumVal,
     right: &NumVal,
 ) -> bool {
     match (&left.kind, &right.kind) {
-        | (NumKind::Sym(_), _) | (_, NumKind::Sym(_)) => false,
         | (NumKind::Complex(ar, ai), NumKind::Complex(br, bi)) => ar == br && ai == bi,
-        | (NumKind::Complex(..), _) | (_, NumKind::Complex(..)) => false,
+        | (NumKind::Sym(_) | NumKind::Complex(..), _)
+        | (_, NumKind::Sym(_) | NumKind::Complex(..)) => false,
         | (NumKind::Float(a), NumKind::Float(b)) => a == b,
+        | (NumKind::Int(a), NumKind::Int(b)) => a == b,
+        // An integer of magnitude at most 2^53 is exactly an `f64`, so the
+        // float comparison is the exact one (and NaN/infinity compare
+        // unequal, as their missing rational does below).
+        | (NumKind::Float(float), NumKind::Int(integer @ crate::int::Int::Small(small)))
+        | (NumKind::Int(integer @ crate::int::Int::Small(small)), NumKind::Float(float))
+            if small.unsigned_abs() <= 1 << 53 =>
+        {
+            *float == integer.to_f64()
+        },
         | _ => {
             match (left.to_rational(), right.to_rational()) {
                 | (Some(a), Some(b)) => a == b,
@@ -3044,14 +2749,24 @@ fn numbers_equal(
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "validates the tensor-specific shape and backing-storage contract"
+)]
 fn tensors_equal(
     left: &TensorData,
     right: &TensorData,
 ) -> Result<bool, NotEqual> {
-    if left.shape != right.shape {
+    let Some(len) = left.checked_element_count() else {
+        return Ok(false);
+    };
+    if left.shape != right.shape || left.storage.len() != len || right.storage.len() != len {
         return Ok(false);
     }
-    for index in 0..left.storage.len() {
+    if let (Some(a), Some(b)) = (left.dense(), right.dense()) {
+        return Ok(a == b);
+    }
+    for index in 0..len {
         let (Some(a), Some(b)) = (left.get_flat(index), right.get_flat(index)) else {
             return Ok(false);
         };
@@ -3083,25 +2798,23 @@ pub fn make_variant(
 
 /// Mark only a constructor freshly resolved from a checked source interface.
 /// Public host-created variants and `make_variant` never receive this proof.
+#[allow(
+    clippy::single_call_fn,
+    reason = "validates provenance at the source resolver's trust boundary"
+)]
 pub(crate) fn mark_source_ctor(value: &mut Value) {
     match value {
-        | Value::Ctor {
-            adt,
-            index,
-            name,
-            arity,
-            args,
-            origin,
-        } => {
-            let valid = args.is_empty()
-                && aevia_types::adt::get(*adt)
-                    .and_then(|entry| entry.ctors.get(*index).cloned())
-                    .is_some_and(|ctor| ctor.name == *name && ctor.fields.len() == *arity);
+        | Value::Ctor(ctor) => {
+            let valid = ctor.args.is_empty()
+                && aevia_types::adt::get(ctor.adt)
+                    .and_then(|entry| entry.ctors.get(ctor.index).cloned())
+                    .is_some_and(|c| c.name == ctor.name && c.fields.len() == ctor.arity);
             if valid {
-                *origin = Some(SourceCtorToken {
-                    adt: *adt,
-                    index: *index,
-                    name: name.clone(),
+                let ctor = Rc::make_mut(ctor);
+                ctor.origin = Some(SourceCtorToken {
+                    adt: ctor.adt,
+                    index: ctor.index,
+                    name: ctor.name.clone(),
                     selected_result: None,
                 });
             }
@@ -3119,6 +2832,10 @@ pub(crate) fn mark_source_ctor(value: &mut Value) {
 }
 
 /// Retain constructor provenance after applying a source-resolved constructor.
+#[allow(
+    clippy::single_call_fn,
+    reason = "validates provenance at the constructor application boundary"
+)]
 pub(crate) fn mark_ctor_result(
     value: &mut Value,
     origin: &SourceCtorToken,
@@ -3169,9 +2886,74 @@ pub fn show_with(
     show(value)
 }
 
+/// Whether a payload is a well-formed native AD handle envelope.
+/// RSSN separately authenticates its session token and retained object.
+pub(crate) fn is_native_ad_var_payload(payload: &aevia_rssn::Val) -> bool {
+    matches!(payload, aevia_rssn::Val::Opaque {kind,bytes} if kind == aevia_rssn::registry::NATIVE_AD_VAR_KIND && bytes.len() == 16)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use num_bigint::BigInt;
+
+    #[test]
+    fn rendering_bounds_virtual_and_inconsistent_host_shapes() {
+        let huge_empty = tensor(vec![usize::MAX, 0], Vec::new());
+        assert_eq!(show(&huge_empty), "...");
+        assert!(to_math(&huge_empty, MathSyntax::Latex).is_err());
+        let huge_product = tensor(vec![usize::MAX, 2], Vec::new());
+        assert_eq!(show(&huge_product), "...");
+        assert!(to_math(&huge_product, MathSyntax::Typst).is_err());
+        assert_eq!(TensorData::element_count(&[usize::MAX, 2]), usize::MAX);
+        assert_eq!(TensorData::element_count(&[usize::MAX, 2, 0]), 0);
+        let ordinary_empty = tensor(vec![2, 0], Vec::new());
+        assert_eq!(show(&ordinary_empty), "[[], []]");
+        assert_eq!(
+            to_math(&ordinary_empty, MathSyntax::Latex).as_deref(),
+            Ok(r"\begin{pmatrix} \\ \end{pmatrix}"),
+        );
+    }
+
+    #[test]
+    fn boxed_tensor_elements_share_the_render_depth_budget() {
+        let mut value = Value::int(1);
+        for _ in 0..=MAX_RENDER_DEPTH {
+            value = Value::Tensor(Rc::new(TensorData::new(
+                Vec::new(),
+                Storage::Boxed(vec![value]),
+                Dim::one(),
+                None,
+            )));
+        }
+        assert_eq!(show(&value), "...");
+        assert!(to_math(&value, MathSyntax::Latex).is_err());
+    }
+
+    #[test]
+    fn unrepresentable_exact_display_keeps_the_coherent_unit() {
+        let dim = Dim::base("Length");
+        let unit = UnitDef::linear(
+            "pi_length",
+            dim.clone(),
+            aevia_dim::Scale {
+                rat: BigRational::from_integer(1.into()),
+                pi: 1,
+            },
+        );
+        let val =
+            NumVal::exact(BigRational::from_integer(3.into()), dim).with_display(Rc::new(unit));
+        assert_eq!(format_scalar(&val), "3 m");
+        assert_eq!(format_scalar_repr(&val), "3 m");
+    }
+
+    #[test]
+    fn equality_rejects_malformed_tensor_storage_in_both_orders() {
+        let short = tensor(vec![2], vec![1.0]);
+        let complete = tensor(vec![2], vec![1.0, 2.0]);
+        assert_eq!(equal(&short, &complete), Ok(false));
+        assert_eq!(equal(&complete, &short), Ok(false));
+    }
 
     #[test]
     fn floats_print_compactly() {
@@ -3202,20 +2984,22 @@ mod tests {
             dim: Dim::one(),
             display: None,
         };
-        assert_eq!(show_tensor_in(&tensor, false), "[[1.0, 2.0], [3.0, 4.0]]");
+        assert_eq!(
+            show_tensor_in(&tensor, false, 0),
+            "[[1.0, 2.0], [3.0, 4.0]]"
+        );
     }
 
     fn tensor(
         shape: Vec<usize>,
         values: Vec<f64>,
     ) -> Value {
-        Value::Tensor(Rc::new(TensorData {
-            verified_element: None,
+        Value::Tensor(Rc::new(TensorData::new(
             shape,
-            storage: Storage::Dense(Rc::new(values)),
-            dim: Dim::one(),
-            display: None,
-        }))
+            Storage::Dense(Rc::new(values)),
+            Dim::one(),
+            None,
+        )))
     }
 
     #[test]

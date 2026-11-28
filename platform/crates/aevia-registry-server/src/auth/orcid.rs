@@ -11,15 +11,13 @@ use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use axum::response::Redirect;
 use axum::response::Response;
-use chrono::Utc;
 use serde::Deserialize;
+use std::fmt::Write as _;
 
 use aevia_registry_db::repo;
 
-use crate::auth::Identity;
 use crate::auth::Provider;
 use crate::error::PageError;
-use crate::http;
 use crate::state::AppState;
 use crate::state::safe_next;
 
@@ -84,15 +82,7 @@ pub async fn start(
         ));
     };
     let next = safe_next(params.next.as_deref());
-    let state_token = http::random_hex(16);
-    repo::create_oauth_state(
-        &state.pool,
-        &state_token,
-        Provider::Orcid.as_str(),
-        &next,
-        Utc::now() + chrono::Duration::minutes(10),
-    )
-    .await?;
+    let state_token = super::issue_state(&state, Provider::Orcid, &next).await?;
     let redirect_uri = state.config.url("/auth/orcid/callback");
     let target = format!(
         "{}/oauth/authorize?client_id={}&response_type=code&scope=/authenticate&redirect_uri={}&state={}",
@@ -101,7 +91,9 @@ pub async fn start(
         urlencode(&redirect_uri),
         state_token,
     );
-    Ok(Redirect::temporary(&target).into_response())
+    let mut response = Redirect::temporary(&target).into_response();
+    super::set_state_cookie(&mut response, &state, Provider::Orcid, Some(&state_token));
+    Ok(response)
 }
 
 /// `GET /auth/orcid/callback`
@@ -129,13 +121,7 @@ pub async fn callback(
             "the sign-in callback is missing its code or state",
         ));
     };
-    let Some(next) =
-        repo::take_oauth_state(&state.pool, &state_token, Provider::Orcid.as_str()).await?
-    else {
-        return Err(PageError::forbidden(
-            "this sign-in link has expired or was already used; start again from /login",
-        ));
-    };
+    let next = super::take_state(&state, Provider::Orcid, &state_token, &headers).await?;
 
     let redirect_uri = state.config.url("/auth/orcid/callback");
     let token: TokenResponse = state
@@ -171,16 +157,16 @@ pub async fn callback(
         ));
     };
     let handle = aevia_registry_core::name::normalize_owner(&orcid_id);
+    if !aevia_registry_core::name::orcid_checksum_ok(&handle) {
+        return Err(PageError::forbidden(
+            "ORCID returned an invalid researcher identifier.",
+        ));
+    }
     let display_name = person_name(&state, orcid.base.as_str(), &handle, &access_token).await;
-    let identity = Identity {
-        kind: "orcid",
-        handle,
-        display_name,
-        // ORCID publishes no avatar; the page falls back to the initials.
-        avatar_url: None,
-    };
-    let publisher = crate::auth::upsert(&state, &identity).await?;
-    let response = crate::state::sign_in(
+    let publisher = repo::upsert_orcid_publisher(&state.pool, &handle, display_name.as_deref())
+        .await?
+        .ok_or_else(|| PageError::forbidden("This Aevia namespace is already reserved."))?;
+    let mut response = crate::state::sign_in(
         &state,
         publisher.id,
         &next,
@@ -189,11 +175,16 @@ pub async fn callback(
             .and_then(|value| value.to_str().ok()),
     )
     .await?;
+    super::set_state_cookie(&mut response, &state, Provider::Orcid, None);
     Ok(response)
 }
 
 /// Reads the name from the public record, ignoring any failure: a missing name
 /// is a cosmetic loss, not a reason to refuse the sign-in.
+#[allow(
+    clippy::single_call_fn,
+    reason = "ORCID identity uses a separate privacy-aware profile lookup"
+)]
 async fn person_name(
     state: &AppState,
     base: &str,
@@ -237,7 +228,9 @@ fn urlencode(value: &str) -> String {
             | b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 out.push(char::from(byte));
             },
-            | _ => out.push_str(&format!("%{byte:02X}")),
+            | _ => {
+                let _ = write!(out, "%{byte:02X}");
+            },
         }
     }
     out

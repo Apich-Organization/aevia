@@ -50,7 +50,7 @@ fn check_codes(source: &str) -> Vec<String> {
         .diagnostics
         .items
         .iter()
-        .map(|d| d.code.to_string())
+        .map(|d| d.code.clone())
         .collect()
 }
 

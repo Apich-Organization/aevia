@@ -44,6 +44,44 @@ fn apply(
     let function = i.eval_toplevel(name).unwrap();
     i.apply(function, vec![value], Span::default())
 }
+
+#[test]
+fn integer_patterns_compare_host_float_payloads_exactly() {
+    let c = checked(
+        r#"fn select(x: Int): Int = match x with
+| 0 -> 10
+| 1 -> 11
+| 9007199254740993 -> 12
+| 9007199254740992 -> 13
+| 9223372036854775807 -> 14
+| 9223372036854775808 -> 15
+| _ -> 99
+"#,
+    );
+    for mode in [Mode::Ast, Mode::Ir] {
+        let mut i = installed(&c, mode);
+        for (value, expected) in [
+            (-0.0, 10.0),
+            (1.0, 11.0),
+            (9_007_199_254_740_992.0, 13.0),
+            (9_223_372_036_854_775_808.0, 15.0),
+            (1.25, 99.0),
+            (f64::from_bits(1), 99.0),
+            (f64::INFINITY, 99.0),
+            (f64::NEG_INFINITY, 99.0),
+            (f64::NAN, 99.0),
+        ] {
+            assert_eq!(
+                apply(&mut i, "select", Value::float(value))
+                    .unwrap()
+                    .as_f64(),
+                Some(expected),
+                "{mode:?}: {value}"
+            );
+        }
+    }
+}
+
 #[test]
 fn fixed_vector_patterns_require_exact_length_in_match_let_and_parameters() {
     let c = checked(
@@ -83,6 +121,27 @@ let three = choose([7, 8, 9])
         assert_eq!(apply(&mut i, "single", xs).unwrap_err().code, "E0308");
     }
 }
+
+#[test]
+fn exhaustive_record_matches_ignore_unconstrained_recursive_fields_in_both_engines() {
+    let compilation = checked(
+        r#"type Chain = | ChainEnd | ChainNext(Chain)
+fn choose(p: { chain: Chain, items: Tensor<1, Int>, state: Bool }): Int = match p with
+| { state = true } -> 17
+| { state = false } -> 31
+let yes = choose({ chain = ChainNext(ChainEnd), items = [1, 2, 3], state = true })
+let no = choose({ chain = ChainEnd, items = [4], state = false })
+"#,
+    );
+    for mode in [Mode::Ast, Mode::Ir] {
+        let mut interpreter = installed(&compilation, mode);
+        for (name, expected) in [("yes", 17.0), ("no", 31.0)] {
+            let actual = interpreter.eval_toplevel(name).unwrap();
+            assert_eq!(actual.as_f64(), Some(expected), "{mode:?}: {name}");
+        }
+    }
+}
+
 #[test]
 fn a_failed_pattern_commits_no_prefix_bindings() {
     let c = checked("let [first, 0] = [1, 2]\n");

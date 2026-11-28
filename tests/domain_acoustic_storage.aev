@@ -1,0 +1,88 @@
+## Checks lifetime and unit contracts of compiled acoustic boundaries and sources.
+fn handle(op: String, args: Tensor<1, Value>): Value = unwrap_or(Rssn.dynamic(op, args), to_value(0))
+fn release(object: Value): Bool =
+    match Rssn.dynamic("num_backend_release", [object]) with
+    | Ok(value) -> match from_value<Bool>(value) with
+        | Ok(done) -> done
+        | Err(_) -> false
+    | Err(_) -> false
+
+let refs = handle("num_grid_mechanical_references", [to_value(1.0 m), to_value(1.0 s), to_value(1.0 kg), to_value(1.0 K)])
+let frame = handle("num_grid_frame_new", [to_value(1.0 m), to_value(1.0 s), to_value(1.0 N)])
+let time_reference = handle("num_backend_reference", [to_value(1.0 s)])
+let base_faces = handle("num_grid_faces_dirichlet_zero", [frame])
+
+fn compile(expression: String, scale: Value): Value =
+    let output = handle("num_backend_reference", [scale])
+    handle("num_backend_compile_current", [to_value(expression), to_value(["t"]), to_value([time_reference]), output, to_value(128)])
+
+fn solver_configuration(faces: Value): Value =
+    handle("num_grid_acoustics_config", [refs, faces, to_value([4]), to_value([1.0]), to_value(1.0), to_value(1.0), to_value(0.5), to_value(0), to_value(2.0)])
+
+fn datum(program: Value): Value =
+    handle("num_grid_datum_time", [frame, program, to_value(16), to_value(1.0 N)])
+
+fn dirichlet(value: Value): Value =
+    handle("num_grid_boundary_from_datum", [value, to_value("Dirichlet"), to_value(0.0), to_value(0.0)])
+
+type Velocity = { normalized: Tensor<1, Float>, reference: Float[Length/Time] }
+type Pressure = { normalized: Tensor<1, Float>, reference: Float[Mass*Length/Time^2] }
+type Fields = { shape: Tensor<1, Int>, pressure: Pressure, velocity_x: Velocity, velocity_y: Velocity, velocity_z: Velocity, time: Float[Time], dt: Float[Time] }
+
+fn first_pressure_after_step(solver: Value, expected: Float[Mass*Length/Time^2]): Bool =
+    match Rssn.dynamic("num_grid_acoustics_step", [solver]) with
+    | Ok(_) -> match Rssn.dynamic("num_grid_acoustics_fields", [solver]) with
+        | Ok(value) -> match from_value<Fields>(value) with
+            | Ok(fields) -> fields.shape == [4, 1, 1] && fields.time == 0.5 s && approx_eq(at(fields.pressure.normalized, 0) * fields.pressure.reference, expected, 1e-12 N)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "an overwritten acoustic boundary and its replacement programs can be released before stepping" =
+    let first = compile("1", to_value(1.0 N))
+    let second = compile("2", to_value(1.0 N))
+    let old_datum = datum(first)
+    let new_datum = datum(second)
+    let old_boundary = dirichlet(old_datum)
+    let new_boundary = dirichlet(new_datum)
+    let old_faces = handle("num_grid_faces_with", [base_faces, old_boundary, to_value(0)])
+    let new_faces = handle("num_grid_faces_with", [old_faces, new_boundary, to_value(0)])
+    let config = solver_configuration(new_faces)
+    let solver = handle("num_grid_acoustics_new", [config])
+    release(config) && release(new_faces) && release(old_faces) && release(new_boundary) && release(old_boundary) && release(new_datum) && release(old_datum) && release(first) && release(second) && first_pressure_after_step(solver, 1.0 N)
+
+fn source(solver: Value, program: Value, budget: Int): Result<Value, OpError> =
+    Rssn.dynamic("num_grid_acoustics_source", [solver, to_value(0), program, to_value(budget)])
+
+test "accepted duplicate sources add while invalid budgets and a released handle leave the solver usable" =
+    let config = solver_configuration(base_faces)
+    let solver = handle("num_grid_acoustics_new", [config])
+    let program = compile("1", to_value(1.0 N/s))
+    match (source(solver, program, 0), source(solver, program, 1), source(solver, program, 1)) with
+    | (Err(_), Ok(_), Ok(_)) ->
+        let dropped = release(program)
+        match source(solver, program, 1) with
+        | Err(_) -> dropped && first_pressure_after_step(solver, 1.0 N)
+        | Ok(_) -> false
+    | _ -> false
+
+fn succeeded(call: Result<Value, OpError>): Bool =
+    match call with
+    | Ok(result) -> match from_value<Bool>(result) with
+        | Ok(value) -> value
+        | Err(_) -> false
+    | Err(_) -> false
+
+fn budget_exhaustion(config: Value, single_run: Bool): Bool =
+    let solver = handle("num_grid_acoustics_new", [config])
+    let program = compile("1", to_value(1.0 N/s))
+    let ready = succeeded(source(solver, program, 1)) && release(program)
+    let advanced = if single_run then ready else ready && succeeded(Rssn.dynamic("num_grid_acoustics_step", [solver]))
+    let exhausted = if single_run then Rssn.dynamic("num_grid_acoustics_run", [solver, to_value(2)]) else Rssn.dynamic("num_grid_acoustics_step", [solver])
+    let budget_error = show(exhausted) == "Err(E0806: out of domain: compiled function evaluation budget exhausted)"
+    let fields_error = show(Rssn.dynamic("num_grid_acoustics_fields", [solver])) == "Err(E0806: out of domain: acoustic solver invalidated by a failed mutation)"
+    advanced && budget_error && fields_error && release(solver)
+
+test "source budget exhaustion returns an error and invalidates the failed mutation" =
+    let config = solver_configuration(base_faces)
+    budget_exhaustion(config, false) && budget_exhaustion(config, true) && first_pressure_after_step(handle("num_grid_acoustics_new", [config]), 0.0 N)

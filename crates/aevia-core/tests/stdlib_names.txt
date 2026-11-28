@@ -55,6 +55,7 @@ by_cases
 cancel
 cbrt
 cdf
+cdf_batch
 ceil
 centroid
 cg
@@ -102,6 +103,7 @@ diag
 diff
 diff_at
 difference
+dist_quantile
 distance
 div
 divergence
@@ -177,6 +179,7 @@ ifftshift_axis
 im
 interp1
 interp2
+interp2Batch
 intersection
 inv
 irfft
@@ -236,6 +239,7 @@ min
 minimize
 minimize_f
 mod
+mod_pow
 mode
 nan
 nnz
@@ -268,6 +272,7 @@ pdf
 permutations
 pi
 plot
+plot_save_gif
 polyfit
 polygon_area
 polyval
@@ -280,6 +285,7 @@ product_dyn
 qr
 quadrature
 quantile
+quantiles
 quot
 range
 rank
@@ -367,6 +373,7 @@ sym_ne
 take
 tan
 tanh
+tetrahedron_volume
 to_bcsr
 to_callback
 to_dense
@@ -376,6 +383,7 @@ to_float
 to_int
 to_json
 to_latex
+to_pretty
 to_real
 to_table
 to_typst

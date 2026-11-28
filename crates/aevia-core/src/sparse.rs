@@ -45,6 +45,22 @@
 //! Nothing here densifies except the functions whose result is dense by
 //! definition (`to_dense`, `sparse ± dense`, `sparse @ dense`, `sum(A, axis)`).
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        clippy::unreachable,
+        clippy::unwrap_used
+    )
+)]
+
 mod api;
 mod kernels;
 
@@ -68,10 +84,11 @@ use aevia_dim::Dim;
 use aevia_dim::UnitDef;
 use aevia_syntax::Span;
 use indexmap::IndexMap;
-use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::ToPrimitive;
 use num_traits::Zero;
+use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::rc::Rc;
 
 pub(crate) type R<T> = Result<T, EvalError>;
@@ -100,7 +117,7 @@ pub enum SparseFormat {
 impl SparseFormat {
     /// The spelling used in types and by `format_of`.
     #[must_use]
-    pub fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             | Self::Csr => "Csr",
             | Self::Csc => "Csc",
@@ -185,7 +202,7 @@ pub(crate) struct Entries<T> {
 }
 
 impl<T> Entries<T> {
-    pub fn empty(rank: usize) -> Self {
+    pub const fn empty(rank: usize) -> Self {
         Self {
             rank,
             coords: Vec::new(),
@@ -193,7 +210,7 @@ impl<T> Entries<T> {
         }
     }
 
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.vals.len()
     }
 
@@ -201,7 +218,15 @@ impl<T> Entries<T> {
         &self,
         index: usize,
     ) -> &[usize] {
-        &self.coords[index * self.rank..(index + 1) * self.rank]
+        self.coord_checked(index).unwrap_or(&[])
+    }
+
+    fn coord_checked(
+        &self,
+        index: usize,
+    ) -> Option<&[usize]> {
+        let begin = index.checked_mul(self.rank)?;
+        self.coords.get(begin..begin.checked_add(self.rank)?)
     }
 
     pub fn push(
@@ -214,37 +239,58 @@ impl<T> Entries<T> {
     }
 }
 
-/// The largest fill ratio (stored slots per logical nonzero) the automatic
-/// block-size choice accepts; the same threshold as rssn's
-/// `kernels::bsr::choose_block_size`.
-pub(crate) const MAX_BLOCK_FILL: f64 = 1.5;
+const SIZE_ERROR: &str = "sparse storage exceeds the representable size";
 
-/// The distinct `br x bc` blocks that hold an entry of sorted `coords`.
-fn count_blocks(
-    shape: &[usize],
-    coords: &[usize],
-    br: usize,
-    bc: usize,
-) -> usize {
-    let mut mark = vec![usize::MAX; shape[1] / bc];
-    let mut blocks = 0;
-    for pair in coords.as_chunks::<2>().0 {
-        let (ib, jb) = (pair[0] / br, pair[1] / bc);
-        if mark[jb] != ib {
-            mark[jb] = ib;
-            blocks += 1;
-        }
-    }
-    blocks
+fn reserve<T>(count: usize) -> Result<Vec<T>, String> {
+    let mut items = Vec::new();
+    items.try_reserve_exact(count).map_err(|_| SIZE_ERROR)?;
+    Ok(items)
 }
 
-/// The block shape `convert<Bcsr>` and the other format-only constructors use.
-///
-/// Candidates are `{4, 3, 2, 1}²` (squares first) restricted to the divisors
-/// of the shape; the largest block whose fill ratio is at most
-/// [`MAX_BLOCK_FILL`] wins, a tie in area going to the lower ratio and then to
-/// the earlier (square) candidate. `(1, 1)` when nothing qualifies.
-pub(crate) fn auto_block(
+fn filled<T: Clone>(
+    count: usize,
+    value: T,
+) -> Result<Vec<T>, String> {
+    let mut items = reserve(count)?;
+    items.resize(count, value);
+    Ok(items)
+}
+
+/// The distinct blocks that hold a stored coordinate. Workspace follows the
+/// stored block columns in one block row instead of the logical matrix width.
+#[allow(
+    clippy::single_call_fn,
+    reason = "one block-geometry candidate has its own row-local occupancy scan"
+)]
+fn count_blocks(
+    coords: &[[usize; 2]],
+    br: usize,
+    bc: usize,
+) -> Option<usize> {
+    let mut active_row = None;
+    let mut columns = HashSet::new();
+    let mut count = 0usize;
+    for &[row, column] in coords {
+        let block_row = row.checked_div(br)?;
+        if active_row != Some(block_row) {
+            active_row = Some(block_row);
+            columns.clear();
+        }
+        if columns.insert(column.checked_div(bc)?) {
+            count = count.checked_add(1)?;
+        }
+    }
+    Some(count)
+}
+
+/// Chooses the largest block area whose padding uses at most three slots for
+/// every two logical nonzeros. Equal areas prefer the smaller slot count,
+/// then the earlier candidate.
+#[allow(
+    clippy::single_call_fn,
+    reason = "automatic block-size selection is independent of constructing the chosen layout"
+)]
+fn auto_block(
     shape: &[usize],
     coords: &[usize],
 ) -> (usize, usize) {
@@ -265,73 +311,184 @@ pub(crate) fn auto_block(
         (2, 1),
         (1, 2),
     ];
-    let nnz = coords.len() / 2;
-    let mut best = (1, 1);
-    let mut best_key = (1usize, f64::INFINITY);
-    if nnz == 0 || shape.len() != 2 {
-        return best;
+    let [rows, cols] = shape else {
+        return (1, 1);
+    };
+    let (coords, _) = coords.as_chunks::<2>();
+    if coords.is_empty() {
+        return (1, 1);
     }
+    let mut best = (1, 1);
+    let mut best_key = (1usize, u128::MAX);
     for (br, bc) in CANDIDATES {
-        if !shape[0].is_multiple_of(br) || !shape[1].is_multiple_of(bc) {
+        if !rows.is_multiple_of(br) || !cols.is_multiple_of(bc) {
             continue;
         }
-        let area = br * bc;
+        let area = br.saturating_mul(bc);
         if area < best_key.0 {
             continue;
         }
-        let ratio = (count_blocks(shape, coords, br, bc) * area) as f64 / nnz as f64;
-        if ratio <= MAX_BLOCK_FILL && (area > best_key.0 || ratio < best_key.1) {
+        let Some(count) = count_blocks(coords, br, bc) else {
+            continue;
+        };
+        let slots = (count as u128).saturating_mul(area as u128);
+        if slots.saturating_mul(2) <= (coords.len() as u128).saturating_mul(3)
+            && (area > best_key.0 || slots < best_key.1)
+        {
             best = (br, bc);
-            best_key = (area, ratio);
+            best_key = (area, slots);
         }
     }
     best
 }
 
+fn block_geometry(
+    rows: usize,
+    cols: usize,
+    (br, bc): (usize, usize),
+) -> Result<(usize, usize, usize), String> {
+    if br == 0 || bc == 0 || !rows.is_multiple_of(br) || !cols.is_multiple_of(bc) {
+        return Err(format!(
+            "block {br}x{bc} does not divide the shape [{rows}, {cols}]"
+        ));
+    }
+    let block_rows = rows.checked_div(br).ok_or(SIZE_ERROR)?;
+    let block_cols = cols.checked_div(bc).ok_or(SIZE_ERROR)?;
+    let area = br.checked_mul(bc).ok_or(SIZE_ERROR)?;
+    Ok((block_rows, block_cols, area))
+}
+
 /// The block-CSR pattern and values of sorted, zero-free entries.
 fn blocked_parts<T: Store>(
-    shape: &[usize],
+    rows: usize,
+    cols: usize,
     block: (usize, usize),
     entries: Entries<T>,
-) -> (Pattern, Vec<T>) {
+) -> Result<(Pattern, Vec<T>), String> {
     let (br, bc) = block;
-    let bs = br * bc;
-    let (nbr, nbc) = (shape[0] / br, shape[1] / bc);
-    let nnz = entries.len();
-    let mut ptr = vec![0usize; nbr + 1];
-    let mut idx: Vec<usize> = Vec::new();
-    let mut vals: Vec<T> = Vec::new();
-    let mut slot = vec![usize::MAX; nbc];
-    let mut at = 0;
-    for ib in 0..nbr {
-        let mut stop = at;
-        while stop < nnz && entries.coords[stop * 2] < (ib + 1) * br {
-            stop += 1;
+    let (block_rows, _, area) = block_geometry(rows, cols, block)?;
+    let mut ptr = reserve(block_rows.checked_add(1).ok_or(SIZE_ERROR)?)?;
+    ptr.push(0);
+    let mut idx = Vec::new();
+    let mut vals = Vec::new();
+    let mut stored = entries
+        .coords
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .copied()
+        .zip(entries.vals)
+        .peekable();
+    for block_row in 0..block_rows {
+        let mut columns = BTreeMap::<usize, Vec<T>>::new();
+        while let Some(([row, _], _)) = stored.peek()
+            && row.checked_div(br) == Some(block_row)
+        {
+            let ([row, col], value) = stored.next().ok_or("missing stored block entry")?;
+            let column = col.checked_div(bc).ok_or(SIZE_ERROR)?;
+            let values = match columns.entry(column) {
+                | std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(filled(area, T::pad_zero())?)
+                },
+                | std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+            };
+            let offset = row
+                .checked_rem(br)
+                .and_then(|r| r.checked_mul(bc))
+                .zip(col.checked_rem(bc))
+                .and_then(|(r, c)| r.checked_add(c))
+                .ok_or(SIZE_ERROR)?;
+            *values.get_mut(offset).ok_or("invalid block entry offset")? = value;
         }
-        let first = idx.len();
-        for q in at..stop {
-            let jb = entries.coords[q * 2 + 1] / bc;
-            if slot[jb] == usize::MAX {
-                slot[jb] = 0;
-                idx.push(jb);
-            }
+        idx.try_reserve(columns.len()).map_err(|_| SIZE_ERROR)?;
+        let slots = columns.len().checked_mul(area).ok_or(SIZE_ERROR)?;
+        vals.try_reserve(slots).map_err(|_| SIZE_ERROR)?;
+        for (column, block_values) in columns {
+            idx.push(column);
+            vals.extend(block_values);
         }
-        idx[first..].sort_unstable();
-        vals.resize(idx.len() * bs, T::pad_zero());
-        for (offset, jb) in idx[first..].iter().enumerate() {
-            slot[*jb] = first + offset;
-        }
-        for q in at..stop {
-            let (row, col) = (entries.coords[q * 2], entries.coords[q * 2 + 1]);
-            vals[slot[col / bc] * bs + (row - ib * br) * bc + col % bc] = entries.vals[q].clone();
-        }
-        for jb in &idx[first..] {
-            slot[*jb] = usize::MAX;
-        }
-        ptr[ib + 1] = idx.len();
-        at = stop;
+        ptr.push(idx.len());
     }
-    (Pattern::Blocked { ptr, idx }, vals)
+    Ok((Pattern::Blocked { ptr, idx }, vals))
+}
+
+fn compressed_parts<T>(
+    lines: usize,
+    nnz: usize,
+    entries: impl Iterator<Item = ([usize; 2], T)>,
+) -> Result<(Pattern, Vec<T>), String> {
+    let mut ptr = filled(lines.checked_add(1).ok_or(SIZE_ERROR)?, 0usize)?;
+    let mut idx = reserve(nnz)?;
+    let mut values = reserve(nnz)?;
+    for ([outer, inner], value) in entries {
+        let count = outer
+            .checked_add(1)
+            .and_then(|index| ptr.get_mut(index))
+            .ok_or("compressed entry is out of range")?;
+        *count = count.saturating_add(1);
+        idx.push(inner);
+        values.push(value);
+    }
+    let mut cumulative = 0usize;
+    for count in &mut ptr {
+        cumulative = cumulative.saturating_add(*count);
+        *count = cumulative;
+    }
+    Ok((Pattern::Compressed { ptr, idx }, values))
+}
+
+fn validate_coordinates(
+    shape: &[usize],
+    coords: &[usize],
+    nnz: usize,
+) -> Result<(), String> {
+    let rank = shape.len();
+    if rank.checked_mul(nnz) != Some(coords.len()) || (rank == 0 && nnz > 1) {
+        return Err("coordinate list does not match the values".into());
+    }
+    if rank == 0 {
+        return Ok(());
+    }
+    let mut previous = None;
+    for coord in coords.chunks_exact(rank) {
+        if coord.iter().zip(shape).any(|(c, e)| c >= e) {
+            return Err("coordinate out of range".into());
+        }
+        if previous.is_some_and(|earlier| earlier >= coord) {
+            return Err("coordinates are not strictly sorted".into());
+        }
+        previous = Some(coord);
+    }
+    Ok(())
+}
+
+fn validate_compressed(
+    ptr: &[usize],
+    idx: &[usize],
+    outer: usize,
+    inner: usize,
+) -> Result<(), String> {
+    if outer.checked_add(1) != Some(ptr.len())
+        || ptr.first() != Some(&0)
+        || ptr.last() != Some(&idx.len())
+    {
+        return Err("compressed pointers do not match the values".into());
+    }
+    for &[start, end] in ptr.array_windows::<2>() {
+        let row = idx
+            .get(start..end)
+            .ok_or("invalid compressed pointer range")?;
+        if row.iter().any(|&index| index >= inner) {
+            return Err("index out of range".into());
+        }
+        if row
+            .array_windows::<2>()
+            .any(|[current, next]| current >= next)
+        {
+            return Err("indices are not strictly increasing".into());
+        }
+    }
+    Ok(())
 }
 
 /// An element class: `f64` or a boxed [`Value`].
@@ -362,7 +519,7 @@ impl Store for f64 {
 impl Store for Value {
     fn pad_zero() -> Self {
         // Replaced by the zero of the final element class in `assemble`.
-        Value::Num(zero_num(0, &Dim::one()))
+        Self::Num(zero_num(0, &Dim::one()))
     }
 
     fn wrap(values: Vec<Self>) -> SpValues {
@@ -381,7 +538,7 @@ impl Store for Value {
 // Scalar helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn kind_rank(kind: &NumKind) -> u8 {
+pub(crate) const fn kind_rank(kind: &NumKind) -> u8 {
     match kind {
         | NumKind::Int(_) => 0,
         | NumKind::Exact(_) | NumKind::Sym(_) => 1,
@@ -395,8 +552,8 @@ pub(crate) fn zero_num(
     dim: &Dim,
 ) -> NumVal {
     let kind = match rank {
-        | 0 => NumKind::Int(BigInt::zero()),
-        | 1 => NumKind::Exact(BigRational::zero()),
+        | 0 => NumKind::Int(crate::int::Int::ZERO),
+        | 1 => NumKind::Exact(Rc::new(BigRational::zero())),
         | 2 => NumKind::Float(0.0),
         | _ => NumKind::Complex(0.0, 0.0),
     };
@@ -423,7 +580,7 @@ pub(crate) fn err(
 }
 
 pub(crate) fn int_value(n: usize) -> Value {
-    Value::int(i64::try_from(n).unwrap_or(i64::MAX))
+    Value::Num(NumVal::int(n))
 }
 
 pub(crate) fn int_tensor(items: &[usize]) -> Value {
@@ -454,20 +611,15 @@ pub(crate) fn element_count(
     shape: &[usize],
     span: Span,
 ) -> R<usize> {
-    let mut count: usize = 1;
-    for extent in shape {
-        count = count
-            .checked_mul(*extent)
-            .filter(|c| *c <= DENSE_LIMIT)
-            .ok_or_else(|| {
-                err(
-                    "E0802",
-                    format!("a dense tensor of shape {shape:?} is too large to build"),
-                    span,
-                )
-            })?;
-    }
-    Ok(count)
+    crate::value::checked_element_count(shape)
+        .filter(|count| *count <= DENSE_LIMIT)
+        .ok_or_else(|| {
+            err(
+                "E0802",
+                format!("a dense tensor of shape {shape:?} is too large to build"),
+                span,
+            )
+        })
 }
 
 /// A non-negative `Int` (or integral `Float`) as `usize`.
@@ -479,12 +631,12 @@ pub(crate) fn index_of(
     match value {
         | Value::Num(num) => {
             let exact = match &num.kind {
-                | NumKind::Int(n) => n.to_i64(),
-                | NumKind::Float(f) if f.fract() == 0.0 => Some(*f as i64),
-                | NumKind::Exact(q) if q.is_integer() => q.to_integer().to_i64(),
+                | NumKind::Int(n) => n.to_usize(),
+                | NumKind::Float(f) if f.fract() == 0.0 => f.to_usize(),
+                | NumKind::Exact(q) if q.is_integer() => q.to_integer().to_usize(),
                 | _ => None,
             };
-            exact.and_then(|n| usize::try_from(n).ok()).ok_or_else(|| {
+            exact.ok_or_else(|| {
                 err(
                     "E0802",
                     format!(
@@ -521,8 +673,22 @@ pub(crate) fn index_list(
             span,
         ));
     };
-    tensor
-        .elements()
+    if tensor.checked_element_count() != Some(tensor.storage.len()) {
+        return Err(err(
+            "E0802",
+            format!("`{what}` does not match its shape"),
+            span,
+        ));
+    }
+    let items = tensor.elements();
+    if items.len() != tensor.storage.len() {
+        return Err(err(
+            "E0802",
+            format!("`{what}` has unreadable elements"),
+            span,
+        ));
+    }
+    items
         .iter()
         .map(|item| index_of(item, what, span))
         .collect()
@@ -546,7 +712,7 @@ impl SparseData {
     /// The number of stored value slots: `nnz` for every format but `Bcsr`,
     /// where it includes the padding zeros of the stored blocks.
     #[must_use]
-    pub fn stored_len(&self) -> usize {
+    pub const fn stored_len(&self) -> usize {
         match &self.values {
             | SpValues::F64(items) => items.len(),
             | SpValues::Boxed(items) => items.len(),
@@ -568,49 +734,38 @@ impl SparseData {
 
     /// The rank.
     #[must_use]
-    pub fn rank(&self) -> usize {
+    pub const fn rank(&self) -> usize {
         self.shape.len()
     }
 
     /// True when the values are an `f64` buffer.
     #[must_use]
-    pub fn is_f64(&self) -> bool {
+    pub const fn is_f64(&self) -> bool {
         matches!(self.values, SpValues::F64(_))
     }
 
     /// The stored entries as `(coordinates, value)` in sorted order.
+    /// Returns an empty list if mutated host metadata invalidates the layout.
     #[must_use]
     pub fn stored(&self) -> Vec<(Vec<usize>, Value)> {
-        let entries = self.entries_with(self.boxed_values());
-        (0..entries.len())
-            .map(|i| (entries.coord(i).to_vec(), entries.vals[i].clone()))
-            .collect()
+        self.checked_stored().unwrap_or_default()
     }
 
-    /// For `Csc`: `order[k]` is the storage position of the k-th entry in
-    /// row-major sorted order.
-    fn csc_order(
-        &self,
-        ptr: &[usize],
-        idx: &[usize],
-    ) -> Vec<usize> {
-        let rows = self.shape[0];
-        let mut counts = vec![0usize; rows + 1];
-        for r in idx {
-            counts[*r + 1] += 1;
+    fn checked_stored(&self) -> Result<Vec<(Vec<usize>, Value)>, String> {
+        let entries = self.try_entries_with(self.boxed_values())?;
+        let mut stored = reserve(entries.len())?;
+        if entries.rank == 0 {
+            stored.extend(entries.vals.into_iter().map(|value| (Vec::new(), value)));
+        } else {
+            stored.extend(
+                entries
+                    .coords
+                    .chunks_exact(entries.rank)
+                    .map(<[usize]>::to_vec)
+                    .zip(entries.vals),
+            );
         }
-        for r in 0..rows {
-            counts[r + 1] += counts[r];
-        }
-        let mut order = vec![0usize; idx.len()];
-        let mut next = counts;
-        for c in 0..self.shape[1] {
-            for k in ptr[c]..ptr[c + 1] {
-                order[next[idx[k]]] = k;
-                next[idx[k]] += 1;
-            }
-        }
-        order
+        Ok(stored)
     }
 
     /// The values in the order of the storage (`Csc`: column-major).
@@ -632,83 +787,115 @@ impl SparseData {
         &self,
         values: Vec<T>,
     ) -> Entries<T> {
+        self.try_entries_with(values)
+            .unwrap_or_else(|_| Entries::empty(self.rank()))
+    }
+
+    fn try_entries_with<T: Clone>(
+        &self,
+        values: Vec<T>,
+    ) -> Result<Entries<T>, String> {
+        self.validate_layout()?;
+        if values.len() != self.stored_len() {
+            return Err("sparse values do not match the stored layout".into());
+        }
         let rank = self.rank();
         match &self.pattern {
             | Pattern::Coords(coords) => {
-                Entries {
+                Ok(Entries {
                     rank,
                     coords: coords.clone(),
                     vals: values,
-                }
-            },
-            | Pattern::Blocked { ptr, idx } => {
-                // Row-major over the blocks, skipping the padding zeros.
-                let (br, bc) = self.block;
-                let bs = br * bc;
-                let live = self.nonzero_mask();
-                let mut coords = Vec::new();
-                let mut vals = Vec::new();
-                for ib in 0..ptr.len().saturating_sub(1) {
-                    for r in 0..br {
-                        for k in ptr[ib]..ptr[ib + 1] {
-                            for c in 0..bc {
-                                let slot = k * bs + r * bc + c;
-                                if live[slot] {
-                                    coords.push(ib * br + r);
-                                    coords.push(idx[k] * bc + c);
-                                    vals.push(values[slot].clone());
-                                }
-                            }
-                        }
-                    }
-                }
-                Entries { rank, coords, vals }
+                })
             },
             | Pattern::Compressed { ptr, idx } => {
-                let mut coords = Vec::with_capacity(idx.len() * 2);
-                match self.format {
-                    | SparseFormat::Csc => {
-                        let order = self.csc_order(ptr, idx);
-                        let mut col_of = vec![0usize; idx.len()];
-                        for c in 0..self.shape[1] {
-                            for k in ptr[c]..ptr[c + 1] {
-                                col_of[k] = c;
-                            }
-                        }
-                        let mut vals = Vec::with_capacity(idx.len());
-                        for &k in &order {
-                            coords.push(idx[k]);
-                            coords.push(col_of[k]);
-                            vals.push(values[k].clone());
-                        }
-                        Entries { rank, coords, vals }
-                    },
-                    | _ => {
-                        for r in 0..self.shape[0] {
-                            for k in ptr[r]..ptr[r + 1] {
-                                coords.push(r);
-                                coords.push(idx[k]);
-                            }
-                        }
-                        Entries {
-                            rank,
-                            coords,
-                            vals: values,
-                        }
-                    },
+                let coordinate_count = idx.len().checked_mul(2).ok_or(SIZE_ERROR)?;
+                let mut coords = reserve(coordinate_count)?;
+                if self.format == SparseFormat::Csc {
+                    let mut pairs = reserve(idx.len())?;
+                    let mut values = values.into_iter();
+                    for (column, &[start, end]) in ptr.array_windows::<2>().enumerate() {
+                        let rows = idx.get(start..end).ok_or("invalid compressed row range")?;
+                        pairs.extend(
+                            rows.iter()
+                                .map(|&row| [row, column])
+                                .zip(values.by_ref().take(rows.len())),
+                        );
+                    }
+                    pairs.sort_unstable_by_key(|(coord, _)| *coord);
+                    let mut vals = reserve(pairs.len())?;
+                    for (coord, value) in pairs {
+                        coords.extend(coord);
+                        vals.push(value);
+                    }
+                    Ok(Entries { rank, coords, vals })
+                } else {
+                    for (row, &[start, end]) in ptr.array_windows::<2>().enumerate() {
+                        let columns = idx
+                            .get(start..end)
+                            .ok_or("invalid compressed column range")?;
+                        coords.extend(columns.iter().flat_map(|&column| [row, column]));
+                    }
+                    Ok(Entries {
+                        rank,
+                        coords,
+                        vals: values,
+                    })
                 }
             },
+            | Pattern::Blocked { ptr, idx } => self.decode_blocks(ptr, idx, &values),
         }
     }
 
-    /// The typed entries, when the storage class is `T`'s.
-    pub(crate) fn entries<T: Store>(&self) -> Option<Entries<T>> {
-        let values = T::view(&self.values)?.to_vec();
-        Some(self.entries_with(values))
+    fn decode_blocks<T: Clone>(
+        &self,
+        ptr: &[usize],
+        idx: &[usize],
+        values: &[T],
+    ) -> Result<Entries<T>, String> {
+        let (br, bc) = self.block;
+        let area = br.checked_mul(bc).ok_or(SIZE_ERROR)?;
+        let live = self.nonzero_mask();
+        let mut entries = Entries::empty(2);
+        for (block_row, &[start, end]) in ptr.array_windows::<2>().enumerate() {
+            if start == end {
+                continue;
+            }
+            let columns = idx.get(start..end).ok_or("invalid block column range")?;
+            let first_row = block_row.checked_mul(br).ok_or(SIZE_ERROR)?;
+            for local_row in 0..br {
+                let row = first_row.checked_add(local_row).ok_or(SIZE_ERROR)?;
+                for (block, &column) in (start..end).zip(columns) {
+                    let first_col = column.checked_mul(bc).ok_or(SIZE_ERROR)?;
+                    let offset = block
+                        .checked_mul(area)
+                        .zip(local_row.checked_mul(bc))
+                        .and_then(|(block, row)| block.checked_add(row))
+                        .ok_or(SIZE_ERROR)?;
+                    let end = offset.checked_add(bc).ok_or(SIZE_ERROR)?;
+                    let row_values = values.get(offset..end).ok_or("invalid block value range")?;
+                    let row_live = live.get(offset..end).ok_or("invalid block mask range")?;
+                    for (local_col, (value, &nonzero)) in
+                        row_values.iter().zip(row_live).enumerate()
+                    {
+                        if nonzero {
+                            let col = first_col.checked_add(local_col).ok_or(SIZE_ERROR)?;
+                            entries.push(&[row, col], value.clone());
+                        }
+                    }
+                }
+            }
+        }
+        Ok(entries)
     }
 
-    /// Builds a sparse tensor of `format` from sorted, duplicate-free,
-    /// zero-free entries.
+    /// The typed entries, when the storage class is `T`'s and its layout is coherent.
+    pub(crate) fn entries<T: Store>(&self) -> Option<Entries<T>> {
+        let values = T::view(&self.values)?.to_vec();
+        self.try_entries_with(values).ok()
+    }
+
+    /// Builds a sparse tensor from sorted, duplicate-free, zero-free entries.
     ///
     /// `zero_rank` is the representation class of the implicit zero for boxed
     /// storage (see [`kind_rank`]); the stored values raise it.
@@ -719,52 +906,56 @@ impl SparseData {
         display: Option<Rc<UnitDef>>,
         zero_rank: u8,
         entries: Entries<T>,
-    ) -> Self {
+    ) -> Result<Self, String> {
+        if entries.rank != shape.len() {
+            return Err("entry rank does not match the sparse shape".into());
+        }
+        validate_coordinates(&shape, &entries.coords, entries.len())?;
         let mut block = (1, 1);
-        let (pattern, values) = match format {
-            | SparseFormat::Coo => (Pattern::Coords(entries.coords), entries.vals),
-            | SparseFormat::Bcsr => {
+        let (pattern, values) = match (format, shape.as_slice()) {
+            | (SparseFormat::Coo, _) => (Pattern::Coords(entries.coords), entries.vals),
+            | (SparseFormat::Bcsr, [rows, cols]) => {
                 block = auto_block(&shape, &entries.coords);
-                blocked_parts(&shape, block, entries)
+                blocked_parts(*rows, *cols, block, entries)?
             },
-            | SparseFormat::Csr => {
-                let rows = shape[0];
-                let nnz = entries.vals.len();
-                let mut ptr = vec![0usize; rows + 1];
-                let mut idx = Vec::with_capacity(nnz);
-                for i in 0..nnz {
-                    ptr[entries.coords[i * 2] + 1] += 1;
-                    idx.push(entries.coords[i * 2 + 1]);
-                }
-                for r in 0..rows {
-                    ptr[r + 1] += ptr[r];
-                }
-                (Pattern::Compressed { ptr, idx }, entries.vals)
+            | (SparseFormat::Csr, [rows, _]) => {
+                let nnz = entries.len();
+                compressed_parts(
+                    *rows,
+                    nnz,
+                    entries
+                        .coords
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .copied()
+                        .zip(entries.vals),
+                )?
             },
-            | SparseFormat::Csc => {
-                let cols = shape[1];
-                let nnz = entries.vals.len();
-                let mut ptr = vec![0usize; cols + 1];
-                for i in 0..nnz {
-                    ptr[entries.coords[i * 2 + 1] + 1] += 1;
-                }
-                for c in 0..cols {
-                    ptr[c + 1] += ptr[c];
-                }
-                let mut next = ptr.clone();
-                let mut idx = vec![0usize; nnz];
-                let mut slots: Vec<Option<T>> = vec![None; nnz];
-                for (i, value) in entries.vals.into_iter().enumerate() {
-                    let c = entries.coords[i * 2 + 1];
-                    idx[next[c]] = entries.coords[i * 2];
-                    slots[next[c]] = Some(value);
-                    next[c] += 1;
-                }
-                let vals = slots.into_iter().flatten().collect();
-                (Pattern::Compressed { ptr, idx }, vals)
+            | (SparseFormat::Csc, [_, cols]) => {
+                let nnz = entries.len();
+                let mut columns = reserve(nnz)?;
+                columns.extend(
+                    entries
+                        .coords
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|&[row, col]| [col, row])
+                        .zip(entries.vals),
+                );
+                columns.sort_unstable_by_key(|(coord, _)| *coord);
+                compressed_parts(*cols, nnz, columns.into_iter())?
+            },
+            | _ => {
+                return Err(format!(
+                    "{} must have rank 2, found {}",
+                    format.name(),
+                    shape.len()
+                ));
             },
         };
-        Self::assemble(
+        Ok(Self::assemble(
             format,
             shape,
             dim,
@@ -773,14 +964,10 @@ impl SparseData {
             block,
             pattern,
             T::wrap(values),
-        )
+        ))
     }
 
-    /// Builds a `Bcsr` tensor with an explicit block shape from sorted,
-    /// duplicate-free, zero-free entries.
-    ///
-    /// The block shape must be positive and divide the shape; callers check
-    /// that and report `E0802`.
+    /// Builds a `Bcsr` tensor with an explicit block shape that tiles the matrix.
     pub(crate) fn from_entries_blocked<T: Store>(
         shape: Vec<usize>,
         dim: Dim,
@@ -788,9 +975,16 @@ impl SparseData {
         zero_rank: u8,
         block: (usize, usize),
         entries: Entries<T>,
-    ) -> Self {
-        let (pattern, values) = blocked_parts(&shape, block, entries);
-        Self::assemble(
+    ) -> Result<Self, String> {
+        let [rows, cols] = shape.as_slice() else {
+            return Err("Bcsr requires a rank-2 shape".into());
+        };
+        if entries.rank != 2 {
+            return Err("entry rank does not match the sparse shape".into());
+        }
+        validate_coordinates(&shape, &entries.coords, entries.len())?;
+        let (pattern, values) = blocked_parts(*rows, *cols, block, entries)?;
+        Ok(Self::assemble(
             SparseFormat::Bcsr,
             shape,
             dim,
@@ -799,7 +993,7 @@ impl SparseData {
             block,
             pattern,
             T::wrap(values),
-        )
+        ))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -870,125 +1064,61 @@ impl SparseData {
         data
     }
 
+    fn validate_layout(&self) -> Result<(), String> {
+        let nnz = self.stored_len();
+        if self.format != SparseFormat::Bcsr && self.block != (1, 1) {
+            return Err("the block shape does not match the format".into());
+        }
+        match (self.format, self.shape.as_slice(), &self.pattern) {
+            | (SparseFormat::Coo, shape, Pattern::Coords(coords)) => {
+                validate_coordinates(shape, coords, nnz)
+            },
+            | (SparseFormat::Csr, &[rows, cols], Pattern::Compressed { ptr, idx })
+            | (SparseFormat::Csc, &[cols, rows], Pattern::Compressed { ptr, idx }) => {
+                if idx.len() != nnz {
+                    return Err("compressed indices do not match the values".into());
+                }
+                validate_compressed(ptr, idx, rows, cols)
+            },
+            | (SparseFormat::Bcsr, &[rows, cols], Pattern::Blocked { ptr, idx }) => {
+                let (block_rows, block_cols, area) = block_geometry(rows, cols, self.block)?;
+                if idx.len().checked_mul(area) != Some(nnz) {
+                    return Err("block indices do not match the values".into());
+                }
+                validate_compressed(ptr, idx, block_rows, block_cols)
+            },
+            | _ => Err("sparse shape or pattern does not match the format".into()),
+        }
+    }
+
     /// Checks the representation invariants.
     ///
     /// # Errors
     /// A description of the first violated invariant.
     pub fn validate(&self) -> Result<(), String> {
-        let rank = self.rank();
-        match self.format {
-            | SparseFormat::Csr | SparseFormat::Csc | SparseFormat::Bcsr if rank != 2 => {
-                return Err(format!(
-                    "{} must have rank 2, found {rank}",
-                    self.format.name()
-                ));
-            },
-            | _ => {},
-        }
-        let nnz = self.stored_len();
-        if (self.format == SparseFormat::Bcsr) != matches!(self.pattern, Pattern::Blocked { .. })
-            || (self.format != SparseFormat::Bcsr && self.block != (1, 1))
-        {
-            return Err("the pattern does not match the format".into());
-        }
-        match &self.pattern {
-            | Pattern::Blocked { ptr, idx } => {
-                let (br, bc) = self.block;
-                if br == 0
-                    || bc == 0
-                    || !self.shape[0].is_multiple_of(br)
-                    || !self.shape[1].is_multiple_of(bc)
-                {
-                    return Err(format!(
-                        "block {br}x{bc} does not divide the shape {:?}",
-                        self.shape
-                    ));
-                }
-                let (nbr, nbc) = (self.shape[0] / br, self.shape[1] / bc);
-                if ptr.len() != nbr + 1
-                    || ptr[0] != 0
-                    || ptr[nbr] != idx.len()
-                    || nnz != idx.len() * br * bc
-                {
-                    return Err("block pointers do not match the values".into());
-                }
-                let live = self.nonzero_mask();
-                for a in 0..nbr {
-                    if ptr[a] > ptr[a + 1] {
-                        return Err("pointers are not monotone".into());
-                    }
-                    for k in ptr[a]..ptr[a + 1] {
-                        if idx[k] >= nbc {
-                            return Err("block index out of range".into());
-                        }
-                        if k > ptr[a] && idx[k - 1] >= idx[k] {
-                            return Err("block indices are not strictly increasing".into());
-                        }
-                        if !live[k * br * bc..(k + 1) * br * bc].iter().any(|l| *l) {
-                            return Err("an all-zero block is stored".into());
-                        }
-                    }
-                }
-            },
-            | Pattern::Coords(coords) => {
-                if self.format != SparseFormat::Coo || coords.len() != nnz * rank {
-                    return Err("coordinate list does not match the values".into());
-                }
-            },
-            | Pattern::Compressed { ptr, idx } => {
-                let axis = if self.format == SparseFormat::Csc {
-                    self.shape[1]
-                } else {
-                    self.shape[0]
-                };
-                let other = if self.format == SparseFormat::Csc {
-                    self.shape[0]
-                } else {
-                    self.shape[1]
-                };
-                if ptr.len() != axis + 1 || ptr[0] != 0 || ptr[axis] != nnz || idx.len() != nnz {
-                    return Err("compressed pointers do not match the values".into());
-                }
-                for a in 0..axis {
-                    if ptr[a] > ptr[a + 1] {
-                        return Err("pointers are not monotone".into());
-                    }
-                    for k in ptr[a]..ptr[a + 1] {
-                        if idx[k] >= other {
-                            return Err("index out of range".into());
-                        }
-                        if k > ptr[a] && idx[k - 1] >= idx[k] {
-                            return Err("indices are not strictly increasing".into());
-                        }
-                    }
-                }
-            },
-        }
-        if let Pattern::Coords(coords) = &self.pattern {
-            for i in 0..nnz {
-                let coord = &coords[i * rank..(i + 1) * rank];
-                if coord.iter().zip(&self.shape).any(|(c, e)| c >= e) {
-                    return Err("coordinate out of range".into());
-                }
-                if i > 0 && coords[(i - 1) * rank..i * rank] >= *coord {
-                    return Err("coordinates are not strictly sorted".into());
-                }
-            }
-        }
+        self.validate_layout()?;
         if matches!(self.pattern, Pattern::Blocked { .. }) {
-            // Zeros inside a stored block are padding, not explicit zeros.
-            return Ok(());
-        }
-        let explicit_zero = match &self.values {
-            | SpValues::F64(items) => items.contains(&0.0),
-            | SpValues::Boxed(items) => {
-                items
-                    .iter()
-                    .any(|v| matches!(v, Value::Num(n) if num_is_zero(n)))
-            },
-        };
-        if explicit_zero {
-            return Err("an explicit zero is stored".into());
+            let (br, bc) = self.block;
+            let area = br.checked_mul(bc).ok_or(SIZE_ERROR)?;
+            if self
+                .nonzero_mask()
+                .chunks_exact(area)
+                .any(|block| !block.iter().any(|live| *live))
+            {
+                return Err("an all-zero block is stored".into());
+            }
+        } else {
+            let explicit_zero = match &self.values {
+                | SpValues::F64(items) => items.contains(&0.0),
+                | SpValues::Boxed(items) => {
+                    items
+                        .iter()
+                        .any(|v| matches!(v, Value::Num(n) if num_is_zero(n)))
+                },
+            };
+            if explicit_zero {
+                return Err("an explicit zero is stored".into());
+            }
         }
         Ok(())
     }
@@ -1003,16 +1133,19 @@ impl SparseData {
     /// the layout the kernel's sparse value uses. Nothing is densified.
     ///
     /// # Errors
-    /// A description when a flat index does not fit in `u64`.
+    /// A description of invalid host metadata or an offset outside `u64`.
     pub fn to_flat_parts(&self) -> Result<(Vec<u64>, Vec<Value>), String> {
-        let mut flat = Vec::with_capacity(self.nnz());
-        let mut values = Vec::with_capacity(self.nnz());
-        for (coord, value) in self.stored() {
+        let stored = self.checked_stored()?;
+        let mut flat = reserve(stored.len())?;
+        let mut values = reserve(stored.len())?;
+        for (coord, value) in stored {
             let mut index: u64 = 0;
             for (c, extent) in coord.iter().zip(&self.shape) {
+                let extent = u64::try_from(*extent).map_err(|_| SIZE_ERROR)?;
+                let coordinate = u64::try_from(*c).map_err(|_| SIZE_ERROR)?;
                 index = index
-                    .checked_mul(*extent as u64)
-                    .and_then(|i| i.checked_add(*c as u64))
+                    .checked_mul(extent)
+                    .and_then(|i| i.checked_add(coordinate))
                     .ok_or_else(|| {
                         format!(
                             "the flat index of a {:?} sparse tensor overflows",
@@ -1051,18 +1184,29 @@ impl SparseData {
                 format.name()
             ));
         }
-        let total = shape
-            .iter()
-            .try_fold(1u64, |acc, e| acc.checked_mul(*e as u64))
-            .ok_or("the shape overflows")?;
         let rank = shape.len();
         let mut entries: Entries<Value> = Entries::empty(rank);
-        let mut coord = vec![0usize; rank];
+        let mut coord = filled(rank, 0usize)?;
         let mut zero_rank_seen = 0u8;
-        for (position, (index, value)) in flat.iter().zip(values).enumerate() {
-            if *index >= total || (position > 0 && flat[position - 1] >= *index) {
+        let mut previous = None;
+        for (&index, value) in flat.iter().zip(values) {
+            if previous.is_some_and(|earlier| earlier >= index) {
                 return Err(format!("index {index} is out of range or out of order"));
             }
+            // Decode the individual extents so the whole logical product
+            // does not have to fit in a host-sized integer.
+            let remaining = shape.iter().zip(&mut coord).rev().try_fold(
+                u128::from(index),
+                |remaining, (&extent, coordinate)| {
+                    let extent = extent as u128;
+                    *coordinate = usize::try_from(remaining.checked_rem(extent)?).ok()?;
+                    remaining.checked_div(extent)
+                },
+            );
+            if remaining != Some(0) {
+                return Err(format!("index {index} is out of range or out of order"));
+            }
+            previous = Some(index);
             let Value::Num(num) = &value else {
                 return Err("a sparse element must be a number".to_string());
             };
@@ -1070,20 +1214,106 @@ impl SparseData {
             if num_is_zero(num) {
                 continue;
             }
-            kernels::unflatten(
-                usize::try_from(*index).map_err(|_| "index too large")?,
-                &shape,
-                &mut coord,
-            );
             entries.push(&coord, value);
         }
-        Ok(Self::from_entries(
-            format,
-            shape,
-            dim,
-            None,
-            zero_rank_seen,
-            entries,
-        ))
+        Self::from_entries(format, shape, dim, None, zero_rank_seen, entries)
+    }
+}
+
+
+#[cfg(test)]
+mod storage_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn paired_wide_sparse_shapes_need_only_stored_coordinates() -> Result<(), String> {
+        let extent = u64::try_from(usize::MAX).map_err(|_| SIZE_ERROR)?;
+        let last = extent.saturating_sub(1);
+        for (format, shape, index, expected_coord) in [
+            (
+                SparseFormat::Coo,
+                vec![usize::MAX, 2],
+                extent,
+                vec![usize::MAX / 2, 1],
+            ),
+            (
+                SparseFormat::Csc,
+                vec![usize::MAX, 1],
+                last,
+                vec![usize::MAX - 1, 0],
+            ),
+            (
+                SparseFormat::Bcsr,
+                vec![1, usize::MAX],
+                last,
+                vec![0, usize::MAX - 1],
+            ),
+        ] {
+            let value = SparseData::from_flat_parts(
+                format,
+                shape,
+                &[index],
+                vec![Value::float(4.0)],
+                Dim::one(),
+            )?;
+            value.validate()?;
+            let stored = value.stored();
+            let [(coords, number)] = stored.as_slice() else {
+                return Err("expected exactly one sparse entry".to_string());
+            };
+            assert_eq!(*coords, expected_coord);
+            assert_eq!(number.as_f64(), Some(4.0));
+            assert_eq!(value.to_flat_parts()?.0, [index]);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn compressed_capacity_and_invalid_public_metadata_report_errors() -> Result<(), String> {
+        let impossible = SparseData::from_flat_parts(
+            SparseFormat::Csr,
+            vec![usize::MAX, 1],
+            &[],
+            Vec::new(),
+            Dim::one(),
+        );
+        assert!(impossible.is_err());
+        assert!(
+            SparseData::from_flat_parts(
+                SparseFormat::Coo,
+                vec![0, usize::MAX],
+                &[0],
+                vec![Value::int(1)],
+                Dim::one()
+            )
+            .is_err()
+        );
+
+        let mut invalid = SparseData::from_flat_parts(
+            SparseFormat::Csr,
+            vec![2, 2],
+            &[1],
+            vec![Value::int(1)],
+            Dim::one(),
+        )?;
+        invalid.shape = vec![usize::MAX, 1];
+        assert!(invalid.validate().is_err());
+        assert!(invalid.stored().is_empty());
+        assert!(invalid.to_flat_parts().is_err());
+        invalid.format = SparseFormat::Coo;
+        invalid.shape = vec![1];
+        assert!(invalid.validate().is_err());
+
+        let mut blocked = SparseData::from_flat_parts(
+            SparseFormat::Bcsr,
+            vec![2, 2],
+            &[1],
+            vec![Value::int(1)],
+            Dim::one(),
+        )?;
+        blocked.block = (usize::MAX, usize::MAX);
+        assert!(blocked.validate().is_err());
+        assert!(blocked.to_flat_parts().is_err());
+        Ok(())
     }
 }

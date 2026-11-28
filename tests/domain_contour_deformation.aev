@@ -1,0 +1,31 @@
+import Rssn_Contour as Contour
+
+import Rssn_numerical_callback as Numeric
+
+let start = complex(3.0 m, -1.0 m)
+let end = complex(3.0 m, 1.0 m)
+let no_poles: Tensor<1, Complex[Length]> = []
+let ray_origins = [complex(0.0 m, 0.0 m)]
+let ray_angles = [0.0]
+
+fn density(_z: Complex[Length]): Complex[Time] = complex(3000.0 ms, 0.0 ms)
+
+test "branch-ray deformation produces an open measured arc" =
+    match Contour.deform(start, end, no_poles, ray_origins, 5.0 cm, ray_angles) with
+    | Ok(path) -> !path.closed && path.arc_segments == [1] && approx_eq(path.arc_radii[0], 3.162277660168379 m, 1e-11 m)
+    | Err(_) -> false
+
+test "checked contour deformation restores callback and coordinate scales" =
+    match Numeric.num_contour_integrate_deformed_checked_typed(start, end, no_poles, ray_origins, 5.0 cm, ray_angles, 2.5 m, 7.0 s, 1e-9 m*s, 64, 900, density) with
+    | Ok(result) -> result.converged && result.evaluations > 0 && approx_eq(im(result.value), 6.0 m*s, 1e-10 m*s)
+    | Err(_) -> false
+
+test "a branch-ray endpoint is rejected" =
+    match Contour.deform(start, complex(1.0 m, 0.0 m), no_poles, ray_origins, 5.0 cm, ray_angles) with
+    | Ok(_) -> false
+    | Err(_) -> true
+
+test "deformed contour preserves the callback limit" =
+    match Numeric.num_contour_integrate_deformed_checked_typed(start, end, no_poles, ray_origins, 5.0 cm, ray_angles, 2.5 m, 7.0 s, 1e-9 m*s, 64, 1, density) with
+    | Ok(_) -> false
+    | Err(_) -> true

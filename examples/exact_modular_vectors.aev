@@ -1,0 +1,28 @@
+## Keep modular vector and scalar operations exact above signed 64-bit range.
+import Rssn_FiniteField as Field
+import Rssn_NumberTheory as Number
+
+let modulus = 18446744073709551615
+let coefficients = [18446744073709551614, 2, 3]
+let weights = [18446744073709551613, 3, 4]
+
+let product = Field.vector_dot_mod(coefficients, weights, modulus)
+let scaled = Field.vector_axpy_mod(modulus - 1, coefficients, weights, modulus)
+let inverses = Field.batch_inverse_skip_zeros([7, 4, 15, 18, 8], 15)
+let power = Number.pow_mod_u128(340282366920938463463374607431768211453, 3, 340282366920938463463374607431768211455)
+
+fn main(): IO Unit = do
+    println("Dot product modulo {modulus}: {product}")
+    println("Modular vector update: {scaled}")
+    println("Inverses modulo 15: {inverses}")
+    println("Wide modular exponentiation: {power}")
+
+test "full-width modular dot product is exact" =
+    match product with
+    | Ok(residue) -> residue == 20
+    | Err(_) -> false
+
+test "wide modular exponentiation preserves the result above 64 bits" =
+    match power with
+    | Ok(residue) -> residue == 340282366920938463463374607431768211447
+    | Err(_) -> false

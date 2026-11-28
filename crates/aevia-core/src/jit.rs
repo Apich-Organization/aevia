@@ -1,4 +1,4 @@
-//! Native code for `@jit` functions.
+//! Native code for checked hot scalar functions and `@jit` functions.
 //!
 //! Pure `Float`/`Int`/`Bool` functions are lowered to RSSN's LIR (a typed
 //! register machine with real branches, loops and calls) and compiled with
@@ -35,7 +35,7 @@ use std::rc::Rc;
 use std::rc::Weak;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum Kind {
+pub enum Kind {
     Float,
     Bool,
     Int,
@@ -238,7 +238,7 @@ use aevia_rssn::jit::lir::Ty;
 
 /// A numeric literal resolved under one activation.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum Lit {
+pub enum Lit {
     /// A `Float`, by its exact bits (so `-0.0` and `0.0` differ).
     F(u64),
     /// An `Int` that fits 64 bits.
@@ -264,10 +264,10 @@ const fn lir_ty(kind: Kind) -> Ty {
 }
 
 /// Whether the global `name` is the builtin of that name (not shadowed).
-pub(crate) type BuiltinCheck<'a> = &'a mut dyn FnMut(&str) -> bool;
+type BuiltinCheck<'a> = &'a mut dyn FnMut(&str) -> bool;
 
 /// What native execution asks the interpreter before entering.
-pub(crate) enum Ask<'a> {
+pub enum Ask<'a> {
     /// Does the self call whose callee is written at this span still call
     /// this very activation?
     IsSelf(Span),
@@ -283,6 +283,28 @@ enum Cont {
     /// It is assigned to the result register of a value-position block, and
     /// control continues at `join`.
     Assign { join: lir::BlockId },
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "native log2 needs a C ABI entry point"
+    )
+)]
+extern "C" fn log2(x: f64) -> f64 {
+    x.log2()
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "native log10 needs a C ABI entry point"
+    )
+)]
+extern "C" fn log10(x: f64) -> f64 {
+    x.log10()
 }
 
 /// The activation being compiled.
@@ -302,8 +324,8 @@ struct Lower<'a> {
     sites: Vec<(Span, Span)>,
     /// The result register of the value-position block being lowered.
     assign: Vec<Option<(LReg, Kind)>>,
-    /// Number of tail self calls (native loops).
-    tails: usize,
+    /// Whether the activation contains a native tail loop.
+    has_tail_loop: bool,
     /// Builtins the code calls, re-checked before every native run.
     used: Vec<String>,
 }
@@ -467,12 +489,6 @@ impl Lower<'_> {
             | Kind::Float => x.0,
             | _ => return None,
         };
-        extern "C" fn log2(x: f64) -> f64 {
-            x.log2()
-        }
-        extern "C" fn log10(x: f64) -> f64 {
-            x.log10()
-        }
         let unary = |i: I| L::FUnary(i, x);
         let y = match name {
             | "sqrt" | "cbrt" => {
@@ -814,7 +830,7 @@ impl Lower<'_> {
                 if self.is_self_call(call) && matches!(cont, Cont::Return) {
                     let args = self.self_args(call, env)?;
                     let site = self.sites.len();
-                    self.tails += 1;
+                    self.has_tail_loop = true;
                     // A tail jump costs one unit of fuel; with none left the
                     // interpreter continues the trampoline.
                     let zero = self.f.ins(L::I(0));
@@ -859,7 +875,7 @@ fn lower_form(
     params: &[Kind],
     result: Kind,
     entry: bool,
-) -> Option<(lir::Function, Vec<(Span, Span)>, usize, Vec<String>)> {
+) -> Option<(lir::Function, Vec<(Span, Span)>, bool, Vec<String>)> {
     let mut sig: Vec<Ty> = params.iter().map(|&k| lir_ty(k)).collect();
     sig.push(Ty::I64);
     let results: Vec<Ty> = if entry {
@@ -889,11 +905,11 @@ fn lower_form(
         result,
         entry,
         head,
-        head_params: head_params.clone(),
+        head_params,
         fuel,
         sites: Vec::new(),
         assign: Vec::new(),
-        tails: 0,
+        has_tail_loop: false,
         used: Vec::new(),
     };
     let mut env: Env = vec![None; function.nslots as usize];
@@ -904,8 +920,12 @@ fn lower_form(
         *env.get_mut(*slot as usize)? = Some((*lower.head_params.get(index)?, *params.get(index)?));
     }
     lower.block(&function.body, &mut env, Cont::Return)?;
-    let (sites, tails, used) = (lower.sites, lower.tails, lower.used);
-    Some((lower.f.finish().ok()?, sites, tails, used))
+    Some((
+        lower.f.finish().ok()?,
+        lower.sites,
+        lower.has_tail_loop,
+        lower.used,
+    ))
 }
 
 /// Native code for one activation.
@@ -922,6 +942,13 @@ struct Native {
     used: Vec<String>,
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "separates code generation from the per-thread cache"
+    )
+)]
 fn compile_native(
     function: &Function,
     literals: &[(Span, Lit)],
@@ -929,10 +956,10 @@ fn compile_native(
     expected_result: Kind,
     builtin: BuiltinCheck<'_>,
 ) -> Option<Native> {
-    if !function.jit || !function.captures.is_empty() || parameters.len() != function.params.len() {
+    if !function.captures.is_empty() || parameters.len() != function.params.len() {
         return None;
     }
-    let (entry, sites, tails, used) = lower_form(
+    let (entry, sites, loops, used) = lower_form(
         function,
         literals,
         &mut *builtin,
@@ -948,7 +975,6 @@ fn compile_native(
         expected_result,
         false,
     )?;
-    let loops = tails > 0;
     let module = lir::Module {
         functions: vec![entry, value],
     };
@@ -979,6 +1005,13 @@ fn compile(
 /// Straight-line SSA for a pure function (no tail loop): the instruction
 /// sequence and its result operand. Shared by the scalar machine-code path and
 /// by [`map_floats`].
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "keeps device tape lowering separate from batch execution"
+    )
+)]
 fn lower_scalar(
     function: &Function,
     literals: &[(Span, u64)],
@@ -997,7 +1030,8 @@ fn lower_scalar(
         let Pattern::Bind { slot, inner: None } = pattern else {
             return None;
         };
-        let value = builder.emit(Inst::Input(u32::try_from(index).ok()?), parameters[index])?;
+        let kind = *parameters.get(index)?;
+        let value = builder.emit(Inst::Input(u32::try_from(index).ok()?), kind)?;
         *slots.get_mut(*slot as usize)? = Some(value);
     }
     let result = builder.block(&function.body, &mut slots)?;
@@ -1022,7 +1056,7 @@ fn lower_scalar(
 /// No builtin calls this yet: registering `Device.map` needs entries in the
 /// type and builtin tables, which the stdlib generator owns (see the spec).
 #[allow(dead_code)]
-pub(crate) fn map_floats(
+pub fn map_floats(
     function: &Function,
     literals: &[(Span, u64)],
     columns: &[&[f64]],
@@ -1044,16 +1078,85 @@ thread_local! { static NATIVE_LOOPS: std::cell::Cell<usize> = const { std::cell:
 #[cfg(test)]
 thread_local! { static NATIVE_SCALARS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "owns specialization cache lookup and replacement"
+    )
+)]
+fn cached_native(
+    function: &Rc<Function>,
+    kinds: Vec<Kind>,
+    expected_result: Kind,
+    literals: &[(Span, Lit)],
+    check: BuiltinCheck<'_>,
+) -> Option<Rc<Native>> {
+    CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let key = (
+            Rc::as_ptr(function) as usize,
+            kinds,
+            expected_result,
+            literals.to_vec(),
+        );
+        if cache.len() >= 256 {
+            cache.retain(|_, (function, _)| function.strong_count() > 0);
+        }
+        if !cache.contains_key(&key)
+            && cache.len() >= 256
+            && let Some(evicted) = cache.keys().next().cloned()
+        {
+            cache.remove(&evicted);
+        }
+        let owner = Rc::downgrade(function);
+        if let Some((prior, entry)) = cache.get(&key)
+            && prior.ptr_eq(&owner)
+        {
+            return entry.clone();
+        }
+        let native =
+            compile_native(function, literals, &key.1, expected_result, check).map(Rc::new);
+        cache.insert(key, (owner, native.clone()));
+        native
+    })
+}
+
+/// Count warm-up entries before the checked native specialization path.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "keeps the native warm-up in the JIT module"
+    )
+)]
+pub fn is_hot(function: &Function) -> bool {
+    const WARMUP_CALLS: u16 = 2_000;
+    if !function.captures.is_empty() {
+        return false;
+    }
+    let calls = function.native_calls.get();
+    if calls >= WARMUP_CALLS {
+        return true;
+    }
+    function.native_calls.set(calls.saturating_add(1));
+    false
+}
+
 /// Resolve numeric literals under the actual activation before consulting the
 /// machine-code cache. Failure is a normal interpreter fallback and never
 /// inserts a negative cache entry for a different specialization.
-pub(crate) fn specialization<T: Into<Lit>>(
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "resolves literal evidence before native dispatch"
+    )
+)]
+pub fn specialization<T: Into<Lit>>(
     function: &Function,
     mut resolve: impl FnMut(&aevia_syntax::ast::NumberLit, Span) -> Option<T>,
 ) -> Option<Vec<(Span, Lit)>> {
-    if !function.jit || !function.captures.is_empty() {
-        return None;
-    }
     fn visit<T: Into<Lit>>(
         block: &Block,
         out: &mut Vec<(Span, Lit)>,
@@ -1093,12 +1196,15 @@ pub(crate) fn specialization<T: Into<Lit>>(
         }
         Some(())
     }
+    if !function.captures.is_empty() {
+        return None;
+    }
     let mut literals = Vec::new();
     visit(&function.body, &mut literals, &mut resolve)?;
     Some(literals)
 }
 
-pub(crate) enum Outcome {
+pub enum Outcome {
     Value(Value),
     Tail {
         args: Vec<Value>,
@@ -1110,7 +1216,7 @@ pub(crate) enum Outcome {
 /// [`run_with`] without access to builtins (a call of `sqrt` and the like
 /// then keeps the function in the interpreter).
 #[cfg(test)]
-pub(crate) fn run(
+pub fn run(
     function: &Rc<Function>,
     args: &[Value],
     fuel: usize,
@@ -1131,7 +1237,14 @@ pub(crate) fn run(
 /// self call no longer refers to this activation, or the code bailed).
 ///
 /// `ask` answers the interpreter-side questions of [`Ask`].
-pub(crate) fn run_with(
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "entry point from the IR interpreter to native execution"
+    )
+)]
+pub fn run_with(
     function: &Rc<Function>,
     args: &[Value],
     fuel: usize,
@@ -1140,11 +1253,11 @@ pub(crate) fn run_with(
     mut ask: impl FnMut(Ask<'_>) -> bool,
 ) -> Option<Outcome> {
     use aevia_rssn::jit::lir::Value as V;
-    if !function.jit || args.len() != function.params.len() {
+    if args.len() != function.params.len() {
         return None;
     }
     let plain = |num: &NumVal| num.dim == Dim::one() && num.display.is_none();
-    let values: Option<Vec<(Kind, V<'static>)>> = args
+    let (kinds, mut call_args): (Vec<Kind>, Vec<V<'static>>) = args
         .iter()
         .map(|value| {
             match value {
@@ -1164,39 +1277,17 @@ pub(crate) fn run_with(
                 | _ => None,
             }
         })
-        .collect();
-    let values = values?;
-    let kinds: Vec<Kind> = values.iter().map(|(kind, _)| *kind).collect();
-    let mut call_args: Vec<V<'static>> = values.into_iter().map(|(_, v)| v).collect();
+        .collect::<Option<_>>()?;
     let limit = i64::try_from(fuel).unwrap_or(i64::MAX);
     call_args.push(V::I(limit));
-    let native = CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        let key = (
-            Rc::as_ptr(function) as usize,
-            kinds.clone(),
-            expected_result,
-            literals.to_vec(),
-        );
-        if cache.len() >= 256 {
-            cache.retain(|_, (function, _)| function.strong_count() > 0);
-        }
-        if !cache.contains_key(&key) && cache.len() >= 256 {
-            if let Some(evicted) = cache.keys().next().cloned() {
-                cache.remove(&evicted);
-            }
-        }
-        let mut check = |name: &str| ask(Ask::Builtin(name));
-        let mut compile =
-            || compile_native(function, literals, &kinds, expected_result, &mut check).map(Rc::new);
-        let entry = cache
-            .entry(key)
-            .or_insert_with(|| (Rc::downgrade(function), compile()));
-        if !entry.0.ptr_eq(&Rc::downgrade(function)) {
-            *entry = (Rc::downgrade(function), compile());
-        }
-        entry.1.clone()
-    })?;
+    let mut check = |name: &str| ask(Ask::Builtin(name));
+    let native = cached_native(
+        function,
+        kinds.clone(),
+        expected_result,
+        literals,
+        &mut check,
+    )?;
     // Pure native code cannot rebind a name, so one check per self-call site
     // before entering is enough even in a mutable REPL scope.
     if !native
@@ -1211,15 +1302,7 @@ pub(crate) fn run_with(
     let lir::Outcome::Returned(out) = outcome else {
         return None;
     };
-    let to_value = |v: &V<'_>, kind: Kind| -> Option<Value> {
-        Some(match (v, kind) {
-            | (V::F(x), Kind::Float) => Value::float(*x),
-            | (V::I(x), Kind::Int) => Value::int(*x),
-            | (V::B(x), Kind::Bool) => Value::Bool(*x),
-            | _ => return None,
-        })
-    };
-    let V::I(status) = out.first()? else {
+    let [V::I(status), value, tail @ ..] = out.as_slice() else {
         return None;
     };
     #[cfg(test)]
@@ -1232,25 +1315,51 @@ pub(crate) fn run_with(
         counter.with(|count| count.set(count.get() + 1));
     }
     if *status == 0 {
-        return Some(Outcome::Value(to_value(out.get(1)?, native.result)?));
+        return Some(Outcome::Value(unpack(value, native.result)?));
     }
     let site = usize::try_from(*status).ok()?.checked_sub(1)?;
     let (span, _) = *native.sites.get(site)?;
-    let V::I(left) = out.last()? else {
+    let (args, consumed) = tail_values(tail, &kinds, limit)?;
+    Some(Outcome::Tail { args, span, consumed })
+}
+
+fn unpack(
+    value: &lir::Value<'_>,
+    kind: Kind,
+) -> Option<Value> {
+    match (value, kind) {
+        | (lir::Value::F(x), Kind::Float) => Some(Value::float(*x)),
+        | (lir::Value::I(x), Kind::Int) => Some(Value::int(*x)),
+        | (lir::Value::B(x), Kind::Bool) => Some(Value::Bool(*x)),
+        | _ => None,
+    }
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "validates tail-resume values at the native boundary"
+    )
+)]
+fn tail_values(
+    tail: &[lir::Value<'_>],
+    kinds: &[Kind],
+    limit: i64,
+) -> Option<(Vec<Value>, usize)> {
+    let (lir::Value::I(left), arguments) = tail.split_last()? else {
         return None;
     };
+    if arguments.len() != kinds.len() || !(0..=limit).contains(left) {
+        return None;
+    }
     let consumed = usize::try_from(limit.checked_sub(*left)?).ok()?;
-    let next: Option<Vec<Value>> = out
-        .get(2..2 + kinds.len())?
+    let args = arguments
         .iter()
-        .zip(&kinds)
-        .map(|(v, &k)| to_value(v, k))
-        .collect();
-    Some(Outcome::Tail {
-        args: next?,
-        span,
-        consumed,
-    })
+        .zip(kinds)
+        .map(|(value, &kind)| unpack(value, kind))
+        .collect::<Option<_>>()?;
+    Some((args, consumed))
 }
 
 #[cfg(test)]
@@ -1281,6 +1390,7 @@ mod tests {
         Rc::new(Function {
             name: Rc::from("dynamic_literal"),
             jit: true,
+            native_calls: std::cell::Cell::new(0),
             params: vec![Pattern::Bind { slot: 0, inner: None }],
             body: Rc::new(Block {
                 stmts: vec![
@@ -1367,6 +1477,7 @@ fn f(x: Float): Float = if x > 0.0 then x * 2.0 else 0.0 - x
         let function = Rc::new(Function {
             name: Rc::from("signed_zero"),
             jit: true,
+            native_calls: std::cell::Cell::new(0),
             params: vec![],
             body: Rc::new(Block {
                 stmts: vec![Stmt::Let(aevia_ir::Let {
@@ -1460,6 +1571,34 @@ fn f(x: Float): Float = if x > 0.0 then x * 2.0 else 0.0 - x
                     .any(|(_, bits)| *bits == Lit::F(1.0_f64.to_bits()))
             }));
         });
+    }
+
+    #[test]
+    fn automatic_native_execution_compiles_verified_hot_source_calls() {
+        NATIVE_LOOPS.with(|count| count.set(0));
+        let source = "fn sum(n: Float, acc: Float): Float = if n <= 0.0 then acc else sum(n - 1.0, acc + 0.5)\nlet result = sum(3000.0, 0.0)\n";
+        let compilation = compile_source("hot-source.aev", source);
+        assert!(
+            !compilation.diagnostics.has_errors(),
+            "{:?}",
+            compilation.diagnostics.items
+        );
+        let module = compilation.module.as_ref().unwrap();
+        for automatic in [false, true] {
+            let mut interp = crate::Interp::new(&compilation.checked).with_mode(crate::Mode::Ir);
+            interp.jit_policy = if automatic {
+                crate::JitPolicy::Automatic
+            } else {
+                crate::JitPolicy::Annotated
+            };
+            let diagnostics = interp.load(module);
+            assert!(!diagnostics.has_errors(), "{:?}", diagnostics.items);
+            assert_eq!(
+                interp.eval_toplevel("result").unwrap().as_f64(),
+                Some(1500.0)
+            );
+            assert_eq!(NATIVE_LOOPS.with(|count| count.get()) > 0, automatic);
+        }
     }
 
     #[test]
@@ -1563,6 +1702,35 @@ fn f(x: Float): Float = if x > 0.0 then x * 2.0 else 0.0 - x
     }
 
     #[test]
+    fn native_tail_requires_exact_arguments_and_remaining_fuel() {
+        use lir::Value as NativeValue;
+
+        let exact = 9_007_199_254_740_993;
+        let kinds = [Kind::Int, Kind::Bool];
+        let native = [
+            NativeValue::I(exact),
+            NativeValue::B(true),
+            NativeValue::I(2),
+        ];
+        let (arguments, consumed) = tail_values(&native, &kinds, 5).unwrap();
+        assert_eq!(consumed, 3);
+        assert!(matches!(
+            arguments.as_slice(),
+            [Value::Num(number), Value::Bool(true)]
+                if matches!(&number.kind, NumKind::Int(value) if value.as_i64() == Some(exact))
+        ));
+        assert!(tail_values(&native, &[Kind::Int], 5).is_none());
+        assert!(tail_values(&native, &[Kind::Int, Kind::Float], 5).is_none());
+        assert!(tail_values(&native, &kinds, 1).is_none());
+        let negative = [
+            NativeValue::I(exact),
+            NativeValue::B(true),
+            NativeValue::I(-1),
+        ];
+        assert!(tail_values(&negative, &kinds, 5).is_none());
+    }
+
+    #[test]
     fn boolean_tail_resume_preserves_argument_kinds_and_values() {
         let bool_function = function(
             "@jit\nfn flip(n: Float, flag: Bool): Bool = if n <= 0.0 then flag else flip(n - 1.0, !flag)\n",
@@ -1638,7 +1806,11 @@ fn f(x: Float): Float = if x > 0.0 then x * 2.0 else 0.0 - x
     }
 
     #[test]
-    fn rebound_specialized_clone_of_same_origin_stays_on_trampoline() {
+    fn replacing_the_lexical_self_binding_disables_the_cached_native_loop() {
+        use crate::value::Closure;
+        use crate::value::ClosureBody;
+        use crate::value::ClosureEnv;
+
         CACHE.with(|cache| cache.borrow_mut().clear());
         NATIVE_LOOPS.with(|count| count.set(0));
         let source = "@jit\nfn sum<r: Rep>(n: Float, acc: r): r = if n <= 0.0 then acc else sum(n - 1.0, acc + 1)\nlet original = sum<Float>\nlet sum = original\nlet result = original(3.0, 0.0)\n";
@@ -1652,10 +1824,44 @@ fn f(x: Float): Float = if x > 0.0 then x * 2.0 else 0.0 - x
         let diagnostics = interp.load(compilation.module.as_ref().unwrap());
         assert!(!diagnostics.has_errors(), "{:?}", diagnostics.items);
         assert_eq!(interp.eval_toplevel("result").unwrap().as_f64(), Some(3.0));
+        assert!(
+            NATIVE_LOOPS.with(|count| count.get()) > 0,
+            "lexical shadowing must leave the earlier recursive binding available to the JIT"
+        );
+
+        let Value::Closure(selected) = interp.eval_toplevel("original").unwrap() else {
+            panic!("expected the selected callable");
+        };
+        let (ClosureBody::Ir(function), ClosureEnv::Ir(environment)) =
+            (&selected.body, &selected.env)
+        else {
+            panic!("expected an IR callable");
+        };
+        let scope = environment.scope.as_ref().expect("the module scope");
+        let site = function.span;
+        // Replace the declaration that the recursive reference actually reads,
+        // as source registrations can do when instrumenting a function.
+        let Some(Value::Closure(canonical)) =
+            scope.replace_source_at("sum", site, Value::Closure(selected.clone()))
+        else {
+            panic!("expected to replace the original lexical binding");
+        };
+        assert!(Closure::same_origin(&selected, &canonical));
+        assert!(!Rc::ptr_eq(&selected, &canonical));
+
+        NATIVE_LOOPS.with(|count| count.set(0));
+        let result = interp
+            .apply(
+                Value::Closure(selected),
+                vec![Value::float(3.0), Value::float(0.0)],
+                site,
+            )
+            .unwrap();
+        assert_eq!(result.as_f64(), Some(3.0));
         assert_eq!(
             NATIVE_LOOPS.with(|count| count.get()),
             0,
-            "a rebound selected clone must not take the native self loop"
+            "a selected clone replacing the lexical binding must use the trampoline"
         );
     }
 

@@ -1,0 +1,26 @@
+import Rssn_Special as Special
+
+fn near(actual: Complex, expected: Complex, tolerance: Real): Bool =
+    approx_eq(magnitude(actual - expected) / magnitude(expected), 0.0, tolerance)
+
+test "complex Bessel order remains continuous near a negative integer" =
+    let order = complex(-4.0, 1e-20)
+    let z = complex(1.2, 0.4)
+    match (Special.complex_bessel_j_order(order, z), Special.complex_bessel_i_order(order, z)) with
+    | (Ok(j), Ok(i)) -> near(j, complex(0.0020397442508668286, 0.005910380262010307), 5e-11) && near(i, complex(0.0016636022704707946, 0.006908728825839641), 5e-11)
+    | _ -> false
+
+test "Legendre Q resolves a recessive solution and En handles large orders" =
+    match (Special.complex_legendre_q(50, complex(1.15, 0.35)), Special.complex_exp_integral_en(4096, complex(1.254, 0.125))) with
+    | (Ok(q), Ok(e)) -> near(q, complex(-5.1487215664372866e-18, 1.60291491136409e-17), 2e-11) && near(e, complex(6.912009784944528e-05, -8.687438416978307e-06), 2e-11)
+    | _ -> false
+
+test "Anger and Weber integrals and named Kelvin components are available" =
+    let z = complex(1.0, 0.5)
+    let order = 0.6
+    match (Special.complex_anger_j(order, z), Special.complex_weber_e(order, z), Special.complex_kelvin(order, z)) with
+    | (Ok(j), Ok(e), Ok(k)) -> near(j, complex(0.853950368272301, 0.038591795070701485), 5e-11) && near(e, complex(0.21476741029097676, -0.2919447593850454), 5e-11) && near(k.ker, complex(-0.3551084864807993, 0.014740903895644381), 2e-11)
+    | _ -> false
+
+test "singular and oversized requests report a typed error" =
+    is_err(Special.complex_legendre_q(1, complex(1.0, 0.0))) && is_err(Special.complex_exp_integral_en(4097, complex(1.0, 0.0)))

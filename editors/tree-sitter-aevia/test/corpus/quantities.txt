@@ -1,0 +1,249 @@
+=====================================
+Layout separates numbers from declarations
+=====================================
+
+let count = 3
+test "after a number" = true
+fn next() =
+    let count = 3
+    2 s
+let tail = 4
+#- Comment on the next logical line. -#
+test "after a comment" = true
+
+---
+
+(source_file
+  (keyword)
+  (identifier)
+  (operator)
+  (number)
+  (keyword)
+  (string
+    (string_content))
+  (operator)
+  (boolean)
+  (function_declaration
+    (identifier))
+  (parenthesized
+    (bracket)
+    (bracket))
+  (operator)
+  (keyword)
+  (identifier)
+  (operator)
+  (number)
+  (quantity
+    (number)
+    (unit_expression
+      (unit_name)))
+  (keyword)
+  (identifier)
+  (operator)
+  (number)
+  (block_comment)
+  (keyword)
+  (string
+    (string_content))
+  (operator)
+  (boolean))
+
+===========================================
+Adjacent and horizontal-space unit suffixes
+===========================================
+
+let adjacent = 3m
+let spaced = 3 m
+let tabbed = 3	m
+let commented = 3 #- An internal
+    line break. -# m
+
+---
+
+(source_file
+  (keyword)
+  (identifier)
+  (operator)
+  (quantity
+    (number)
+    (unit_expression
+      (unit_name)))
+  (keyword)
+  (identifier)
+  (operator)
+  (quantity
+    (number)
+    (unit_expression
+      (unit_name)))
+  (keyword)
+  (identifier)
+  (operator)
+  (quantity
+    (number)
+    (unit_expression
+      (unit_name)))
+  (keyword)
+  (identifier)
+  (operator)
+  (quantity
+    (number)
+    (block_comment)
+    (unit_expression
+      (unit_name))))
+
+=============================================
+Delimited expressions suspend newline layout
+=============================================
+
+let scalar = (3
+    m)
+let vector = [3
+    m]
+let record = {distance = 3
+    m}
+let text = """{3
+    m}"""
+let grouped = 3 (
+    m/s
+)
+
+---
+
+(source_file
+  (keyword)
+  (identifier)
+  (operator)
+  (parenthesized
+    (bracket)
+    (quantity
+      (number)
+      (unit_expression
+        (unit_name)))
+    (bracket))
+  (keyword)
+  (identifier)
+  (operator)
+  (bracketed
+    (bracket)
+    (quantity
+      (number)
+      (unit_expression
+        (unit_name)))
+    (bracket))
+  (keyword)
+  (identifier)
+  (operator)
+  (braced
+    (bracket)
+    (identifier)
+    (operator)
+    (quantity
+      (number)
+      (unit_expression
+        (unit_name)))
+    (bracket))
+  (keyword)
+  (identifier)
+  (operator)
+  (string
+    (interpolation
+      (quantity
+        (number)
+        (unit_expression
+          (unit_name)))))
+  (keyword)
+  (identifier)
+  (operator)
+  (quantity
+    (number)
+    (unit_expression
+      (bracket)
+      (unit_expression
+        (unit_name)
+        (unit_name))
+      (bracket))))
+
+===========================================
+Unit product and division must touch both factors
+===========================================
+
+let acceleration = 9.81 m/s^2 * mass
+let product = 3 m·µs
+let right_space = 3 m/ s
+let left_space = 3 m /s
+let numeric = 3 m/2
+let unary = 3 m/√s
+let line_break = (3 m/
+    s)
+
+---
+
+(source_file
+  (keyword)
+  (identifier)
+  (operator)
+  (quantity
+    (number)
+    (unit_expression
+      (unit_name)
+      (unit_name)
+      (unit_exponent)))
+  (operator)
+  (identifier)
+  (keyword)
+  (identifier)
+  (operator)
+  (quantity
+    (number)
+    (unit_expression
+      (unit_name)
+      (unit_name)))
+  (keyword)
+  (identifier)
+  (operator)
+  (quantity
+    (number)
+    (unit_expression
+      (unit_name)))
+  (operator)
+  (identifier)
+  (keyword)
+  (identifier)
+  (operator)
+  (quantity
+    (number)
+    (unit_expression
+      (unit_name)))
+  (operator)
+  (identifier)
+  (keyword)
+  (identifier)
+  (operator)
+  (quantity
+    (number)
+    (unit_expression
+      (unit_name)))
+  (operator)
+  (number)
+  (keyword)
+  (identifier)
+  (operator)
+  (quantity
+    (number)
+    (unit_expression
+      (unit_name)))
+  (operator)
+  (operator)
+  (identifier)
+  (keyword)
+  (identifier)
+  (operator)
+  (parenthesized
+    (bracket)
+    (quantity
+      (number)
+      (unit_expression
+        (unit_name)))
+    (operator)
+    (identifier)
+    (bracket)))

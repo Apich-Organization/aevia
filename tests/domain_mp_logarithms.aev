@@ -1,0 +1,22 @@
+## Outward logarithms, binary exponential, and one-round decimal scaling.
+import Rssn_Multiprecision as MP
+
+let one: MP.Dyadic = { mantissa = 1, exponent = 0, precision = 1 }
+
+let two: MP.Dyadic = { mantissa = 1, exponent = 1, precision = 1 }
+
+test "an exact binary power has a point logarithm" =
+    match MP.log2_dyadic(two, 16) with
+    | Ok(interval) -> MP.compare_dyadic(interval.midpoint, one) == Ok(0) && MP.dyadic_is_zero(interval.radius) == Ok(true)
+    | Err(_) -> false
+
+test "logarithms reject a closed interval touching zero" =
+    match MP.ln_ball({ midpoint = one, radius = one }, 8) with
+    | Err(_) -> true
+    | Ok(_) -> false
+
+test "decimal scaling offers explicit rounding" =
+    let input: MP.Dyadic = { mantissa = 5, exponent = -2, precision = 3 }
+    let upper: MP.Dyadic = { mantissa = 1, exponent = 4, precision = 1 }
+    let lower: MP.Dyadic = { mantissa = 1, exponent = 3, precision = 1 }
+    MP.scale_decimal_dyadic(input, 1, 1) == Ok(upper) && MP.scale_decimal_dyadic_in(input, 1, 1, "down") == Ok(lower)

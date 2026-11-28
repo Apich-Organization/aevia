@@ -1,10 +1,4 @@
-//! `@`, `det`, `inv` and `linsolve` after the move onto `aevia_std::linalg`.
-//!
-//! The `f64` branches of those four call sites now run on the `faer`-backed
-//! dispatcher; the exact branches (`exact_matrix` / `invert_exact` / the
-//! rational `linsolve`) do not. This file is the guard on both halves: the
-//! numbers each operation answers are the ones the existing tests document, and
-//! an exact operand still produces an exact result.
+//! Dense matrix operations across exact and RSSN floating-point execution.
 
 #![allow(clippy::result_large_err)]
 
@@ -197,11 +191,8 @@ fn diagonal(
 
 /// `det`, `inv` and `linsolve` on the `f64` branch.
 ///
-/// That branch is only reached above 64×64: `exact_matrix` converts a `Float`
-/// to a `BigRational` (`NumVal::to_rational`) and takes the exact path for
-/// every matrix up to its 64-element bound. So the numbers below are the ones
-/// the hand-written elimination answered on the same input, with every value a
-/// power of two and therefore exact.
+/// A diagonal matrix with powers of two gives exactly representable answers
+/// when evaluated by the floating-point kernels.
 #[test]
 fn the_float_factorisations_agree_on_a_large_matrix() {
     let size = 65;
@@ -289,5 +280,101 @@ fn an_exact_operand_still_produces_an_exact_result() {
             .map(|index| repr(&inverse.get_flat(index).expect("element")))
             .collect::<Vec<_>>(),
         vec!["-2", "1", "3/2", "-1/2"]
+    );
+}
+
+#[test]
+fn large_integral_factorizations_stay_exact() {
+    let order = 65;
+    let a = Value::Tensor(std::rc::Rc::new(TensorData::new(
+        vec![order, order],
+        Storage::Boxed(
+            (0..order)
+                .flat_map(|row| {
+                    (0..order).map(move |col| Value::int(if row == col { 3 } else { 0 }))
+                })
+                .collect(),
+        ),
+        aevia_dim::Dim::one(),
+        None,
+    )));
+    let rhs = Value::Tensor(std::rc::Rc::new(TensorData::new(
+        vec![order],
+        Storage::Boxed(vec![Value::int(1); order]),
+        aevia_dim::Dim::one(),
+        None,
+    )));
+    let determinant = call("det", vec![a.clone()]);
+    assert_eq!(
+        repr(&determinant),
+        num_bigint::BigInt::from(3).pow(65).to_string()
+    );
+    let inverse = ok_tensor(call("inv", vec![a.clone()]));
+    assert_eq!(
+        repr(&inverse.get_flat(0).expect("first inverse entry")),
+        "1/3"
+    );
+    let solution = ok_tensor(call("linsolve", vec![a, rhs]));
+    assert_eq!(repr(&solution.get_flat(0).expect("first solution")), "1/3");
+}
+
+#[test]
+fn invalid_matrix_storage_and_non_finite_factors_report_failures() {
+    let dense_matrix = |entries| {
+        Value::Tensor(std::rc::Rc::new(TensorData::new(
+            vec![1, 1],
+            Storage::Dense(std::rc::Rc::new(entries)),
+            aevia_dim::Dim::one(),
+            None,
+        )))
+    };
+    let malformed = dense_matrix(Vec::new());
+    assert_eq!(
+        call_simple("det", vec![malformed.clone()])
+            .expect_err("malformed matrix")
+            .code,
+        "E0802"
+    );
+    assert_eq!(repr(&call("inv", vec![malformed])), "Err(ShapeMismatch)");
+    let non_finite = dense_matrix(vec![f64::INFINITY]);
+    assert_eq!(
+        call_simple("det", vec![non_finite.clone()])
+            .expect_err("non-finite matrix")
+            .code,
+        "E0806"
+    );
+    assert_eq!(
+        repr(&call("inv", vec![non_finite.clone()])),
+        "Err(NotConverged)"
+    );
+    let rhs = Value::Tensor(std::rc::Rc::new(TensorData::new(
+        vec![1],
+        Storage::Dense(std::rc::Rc::new(vec![1.0])),
+        aevia_dim::Dim::one(),
+        None,
+    )));
+    assert_eq!(
+        repr(&call("linsolve", vec![non_finite, rhs])),
+        "Err(NotConverged)"
+    );
+}
+
+#[test]
+fn square_decompositions_validate_both_matrix_extents() {
+    let empty_rectangle = Value::Tensor(std::rc::Rc::new(TensorData::new(
+        vec![0, 4],
+        Storage::Dense(std::rc::Rc::new(Vec::new())),
+        aevia_dim::Dim::one(),
+        None,
+    )));
+    for name in ["eig", "eigvals"] {
+        let error = call_simple(name, vec![empty_rectangle.clone()])
+            .expect_err("an empty rectangular matrix is not square");
+        assert_eq!(error.code, "E0802");
+        assert!(error.message.contains("matrix is not square"));
+    }
+    assert_eq!(
+        repr(&call("cholesky", vec![empty_rectangle])),
+        "Err(ShapeMismatch)"
     );
 }

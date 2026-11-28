@@ -1,0 +1,18 @@
+fn main() = 0
+# run main
+fn helper() = 0
+test "after a numeric line" = true
+# run test
+test r"raw name" = true
+# run test
+test #- inline -# "documented name" #- inline -# = true
+# run test
+test """
+# run test
+  multiline name
+  """ = true
+
+let incomplete_expression = "{test}"
+test "unfinished header"
+test "wrong assignment" == true
+let quantity = 1 test "same line is not a test header" = true

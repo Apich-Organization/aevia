@@ -10,10 +10,28 @@
 //! declarations are still different types, which is what makes `Shape` and
 //! `Rect` in different modules distinct.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
 use aevia_dim::Dim;
 use num_traits::One;
 use num_traits::Signed;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::collections::hash_map::Entry;
 use std::fmt;
 
 /// Identifier of a nominal algebraic data type.
@@ -23,7 +41,19 @@ pub type AdtId = u32;
 ///
 /// `Rep::Var` is a representation variable: `sqrt` and `+` are polymorphic in
 /// it, and it is resolved by unification or by the defaulting rules of §3.10.2.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum Rep {
     /// Arbitrary-precision integer; always dimensionless.
     Int,
@@ -40,18 +70,17 @@ pub enum Rep {
 impl Rep {
     /// The default representation for a variable, per §3.10.2.
     #[must_use]
-    pub fn default_for_literal(kind: LiteralKind) -> Self {
+    pub const fn default_for_literal(kind: LiteralKind) -> Self {
         match kind {
             | LiteralKind::Int => Self::Int,
-            | LiteralKind::Decimal => Self::Float,
+            | LiteralKind::Decimal | LiteralKind::QuantityDecimal => Self::Float,
             | LiteralKind::QuantityInt => Self::Real,
-            | LiteralKind::QuantityDecimal => Self::Float,
         }
     }
 
     /// `div_rep` of §3.4.2: division promotes integers to exact rationals.
     #[must_use]
-    pub fn div_rep(self) -> Self {
+    pub const fn div_rep(self) -> Self {
         match self {
             | Self::Int => Self::Real,
             | other => other,
@@ -60,8 +89,8 @@ impl Rep {
 
     /// The least upper bound of two *concrete* representations, per §3.4.1.
     ///
-    /// `None` when either side is a variable, or when the two are not
-    /// comparable — the caller records a bound instead of guessing.
+    /// Equal operands retain their representation. A variable paired with a
+    /// different representation needs a constraint before it can join.
     #[must_use]
     pub fn join_concrete(
         self,
@@ -75,13 +104,10 @@ impl Rep {
             return Some(self);
         }
         match (self, other) {
-            | (Int, Real) | (Real, Int) => Some(Real),
+            // §3.4.1: `Real` wins over `Float` to preserve exactness.
+            | (Int | Float, Real) | (Real, Int | Float) => Some(Real),
             | (Int, Float) | (Float, Int) => Some(Float),
-            | (Int, Complex) | (Complex, Int) => Some(Complex),
-            // §3.4.1: `Real` wins over `Float` — exactness is preserved.
-            | (Real, Float) | (Float, Real) => Some(Real),
-            | (Real, Complex) | (Complex, Real) => Some(Complex),
-            | (Float, Complex) | (Complex, Float) => Some(Complex),
+            | (Int | Real | Float, Complex) | (Complex, Int | Real | Float) => Some(Complex),
             | _ => None,
         }
     }
@@ -112,23 +138,22 @@ impl Rep {
     /// The concrete representations a variable may still take, given its
     /// lower bounds, in increasing order.
     #[must_use]
-    pub fn upper_candidates(lower: Self) -> &'static [Rep] {
+    pub const fn upper_candidates(lower: Self) -> &'static [Self] {
         use Rep::Complex;
         use Rep::Float;
         use Rep::Int;
         use Rep::Real;
         match lower {
-            | Int => &[Int, Float, Real, Complex],
+            | Int | Self::Var(_) => &[Int, Float, Real, Complex],
             | Float => &[Float, Complex],
             | Real => &[Real, Complex],
             | Complex => &[Complex],
-            | Rep::Var(_) => &[Int, Float, Real, Complex],
         }
     }
 
     /// The surface name.
     #[must_use]
-    pub fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             | Self::Int => "Int",
             | Self::Real => "Real",
@@ -156,7 +181,18 @@ impl fmt::Display for Rep {
 /// Literals are representation-polymorphic (§3.10.1): `1` can become `Int`,
 /// `Real`, `Float` or `Complex` depending on context, but never a dimensioned
 /// scalar — for that you write `1 m`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum LiteralKind {
     /// An integer literal: default `Int`, dimensionless only.
     Int,
@@ -171,13 +207,13 @@ pub enum LiteralKind {
 impl LiteralKind {
     /// Whether the literal carries a dimension from its unit.
     #[must_use]
-    pub fn is_quantity(self) -> bool {
+    pub const fn is_quantity(self) -> bool {
         matches!(self, Self::QuantityInt | Self::QuantityDecimal)
     }
 
     /// Whether the literal may unify with a given representation.
     #[must_use]
-    pub fn accepts_rep(
+    pub const fn accepts_rep(
         self,
         rep: Rep,
     ) -> bool {
@@ -197,7 +233,17 @@ impl LiteralKind {
 /// [`crate::infer::Infer::unify_nat`] when a linear equation isolates it
 /// (`n + 1 ~ 3` ⇒ `n = 2`, `2 * n ~ 6` ⇒ `n = 3`).
 #[derive(
-    Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, serde::Serialize, serde::Deserialize,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
 )]
 pub enum Nat {
     /// A concrete extent.
@@ -205,22 +251,29 @@ pub enum Nat {
     /// A type-level variable.
     Var(u32),
     /// `a + b`.
-    Add(Box<Nat>, Box<Nat>),
+    Add(Box<Self>, Box<Self>),
     /// `a * b`. Only a constant factor makes the equation linear; a product of
     /// two variables is rejected (`E0304`).
-    Mul(Box<Nat>, Box<Nat>),
+    Mul(Box<Self>, Box<Self>),
+}
+
+impl<C: bincode_next::config::Config> bincode_next::Fingerprint<C> for Nat {
+    const SCHEMA_HASH: u64 = bincode_next::rapidhash::v3::rapidhash_v3_seeded(
+        b"Nat:v1:Lit(usize)|Var(u32)|Add|Mul",
+        &bincode_next::rapidhash::v3::RapidSecrets::seed_cpp(C::CONFIG_HASH),
+    );
 }
 
 impl Nat {
     /// A literal.
     #[must_use]
-    pub fn lit(value: usize) -> Self {
+    pub const fn lit(value: usize) -> Self {
         Self::Lit(value)
     }
 
     /// A variable.
     #[must_use]
-    pub fn var(id: u32) -> Self {
+    pub const fn var(id: u32) -> Self {
         Self::Var(id)
     }
 
@@ -253,6 +306,28 @@ impl Nat {
             | Self::Add(left, right) => Some(left.as_const()?.checked_add(right.as_const()?)?),
             | Self::Mul(left, right) => Some(left.as_const()?.checked_mul(right.as_const()?)?),
         }
+    }
+
+    pub(crate) fn fold_add(
+        self,
+        other: Self,
+    ) -> Self {
+        let folded = self
+            .as_const()
+            .zip(other.as_const())
+            .and_then(|(left, right)| left.checked_add(right));
+        folded.map_or_else(|| self.add(other), Self::Lit)
+    }
+
+    pub(crate) fn fold_mul(
+        self,
+        other: Self,
+    ) -> Self {
+        let folded = self
+            .as_const()
+            .zip(other.as_const())
+            .and_then(|(left, right)| left.checked_mul(right));
+        folded.map_or_else(|| self.mul(other), Self::Lit)
     }
 
     /// Whether the term is linear: every product has at least one literal
@@ -295,31 +370,17 @@ impl Nat {
         }
     }
 
-    /// Substitutes variables through `map`, folding any constant arithmetic.
+    /// Substitutes through `map`, folding constants that fit a machine extent.
     #[must_use]
     pub fn substitute(
         &self,
-        map: &std::collections::HashMap<u32, Nat>,
-    ) -> Nat {
+        map: &std::collections::HashMap<u32, Self>,
+    ) -> Self {
         match self {
             | Self::Lit(value) => Self::Lit(*value),
             | Self::Var(id) => map.get(id).cloned().unwrap_or_else(|| self.clone()),
-            | Self::Add(left, right) => {
-                let left = left.substitute(map);
-                let right = right.substitute(map);
-                match (left.as_const(), right.as_const()) {
-                    | (Some(left), Some(right)) => Nat::Lit(left.saturating_add(right)),
-                    | _ => Nat::Add(Box::new(left), Box::new(right)),
-                }
-            },
-            | Self::Mul(left, right) => {
-                let left = left.substitute(map);
-                let right = right.substitute(map);
-                match (left.as_const(), right.as_const()) {
-                    | (Some(left), Some(right)) => Nat::Lit(left.saturating_mul(right)),
-                    | _ => Nat::Mul(Box::new(left), Box::new(right)),
-                }
-            },
+            | Self::Add(left, right) => left.substitute(map).fold_add(right.substitute(map)),
+            | Self::Mul(left, right) => left.substitute(map).fold_mul(right.substitute(map)),
         }
     }
 }
@@ -356,7 +417,18 @@ impl fmt::Display for Nat {
 /// requires it, §3.5.4), the extents are not. `Refined` is
 /// `Tensor<[n1, ..., nk], τ>` with `None` for `?`; each extent is a type-level
 /// [`Nat`], so `reshape<[n + 1, 2]>` is expressible.
-#[derive(Clone, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum Shape {
     /// Only the rank is known.
     Rank(u32),
@@ -376,7 +448,7 @@ impl Shape {
 
     /// A rank-only shape, for code that constructs one from a `u32`.
     #[must_use]
-    pub fn rank_only(rank: u32) -> Self {
+    pub const fn rank_only(rank: u32) -> Self {
         Self::Rank(rank)
     }
 
@@ -426,7 +498,7 @@ impl Shape {
     pub fn substitute_nats(
         &self,
         map: &std::collections::HashMap<u32, Nat>,
-    ) -> Shape {
+    ) -> Self {
         match self {
             | Self::Rank(rank) => Self::Rank(*rank),
             | Self::Refined(items) => {
@@ -442,7 +514,7 @@ impl Shape {
 
     /// A refined shape with all extents unknown, for a given rank.
     #[must_use]
-    pub fn unknown_of_rank(rank: u32) -> Self {
+    pub const fn unknown_of_rank(rank: u32) -> Self {
         Self::Rank(rank)
     }
 }
@@ -472,7 +544,17 @@ impl fmt::Display for Shape {
 }
 
 /// A record row: labels in order, terminated by an empty row or a row variable.
-#[derive(Clone, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+)]
 pub enum Row {
     /// The closed empty row.
     Empty,
@@ -483,7 +565,7 @@ pub enum Row {
         /// The field type.
         ty: Box<Type>,
         /// The remaining fields.
-        tail: Box<Row>,
+        tail: Box<Self>,
     },
     /// An unknown tail, for open records.
     Var(u32),
@@ -497,9 +579,9 @@ impl Row {
         for (label, ty) in fields {
             map.insert(label, ty);
         }
-        let mut row = Row::Empty;
+        let mut row = Self::Empty;
         for (label, ty) in map.into_iter().rev() {
-            row = Row::Extend {
+            row = Self::Extend {
                 label,
                 ty: Box::new(ty),
                 tail: Box::new(row),
@@ -508,20 +590,24 @@ impl Row {
         row
     }
 
+    /// Borrows the fields of a row in order.
+    pub(crate) fn iter_fields(&self) -> impl Iterator<Item = (&str, &Type)> {
+        let mut next = self;
+        std::iter::from_fn(move || {
+            let Self::Extend { label, ty, tail } = next else {
+                return None;
+            };
+            next = tail;
+            Some((label.as_str(), ty.as_ref()))
+        })
+    }
+
     /// The fields of a row, in order, ignoring the tail.
     #[must_use]
     pub fn fields(&self) -> Vec<(String, Type)> {
-        let mut out = Vec::new();
-        let mut current = self;
-        loop {
-            match current {
-                | Row::Empty | Row::Var(_) => return out,
-                | Row::Extend { label, ty, tail } => {
-                    out.push((label.clone(), (**ty).clone()));
-                    current = tail;
-                },
-            }
-        }
+        self.iter_fields()
+            .map(|(label, ty)| (label.to_string(), ty.clone()))
+            .collect()
     }
 
     /// The tail variable, when the row is open.
@@ -530,9 +616,9 @@ impl Row {
         let mut current = self;
         loop {
             match current {
-                | Row::Empty => return None,
-                | Row::Var(id) => return Some(*id),
-                | Row::Extend { tail, .. } => current = tail,
+                | Self::Empty => return None,
+                | Self::Var(id) => return Some(*id),
+                | Self::Extend { tail, .. } => current = tail,
             }
         }
     }
@@ -543,76 +629,94 @@ impl Row {
         &self,
         name: &str,
     ) -> Option<&Type> {
-        let mut current = self;
-        loop {
-            match current {
-                | Row::Empty | Row::Var(_) => return None,
-                | Row::Extend { label, ty, tail } => {
-                    if label == name {
-                        return Some(ty);
-                    }
-                    current = tail;
-                },
-            }
-        }
+        self.iter_fields()
+            .find_map(|(label, ty)| (label == name).then_some(ty))
     }
 
     /// The first label that appears twice, if any (§3.6.1: `E0208`).
     #[must_use]
     pub fn duplicate_label(&self) -> Option<String> {
-        let mut seen: Vec<&str> = Vec::new();
-        let mut current = self;
+        let mut seen = HashSet::new();
+        self.iter_fields()
+            .find_map(|(label, _)| (!seen.insert(label)).then(|| label.to_string()))
+    }
+
+    /// Replaces an existing field or inserts it before the row tail (§3.6.2).
+    #[must_use]
+    pub fn update(
+        mut self,
+        label: &str,
+        ty: Type,
+    ) -> Self {
+        let mut current = &mut self;
         loop {
             match current {
-                | Row::Empty | Row::Var(_) => return None,
-                | Row::Extend { label, tail, .. } => {
-                    if seen.contains(&label.as_str()) {
-                        return Some(label.clone());
+                | Self::Extend {
+                    label: existing,
+                    ty: stored,
+                    tail,
+                } => {
+                    if existing == label {
+                        **stored = ty;
+                        break;
                     }
-                    seen.push(label);
                     current = tail;
+                },
+                | Self::Empty | Self::Var(_) => {
+                    current.insert_before_tail(label, ty);
+                    break;
+                },
+            }
+        }
+        self
+    }
+
+    /// Updates fields in input order using one traversal of the original row.
+    /// The callback receives the open tail only when the label is new.
+    #[allow(
+        clippy::single_call_fn,
+        reason = "keeps the mutable row representation and its indexing private to the type layer"
+    )]
+    pub(crate) fn update_many<'a, T>(
+        &'a mut self,
+        fields: impl ExactSizeIterator<Item = (&'a str, T)>,
+        mut field_type: impl FnMut(&str, T, Option<u32>) -> Type,
+    ) {
+        let mut slots = HashMap::with_capacity(fields.len());
+        let mut end = self;
+        while let Self::Extend { label, ty, tail } = end {
+            slots.entry(label.as_str()).or_insert_with(|| ty.as_mut());
+            end = tail.as_mut();
+        }
+        let tail_var = match end {
+            | Self::Var(id) => Some(*id),
+            | _ => None,
+        };
+        for (label, value) in fields {
+            match slots.entry(label) {
+                | Entry::Occupied(mut slot) => **slot.get_mut() = field_type(label, value, None),
+                | Entry::Vacant(slot) => {
+                    end.insert_before_tail(label, field_type(label, value, tail_var));
+                    if let Self::Extend { ty, tail, .. } = end {
+                        slot.insert(ty.as_mut());
+                        end = tail.as_mut();
+                    }
                 },
             }
         }
     }
 
-    /// Extends a row with a field, keeping an open tail (§3.6.2).
-    ///
-    /// A label already present is *replaced* — that is record update, not a
-    /// duplicate.
-    #[must_use]
-    pub fn update(
-        self,
+    fn insert_before_tail(
+        &mut self,
         label: &str,
         ty: Type,
-    ) -> Self {
-        match self {
-            | Row::Extend {
-                label: existing,
-                ty: existing_ty,
-                tail,
-            } => {
-                let tail = tail.update(label, ty.clone());
-                let ty = if existing == label {
-                    ty
-                } else {
-                    *existing_ty
-                };
-                Row::Extend {
-                    label: existing,
-                    ty: Box::new(ty),
-                    tail: Box::new(tail),
-                }
-            },
-            | Row::Var(id) => Row::Var(id),
-            | Row::Empty => {
-                Row::Extend {
-                    label: label.to_string(),
-                    ty: Box::new(ty),
-                    tail: Box::new(Row::Empty),
-                }
-            },
-        }
+    ) {
+        let prior_tail = std::mem::replace(self, Self::Empty);
+        *self = Self::Extend {
+            label: label.to_string(),
+            ty: Box::new(ty),
+            tail: Box::new(prior_tail),
+        };
     }
 }
 
@@ -621,27 +725,32 @@ impl fmt::Display for Row {
         &self,
         f: &mut fmt::Formatter<'_>,
     ) -> fmt::Result {
-        let fields = self.fields();
-        for (index, (label, ty)) in fields.iter().enumerate() {
-            if index > 0 {
-                f.write_str(", ")?;
-            }
-            write!(f, "{label}: {ty}")?;
+        let mut separator = "";
+        for (label, ty) in self.iter_fields() {
+            write!(f, "{separator}{label}: {ty}")?;
+            separator = ", ";
         }
-        match self.tail_var() {
-            | Some(id) => {
-                if !fields.is_empty() {
-                    f.write_str(", ")?;
-                }
-                write!(f, "...r{id}")
-            },
-            | None => Ok(()),
+        if let Some(id) = self.tail_var() {
+            write!(f, "{separator}...r{id}")?;
         }
+        Ok(())
     }
 }
 
 /// A rank-polymorphic tensor constructor, preserved across value aliases.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum TensorIntrinsic {
     /// Construct a tensor of zeros.
     Zeros,
@@ -654,7 +763,7 @@ pub enum TensorIntrinsic {
 impl TensorIntrinsic {
     /// The name used by the runtime builtin dispatcher.
     #[must_use]
-    pub fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             | Self::Zeros => "zeros",
             | Self::Ones => "ones",
@@ -675,7 +784,19 @@ impl TensorIntrinsic {
 }
 
 /// The callable identity and optional explicitly selected element representation.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct TensorIntrinsicType {
     /// The constructor's operation.
     pub kind: TensorIntrinsic,
@@ -701,7 +822,7 @@ pub enum Type {
         /// The rank or refined shape.
         shape: Shape,
         /// The element type.
-        elem: Box<Type>,
+        elem: Box<Self>,
     },
     /// `Point[d]`: an affine point such as an absolute temperature.
     Point(Dim),
@@ -710,9 +831,9 @@ pub enum Type {
     /// A variadic tensor constructor; its result rank depends on its call.
     TensorIntrinsic(TensorIntrinsicType),
     /// A type reflection constructor, optionally specialized to a concrete type.
-    TypeRepIntrinsic(Option<Box<Type>>),
+    TypeRepIntrinsic(Option<Box<Self>>),
     /// A checked opaque-value conversion, optionally specialized to its result type.
-    FromValueIntrinsic(Option<Box<Type>>),
+    FromValueIntrinsic(Option<Box<Self>>),
     /// An NPY reader specialized to a statically known tensor rank.
     ReadNpyIntrinsic(Option<u32>),
     /// An NPY writer accepting dimensionless Float tensors of any rank.
@@ -720,13 +841,13 @@ pub enum Type {
     /// A checked conversion of a concrete function into an opaque callback.
     ToCallbackIntrinsic,
     /// `(τ1, ..., τn) -> τ`.
-    Fn(Vec<Type>, Box<Type>),
+    Fn(Vec<Self>, Box<Self>),
     /// A record with a row.
     Record(Row),
     /// A nominal variant type with arguments.
-    Adt(#[serde(with = "crate::persist::adt_ref")] AdtId, Vec<Type>),
+    Adt(#[serde(with = "crate::persist::adt_ref")] AdtId, Vec<Self>),
     /// `IO τ`.
-    Io(Box<Type>),
+    Io(Box<Self>),
     /// `Dyn<ρ>`.
     Dyn(Rep),
     /// A type variable.
@@ -737,7 +858,276 @@ pub enum Type {
     Error,
 }
 
+pub(crate) enum TypeVariableRef<'a> {
+    Type(u32),
+    Representation(Rep),
+    Dimension(&'a Dim),
+    Extents(&'a [Option<Nat>]),
+    Row(u32),
+}
+
+impl<C: bincode_next::config::Config> bincode_next::Fingerprint<C> for Row {
+    const SCHEMA_HASH: u64 = bincode_next::rapidhash::v3::rapidhash_v3_seeded(
+        b"Row:v1:Empty|Extend(String,Type,Row)|Var(u32)",
+        &bincode_next::rapidhash::v3::RapidSecrets::seed_cpp(C::CONFIG_HASH),
+    );
+}
+
+impl<C: bincode_next::config::Config> bincode_next::Fingerprint<C> for Type {
+    const SCHEMA_HASH: u64 = {
+        let h = crate::persist::mix_hash(
+            C::CONFIG_HASH,
+            b"Type:v1:Dim",
+            <Dim as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        );
+        let h = crate::persist::mix_hash(
+            h,
+            b"Type:v1:Rep",
+            <Rep as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        );
+        let h = crate::persist::mix_hash(
+            h,
+            b"Type:v1:Shape",
+            <Shape as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        );
+        crate::persist::mix_hash(
+            h,
+            b"Type:v1:Row",
+            <Row as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        )
+    };
+}
+
+impl bincode_next::Encode for Type {
+    fn encode<E: bincode_next::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode_next::error::EncodeError> {
+        match self {
+            | Self::Scalar(rep, dim) => {
+                0u8.encode(encoder)?;
+                rep.encode(encoder)?;
+                dim.encode(encoder)
+            },
+            | Self::Bool => 1u8.encode(encoder),
+            | Self::Prop => 2u8.encode(encoder),
+            | Self::Str => 3u8.encode(encoder),
+            | Self::Unit => 4u8.encode(encoder),
+            | Self::Tensor { shape, elem } => {
+                5u8.encode(encoder)?;
+                shape.encode(encoder)?;
+                elem.encode(encoder)
+            },
+            | Self::Point(dim) => {
+                6u8.encode(encoder)?;
+                dim.encode(encoder)
+            },
+            | Self::UnitOf(dim) => {
+                7u8.encode(encoder)?;
+                dim.encode(encoder)
+            },
+            | Self::TensorIntrinsic(t) => {
+                8u8.encode(encoder)?;
+                t.encode(encoder)
+            },
+            | Self::TypeRepIntrinsic(t) => {
+                9u8.encode(encoder)?;
+                t.encode(encoder)
+            },
+            | Self::FromValueIntrinsic(t) => {
+                10u8.encode(encoder)?;
+                t.encode(encoder)
+            },
+            | Self::ReadNpyIntrinsic(t) => {
+                11u8.encode(encoder)?;
+                t.encode(encoder)
+            },
+            | Self::WriteNpyIntrinsic => 12u8.encode(encoder),
+            | Self::ToCallbackIntrinsic => 13u8.encode(encoder),
+            | Self::Fn(params, ret) => {
+                14u8.encode(encoder)?;
+                params.encode(encoder)?;
+                ret.encode(encoder)
+            },
+            | Self::Record(row) => {
+                15u8.encode(encoder)?;
+                row.encode(encoder)
+            },
+            | Self::Adt(id, args) => {
+                16u8.encode(encoder)?;
+                crate::persist::encode_adt_id(*id)
+                    .map_err(bincode_next::error::EncodeError::OtherString)?
+                    .encode(encoder)?;
+                args.encode(encoder)
+            },
+            | Self::Io(inner) => {
+                17u8.encode(encoder)?;
+                inner.encode(encoder)
+            },
+            | Self::Dyn(rep) => {
+                18u8.encode(encoder)?;
+                rep.encode(encoder)
+            },
+            | Self::Var(v) => {
+                19u8.encode(encoder)?;
+                v.encode(encoder)
+            },
+            | Self::Param(p) => {
+                20u8.encode(encoder)?;
+                p.encode(encoder)
+            },
+            | Self::Error => 21u8.encode(encoder),
+        }
+    }
+}
+
+impl<Context> bincode_next::Decode<Context> for Type {
+    fn decode<D: bincode_next::de::Decoder<Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        match u8::decode(decoder)? {
+            | 0 => Ok(Self::Scalar(Rep::decode(decoder)?, Dim::decode(decoder)?)),
+            | 1 => Ok(Self::Bool),
+            | 2 => Ok(Self::Prop),
+            | 3 => Ok(Self::Str),
+            | 4 => Ok(Self::Unit),
+            | 5 => {
+                Ok(Self::Tensor {
+                    shape: Shape::decode(decoder)?,
+                    elem: Box::<Self>::decode(decoder)?,
+                })
+            },
+            | 6 => Ok(Self::Point(Dim::decode(decoder)?)),
+            | 7 => Ok(Self::UnitOf(Dim::decode(decoder)?)),
+            | 8 => Ok(Self::TensorIntrinsic(TensorIntrinsicType::decode(decoder)?)),
+            | 9 => {
+                Ok(Self::TypeRepIntrinsic(Option::<Box<Self>>::decode(
+                    decoder,
+                )?))
+            },
+            | 10 => {
+                Ok(Self::FromValueIntrinsic(Option::<Box<Self>>::decode(
+                    decoder,
+                )?))
+            },
+            | 11 => Ok(Self::ReadNpyIntrinsic(Option::<u32>::decode(decoder)?)),
+            | 12 => Ok(Self::WriteNpyIntrinsic),
+            | 13 => Ok(Self::ToCallbackIntrinsic),
+            | 14 => {
+                Ok(Self::Fn(
+                    Vec::<Self>::decode(decoder)?,
+                    Box::<Self>::decode(decoder)?,
+                ))
+            },
+            | 15 => Ok(Self::Record(Row::decode(decoder)?)),
+            | 16 => {
+                let index = u32::decode(decoder)?;
+                let id = crate::persist::decode_adt_id(index)
+                    .map_err(bincode_next::error::DecodeError::OtherString)?;
+                let args = Vec::<Self>::decode(decoder)?;
+                Ok(Self::Adt(id, args))
+            },
+            | 17 => Ok(Self::Io(Box::<Self>::decode(decoder)?)),
+            | 18 => Ok(Self::Dyn(Rep::decode(decoder)?)),
+            | 19 => Ok(Self::Var(u32::decode(decoder)?)),
+            | 20 => Ok(Self::Param(u32::decode(decoder)?)),
+            | 21 => Ok(Self::Error),
+            | tag => {
+                Err(bincode_next::error::DecodeError::UnexpectedVariant {
+                    type_name: "Type",
+                    allowed: &bincode_next::error::AllowedEnumVariants::Range { min: 0, max: 21 },
+                    found: u32::from(tag),
+                })
+            },
+        }
+    }
+}
+
+impl<'de, Context> bincode_next::BorrowDecode<'de, Context> for Type {
+    fn borrow_decode<D: bincode_next::de::BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        bincode_next::Decode::decode(decoder)
+    }
+}
+
 impl Type {
+    /// Visits variable-bearing parts in freshening order without cloning the type.
+    pub(crate) fn visit_variables(
+        &self,
+        visit: &mut impl FnMut(TypeVariableRef<'_>),
+    ) {
+        match self {
+            | Self::Var(id) => visit(TypeVariableRef::Type(*id)),
+            | Self::Scalar(rep, dim) => {
+                visit(TypeVariableRef::Representation(*rep));
+                visit(TypeVariableRef::Dimension(dim));
+            },
+            | Self::Dyn(rep) => visit(TypeVariableRef::Representation(*rep)),
+            | Self::Point(dim) | Self::UnitOf(dim) => visit(TypeVariableRef::Dimension(dim)),
+            | Self::Tensor { shape, elem } => {
+                if let Shape::Refined(items) = shape {
+                    visit(TypeVariableRef::Extents(items));
+                }
+                elem.visit_variables(visit);
+            },
+            | Self::Fn(args, ret) => {
+                for arg in args {
+                    arg.visit_variables(visit);
+                }
+                ret.visit_variables(visit);
+            },
+            | Self::Record(row) => {
+                let mut current = row;
+                while let Row::Extend { ty, tail, .. } = current {
+                    ty.visit_variables(visit);
+                    current = tail;
+                }
+                if let Row::Var(id) = current {
+                    visit(TypeVariableRef::Row(*id));
+                }
+            },
+            | Self::Adt(_, args) => {
+                for arg in args {
+                    arg.visit_variables(visit);
+                }
+            },
+            | Self::Io(value)
+            | Self::TypeRepIntrinsic(Some(value))
+            | Self::FromValueIntrinsic(Some(value)) => value.visit_variables(visit),
+            | Self::TensorIntrinsic(intrinsic) => {
+                if let Some(rep) = intrinsic.element {
+                    visit(TypeVariableRef::Representation(rep));
+                }
+            },
+            | Self::TypeRepIntrinsic(None)
+            | Self::FromValueIntrinsic(None)
+            | Self::Bool
+            | Self::Prop
+            | Self::Str
+            | Self::Unit
+            | Self::Param(_)
+            | Self::Error
+            | Self::WriteNpyIntrinsic
+            | Self::ReadNpyIntrinsic(_)
+            | Self::ToCallbackIntrinsic => {},
+        }
+    }
+
+    /// Visits type and representation variables that connect numeric constraints.
+    pub(crate) fn visit_numeric_variables(
+        &self,
+        mut visit: impl FnMut(u32),
+    ) {
+        self.visit_variables(&mut |variable| {
+            if let TypeVariableRef::Type(id) | TypeVariableRef::Representation(Rep::Var(id)) =
+                variable
+            {
+                visit(id);
+            }
+        });
+    }
+
     /// `Int`, that is `Scalar<Int, 1>`.
     #[must_use]
     pub fn int() -> Self {
@@ -746,25 +1136,25 @@ impl Type {
 
     /// `Real[d]`.
     #[must_use]
-    pub fn real(dim: Dim) -> Self {
+    pub const fn real(dim: Dim) -> Self {
         Self::Scalar(Rep::Real, dim)
     }
 
     /// `Float[d]`.
     #[must_use]
-    pub fn float(dim: Dim) -> Self {
+    pub const fn float(dim: Dim) -> Self {
         Self::Scalar(Rep::Float, dim)
     }
 
     /// `Complex[d]`.
     #[must_use]
-    pub fn complex(dim: Dim) -> Self {
+    pub const fn complex(dim: Dim) -> Self {
         Self::Scalar(Rep::Complex, dim)
     }
 
     /// A scalar with a representation and dimension.
     #[must_use]
-    pub fn scalar(
+    pub const fn scalar(
         rep: Rep,
         dim: Dim,
     ) -> Self {
@@ -773,19 +1163,19 @@ impl Type {
 
     /// `Bool`.
     #[must_use]
-    pub fn bool() -> Self {
+    pub const fn bool() -> Self {
         Self::Bool
     }
 
     /// `String`.
     #[must_use]
-    pub fn string() -> Self {
+    pub const fn string() -> Self {
         Self::Str
     }
 
     /// `()`.
     #[must_use]
-    pub fn unit() -> Self {
+    pub const fn unit() -> Self {
         Self::Unit
     }
 
@@ -793,7 +1183,7 @@ impl Type {
     #[must_use]
     pub fn tensor(
         shape: Shape,
-        elem: Type,
+        elem: Self,
     ) -> Self {
         Self::Tensor {
             shape,
@@ -805,7 +1195,7 @@ impl Type {
     #[must_use]
     pub fn tensor_rank(
         rank: u32,
-        elem: Type,
+        elem: Self,
     ) -> Self {
         Self::tensor(Shape::Rank(rank), elem)
     }
@@ -813,42 +1203,42 @@ impl Type {
     /// A function type.
     #[must_use]
     pub fn func(
-        args: Vec<Type>,
-        ret: Type,
+        args: Vec<Self>,
+        ret: Self,
     ) -> Self {
         Self::Fn(args, Box::new(ret))
     }
 
     /// `IO τ`.
     #[must_use]
-    pub fn io(inner: Type) -> Self {
+    pub fn io(inner: Self) -> Self {
         Self::Io(Box::new(inner))
     }
 
     /// A record from fields.
     #[must_use]
-    pub fn record(fields: impl IntoIterator<Item = (String, Type)>) -> Self {
+    pub fn record(fields: impl IntoIterator<Item = (String, Self)>) -> Self {
         Self::Record(Row::closed(fields))
     }
 
     /// `Option<τ>` as an ADT reference.
     #[must_use]
-    pub fn option(inner: Type) -> Self {
+    pub fn option(inner: Self) -> Self {
         Self::Adt(crate::adt::OPTION_ID, vec![inner])
     }
 
     /// `Result<τ, ε>` as an ADT reference.
     #[must_use]
     pub fn result(
-        ok: Type,
-        err: Type,
+        ok: Self,
+        err: Self,
     ) -> Self {
         Self::Adt(crate::adt::RESULT_ID, vec![ok, err])
     }
 
     /// The scalar representation and dimension, when this is a scalar.
     #[must_use]
-    pub fn as_scalar(&self) -> Option<(Rep, &Dim)> {
+    pub const fn as_scalar(&self) -> Option<(Rep, &Dim)> {
         match self {
             | Self::Scalar(rep, dim) => Some((*rep, dim)),
             | _ => None,
@@ -857,13 +1247,13 @@ impl Type {
 
     /// True when the type is `()`, which `do` blocks discard silently.
     #[must_use]
-    pub fn is_unit(&self) -> bool {
+    pub const fn is_unit(&self) -> bool {
         matches!(self, Self::Unit)
     }
 
     /// True when the type already failed to check.
     #[must_use]
-    pub fn is_error(&self) -> bool {
+    pub const fn is_error(&self) -> bool {
         matches!(self, Self::Error)
     }
 
@@ -871,13 +1261,13 @@ impl Type {
     #[must_use]
     pub fn substitute_params(
         &self,
-        args: &[Type],
-    ) -> Type {
+        args: &[Self],
+    ) -> Self {
         match self {
             | Self::Param(index) => {
                 args.get(usize::try_from(*index).unwrap_or(usize::MAX))
                     .cloned()
-                    .unwrap_or(Type::Error)
+                    .unwrap_or(Self::Error)
             },
             | Self::Scalar(rep, dim) => Self::Scalar(*rep, dim.clone()),
             | Self::Tensor { shape, elem } => {
@@ -920,18 +1310,18 @@ impl Type {
     #[must_use]
     pub fn substitute_kinded(
         &self,
-        types: &[Option<Type>],
+        types: &[Option<Self>],
         dims: &std::collections::HashMap<u32, Dim>,
         nats: &std::collections::HashMap<u32, Nat>,
         rows: &std::collections::HashMap<u32, Row>,
-    ) -> Type {
+    ) -> Self {
         match self {
             | Self::Param(index) => {
                 types
                     .get(usize::try_from(*index).unwrap_or(usize::MAX))
                     .cloned()
                     .flatten()
-                    .unwrap_or(Type::Error)
+                    .unwrap_or(Self::Error)
             },
             | Self::Scalar(rep, dim) => {
                 Self::Scalar(*rep, dim.substitute(|id| dims.get(&id).cloned()))
@@ -977,18 +1367,8 @@ impl Row {
     pub fn substitute_params(
         &self,
         args: &[Type],
-    ) -> Row {
-        match self {
-            | Self::Empty => Self::Empty,
-            | Self::Var(id) => Self::Var(*id),
-            | Self::Extend { label, ty, tail } => {
-                Self::Extend {
-                    label: label.clone(),
-                    ty: Box::new(ty.substitute_params(args)),
-                    tail: Box::new(tail.substitute_params(args)),
-                }
-            },
-        }
+    ) -> Self {
+        self.map_types(|ty| ty.substitute_params(args), Self::Var)
     }
 
     /// Substitutes all four kinds of declaration parameters (§2).
@@ -998,19 +1378,31 @@ impl Row {
         types: &[Option<Type>],
         dims: &std::collections::HashMap<u32, Dim>,
         nats: &std::collections::HashMap<u32, Nat>,
-        rows: &std::collections::HashMap<u32, Row>,
-    ) -> Row {
-        match self {
-            | Self::Empty => Self::Empty,
-            | Self::Var(id) => rows.get(id).cloned().unwrap_or_else(|| self.clone()),
-            | Self::Extend { label, ty, tail } => {
-                Self::Extend {
-                    label: label.clone(),
-                    ty: Box::new(ty.substitute_kinded(types, dims, nats, rows)),
-                    tail: Box::new(tail.substitute_kinded(types, dims, nats, rows)),
-                }
-            },
-        }
+        rows: &std::collections::HashMap<u32, Self>,
+    ) -> Self {
+        self.map_types(
+            |ty| ty.substitute_kinded(types, dims, nats, rows),
+            |id| rows.get(&id).cloned().unwrap_or(Self::Var(id)),
+        )
+    }
+
+    fn map_types(
+        &self,
+        mut map_field: impl FnMut(&Type) -> Type,
+        map_tail: impl FnOnce(u32) -> Self,
+    ) -> Self {
+        let fields: Vec<_> = self
+            .iter_fields()
+            .map(|(label, ty)| (label, map_field(ty)))
+            .collect();
+        let tail = self.tail_var().map_or(Self::Empty, map_tail);
+        fields.into_iter().rev().fold(tail, |tail, (label, ty)| {
+            Self::Extend {
+                label: label.to_string(),
+                ty: Box::new(ty),
+                tail: Box::new(tail),
+            }
+        })
     }
 }
 
@@ -1059,8 +1451,8 @@ impl fmt::Display for Type {
             | Self::WriteNpyIntrinsic => f.write_str("write_npy writer"),
             | Self::ToCallbackIntrinsic => f.write_str("to_callback converter"),
             | Self::Fn(params, ret) => {
-                if params.len() == 1 {
-                    write!(f, "{} -> {ret}", params[0])
+                if let [param] = params.as_slice() {
+                    write!(f, "{param} -> {ret}")
                 } else {
                     f.write_str("(")?;
                     for (index, param) in params.iter().enumerate() {
@@ -1076,10 +1468,9 @@ impl fmt::Display for Type {
             | Self::Adt(id, args) => {
                 let name = crate::adt::name_of(*id);
                 if name == "Sparse"
-                    && args.len() == 2
-                    && let Self::Tensor { shape, elem } = &args[1]
+                    && let [format, Self::Tensor { shape, elem }] = args.as_slice()
                 {
-                    return write!(f, "Sparse<{}, {shape}, {elem}>", args[0]);
+                    return write!(f, "Sparse<{format}, {shape}, {elem}>");
                 }
                 if args.is_empty() {
                     f.write_str(&name)
@@ -1118,6 +1509,10 @@ fn write_dim(
 ///
 /// Dimension variables print as `d<id>`, so a polymorphic scheme shows its
 /// parameter instead of the dimensionless `1`.
+#[cfg_attr(
+    not(test),
+    expect(clippy::single_call_fn, reason = "render surface dimension notation")
+)]
 fn render_dim(dim: &Dim) -> String {
     let mut numerator = Vec::new();
     let mut denominator = Vec::new();
@@ -1189,7 +1584,18 @@ fn render_dim(dim: &Dim) -> String {
 ///
 /// Constraints live only in the type language: an instance set is resolved
 /// statically, so a scheme never carries a runtime dictionary.
-#[derive(Clone, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct Constraint {
     /// The class name.
     pub class: String,
@@ -1225,7 +1631,15 @@ impl fmt::Display for Constraint {
 }
 
 /// A polymorphic type scheme.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct Scheme {
     /// Quantified type variables.
     pub vars: Vec<u32>,
@@ -1233,6 +1647,9 @@ pub struct Scheme {
     pub dims: Vec<u32>,
     /// Quantified row variables.
     pub rows: Vec<u32>,
+    /// Quantified rows and the field names that must be absent from each one.
+    #[serde(default)]
+    pub row_lacks: Vec<(u32, Vec<String>)>,
     /// Quantified type-level natural-number variables (§3.5.1).
     ///
     /// A shape extent `[n]` on a declaration takes a fresh Nat variable; a
@@ -1252,11 +1669,12 @@ pub struct Scheme {
 impl Scheme {
     /// A monomorphic scheme.
     #[must_use]
-    pub fn mono(ty: Type) -> Self {
+    pub const fn mono(ty: Type) -> Self {
         Self {
             vars: Vec::new(),
             dims: Vec::new(),
             rows: Vec::new(),
+            row_lacks: Vec::new(),
             nats: Vec::new(),
             constraints: Vec::new(),
             numeric: Vec::new(),
@@ -1267,7 +1685,7 @@ impl Scheme {
 
     /// A scheme quantified over type variables.
     #[must_use]
-    pub fn poly(
+    pub const fn poly(
         vars: Vec<u32>,
         ty: Type,
     ) -> Self {
@@ -1275,6 +1693,7 @@ impl Scheme {
             vars,
             dims: Vec::new(),
             rows: Vec::new(),
+            row_lacks: Vec::new(),
             nats: Vec::new(),
             constraints: Vec::new(),
             numeric: Vec::new(),
@@ -1296,10 +1715,11 @@ impl Scheme {
     /// Whether the scheme is closed (no quantified variables and no
     /// constraints), so instantiating it is a no-op.
     #[must_use]
-    pub fn is_closed(&self) -> bool {
+    pub const fn is_closed(&self) -> bool {
         self.vars.is_empty()
             && self.dims.is_empty()
             && self.rows.is_empty()
+            && self.row_lacks.is_empty()
             && self.nats.is_empty()
             && self.constraints.is_empty()
             && self.numeric.is_empty()
@@ -1322,6 +1742,17 @@ impl fmt::Display for Scheme {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn out_of_range_nat_arithmetic_does_not_become_a_machine_limit_literal() {
+        let map = std::collections::HashMap::from([(0, Nat::lit(usize::MAX))]);
+        for expression in [Nat::var(0).add(Nat::lit(1)), Nat::var(0).mul(Nat::lit(2))] {
+            let substituted = expression.substitute(&map);
+            assert_eq!(substituted.as_const(), None);
+            assert_eq!(crate::Infer::new().resolve_nat(&substituted), substituted);
+        }
+        assert_eq!(Nat::lit(6).fold_mul(Nat::lit(7)), Nat::lit(42));
+    }
 
     #[test]
     fn surface_spellings_round_trip() {
@@ -1355,6 +1786,23 @@ mod tests {
         assert_eq!(row.tail_var(), Some(3));
         assert!(row.field("x").is_some());
         assert!(row.field("y").is_none());
+    }
+
+    #[test]
+    fn record_updates_replace_in_place_and_keep_new_open_fields() {
+        let closed = Row::closed([
+            ("left".to_string(), Type::int()),
+            ("right".to_string(), Type::int()),
+        ]);
+        let updated = closed.update("left", Type::Str);
+        assert_eq!(updated.field("left"), Some(&Type::Str));
+        assert_eq!(updated.field("right"), Some(&Type::int()));
+        assert_eq!(updated.iter_fields().count(), 2);
+        assert_eq!(updated.duplicate_label(), None);
+
+        let open = Row::Var(4).update("added", Type::Bool);
+        assert_eq!(open.field("added"), Some(&Type::Bool));
+        assert_eq!(open.tail_var(), Some(4));
     }
 
     #[test]

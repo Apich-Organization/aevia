@@ -1,0 +1,20 @@
+import Rssn_numerical_callback as Numeric
+
+fn density(_t: Float): Complex[Time] = complex(3.0 s, 0.0 s)
+fn scalar_jump(_t: Float): Complex = complex(16.0, 0.0)
+fn cubic(z: Complex[Length]): Complex[Length^3] = z * z * z
+
+test "Cauchy and Plemelj retain the density dimension and checked work" =
+    match (Numeric.num_riemann_hilbert_cauchy_checked_typed(complex(0.0, 1.0), 2.0 s, 1e-9 s, 64, 500, density), Numeric.num_riemann_hilbert_plemelj_checked_typed(0.0, 2.0 s, 1e-9 s, 64, 500, density)) with
+    | (Ok(cauchy), Ok(jump)) -> cauchy.converged && jump.converged && approx_eq(re(cauchy.value), 0.75 s, 1e-9 s) && approx_eq(re(jump.upper - jump.lower), 3.0 s, 1e-9 s) && jump.evaluations == 31
+    | _ -> false
+
+test "the scalar factor controls absolute error after exponentiating" =
+    match Numeric.num_riemann_hilbert_factor_checked_typed(complex(0.0, 1.0), 1e-9, 16, 96, 1024, scalar_jump) with
+    | Ok(result) -> result.converged && approx_eq(re(result.value), 2.0, 1e-9) && result.error <= 1e-9
+    | Err(_) -> false
+
+test "Cauchy FFT computes local normalized derivatives with one output dimension" =
+    match Numeric.num_complex_cauchy_fft_derivatives_checked_typed(complex(1.0 m, 0.0 m), 2.0 m, 1.0 m^3, 1e-9 m^3, 3, 16, 48, cubic) with
+    | Ok(result) -> result.converged && result.evaluations == 48 && approx_eq(re(at(result.derivatives, 1)), 6.0 m^3, 1e-9 m^3) && approx_eq(re(at(result.derivatives, 3)), 48.0 m^3, 1e-9 m^3)
+    | Err(_) -> false

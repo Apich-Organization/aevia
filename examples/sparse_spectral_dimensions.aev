@@ -1,0 +1,17 @@
+## Run: bazel run //:aevia -- test examples/sparse_spectral_dimensions.aev
+## Eigenvalues/residuals retain operator units; normalized eigenvectors do not.
+import Rssn_numerical_matrix as M
+
+let a = { rows = 2, cols = 2, indptr = [0, 1, 2], indices = [0, 1], values = [2.0 m, 4.0 m] }
+
+let eigen = M.num_csr_eigs_sym(a, 1, "largest_magnitude", 0.00000001, 30, 0)
+
+let nearest = M.num_csr_eigs_shift_invert(a, 1, 3.8 m, true, 0.00000001, 30, 0)
+
+let solved = M.num_csr_amg_solve(a, [2.0 s, 8.0 s], 0.00000001, 30)
+
+test "Lanczos and shift invert retain operator dimension" = approx_eq(at(eigen.values_re, 0), 4.0 m, 0.000001 m) && approx_eq(at(nearest.values_re, 0), 4.0 m, 0.000001 m) && eigen.converged && nearest.converged
+
+test "eigenvectors are normalized and unitless" = approx_eq(sum(map(fn (v: Float) => v * v, flatten(eigen.vectors_re))) + sum(map(fn (v: Float) => v * v, flatten(eigen.vectors_im))), 1.0, 0.000001)
+
+test "AMG produces RHS divided by operator units" = solved.converged && approx_eq(at(solved.x, 0), 1.0 s/m, 0.000001 s/m) && approx_eq(at(solved.x, 1), 2.0 s/m, 0.000001 s/m) && solved.residual < 0.00000001

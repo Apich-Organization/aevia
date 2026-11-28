@@ -43,19 +43,29 @@
 //! candidates and package resolution are unchanged. It scans no unrelated
 //! directories and notices same-size edits even with restored mtimes.
 //! Opening, editing or closing an imported buffer republishes diagnostics for
-//! its open dependents. Rename edits carry open buffer versions and positions
-//! from the same unsaved snapshot. `workspace/symbol` answers from all
-//! open documents' loaded modules, with each declaration's own file and range.
+//! its open dependents. Incremental edits reuse the text of unaffected buffers.
+//! If two open URIs name one physical file, the last opened buffer supplies
+//! imports, while each focused entry uses its own text. Rename edits carry the
+//! versions and positions of the buffers used by analysis. `workspace/symbol`
+//! answers from all open documents' loaded modules, with each declaration's own
+//! file and range.
+//! Formatting operates directly on the buffer's syntax.
 //!
 //! # Navigation beyond a single name
 //!
 //! `references`, `prepareRename` and `rename` work over the loaded program (a
 //! declaration and its qualified or `open`ed uses in importers are one symbol),
-//! and `rename` returns a `WorkspaceEdit` with `documentChanges`. `signatureHelp`
+//! and `rename` returns a `WorkspaceEdit` with `documentChanges`.
+//! `documentHighlight` uses the same declaration identity in the focused
+//! document. `signatureHelp`
 //! resolves the call under the cursor — user functions, constructors, prelude
 //! overloads, `Rssn` operator overloads, class methods — and completion offers
 //! a record's fields after `.` and expression-starting keywords. Each of these
 //! is claimed in `initialize` only because a handler and a test exist.
+//!
+//! Semantic highlighting supports both full-document and viewport requests.
+//! A viewport response encodes only overlapping tokens and keeps their ranges
+//! intact when the viewport starts or ends inside a token.
 //!
 //! # Concurrency
 //!
@@ -66,10 +76,26 @@
 //! synchronously can.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
 
 pub mod protocol;
 pub mod server;
 pub mod transport;
+
+mod command;
 
 use std::io::BufReader;
 use std::io::Read;
@@ -77,6 +103,7 @@ use std::io::Write;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::channel;
+use std::sync::mpsc::sync_channel;
 use std::thread;
 
 pub use server::Control;
@@ -113,7 +140,7 @@ where
 {
     let (to_client, from_server): (Sender<serde_json::Value>, Receiver<serde_json::Value>) =
         channel();
-    let (to_server, from_client): (Sender<Incoming>, Receiver<Incoming>) = channel();
+    let (to_server, from_client) = sync_channel(16);
 
     // The writer owns the output for the whole session. Nothing in the
     // dispatcher can block on it: `send` hands the message to this thread and
@@ -135,13 +162,12 @@ where
         loop {
             let incoming = match reader.next_message() {
                 | Ok(Some(message)) => Incoming::Message(message),
-                | Ok(None) => break,
                 | Err(transport::TransportError::Json(error)) => {
                     Incoming::Malformed(error.to_string())
                 },
                 // A broken frame cannot be resynchronised, so the session ends
                 // rather than inventing message boundaries.
-                | Err(_) => break,
+                | Ok(None) | Err(_) => break,
             };
             if to_server.send(incoming).is_err() {
                 break;
@@ -151,7 +177,7 @@ where
 
     let mut server = Server::new(to_client.clone());
     let mut exit = Exit::Graceful;
-    for incoming in from_client {
+    for incoming in &from_client {
         match incoming {
             | Incoming::Message(message) => {
                 if let Control::Exit { graceful } = server.handle(message) {
@@ -169,6 +195,7 @@ where
     // the join below finish: a server that returned before its last
     // `publishDiagnostics` was written would lose it.
     drop(server);
+    drop(from_client);
     drop(to_client);
     let _ = writer.join();
     exit

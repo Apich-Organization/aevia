@@ -1,0 +1,229 @@
+## Run: aevia test examples/physical_functions.aev
+## Fixed SI constants remain in RSSN. Generated contracts check physical inputs
+## and restore result units; sampled functions use separate axis/value vectors.
+open Units.SI
+
+import Rssn_numerical_special as P
+
+import Rssn_numerical_vector as F
+
+import Rssn_numerical_stats as S
+
+test "fixed Cartesian and spherical shapes preserve a small polar angle" =
+    let sphere = F.num_analysis_coordinates_cartesian_to_spherical([1e-10, 0.0, 1.0])
+    let point = F.num_analysis_coordinates_spherical_to_cartesian(sphere)
+    approx_eq(at(sphere, 1), 1e-10, 1e-24) && approx_eq(at(point, 0), 1e-10, 1e-24) && approx_eq(at(point, 2), 1.0, 1e-15)
+
+test "Fresnel integration preserves the signs on adjacent Float bounds" =
+    let forward = P.num_fresnel_sc_interval(1.0, 1.0000000000000002)
+    let reverse = P.num_fresnel_sc_interval(1.0000000000000002, 1.0)
+    forward.item0 > 0.0 && forward.item1 < 0.0 && reverse.item0 == -forward.item0 && reverse.item1 == -forward.item1
+
+test "the Gauss hypergeometric value at one avoids overflow of the Gamma factors" =
+    let one = F.num_analysis_complex_scalar_complex(1.0, 0.0)
+    let c = F.num_analysis_complex_scalar_complex(200.0, 0.0)
+    let value = F.num_analysis_hypergeometric_hyp2f1_cplx(one, one, c, one)
+    approx_eq(re(value), 199.0 / 198.0, 1e-13) && approx_eq(im(value), 0.0, 1e-15)
+
+test "a prepared third-kind elliptic integral preserves amplitude order" =
+    match Rssn.dynamic("num_special_elliptic_pi_plan_new", [to_value(0.0), to_value(0.0)]) with
+    | Ok(plan) ->
+        match Rssn.dynamic("num_special_elliptic_pi_plan_eval_many", [plan, to_value([3.141592653589793, 0.0, -3.141592653589793, 0.25])]) with
+        | Ok(value) ->
+            match from_value<Tensor<1, Float>>(value) with
+            | Ok(batch) -> approx_eq(at(batch, 0), 3.141592653589793, 1e-14) && at(batch, 1) == 0.0 && approx_eq(at(batch, 2), -3.141592653589793, 1e-14) && approx_eq(at(batch, 3), 0.25, 1e-14)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "logarithmic Bessel I survives underflow of the scaled value" =
+    let log_value = P.num_special_ext_bessel_in_log_abs(2000, 1000.0)
+    let scaled = P.num_special_ext_bessel_in_scaled(2000, 1000.0)
+    approx_eq(log_value, -655.9781671500337, 1e-10) && scaled == 0.0
+
+test "logarithmic Bessel K survives underflow of the ordinary value" =
+    let magnitude = P.num_special_bessel_k(0.5, 1000.0)
+    let logarithm = P.num_special_ln_bessel_k(0.5, 1000.0)
+    approx_eq(magnitude, 0.0, 1e-300) && approx_eq(logarithm, -1003.2280862868463, 1e-12)
+
+test "single-pole Meijer G keeps small and competing exponential factors" =
+    let upper: Tensor<1, Float> = []
+    let tiny = F.num_analysis_meijer_meijer_g_real(1, 0, upper, [0.5], 80.0)
+    let balanced = F.num_analysis_meijer_meijer_g_real(1, 0, upper, [120.0], 800.0)
+    match (tiny, balanced) with
+    | (Some(a), Some(b)) -> approx_eq(a / 1.6143081570028745e-34, 1.0, 1e-12) && approx_eq(b, 8.6141596492149, 1e-11)
+    | _ -> false
+
+test "single-pole Meijer G preserves a subnormal result before rounding to zero" =
+    let upper: Tensor<1, Float> = []
+    let tiny = F.num_analysis_meijer_meijer_g_real(1, 0, upper, [0.0], 745.0)
+    let zero = F.num_analysis_meijer_meijer_g_real(1, 0, upper, [0.0], 746.0)
+    match (tiny, zero) with
+    | (Some(a), Some(b)) -> a > 0.0 && a < 1e-320 && b == 0.0
+    | _ -> false
+
+test "Chebyshev samples use independent time and ordinate units" =
+    match Rssn.dynamic("num_native_cheb_from_values", [to_value([5.0 m, 3.0 m, 1.0 m]), to_value(0.0 s), to_value(2.0 s)]) with
+    | Ok(model) ->
+        match Rssn.dynamic("num_native_cheb_eval", [model, to_value(0.5 s)]) with
+        | Ok(value) ->
+            match from_value<Float[Length]>(value) with
+            | Ok(distance) -> approx_eq(distance, 2.0 m, 1e-12 m)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+let photon = P.num_classical_photon_energy(500.0 nm)
+
+let wavelength = P.num_classical_photon_wavelength(photon)
+
+let pressure = P.num_classical_ideal_gas_pressure(1.0 mol, 300.0 K, 1.0 m^3)
+
+test "fixed SI constants yield energy, wavelength and pressure" = approx_eq(photon, 3.972891714297857e-19 J, 1e-30 J) && approx_eq(wavelength, 500.0 nm, 1e-12 m) && approx_eq(pressure, 2494.3387854 Pa, 0.00001 Pa)
+
+## item0 is the measured sample axis; item1 is the independently measured value.
+let first = { item0 = [0.0 s, 1.0 s, 2.0 s], item1 = [2.0 m, 2.0 m, 2.0 m] }
+
+let second = { item0 = [0.0 s, 1.0 s, 2.0 s], item1 = [3.0 kg, 3.0 kg, 3.0 kg] }
+
+let product = F.num_functional_inner_product(first, second)
+
+let projected = F.num_functional_project(first, second)
+
+let normalized = F.num_functional_normalize(first)
+
+test "functional inner product integrates independent ordinate units over time" = approx_eq(product, 12.0 m*kg*s, 1e-10 m*kg*s)
+
+test "projection restores the first function's units" = approx_eq(projected.item1[1], 2.0 m, 1e-10 m) && projected.item0[2] == 2.0 s
+
+test "L2 normalization returns inverse square-root axis units" = approx_eq(normalized.item1[0], 1.0 / sqrt(2.0 s), 1e-10 / sqrt(1.0 s))
+
+fn main(): IO Unit = println(photon)
+
+let measured_samples = [3.0 m, 1.0 m, 2.0 m]
+
+let median_sample = S.num_stats_percentile(measured_samples, 50.0)
+
+test "mutable native percentile operates on a private copy" = approx_eq(median_sample, 2.0 m, 1e-10 m) && at(measured_samples, 0) == 3.0 m
+
+test "a prepared L2 grid keeps independent ordinate and axis dimensions" =
+    let grid = unwrap_or(Rssn.dynamic("num_functional_l2_grid_new", [to_value([0.0 s, 1.0 s, 4.0 s])]), to_value(0))
+    match Rssn.dynamic("num_functional_l2_grid_norm_and_normalize", [grid, to_value([3.0 m, 3.0 m, 3.0 m])]) with
+    | Ok(value) ->
+        match from_value<{ norm: Option<Float[Length*Time^(1/2)]>, normalized: Option<Tensor<1, Float[Time^(-1/2)]>> }>(value) with
+        | Ok(result) ->
+            match result.norm with
+            | Some(norm) ->
+                match result.normalized with
+                | Some(field) -> approx_eq(norm, 6.0 m*s^(1/2), 1e-12 m*s^(1/2)) && approx_eq(at(field, 1), 0.5 s^(-1/2), 1e-12 s^(-1/2))
+                | None -> false
+            | None -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "a prepared Levin rule integrates amplitude samples in physical units" =
+    let axis = unwrap_or(Rssn.dynamic("num_backend_reference", [to_value(1.0 m)]), to_value(0))
+    let phase_value = unwrap_or(Rssn.dynamic("num_backend_reference", [to_value(1.0)]), to_value(0))
+    let derivative_value = unwrap_or(Rssn.dynamic("num_backend_reference", [to_value(1.0 m^-1)]), to_value(0))
+    let phase = unwrap_or(Rssn.dynamic("num_backend_compile_current", [to_value("x"), to_value(["x"]), to_value([axis]), phase_value, to_value(1000)]), to_value(0))
+    let derivative = unwrap_or(Rssn.dynamic("num_backend_compile_current", [to_value("1"), to_value(["x"]), to_value([axis]), derivative_value, to_value(1000)]), to_value(0))
+    let plan = unwrap_or(Rssn.dynamic("num_analysis_levin_plan_new", [to_value(1.0 m), to_value(4.0 m), to_value(0.0), to_value(6), to_value(1), phase, derivative]), to_value(0))
+    match Rssn.dynamic("num_analysis_levin_plan_integrate_samples", [plan, to_value([5.0 s, 5.0 s, 5.0 s, 5.0 s, 5.0 s, 5.0 s])]) with
+    | Ok(value) ->
+        match from_value<Complex[Length*Time]>(value) with
+        | Ok(integral) -> approx_eq(re(integral), 15.0 m*s, 1e-12 m*s) && approx_eq(im(integral), 0.0 m*s, 1e-12 m*s)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "a sampled series preserves units and obeys the exact term budget" =
+    match Rssn.dynamic("num_analysis_series_sum_terms", [to_value([3.0 m, 4.0 m, 20.0 m]), to_value(1e-10 m), to_value(2)]) with
+    | Ok(value) ->
+        match from_value<{ value: Option<Float[Length]>, error: Option<Float[Length]>, terms: Int }>(value) with
+        | Ok(result) ->
+            match result.value with
+            | Some(estimate) -> result.terms == 2 && result.error == None && approx_eq(estimate, 7.0 m, 1e-12 m)
+            | None -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "Kruskal–Wallis compares unequal sized groups with common units" =
+    let samples = { offsets = [0, 2, 5, 9], values = [1.0 m, 2.0 m, 3.0 m, 4.0 m, 5.0 m, 6.0 m, 7.0 m, 8.0 m, 9.0 m] }
+    match Rssn.dynamic("num_stats_kruskal_wallis", [to_value(samples)]) with
+    | Ok(value) ->
+        match from_value<{ statistic: Float, p_value: Float, df: Option<Float> }>(value) with
+        | Ok(result) -> result.df == Some(2.0) && approx_eq(result.statistic, 7.0, 1e-12) && approx_eq(result.p_value, 0.0301973834223185, 1e-12)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "a prepared multilinear grid keeps different axis units across queries" =
+    let axes = to_value([to_value([0.0 cm, 200.0 cm]), to_value([0.0 s, 1.0 s, 4.0 s])])
+    let flat_values = to_value([5.0 kg, 9.0 kg, 4.0 kg, 10.0 kg, 1.0 kg, 13.0 kg])
+    let grid = unwrap_or(Rssn.dynamic("num_native_multilinear_grid_new", [axes, flat_values]), to_value(0))
+    let interior = to_value([to_value(50.0 cm), to_value(2.0 s)])
+    let corner = to_value([to_value(2.0 m), to_value(4.0 s)])
+    match Rssn.dynamic("num_native_multilinear_grid_eval", [grid, interior]) with
+    | Ok(interior_value) ->
+        match Rssn.dynamic("num_native_multilinear_grid_eval", [grid, corner]) with
+        | Ok(corner_value) ->
+            match (from_value<Float[Mass]>(interior_value), from_value<Float[Mass]>(corner_value)) with
+            | (Ok(first), Ok(last)) -> approx_eq(first, 5.0 kg, 1e-12 kg) && approx_eq(last, 13.0 kg, 1e-12 kg)
+            | _ -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "Huber location accepts a scale that shares the sample dimension" =
+    let observations = to_value([0.0 m, 0.0 m, 0.2 m, 0.4 m, 100.0 m])
+    match Rssn.dynamic("num_robust_huber_location_with_scale", [observations, to_value(1.0), to_value(100.0 cm)]) with
+    | Ok(value) ->
+        match from_value<Float[Length]>(value) with
+        | Ok(location) -> approx_eq(location, 0.4 m, 1e-12 m)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "Weibull batch quantiles and the inverse survival keep scale units in the tails" =
+    match Rssn.dynamic("num_distributions_weibull_quantiles", [to_value(2.0), to_value(2.0 s), to_value([1e-250, 0.5])]) with
+    | Ok(value) ->
+        match from_value<Tensor<[2], Float[Time]>>(value) with
+        | Ok(lower) ->
+            match Rssn.dynamic("num_distributions_weibull_inverse_survival", [to_value(2.0), to_value(2.0 s), to_value(1e-250)]) with
+            | Ok(upper_value) ->
+                match from_value<Float[Time]>(upper_value) with
+                | Ok(upper) -> approx_eq(lower[0] / (2e-125 s), 1.0, 1e-12) && approx_eq(lower[1], 1.6651092223153954 s, 1e-12 s) && approx_eq(upper, 47.98525912188081 s, 1e-10 s)
+                | Err(_) -> false
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "one overlap-save plan convolves recordings with different lengths and keeps product units" =
+    let plan = unwrap_or(Rssn.dynamic("num_native_overlap_save_plan_new", [to_value([2.0 s, -1.0 s])]), to_value(0))
+    match Rssn.dynamic("num_native_overlap_save_plan_apply_batch", [plan, to_value([1.0 m, 2.0 m, 3.0 m]), to_value([0, 2, 2, 3])]) with
+    | Ok(value) ->
+        match from_value<{ offsets: Tensor<[4], Int>, values: Tensor<[5], Float[Length*Time]> }>(value) with
+        | Ok(result) -> result.offsets == [0, 3, 3, 5] && approx_eq(result.values[0], 2.0 m*s, 1e-12 m*s) && approx_eq(result.values[1], 3.0 m*s, 1e-12 m*s) && approx_eq(result.values[2], -2.0 m*s, 1e-12 m*s) && approx_eq(result.values[3], 6.0 m*s, 1e-12 m*s) && approx_eq(result.values[4], -3.0 m*s, 1e-12 m*s)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "a polynomial antidifference keeps value units with a physical step" =
+    let plan = unwrap_or(Rssn.dynamic("num_analysis_polynomial_antidifference_new", [to_value([1.0 s, 2.0 s]), to_value(0.0 m), to_value(2.0 m)]), to_value(0))
+    match Rssn.dynamic("num_analysis_polynomial_antidifference_difference", [plan, to_value(2.0 m), to_value(6.0 m)]) with
+    | Ok(value) ->
+        match from_value<Float[Time]>(value) with
+        | Ok(difference) -> approx_eq(difference, 8.0 s, 1e-12 s)
+        | Err(_) -> false
+    | Err(_) -> false
+
+fn recurrence_term(_x: Float[Length]): Float[Time] = 2.0 s
+
+test "indefinite sums and products share a measured lattice and explicit callback budget" =
+    let options = to_value({ h = 2.0 m, step = 2.0 m, tolerance = 1e-10, shift = 20, taylor_terms = 8 })
+    let args = [to_value(8.0 m), options, to_value(2.0 m), to_value(1.0 s), to_value(3)]
+    let short = [to_value(8.0 m), options, to_value(2.0 m), to_value(1.0 s), to_value(2)]
+    let callbacks = [to_callback(recurrence_term)]
+    let sum = F.num_native_sum_indefinite_sum(args, callbacks)
+    let product = F.num_native_sum_indefinite_product(args, callbacks)
+    match (sum, product, F.num_native_sum_indefinite_sum(short, callbacks)) with
+    | (Ok(total), Ok(factors), Err(_)) ->
+        match (from_value<Float[Time]>(total), from_value<Float>(factors)) with
+        | (Ok(t), Ok(p)) -> approx_eq(t, 6.0 s, 1e-12 s) && approx_eq(p, 8.0, 1e-12)
+        | _ -> false
+    | _ -> false

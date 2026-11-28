@@ -19,10 +19,25 @@
 //! file and a diff always means something changed.
 //!
 //! The reader is a deliberately small subset of TOML: `[table]` headers,
-//! `key = "string"` and inline tables `{ path = "...", version = "..." }`, with
-//! `#` comments and blank lines. Anything outside that subset is `E0605` with
-//! the line number — a manifest the tool only half-understands is worse than
-//! one it rejects.
+//! `key = "string"`, `key = ["a", "b"]`, and inline tables
+//! `{ path = "...", version = "..." }`, with `#` comments and blank lines.
+//! Anything outside that subset is `E0605` with the line number — a manifest
+//! the tool only half-understands is worse than one it rejects.
+
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -127,28 +142,115 @@ impl Dependency {
     }
 }
 
+/// Configured level for a lint or lint group in `[lints]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum LintLevel {
+    /// Suppress the lint.
+    Allow,
+    /// Emit as a warning (exit 0 unless promoted).
+    Warn,
+    /// Emit as an error (exit 1).
+    Deny,
+    /// Emit as an error that cannot be lowered by inner attributes or flags.
+    Forbid,
+}
+
+impl LintLevel {
+    /// Parses `"allow"`, `"warn"`, `"deny"`, or `"forbid"`.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            | "allow" => Some(Self::Allow),
+            | "warn" => Some(Self::Warn),
+            | "deny" => Some(Self::Deny),
+            | "forbid" => Some(Self::Forbid),
+            | _ => None,
+        }
+    }
+
+    /// Lowercase canonical spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            | Self::Allow => "allow",
+            | Self::Warn => "warn",
+            | Self::Deny => "deny",
+            | Self::Forbid => "forbid",
+        }
+    }
+}
+
+/// One entry in `[lints]`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LintSetting {
+    /// Configured severity level.
+    pub level: LintLevel,
+    /// Optional human explanation.
+    pub reason: Option<String>,
+}
+
 /// The contents of `aevia.toml`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Manifest {
     /// `[package] name` — the package name, `snake_case`.
     pub name: String,
-    /// `[package] version` — SemVer, `major.minor.patch[-pre]`.
+    /// `[package] version` — `SemVer`, `major.minor.patch[-pre]`.
     pub version: String,
+    /// `[package] edition` — language edition (e.g. `"2026"`).
+    pub edition: Option<String>,
     /// `[package] entry` — the executable entry, relative to the package root.
     pub entry: String,
+    /// `[lib] entry` — optional library entry, relative to the package root.
+    pub lib_entry: Option<String>,
+    /// `[package] authors` — package authors.
+    pub authors: Vec<String>,
+    /// `[package] description` — short summary of the package.
+    pub description: Option<String>,
+    /// `[package] license` — SPDX license expression (e.g. `"Apache-2.0"`).
+    pub license: Option<String>,
+    /// `[package] license-file` — path to a custom license file in the package.
+    pub license_file: Option<String>,
+    /// `[package] readme` — path to the README file (e.g. `"README.md"`).
+    pub readme: Option<String>,
+    /// `[package] repository` — source repository URL.
+    pub repository: Option<String>,
+    /// `[package] homepage` — project homepage URL.
+    pub homepage: Option<String>,
+    /// `[package] documentation` — documentation URL.
+    pub documentation: Option<String>,
+    /// `[package] keywords` — up to five search keywords.
+    pub keywords: Vec<String>,
+    /// `[package] categories` — up to five registry categories.
+    pub categories: Vec<String>,
     /// `[dependencies]` — import root to dependency, sorted by key.
     pub dependencies: BTreeMap<String, Dependency>,
+    /// `[lints]` — lint or group name to configured level, sorted by key.
+    pub lints: BTreeMap<String, LintSetting>,
 }
 
 impl Manifest {
-    /// A manifest for a new package.
+    /// A manifest for a new package, pre-populated with Cargo-style `[package]`
+    /// metadata fields.
     #[must_use]
     pub fn new(name: &str) -> Self {
         Self {
             name: name.to_string(),
             version: "0.1.0".to_string(),
+            edition: Some("2026".to_string()),
             entry: "src/main.aev".to_string(),
+            lib_entry: None,
+            authors: Vec::new(),
+            description: Some(String::new()),
+            license: Some(String::new()),
+            license_file: None,
+            readme: Some("README.md".to_string()),
+            repository: Some(String::new()),
+            homepage: Some(String::new()),
+            documentation: Some(String::new()),
+            keywords: Vec::new(),
+            categories: Vec::new(),
             dependencies: BTreeMap::new(),
+            lints: BTreeMap::new(),
         }
     }
 
@@ -169,7 +271,34 @@ impl Manifest {
         out.push_str("[package]\n");
         let _ = writeln!(out, "name = \"{}\"", self.name);
         let _ = writeln!(out, "version = \"{}\"", self.version);
+        if let Some(edition) = &self.edition {
+            let _ = writeln!(out, "edition = \"{edition}\"");
+        }
         let _ = writeln!(out, "entry = \"{}\"", self.entry);
+        let _ = writeln!(out, "authors = {}", format_string_array(&self.authors));
+        for (key, value) in [
+            ("description", &self.description),
+            ("license", &self.license),
+            ("license-file", &self.license_file),
+            ("readme", &self.readme),
+            ("repository", &self.repository),
+            ("homepage", &self.homepage),
+            ("documentation", &self.documentation),
+        ] {
+            if let Some(text) = value {
+                let _ = writeln!(out, "{key} = \"{text}\"");
+            }
+        }
+        let _ = writeln!(out, "keywords = {}", format_string_array(&self.keywords));
+        let _ = writeln!(
+            out,
+            "categories = {}",
+            format_string_array(&self.categories)
+        );
+        if let Some(lib_entry) = &self.lib_entry {
+            out.push_str("\n[lib]\n");
+            let _ = writeln!(out, "entry = \"{lib_entry}\"");
+        }
         out.push('\n');
         out.push_str("[dependencies]\n");
         for (key, dependency) in &self.dependencies {
@@ -201,6 +330,20 @@ impl Manifest {
                 },
             }
         }
+        if !self.lints.is_empty() {
+            out.push_str("\n[lints]\n");
+            for (key, setting) in &self.lints {
+                if let Some(reason) = &setting.reason {
+                    let _ = writeln!(
+                        out,
+                        "{key} = {{ level = \"{}\", reason = \"{reason}\" }}",
+                        setting.level.as_str()
+                    );
+                } else {
+                    let _ = writeln!(out, "{key} = \"{}\"", setting.level.as_str());
+                }
+            }
+        }
         out
     }
 
@@ -210,6 +353,13 @@ impl Manifest {
     ///
     /// `E0605` for anything outside the supported subset, a missing required
     /// key, an invalid name, version or version requirement.
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::too_many_lines,
+            reason = "keep the supported manifest grammar and each field diagnostic together"
+        )
+    )]
     pub fn parse(
         text: &str,
         origin: &str,
@@ -217,11 +367,24 @@ impl Manifest {
         let mut table = String::new();
         let mut name: Option<String> = None;
         let mut version: Option<String> = None;
+        let mut edition: Option<String> = None;
         let mut entry: Option<String> = None;
+        let mut lib_entry: Option<String> = None;
+        let mut authors: Vec<String> = Vec::new();
+        let mut description: Option<String> = None;
+        let mut license: Option<String> = None;
+        let mut license_file: Option<String> = None;
+        let mut readme: Option<String> = None;
+        let mut repository: Option<String> = None;
+        let mut homepage: Option<String> = None;
+        let mut documentation: Option<String> = None;
+        let mut keywords: Vec<String> = Vec::new();
+        let mut categories: Vec<String> = Vec::new();
         let mut dependencies: BTreeMap<String, Dependency> = BTreeMap::new();
+        let mut lints: BTreeMap<String, LintSetting> = BTreeMap::new();
         for (index, raw) in text.lines().enumerate() {
             let line = strip_comment(raw).trim();
-            let number = index + 1;
+            let number = index.saturating_add(1);
             if line.is_empty() {
                 continue;
             }
@@ -232,12 +395,12 @@ impl Manifest {
                         format!("{origin}:{number}: unterminated table header `{line}`"),
                     ));
                 };
-                if !matches!(header, "package" | "dependencies") {
+                if !matches!(header, "package" | "lib" | "dependencies" | "lints") {
                     return Err(ManifestError::new(
                         "E0605",
                         format!(
                             "{origin}:{number}: unknown table `[{header}]`; this tool reads \
-                             `[package]` and `[dependencies]`"
+                             `[package]`, `[lib]`, `[dependencies]` and `[lints]`"
                         ),
                     ));
                 }
@@ -254,22 +417,77 @@ impl Manifest {
             let value = value.trim();
             match table.as_str() {
                 | "package" => {
-                    let text = parse_string(value).ok_or_else(|| {
-                        ManifestError::new(
-                            "E0605",
-                            format!("{origin}:{number}: `{key}` expects a quoted string"),
-                        )
-                    })?;
                     match key {
-                        | "name" => name = Some(text),
-                        | "version" => version = Some(text),
-                        | "entry" => entry = Some(text),
+                        | "authors" | "keywords" | "categories" => {
+                            let items = parse_string_array(value).ok_or_else(|| {
+                                ManifestError::new(
+                                    "E0605",
+                                    format!(
+                                        "{origin}:{number}: `{key}` expects an array of quoted \
+                                         strings"
+                                    ),
+                                )
+                            })?;
+                            match key {
+                                | "authors" => authors = items,
+                                | "keywords" => keywords = items,
+                                | _ => categories = items,
+                            }
+                        },
+                        | "name" | "version" | "edition" | "entry" | "description" | "license"
+                        | "license-file" | "readme" | "repository" | "homepage"
+                        | "documentation" => {
+                            let text = parse_string(value).ok_or_else(|| {
+                                ManifestError::new(
+                                    "E0605",
+                                    format!("{origin}:{number}: `{key}` expects a quoted string"),
+                                )
+                            })?;
+                            match key {
+                                | "name" => name = Some(text),
+                                | "version" => version = Some(text),
+                                | "edition" => edition = Some(text),
+                                | "entry" => entry = Some(text),
+                                | "description" => description = Some(text),
+                                | "license" => license = Some(text),
+                                | "license-file" => license_file = Some(text),
+                                | "readme" => readme = Some(text),
+                                | "repository" => repository = Some(text),
+                                | "homepage" => homepage = Some(text),
+                                | _ => documentation = Some(text),
+                            }
+                        },
                         | other => {
                             return Err(ManifestError::new(
                                 "E0605",
                                 format!(
                                     "{origin}:{number}: unknown key `{other}` in `[package]`; \
-                                     this tool reads `name`, `version` and `entry`"
+                                     supported keys are `name`, `version`, `edition`, `entry`, \
+                                     `authors`, `description`, `license`, `license-file`, \
+                                     `readme`, `repository`, `homepage`, `documentation`, \
+                                     `keywords`, and `categories`"
+                                ),
+                            ));
+                        },
+                    }
+                },
+                | "lib" => {
+                    match key {
+                        | "entry" | "path" => {
+                            let text = parse_string(value).ok_or_else(|| {
+                                ManifestError::new(
+                                    "E0605",
+                                    format!("{origin}:{number}: `{key}` expects a quoted string"),
+                                )
+                            })?;
+                            lib_entry = Some(text);
+                        },
+                        | other => {
+                            return Err(ManifestError::new(
+                                "E0605",
+                                format!(
+                                    "{origin}:{number}: unknown key `{other}` in `[lib]`; \
+                                     supported keys are `entry` and `path`"
                                 ),
                             ));
                         },
@@ -291,6 +509,15 @@ impl Manifest {
                         return Err(ManifestError::new(
                             "E0605",
                             format!("{origin}:{number}: `{key}` is declared twice"),
+                        ));
+                    }
+                },
+                | "lints" => {
+                    let setting = parse_lint_setting(value, origin, number)?;
+                    if lints.insert(key.to_string(), setting).is_some() {
+                        return Err(ManifestError::new(
+                            "E0605",
+                            format!("{origin}:{number}: lint `{key}` is configured twice"),
                         ));
                     }
                 },
@@ -330,8 +557,21 @@ impl Manifest {
         Ok(Self {
             name,
             version,
+            edition,
             entry: entry.unwrap_or_else(|| "src/main.aev".to_string()),
+            lib_entry,
+            authors,
+            description,
+            license,
+            license_file,
+            readme,
+            repository,
+            homepage,
+            documentation,
+            keywords,
+            categories,
             dependencies,
+            lints,
         })
     }
 
@@ -437,7 +677,8 @@ impl Package {
         let owns = ["src", "tests", "examples"]
             .iter()
             .any(|tree| file.starts_with(normalise(&package.dir.join(tree))))
-            || file == normalise(&package.entry_path());
+            || file == normalise(&package.entry_path())
+            || file == normalise(&package.lib_entry_path());
         if owns {
             Ok(Some(package))
         } else {
@@ -455,6 +696,15 @@ impl Package {
     #[must_use]
     pub fn entry_path(&self) -> PathBuf {
         self.dir.join(&self.manifest.entry)
+    }
+
+    /// The library entry file, `[lib] entry` if configured, otherwise [`Self::entry_path`].
+    #[must_use]
+    pub fn lib_entry_path(&self) -> PathBuf {
+        self.manifest
+            .lib_entry
+            .as_ref()
+            .map_or_else(|| self.entry_path(), |entry| self.dir.join(entry))
     }
 
     /// Resolves the manifest's dependencies, transitively, into import roots.
@@ -507,9 +757,11 @@ impl Package {
             package_owners: graph.aliases.clone(),
         };
         for (alias, identity) in &graph.aliases {
-            let package = &graph.packages[identity];
+            let package = graph.package_at(identity)?;
             roots.packages.insert(alias.clone(), package.source_dir());
-            roots.entries.insert(alias.clone(), package.entry_path());
+            roots
+                .entries
+                .insert(alias.clone(), package.lib_entry_path());
         }
         for (identity, package) in &graph.packages {
             roots.scopes.insert(
@@ -577,7 +829,7 @@ impl Package {
             hash: None,
             checksum: None,
         };
-        let mut hashes: BTreeMap<PathBuf, String> = BTreeMap::new();
+        let hashes = hash_path_packages(&graph)?;
         let mut packages = Vec::new();
         for (alias, identity) in &graph.aliases {
             if let Some(node) = graph.registry.get(identity) {
@@ -591,21 +843,19 @@ impl Package {
                 });
                 continue;
             }
-            let package = &graph.packages[identity];
-            let hash = match hashes.get(identity) {
-                | Some(hash) => hash.clone(),
-                | None => {
-                    let hash = hash_package(package)?;
-                    hashes.insert(identity.clone(), hash.clone());
-                    hash
-                },
-            };
+            let package = graph.package_at(identity)?;
+            let hash = hashes.get(identity.as_path()).ok_or_else(|| {
+                ManifestError::new(
+                    "E0607",
+                    format!("no hash for path package `{}`", identity.display()),
+                )
+            })?;
             packages.push(LockedPackage {
                 name: package.manifest.name.clone(),
                 version: package.manifest.version.clone(),
                 import: alias.clone(),
                 source: format!("path+{}", relative_to(&graph.root, identity)),
-                hash: Some(hash),
+                hash: Some(hash.clone()),
                 checksum: None,
             });
         }
@@ -649,9 +899,7 @@ impl Package {
     /// no readable lock).
     #[must_use]
     pub fn locked_versions(&self) -> BTreeMap<String, BTreeSet<Version>> {
-        Lock::load(&self.dir.join("aevia.lock"))
-            .map(|lock| lock.registry_versions())
-            .unwrap_or_default()
+        Lock::load(&self.dir.join("aevia.lock")).map_or_default(|lock| lock.registry_versions())
     }
 
     /// Whether this manifest itself (not its dependencies) names a registry
@@ -694,11 +942,7 @@ impl LockHints {
         match self {
             | Self::None => BTreeMap::new(),
             | Self::Map(map) => map.clone(),
-            | Self::File(path) => {
-                Lock::load(path)
-                    .map(|lock| lock.registry_versions())
-                    .unwrap_or_default()
-            },
+            | Self::File(path) => Lock::load(path).map_or_default(|lock| lock.registry_versions()),
         }
     }
 }
@@ -722,6 +966,7 @@ pub trait RegistryIndex: aevia_resolve::Index {
 }
 
 /// The file that records which archive was unpacked into a vendored directory.
+///
 /// Its first line is the archive's `sha256:` checksum. Written by
 /// `aevia-pkg vendor`; the toolchain refuses a vendored directory without it.
 pub const VENDOR_MARKER: &str = ".aevia-pkg-checksum";
@@ -887,6 +1132,18 @@ struct PackageGraph {
 }
 
 impl PackageGraph {
+    fn package_at(
+        &self,
+        identity: &Path,
+    ) -> Result<&Package, ManifestError> {
+        self.packages.get(identity).ok_or_else(|| {
+            ManifestError::new(
+                "E0607",
+                format!("no resolved package at `{}`", identity.display()),
+            )
+        })
+    }
+
     fn resolve(
         root: &Package,
         env: &RegistryEnv<'_>,
@@ -911,7 +1168,7 @@ impl PackageGraph {
         let mut queue = vec![identity];
         let mut requests: Vec<RegistryRequest> = Vec::new();
         while let Some(identity) = queue.pop() {
-            let package = &graph.packages[&identity];
+            let package = graph.package_at(&identity)?;
             let dependencies = package.manifest.dependencies.clone();
             for (alias, dependency) in dependencies {
                 let Some(path) = dependency.local_path() else {
@@ -985,24 +1242,34 @@ impl PackageGraph {
         }
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::too_many_lines,
+            reason = "keep resolver inputs, verified vendoring and edge publication in order"
+        )
+    )]
     fn attach_registry(
         &mut self,
         requests: &[RegistryRequest],
         env: &RegistryEnv<'_>,
     ) -> Result<(), ManifestError> {
+        let Some(first) = requests.first() else {
+            return Ok(());
+        };
         let Some(index) = env.index else {
             return Err(ManifestError::new(
                 "E0607",
                 format!(
                     "`{}` is a registry dependency, but no registry is configured",
-                    requests[0].package
+                    first.package
                 ),
             ));
         };
         // One resolver root per package that has registry requirements.
         let mut roots: BTreeMap<PathBuf, aevia_resolve::Root> = BTreeMap::new();
         for request in requests {
-            let manifest = &self.packages[&request.owner].manifest;
+            let manifest = &self.package_at(&request.owner)?.manifest;
             let id = if request.owner == self.root {
                 manifest.name.clone()
             } else {
@@ -1069,11 +1336,25 @@ impl PackageGraph {
             directories.insert(chosen.clone(), identity);
         }
         for edge in &resolution.edges {
-            let from = match &edge.from {
-                | aevia_resolve::Node::Root(id) => owner_of[id].clone(),
-                | aevia_resolve::Node::Package(chosen) => directories[chosen].clone(),
+            let missing = |endpoint| {
+                ManifestError::new(
+                    "E0607",
+                    format!(
+                        "the `{}` dependency has no resolved {endpoint} package",
+                        edge.label
+                    ),
+                )
             };
-            let to = directories[&edge.to].clone();
+            let from = match &edge.from {
+                | aevia_resolve::Node::Root(id) => owner_of.get(id),
+                | aevia_resolve::Node::Package(chosen) => directories.get(chosen),
+            }
+            .cloned()
+            .ok_or_else(|| missing("source"))?;
+            let to = directories
+                .get(&edge.to)
+                .cloned()
+                .ok_or_else(|| missing("destination"))?;
             self.claim(&edge.label, &to)?;
             self.edges
                 .entry(from)
@@ -1181,7 +1462,7 @@ impl PackageGraph {
         let mut children = children.clone();
         children.sort();
         for (position, (alias, child)) in children.iter().enumerate() {
-            let last = position + 1 == children.len();
+            let last = position == children.len().saturating_sub(1);
             let (branch, next_prefix) = if last {
                 ("└── ", format!("{prefix}    "))
             } else {
@@ -1228,12 +1509,19 @@ struct RegistryRequest {
 }
 
 /// Maps a resolver failure to the diagnostic codes of §7.7.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "preserve the resolver error code mapping in one place"
+    )
+)]
 fn registry_failure(error: aevia_resolve::ResolveError) -> ManifestError {
-    match &error {
+    match error {
         | aevia_resolve::ResolveError::Index(index) => {
-            let mut failure = ManifestError::new("E0607", index.message.clone());
+            let mut failure = ManifestError::new("E0607", index.message);
             if index.kind == aevia_resolve::IndexErrorKind::Unavailable {
-                failure.missing_index = Some(index.package.clone());
+                failure.missing_index = Some(index.package);
             }
             failure
         },
@@ -1261,6 +1549,7 @@ struct PackageScope {
 }
 
 /// A source path together with the package context that selected it.
+///
 /// The path retains its logical spelling for declaration checks and neighbour
 /// resolution. Canonical physical identity alone cannot recover this owner.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1353,25 +1642,26 @@ impl Roots {
             .as_ref()
             .and_then(|owner| self.scopes.get(owner));
         let source = scope.map_or(self.source.as_path(), |scope| scope.source.as_path());
-        let local = if let Some(scope) = scope {
-            // Use logical paths first: a single src file may link outside the
-            // package while still importing the package's own source modules.
-            let file = crate::source::canonical_path(&importer.path);
-            let in_source = normalise(&absolute(&importer.path))
-                .starts_with(normalise(&absolute(&scope.source)))
-                || file.starts_with(crate::source::canonical_path(&scope.source))
-                || (file == scope.entry
-                    && normalise(&scope.logical_entry).starts_with(normalise(&scope.source)));
-            if in_source {
-                None
-            } else if file == scope.entry {
-                scope.logical_entry.parent().map(Path::to_path_buf)
-            } else {
-                file.parent().map(Path::to_path_buf)
-            }
-        } else {
-            self.local.clone()
-        };
+        let local = scope.map_or_else(
+            || self.local.clone(),
+            |scope| {
+                // Use logical paths first: a single src file may link outside the
+                // package while still importing the package's own source modules.
+                let file = crate::source::canonical_path(&importer.path);
+                let in_source = normalise(&absolute(&importer.path))
+                    .starts_with(normalise(&absolute(&scope.source)))
+                    || file.starts_with(crate::source::canonical_path(&scope.source))
+                    || (file == scope.entry
+                        && normalise(&scope.logical_entry).starts_with(normalise(&scope.source)));
+                if in_source {
+                    None
+                } else if file == scope.entry {
+                    scope.logical_entry.parent().map(Path::to_path_buf)
+                } else {
+                    file.parent().map(Path::to_path_buf)
+                }
+            },
+        );
         let mut out = Vec::new();
         for base in std::iter::once(source).chain(local.as_deref()) {
             let mut file = base.to_path_buf();
@@ -1419,20 +1709,21 @@ impl Roots {
         module: &ResolvedModule,
         visible: &[String],
     ) -> aevia_types::keys::ModulePath {
-        if let Some(scope) = module
+        module
             .owner
             .as_ref()
             .and_then(|owner| self.scopes.get(owner))
-        {
-            crate::source::SourceIdentity::for_owner(
-                scope.package.clone(),
-                &scope.directory,
-                &module.path,
+            .map_or_else(
+                || crate::source::SourceIdentity::for_path(&module.path),
+                |scope| {
+                    crate::source::SourceIdentity::for_owner(
+                        scope.package.clone(),
+                        &scope.directory,
+                        &module.path,
+                    )
+                },
             )
             .module_path(Some(visible))
-        } else {
-            crate::source::SourceIdentity::for_path(&module.path).module_path(Some(visible))
-        }
     }
 
     pub(crate) fn resolved_name_matches(
@@ -1530,8 +1821,7 @@ impl Roots {
             | Some(scope) if normalise(&absolute(&self.source)) != scope.source => {
                 self.candidates_in(&scope.source, None, path)
             },
-            | Some(_) => self.candidates(path),
-            | None => self.candidates(path),
+            | _ => self.candidates(path),
         }
     }
 
@@ -1764,7 +2054,7 @@ impl Lock {
         let mut version = None;
         for (index, raw) in text.lines().enumerate() {
             let line = raw.trim();
-            let number = index + 1;
+            let number = index.saturating_add(1);
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
@@ -1914,6 +2204,13 @@ pub fn import_root(name: &str) -> String {
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "validate the manifest import root with the source naming rule"
+    )
+)]
 fn is_module_segment(key: &str) -> bool {
     let mut chars = key.chars();
     match chars.next() {
@@ -1923,7 +2220,8 @@ fn is_module_segment(key: &str) -> bool {
     chars.all(|c| c.is_alphanumeric() || c == '_')
 }
 
-/// True when `name` is a valid `[package] name`: lower-case, digits, `_`, `-`.
+/// True when `name` starts with an ASCII letter and contains only ASCII
+/// letters, digits, `_` and `-`.
 #[must_use]
 pub fn valid_package_name(name: &str) -> bool {
     is_package_name(name)
@@ -1938,6 +2236,67 @@ fn is_package_name(name: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "keep lint table and shorthand parsing separate from package fields"
+    )
+)]
+fn parse_lint_setting(
+    value: &str,
+    origin: &str,
+    number: usize,
+) -> Result<LintSetting, ManifestError> {
+    let fail =
+        |message: String| ManifestError::new("E0605", format!("{origin}:{number}: {message}"));
+    let value = value.trim();
+    if let Some(level_str) = parse_string(value) {
+        let level = LintLevel::parse(&level_str).ok_or_else(|| {
+            fail(format!(
+                "unknown lint level `{level_str}`; expected `allow`, `warn`, `deny` or `forbid`"
+            ))
+        })?;
+        return Ok(LintSetting { level, reason: None });
+    }
+    let Some(inner) = value.strip_prefix('{').and_then(|s| s.strip_suffix('}')) else {
+        return Err(fail(
+            "lint setting must be a level string or `{ level = \"...\" }`".to_string(),
+        ));
+    };
+    let mut level: Option<LintLevel> = None;
+    let mut reason: Option<String> = None;
+    for field in split_fields(inner).map_err(fail)? {
+        let field = field.trim();
+        if field.is_empty() {
+            continue;
+        }
+        let Some((k, v)) = field.split_once('=') else {
+            return Err(fail(format!("expected `key = value`, found `{field}`")));
+        };
+        let k = k.trim();
+        let text = parse_string(v).ok_or_else(|| fail(format!("`{k}` expects a quoted string")))?;
+        match k {
+            | "level" => {
+                level = Some(LintLevel::parse(&text).ok_or_else(|| {
+                    fail(format!(
+                        "unknown lint level `{text}`; expected `allow`, `warn`, `deny` or `forbid`"
+                    ))
+                })?);
+            },
+            | "reason" => reason = Some(text),
+            | other => {
+                return Err(fail(format!(
+                    "unknown key `{other}` in `[lints]` entry; expected `level` or `reason`"
+                )));
+            },
+        }
+    }
+    let level =
+        level.ok_or_else(|| fail("`[lints]` table entry is missing `level`".to_string()))?;
+    Ok(LintSetting { level, reason })
+}
+
 fn parse_string(value: &str) -> Option<String> {
     let value = value.trim();
     let inner = value.strip_prefix('"')?.strip_suffix('"')?;
@@ -1947,13 +2306,49 @@ fn parse_string(value: &str) -> Option<String> {
     Some(inner.to_string())
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "reuse the manifest field scanner while retaining array grammar"
+    )
+)]
+fn parse_string_array(value: &str) -> Option<Vec<String>> {
+    let inner = value.trim().strip_prefix('[')?.strip_suffix(']')?;
+    let fields = split_fields(inner).ok()?;
+    let mut items = Vec::new();
+    for field in fields {
+        let item = field.trim();
+        if item.is_empty() {
+            continue;
+        }
+        items.push(parse_string(item)?);
+    }
+    Some(items)
+}
+
+fn format_string_array(items: &[String]) -> String {
+    if items.is_empty() {
+        return "[]".to_string();
+    }
+    let rendered: Vec<String> = items.iter().map(|item| format!("\"{item}\"")).collect();
+    format!("[{}]", rendered.join(", "))
+}
+
 /// Cuts a trailing `# comment` that is not inside a quoted string.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "keep manifest comment handling independent of value parsing"
+    )
+)]
 fn strip_comment(line: &str) -> &str {
     let mut quoted = false;
     for (position, character) in line.char_indices() {
         match character {
             | '"' => quoted = !quoted,
-            | '#' if !quoted => return &line[..position],
+            | '#' if !quoted => return line.get(..position).unwrap_or(line),
             | _ => {},
         }
     }
@@ -1966,12 +2361,17 @@ fn split_fields(inner: &str) -> Result<Vec<&str>, String> {
     let mut fields = Vec::new();
     let mut quoted = false;
     let mut start = 0;
-    for (position, character) in inner.char_indices() {
+    let mut characters = inner.char_indices();
+    while let Some((position, character)) = characters.next() {
         match character {
             | '"' => quoted = !quoted,
             | ',' if !quoted => {
-                fields.push(&inner[start..position]);
-                start = position + 1;
+                fields.push(
+                    inner
+                        .get(start..position)
+                        .ok_or_else(|| "invalid inline table boundary".to_string())?,
+                );
+                start = characters.offset();
             },
             | _ => {},
         }
@@ -1979,7 +2379,11 @@ fn split_fields(inner: &str) -> Result<Vec<&str>, String> {
     if quoted {
         return Err("an unterminated string in the inline table".to_string());
     }
-    fields.push(&inner[start..]);
+    fields.push(
+        inner
+            .get(start..)
+            .ok_or_else(|| "invalid inline table boundary".to_string())?,
+    );
     Ok(fields)
 }
 
@@ -1989,6 +2393,20 @@ fn parse_requirement(text: &str) -> Result<VersionReq, String> {
     })
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "isolate dependency parsing from package metadata"
+    )
+)]
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::too_many_lines,
+        reason = "report each dependency form and its field errors together"
+    )
+)]
 fn parse_dependency(
     key: &str,
     value: &str,
@@ -2001,7 +2419,7 @@ fn parse_dependency(
     if value.starts_with('"') {
         let text = parse_string(value)
             .ok_or_else(|| fail("a version requirement is one quoted string".to_string()))?;
-        let req = parse_requirement(&text).map_err(&fail)?;
+        let req = parse_requirement(&text).map_err(fail)?;
         return Ok(Dependency::Registry {
             package: official_package(key),
             req,
@@ -2019,7 +2437,7 @@ fn parse_dependency(
     let mut path: Option<String> = None;
     let mut package: Option<String> = None;
     let mut version: Option<String> = None;
-    for field in split_fields(inner).map_err(&fail)? {
+    for field in split_fields(inner).map_err(fail)? {
         let field = field.trim();
         if field.is_empty() {
             continue;
@@ -2152,7 +2570,7 @@ pub(crate) fn relative_to(
     for _ in common..root_parts.len() {
         out.push_str("../");
     }
-    for component in &target_parts[common..] {
+    for component in target_parts.iter().skip(common) {
         out.push_str(&component.as_os_str().to_string_lossy());
         out.push('/');
     }
@@ -2163,19 +2581,61 @@ fn absolute(path: &Path) -> PathBuf {
     if path.is_absolute() {
         return path.to_path_buf();
     }
-    std::env::current_dir()
-        .map(|cwd| cwd.join(path))
-        .unwrap_or_else(|_| path.to_path_buf())
+    std::env::current_dir().map_or_else(|_| path.to_path_buf(), |cwd| cwd.join(path))
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "separate path package hashing from lock assembly"
+)]
+fn hash_path_packages(graph: &PackageGraph) -> Result<BTreeMap<&Path, String>, ManifestError> {
+    use rayon::prelude::*;
+
+    let mut seen = BTreeSet::new();
+    let paths: Vec<_> = graph
+        .aliases
+        .values()
+        .filter(|path| !graph.registry.contains_key(*path))
+        .map(PathBuf::as_path)
+        .filter(|path| seen.insert(*path))
+        .collect();
+    let hash = |path: &&Path| graph.package_at(path).and_then(hash_package);
+    if aevia_rssn::execution::should_split(paths.len(), 4) {
+        // Indexed collection keeps the first alias's diagnostic even when
+        // another package finishes reading first.
+        let results: Vec<_> = paths.par_iter().map(hash).collect();
+        paths
+            .into_iter()
+            .zip(results)
+            .map(|(path, result)| Ok((path, result?)))
+            .collect()
+    } else {
+        paths
+            .into_iter()
+            .map(|path| Ok((path, hash(&path)?)))
+            .collect()
+    }
 }
 
 /// The package's resolution contract is part of its content: source-only
 /// hashes miss entry changes and dependency-edge changes in the manifest.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "hash the complete local package contract used by resolution"
+    )
+)]
 fn hash_package(package: &Package) -> Result<String, ManifestError> {
     let mut files = Vec::new();
     collect(&package.source_dir(), &mut files)?;
     let entry = package.entry_path();
     if entry.is_file() && !files.contains(&entry) {
         files.push(entry);
+    }
+    let lib_entry = package.lib_entry_path();
+    if lib_entry.is_file() && !files.contains(&lib_entry) {
+        files.push(lib_entry);
     }
     files.sort();
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
@@ -2258,18 +2718,19 @@ fn collect_acyclic(
     out: &mut Vec<PathBuf>,
     active: &mut BTreeSet<PathBuf>,
 ) -> Result<(), ManifestError> {
-    if !dir.exists() {
-        return Ok(());
-    }
-    let identity = std::fs::canonicalize(dir).map_err(|error| {
-        ManifestError::new(
-            "E0607",
-            format!(
-                "cannot resolve source directory `{}`: {error}",
-                dir.display()
-            ),
-        )
-    })?;
+    let identity = match std::fs::canonicalize(dir) {
+        | Ok(identity) => identity,
+        | Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        | Err(error) => {
+            return Err(ManifestError::new(
+                "E0607",
+                format!(
+                    "cannot resolve source directory `{}`: {error}",
+                    dir.display()
+                ),
+            ));
+        },
+    };
     if !active.insert(identity.clone()) {
         return Err(ManifestError::new(
             "E0607",
@@ -2280,7 +2741,10 @@ fn collect_acyclic(
         | Ok(entries) => entries,
         // A dependency with no `src/` is empty, not broken: the lock still
         // records it, so removing a directory shows up as a hash change.
-        | Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        | Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            active.remove(&identity);
+            return Ok(());
+        },
         | Err(error) => {
             return Err(ManifestError::new(
                 "E0607",
@@ -2293,7 +2757,17 @@ fn collect_acyclic(
             ManifestError::new("E0607", format!("cannot read `{}`: {error}", dir.display()))
         })?;
         let path = entry.path();
-        if path.is_dir() {
+        let is_dir = match path.metadata() {
+            | Ok(metadata) => metadata.is_dir(),
+            | Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            | Err(error) => {
+                return Err(ManifestError::new(
+                    "E0607",
+                    format!("cannot inspect source entry `{}`: {error}", path.display()),
+                ));
+            },
+        };
+        if is_dir {
             collect_acyclic(&path, out, active)?;
         } else if path.extension().is_some_and(|extension| extension == "aev") {
             out.push(path);
@@ -2343,6 +2817,42 @@ UnitsExtra = { path = "../units-extra" }
         let again = Manifest::parse(&rendered, "aevia.toml").expect("re-parses");
         assert_eq!(manifest, again);
         assert_eq!(rendered, again.render());
+    }
+
+    #[test]
+    fn new_manifest_includes_cargo_metadata_fields_and_round_trips() {
+        let manifest = Manifest::new("kinematics");
+        assert_eq!(manifest.edition.as_deref(), Some("2026"));
+        assert_eq!(manifest.readme.as_deref(), Some("README.md"));
+        let rendered = manifest.render();
+        for needle in [
+            "edition = \"2026\"",
+            "authors = []",
+            "description = \"\"",
+            "license = \"\"",
+            "readme = \"README.md\"",
+            "repository = \"\"",
+            "homepage = \"\"",
+            "documentation = \"\"",
+            "keywords = []",
+            "categories = []",
+        ] {
+            assert!(
+                rendered.contains(needle),
+                "missing `{needle}` in:\n{rendered}"
+            );
+        }
+        let parsed = Manifest::parse(&rendered, "aevia.toml").expect("re-parses");
+        assert_eq!(parsed, manifest);
+
+        let populated = "[package]\nname = \"units\"\nversion = \"0.2.0\"\nedition = \"2026\"\nentry = \"src/lib.aev\"\nauthors = [\"Smith, Alice <alice@example.com>\", \"Bob\"]\ndescription = \"Physical units\"\nlicense = \"Apache-2.0\"\nreadme = \"README.md\"\nrepository = \"https://github.com/apich/units\"\nhomepage = \"https://aevia.org\"\ndocumentation = \"https://docs.aevia.org\"\nkeywords = [\"units\", \"physics\"]\ncategories = [\"science\", \"simulation\"]\n";
+        let full = Manifest::parse(populated, "aevia.toml").expect("full parses");
+        assert_eq!(full.authors, ["Smith, Alice <alice@example.com>", "Bob"]);
+        assert_eq!(full.description.as_deref(), Some("Physical units"));
+        assert_eq!(full.license.as_deref(), Some("Apache-2.0"));
+        assert_eq!(full.keywords, ["units", "physics"]);
+        assert_eq!(full.categories, ["science", "simulation"]);
+        assert_eq!(Manifest::parse(&full.render(), "aevia.toml").unwrap(), full);
     }
 
     #[test]
@@ -2421,6 +2931,26 @@ UnitsExtra = { path = "../units-extra" }
         .expect("parses");
         assert_eq!(manifest.name, "a");
         assert_eq!(strip_comment("x = \"a#b\" # c"), "x = \"a#b\" ");
+    }
+
+    #[test]
+    fn a_path_keeps_unicode_commas_hashes_and_backslashes_inside_quotes() {
+        let source = r#"[package]
+name = "example"
+version = "1.0.0"
+[dependencies]
+Local = { path = "../répertoire, #donnees\src" } # the local package
+"#;
+        let manifest = Manifest::parse(source, "aevia.toml").expect("manifest parses");
+        let path = manifest
+            .dependencies
+            .get("Local")
+            .and_then(Dependency::local_path);
+        assert_eq!(path, Some(r"../répertoire, #donnees\src"));
+        assert_eq!(
+            Manifest::parse(&manifest.render(), "aevia.toml").unwrap(),
+            manifest
+        );
     }
 
     #[test]
@@ -2629,6 +3159,17 @@ UnitsExtra = { path = "../units-extra" }
     /// A scratch directory holding a package, a path dependency and a
     /// registry cache.
     struct Scratch(PathBuf);
+
+    #[cfg(unix)]
+    #[test]
+    fn a_source_root_with_an_unresolvable_symlink_is_reported() {
+        let scratch = Scratch::new("source-root-cycle");
+        let source = scratch.0.join("source");
+        std::os::unix::fs::symlink("source", &source).expect("source symlink");
+        let error = hash_sources(&source).expect_err("symlink cycle");
+        assert_eq!(error.code, "E0607");
+        assert!(error.message.contains("cannot resolve source directory"));
+    }
 
     impl Scratch {
         fn new(name: &str) -> Self {

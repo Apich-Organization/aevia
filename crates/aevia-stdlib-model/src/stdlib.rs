@@ -1,6 +1,8 @@
 //! Declarative module catalog and source generation for chapter 8.
 use crate::spec;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+use std::fmt::Write as _;
 
 /// One row of the module tree of §8.20.
 ///
@@ -56,7 +58,7 @@ pub const TREE: &[ModuleDef] = &[
     ModuleDef {
         path: "Math/NumberTheory",
         sections: &[],
-        names: &["factor", "is_prime", "primes", "gcd", "lcm"],
+        names: &["factor", "is_prime", "primes", "gcd", "lcm", "mod_pow"],
         types: &[],
     },
     ModuleDef {
@@ -68,7 +70,7 @@ pub const TREE: &[ModuleDef] = &[
     ModuleDef {
         path: "Math/Geometry",
         sections: &[],
-        names: &["polygon_area", "distance"],
+        names: &["polygon_area", "distance", "tetrahedron_volume"],
         types: &[],
     },
     ModuleDef {
@@ -222,6 +224,7 @@ pub const TREE: &[ModuleDef] = &[
         names: &[
             "interp1",
             "interp2",
+            "interp2Batch",
             "spline",
             "polyfit",
             "polyval",
@@ -338,193 +341,208 @@ pub const TREE: &[ModuleDef] = &[
 ];
 
 /// Reject duplicate or unsafe catalog paths before generating any files.
-fn validate_catalog() {
-    let mut paths = std::collections::BTreeSet::new();
+fn validate_catalog() -> Result<(), String> {
+    let mut paths = BTreeSet::new();
     for module in TREE {
-        assert!(
-            paths.insert(module.path),
-            "duplicate module path `{}`",
-            module.path
-        );
+        if !paths.insert(module.path) {
+            return Err(format!("duplicate module path `{}`", module.path));
+        }
         for component in module.path.split('/') {
             let mut chars = component.chars();
-            assert!(
-                chars
-                    .next()
-                    .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-                    && chars.all(|c| c.is_ascii_alphanumeric() || c == '_'),
-                "invalid module path `{}`",
-                module.path
-            );
+            if !(chars
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && chars.all(|c| c.is_ascii_alphanumeric() || c == '_'))
+            {
+                return Err(format!("invalid module path `{}`", module.path));
+            }
         }
     }
+    Ok(())
 }
 
 /// The generated source for every §8.20 module whose contents come from the
 /// specification. `path → source`, `/` separated.
 ///
 /// `Units.Constants` is generated separately from the live RSSN manifest.
+///
+/// # Panics
+///
+/// Panics when the specification or the module catalog is incomplete. Use
+/// [`try_spec_module_sources_with_docs`] to report the error to the caller.
 #[must_use]
 pub fn spec_module_sources(spec_source: &str) -> Vec<(String, String)> {
-    validate_catalog();
-    let sections = spec::sections(spec_source);
-    let declared = spec::names(spec_source);
-    for module in TREE {
-        for name in module.names {
-            assert!(
-                declared.binary_search(&name.to_string()).is_ok(),
-                "module `{}` re-exports `{name}`, which is absent from chapter 8",
-                module.path
-            );
+    spec_module_sources_with_docs(spec_source, &|_, _, _| None)
+}
+
+/// Supplies the `##` documentation of one re-exported name.
+///
+/// Called with the module path (`Math/NumberTheory`), the name, and the
+/// signatures chapter 8 states for that name; returns markdown (no `##`
+/// prefixes), or `None` to leave the name undocumented. The model has no
+/// dependency on the kernel, so whoever has the Kernel Manifest and the Rust
+/// sources of the library supplies this.
+pub type DocFn<'a> = &'a dyn Fn(&str, &str, &[String]) -> Option<String>;
+
+/// [`spec_module_sources`] with a documentation source for every name.
+///
+/// # Panics
+///
+/// Panics when the specification or the module catalog is incomplete.
+#[must_use]
+#[allow(
+    clippy::panic,
+    reason = "preserves the established fail-fast generation API"
+)]
+pub fn spec_module_sources_with_docs(
+    spec_source: &str,
+    docs: DocFn<'_>,
+) -> Vec<(String, String)> {
+    try_spec_module_sources_with_docs(spec_source, docs).unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// Generates the specification's modules and attaches documentation to their exports.
+///
+/// # Errors
+///
+/// Returns an error for an invalid catalog, a missing section, export, or type,
+/// or a duplicate numbered section or constructible type in that section.
+pub fn try_spec_module_sources_with_docs(
+    spec_source: &str,
+    docs: DocFn<'_>,
+) -> Result<Vec<(String, String)>, String> {
+    validate_catalog()?;
+    let chapter = spec::read_chapter(spec_source, true);
+    let mut by_number = BTreeMap::new();
+    for section in &chapter.sections {
+        if !section.number.is_empty()
+            && by_number.insert(section.number.as_str(), section).is_some()
+        {
+            return Err(format!("duplicate chapter 8 section {}", section.number));
         }
     }
-    let by_number: BTreeMap<&str, &spec::Section> = sections
+    let declared: BTreeSet<&str> = chapter
+        .sections
         .iter()
-        .map(|section| (section.number.as_str(), section))
+        .flat_map(|section| section.names.iter().map(String::as_str))
         .collect();
+    for module in TREE {
+        for name in module.names {
+            if !declared.contains(name) {
+                return Err(format!(
+                    "module `{}` re-exports `{name}`, which is absent from chapter 8",
+                    module.path
+                ));
+            }
+        }
+    }
     TREE.iter()
         .filter(|module| !is_manifest_generated(module.path))
         .map(|module| {
             let mut names: Vec<&str> = Vec::new();
             for number in module.sections {
-                let Some(section) = by_number.get(number) else {
-                    panic!(
-                        "spec/08-stdlib.md has no section `{number}`, but module `{}` re-exports it",
-                        module.path
-                    );
-                };
+                let section = by_number.get(number).ok_or_else(|| format!(
+                    "spec/08-stdlib.md has no section `{number}`, but module `{}` re-exports it",
+                    module.path
+                ))?;
                 names.extend(section.names.iter().map(String::as_str));
             }
             names.extend(module.names.iter().copied());
             names.sort_unstable();
             names.dedup();
-            (module.path.to_string(), render_module(module, &names, spec_source))
+            Ok((
+                module.path.to_string(),
+                render_module(module, &names, &chapter, docs)?,
+            ))
         })
         .collect()
 }
 
-/// Constructible declarations are copied from the authoritative chapter, with
-/// comments removed. The allowlist avoids emitting illustrative or result-only
-/// types whose dimensions cannot yet be represented by source declarations.
+/// The module, authoritative section, and ordered constructible types to copy.
+const TYPE_SOURCES: &[(&str, &str, &[&str])] = &[
+    (
+        "Ode",
+        "8.9",
+        &[
+            "OdeMethod",
+            "OdeOpts",
+            "OdeAdaptiveOpts",
+            "OdePhysicalOpts",
+            "OdeEvent",
+            "OdeHit",
+            "OdeSolution",
+        ],
+    ),
+    // §8.4.1: the preconditioner of `cg_with`.
+    ("LinearAlgebra/Sparse", "8.4.1", &["Precond"]),
+    // §8.7.1: the nominal distribution type and its parameter records,
+    // so `Normal({ mu = 0.0 m, sigma = 0.1 m })` is a source value.
+    (
+        "Stats/Distributions",
+        "8.7.1",
+        &[
+            "Normal",
+            "Uniform",
+            "Exponential",
+            "Gamma",
+            "Beta",
+            "ChiSquared",
+            "StudentT",
+            "Poisson",
+            "Binomial",
+            "LogNormal",
+            "Weibull",
+            "Cauchy",
+            "F",
+            "NegativeBinomial",
+            "Geometric",
+            "Distribution",
+        ],
+    ),
+    ("FFT", "8.8", &["Norm", "AxisScale"]),
+    (
+        "Sde",
+        "8.9.1",
+        &[
+            "SdeMethod",
+            "SdeStructure",
+            "SdeFixedOpts",
+            "SdeAdaptiveOpts",
+            "SdeOpts",
+            "SdeEvent",
+            "SdeHit",
+        ],
+    ),
+];
+
+/// Copies constructible types in the order expected by the generated module.
+#[allow(
+    clippy::single_call_fn,
+    reason = "isolates chapter fence and declaration handling from module rendering"
+)]
 fn type_declarations(
     path: &str,
-    source: &str,
-) -> Vec<String> {
-    let (section, wanted): (&str, &[&str]) = match path {
-        | "Ode" => {
-            (
-                "8.9",
-                &["OdeMethod", "OdeOpts", "OdeEvent", "OdeHit", "OdeSolution"],
-            )
-        },
-        // §8.4.1: the preconditioner of `cg_with`.
-        | "LinearAlgebra/Sparse" => ("8.4.1", &["Precond"]),
-        // §8.7.1: the nominal distribution type and its parameter records,
-        // so `Normal({ mu = 0.0 m, sigma = 0.1 m })` is a source value.
-        | "Stats/Distributions" => {
-            (
-                "8.7.1",
-                &[
-                    "Normal",
-                    "Uniform",
-                    "Exponential",
-                    "Gamma",
-                    "Beta",
-                    "ChiSquared",
-                    "StudentT",
-                    "Poisson",
-                    "Binomial",
-                    "Distribution",
-                ],
-            )
-        },
-        | "FFT" => ("8.8", &["Norm", "AxisScale"]),
-        | "Sde" => {
-            (
-                "8.9.1",
-                &[
-                    "SdeMethod",
-                    "SdeStructure",
-                    "SdeFixedOpts",
-                    "SdeAdaptiveOpts",
-                    "SdeOpts",
-                    "SdeEvent",
-                    "SdeHit",
-                ],
-            )
-        },
-        | _ => return Vec::new(),
+    chapter: &spec::Chapter<'_>,
+) -> Result<Vec<String>, String> {
+    let Some(&(_, section, wanted)) = TYPE_SOURCES.iter().find(|(module, _, _)| *module == path)
+    else {
+        return Ok(Vec::new());
     };
-    let mut active = false;
-    let mut fenced = false;
-    let mut declarations = BTreeMap::new();
-    let mut current: Option<(String, Vec<String>)> = None;
-    for raw in source.lines() {
-        if !fenced && (raw.starts_with("## ") || raw.starts_with("### ")) {
-            active = raw.split_whitespace().nth(1) == Some(section);
-        }
-        if !active {
-            continue;
-        }
-        if raw.trim_start().starts_with("```") {
-            if let Some((name, lines)) = current.take() {
-                declarations.insert(name, lines.join("\n"));
-            }
-            fenced = !fenced;
-            continue;
-        }
-        if !fenced {
-            continue;
-        }
-        let line = raw.split('#').next().unwrap_or("").trim_end();
-        if let Some(rest) = line.strip_prefix("type ") {
-            if let Some((name, lines)) = current.take() {
-                declarations.insert(name, lines.join("\n"));
-            }
-            let name = rest
-                .split(|c: char| c == '<' || c == '=' || c.is_whitespace())
-                .next()
-                .unwrap_or("");
-            if wanted.contains(&name) {
-                current = Some((name.to_string(), vec![line.to_string()]));
-            }
-        } else if line.trim().is_empty() {
-            if let Some((name, lines)) = current.take() {
-                declarations.insert(name, lines.join("\n"));
-            }
-        } else if let Some((_, lines)) = &mut current {
-            // A declaration ends before another top-level signature.
-            if !line.starts_with(char::is_whitespace) && line != "}" {
-                let (name, lines) = current.take().unwrap();
-                declarations.insert(name, lines.join("\n"));
-            } else if line.trim_start().starts_with("| ") {
-                // The specification packs multiple variants onto continuation
-                // lines, whereas Aevia source requires one per line.
-                for variant in line.trim().trim_start_matches("| ").split(" | ") {
-                    lines.push(format!("    | {variant}"));
-                }
-            } else {
-                lines.push(line.to_string());
-            }
-        }
-    }
-    if let Some((name, lines)) = current {
-        declarations.insert(name, lines.join("\n"));
-    }
     wanted
         .iter()
-        .map(|name| {
-            declarations
-                .remove(*name)
-                .unwrap_or_else(|| panic!("missing type `{name}` in section {section}"))
-        })
+        .map(|name| chapter.type_source(section, name))
         .collect()
 }
 
 /// Module-specific structured data that cannot be derived from section exports.
 /// Units are ambient values; physics records and façades describe the typed
 /// boundary around the kernel's scenario interface.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps non-specification module declarations separate"
+)]
 fn special_body(path: &str) -> Option<String> {
+    type Fields = &'static [(&'static str, &'static str)];
     let unit_note = match path {
         | "Units/SI" => Some("SI unit names are ambient Unit values from the kernel registry."),
         | "Units/Imperial" => {
@@ -539,12 +557,7 @@ fn special_body(path: &str) -> Option<String> {
     if let Some(note) = unit_note {
         return Some(format!("## {note}\n## This module declares no bindings.\n"));
     }
-    let (fields, result_name, result_fields, scenario): (
-        &[(&str, &str)],
-        &str,
-        &[(&str, &str)],
-        &str,
-    ) = match path {
+    let (fields, result_name, result_fields, scenario): (Fields, &str, Fields, &str) = match path {
         | "Physics/Ising" => {
             (
                 &[
@@ -576,34 +589,103 @@ fn special_body(path: &str) -> Option<String> {
     };
     let mut out = String::new();
     for (name, fields) in [("Params", fields), (result_name, result_fields)] {
-        out.push_str(&format!("type {name} = {{\n"));
+        let what = if name == "Params" {
+            format!("The parameters of the `{scenario}` simulation, one field per setting.")
+        } else {
+            format!("What the `{scenario}` simulation returns.")
+        };
+        push_doc_text(&mut out, &what);
+        let _ = writeln!(out, "type {name} = {{");
         for (field, ty) in fields {
-            out.push_str(&format!("    {field}: {ty},\n"));
+            let _ = writeln!(out, "    {field}: {ty},");
         }
         out.push_str("}\n\n");
     }
-    out.push_str(&format!("fn run(p: Params): Result<{result_name}, SimError> =\n    match simulate(\"{scenario}\", to_json(p)) with\n    | Ok(json) -> from_json(json)\n    | Err(error) -> Err(error)\n"));
+    push_doc_text(
+        &mut out,
+        &format!(
+            "Runs the `{scenario}` simulation with the given parameters and returns its result, \
+             or `Err(SimError)` if the parameters are rejected."
+        ),
+    );
+    let _ = write!(
+        out,
+        "fn run(p: Params): Result<{result_name}, SimError> =\n    match simulate(\"{scenario}\", to_json(p)) with\n    | Ok(json) -> from_json(json)\n    | Err(error) -> Err(error)\n"
+    );
     Some(out)
+}
+
+/// Writes `text` as a `##` documentation block.
+fn push_doc_text(
+    out: &mut String,
+    text: &str,
+) {
+    for line in text.lines() {
+        if line.is_empty() {
+            out.push_str("##\n");
+        } else {
+            out.push_str("## ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+}
+
+/// Documents the type `name` from its guide, when it has one.
+fn push_doc(
+    out: &mut String,
+    name: &str,
+) {
+    if let Some(guide) = crate::guides::guide(name) {
+        push_doc_text(out, guide.description);
+    }
+}
+
+/// Documents a `type Name ...` declaration copied from the specification.
+#[allow(
+    clippy::single_call_fn,
+    reason = "isolates source declaration name extraction"
+)]
+fn push_type_doc(
+    out: &mut String,
+    declaration: &str,
+) {
+    let name = declaration
+        .strip_prefix("type ")
+        .and_then(|rest| {
+            rest.split(|c: char| c == '<' || c == '=' || c.is_whitespace())
+                .next()
+        })
+        .unwrap_or("");
+    push_doc(out, name);
 }
 
 /// Renders one generated module: a header, the `module` declaration, one
 /// self-alias per name and one alias per re-exported type.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps textual formatting separate from catalog validation"
+)]
 fn render_module(
     module: &ModuleDef,
     names: &[&str],
-    spec_source: &str,
-) -> String {
+    chapter: &spec::Chapter<'_>,
+    docs: DocFn<'_>,
+) -> Result<String, String> {
     let mut out = String::new();
-    out.push_str(&format!(
+    // The generated notice is a plain `#` comment: a `##` line would be
+    // documentation, and would be repeated on the page of every module.
+    let _ = write!(
+        out,
         "## The `{}` module of §8.20.\n\
-         ##\n\
-         ## Generated standard library; do not edit.\n\
-         ## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.\n\
+         # Generated standard library; do not edit.\n\
+         # Regenerate with `bazel run //:refresh_stdlib`.\n\
          module {}\n\n",
         module.path,
         module.path.replace('/', ".")
-    ));
-    for declaration in type_declarations(module.path, spec_source) {
+    );
+    for declaration in type_declarations(module.path, chapter)? {
+        push_type_doc(&mut out, &declaration);
         out.push_str(&declaration);
         out.push_str("\n\n");
     }
@@ -623,17 +705,24 @@ fn render_module(
             ));
             continue;
         }
-        out.push_str(&format!("let {name} = {name}\n"));
+        let found = chapter.signatures(name);
+        if let Some(text) = docs(module.path, name, found) {
+            push_doc_text(&mut out, &text);
+        }
+        let _ = writeln!(out, "let {name} = {name}");
     }
     for (name, arity) in module.types {
-        let params: Vec<String> = (0..*arity)
-            .map(|index| format!("{}", (b'a' + u8::try_from(index).unwrap_or(0)) as char))
+        let params: Vec<String> = ('a'..='z')
+            .map(|letter| letter.to_string())
+            .chain((26..).map(|index| format!("p{index}")))
+            .take(*arity)
             .collect();
+        push_doc(&mut out, name);
         if params.is_empty() {
-            out.push_str(&format!("type {name} = {name}\n"));
+            let _ = writeln!(out, "type {name} = {name}");
         } else {
             let params = params.join(", ");
-            out.push_str(&format!("type {name}<{params}> = {name}<{params}>\n"));
+            let _ = writeln!(out, "type {name}<{params}> = {name}<{params}>");
         }
     }
     if !skipped.is_empty() {
@@ -641,24 +730,35 @@ fn render_module(
             "\n## Not re-exported (see the module header of `tests/stdlib_modules.rs`):\n",
         );
         for (name, reason) in &skipped {
-            out.push_str(&format!("##   {name} — {reason}\n"));
+            let _ = writeln!(out, "##   {name} — {reason}");
         }
     }
-    out
+    Ok(out)
 }
 
-/// Generate the Rust embedding table from the same catalog as the sources.
+/// Generates the Rust embedding table from the same catalog as the sources.
+///
+/// # Panics
+///
+/// Panics if the built-in catalog includes duplicate or invalid paths.
 #[must_use]
+#[allow(
+    clippy::panic,
+    reason = "invalid static catalog paths are generator defects"
+)]
 pub fn embedding_table_source() -> String {
-    validate_catalog();
+    if let Err(error) = validate_catalog() {
+        panic!("{error}");
+    }
     let mut out = String::from(
         "// Generated by aevia-stdlib-gen; do not edit.\nstatic MODULES: &[Module] = &[\n",
     );
     for module in TREE {
-        out.push_str(&format!(
-            "    Module {{ path: \"{}\", source: include_str!(\"../stdlib/{}.aev\") }},\n",
-            module.path, module.path
-        ));
+        let path = module.path;
+        let _ = writeln!(
+            out,
+            "    Module {{ path: \"{path}\", source: include_str!(\"../stdlib/{path}.aev\") }},"
+        );
     }
     out.push_str("];\n");
     out
@@ -677,4 +777,51 @@ pub const SYSTEM_MODULES: &[(&str, &str)] = &[
 #[must_use]
 pub fn is_manifest_generated(path: &str) -> bool {
     path == "Units/Constants" || SYSTEM_MODULES.iter().any(|(module, _)| *module == path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn type_extraction_ignores_section_headings_inside_other_fences() {
+        let source = "```markdown\n## 8.8 Quoted heading\ntype Norm = Fake\n```\n\
+                      ## 8.8 FFT\n```aevia\ntype Norm = | Unscaled\ntype AxisScale = | Linear\n```\n";
+        assert_eq!(
+            type_declarations("FFT", &spec::read_chapter(source, true)).expect("extract types"),
+            ["type Norm = | Unscaled", "type AxisScale = | Linear"]
+        );
+    }
+
+    #[test]
+    fn incomplete_specification_is_reported_as_an_error() {
+        let error =
+            try_spec_module_sources_with_docs("", &|_, _, _| None).expect_err("missing source");
+        assert!(error.contains("which is absent from chapter 8"), "{error}");
+    }
+
+    #[test]
+    fn duplicate_numbered_sections_fail_instead_of_overwriting_exports() {
+        let source = "## 8.8 FFT\n```\nfft : Int\n```\n### 8.8 Repeated\n";
+        let result = try_spec_module_sources_with_docs(source, &|_, _, _| None);
+        assert_eq!(result.unwrap_err(), "duplicate chapter 8 section 8.8");
+    }
+
+    #[test]
+    fn duplicate_constructible_types_fail_instead_of_overwriting_a_definition() {
+        let source = "## 8.8 FFT\n```aevia\ntype Norm = | First\n```\n\
+                      ```text\ntype Norm = | Second\ntype AxisScale = | Linear\n```\n";
+        let result = type_declarations("FFT", &spec::read_chapter(source, true));
+        assert_eq!(result.unwrap_err(), "duplicate type `Norm` in section 8.8");
+    }
+
+    #[test]
+    fn a_blank_line_inside_a_constructible_record_preserves_its_remaining_fields() {
+        let source = "## 8.9 Ode\n```aevia\ntype OdeOpts = {\n    a: Int,\n\n    b: Int,\n}\n```\n";
+        let parsed = spec::read_chapter(source, true);
+        assert_eq!(
+            parsed.type_source("8.9", "OdeOpts").unwrap(),
+            "type OdeOpts = {\n    a: Int,\n\n    b: Int,\n}"
+        );
+    }
 }

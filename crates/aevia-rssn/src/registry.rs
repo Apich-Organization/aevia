@@ -6,6 +6,39 @@
 //! added to the kernel appears on the next run without a line changing in
 //! this repository.
 
+/// The sole opaque native value admitted to checked AD callbacks.
+/// Session ownership and tape identity are validated by RSSN before use.
+pub const NATIVE_AD_VAR_KIND: &str = "rssn/native/ad/var/v1";
+
+/// Recognize the reserved native-bank handle namespace, not source nominal ADTs.
+pub(crate) fn native_object_kind(kind: &str) -> bool {
+    kind.strip_prefix("rssn/native/").is_some_and(|tail| {
+        !tail.is_empty()
+            && tail.split('/').all(|part| {
+                !part.is_empty()
+                    && part
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.'))
+            })
+    })
+}
+/// Check only a native wire envelope; RSSN independently authenticates its live session object.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Keeps wire envelope checks separate from live object authentication"
+)]
+pub(crate) fn native_handle_envelope(
+    kind: &str,
+    bytes: &[u8],
+) -> bool {
+    let ([session, object], []) = bytes.as_chunks::<8>() else {
+        return false;
+    };
+    native_object_kind(kind)
+        && session.iter().any(|byte| *byte != 0)
+        && object.iter().any(|byte| *byte != 0)
+}
+
 use crate::error::KernelError;
 use aevia_dim::Dim;
 use aevia_dim::Scale;
@@ -18,8 +51,8 @@ use rssn::kernel::signature::Rational;
 use rssn::kernel::signature::Signature;
 use rssn::kernel::signature::Stability;
 use rssn::kernel::signature::TypeExpr;
-use rssn::kernel::signature::Variadic;
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::sync::OnceLock;
 
 /// Where an overload's signature came from.
@@ -43,13 +76,13 @@ pub enum Source {
 impl Source {
     /// Whether the signature is exact rather than form-level.
     #[must_use]
-    pub fn is_exact(self) -> bool {
+    pub const fn is_exact(self) -> bool {
         matches!(self, Self::Declared | Self::Overlay)
     }
 
     /// The spelling used in generated stubs and the IDE.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             | Self::Declared => "declared",
             | Self::Overlay => "overlay",
@@ -123,6 +156,23 @@ pub enum SigType {
     Never,
 }
 
+/// Recognizes the exact structural encoding of the source `Option<T>` type.
+///
+/// Other tagged unions, duplicate tags, and malformed payload counts retain
+/// their dynamic representation rather than acquiring a source ADT identity.
+#[must_use]
+pub fn option_payload<T>(cases: &[(String, Vec<T>)]) -> Option<&T> {
+    if cases.len() != 2 {
+        return None;
+    }
+    let none = cases.iter().find(|(tag, _)| tag == "None")?;
+    let some = cases.iter().find(|(tag, _)| tag == "Some")?;
+    if !none.1.is_empty() || some.1.len() != 1 {
+        return None;
+    }
+    some.1.first()
+}
+
 /// One overload.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sig {
@@ -142,7 +192,7 @@ impl Sig {
         let mut text = format!("({}) -> {}", params.join(", "), render_type(&self.ret));
         if let Some((min, max, elem)) = &self.variadic {
             let bound = max.map_or_else(|| "...".to_string(), |max| format!("..{max}"));
-            text.push_str(&format!(" with {min}{bound} x {}", render_type(elem)));
+            let _ = write!(text, " with {min}{bound} x {}", render_type(elem));
         }
         text
     }
@@ -195,6 +245,15 @@ pub struct OpEntry {
     pub stability: Stability,
     /// Documentation.
     pub doc: String,
+    /// Where `doc` came from: the registration, or the rustdoc of the Rust
+    /// function behind the operator.
+    pub doc_source: rssn::kernel::manifest::DocSource,
+    /// The Rust function whose rustdoc completed `doc`, when one did.
+    pub doc_path: Option<String>,
+    /// The public Rust function the registration declares behind the operator.
+    pub rust_path: Option<String>,
+    /// Worked examples from the kernel manifest.
+    pub examples: Vec<rssn::kernel::signature::Example>,
     /// Accepted argument counts.
     pub arity: (usize, Option<usize>),
     /// Whether it takes a function argument.
@@ -204,7 +263,7 @@ pub struct OpEntry {
 impl OpEntry {
     /// Whether calls use the value-native ABI rather than the dimensionless graph.
     #[must_use]
-    pub fn is_value_native(&self) -> bool {
+    pub const fn is_value_native(&self) -> bool {
         matches!(
             self.eval_kind,
             rssn::kernel::signature::EvalKind::Dynamic
@@ -227,6 +286,39 @@ impl OpEntry {
         self.keys.get(index)
     }
 
+    /// The term overload for a nullary pair with an eligible dimension rule.
+    ///
+    /// RSSN publishes scalar and term signatures for some nullary graph
+    /// operators. An explicit overlay can preserve this pair. A dimensionless
+    /// or dimensionally polymorphic result can use the term contract.
+    #[must_use]
+    pub fn derived_nullary_term_index(&self) -> Option<usize> {
+        let [scalar, symbolic] = self.raw.as_slice() else {
+            return None;
+        };
+        // The domain facade also treats overlay overloads as authoritative.
+        // Their indices carry no runtime evidence without recorded witnesses.
+        if matches!(
+            (self.source, self.witnessed.as_slice()),
+            (Source::Derived, []) | (Source::Overlay, [0, 1])
+        ) && self.arity == (0, Some(0))
+            && self.witnesses.is_empty()
+            && matches!(
+                self.dim_rule,
+                Some(
+                    rssn::kernel::signature::DimRuleInfo::Dimensionless
+                        | rssn::kernel::signature::DimRuleInfo::Any
+                )
+            )
+            && matches!(scalar.ret, TypeExpr::Real | TypeExpr::Bool)
+            && *scalar == Signature::new(Vec::new(), scalar.ret.clone())
+            && *symbolic == Signature::new(Vec::new(), rssn::kernel::infer::term())
+        {
+            return Some(1);
+        }
+        None
+    }
+
     /// Whether the operator accepts `count` arguments.
     #[must_use]
     pub fn accepts(
@@ -242,7 +334,7 @@ impl OpEntry {
     /// type is `[α] -> R`, so one list argument at the call site means N
     /// positional arguments at the kernel.
     #[must_use]
-    pub fn is_variadic(&self) -> bool {
+    pub const fn is_variadic(&self) -> bool {
         self.arity.1.is_none()
     }
 
@@ -261,18 +353,24 @@ impl OpEntry {
     ///
     /// This is `kernel::overload`'s lattice, applied to types instead of
     /// values: arity first, then the weakest per-argument match, then the
-    /// unique maximum. A tie is `E1002`; nothing accepted is `E1003`. The
-    /// checker calls this so that what it types is what the runtime executes
-    /// .
+    /// unique maximum. A dimensionless or dimensionally polymorphic
+    /// nullary scalar and term pair from inference or an overlay selects
+    /// its term contract.
     ///
     /// # Errors
     ///
-    /// `E1002` for a tie, `E1003` when no overload accepts the arguments.
+    /// `E1002` for other ties, `E1003` when no overload accepts the arguments.
     pub fn resolve_by_type(
         &self,
         arg_types: &[rssn::kernel::signature::TypeExpr],
     ) -> Result<rssn::kernel::signature::OpKey, KernelError> {
         use rssn::kernel::overload::Match;
+        if arg_types.is_empty()
+            && let Some(index) = self.derived_nullary_term_index()
+            && let Some(key) = self.key(index)
+        {
+            return Ok(key.clone());
+        }
         let scored: Vec<(usize, Match)> =
             self.raw
                 .iter()
@@ -375,6 +473,10 @@ pub struct Capability {
 
 /// What the build can do.
 #[derive(Clone, Debug, Default)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Capabilities are independent public manifest flags"
+)]
 pub struct Capabilities {
     /// Dynamic calls by name.
     pub dynamic_call: bool,
@@ -431,7 +533,7 @@ impl Capabilities {
             row("core.sde", "sde", self.sde),
             // Callback support is scoped to synchronous, thread-affine
             // interpreter calls. Individual signatures remain subject to the
-            // binding catalog's Float-only, trailing callback restrictions.
+            // binding catalog and the checked recursive callback schema.
             row(
                 "core.callback",
                 "callback",
@@ -564,6 +666,10 @@ impl Capabilities {
 }
 
 /// Whether a signature speaks in affine points (`degC`, `degF`).
+#[allow(
+    clippy::single_call_fn,
+    reason = "Separates affine type discovery from kernel operator availability"
+)]
 fn signature_is_affine(signature: &Sig) -> bool {
     signature
         .params
@@ -619,14 +725,12 @@ pub struct ConstantInfo {
 /// The manifest, indexed for lookup.
 #[derive(Debug)]
 pub struct Registry {
-    /// Every spelling (name and aliases) mapped to the operator it denotes.
-    ops: BTreeMap<String, OpEntry>,
-    /// One entry per operator in `manifest.ops`, in name order.
-    ///
-    /// Iteration is over this and not over `ops`: the map is keyed by spelling,
-    /// so it also holds one entry per alias, and counting or generating from it
-    /// would over-report operators and emit a second declaration for one.
+    /// Every spelling (name and aliases) indexes the same canonical entries.
+    ops: BTreeMap<String, usize>,
+    /// One entry per operator, in manifest order.
     canonical: Vec<OpEntry>,
+    /// Canonical entry indices in stable name order.
+    name_order: Vec<usize>,
     /// Every base dimension the kernel knows.
     pub base_dimensions: Vec<String>,
     /// Units, sorted by name.
@@ -651,10 +755,14 @@ pub struct Registry {
 impl Registry {
     /// Indexes a manifest.
     #[must_use]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Builds the name, overload and capability indexes from a single manifest snapshot"
+    )]
     pub fn from_manifest(manifest: &KernelManifest) -> Self {
         let mut ops = BTreeMap::new();
         let mut canonical = Vec::with_capacity(manifest.ops.len());
-        for op in &manifest.ops {
+        for (index, op) in manifest.ops.iter().enumerate() {
             let entry = OpEntry {
                 name: op.name.clone(),
                 rule_set: op.rule_set.clone(),
@@ -676,7 +784,14 @@ impl Registry {
                     .iter()
                     .enumerate()
                     .filter(|(_, source)| {
-                        **source == rssn::kernel::manifest::SignatureSource::Witnessed
+                        // An overlay overload is hand-curated typing for this
+                        // operator, so it carries the same authority as a
+                        // witnessed one when the domain module picks a shape.
+                        matches!(
+                            **source,
+                            rssn::kernel::manifest::SignatureSource::Witnessed
+                                | rssn::kernel::manifest::SignatureSource::Overlay
+                        )
                     })
                     .map(|(index, _)| index)
                     .collect(),
@@ -692,6 +807,10 @@ impl Registry {
                 backend_support: op.backend_support,
                 stability: op.stability,
                 doc: op.doc.clone(),
+                doc_source: op.doc_source,
+                doc_path: op.doc_path.clone(),
+                rust_path: op.rust_path.clone(),
+                examples: op.examples.clone(),
                 arity: (usize::from(op.arity.min), op.arity.max.map(usize::from)),
                 higher_order: op.higher_order,
             };
@@ -701,20 +820,21 @@ impl Registry {
                 "`{}` must keep its two overload views index-aligned",
                 op.name
             );
-            // An alias resolves to the same entry; a name that two rule sets
-            // both register keeps the first, which is what the dynamic ABI
-            // does as well.
+            // Preserve manifest precedence: the first claim for an alias
+            // wins, while an explicit canonical spelling takes priority.
             for alias in &op.aliases {
-                ops.entry(alias.clone()).or_insert_with(|| entry.clone());
+                ops.entry(alias.clone()).or_insert(index);
             }
-            ops.insert(op.name.clone(), entry.clone());
+            ops.insert(op.name.clone(), index);
             canonical.push(entry);
         }
-        canonical.sort_by(|left, right| left.name.cmp(&right.name));
+        let mut name_order: Vec<_> = (0..canonical.len()).collect();
+        name_order.sort_by_key(|&index| canonical.get(index).map(|entry| entry.name.as_str()));
         let features = &manifest.features;
         Self {
             ops,
             canonical,
+            name_order,
             base_dimensions: manifest
                 .base_dimensions
                 .iter()
@@ -765,12 +885,14 @@ impl Registry {
         &self,
         name: &str,
     ) -> Option<&OpEntry> {
-        self.ops.get(name)
+        self.canonical.get(*self.ops.get(name)?)
     }
 
     /// Every operator, in name order, once per operator.
     pub fn ops(&self) -> impl Iterator<Item = &OpEntry> {
-        self.canonical.iter()
+        self.name_order
+            .iter()
+            .filter_map(|&index| self.canonical.get(index))
     }
 
     /// How many operators the manifest registers.
@@ -778,7 +900,7 @@ impl Registry {
     /// Aliases are spellings of an operator, not operators: this is
     /// `manifest.ops.len()`.
     #[must_use]
-    pub fn op_count(&self) -> usize {
+    pub const fn op_count(&self) -> usize {
         self.canonical.len()
     }
 
@@ -806,9 +928,8 @@ impl Registry {
 
     /// The overload of `name` that `arg_types` belong to.
     ///
-    /// This is the function the checker calls at a `Rssn.<op>` call site: it
-    /// returns the `OpKey` to pin, and it is the *only* place the choice is
-    /// made. The runtime executes that key without resolving again.
+    /// Returns the `OpKey` to pin when resolving from bridge signature types.
+    /// The runtime executes that key without resolving again.
     ///
     /// # Errors
     ///
@@ -866,10 +987,10 @@ pub fn registry() -> &'static Registry {
     })
 }
 
-fn hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
+pub(crate) fn hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len().saturating_mul(2));
     for byte in bytes {
-        out.push_str(&format!("{byte:02x}"));
+        let _ = write!(out, "{byte:02x}");
     }
     out
 }
@@ -908,22 +1029,14 @@ fn convert_signature(signature: &Signature) -> Sig {
             .map(|ty| convert_type_with(ty, &mut dims))
             .collect(),
         ret: convert_type_with(&signature.ret, &mut dims),
-        variadic: signature
-            .variadic
-            .as_ref()
-            .map(|variadic| variadic_bounds_with(variadic, &mut dims)),
+        variadic: signature.variadic.as_ref().map(|variadic| {
+            (
+                usize::from(variadic.min),
+                variadic.max.map(usize::from),
+                convert_type_with(&variadic.elem, &mut dims),
+            )
+        }),
     }
-}
-
-fn variadic_bounds_with(
-    variadic: &Variadic,
-    dims: &mut SignatureDims,
-) -> (usize, Option<usize>, SigType) {
-    (
-        usize::from(variadic.min),
-        variadic.max.map(usize::from),
-        convert_type_with(&variadic.elem, dims),
-    )
 }
 
 fn convert_type_with(
@@ -1156,11 +1269,10 @@ fn convert_dim_with(
         },
         | DimExpr::Pow(base, Exp::Rat(exponent)) => {
             let Some(exponent) = convert_exponent(exponent) else {
-                return Dim::one();
+                return Dim::var(fresh_dim());
             };
             convert_dim_with(base, dims).pow(&exponent)
         },
-        | DimExpr::Pow(_, Exp::Symbol(_)) => Dim::var(fresh_dim()),
         | DimExpr::Inverse(base) => {
             convert_dim_with(base, dims).pow(&num_rational::BigRational::from_integer(
                 num_bigint::BigInt::from(-1),
@@ -1170,9 +1282,11 @@ fn convert_dim_with(
         // Neither non-metric nor container is a dimension. Preserve the fact
         // that it is unknown; callers must consult the raw signature before
         // making a static promise about it.
-        | DimExpr::NonMetric | DimExpr::Container => Dim::var(fresh_dim()),
-        | DimExpr::Var(name) => dims.var(name),
+        | DimExpr::NonMetric
+        | DimExpr::Container
+        | DimExpr::Pow(_, Exp::Symbol(_))
         | DimExpr::Any => Dim::var(fresh_dim()),
+        | DimExpr::Var(name) => dims.var(name),
     }
 }
 
@@ -1196,20 +1310,28 @@ fn fresh_dim() -> u32 {
     })
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "Validates the wire denominator before constructing an exact host ratio"
+)]
 fn convert_exponent(exponent: &Rational) -> Option<num_rational::BigRational> {
-    Some(num_rational::BigRational::new(
-        num_bigint::BigInt::from(exponent.numer),
-        num_bigint::BigInt::from(exponent.denom),
-    ))
+    (exponent.denom != 0).then(|| {
+        num_rational::BigRational::new(
+            num_bigint::BigInt::from(exponent.numer),
+            num_bigint::BigInt::from(exponent.denom),
+        )
+    })
 }
 
-/// Whether any part of a kernel signature uses dimensional semantics that
-/// Aevia's scalar dimension algebra cannot express. Such signatures may still
-/// be called dynamically, but must not be presented as exact static types.
+/// Whether a kernel signature uses dimensions the host cannot express.
+///
+/// These signatures can still be called dynamically when the bridge can
+/// carry their values.
 #[must_use]
 pub fn signature_has_unrepresentable_dimensions(signature: &Signature) -> bool {
     fn dim(d: &DimExpr) -> bool {
         match d {
+            | DimExpr::Pow(_, Exp::Rat(exponent)) if exponent.denom == 0 => true,
             | DimExpr::NonMetric | DimExpr::Container | DimExpr::Pow(_, Exp::Symbol(_)) => true,
             | DimExpr::Pow(base, _) | DimExpr::Inverse(base) => dim(base),
             | DimExpr::Mul(parts) => parts.iter().any(dim),
@@ -1256,7 +1378,10 @@ pub fn to_dim_expr(dim: &Dim) -> DimExpr {
         };
         let base = match atom {
             | aevia_dim::Atom::Base(_) | aevia_dim::Atom::Nominal(_) => {
-                DimExpr::Base(atom.transport_name().expect("base atom"))
+                let Some(name) = atom.transport_name() else {
+                    return DimExpr::Any;
+                };
+                DimExpr::Base(name)
             },
             | aevia_dim::Atom::Var(id) => DimExpr::Var(format!("d{id}")),
         };
@@ -1269,6 +1394,10 @@ pub fn to_dim_expr(dim: &Dim) -> DimExpr {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "Converts the complete kernel unit record at the registry boundary"
+)]
 fn convert_unit(unit: &rssn::kernel::value::UnitValue) -> UnitInfo {
     UnitInfo {
         name: unit.name.clone(),
@@ -1285,6 +1414,10 @@ fn convert_unit(unit: &rssn::kernel::value::UnitValue) -> UnitInfo {
 
 /// A manifest unit system, with each unity quantity's SI value and
 /// dimension taken from the manifest's constants (§5.11).
+#[allow(
+    clippy::single_call_fn,
+    reason = "Maps unit-system bases, constants and dimension maps together"
+)]
 fn convert_unit_system(
     system: &rssn::dim::systems::UnitSystemValue,
     constants: &[rssn::kernel::value::ConstantValue],
@@ -1333,6 +1466,10 @@ impl Registry {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "Converts constant metadata before registry indexing"
+)]
 fn convert_constant(constant: &rssn::kernel::value::ConstantValue) -> ConstantInfo {
     ConstantInfo {
         name: constant.name.clone(),
@@ -1436,8 +1573,7 @@ pub fn render_type(ty: &SigType) -> String {
         },
         | SigType::Table => "Table".to_string(),
         | SigType::Device => "Device".to_string(),
-        | SigType::Opaque(name) => name.clone(),
-        | SigType::Var(name) => name.clone(),
+        | SigType::Opaque(name) | SigType::Var(name) => name.clone(),
         | SigType::Dyn => "Dyn<term>".to_string(),
         | SigType::Never => "Never".to_string(),
     }

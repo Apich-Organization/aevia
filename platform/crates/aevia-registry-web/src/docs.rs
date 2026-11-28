@@ -1,20 +1,21 @@
 //! The three documentation pages.
 //!
-//! Documentation on this registry is not written twice. The compiler renders
-//! `##` comments from the modules it type-checks at publish time, and these
-//! pages only present that output: a landing page that explains the rule, an
-//! index per package version that shows what is covered, and one page per
-//! module with the rendered declarations.
+//! The documentation builder extracts `##` comments from the published
+//! modules. These pages present its output in a landing page, a version index
+//! with coverage counts, and a page for each module. The version and module
+//! views borrow rendered HTML from their view models for synchronous SSR.
 //!
 //! The coverage numbers are stated as counts as well as a percentage, because a
 //! percentage hides the difference between a package with three declarations
 //! and one with three hundred.
 
 use aevia_registry_core::Lang;
+use aevia_registry_core::PackageId;
 use aevia_registry_core::vm::CrateCard;
 use aevia_registry_core::vm::DocModulePage;
 use aevia_registry_core::vm::DocsIndexPage;
 use aevia_registry_core::vm::Viewer;
+use leptos::either::Either;
 use leptos::prelude::AnyView;
 use leptos::prelude::*;
 
@@ -25,17 +26,17 @@ use crate::layout;
 // Page headings and body text.
 const TITLE: Msg = Msg::new("documentation", "文档");
 const LEDE: Msg = Msg::new(
-    "Built from `##` comments by the compiler, at publish time.",
-    "由编译器在发布时根据 `##` 注释生成。",
+    "Built from ## comments by the compiler, at publish time.",
+    "由编译器在发布时根据 ## 注释生成。",
 );
 const ABOUT: Msg = Msg::new(
     "A declaration carries its documentation next to it. When a version is \
-     published, the compiler parses the sources, collects the `##` comment above \
+     published, the compiler parses the sources, collects the ## comment above \
      each public declaration and renders the module pages you see here. There is \
      no separate documentation build to run and no second source of truth: the \
      text you read is the text that was compiled.",
     "声明旁边的注释就是它的文档。版本发布时，编译器解析源文件，收集每个公开声明上方的 \
-     `##` 注释，并渲染出这里看到的模块页面。不需要另外跑一次文档构建，也不存在第二份事实来源：\
+     ## 注释，并渲染出这里看到的模块页面。不需要另外跑一次文档构建，也不存在第二份事实来源：\
      你读到的文本就是编译时读到的文本。",
 );
 const EMPTY: Msg = Msg::new(
@@ -66,11 +67,39 @@ const PACKAGE_PAGE: Msg = Msg::new("package page", "包页面");
 const PACKAGE_INDEX: Msg = Msg::new("← package index", "← 包索引");
 const DOC_INDEX: Msg = Msg::new("documentation index", "文档索引");
 
+/// The state of a release whose documentation pages are unavailable.
+#[must_use]
+pub fn docs_build_status(
+    lang: Lang,
+    id: &PackageId,
+    version: &str,
+    message: &str,
+) -> String {
+    let title = format!("{id} {version}");
+    layout::page(
+        lang,
+        &title,
+        "/docs",
+        None,
+        view! {
+            <article class="manual-index">
+                <h1>{title.as_str()}</h1>
+                <p>{message}</p>
+                <p><a href=format!("/crates/{id}/{version}")>{PACKAGE_PAGE.of(lang)}</a></p>
+            </article>
+        },
+    )
+}
+
 /// The coverage sentence.
 ///
 /// The counts are interpolated, so the two languages cannot share one template:
 /// Chinese puts the total first and parenthesises the percentage with a
 /// full-width bracket.
+#[allow(
+    clippy::single_call_fn,
+    reason = "documentation coverage uses different word order in English and Chinese"
+)]
 fn coverage(
     lang: Lang,
     documented: usize,
@@ -84,6 +113,10 @@ fn coverage(
 }
 
 /// The source line above a module's declarations.
+#[allow(
+    clippy::single_call_fn,
+    reason = "module source summaries use a separate localized format"
+)]
 fn module_source(
     lang: Lang,
     source_file: &str,
@@ -102,6 +135,7 @@ fn module_source(
 ///
 /// The search box posts to the same page as a GET form so that a shared link
 /// carries the query; there is no separate results route to keep in sync.
+#[must_use]
 pub fn docs_landing(
     lang: Lang,
     crates: &[CrateCard],
@@ -154,6 +188,7 @@ pub fn docs_landing(
 /// The coverage bar is placed above the module table because the table is
 /// where a reader decides what to read next, and whether the package is
 /// documented at all changes how they read it.
+#[must_use]
 pub fn docs_index(
     lang: Lang,
     page: &DocsIndexPage,
@@ -161,8 +196,8 @@ pub fn docs_index(
 ) -> String {
     let id = page.id.to_path();
     let owner = format!("{}/", page.id.owner());
-    let name = page.id.name().to_string();
-    let version = page.version.clone();
+    let name = page.id.name();
+    let version = page.version.as_str();
     let percent = page.documented_percent();
     let documented = page.total_decls.saturating_sub(page.undocumented);
     let coverage = coverage(lang, documented, page.total_decls, percent);
@@ -170,34 +205,31 @@ pub fn docs_index(
         | Lang::En => format!("{id} {version} docs"),
         | Lang::Zh => format!("{id} {version} 文档"),
     };
-    let generated_at = page.generated_at.clone();
-    let generated = crate::date_only(&page.generated_at).to_string();
-
-    let rows: Vec<AnyView> = page
-        .modules
-        .iter()
-        .map(|module| {
-            let path = module.path.clone();
-            let href = format!("/docs/{id}/{version}/{path}");
-            view! {
-                <tr>
-                    <th scope="row">
-                        <a href=href>
-                            <code>{path}</code>
-                        </a>
-                    </th>
-                    <td class="num">{module.decls}</td>
-                    <td class="num">{module.undocumented}</td>
-                </tr>
-            }
-            .into_any()
-        })
-        .collect();
+    let generated_at = page.generated_at.as_str();
+    let generated = crate::date_only(generated_at);
 
     let module_table = if page.modules.is_empty() {
-        view! { <p class="muted">{NO_MODULES.of(lang)}</p> }.into_any()
+        Either::Left(view! { <p class="muted">{NO_MODULES.of(lang)}</p> })
     } else {
-        view! {
+        let rows: Vec<_> = page
+            .modules
+            .iter()
+            .map(|module| {
+                let path = module.path.as_str();
+                view! {
+                    <tr>
+                        <th scope="row">
+                            <a href=format!("/docs/{id}/{version}/{path}")>
+                                <code>{path}</code>
+                            </a>
+                        </th>
+                        <td class="num">{module.decls}</td>
+                        <td class="num">{module.undocumented}</td>
+                    </tr>
+                }
+            })
+            .collect();
+        Either::Right(view! {
             <table>
                 <thead>
                     <tr>
@@ -208,33 +240,31 @@ pub fn docs_index(
                 </thead>
                 <tbody>{rows}</tbody>
             </table>
-        }
-        .into_any()
+        })
     };
 
-    let readme = match &page.readme_html {
-        | Some(html) => {
-            view! {
+    let readme = page.readme_html.as_deref().map_or_else(
+        // The empty erased view supplies the existing SSR placeholder.
+        || Either::Right(().into_any()),
+        |html| {
+            Either::Left(view! {
                 <section>
                     <h2>{README.of(lang)}</h2>
-                    <div class="readme" inner_html=html.clone()></div>
+                    <div class="readme" inner_html=html></div>
                 </section>
-            }
-            .into_any()
+            })
         },
-        | None => ().into_any(),
-    };
+    );
 
-    let other_versions: Vec<AnyView> = page
+    let other_versions: Vec<_> = page
         .other_versions
         .iter()
         .map(|other| {
             view! {
                 <li>
-                    <a href=format!("/docs/{id}/{other}")>{other.clone()}</a>
+                    <a href=format!("/docs/{id}/{other}")>{other.as_str()}</a>
                 </li>
             }
-            .into_any()
         })
         .collect();
 
@@ -261,16 +291,12 @@ pub fn docs_index(
                     </p>
                 </header>
                 <p>{coverage}</p>
-                <div
+                <progress
                     class="meter"
-                    role="progressbar"
-                    aria-valuenow=percent
-                    aria-valuemin="0"
-                    aria-valuemax="100"
+                    value=percent
+                    max="100"
                     aria-label=COVERAGE_LABEL.of(lang)
-                >
-                    <span style=format!("width: {percent}%")></span>
-                </div>
+                ></progress>
                 <section>
                     <h2>{MODULES.of(lang)}</h2>
                     {module_table}
@@ -290,31 +316,29 @@ pub fn docs_index(
 /// The sidebar lists every module rather than only siblings: a reader arriving
 /// from a search result needs to see the shape of the package, not just where
 /// they landed.
+#[must_use]
 pub fn docs_module(
     lang: Lang,
     page: &DocModulePage,
     viewer: Option<&Viewer>,
 ) -> String {
     let id = page.id.to_path();
-    let version = page.version.clone();
-    let module = page.module.clone();
-    let undocumented = page.undocumented;
-    let decls = page.decls;
-    let source_file = page.source_file.clone();
-    let header = module_source(lang, &source_file, decls, undocumented);
+    let version = page.version.as_str();
+    let module = page.module.as_str();
+    let header = module_source(lang, &page.source_file, page.decls, page.undocumented);
+    let docs_path = format!("/docs/{id}/{version}");
 
-    let modules: Vec<AnyView> = page
+    let modules: Vec<_> = page
         .modules
         .iter()
         .map(|entry| {
-            let current = (entry.path == module).then_some("page");
-            let href = format!("/docs/{id}/{version}/{}", entry.path);
+            let path = entry.path.as_str();
+            let current = (path == module).then_some("page");
             view! {
                 <li>
-                    <a href=href aria-current=current>{entry.path.clone()}</a>
+                    <a href=format!("{docs_path}/{path}") aria-current=current>{path}</a>
                 </li>
             }
-            .into_any()
         })
         .collect();
 
@@ -329,20 +353,20 @@ pub fn docs_module(
                     <h2>{MODULES.of(lang)}</h2>
                     <ul>{modules}</ul>
                     <p class="small">
-                        <a href=format!("/docs/{id}/{version}")>{PACKAGE_INDEX.of(lang)}</a>
+                        <a href=docs_path.as_str()>{PACKAGE_INDEX.of(lang)}</a>
                     </p>
                 </aside>
                 <div class="docs-main">
                     <header class="doc-head">
-                        <h1>{module.clone()}</h1>
+                        <h1>{module}</h1>
                         <p>{header}</p>
                         <p>
                             <a href=format!("/crates/{id}")>{PACKAGE_PAGE.of(lang)}</a>
                             " · "
-                            <a href=format!("/docs/{id}/{version}")>{DOC_INDEX.of(lang)}</a>
+                            <a href=docs_path.as_str()>{DOC_INDEX.of(lang)}</a>
                         </p>
                     </header>
-                    <div class="doc-body" inner_html=page.html.clone()></div>
+                    <div class="doc-body" inner_html=page.html.as_str()></div>
                 </div>
             </div>
         },
@@ -384,7 +408,24 @@ mod tests {
         assert!(html.contains("10 of 12 declarations documented (83%)"));
         assert!(html.contains("/docs/apich/units-extra/1.2.0/Kinematics"));
         assert!(html.contains("Thermo.IdealGas"));
-        assert!(html.contains("width: 83%"));
+        assert!(html.contains("<progress"));
+        assert!(html.contains("value=\"83\""));
+        assert!(html.contains("<div class=\"readme\"><p>Units.</p></div>"));
+    }
+
+    #[test]
+    fn empty_documentation_omits_the_module_table_and_readme() {
+        let mut page = index();
+        page.modules.clear();
+        page.total_decls = 0;
+        page.undocumented = 0;
+        page.readme_html = None;
+        let html = docs_index(Lang::Zh, &page, None);
+        assert!(html.contains("<html lang=\"zh-CN\">"));
+        assert!(html.contains("该版本没有模块文档。"));
+        assert!(html.contains("value=\"100\""));
+        assert!(!html.contains("<table>"));
+        assert!(!html.contains("class=\"readme\""));
     }
 
     #[test]
@@ -395,15 +436,19 @@ mod tests {
             module: "Kinematics".to_string(),
             html: "<h2>fall_time</h2>".to_string(),
             modules: index().modules,
-            source_file: "src/kinematics.aev".to_string(),
+            source_file: "src/force & motion.aev".to_string(),
             decls: 8,
             undocumented: 2,
         };
         let html = docs_module(Lang::En, &page, None);
-        assert!(html.contains("src/kinematics.aev · 8 declarations · 2 undocumented"));
+        assert!(html.contains("src/force &amp; motion.aev · 8 declarations · 2 undocumented"));
         assert!(html.contains("aria-current=\"page\">Kinematics</a>"));
+        assert_eq!(
+            html.matches("aria-current=\"page\">Kinematics</a>").count(),
+            1
+        );
         assert!(
-            html.contains("<h2>fall_time</h2>"),
+            html.contains("<div class=\"doc-body\"><h2>fall_time</h2></div>"),
             "raw documentation HTML"
         );
     }

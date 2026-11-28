@@ -1,0 +1,41 @@
+## Run: aevia test examples/ode_adaptive_geometric.aev
+## Choose the requested method explicitly. Every Adaptive* method compares one
+## full step with two half steps and checks its Hermite midpoint defect.
+## Work limits include rejected trials. Variable steps lose fixed-step symplecticity.
+## The tensor contains normalized, dimensionless q/p. Physical q/p have different
+## units; use a record state for ode_solve, or normalize before advanced tensor APIs.
+open Units.SI
+
+import Ode { OdeMethod, OdeAdaptiveOpts, OdePhysicalOpts, AdaptiveRk4, AdaptiveStormerVerlet, AdaptiveRuth4, AdaptiveImplicitMidpoint, AdaptiveGaussLegendre4, AdaptiveGaussLegendre6, ode_solve }
+
+fn oscillator(_t: Float[Time], y: Tensor<[2], Float>): Tensor<[2], Float[1/Time]> = [y[1] / 1.0 s, -y[0] / 1.0 s]
+
+fn options(method: OdeMethod): OdeAdaptiveOpts<Tensor<1, Float>> = { rtol = 0.000001, atol = 0.00000001, method = method, steps = None, events = None, h0 = 0.4 s, h_min = 0.0000000001 s, h_max = 0.5 s, max_steps = 20000, max_evaluations = 200000 }
+
+fn accurate(method: OdeMethod): Bool =
+    let path = ode_solve(oscillator, [1.0, 0.0], (0.0 s, 0.5 s), options(method), [])
+    abs(path.at(0.5 s)[0] - cos(0.5)) < 0.00002 && abs(path.at(0.231 s)[0] - cos(0.231)) < 0.00002 && path.rejected > 0
+
+test "every requested adaptive geometric family controls endpoint and dense errors" = accurate(AdaptiveRk4) && accurate(AdaptiveStormerVerlet) && accurate(AdaptiveRuth4) && accurate(AdaptiveImplicitMidpoint) && accurate(AdaptiveGaussLegendre4) && accurate(AdaptiveGaussLegendre6)
+
+let terminal = ode_solve(oscillator, [1.0, 0.0], (0.0 s, 4.0 s), options(AdaptiveGaussLegendre6), [{ g = fn (_t: Float[Time], y: Tensor<[2], Float>) => y[0], terminal = true, direction = -1 }])
+
+test "terminal event stops the same adaptive method" = abs(terminal.events[0].t - 1.5707963267948966 s) < 0.0001 s && terminal.method == "AdaptiveGaussLegendre6"
+
+fn main(): IO Unit = println(terminal.events)
+
+## Physical position and momentum belong in a record, since their units differ.
+## Physical atol has exactly the same structure and component units as the state.
+type PhysicalState = { q: Float[Length], p: Float[Mass*Length/Time] }
+
+type PhysicalRate = { q: Float[Length/Time], p: Float[Mass*Length/Time^2] }
+
+fn physical_oscillator(_t: Float[Time], y: PhysicalState): PhysicalRate = { q = y.p / 1.0 kg, p = -y.q * (1.0 kg / 1.0 s^2) }
+
+fn physical_options(tolerance: Float): OdePhysicalOpts<PhysicalState> = { rtol = 0.0, atol = { q = tolerance * 1.0 m, p = tolerance * 1.0 kg*m/s }, method = AdaptiveGaussLegendre4, steps = None, events = None, h0 = 0.5 s, h_min = 0.0000000001 s, h_max = 0.5 s, max_steps = 20000, max_evaluations = 200000 }
+
+let physical_loose = ode_solve(physical_oscillator, { q = 1.0 m, p = 0.0 kg*m/s }, (0.0 s, 1.0 s), physical_options(0.001), [])
+
+let physical_tight = ode_solve(physical_oscillator, { q = 1.0 m, p = 0.0 kg*m/s }, (0.0 s, 1.0 s), physical_options(0.0000001), [])
+
+test "physical record atol controls work and restores heterogeneous dense units" = physical_tight.nfev > physical_loose.nfev && abs(physical_tight.at(0.731 s).q - cos(0.731) * 1.0 m) < 0.000002 m && abs(physical_tight.at(0.731 s).p + sin(0.731) * 1.0 kg*m/s) < 0.000002 kg*m/s

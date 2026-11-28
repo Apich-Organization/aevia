@@ -68,6 +68,66 @@ fn main(): IO Unit = do
 }
 
 #[test]
+fn nested_units_follow_each_rendering_modules_scope() {
+    use aevia_core::Interp;
+    use aevia_core::Mode;
+    use aevia_core::driver;
+
+    let directory = std::env::temp_dir().join(format!("aevia-nested-units-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("NaturalReport.aev"),
+        r#"module NaturalReport with units natural
+fn sample() =
+    let length = 1.0 fm + 0.001 pm
+    let energy = 2.0 eV + 0.003 keV
+    { length = length, energy = energy, nested = Some({ length = length, energy = energy, explicit = 3.0 keV, plain = 4.0 }) }
+fn report(value) = "{value}"
+"#,
+    )
+    .unwrap();
+    let entry = directory.join("main.aev");
+    std::fs::write(
+        &entry,
+        r#"import NaturalReport
+fn main(): IO Unit = do
+    let data = NaturalReport.sample()
+    println(NaturalReport.report(data))
+    println("{data}")
+    println(NaturalReport.report(data))
+"#,
+    )
+    .unwrap();
+    let program = driver::load(&entry);
+    assert!(
+        !program.diagnostics.has_errors(),
+        "{:?}",
+        program.diagnostics.items
+    );
+    for mode in [Mode::Ast, Mode::Ir] {
+        let mut interp = Interp::new(&program.entry().unwrap().checked)
+            .with_mode(mode)
+            .with_buffer();
+        let loaded = driver::run_modules(&mut interp, &program);
+        assert!(!loaded.has_errors(), "{mode:?}: {:?}", loaded.items);
+        interp.run_main().unwrap();
+        let output = interp.captured();
+        let lines: Vec<_> = output.lines().collect();
+        assert_eq!(lines.len(), 3, "{mode:?}: {output}");
+        assert_eq!(lines[0], lines[2], "{mode:?}: {output}");
+        assert_eq!(lines[0].matches(" eV^-1").count(), 2, "{mode:?}: {output}");
+        assert_eq!(lines[0].matches(" eV,").count(), 2, "{mode:?}: {output}");
+        assert_eq!(lines[1].matches(" eV^-1").count(), 0, "{mode:?}: {output}");
+        assert_eq!(lines[1].matches(" eV,").count(), 0, "{mode:?}: {output}");
+        assert!(
+            lines[0].contains(" keV") && lines[1].contains(" keV"),
+            "{mode:?}: {output}"
+        );
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn velocities_are_pure_numbers_and_unity_constants_are_one() {
     let output = run_loaded(
         r#"module Hep with units natural

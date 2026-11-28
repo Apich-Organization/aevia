@@ -7,14 +7,15 @@
 //! `aevia update` does. This endpoint exists for clients that would rather not
 //! download one index file per transitive package — a CI job, an editor, a
 //! script — and for checking what the registry itself would choose. It runs the
-//! same resolver (`aevia-resolve`) over the same records the index serves, so
-//! the answer is the one a toolchain would compute, not an approximation.
+//! same resolver (`aevia-resolve`) over the versions and dependencies the
+//! sparse index serves, so its answer agrees with the toolchain's.
 //!
 //! The resolver is synchronous and the catalogue is not, so resolution runs in
 //! rounds: resolve against what is loaded; if the index reports a package as
 //! not loaded, load it and run again. A [`RecordSource`] supplies the records;
 //! the database is one, a table of strings in a test is another.
 
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 
 use axum::Json;
@@ -25,6 +26,8 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use aevia_registry_core::PackageId;
+use aevia_registry_core::error::E_JSON;
+use aevia_registry_core::index::deps_from_json;
 use aevia_registry_db::repo;
 use aevia_resolve::Dependency;
 use aevia_resolve::Index;
@@ -33,12 +36,14 @@ use aevia_resolve::IndexErrorKind;
 use aevia_resolve::Options;
 use aevia_resolve::ResolveError;
 use aevia_resolve::Root;
+use aevia_resolve::SparseDependency;
 use aevia_resolve::SparseIndex;
 use aevia_resolve::SparseRecord;
 use aevia_resolve::Summary;
 use aevia_resolve::Unify;
 use aevia_resolve::Version;
 use aevia_resolve::VersionReq;
+use aevia_resolve::sparse::SparseError;
 
 use crate::api::ApiError;
 use crate::api::ApiResult;
@@ -118,7 +123,7 @@ pub struct ResolveResponse {
 }
 
 /// Where records come from.
-pub trait RecordSource {
+pub trait RecordSource: Sync {
     /// All records of `package` (`owner/name`), or `None` when it does not
     /// exist.
     ///
@@ -212,7 +217,7 @@ pub async fn resolve_request(
         dependencies,
     }];
     let mut index = LoadedIndex::default();
-    let mut loaded = 0;
+    let mut loaded = 0usize;
     loop {
         match aevia_resolve::resolve(&roots, &index, &options) {
             | Ok(resolution) => {
@@ -225,7 +230,7 @@ pub async fn resolve_request(
                             ResolvedPackage {
                                 package: chosen.package.clone(),
                                 version: chosen.version.to_string(),
-                                checksum: record.map(|r| r.checksum.clone()).unwrap_or_default(),
+                                checksum: record.map_or_default(|r| r.checksum.clone()),
                                 yanked: record.is_some_and(|r| r.yanked),
                             }
                         })
@@ -244,7 +249,7 @@ pub async fn resolve_request(
                 });
             },
             | Err(ResolveError::Index(error)) if error.kind == IndexErrorKind::Unavailable => {
-                loaded += 1;
+                loaded = loaded.saturating_add(1);
                 if loaded > MAX_LOADED {
                     return Err(ApiError::new(
                         StatusCode::UNPROCESSABLE_ENTITY,
@@ -283,6 +288,66 @@ struct Catalogue<'a> {
     pool: &'a sqlx::PgPool,
 }
 
+#[derive(sqlx::FromRow)]
+struct ResolveVersion {
+    version: String,
+    dependencies: serde_json::Value,
+    checksum: String,
+    yanked: bool,
+}
+
+/// Rows arrive in sparse-index publication order so the last occurrence of
+/// a parsed version wins and errors report the same line as the index reader.
+#[allow(
+    clippy::single_call_fn,
+    reason = "test catalogue projection independently of the database"
+)]
+fn project_records(
+    id: &PackageId,
+    rows: Vec<ResolveVersion>,
+) -> aevia_registry_core::Result<Vec<SparseRecord>> {
+    let name = id.to_string();
+    let mut records = BTreeMap::new();
+    for (position, row) in rows.into_iter().enumerate() {
+        let malformed = |message: String| {
+            let error = SparseError {
+                line: position.saturating_add(1),
+                message,
+            };
+            aevia_registry_core::Error::new(E_JSON, format!("a stored record is damaged: {error}"))
+        };
+        let version =
+            Version::parse(&row.version).map_err(|error| malformed(format!("`vers`: {error}")))?;
+        let deps = deps_from_json(&row.dependencies)
+            .into_iter()
+            .map(|mut dep| {
+                let req = VersionReq::parse(&dep.req)
+                    .map_err(|error| malformed(format!("dependency `{}`: {error}", dep.package)))?;
+                dep.package.make_ascii_lowercase();
+                Ok(SparseDependency {
+                    package: dep.package,
+                    req,
+                    import: dep.import,
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        records.insert(
+            version.clone(),
+            SparseRecord {
+                name: name.clone(),
+                version,
+                deps,
+                checksum: row.checksum,
+                yanked: row.yanked,
+                // Only the sparse-index download clients use provenance and size.
+                size: None,
+                signature: None,
+            },
+        );
+    }
+    Ok(records.into_values().collect())
+}
+
 impl RecordSource for Catalogue<'_> {
     async fn records(
         &self,
@@ -297,15 +362,15 @@ impl RecordSource for Catalogue<'_> {
             return Ok(None);
         };
         let id = PackageId::new(&owner.handle, &row.name)?;
-        let versions = repo::versions(self.pool, row.id).await?;
-        // Through the text the index endpoint serves, so the resolver reads
-        // exactly what a client would.
-        let text = crate::api::index::render(&id, &versions)?;
-        aevia_resolve::sparse::parse_text(&text)
-            .map(Some)
-            .map_err(|error| {
-                aevia_registry_core::Error::new("E_JSON", format!("a stored record is damaged: {error}"))
-            })
+        let versions = sqlx::query_as::<_, ResolveVersion>(
+            "SELECT version, dependencies, checksum, yanked FROM versions
+             WHERE package_id = $1 ORDER BY created_at ASC, id ASC",
+        )
+        .bind(row.id)
+        .fetch_all(self.pool)
+        .await
+        .map_err(|error| aevia_registry_db::sql_error("cannot read the versions", error))?;
+        project_records(&id, versions).map(Some)
     }
 }
 
@@ -466,6 +531,42 @@ mod tests {
         }
     }
 
+    #[test]
+    fn projection_preserves_empty_catalogues_and_version_errors() {
+        let id = PackageId::new("o", "package").expect("fixture identity");
+        assert!(
+            project_records(&id, Vec::new())
+                .expect("empty catalogue")
+                .is_empty()
+        );
+
+        let rows = ["1.0.0", "2.0"]
+            .into_iter()
+            .map(|version| {
+                ResolveVersion {
+                    version: version.to_string(),
+                    dependencies: serde_json::Value::Null,
+                    checksum: "sha256:test".to_string(),
+                    yanked: false,
+                }
+            })
+            .collect();
+        let error = project_records(&id, rows).expect_err("an invalid version");
+        let index_text = [
+            line("o/package", "1.0.0", &[], false),
+            line("o/package", "2.0", &[], false),
+        ]
+        .concat();
+        let index_error =
+            aevia_resolve::sparse::parse_text(&index_text).expect_err("an invalid version");
+        assert_eq!(index_error.line, 2);
+        assert_eq!(error.code, E_JSON);
+        assert_eq!(
+            error.message,
+            format!("a stored record is damaged: {index_error}")
+        );
+    }
+
     #[tokio::test]
     async fn a_request_resolves_through_loaded_rounds() {
         let source = catalogue();
@@ -477,9 +578,23 @@ mod tests {
             .iter()
             .map(|p| format!("{} {}", p.package, p.version))
             .collect();
-        assert_eq!(chosen, ["o/plot 1.1.0", "o/units 1.2.0"], "yanked 1.3.0 is skipped");
-        assert!(response.packages.iter().all(|p| p.checksum.starts_with("sha256:")));
-        assert!(response.edges.iter().any(|e| e.from == "request" && e.import == "Plot"));
+        assert_eq!(
+            chosen,
+            ["o/plot 1.1.0", "o/units 1.2.0"],
+            "yanked 1.3.0 is skipped"
+        );
+        assert!(
+            response
+                .packages
+                .iter()
+                .all(|p| p.checksum.starts_with("sha256:"))
+        );
+        assert!(
+            response
+                .edges
+                .iter()
+                .any(|e| e.from == "request" && e.import == "Plot")
+        );
         // Each package was loaded once, however many rounds it took.
         let asked = source.asked.lock().expect("lock");
         assert_eq!(asked.len(), 2, "{asked:?}");
@@ -507,7 +622,11 @@ mod tests {
             .expect_err("unknown");
         assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(error.error.code, "E_RESOLVE");
-        assert!(error.error.message.contains("not in the index"), "{}", error.error.message);
+        assert!(
+            error.error.message.contains("not in the index"),
+            "{}",
+            error.error.message
+        );
     }
 
     #[tokio::test]
@@ -515,15 +634,24 @@ mod tests {
         let source = catalogue();
         let mut asked = request(&[("o/plot", "^1"), ("o/units", "^2")]);
         asked.unify = Some("package".to_string());
-        let error = resolve_request(&source, &asked).await.expect_err("conflict");
+        let error = resolve_request(&source, &asked)
+            .await
+            .expect_err("conflict");
         assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY);
-        assert!(error.error.message.contains("o/units"), "{}", error.error.message);
+        assert!(
+            error.error.message.contains("o/units"),
+            "{}",
+            error.error.message
+        );
         // The default rule lets both majors coexist.
         let ok = resolve_request(&source, &request(&[("o/plot", "^1"), ("o/units", "^2")]))
             .await
             .expect("series");
         assert_eq!(
-            ok.packages.iter().filter(|p| p.package == "o/units").count(),
+            ok.packages
+                .iter()
+                .filter(|p| p.package == "o/units")
+                .count(),
             2
         );
     }
@@ -542,7 +670,10 @@ mod tests {
         let mut asked = request(&[("o/plot", "^1")]);
         asked.unify = Some("both".to_string());
         assert_eq!(
-            resolve_request(&source, &asked).await.expect_err("bad").status,
+            resolve_request(&source, &asked)
+                .await
+                .expect_err("bad")
+                .status,
             StatusCode::BAD_REQUEST
         );
     }

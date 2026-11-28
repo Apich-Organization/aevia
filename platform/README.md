@@ -1,218 +1,71 @@
-# aevia platform — registry and documentation site
+# Aevia platform
 
-The service behind <https://aevia.apich.org>: a package registry for the Aevia
-language, a documentation site built by the compiler, and the client that
-publishes to them. Everything is Rust — `axum` for HTTP, `leptos` for the pages,
-`sqlx` for PostgreSQL — and there is no Node.js, no bundler and no WASM bundle
-anywhere in the build.
+The platform serves the package registry, hosted package documentation, the language specification, and the Aevia Book. The separate Cargo workspace includes the `aevia-pkg` client and the registry’s Rust server, PostgreSQL queries, documentation renderer, and HTML views.
 
-```
-crates.io          →  aevia.apich.org/crates
-docs.rs            →  aevia.apich.org/docs
-the design standard →  aevia.apich.org/spec   (bilingual, rendered from spec/*.md)
-cargo login        →  aevia-pkg login          (no token; a key binding)
-cargo publish      →  aevia-pkg publish        (signed statement, not a bearer token)
-```
+| Read | Open |
+| --- | --- |
+| Learn the language | [The Aevia Book](manuals/book/en/01-getting-started.md) · [Interactive edition](https://aevia.apich.org/book?lang=en) |
+| Look up a library, function, or unit | [Standard library](stdlib-docs/stdlib.md) · [Hosted package docs](https://aevia.apich.org/docs) |
+| Find or publish a package | [Registry](https://aevia.apich.org/crates) · [CLI guide](https://aevia.apich.org/cli) |
+| Understand the system | [Language specification](../spec/en/README.md) · [Architecture](manuals/architecture/en/05-registry.md) |
+| Operate or integrate the registry | [Deployment](docs/DEPLOY.md) · [HTTP API](docs/API.md) · [Security](docs/SECURITY.md) |
 
-The site speaks English and Chinese; the switch is in the top bar and the choice
-is remembered in a cookie. `?lang=zh` works on any page and wins over the cookie,
-so a link can name its language.
+## Install the language tools
 
-## What is here
+The release installers require GitHub CLI with `gh release verify-asset` and a session from `gh auth login`. Run the installer for your operating system from the repository root. These examples select a particular beta release.
 
-| Path | What it is |
-|---|---|
-| `crates/aevia-registry-core` | Names, manifests, tarballs, signed statements, signature verification, index records, view models. No I/O, no database, no network. |
-| `crates/aevia-registry-db` | The PostgreSQL schema and every query. Migrations are embedded and applied by the binary at start-up. |
-| `crates/aevia-registry-docs` | Turns a published package into the HTML pages under `/docs`, using the language's own `aevia-doc` crate. |
-| `crates/aevia-registry-web` | The Leptos pages. Server-rendered to `String`; no hydration, no client-side router. |
-| `crates/aevia-registry-server` | The binary: routes, OAuth, publish verification, archive storage, background documentation builds. |
-| `crates/aevia-pkg` | The client: `login`, `publish`, `yank`, `search`, `info`, `verify`, `key`, `status`, and the dependency commands `add owner/name@REQ`, `index`, `update`, `vendor` (`fetch`), `tree`, `lock [--check]`. `aevia pkg …` in the language toolchain forwards to it; `aevia add/update/fetch/tree` call it to fill `.aevia/registry`. |
-| `infra/` | Debian 13 container images, a Podman-compose stack, Quadlet units, a Caddyfile and a deploy script. |
-| `docs/` | [Architecture](docs/ARCHITECTURE.md), [API](docs/API.md), [security model](docs/SECURITY.md), [deployment](docs/DEPLOY.md). |
-
-## Quick start
-
-```console
-# 1. A database. Any PostgreSQL 14+ will do; the container in infra/ is one way.
-podman run -d --name aevia-db -e POSTGRES_USER=aevia -e POSTGRES_PASSWORD=aevia \
-    -e POSTGRES_DB=aevia -p 55432:5432 postgres:18-trixie
-
-# 2. The server. It applies the schema itself on first start.
-export DATABASE_URL=postgres://aevia:aevia@127.0.0.1:55432/aevia
-export AEVIA_SESSION_SECRET=$(openssl rand -hex 32)
-export AEVIA_STORAGE_DIR=$PWD/target/packages
-export AEVIA_BASE_URL=http://127.0.0.1:8080
-cargo run -p aevia-registry-server
-
-# 3. The site.
-open http://127.0.0.1:8080
+```sh
+sh platform/install.sh --version 0.1.0-beta.1
 ```
 
-Building the workspace needs Rust 1.97 or newer. The `aevia-registry-docs` crate
-depends on `../crates/aevia-doc` — the language repository checked out next to
-this one — because documentation is built by the compiler that will run the
-package. Build with `--no-default-features -p aevia-registry-docs` only if you
-are working on the platform without that checkout.
-
-## Development
-
-`scripts/dev.sh` wraps the quick start in one command — a PostgreSQL container
-on `127.0.0.1:55432` and the environment the server reads:
-
-```console
-./scripts/dev.sh up      # start the database, print the exports
-./scripts/dev.sh run     # up, then cargo run -p aevia-registry-server
-./scripts/dev.sh reset   # drop and recreate the schema
-./scripts/dev.sh down    # stop and remove the container
+```powershell
+.\platform\install.ps1 -Version 0.1.0-beta.1
 ```
 
-The tests that need a database read `AEVIA_TEST_DATABASE_URL` and skip
-themselves when it is unset; point it at that container
-(`postgres://aevia:aevia@127.0.0.1:55432/aevia`) to run them. The specification
-pages are read from `AEVIA_SPEC_DIR`, by default `../spec`.
+The default channel is `stable`. Use `--channel nightly` or `-Channel nightly` to select a daily build. Linux and macOS install to `~/.aevia`. Windows installs to `%LOCALAPPDATA%\aevia`. Set `AEVIA_HOME` to override the default, or pass `--home` on Linux or macOS and `-HomeDirectory` on Windows. Use `--no-activate` or `-NoActivate` to install alongside your active toolchain. Use `--no-path` or `-NoPath` to skip PATH and shell completion changes. [Linux and macOS installer](install.sh) · [Windows installer](install.ps1)
 
-## Publishing
+## Develop the registry
 
-There is no `cargo login` equivalent that hands out a token, and no long-lived
-credential on disk. A publish is authorised by a signature over a short,
-canonical statement:
+From the repository root, run `bazel run //:platform_dev -- run` to start the registry at `http://127.0.0.1:8080`. Set `AEVIA_BIND` and `AEVIA_BASE_URL` to use another listener and public origin. The script prefers Podman and also supports Docker. It starts a PostgreSQL 18 container named `aevia-dev-db` on `127.0.0.1:55432`. The registry stores local archives in `platform/target/packages` and reads the specification from the repository’s `spec/`. Use `bazel run //:platform_dev -- up` to start only the database and print the environment exports. The existing `platform/scripts/dev.sh` command forwards to this target.
 
-```console
-aevia-pkg login            # binds your key to your account, once
-aevia-pkg publish          # from a package directory with aevia.toml
+[`Cargo.toml`](Cargo.toml) declares the minimum supported Rust version. The platform builds the parser, formatter, documentation, dimension, and dependency resolution crates from the language workspace. Build the registry image from this checkout with `bazel run //:registry_image -- --tag localhost/aevia/registry:0.1.0`.
+
+```sh
+bazel test //:platform_unit_test
+AEVIA_TEST_DATABASE_URL=postgres://aevia:aevia@127.0.0.1:55432/aevia \
+    bazel test --test_env=AEVIA_TEST_DATABASE_URL //:platform_test
 ```
 
-(`aevia pkg …` works too: the language CLI forwards to `aevia-pkg`, which it
-finds on `PATH`, beside itself, or at `$AEVIA_PKG`.)
+The database integration tests create a separate schema for each test and require PostgreSQL 18 and permission to create schemas. The integration target creates a disposable OpenPGP signing key for publish tests.
 
-`login` prints a code and a URL. You open the URL, sign in with GitHub or ORCID,
-and confirm the key's fingerprint; the terminal polls until the binding exists.
-After that, `publish` needs only the private key — which never leaves
-`gpg-agent` or `ssh-agent`.
+## 中文
 
-```
-aevia-publish-v1
-name: apich/units-extra
-version: 0.2.0
-checksum: sha256:7cb292ee…
-nonce: 4d1a…
-expires: 1794000300
-```
+平台提供包注册中心、托管包文档、语言规范和 Aevia 教程。`platform/` 是独立的 Cargo 工作区，包含 `aevia-pkg` 客户端、Rust 服务端、PostgreSQL 查询、文档生成和 HTML 页面。
 
-The server issues that text (nonce and expiry included), the client signs the
-exact bytes with `gpg --detach-sign --armor` or `ssh-keygen -Y sign`, and the
-server verifies it before anything is written. A captured signature names one
-archive and dies in five minutes, so replaying it publishes nothing — the
-registry spends the nonce and refuses the second attempt.
+| 所需内容 | 入口 |
+| --- | --- |
+| 学习语言 | [Aevia 教程](manuals/book/zh/01-getting-started.md) · [交互版](https://aevia.apich.org/book?lang=zh) |
+| 查询库、函数或单位 | [标准库概览](../spec/08-stdlib.md) · [托管包文档](https://aevia.apich.org/docs?lang=zh) |
+| 查找或发布包 | [注册中心](https://aevia.apich.org/crates?lang=zh) · [命令行指南](https://aevia.apich.org/cli?lang=zh) |
+| 了解系统设计 | [语言规范](../spec/README.md) · [架构](manuals/architecture/zh/05-registry.md) |
+| 运维或集成注册中心 | [部署](docs/DEPLOY.zh.md) · [HTTP API](docs/API.zh.md) · [安全](docs/SECURITY.zh.md) |
 
-## Dependencies
+### 安装语言工具
 
-A package depends on registry packages by version requirement
-(`Units = "^1.2"`, `Plot = { package = "apich/plot", version = "~2.1" }`; the
-syntax and the resolution rules are `spec/07-modules.md` §7.5). The pieces:
+发布安装脚本需要支持 `gh release verify-asset` 的 GitHub CLI，并要求提前运行 `gh auth login`。在仓库根目录执行上面的 Linux、macOS 或 Windows 命令即可安装指定 beta 版本。默认渠道为 `stable`。可用 `--channel nightly` 或 `-Channel nightly` 选择每日构建。
 
-| Piece | Where |
-|---|---|
-| versions, requirements, the resolver, the sparse-index reader | `../crates/aevia-resolve` (pure; shared with the toolchain) |
-| the index the registry serves, `deps` with `package`/`req`/`import` | `GET /api/v1/index/{owner}/{name}` |
-| reverse dependencies, server-side resolution | `/api/v1/crates/{owner}/{name}/dependents`, `POST /api/v1/resolve` |
-| the local cache both `aevia` and `aevia-pkg` use | `.aevia/registry/{index,src}` (or `$AEVIA_REGISTRY_DIR`, `--cache`) |
+Linux 和 macOS 的默认安装目录是 `~/.aevia`，Windows 的默认目录是 `%LOCALAPPDATA%\aevia`。可设置 `AEVIA_HOME`，或分别通过 `--home` 和 `-HomeDirectory` 指定目录。使用 `--no-activate` 或 `-NoActivate` 可并行安装其他版本并保留当前版本为活动工具链。使用 `--no-path` 或 `-NoPath` 可跳过 PATH 和 Shell 补全设置。 [Linux 和 macOS 安装脚本](install.sh) · [Windows 安装脚本](install.ps1)
 
-```console
-aevia add apich/plot@~2.1       # resolves, writes aevia.toml + aevia.lock, vendors
-aevia tree                      # path and registry packages
-aevia update [apich/units]      # newest compatible versions (all, or only these)
-aevia fetch                     # download + verify what aevia.lock names
-aevia-pkg lock --check          # is aevia.lock what the registry index resolves to?
+### 开发注册中心
+
+在仓库根目录运行 `bazel run //:platform_dev -- run`，即可通过 `http://127.0.0.1:8080` 访问注册中心。如需使用其他监听地址或公开访问地址，可设置 `AEVIA_BIND` 和 `AEVIA_BASE_URL`。脚本优先使用 Podman，也支持 Docker。它会在 `127.0.0.1:55432` 启动名为 `aevia-dev-db` 的 PostgreSQL 18 容器。注册中心将本地包归档写入 `platform/target/packages`，并从仓库的 `spec/` 读取语言规范。仅需数据库时，运行 `bazel run //:platform_dev -- up`，命令会输出环境变量设置。原有 `platform/scripts/dev.sh` 会转发到该 Bazel 目标。
+
+[`Cargo.toml`](Cargo.toml) 声明了最低 Rust 版本。平台复用语言工作区中的解析、格式化、文档、量纲及依赖解析 crate。在仓库根目录运行 `bazel run //:registry_image -- --tag localhost/aevia/registry:0.1.0` 构建注册中心镜像。
+
+```sh
+bazel test //:platform_unit_test
+AEVIA_TEST_DATABASE_URL=postgres://aevia:aevia@127.0.0.1:55432/aevia \
+    bazel test --test_env=AEVIA_TEST_DATABASE_URL //:platform_test
 ```
 
-`aevia` itself never touches the network: it resolves from the cached index
-files and builds from the unpacked sources, refusing a source directory whose
-`.aevia-pkg-checksum` does not carry the checksum the index records.
-`--offline` makes a missing file an error that names it.
-
-## The three surfaces
-
-**`/`** — what the registry is, how many packages it holds, and the three ideas
-behind it: identities come from GitHub or ORCID, publishing is a signature, and
-documentation is built by the compiler.
-
-**`/crates`** — search, sort, and a page per package with its versions,
-dependencies, README, checksums, signing key and yank state. Names are scoped to
-a verified identity (`apich/units-extra`), so a package cannot be squatted
-before its owner exists.
-
-**`/docs`** — the documentation site. Each version's pages are rendered at
-publish time from the `##` comments in its source by `aevia-doc`, so the site
-shows the API the compiler sees, not a second parser's guess. Pages are stored
-with the version and never rebuilt from a later source tree.
-
-**`/spec`** — the language specification, rendered from the language
-repository's `spec/*.md` at start-up: one page per chapter with a sticky
-sidebar, a per-page table of contents and CJK-aware anchors, plus `/spec/all`,
-the single-page edition the bundler produces, generated on request instead of
-checked in. The chapters are normative Chinese; every chapter carries an English
-title and abstract so an English reader can find what they need. Point
-`AEVIA_SPEC_DIR` at the `spec/` directory (the container mounts it read-only).
-
-## Where this departs from the Rust ecosystem
-
-These are deliberate, and each is argued in [ARCHITECTURE.md](docs/ARCHITECTURE.md):
-
-| Cargo / crates.io | Here | Why |
-|---|---|---|
-| `cargo login` stores a bearer token | a key binding plus a signed statement per action | a token is a transferable secret; a signature is a proof that cannot be replayed |
-| flat global namespace, first-come-first-served | `owner/name` scoped to a verified GitHub or ORCID identity | no squatting, no ten-minute name reservation, no support tickets |
-| `cargo publish` allows deletes | versions are immutable; `yank` only | a deleted version breaks every lock file that names it |
-| index records carry a checksum | index records carry the checksum *and* the signature that authorised it | provenance can be checked before the download, from the index alone |
-| no public append-only record | a hash-chained transparency log at `/log` | the registry cannot quietly rewrite its own history |
-| docs built by a separate service, days later | built at publish, by the same compiler | the page cannot describe an API the package does not have |
-
-## Deployment
-
-`infra/` targets **aarch64 Linux with rootless Podman** and Debian 13 images:
-
-```console
-cd infra
-cp .env.example .env && $EDITOR .env     # set the database password and session secret
-./deploy.sh build && ./deploy.sh up
-```
-
-The full operator guide — DNS, the GitHub App and ORCID application, backups,
-upgrades, the Quadlet alternative — is [docs/DEPLOY.md](docs/DEPLOY.md).
-
-## Tests
-
-```console
-cargo test --workspace
-```
-
-The tests come in three layers:
-
-* **Unit** — name and manifest rules, deterministic packing, statement
-  canonicalisation, signature verification, SQL helpers, page rendering in both
-  languages, the specification loader, the documentation builder.
-* **HTTP integration** (`crates/aevia-registry-server/tests/api.rs`) — real
-  requests through the real router against a real PostgreSQL: health, stats,
-  challenge validation, a full signed publish that is then replayed and refused,
-  index, download, yank, 404s and the language switch. They **skip themselves**
-  unless `AEVIA_TEST_DATABASE_URL` is set:
-
-  ```console
-  docker run -d --name aevia-tests-db \
-      -e POSTGRES_USER=aevia -e POSTGRES_PASSWORD=aevia \
-      -e POSTGRES_DB=aevia -p 55433:5432 postgres:18-trixie
-  AEVIA_TEST_DATABASE_URL=postgres://aevia:aevia@127.0.0.1:55433/aevia cargo test --workspace
-  ```
-
-  The signed-publish test shells out to `gpg` and skips when it is absent.
-* **Client** (`crates/aevia-pkg`) — the CLI parser, config round-trips, and the
-  statement-mismatch refusals.
-
-`scripts/dev.sh` brings up the same database for development; CI runs the
-database-backed job on every push.
-
-## Licence
-
-Apache-2.0, matching the language repository.
+数据库集成测试需要 PostgreSQL 18 和创建模式的权限，每项测试使用独立模式。集成测试目标会为 OpenPGP 发布测试创建一次性签名密钥。

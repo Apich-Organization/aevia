@@ -12,15 +12,30 @@
 //! The routes themselves live in the crate's library, so an integration test
 //! can drive them without a socket; this file is only the process.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unreachable
+    )
+)]
+
 use std::sync::Arc;
 use std::time::Duration;
 
 use tracing_subscriber::EnvFilter;
 
 use aevia_registry::config::Config;
+use aevia_registry::manual::ManualStore;
 use aevia_registry::router;
 use aevia_registry::spec::SpecStore;
 use aevia_registry::state::AppState;
+use aevia_registry::stdlib::StdlibDocStore;
 use aevia_registry::storage::Storage;
 
 #[tokio::main]
@@ -76,8 +91,39 @@ async fn main() -> std::process::ExitCode {
         );
     }
 
+    let stdlib_docs = match StdlibDocStore::load(&config.stdlib_docs_dir) {
+        | Ok(stdlib_docs) => Arc::new(stdlib_docs),
+        | Err(error) => {
+            eprintln!("aevia-registry: {}", error.render());
+            return std::process::ExitCode::from(1);
+        },
+    };
+    if stdlib_docs.is_empty() {
+        tracing::warn!(
+            directory = %stdlib_docs.directory().display(),
+            "/stdlib has no modules; set AEVIA_STDLIB_DOCS_DIR to the output of `aevia doc --stdlib`"
+        );
+    }
+
+    let manuals = match ManualStore::load(&config.manuals_dir, &config.base_url) {
+        | Ok(manuals) => Arc::new(manuals),
+        | Err(error) => {
+            eprintln!("aevia-registry: {}", error.render());
+            return std::process::ExitCode::from(1);
+        },
+    };
     let bind = config.bind;
-    let state = AppState::new(pool.clone(), Arc::new(config), storage, spec);
+    let state = AppState::new(
+        pool.clone(),
+        Arc::new(config),
+        storage,
+        spec,
+        stdlib_docs,
+        manuals,
+    );
+    aevia_registry::spawn_reloader(&state);
+    let _docs_worker = aevia_registry::docs_queue::spawn(state.clone());
+    let _downloads_worker = aevia_registry::spawn_download_counts(state.clone());
 
     // Housekeeping: expired nonces and sessions are dead weight, and a table
     // that only grows is a slow leak. Hourly is often enough for a registry
@@ -103,9 +149,12 @@ async fn main() -> std::process::ExitCode {
         },
     };
     tracing::info!(%bind, "listening");
-    if let Err(error) = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown())
-        .await
+    if let Err(error) = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown())
+    .await
     {
         eprintln!("aevia-registry: the server stopped: {error}");
         return std::process::ExitCode::from(1);
@@ -114,6 +163,10 @@ async fn main() -> std::process::ExitCode {
 }
 
 /// Waits for `Ctrl-C` or `SIGTERM`, so a container restart drains requests.
+#[allow(
+    clippy::single_call_fn,
+    reason = "platform signal registration is separate from registry startup"
+)]
 async fn shutdown() {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;

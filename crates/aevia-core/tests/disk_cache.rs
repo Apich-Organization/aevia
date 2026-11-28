@@ -9,13 +9,20 @@
 use aevia_core::Interp;
 use aevia_core::Mode;
 use aevia_core::disk_cache::DiskCache;
+use aevia_core::disk_cache::FORMAT_VERSION;
+use aevia_core::disk_cache::Key;
+use aevia_core::disk_cache::KeyInputs;
 use aevia_core::driver;
 use aevia_core::driver::LoadStats;
 use aevia_core::driver::Program;
 use aevia_core::manifest::Roots;
 use aevia_core::source::SourceOverlays;
+use aevia_syntax::Diagnostic;
+use aevia_syntax::Diagnostics;
+use aevia_syntax::Span;
 use aevia_types::check::Capabilities;
 use aevia_types::check::CheckOptions;
+use aevia_types::check::CheckedModule;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
@@ -277,6 +284,109 @@ fn a_corrupt_truncated_or_foreign_file_is_a_miss_that_is_overwritten() {
     assert_eq!(stats.disk_hits, 3, "{stats:?}");
 }
 
+fn fixture_key(
+    cache: &DiskCache,
+    module: &str,
+) -> Key {
+    cache
+        .key(&KeyInputs {
+            text: "let x = 1",
+            file: 0,
+            path: &[module.to_string()],
+            identity: &None,
+            bindings: &[],
+            reexports: &[],
+            options: &CheckOptions::default(),
+            interfaces: &[],
+        })
+        .unwrap()
+}
+
+#[test]
+fn a_stale_header_or_mismatched_file_size_is_a_cache_miss() {
+    let scratch = Scratch::new("header");
+    let cache = scratch.cache();
+    let key = fixture_key(&cache, "Header");
+    let module = CheckedModule::default();
+    let diagnostics = Diagnostics::new();
+    assert!(cache.store(&key, 0, [1; 16], &diagnostics, &module));
+    let files = scratch.aevi_files();
+    let [file] = files.as_slice() else {
+        panic!("expected one cache file");
+    };
+    let valid = std::fs::read(file).unwrap();
+    let mut stale = valid.clone();
+    stale[4..8].copy_from_slice(&(FORMAT_VERSION - 1).to_le_bytes());
+    std::fs::write(file, &stale).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(file)
+        .unwrap()
+        .set_len(128 * 1024)
+        .unwrap();
+    assert!(cache.load(&key, 0).is_none());
+
+    let mut foreign = valid.clone();
+    foreign[8] ^= 1;
+    let mut overstated = valid.clone();
+    overstated[24..32].copy_from_slice(&u64::MAX.to_le_bytes());
+    let mut trailing = valid.clone();
+    trailing.push(0);
+    for contents in [foreign, overstated, trailing] {
+        std::fs::write(file, contents).unwrap();
+        assert!(cache.load(&key, 0).is_none());
+    }
+
+    std::fs::write(file, &valid).unwrap();
+    assert_eq!(cache.load(&key, 0).unwrap().interface, [1; 16]);
+    assert!(cache.load(&key, 1).is_none());
+}
+
+#[test]
+fn replacing_one_cache_key_keeps_each_read_on_one_complete_entry() {
+    let scratch = Scratch::new("replace");
+    let cache = scratch.cache();
+    let key = fixture_key(&cache, "Replace");
+    let store = |revision: u8| {
+        let mut diagnostics = Diagnostics::new();
+        // Different lengths detect a reader mixing a header and another generation's body.
+        diagnostics.push(Diagnostic::warning(
+            "W0101",
+            "r".repeat(usize::from(revision) * 512),
+            Span::new(0, 0, 1),
+        ));
+        assert!(cache.store(
+            &key,
+            0,
+            [revision; 16],
+            &diagnostics,
+            &CheckedModule::default()
+        ));
+    };
+    store(1);
+    let start = std::sync::Barrier::new(2);
+    std::thread::scope(|threads| {
+        threads.spawn(|| {
+            start.wait();
+            for revision in 2..24 {
+                store(revision);
+            }
+        });
+        start.wait();
+        for _ in 0..96 {
+            let hit = cache.load(&key, 0).expect("complete cache entry");
+            let [diagnostic] = hit.diagnostics.items.as_slice() else {
+                panic!("expected one diagnostic");
+            };
+            assert_eq!(
+                diagnostic.message.len(),
+                usize::from(hit.interface[0]) * 512
+            );
+        }
+    });
+    assert_eq!(cache.load(&key, 0).unwrap().interface, [23; 16]);
+}
+
 #[test]
 fn a_different_capability_set_is_a_miss() {
     let scratch = Scratch::new("capabilities");
@@ -286,6 +396,7 @@ fn a_different_capability_set_is_a_miss() {
 
     let bare = CheckOptions {
         capabilities: Capabilities::from_names(Vec::<String>::new()),
+        ..CheckOptions::default()
     };
     let (program, stats) = load_with(&entry, &disk, &bare);
     assert!(!program.diagnostics.has_errors());

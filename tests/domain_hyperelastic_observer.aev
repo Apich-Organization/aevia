@@ -1,0 +1,76 @@
+## Checks the time and units seen by the observer in a compiled hyperelastic model.
+import Rssn_numerical_vector as Native
+
+type State = { displacement: Tensor<1, Float[Length]>, velocity: Tensor<1, Float[Length/Time]>, acceleration: Tensor<1, Float[Length/Time^2]>, time: Float[Time] }
+
+## State reads retain the dimensionless stored coefficients and each physical reference.
+type StoredState = {
+    displacement: { normalized: Tensor<1, Float>, reference: Float[Length] },
+    velocity: { normalized: Tensor<1, Float>, reference: Float[Length/Time] },
+    acceleration: { normalized: Tensor<1, Float>, reference: Float[Length/Time^2] },
+    time: Float[Time]
+}
+
+fn validate_end(end: Value, accepts: (State) -> Bool): Bool =
+    match Rssn.dynamic("num_grid_hyper_state_fields", [end]) with
+    | Ok(result) -> match from_value<StoredState>(result) with
+        | Ok(state) ->
+            let displacement = map(fn (x: Float) => x * state.displacement.reference, state.displacement.normalized)
+            let velocity = map(fn (x: Float) => x * state.velocity.reference, state.velocity.normalized)
+            let acceleration = map(fn (x: Float) => x * state.acceleration.reference, state.acceleration.normalized)
+            let measured = { displacement = displacement, velocity = velocity, acceleration = acceleration, time = state.time }
+            state.displacement.reference == 2.0 m && state.velocity.reference == 0.5 m/s && state.acceleration.reference == 0.125 m/s^2 && state.time == 1.0 s && accepts(measured)
+        | Err(_) -> false
+    | Err(_) -> false
+
+fn make_handle(op: String, args: Tensor<1, Value>): Value = unwrap_or(Rssn.dynamic(op, args), to_value(0))
+
+fn starting_state(force_x: Bool): Result<Value, OpError> =
+    let refs = make_handle("num_grid_mechanical_references", [to_value(2.0 m), to_value(4.0 s), to_value(3.0 kg), to_value(1.0 K)])
+    let frame = make_handle("num_grid_frame_new", [to_value(2.0 m), to_value(4.0 s), to_value(2.0 m)])
+    let mesh = make_handle("num_grid_simplex_rectangle", [frame, to_value(1), to_value(1), to_value([0.0, 0.0]), to_value([1.0, 1.0])])
+    let material = make_handle("num_grid_hyper_material", [refs, to_value("NeoHookean"), to_value(10.0), to_value(0.25), to_value(1.0)])
+    let markers: Tensor<1, Int> = []
+    let no_handles: Tensor<1, Value> = []
+    let bcs = make_handle("num_grid_elastic_bcs", [refs, to_value(markers), to_value(no_handles)])
+    let length_ref = make_handle("num_backend_reference", [to_value(1.0 m)])
+    let force_ref = make_handle("num_backend_reference", [to_value(0.75 kg/m^2/s^2)])
+    let zero_force = make_handle("num_backend_compile_current", [to_value("0"), to_value(["x", "y", "z"]), to_value([length_ref, length_ref, length_ref]), force_ref, to_value(128)])
+    let first_force = if force_x then make_handle("num_backend_compile_current", [to_value("1"), to_value(["x", "y", "z"]), to_value([length_ref, length_ref, length_ref]), force_ref, to_value(128)]) else zero_force
+    let problem = make_handle("num_grid_hyper_problem", [mesh, material, bcs, to_value([first_force, zero_force, zero_force]), to_value(no_handles), to_value(128)])
+    Rssn.dynamic("num_grid_hyper_rest", [problem, to_value([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])])
+
+fn is_resting(state: State): Bool =
+    length(state.displacement) == 8 && length(state.velocity) == 8 && length(state.acceleration) == 8 && all(fn (x: Float[Length]) => x == 0.0 m, state.displacement) && all(fn (x: Float[Length/Time]) => x == 0.0 m/s, state.velocity) && all(fn (x: Float[Length/Time^2]) => x == 0.0 m/s^2, state.acceleration)
+
+fn observer(state: State): Bool = is_resting(state) && (state.time == 0.5 s || state.time == 1.0 s)
+fn stop(_state: State): Bool = false
+
+fn evolve(rest: Value, callback: (State) -> Bool, budget: Int): Result<Value, OpError> =
+    Native.num_grid_hyper_dynamic([rest, to_value("Newmark"), to_value(0.25), to_value(0.5), to_value(1.0), to_value(0.125), to_value(2), to_value(1e-10), to_value(budget)], [to_callback(callback)])
+
+test "mechanical observer sees physical time and measured resting state" =
+    match starting_state(false) with
+    | Ok(rest) -> match evolve(rest, observer, 2) with
+        | Ok(end) -> validate_end(end, is_resting)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "mechanical observer cancellation returns an error and leaves the input state reusable" =
+    match starting_state(false) with
+    | Ok(rest) -> match evolve(rest, stop, 2) with
+        | Err(_) -> match evolve(rest, observer, 2) with
+            | Ok(_) -> true
+            | Err(_) -> false
+        | Ok(_) -> false
+    | Err(_) -> false
+
+fn measures_motion(state: State): Bool =
+    approx_eq(at(state.displacement, 0), (state.time / 1.0 s)^2 * 1.0 m, 1e-10 m) && approx_eq(at(state.velocity, 0), (state.time / 1.0 s) * 2.0 m/s, 1e-10 m/s) && approx_eq(at(state.acceleration, 0), 2.0 m/s^2, 1e-10 m/s^2)
+
+test "uniform measured body force accelerates the unconstrained mesh" =
+    match starting_state(true) with
+    | Ok(rest) -> match evolve(rest, measures_motion, 2) with
+        | Ok(end) -> validate_end(end, measures_motion)
+        | Err(_) -> false
+    | Err(_) -> false

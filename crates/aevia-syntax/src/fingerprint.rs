@@ -10,13 +10,39 @@
 //! therefore in the fingerprint; ordinary `#` comments are not in the AST at
 //! all and are checked separately (the formatter checks them separately).
 
-use crate::ast::*;
+use crate::ast::Attribute;
+use crate::ast::BlockStmt;
+use crate::ast::Decl;
+use crate::ast::DeclKind;
+use crate::ast::DimAst;
+use crate::ast::DoStmt;
+use crate::ast::Expr;
+use crate::ast::ExprKind;
+use crate::ast::InstanceMethod;
+use crate::ast::Module;
+use crate::ast::NatAst;
+use crate::ast::NumberLit;
+use crate::ast::Param;
+use crate::ast::Pat;
+use crate::ast::PatKind;
+use crate::ast::PatLit;
+use crate::ast::ShapeAst;
+use crate::ast::ShapeItem;
+use crate::ast::SliceAst;
+use crate::ast::StrPiece;
+use crate::ast::Ty;
+use crate::ast::TyKind;
+use crate::ast::TypeBody;
+use crate::ast::TypeParam;
 use std::fmt::Write as _;
 
 /// The fingerprint of a module.
 #[must_use]
 pub fn module(module: &Module) -> String {
     let mut out = String::new();
+    if module.private {
+        out.push_str("private ");
+    }
     out.push_str("module");
     match &module.name {
         | Some(path) => {
@@ -48,10 +74,13 @@ pub fn declaration(decl: &Decl) -> String {
     out
 }
 
-/// A method's complete signature and body, without source offsets or FileId.
+/// A method's complete signature and body, without source offsets or `FileId`.
 #[must_use]
 pub fn method(method: &InstanceMethod) -> String {
     let mut out = String::new();
+    if method.private {
+        out.push_str("private ");
+    }
     let _ = write!(out, "method:{}(", method.name);
     for param in &method.params {
         param_into(&mut out, param);
@@ -65,6 +94,10 @@ pub fn method(method: &InstanceMethod) -> String {
     out
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeps declaration fingerprint tags in one exhaustive match"
+)]
 fn decl_into(
     out: &mut String,
     decl: &Decl,
@@ -90,7 +123,11 @@ fn decl_into(
             alias,
             names,
             open,
+            export,
         } => {
+            if *export {
+                out.push_str("export ");
+            }
             let _ = write!(
                 out,
                 "{}({} as {} names {:?})",
@@ -149,6 +186,9 @@ fn decl_into(
                 | TypeBody::Variants(variants) => {
                     out.push_str("variants ");
                     for variant in variants {
+                        if variant.private {
+                            out.push_str("private ");
+                        }
                         let _ = write!(out, "{}(", variant.name);
                         for arg in &variant.args {
                             ty_into(out, arg);
@@ -169,9 +209,12 @@ fn decl_into(
             out.push_str(name);
             type_params_into(out, params);
             out.push_str(" where ");
-            for (method, ty) in methods {
-                let _ = write!(out, "{method}: ");
-                ty_into(out, ty);
+            for method in methods {
+                if method.private {
+                    out.push_str("private ");
+                }
+                let _ = write!(out, "{}: ", method.name);
+                ty_into(out, &method.ty);
                 out.push(';');
             }
         },
@@ -180,6 +223,9 @@ fn decl_into(
             ty_into(out, ty);
             out.push_str(" where ");
             for method in methods {
+                if method.private {
+                    out.push_str("private ");
+                }
                 let _ = write!(out, "{}(", method.name);
                 for param in &method.params {
                     param_into(out, param);
@@ -244,6 +290,10 @@ fn decl_into(
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps annotation encoding separate from declaration encoding"
+)]
 fn attribute_into(
     out: &mut String,
     attr: &Attribute,
@@ -296,6 +346,10 @@ pub fn expression(expr: &Expr) -> String {
     out
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeps expression fingerprint tags in one exhaustive match"
+)]
 fn expr_into(
     out: &mut String,
     expr: &Expr,
@@ -381,7 +435,7 @@ fn expr_into(
                         actions.push(Task::Text(format!("{value}").into()));
                     },
                     | NumberLit::Decimal(text) => {
-                        actions.push(Task::Text(text.to_string().into()));
+                        actions.push(Task::Text(text.clone().into()));
                     },
                 }
                 actions.push(Task::Char(' '));
@@ -716,6 +770,10 @@ fn pat_into(
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeps type fingerprint tags in one exhaustive match"
+)]
 fn ty_into(
     out: &mut String,
     ty: &Ty,

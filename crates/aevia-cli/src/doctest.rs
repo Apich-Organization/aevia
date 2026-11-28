@@ -15,11 +15,18 @@
 
 use crate::Options;
 use crate::tooling;
+use aevia_core::driver::CheckCache;
+use aevia_core::driver::Program;
+use aevia_core::manifest::Package;
+use aevia_core::manifest::Roots;
+use aevia_core::source::SourceOverlays;
 use aevia_doc::doctest::Doctest;
 use aevia_doc::doctest::Expected;
 use aevia_doc::doctest::extract;
 use aevia_syntax::Severity;
+use std::cell::RefCell;
 use std::process::ExitCode;
+use std::rc::Rc;
 
 /// The outcome of compiling one doctest.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,6 +38,10 @@ enum Outcome {
 }
 
 /// `aevia test --doc [--filter PAT] [files…]`
+#[allow(
+    clippy::single_call_fn,
+    reason = "the test command routes documentation snippets through a separate runner"
+)]
 pub fn run(
     options: Options,
     files: &[String],
@@ -42,19 +53,19 @@ pub fn run(
     };
     let mut passed = 0usize;
     let mut failed = 0usize;
-    let mut checked = 0usize;
+    // Share one incremental check cache across files so stdlib and package
+    // dependencies are checked once rather than once per file.
+    let shared_cache = Rc::new(RefCell::new(CheckCache::new()));
     for path in &paths {
         let shown = path.display().to_string();
-        if let Some(pattern) = filter
-            && !shown.contains(pattern)
-        {
+        if filter.is_some_and(|pattern| !shown.contains(pattern)) {
             continue;
         }
         let source = match std::fs::read_to_string(path) {
             | Ok(source) => source,
             | Err(error) => {
                 eprintln!("aevia test --doc: cannot read `{shown}`: {error}");
-                failed += 1;
+                failed = failed.saturating_add(1);
                 continue;
             },
         };
@@ -64,14 +75,18 @@ pub fn run(
                 // A file whose documentation cannot be read is a failure, not
                 // an empty success: nothing was checked.
                 eprintln!("aevia test --doc: `{shown}`: {message}");
-                failed += 1;
+                failed = failed.saturating_add(1);
                 continue;
             },
         };
+        if doctests.is_empty() && !options.locked {
+            continue;
+        }
+        let package = Package::owning(path);
         if options.locked {
-            match aevia_core::manifest::Package::owning(path) {
+            match &package {
                 | Ok(Some(package)) => {
-                    if let Err(code) = crate::verify_package_lock(&package) {
+                    if let Err(code) = crate::verify_package_lock(package) {
                         return code;
                     }
                 },
@@ -85,13 +100,24 @@ pub fn run(
                 },
             }
         }
+        if doctests.is_empty() {
+            continue;
+        }
+        let roots = package
+            .and_then(|package| package.map_or_else(|| Ok(Roots::adjacent(path)), |p| p.roots()))
+            .map_err(|error| error.render());
         for doctest in &doctests {
-            checked += 1;
-            let (outcome, compilation) = check(doctest);
+            let (outcome, compilation) = match &roots {
+                | Ok(roots) => {
+                    let (outcome, compilation) = check(doctest, roots.clone(), &shared_cache);
+                    (outcome, Some(compilation))
+                },
+                | Err(message) => (Outcome::Fail(message.clone()), None),
+            };
             match outcome {
                 | Outcome::Pass => {
                     println!("doctest {}:{} ... ok", doctest.file, doctest.line);
-                    passed += 1;
+                    passed = passed.saturating_add(1);
                 },
                 | Outcome::Fail(reason) => {
                     println!(
@@ -101,20 +127,17 @@ pub fn run(
                     if let Some(compilation) = compilation {
                         eprint!("{}", compilation.diagnostics.render(&compilation.sources));
                     }
-                    failed += 1;
+                    failed = failed.saturating_add(1);
                 },
             }
         }
     }
-    if let Some(pattern) = filter
-        && checked == 0
-        && failed == 0
-    {
-        eprintln!("aevia test --doc: the filter `{pattern}` matched no doctest");
-        return ExitCode::from(1);
-    }
-    if checked == 0 {
-        eprintln!("aevia test --doc: no ```aevia code blocks found; nothing was checked");
+    if passed == 0 && failed == 0 {
+        if let Some(pattern) = filter {
+            eprintln!("aevia test --doc: the filter `{pattern}` matched no doctest");
+        } else {
+            eprintln!("aevia test --doc: no fenced `aevia` code blocks found");
+        }
         return ExitCode::from(1);
     }
     println!("\n{passed} passed, {failed} failed");
@@ -133,21 +156,17 @@ pub fn run(
 ///
 /// The compilation is returned alongside the outcome so a caller can print the
 /// compiler's own diagnostics when the snippet did not do what it promised.
-fn check(doctest: &Doctest) -> (Outcome, Option<aevia_core::driver::Program>) {
-    use aevia_core::manifest::Package;
-    use aevia_core::manifest::Roots;
+#[allow(
+    clippy::single_call_fn,
+    reason = "isolates compilation and failure accounting for a single snippet"
+)]
+fn check(
+    doctest: &Doctest,
+    roots: Roots,
+    cache: &Rc<RefCell<CheckCache>>,
+) -> (Outcome, Program) {
     let source = candidate(doctest);
     let declaring = std::path::Path::new(&doctest.file);
-    let roots = match Package::owning(declaring) {
-        | Ok(Some(package)) => {
-            match package.roots() {
-                | Ok(roots) => roots,
-                | Err(error) => return (Outcome::Fail(error.render()), None),
-            }
-        },
-        | Ok(None) => Roots::adjacent(declaring),
-        | Err(error) => return (Outcome::Fail(error.render()), None),
-    };
     let parent = declaring
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
@@ -157,13 +176,16 @@ fn check(doctest: &Doctest) -> (Outcome, Option<aevia_core::driver::Program>) {
         if !entry.exists() && entry != declaring {
             break entry;
         }
-        serial += 1;
+        serial = serial.saturating_add(1);
     };
-    let compilation = aevia_core::driver::load_with_roots_and_source(
+    let mut overlays = SourceOverlays::new();
+    overlays.insert(&entry, &source);
+    let (compilation, _) = aevia_core::driver::load_incremental(
         &entry,
         roots,
-        &source,
+        &overlays,
         &aevia_types::check::CheckOptions::default(),
+        cache,
     );
     let errors: Vec<&aevia_syntax::Diagnostic> = compilation
         .diagnostics
@@ -176,7 +198,9 @@ fn check(doctest: &Doctest) -> (Outcome, Option<aevia_core::driver::Program>) {
         .filter(|diagnostic| !diagnostic.code.is_empty())
         .map(|diagnostic| diagnostic.code.clone())
         .collect();
-    let prefix_len = source.len() - (doctest.snippet.trim_end().len() + 1);
+    let prefix_len = source
+        .len()
+        .saturating_sub(doctest.snippet.trim_end().len().saturating_add(1));
     let entry_file = compilation.entry().map(|entry| entry.file);
     if entry_file.is_none()
         || errors.iter().any(|error| {
@@ -188,7 +212,7 @@ fn check(doctest: &Doctest) -> (Outcome, Option<aevia_core::driver::Program>) {
                 "dependency or inherited import failed ({})",
                 codes_or(&codes)
             )),
-            Some(compilation),
+            compilation,
         );
     }
     let outcome = match &doctest.expected {
@@ -223,10 +247,14 @@ fn check(doctest: &Doctest) -> (Outcome, Option<aevia_core::driver::Program>) {
             }
         },
     };
-    (outcome, Some(compilation))
+    (outcome, compilation)
 }
 
 /// The synthetic module: copied imports, a blank line, then the snippet.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps generated file layout with the corresponding diagnostic remapping"
+)]
 fn candidate(doctest: &Doctest) -> String {
     let mut source = String::new();
     for import in &doctest.imports {
@@ -272,7 +300,10 @@ mod tests {
         snippet: &str,
         expected: Expected,
     ) -> Outcome {
-        check(&doctest(snippet, expected)).0
+        let doctest = doctest(snippet, expected);
+        let roots = Roots::adjacent(std::path::Path::new(&doctest.file));
+        let cache = Rc::new(RefCell::new(CheckCache::new()));
+        check(&doctest, roots, &cache).0
     }
 
     #[test]
@@ -338,9 +369,36 @@ mod tests {
     fn the_copied_imports_reach_the_synthetic_module() {
         let mut with_import = doctest("let d = 2.0 m", Expected::Compiles);
         with_import.imports = vec!["open Units.SI".to_string()];
-        let (outcome, _) = check(&with_import);
+        let roots = Roots::adjacent(std::path::Path::new(&with_import.file));
+        let cache = Rc::new(RefCell::new(CheckCache::new()));
+        let (outcome, _) = check(&with_import, roots, &cache);
         assert_eq!(outcome, Outcome::Pass);
         assert!(candidate(&with_import).starts_with("open Units.SI\n\n"));
+    }
+
+    #[test]
+    fn snippets_reuse_imports_and_keep_separate_declarations() {
+        let mut first = doctest("let first_only = 2.0 m", Expected::Compiles);
+        first.imports = vec!["open Units.SI".to_string()];
+        let mut second = first.clone();
+        second.line += 10;
+        second.snippet = "let value = first_only".to_string();
+        second.expected = Expected::FailsWith("E0301".to_string());
+
+        let roots = Roots::adjacent(std::path::Path::new(&first.file));
+        let cache = Rc::new(RefCell::new(CheckCache::new()));
+        assert_eq!(check(&first, roots.clone(), &cache).0, Outcome::Pass);
+        assert_eq!(cache.borrow().reused, 0);
+        assert_eq!(check(&second, roots, &cache).0, Outcome::Pass);
+        assert!(
+            cache.borrow().reused > 0,
+            "the inherited modules should be reused"
+        );
+        assert_eq!(
+            cache.borrow().checked,
+            1,
+            "only the second snippet needs checking"
+        );
     }
 
     #[test]

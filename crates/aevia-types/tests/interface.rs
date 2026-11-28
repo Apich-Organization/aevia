@@ -12,16 +12,22 @@ use aevia_types::ClassKey;
 use aevia_types::Export;
 use aevia_types::InstanceKey;
 use aevia_types::ModulePath;
+use aevia_types::Scheme;
 use aevia_types::Type;
 use aevia_types::check::CheckOptions;
 use aevia_types::check::CheckedModule;
 use aevia_types::check::DictTarget;
 use aevia_types::check::InstanceExport;
+use aevia_types::check::InterfaceBinding;
 use aevia_types::check::ModuleInterface;
 use aevia_types::check::check_module;
+use aevia_types::check::check_module_with_imports;
 use aevia_types::check::check_module_with_interfaces;
+use aevia_types::check::check_module_with_resolved_imports;
 use aevia_types::head_key;
+use aevia_types::keys::ModuleOrigin;
 use indexmap::IndexMap;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 fn parsed(source: &str) -> CheckedModule {
@@ -94,6 +100,140 @@ fn check_importing(
 }
 
 #[test]
+fn opened_name_conflicts_keep_the_first_type_and_import_order() {
+    let source = "module Caller\n";
+    let tokens = lex(0, source).expect("lexer");
+    let (module, diagnostics) = parse_module(0, source, &tokens);
+    assert!(!diagnostics.has_errors(), "{diagnostics:?}");
+
+    let opened_values = |ty: &Type, names: &[&str]| {
+        let exports = names
+            .iter()
+            .map(|name| {
+                (
+                    (*name).to_string(),
+                    Export::Value {
+                        scheme: Scheme::mono(ty.clone()),
+                        decl: 0,
+                        arity: 0,
+                    },
+                )
+            })
+            .collect();
+        (String::new(), exports)
+    };
+    let first = opened_values(&Type::int(), &["alpha", "beta"]);
+    let second = opened_values(&Type::Bool, &["beta", "alpha"]);
+    let checked = check_module_with_imports(0, &module, &[first.clone(), second, first]);
+    let conflicts: Vec<_> = checked
+        .diagnostics
+        .items
+        .iter()
+        .filter(|error| error.code == "E0603")
+        .map(|error| error.message.as_str())
+        .collect();
+    assert_eq!(
+        conflicts,
+        [
+            "`beta` is opened by two modules",
+            "`alpha` is opened by two modules",
+        ]
+    );
+}
+
+#[test]
+fn a_resolved_reexport_uses_the_direct_nominal_origin() {
+    let mut unrelated =
+        parsed("module Shared\ntype Sample = String\nlet unwanted = true\n").interface();
+    let mut selected =
+        parsed("module Shared\ntype Sample = Int\nfn identity<a>(x: a): a = x\n").interface();
+    for (interface, package) in [(&mut unrelated, "one"), (&mut selected, "two")] {
+        interface.name = ModulePath::new(["Shared"]).with_origin(ModuleOrigin {
+            package: package.to_string(),
+            source: "src/Shared.aev".to_string(),
+        });
+    }
+    let source = "module Caller\nopen Shared\nexport import Shared as Selected\n";
+    let tokens = lex(0, source).expect("lexer");
+    let (module, diagnostics) = parse_module(0, source, &tokens);
+    assert!(!diagnostics.has_errors(), "{diagnostics:?}");
+    let export = module.decls.last().expect("reexport declaration");
+
+    let imports = [
+        (String::new(), unrelated.exports.clone()),
+        ("Selected".to_string(), selected.exports.clone()),
+    ];
+    let bindings = [
+        InterfaceBinding {
+            module: unrelated.name.clone(),
+            prefix: String::new(),
+            names: None,
+        },
+        InterfaceBinding {
+            module: selected.name.clone(),
+            prefix: "Selected".to_string(),
+            names: None,
+        },
+    ];
+    let origins = BTreeMap::from([(export.span, selected.name.clone())]);
+    let result = check_module_with_resolved_imports(
+        0,
+        &module,
+        &imports,
+        &[unrelated, selected],
+        &CheckOptions::default(),
+        None,
+        &bindings,
+        &origins,
+    );
+    assert!(!result.diagnostics.has_errors(), "{:?}", result.diagnostics);
+    assert_eq!(result.module.alias_defs["Sample"].body, Type::int());
+    assert!(result.module.function_headers.contains_key("identity"));
+    assert!(result.module.callable_exports.contains_key("identity"));
+    assert!(!result.module.exports.contains_key("unwanted"));
+}
+
+#[test]
+fn selectively_reexporting_a_type_with_a_same_name_constructor_keeps_its_siblings() {
+    let library =
+        parsed("module Source\ntype Choice = | Choice(Int) | Other\nlet hidden = 42\n").interface();
+    let source = "module Caller\nexport open Source { Choice }\n";
+    let tokens = lex(0, source).expect("lexer");
+    let (module, diagnostics) = parse_module(0, source, &tokens);
+    assert!(!diagnostics.has_errors(), "{diagnostics:?}");
+    let export = module.decls.last().expect("reexport declaration");
+    let origins = BTreeMap::from([(export.span, library.name.clone())]);
+    let binding = InterfaceBinding {
+        module: library.name.clone(),
+        prefix: String::new(),
+        names: Some(vec!["Choice".to_string()]),
+    };
+    let imports = [(
+        String::new(),
+        IndexMap::from([("Choice".to_string(), library.exports["Choice"].clone())]),
+    )];
+    let result = check_module_with_resolved_imports(
+        0,
+        &module,
+        &imports,
+        &[library],
+        &CheckOptions::default(),
+        None,
+        &[binding],
+        &origins,
+    );
+    assert!(!result.diagnostics.has_errors(), "{:?}", result.diagnostics);
+    let Export::TypeCtor { adt, .. } = result.module.exports["Choice"] else {
+        panic!("expected both a type and a constructor");
+    };
+    assert!(matches!(
+        result.module.exports.get("Other"),
+        Some(Export::Ctor { adt: sibling, .. }) if *sibling == adt
+    ));
+    assert!(!result.module.exports.contains_key("hidden"));
+}
+
+#[test]
 fn the_interface_round_trips_classes_instances_and_alias_definitions() {
     let library = parsed(
         r#"module A
@@ -128,6 +268,39 @@ let rendered = pretty({ x = 1.0, y = 2.0 })
         library.exports.get("Vec2"),
         Some(Export::Alias { .. })
     ));
+}
+
+#[test]
+fn imported_row_exclusions_survive_the_native_interface_codec() {
+    let library =
+        parsed("module Library\nfn add(p: { x: Int, ...r }): Bool = ({ p with z = true }).z\n");
+    let bytes = aevia_types::persist::encode(&library.interface()).expect("encode interface");
+    let decoded: ModuleInterface = aevia_types::persist::decode(&bytes).expect("decode interface");
+    let Some(Export::Value { scheme, .. }) = decoded.exports.get("add") else {
+        panic!("expected an exported function");
+    };
+    assert!(
+        scheme
+            .row_lacks
+            .iter()
+            .any(|(_, labels)| labels.iter().any(|label| label == "z"))
+    );
+
+    let source = "module Caller\nlet allowed = Library.add({ x = 1, y = \"other\" })\nlet refused = Library.add({ x = 1, z = \"existing\" })\n";
+    let tokens = lex(0, source).expect("lex importer");
+    let (module, diagnostics) = parse_module(0, source, &tokens);
+    assert!(!diagnostics.has_errors(), "{diagnostics:?}");
+    let imports = [("Library".to_string(), decoded.exports.clone())];
+    let result =
+        check_module_with_interfaces(0, &module, &imports, &[decoded], &CheckOptions::default());
+    let errors: Vec<_> = result
+        .diagnostics
+        .items
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == aevia_syntax::Severity::Error)
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect();
+    assert_eq!(errors, ["E0208"], "{:?}", result.diagnostics.items);
 }
 
 #[test]
@@ -706,4 +879,40 @@ instance Describe for Option<String> where
     );
     assert_eq!(module.instances.len(), 2);
     assert_ne!(module.instances[0].key, module.instances[1].key);
+}
+
+#[test]
+fn sde_paths_retain_the_method_type_of_an_imported_policy() {
+    // The boundary must use the argument's declaration witness, even when a
+    // wrapper chooses different module and type names for its option schema.
+    let library = parsed(
+        r#"module Stochastic
+type ChosenMethod = | EulerMaruyama | DriftImplicitEuler
+type NoiseShape = | Diagonal
+type Policy<T> = | Fixed({ structure: NoiseShape, method: ChosenMethod, seed: Int, t0: Float[T], dt: Float[T], steps: Int, terms: Int })
+let sdeint_diag = sdeint_diag
+"#,
+    );
+    let checked = check_importing(
+        r#"module UsePolicy
+import Stochastic { Fixed, Diagonal, DriftImplicitEuler, sdeint_diag }
+fn drift(t: Float[T], x: Float[1]): Float[1/T] = -x / (1.0 s)
+fn noise(t: Float[T], x: Float[1]): Float[1/T^(1/2)] = 0.0 / sqrt(1.0 s)
+let policy = Fixed({ structure = Diagonal, method = DriftImplicitEuler, seed = 7, t0 = 0.0 s, dt = 0.01 s, steps = 3, terms = 0 })
+let path = sdeint_diag(drift, noise, 1.0, policy)
+fn selected(): Int = match path with
+    | Ok(p) ->
+        match p.method with
+        | DriftImplicitEuler -> 1
+        | _ -> 0
+    | Err(_) -> 0
+"#,
+        vec![("", library.clone())],
+        vec![library],
+    );
+    assert!(
+        !checked.diagnostics.has_errors(),
+        "{:?}",
+        checked.diagnostics.items
+    );
 }

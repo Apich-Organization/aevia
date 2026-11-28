@@ -71,8 +71,11 @@ pub async fn challenge(
         .name
         .parse::<PackageId>()
         .map_err(ApiError::from_core)?;
+    super::publish::check_version(&request.version)?;
     let nonce = http::random_hex(16);
-    let expires = Utc::now().timestamp() + STATEMENT_LIFETIME_SECONDS;
+    let expires = Utc::now()
+        .timestamp()
+        .saturating_add(STATEMENT_LIFETIME_SECONDS);
     let statement =
         YankStatement::new(id, request.version, request.yanked, nonce.clone(), expires).render();
     let expires_at = chrono::DateTime::from_timestamp(expires, 0).unwrap_or_else(Utc::now);
@@ -140,6 +143,34 @@ pub async fn yank(
             "the package belongs to a different publisher",
         ));
     }
+    transition(
+        &state,
+        YankChange {
+            package_id: package.id,
+            name: &statement.name,
+            version: &statement.version,
+            yanked: statement.yanked,
+            publisher: &authorised.publisher.handle,
+            fingerprint: Some(&authorised.fingerprint),
+        },
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(crate) struct YankChange<'a> {
+    pub package_id: i64,
+    pub name: &'a PackageId,
+    pub version: &'a str,
+    pub yanked: bool,
+    pub publisher: &'a str,
+    pub fingerprint: Option<&'a str>,
+}
+
+pub(crate) async fn transition(
+    state: &AppState,
+    change: YankChange<'_>,
+) -> ApiResult<()> {
     // The flag, the package's `updated_at` and the log link change together:
     // the sparse index is derived from the row, and a yank the log does not
     // mention (or a log entry for a yank that did not happen) would make the
@@ -150,46 +181,54 @@ pub async fn yank(
             error,
         ))
     })?;
-    let Some(row) = repo::set_yanked(
+    repo::lock_package(&mut transaction, change.package_id).await?;
+    let Some((row, changed)) = repo::set_yanked_with_changed(
         &mut *transaction,
-        package.id,
-        &statement.version,
-        statement.yanked,
+        change.package_id,
+        change.version,
+        change.yanked,
     )
     .await?
     else {
         return Err(ApiError::not_found(format!(
             "{} has no version {}.",
-            statement.name, statement.version
+            change.name, change.version
         )));
     };
-    repo::touch_package(&mut *transaction, package.id).await?;
-    let verb = if statement.yanked {
-        "yanked"
-    } else {
-        "restored"
-    };
-    repo::append_log_in(
-        &mut transaction,
-        "yank",
-        &format!(
-            "{} {verb} {} {}",
-            authorised.publisher.handle, statement.name, row.version
-        ),
-        serde_json::json!({
-            "name": statement.name.to_string(),
-            "version": row.version,
-            "yanked": statement.yanked,
-            "fingerprint": authorised.fingerprint,
-            "publisher": authorised.publisher.handle,
-        }),
-    )
-    .await?;
+    if changed {
+        repo::touch_package(&mut *transaction, change.package_id).await?;
+        let verb = if change.yanked {
+            "yanked"
+        } else {
+            "restored"
+        };
+        let mut payload = serde_json::Map::from_iter([
+            ("name".into(), serde_json::json!(change.name.to_string())),
+            ("version".into(), serde_json::json!(row.version)),
+            ("yanked".into(), serde_json::json!(change.yanked)),
+            ("publisher".into(), serde_json::json!(change.publisher)),
+        ]);
+        if let Some(fingerprint) = change.fingerprint {
+            payload.insert("fingerprint".into(), serde_json::json!(fingerprint));
+        } else {
+            payload.insert("via".into(), serde_json::json!("browser"));
+        }
+        repo::append_log_in(
+            &mut transaction,
+            "yank",
+            &format!(
+                "{} {verb} {} {}",
+                change.publisher, change.name, row.version
+            ),
+            serde_json::Value::Object(payload),
+        )
+        .await?;
+    }
     transaction.commit().await.map_err(|error| {
         ApiError::from_core(aevia_registry_db::sql_error(
             "cannot commit the yank",
             error,
         ))
     })?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(())
 }

@@ -1,13 +1,11 @@
 //! Offline interpreter benchmarks (round-2 performance work).
 //!
-//! Run with `cargo bench -p aevia-core --bench interp` (or
-//! `cargo bench -p aevia-core --bench interp -- --quick` for one round).
+//! Run with `bazel run //:benchmark -- interp`.
 //!
 //! Protocol: **release-ish** build (`cargo bench` uses the `bench` profile, which
 //! inherits `release`), one process, warm up once per workload, then report the
-//! median of `ROUNDS` runs with min/max. The measured path is the Core IR
-//! interpreter (`Mode::Ir`) — the production path; the AST evaluator is the
-//! semantic reference and is intentionally slower. Numbers are comparable
+//! median of `ROUNDS` runs with min/max. The benchmark uses the Core IR
+//! interpreter (`Mode::Ir`). Compare timings
 //! between commits on the same machine only; the allocation counts printed by
 //! `crates/aevia-core/tests/allocations.rs` are the portable gate.
 //!
@@ -66,9 +64,9 @@ fn report(
     units: f64,
 ) {
     let (median, min, max) = median(samples);
-    let unit = median.as_secs_f64() / units;
+    let micros_per_unit = median.as_secs_f64() * 1e6 / units;
     println!(
-        "{label:<34} median {:>10.3} ms  (min {:>8.3}, max {:>8.3})  {unit:>10.3} µs/unit",
+        "{label:<34} median {:>10.3} ms  (min {:>8.3}, max {:>8.3})  {micros_per_unit:>10.3} µs/unit",
         median.as_secs_f64() * 1e3,
         min.as_secs_f64() * 1e3,
         max.as_secs_f64() * 1e3,

@@ -1,0 +1,40 @@
+## Normalized sparse SQP with checked objective, gradient and Hessian callbacks.
+import Rssn_Optimizer as Opt
+
+let zero_index: Tensor<1, Int> = []
+
+let zero_float: Tensor<1, Float> = []
+
+let unconstrained: Opt.SqpShape = { equalities = 0, inequalities = 0 }
+
+fn evaluation(x: Tensor<1, Float>): Opt.SqpEvaluation =
+    let d = x[0] - 3.0
+    { objective = 1000000000.0 + d*d, gradient = [2.0*d], constraints = zero_float, jacobian = { rows = zero_index, columns = zero_index, values = zero_float } }
+
+fn hessian(_x: Tensor<1, Float>, _eq: Tensor<1, Float>, _ineq: Tensor<1, Float>): Opt.SqpSparseEntries =
+    { rows = [0], columns = [0], values = [2.0] }
+
+test "SQP safely solves a shifted quadratic" =
+    match Opt.sqp_solve([0.0], unconstrained, 1e-9, 10.0, 20, 100, evaluation, hessian) with
+    | Err(_) -> false
+    | Ok(result) -> result.converged && abs(result.x[0] - 3.0) < 1e-8 && result.evaluations <= 3
+
+fn constrained_evaluation(x: Tensor<1, Float>): Opt.SqpEvaluation =
+    let sample = evaluation(x)
+    { objective = sample.objective, gradient = sample.gradient, constraints = [x[0] - 1.0], jacobian = { rows = [0], columns = [0], values = [1.0] } }
+
+test "initially stationary active constraints recover their multipliers" =
+    match Opt.sqp_solve([1.0], { equalities = 0, inequalities = 1 }, 1e-10, 10.0, 20, 100, constrained_evaluation, hessian) with
+    | Err(_) -> false
+    | Ok(result) -> result.converged && result.iterations == 0 && abs(result.inequality_multipliers[0] - 4.0) < 1e-12
+
+test "budget exhaustion propagates as an operator error" =
+    match Opt.sqp_solve([0.0], unconstrained, 1e-9, 10.0, 20, 1, evaluation, hessian) with
+    | Err(_) -> true
+    | Ok(_) -> false
+
+test "the declared callback components remain separately usable" =
+    Opt.sqp_oracle_gradient([0.0], unconstrained, evaluation) == Ok([-6.0]) && Opt.sqp_oracle_objective([3.0], unconstrained, evaluation) == Ok(1000000000.0)
+
+test "sparse triplets and constraint counts have explicit types" =
+    Opt.sqp_oracle_hessian([3.0], zero_float, zero_float, hessian) == Ok({ rows = [0], columns = [0], values = [2.0] }) && Opt.sqp_oracle_inequality_count(unconstrained) == Ok(0)

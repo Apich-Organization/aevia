@@ -22,6 +22,23 @@
 //! ```
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+// Preserve written evaluation order across FMA and non-FMA targets. Numeric
+// kernels deliberately convert host counts and indices to their scalar type.
+#![allow(clippy::suboptimal_flops, clippy::cast_precision_loss)]
 #![allow(
     clippy::needless_range_loop,
     clippy::should_implement_trait,
@@ -32,9 +49,13 @@
     clippy::too_many_arguments
 )]
 
+mod builtin_ids;
 pub mod builtins;
 mod callback;
+pub mod cancellation;
+pub mod debugger;
 pub mod disk_cache;
+pub mod display;
 pub mod driver;
 pub mod eval;
 pub mod eval_ir;
@@ -42,6 +63,7 @@ mod evidence;
 pub mod fxhash;
 mod generics;
 mod host_witness;
+pub mod int;
 pub mod io_do;
 #[cfg(feature = "jit")]
 mod jit;
@@ -50,6 +72,8 @@ pub mod manifest;
 pub mod parallel;
 mod pattern;
 mod plugin_source;
+#[cfg(test)]
+mod release_tests;
 pub mod rssn_module;
 pub mod source;
 pub mod sparse;
@@ -70,8 +94,10 @@ use std::rc::Rc;
 use value::Scope;
 use value::Value;
 
+pub use cancellation::CancellationToken;
 pub use eval::EvalError;
 pub use eval::Interp;
+pub use eval::JitPolicy;
 pub use eval::Mode;
 pub use eval::Output;
 pub use eval::install_stack_budget;
@@ -176,6 +202,7 @@ impl Interp {
         // `eval_toplevel` and the REPL expect.
         for name in top_level_names(module) {
             if let Some(value) = root.lookup(&name) {
+                crate::value::bump_environment();
                 self.globals.insert(name, value);
             }
         }
@@ -201,6 +228,7 @@ impl Interp {
         if path.is_empty() {
             for name in names {
                 if let Some(value) = scope.lookup(&name) {
+                    crate::value::bump_environment();
                     self.globals.insert(name, value);
                 }
             }
@@ -209,6 +237,7 @@ impl Interp {
         let prefix = path.join(".");
         for name in names {
             if let Some(value) = scope.lookup(&name) {
+                crate::value::bump_environment();
                 self.globals.insert(format!("{prefix}.{name}"), value);
             }
         }
@@ -221,6 +250,7 @@ impl Interp {
         module: &Module,
         root: &Rc<Scope>,
     ) -> Diagnostics {
+        reserve_source_declarations(root, &module.decls);
         match self.mode {
             | Mode::Ast => self.load_into_ast(module, root),
             | Mode::Ir => self.load_into_ir(module, root),
@@ -246,7 +276,7 @@ impl Interp {
                     Some(name.clone()),
                     decl.span,
                 );
-                root.vars.borrow_mut().insert(name.clone(), closure);
+                root.bind_source(name, closure, source_visibility(decl));
             }
         }
         // `instance` methods are values too, and a call site may reach them
@@ -270,33 +300,33 @@ impl Interp {
         // Then the bindings, in passes: `let a = b + 1` before `let b = 41` is
         // legal (§7.1.2), so a pass that hits an unbound name retries once the
         // names after it are bound.
-        let mut pending: Vec<usize> = module
+        let mut pending: Vec<_> = module
             .decls
             .iter()
-            .enumerate()
-            .filter(|(_, decl)| matches!(decl.kind, aevia_syntax::DeclKind::Let { .. }))
-            .map(|(index, _)| index)
+            .filter(|decl| matches!(decl.kind, aevia_syntax::DeclKind::Let { .. }))
             .collect();
         while !pending.is_empty() {
             let mut deferred = Vec::new();
             let mut progress = false;
-            for index in pending {
-                let decl = &module.decls[index];
+            for decl in pending {
                 let aevia_syntax::DeclKind::Let { pattern, value, .. } = &decl.kind else {
                     continue;
                 };
                 match self.eval(value, &root) {
                     | Ok(bound) => {
                         progress = true;
-                        if let aevia_syntax::PatKind::Var(name) = &pattern.kind {
-                            root.vars.borrow_mut().insert(name.clone(), bound);
-                        } else if let Err(error) = self.bind_public(pattern, &bound, &root) {
+                        if let Err(error) = self.bind_source_pattern(
+                            pattern,
+                            &bound,
+                            &root,
+                            source_visibility(decl),
+                        ) {
                             diagnostics.push(error.diagnostic());
                         }
                     },
                     // A name that is not bound yet may be bound by a later
                     // declaration; anything else is a real failure.
-                    | Err(error) if error.code == "E0301" => deferred.push((index, error)),
+                    | Err(error) if error.code == "E0301" => deferred.push((decl, error)),
                     | Err(error) => {
                         progress = true;
                         diagnostics.push(error.diagnostic());
@@ -312,7 +342,7 @@ impl Interp {
                 }
                 break;
             }
-            pending = deferred.into_iter().map(|(index, _)| index).collect();
+            pending = deferred.into_iter().map(|(decl, _)| decl).collect();
         }
         diagnostics
     }
@@ -329,7 +359,7 @@ impl Interp {
         root: &Rc<Scope>,
     ) -> Diagnostics {
         let mut diagnostics = Diagnostics::new();
-        let lowered = aevia_ir::lower::lower_module_with_runtime_evidence(
+        let mut lowered = aevia_ir::lower::lower_module_with_runtime_evidence(
             module,
             &self.rssn_call_sites,
             &self.dictionary_sites,
@@ -339,10 +369,22 @@ impl Interp {
             &self.context.evidence.expr_types,
             &self.constant_regions,
         );
+        if self.optimize_ir {
+            aevia_ir::optimize::module(&mut lowered);
+        }
+        let sites: std::collections::HashMap<_, _> = module
+            .decls
+            .iter()
+            .map(|decl| (decl.span, source_visibility(decl)))
+            .collect();
         let root = root.clone();
         for decl in &lowered.fns {
             let closure = crate::eval_ir::module_closure(&decl.function, &root);
-            root.vars.borrow_mut().insert(decl.name.clone(), closure);
+            root.bind_source(
+                &decl.name,
+                closure,
+                sites.get(&decl.span).copied().unwrap_or(decl.span),
+            );
         }
         for instance in &lowered.instances {
             let export = self.instance_export_at(instance.span);
@@ -359,24 +401,24 @@ impl Interp {
         }
         bind_module_constructors(self, module, &root);
         diagnostics.extend(self.publish_module_registrations(module, &root));
-        let mut pending: Vec<usize> = (0..lowered.lets.len()).collect();
+        let mut pending: Vec<_> = lowered.lets.iter().collect();
         while !pending.is_empty() {
             let mut deferred = Vec::new();
             let mut progress = false;
-            for index in pending {
-                let decl = &lowered.lets[index];
+            for decl in pending {
                 match crate::eval_ir::eval_top(self, &decl.block, decl.nslots, &root) {
                     | Ok(bound) => {
                         progress = true;
-                        if let aevia_syntax::PatKind::Var(name) = &decl.pattern.kind {
-                            root.vars.borrow_mut().insert(name.clone(), bound);
-                        } else if let Err(error) =
-                            self.bind_pattern_entry(&decl.pattern, &bound, &root)
-                        {
+                        if let Err(error) = self.bind_source_pattern(
+                            &decl.pattern,
+                            &bound,
+                            &root,
+                            sites.get(&decl.span).copied().unwrap_or(decl.span),
+                        ) {
                             diagnostics.push(error.diagnostic());
                         }
                     },
-                    | Err(error) if error.code == "E0301" => deferred.push((index, error)),
+                    | Err(error) if error.code == "E0301" => deferred.push((decl, error)),
                     | Err(error) => {
                         progress = true;
                         diagnostics.push(error.diagnostic());
@@ -392,7 +434,7 @@ impl Interp {
                 }
                 break;
             }
-            pending = deferred.into_iter().map(|(index, _)| index).collect();
+            pending = deferred.into_iter().map(|(decl, _)| decl).collect();
         }
         diagnostics
     }
@@ -414,7 +456,7 @@ impl Interp {
         let spelled = crate::eval::instance_head_name(head);
         let key = export.map(|export| export.key.clone());
         let name = match &key {
-            | Some(key) => Interp::instance_global(key, method),
+            | Some(key) => Self::instance_global(key, method),
             | None => format!("{class}@{}::{method}", spelled.as_deref().unwrap_or("?")),
         };
         let closure = crate::eval_ir::module_closure(function, env);
@@ -436,7 +478,9 @@ impl Interp {
                 })),
                 scope: Rc::downgrade(env),
             });
+        crate::value::bump_environment();
         self.globals.insert(name.clone(), closure);
+        crate::value::bump_environment();
         self.method_classes
             .insert(method.to_string(), class.to_string());
         self.instance_methods
@@ -484,6 +528,130 @@ impl Interp {
         self.dims = checked.dims.clone();
     }
 
+    /// Installs a checked incremental batch in one lexical scope.
+    ///
+    /// Checked evidence is installed after taking a rollback snapshot. Functions,
+    /// constructors and instance methods are bound before initializers, so a pasted module
+    /// can use forward function references and mutual recursion. Each batch
+    /// captures a fresh scope: later submissions cannot rewrite bindings seen
+    /// by closures from earlier submissions.
+    ///
+    /// # Errors
+    ///
+    /// Returns the number of declarations reached before the first runtime
+    /// error and that error. Failure is atomic: no new batch bindings remain,
+    /// and symbol counters, random state and instance registrations are restored.
+    /// Later initializers are not executed. The caller must also reinstall the
+    /// previous checked revision with [`Self::prepare_incremental_module`].
+    pub fn load_incremental_declarations(
+        &mut self,
+        checked: &CheckedModule,
+        loaded: &[aevia_syntax::Decl],
+        declarations: &[aevia_syntax::Decl],
+    ) -> Result<(), (usize, EvalError)> {
+        // Each batch creates its own scope, so these snapshots only clone
+        // binding tables: no scope captured by an earlier closure is mutated.
+        let globals = self.globals.clone();
+        let symbol_counts = self.symbol_counts.clone();
+        let seed = self.seed;
+        let constants_seeded = self.constants_seeded;
+        let instance_methods = self.instance_methods.clone();
+        let method_classes = self.method_classes.clone();
+        let class_keys = self.class_keys.clone();
+        let aliases = self.aliases.clone();
+        let adts = self.adts.clone();
+        let module_scopes = self.module_scopes.clone();
+        let next_instance_export = self.next_instance_export;
+        let context = self.context.clone();
+        let instances = context.instances.borrow().clone();
+        let active_scope = self.active_scope.clone();
+        let bindings = self.bindings.clone();
+        self.prepare_incremental_module(checked, loaded);
+        let result = self.load_incremental_declarations_in(declarations);
+        if result.is_err() {
+            crate::value::bump_environment();
+            self.globals = globals;
+            self.symbol_counts = symbol_counts;
+            self.seed = seed;
+            self.constants_seeded = constants_seeded;
+            self.instance_methods = instance_methods;
+            crate::value::bump_environment();
+            self.method_classes = method_classes;
+            self.class_keys = class_keys;
+            self.aliases = aliases;
+            self.adts = adts;
+            self.module_scopes = module_scopes;
+            self.next_instance_export = next_instance_export;
+            *context.instances.borrow_mut() = instances;
+            self.context = context;
+            self.active_scope = active_scope;
+            self.bindings = bindings;
+        }
+        result
+    }
+
+    fn load_incremental_declarations_in(
+        &mut self,
+        declarations: &[aevia_syntax::Decl],
+    ) -> Result<(), (usize, EvalError)> {
+        let root = self.root();
+        self.remember_scope(&root);
+        reserve_source_declarations(&root, declarations);
+        let prebound = |decl: &aevia_syntax::Decl| {
+            matches!(
+                decl.kind,
+                aevia_syntax::DeclKind::Fn { .. }
+                    | aevia_syntax::DeclKind::Type { .. }
+                    | aevia_syntax::DeclKind::Instance { .. }
+            )
+        };
+        for declaration in declarations.iter().filter(|decl| prebound(decl)) {
+            self.load_decl_in(declaration, &root)
+                .map_err(|error| (0, error))?;
+        }
+        // Instance registration also publishes mangled implementation
+        // globals. Preserve these in this batch's lexical snapshot.
+        crate::value::bump_environment();
+        root.vars.borrow_mut().extend(self.globals.clone());
+        let mut pending: Vec<_> = declarations
+            .iter()
+            .enumerate()
+            .filter(|(_, declaration)| !prebound(declaration))
+            .collect();
+        while !pending.is_empty() {
+            let mut deferred = Vec::new();
+            let mut progress = false;
+            for (index, declaration) in pending {
+                // A deferred initializer must not consume random/symbol state
+                // twice when its forward dependency becomes available.
+                let symbol_counts = self.symbol_counts.clone();
+                let seed = self.seed;
+                let constants_seeded = self.constants_seeded;
+                let globals = self.globals.clone();
+                match self.load_decl_in(declaration, &root) {
+                    | Ok(()) => progress = true,
+                    | Err(error) if error.code == "E0301" => {
+                        self.symbol_counts = symbol_counts;
+                        self.seed = seed;
+                        self.constants_seeded = constants_seeded;
+                        crate::value::bump_environment();
+                        self.globals = globals;
+                        deferred.push(((index, declaration), error));
+                    },
+                    | Err(error) => return Err((index, error)),
+                }
+            }
+            if !progress {
+                if let Some(((index, _), error)) = deferred.into_iter().next() {
+                    return Err((index, error));
+                }
+                break;
+            }
+            pending = deferred.into_iter().map(|(decl, _)| decl).collect();
+        }
+        Ok(())
+    }
+
     /// Adds one top-level declaration to a running session (§9.8).
     ///
     /// The REPL appends declarations instead of re-evaluating the session: a
@@ -498,8 +666,18 @@ impl Interp {
         &mut self,
         decl: &aevia_syntax::Decl,
     ) -> Result<(), EvalError> {
+        let root = self.root();
+        self.remember_scope(&root);
+        self.load_decl_in(decl, &root)
+    }
+
+    fn load_decl_in(
+        &mut self,
+        decl: &aevia_syntax::Decl,
+        root: &Rc<Scope>,
+    ) -> Result<(), EvalError> {
         use aevia_syntax::DeclKind;
-        use aevia_syntax::PatKind;
+        reserve_source_declarations(root, std::slice::from_ref(decl));
         if let DeclKind::Type {
             body: aevia_syntax::ast::TypeBody::Variants(ctors),
             ..
@@ -509,13 +687,17 @@ impl Interp {
                 if let Some(&(adt, index)) = self.current_constructors.get(&ctor.name)
                     && let Some(value) = crate::eval::source_ctor_value_at(adt, index)
                 {
+                    crate::value::bump_environment();
+                    root.vars
+                        .borrow_mut()
+                        .insert(ctor.name.clone(), value.clone());
                     self.globals.insert(ctor.name.clone(), value);
                 }
             }
             return Ok(());
         }
         if self.mode == Mode::Ir
-            && let Some(lowered) = aevia_ir::lower::lower_decl_with_runtime_evidence(
+            && let Some(mut lowered) = aevia_ir::lower::lower_decl_with_runtime_evidence(
                 decl,
                 &self.rssn_call_sites,
                 &self.dictionary_sites,
@@ -526,10 +708,11 @@ impl Interp {
                 &self.constant_regions,
             )
         {
-            return self.load_lowered(lowered);
+            if self.optimize_ir {
+                aevia_ir::optimize::declaration(&mut lowered);
+            }
+            return self.load_lowered_in(lowered, root, source_visibility(decl));
         }
-        let root = self.root();
-        self.remember_scope(&root);
         match &decl.kind {
             | DeclKind::Fn { name, args, body, .. } => {
                 let closure = self.checked_ast_closure(
@@ -539,26 +722,23 @@ impl Interp {
                     Some(name.clone()),
                     decl.span,
                 );
-                root.vars.borrow_mut().insert(name.clone(), closure.clone());
-                self.globals.insert(name.clone(), closure);
+                root.bind_source(name, closure, source_visibility(decl));
+                if let Some(latest) = root.lookup(name) {
+                    crate::value::bump_environment();
+                    self.globals.insert(name.clone(), latest);
+                }
                 Ok(())
             },
             | DeclKind::Let { pattern, value, .. } => {
-                let bound = self.eval(value, &root)?;
-                if let PatKind::Var(name) = &pattern.kind {
-                    self.globals.insert(name.clone(), bound);
-                    return Ok(());
-                }
-                self.bind_pattern_entry(pattern, &bound, &root)?;
-                for (name, value) in root.vars.borrow().iter() {
-                    self.globals.insert(name.clone(), value.clone());
-                }
+                let bound = self.eval(value, root)?;
+                self.bind_source_pattern(pattern, &bound, root, source_visibility(decl))?;
+                self.export_source_pattern(pattern, root);
                 Ok(())
             },
             | DeclKind::Instance { class, ty, methods } => {
                 let export = self.instance_export_at(decl.span);
                 for method in methods {
-                    self.register_instance(class, ty, export.as_ref(), method, &root);
+                    self.register_instance(class, ty, export.as_ref(), method, root);
                 }
                 Ok(())
             },
@@ -567,32 +747,26 @@ impl Interp {
     }
 
     /// Adds one declaration that was lowered to the Core IR (§9.8).
-    fn load_lowered(
+    fn load_lowered_in(
         &mut self,
         decl: aevia_ir::lower::LoweredDecl,
+        root: &Rc<Scope>,
+        visible: aevia_syntax::Span,
     ) -> Result<(), EvalError> {
-        use aevia_syntax::PatKind;
-        let root = self.root();
-        self.remember_scope(&root);
         match decl {
             | aevia_ir::lower::LoweredDecl::Fn(decl) => {
-                let closure = crate::eval_ir::module_closure(&decl.function, &root);
-                root.vars
-                    .borrow_mut()
-                    .insert(decl.name.clone(), closure.clone());
-                self.globals.insert(decl.name, closure);
+                let closure = crate::eval_ir::module_closure(&decl.function, root);
+                root.bind_source(&decl.name, closure, visible);
+                if let Some(latest) = root.lookup(&decl.name) {
+                    crate::value::bump_environment();
+                    self.globals.insert(decl.name, latest);
+                }
                 Ok(())
             },
             | aevia_ir::lower::LoweredDecl::Let(decl) => {
-                let bound = crate::eval_ir::eval_top(self, &decl.block, decl.nslots, &root)?;
-                if let PatKind::Var(name) = &decl.pattern.kind {
-                    self.globals.insert(name.clone(), bound);
-                    return Ok(());
-                }
-                self.bind_pattern_entry(&decl.pattern, &bound, &root)?;
-                for (name, value) in root.vars.borrow().iter() {
-                    self.globals.insert(name.clone(), value.clone());
-                }
+                let bound = crate::eval_ir::eval_top(self, &decl.block, decl.nslots, root)?;
+                self.bind_source_pattern(&decl.pattern, &bound, root, visible)?;
+                self.export_source_pattern(&decl.pattern, root);
                 Ok(())
             },
             | aevia_ir::lower::LoweredDecl::Instance(instance) => {
@@ -604,7 +778,7 @@ impl Interp {
                         export.as_ref(),
                         &method.name,
                         &method.function,
-                        &root,
+                        root,
                     );
                 }
                 Ok(())
@@ -630,6 +804,9 @@ impl Interp {
                     aevia_syntax::Span::default(),
                 )?
             },
+            | Value::Closure(_) => {
+                return Err(EvalError::new("E0315", "`main` must take zero arguments"));
+            },
             | other => other,
         };
         match value {
@@ -649,13 +826,111 @@ impl Interp {
         }
     }
 
-    fn bind_public(
+    fn bind_source_pattern(
         &mut self,
         pattern: &aevia_syntax::Pat,
         value: &Value,
         scope: &Rc<Scope>,
+        visible: aevia_syntax::Span,
     ) -> Result<(), EvalError> {
-        self.bind_pattern_entry(pattern, value, scope)
+        if let aevia_syntax::PatKind::Var(name) = &pattern.kind {
+            scope.bind_source(name, value.clone(), visible);
+            return Ok(());
+        }
+        // Match in a temporary lexical scope: failed destructuring must not
+        // partially overwrite the module, and old revisions remain available.
+        let bindings = Scope::child(scope);
+        self.bind_pattern_entry(pattern, value, &bindings)?;
+        for (name, value) in bindings.vars.borrow().iter() {
+            scope.bind_source(name, value.clone(), visible);
+        }
+        Ok(())
+    }
+
+    fn export_source_pattern(
+        &mut self,
+        pattern: &aevia_syntax::Pat,
+        scope: &Rc<Scope>,
+    ) {
+        for name in source_pattern_names(pattern) {
+            if let Some(value) = scope.lookup(&name) {
+                crate::value::bump_environment();
+                self.globals.insert(name, value);
+            }
+        }
+    }
+}
+
+/// Functions and recursive bindings see themselves; ordinary initializers
+/// see the preceding declaration with that name.
+const fn source_visibility(declaration: &aevia_syntax::Decl) -> aevia_syntax::Span {
+    let mut site = declaration.span;
+    if matches!(
+        declaration.kind,
+        aevia_syntax::DeclKind::Fn { .. } | aevia_syntax::DeclKind::Let { rec: true, .. }
+    ) {
+        site.end = site.start;
+    } else {
+        site.start = site.end;
+    }
+    site
+}
+
+fn source_pattern_names(pattern: &aevia_syntax::Pat) -> Vec<String> {
+    use aevia_syntax::PatKind;
+    let mut names = Vec::new();
+    match &pattern.kind {
+        | PatKind::Var(name) => names.push(name.clone()),
+        | PatKind::Ctor { args, .. } | PatKind::Tuple(args) => {
+            for pattern in args {
+                names.extend(source_pattern_names(pattern));
+            }
+        },
+        | PatKind::Record(fields) => {
+            for (name, pattern) in fields {
+                if let Some(pattern) = pattern {
+                    names.extend(source_pattern_names(pattern));
+                } else {
+                    names.push(name.clone());
+                }
+            }
+        },
+        | PatKind::Tensor { items, rest } => {
+            for pattern in items {
+                names.extend(source_pattern_names(pattern));
+            }
+            names.extend(rest.iter().cloned());
+        },
+        | PatKind::As { pattern, name } => {
+            names.extend(source_pattern_names(pattern));
+            names.push(name.clone());
+        },
+        | PatKind::Annot { pattern, .. } => names.extend(source_pattern_names(pattern)),
+        | _ => {},
+    }
+    names
+}
+
+fn reserve_source_declarations(
+    scope: &Rc<Scope>,
+    declarations: &[aevia_syntax::Decl],
+) {
+    for declaration in declarations {
+        let names = match &declaration.kind {
+            | aevia_syntax::DeclKind::Fn { name, .. } => vec![name.clone()],
+            | aevia_syntax::DeclKind::Let { pattern, .. } => source_pattern_names(pattern),
+            | _ => continue,
+        };
+        let visible = source_visibility(declaration);
+        for name in names {
+            scope.reserve_source(&name, visible);
+            if matches!(
+                declaration.kind,
+                aevia_syntax::DeclKind::Let { rec: false, .. }
+            ) {
+                scope.reserve_initializer(&name, declaration.span);
+            }
+        }
     }
 }
 
@@ -682,6 +957,7 @@ fn bind_module_constructors(
             if let Some(&(adt, index)) = interp.current_constructors.get(&ctor.name)
                 && let Some(value) = crate::eval::source_ctor_value_at(adt, index)
             {
+                crate::value::bump_environment();
                 root.vars.borrow_mut().insert(ctor.name.clone(), value);
             }
         }
@@ -696,9 +972,7 @@ pub fn top_level_names(module: &Module) -> Vec<String> {
         match &decl.kind {
             | aevia_syntax::DeclKind::Fn { name, .. } => names.push(name.clone()),
             | aevia_syntax::DeclKind::Let { pattern, .. } => {
-                if let aevia_syntax::PatKind::Var(name) = &pattern.kind {
-                    names.push(name.clone());
-                }
+                names.extend(source_pattern_names(pattern));
             },
             | _ => {},
         }
@@ -710,39 +984,49 @@ pub fn top_level_names(module: &Module) -> Vec<String> {
 ///
 /// # Errors
 ///
-/// Returns the first diagnostic when the program does not compile, or the
+/// Returns the first error diagnostic when the program does not compile, or the
 /// runtime error when `main` fails.
 pub fn run(
     source: &str,
     name: &str,
 ) -> Result<String, Diagnostic> {
     let compilation = compile(name, source);
-    if compilation.diagnostics.has_errors() {
-        return Err(compilation.diagnostics.items[0].clone());
+    if let Some(error) = compilation
+        .diagnostics
+        .items
+        .into_iter()
+        .find(|item| item.severity == aevia_syntax::Severity::Error)
+    {
+        return Err(error);
     }
-    let Some(module) = &compilation.module else {
+    let Some(module) = compilation.module else {
         return Err(Diagnostic::error(
             "E0608",
             "no module",
             aevia_syntax::Span::default(),
         ));
     };
-    let mut interp = Interp::new(&compilation.checked).with_buffer();
-    // §9.7: workers recompile the same source, so closures cross by span.
-    let replica_source = source.to_string();
-    let replica_name = name.to_string();
+    let program = std::sync::Arc::new((module, compilation.checked));
+    let mut interp = Interp::new(&program.1).with_buffer();
+    let replica_program = std::sync::Arc::clone(&program);
     interp.set_replica(std::sync::Arc::new(move || {
-        let compilation = compile(&replica_name, &replica_source);
-        let module = compilation.module.as_ref().ok_or("no module")?;
-        let mut replica = Interp::new(&compilation.checked).with_buffer();
+        let (module, checked) = replica_program.as_ref();
+        let mut replica = Interp::new(checked).with_buffer();
+        replica.set_jobs(1);
+        replica.jit_policy = JitPolicy::Annotated;
+        replica.matmul_policy = aevia_rssn::device::MatmulPolicy::Cpu;
         if replica.load(module).has_errors() {
             return Err("the program's top level failed on a worker".to_string());
         }
         Ok(replica)
     }));
-    let load_diagnostics = interp.load(module);
-    if load_diagnostics.has_errors() {
-        return Err(load_diagnostics.items[0].clone());
+    let load_diagnostics = interp.load(&program.0);
+    if let Some(error) = load_diagnostics
+        .items
+        .into_iter()
+        .find(|item| item.severity == aevia_syntax::Severity::Error)
+    {
+        return Err(error);
     }
     interp.run_main().map_err(|error| error.diagnostic())?;
     Ok(interp.captured())

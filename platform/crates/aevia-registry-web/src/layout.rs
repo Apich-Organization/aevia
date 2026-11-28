@@ -9,10 +9,9 @@
 //! # Language
 //!
 //! Every label in the chrome is a [`Msg`], so the top bar, the footer and the
-//! skip link are translated. The switcher is a link to `/lang/{code}`, which
-//! sets a cookie and sends the reader back to the page they were on: a language
-//! is a preference about a reader, not about a URL, so it belongs in a cookie
-//! rather than in every link on the site.
+//! skip link are translated. The language switch stores the reader's
+//! preference, while explicit documentation URLs carry `?lang=en` or
+//! `?lang=zh` so links are stable when shared.
 
 use aevia_registry_core::Lang;
 use aevia_registry_core::vm::OwnerView;
@@ -24,27 +23,21 @@ use leptos::prelude::*;
 use crate::Msg;
 use crate::lang_attr;
 use crate::render;
-use crate::styles::APP_JS;
-
-/// The language-spec revision the registry serves.
-///
-/// The page functions receive no spec metadata — the view models describe
-/// packages, not the toolchain — so the footer states a value compiled into
-/// this crate. It is one place to change when the served revision moves, and
-/// keeping it honest matters: a reader uses it to check that the compiler they
-/// run is the one the documentation was built from.
-const SPEC_COMMIT: &str = "aevia-spec 0.1";
 
 const SKIP: Msg = Msg::new("skip to content", "跳到正文");
 const NAV_CRATES: Msg = Msg::new("crates", "包");
 const NAV_DOCS: Msg = Msg::new("docs", "文档");
+const NAV_STDLIB: Msg = Msg::new("stdlib", "标准库");
+const NAV_CLI: Msg = Msg::new("cli", "命令行");
 const NAV_SPEC: Msg = Msg::new("spec", "语言规范");
+const NAV_BOOK: Msg = Msg::new("book", "教程");
+const NAV_ARCHITECTURE: Msg = Msg::new("architecture", "架构");
 const NAV_PRIMARY: Msg = Msg::new("Primary", "主导航");
 const SIGN_IN: Msg = Msg::new("sign in", "登录");
 const ACCOUNT: Msg = Msg::new("account", "账户");
 const SIGN_OUT: Msg = Msg::new("sign out", "退出");
 const FOOTER_WHAT: Msg = Msg::new("Aevia package registry", "Aevia 包注册中心");
-const FOOTER_SPEC: Msg = Msg::new("serving the language spec at", "所服务的语言规范版本");
+const FOOTER_TEXT: Msg = Msg::new("Documentation in plain text", "纯文本文档");
 const FOOTER_SITES: Msg = Msg::new("Sibling sites", "相关站点");
 const SWITCH_TO: Msg = Msg::new("switch language", "切换语言");
 
@@ -53,7 +46,7 @@ const SWITCH_TO: Msg = Msg::new("switch language", "切换语言");
 /// `here` is the section the page belongs to, used only to mark the matching
 /// top-bar link with `aria-current`; an unknown value simply marks nothing,
 /// which is the right behaviour for a page that is not in the nav.
-pub(crate) fn page<V>(
+pub fn page<V>(
     lang: Lang,
     title: &str,
     here: &str,
@@ -63,10 +56,19 @@ pub(crate) fn page<V>(
 where
     V: RenderHtml,
 {
+    let description = match lang {
+        | Lang::En => {
+            format!(
+                "{title}. Aevia scientific computing language, documentation and package registry."
+            )
+        },
+        | Lang::Zh => format!("{title}。Aevia 科学计算语言、文档与包注册中心。"),
+    };
     let document = view! {
         <html lang=lang_attr(lang)>
             <head>
                 <meta charset="utf-8"/>
+                <meta name="description" content=description/>
                 <meta name="viewport" content="width=device-width, initial-scale=1"/>
                 <title>{format!("{title} · aevia")}</title>
                 <link rel="stylesheet" href="/static/site.css"/>
@@ -79,7 +81,11 @@ where
                     <nav class="topnav" aria-label=NAV_PRIMARY.of(lang)>
                         {nav_link(lang, "/crates", NAV_CRATES, here)}
                         {nav_link(lang, "/docs", NAV_DOCS, here)}
+                        {nav_link(lang, "/stdlib", NAV_STDLIB, here)}
+                        {nav_link(lang, "/cli", NAV_CLI, here)}
                         {nav_link(lang, "/spec", NAV_SPEC, here)}
+                        {nav_link(lang, "/book", NAV_BOOK, here)}
+                        {nav_link(lang, "/architecture", NAV_ARCHITECTURE, here)}
                         <a href="https://github.com/Apich-Organization/aevia" rel="noreferrer">
                             "github"
                         </a>
@@ -93,18 +99,14 @@ where
                 <footer class="footer">
                     <div class="footer-inner">
                         <p>{FOOTER_WHAT.of(lang)}</p>
-                        <p>
-                            {FOOTER_SPEC.of(lang)}
-                            " "
-                            <code>{SPEC_COMMIT}</code>
-                        </p>
                         <nav aria-label=FOOTER_SITES.of(lang)>
                             <a href="https://aevia.apich.org">"aevia.apich.org"</a>
                             <a href="https://rssn.apich.org">"rssn.apich.org"</a>
+                            <a href=format!("/llms.txt?lang={}", lang.code())>{FOOTER_TEXT.of(lang)}</a>
                         </nav>
                     </div>
                 </footer>
-                <script>{APP_JS}</script>
+                <script src="/static/app.js" defer></script>
             </body>
         </html>
     };
@@ -127,6 +129,10 @@ fn nav_link(
 /// Both languages are listed rather than a single toggle button: a reader who
 /// does not read the current language cannot be expected to recognise a
 /// two-letter code, but they can recognise their own language's name.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the language selector owns language links and accessibility labels"
+)]
 fn language_switch(lang: Lang) -> AnyView {
     let link = |target: Lang| {
         let current = (target == lang).then_some("page");
@@ -156,6 +162,10 @@ fn language_switch(lang: Lang) -> AnyView {
 ///
 /// The sign-out control is a form because signing out is a state change; a
 /// link would let a prefetcher or a crawler end a session.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the signed-in and signed-out navigation states share one layout section"
+)]
 fn viewer_chrome(
     lang: Lang,
     viewer: Option<&Viewer>,
@@ -190,7 +200,7 @@ fn viewer_chrome(
 /// The fallback is not decoration: an ORCID iD has no avatar, and a broken
 /// image icon next to every ORCID owner would read as a registry fault rather
 /// than as a provider without pictures.
-pub(crate) fn avatar(owner: &OwnerView) -> AnyView {
+pub fn avatar(owner: &OwnerView) -> AnyView {
     match &owner.avatar_url {
         | Some(url) if !url.is_empty() => {
             view! {
@@ -206,15 +216,18 @@ pub(crate) fn avatar(owner: &OwnerView) -> AnyView {
 }
 
 /// The first character of a handle, for the avatar fallback.
+#[allow(
+    clippy::single_call_fn,
+    reason = "avatar fallback extracts and uppercases a Unicode character"
+)]
 fn initial(handle: &str) -> String {
-    handle
-        .chars()
-        .next()
-        .map(|character| character.to_uppercase().to_string())
-        .unwrap_or_else(|| "?".to_string())
+    handle.chars().next().map_or_else(
+        || "?".to_string(),
+        |character| character.to_uppercase().to_string(),
+    )
 }
 
 /// A badge naming the identity provider.
-pub(crate) fn provider_badge(owner: &OwnerView) -> AnyView {
+pub fn provider_badge(owner: &OwnerView) -> AnyView {
     view! { <span class="badge">{owner.provider()}</span> }.into_any()
 }

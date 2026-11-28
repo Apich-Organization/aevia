@@ -6,6 +6,7 @@
 //! everyone out on every restart; a server that boots without a database would
 //! serve 500s until someone noticed.
 
+use crate::playground::PlaygroundConfig;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -60,6 +61,14 @@ pub struct Config {
     pub storage_dir: PathBuf,
     /// Where the language specification's Markdown chapters live.
     pub spec_dir: PathBuf,
+    /// Where the standard library documentation (`stdlib-docs.json` or `*.md`) lives.
+    pub stdlib_docs_dir: PathBuf,
+    /// Where both language editions of the book and architecture live.
+    pub manuals_dir: PathBuf,
+    /// The optional private Aevia execution service.
+    pub playground: Option<PlaygroundConfig>,
+    /// Where `install.sh` and `install.ps1` are read from for hot-reloading.
+    pub install_dir: PathBuf,
     /// The HMAC key for session cookies.
     pub session_secret: Vec<u8>,
     /// The name the site shows.
@@ -91,9 +100,9 @@ impl Config {
                             .to_string(),
                 }
             })?;
-            if bytes.len() < 32 {
+            if bytes.len() < 32 || bytes.iter().all(|byte| *byte == 0) {
                 return Err(ConfigError {
-                    message: "AEVIA_SESSION_SECRET must be at least 32 bytes (64 hex characters); \
+                    message: "AEVIA_SESSION_SECRET requires at least 32 random bytes as hex; \
                               generate it with `openssl rand -hex 32`"
                         .to_string(),
                 });
@@ -107,13 +116,17 @@ impl Config {
                     message: format!("AEVIA_BIND is not an address: {error}"),
                 }
             })?;
-        let base_url = optional("AEVIA_BASE_URL", "https://aevia.apich.org")
-            .trim_end_matches('/')
-            .to_string();
+        let base_url = origin(
+            "AEVIA_BASE_URL",
+            &optional("AEVIA_BASE_URL", "https://aevia.apich.org"),
+        )?;
         let storage_dir = PathBuf::from(optional("AEVIA_STORAGE_DIR", "/var/lib/aevia/packages"));
         // Defaults to the language repository checked out next to this one,
         // which is where a developer runs the server from.
         let spec_dir = PathBuf::from(optional("AEVIA_SPEC_DIR", "../spec"));
+        let stdlib_docs_dir = PathBuf::from(optional("AEVIA_STDLIB_DOCS_DIR", "stdlib-docs"));
+        let manuals_dir = PathBuf::from(optional("AEVIA_MANUALS_DIR", "manuals"));
+        let install_dir = PathBuf::from(optional("AEVIA_INSTALL_DIR", "."));
         let github = match (
             var("AEVIA_GITHUB_CLIENT_ID"),
             var("AEVIA_GITHUB_CLIENT_SECRET"),
@@ -134,9 +147,10 @@ impl Config {
                 Some(OrcidConfig {
                     client_id,
                     client_secret,
-                    base: optional("AEVIA_ORCID_BASE", "https://orcid.org")
-                        .trim_end_matches('/')
-                        .to_string(),
+                    base: origin(
+                        "AEVIA_ORCID_BASE",
+                        &optional("AEVIA_ORCID_BASE", "https://orcid.org"),
+                    )?,
                 })
             },
             | _ => None,
@@ -147,6 +161,10 @@ impl Config {
             database_url,
             storage_dir,
             spec_dir,
+            stdlib_docs_dir,
+            manuals_dir,
+            playground: PlaygroundConfig::from_env()?,
+            install_dir,
             session_secret,
             registry_name: optional("AEVIA_REGISTRY_NAME", "aevia"),
             docs_enabled: flag("AEVIA_DOCS_ENABLED", true),
@@ -166,14 +184,39 @@ impl Config {
     }
 }
 
-fn var(name: &str) -> Option<String> {
+fn origin(
+    name: &str,
+    value: &str,
+) -> Result<String, ConfigError> {
+    let disallowed = || {
+        ConfigError {
+            message: format!(
+                "{name} must be an HTTP(S) origin without credentials, a path, or query"
+            ),
+        }
+    };
+    let url = url::Url::parse(value).map_err(|_| disallowed())?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(disallowed());
+    }
+    Ok(url.origin().ascii_serialization())
+}
+
+pub(crate) fn var(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
 }
 
-fn required(name: &str) -> Result<String, ConfigError> {
+pub(crate) fn required(name: &str) -> Result<String, ConfigError> {
     var(name).ok_or_else(|| {
         ConfigError {
             message: format!("{name} is required; see infra/.env.example"),

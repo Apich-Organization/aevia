@@ -1,7 +1,7 @@
 //! Measures what one process pays before checking any source: the kernel
 //! session and the registry built from its manifest.
 //!
-//! `cargo run -p aevia-rssn --profile profiling --example startup`
+//! `bazel run //:benchmark -- startup`
 fn main() {
     let t = std::time::Instant::now();
     let session = rssn::api::Session::new();

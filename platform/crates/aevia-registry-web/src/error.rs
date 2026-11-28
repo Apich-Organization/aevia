@@ -26,6 +26,7 @@ const CODE_HINT: Msg = Msg::new(
 /// The status is shown as a number rather than mapped to a phrase so that it
 /// matches what `curl -i` reported; the code is the registry's own stable
 /// identifier, which is what a bug report should quote.
+#[must_use]
 pub fn error_page(
     lang: Lang,
     status: u16,

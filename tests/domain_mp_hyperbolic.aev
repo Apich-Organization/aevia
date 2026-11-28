@@ -1,0 +1,20 @@
+## Certified point and interval hyperbolic functions.
+import Rssn_Multiprecision as MP
+
+let zero: MP.Dyadic = { mantissa = 0, exponent = 0, precision = 1 }
+
+let one: MP.Dyadic = { mantissa = 1, exponent = 0, precision = 1 }
+
+test "cosh keeps its minimum inside an interval crossing zero" =
+    match MP.cosh_ball({ midpoint = zero, radius = one }, 16) with
+    | Ok(interval) ->
+        match MP.ball_endpoints(interval, 32) with
+        | Ok(ends) -> MP.compare_dyadic(ends.lower, one) != Ok(1) && MP.compare_dyadic(ends.upper, one) == Ok(1)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "large tanh saturates with a finite positive radius" =
+    let huge: MP.Dyadic = { mantissa = 1, exponent = 262144, precision = 1 }
+    match MP.tanh_dyadic(huge, 16) with
+    | Ok(interval) -> MP.compare_dyadic(interval.midpoint, one) == Ok(0) && MP.dyadic_sign(interval.radius) == Ok(1)
+    | Err(_) -> false

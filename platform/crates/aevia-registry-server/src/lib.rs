@@ -15,15 +15,42 @@
 //! build the state, bind, serve, and stop on a signal. Everything else is in
 //! this crate, so the binary and the tests exercise the same code.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unreachable,
+        clippy::unwrap_used
+    )
+)]
+
 pub mod api;
 pub mod auth;
 pub mod config;
+pub mod docs_queue;
+mod download_counts;
 pub mod error;
 pub mod http;
+mod limits;
+pub mod manual;
 pub mod pages;
+pub mod playground;
+mod reload;
+pub mod sandbox;
+pub mod seo;
 pub mod spec;
 pub mod state;
+pub mod stdlib;
 pub mod storage;
+
+pub use download_counts::spawn as spawn_download_counts;
+pub use reload::spawn_reloader;
 
 use std::time::Duration;
 
@@ -41,6 +68,8 @@ use axum::routing::post;
 use tower_http::compression::CompressionLayer;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
+
+use aevia_registry_core::vm::ManualKind;
 
 use crate::state::AppState;
 
@@ -68,9 +97,24 @@ pub fn router(state: AppState) -> Router {
         .route("/login", get(pages::login))
         .route("/logout", post(pages::logout))
         .route("/log", get(pages::log))
+        .route("/cli", get(pages::cli))
+        .route("/users/{handle}", get(pages::user))
+        .route("/feed.xml", get(seo::feed))
+        .route("/sitemap.xml", get(seo::sitemap))
+        .route("/robots.txt", get(seo::robots))
+        .route("/llms.txt", get(seo::llms))
+        .route("/badge/{owner}/{name}", get(seo::badge))
         .route("/spec", get(pages::spec_index))
         .route("/spec/all", get(pages::spec_all))
         .route("/spec/{slug}", get(pages::spec_chapter))
+        .nest("/book", manual::router(ManualKind::Book))
+        .nest("/architecture", manual::router(ManualKind::Architecture))
+        .merge(playground::router())
+        .route("/stdlib", get(pages::stdlib_index))
+        .route("/stdlib/catalog.json", get(seo::catalog))
+        .route("/stdlib/{module}", get(pages::stdlib_module))
+        .route("/install.sh", get(pages::install_sh))
+        .route("/install.ps1", get(pages::install_ps1))
         .route("/lang/{code}", get(pages::set_language))
         .route(
             "/activate",
@@ -91,7 +135,19 @@ pub fn router(state: AppState) -> Router {
             StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(120),
         ))
-        .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            http::site_policy,
+        ))
+        .layer(
+            TraceLayer::new_for_http().make_span_with(|request: &axum::extract::Request| {
+                let route = request
+                    .extensions()
+                    .get::<axum::extract::MatchedPath>()
+                    .map_or("<unmatched>", axum::extract::MatchedPath::as_str);
+                tracing::debug_span!("request", method = %request.method(), route)
+            }),
+        )
         .with_state(state)
 }
 
@@ -111,6 +167,10 @@ pub struct YankForm {
 /// credential", and it is narrow: a yank is reversible, it cannot introduce new
 /// bytes, and it still requires the session of the account that owns the
 /// package. Publishing — the action that adds code — never takes this path.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the browser independently negotiates authentication and localized errors"
+)]
 async fn yank_from_browser(
     State(state): State<AppState>,
     axum::extract::Path((owner, name)): axum::extract::Path<(String, String)>,
@@ -138,44 +198,43 @@ async fn yank_from_browser(
         },
         | Err(error) => return error::PageError::from(error).into_response(),
     };
-    if package.owner_id != publisher.id {
-        return error::PageError::forbidden("Only the package's owner can yank a version.")
-            .into_response();
-    }
-    let yanked = form.yanked.is_some();
-    match aevia_registry_db::repo::set_yanked(&state.pool, package.id, &form.version, yanked).await
+    match aevia_registry_db::repo::resolve_publishing_owner(
+        &state.pool,
+        publisher.id,
+        requested.owner(),
+    )
+    .await
     {
-        | Ok(Some(_)) => {
-            let _ = aevia_registry_db::repo::touch_package(&state.pool, package.id).await;
-            let verb = if yanked {
-                "yanked"
-            } else {
-                "restored"
-            };
-            let _ = aevia_registry_db::repo::append_log(
-                &state.pool,
-                "yank",
-                &format!("{} {verb} {requested} {}", publisher.handle, form.version),
-                serde_json::json!({
-                    "name": requested.to_string(),
-                    "version": form.version,
-                    "yanked": yanked,
-                    "publisher": publisher.handle,
-                    "via": "browser",
-                }),
-            )
-            .await;
-            axum::response::Redirect::to(&format!("/crates/{requested}")).into_response()
+        | Ok(Some(owner_id)) if owner_id == package.owner_id => {},
+        | Ok(_) => {
+            return error::PageError::forbidden("Only the package's owner can yank a version.")
+                .into_response();
         },
-        | Ok(None) => {
-            error::PageError::not_found(format!("{requested} has no version {}.", form.version))
-                .into_response()
+        | Err(error) => return error::PageError::from(error).into_response(),
+    }
+    match api::yank::transition(
+        &state,
+        api::yank::YankChange {
+            package_id: package.id,
+            name: &requested,
+            version: &form.version,
+            yanked: form.yanked.is_some(),
+            publisher: &publisher.handle,
+            fingerprint: None,
         },
-        | Err(error) => error::PageError::from(error).into_response(),
+    )
+    .await
+    {
+        | Ok(()) => axum::response::Redirect::to(&format!("/crates/{requested}")).into_response(),
+        | Err(error) => error::PageError::from(error.error).into_response(),
     }
 }
 
 /// The 404 page.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the site fallback keeps language and viewer context"
+)]
 async fn not_found(
     uri: Uri,
     State(state): State<AppState>,

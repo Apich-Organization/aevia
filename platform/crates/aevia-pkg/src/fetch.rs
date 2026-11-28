@@ -108,7 +108,7 @@ pub async fn verify(
             error.message
         ))
     })?;
-    if statement.name != *id {
+    if statement.name.key() != id.key() {
         return Err(CliError::new(format!(
             "the signature covers `{}`, not `{id}`",
             statement.name
@@ -142,12 +142,7 @@ pub async fn verify(
         })?;
 
     let status = app.client.key_status(&fingerprint).await?;
-    if !status.registered {
-        return Err(CliError::new(format!(
-            "the archive was signed by `{fingerprint}`, which is not bound to any account"
-        ))
-        .with_next_step("the key may have been revoked; treat this download as untrusted"));
-    }
+    // Retired keys remain available for verification of published releases.
     let armored = app.client.public_key(&fingerprint).await?;
     let signer = SignerKey::detect(&armored).map_err(CliError::from)?;
     // The endpoint is addressed by fingerprint, but the server chooses what to
@@ -179,6 +174,10 @@ pub async fn verify(
 /// # Errors
 ///
 /// As [`verify`], plus a malformed target.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the verify command distinguishes cache hits from signature verification"
+)]
 pub async fn verify_command(
     app: &App,
     spec: &str,
@@ -216,8 +215,12 @@ pub async fn verify_command(
 /// # Errors
 ///
 /// `E_SIGNATURE` when there is no armour block, or nothing before it.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the signature parser preserves the exact signed statement bytes"
+)]
 pub fn split_signature_payload(payload: &str) -> Result<(String, String), CliError> {
-    let mut offset = 0;
+    let mut offset = 0usize;
     let mut start = None;
     for line in payload.split_inclusive('\n') {
         if ARMOUR
@@ -227,7 +230,7 @@ pub fn split_signature_payload(payload: &str) -> Result<(String, String), CliErr
             start = Some(offset);
             break;
         }
-        offset += line.len();
+        offset = offset.saturating_add(line.len());
     }
     let Some(start) = start else {
         return Err(

@@ -357,6 +357,23 @@ fn exponentiation_requires_literal_exponents_for_dimensions() {
     expect_error("fn f(x: Real[L], n: Int): Real[L] = x^n\n", "E0404");
 }
 
+#[test]
+fn decimal_dimension_notation_preserves_exact_type_equality() {
+    expect_ok(
+        r#"
+let root: Float[L^0.75] = sqrt(17.0 m^1.5)
+let same: Float[L^(3/4)] = root
+let tenth: Real[L^(1/10)] = 1 m^0.1
+fn large(x: Real[L^9007199254740993.0]): Real[L^9007199254740993] = x
+fn half<d>(x: Float[d^3]): Float[d^1.5] = sqrt(x)
+let applied: Float[L^1.5] = half(4.0 m^3)
+"#,
+    );
+    expect_error("let x: Real[L^(1/3)] = 1 m^0.333333\n", "E0401");
+    expect_error("let x = (17.0 m)^1.5\n", "E0404");
+    expect_error("fn f(x: Float[L], p: Float) = x^p\n", "E0404");
+}
+
 // --- regressions found by review -------------------------------------------
 
 #[test]
@@ -610,7 +627,35 @@ fn a_record_update_keeps_the_open_tail() {
         r#"type P = { x: Float, y: Float }
 fn f(p: P): { x: Float, y: Float, z: Float } = { p with z = 1.0 }
 fn g(p: { x: Float, ...r }): { x: Float, ...r } = { p with x = 2.0 }
+fn h(p: { x: Float, ...r }): { x: Float, z: Bool, ...r } = { p with z = true }
 "#,
+    );
+}
+
+#[test]
+fn generic_record_updates_require_the_added_field_to_be_absent() {
+    let definitions = "\
+fn add_visible(p: { x: Int, ...r }): { x: Int, z: Bool, ...r } = { p with z = true }
+fn add_hidden(p: { x: Int, ...r }): Bool = ({ p with z = true }).z
+fn forwarded(p: { x: Int, ...r }): Bool = add_hidden(p)
+let alias = add_hidden
+";
+    expect_ok(&format!(
+        "{definitions}let visible = add_visible({{ x = 1, y = \"other\" }})\nlet hidden = add_hidden({{ x = 1 }})\n"
+    ));
+    for name in ["add_visible", "add_hidden", "forwarded", "alias"] {
+        expect_error(
+            &format!("{definitions}let invalid = {name}({{ x = 1, z = \"existing\" }})\n"),
+            "E0208",
+        );
+    }
+}
+
+#[test]
+fn projecting_a_field_that_the_open_tail_excludes_is_an_error() {
+    expect_error(
+        "fn f(p: { x: Int, ...r }) =\n    let _updated = { p with z = true }\n    p.z\n",
+        "E0208",
     );
 }
 
@@ -662,8 +707,8 @@ fn a_dimensioned_determinant_needs_dyn() {
 }
 
 #[test]
-fn a_duplicate_function_name_is_e0316() {
-    expect_error("fn f(): Int = 1\nfn f(): String = \"s\"\n", "E0316");
+fn a_redefined_function_can_change_its_result_type() {
+    expect_ok("fn f(): Int = 1\nfn f(): String = \"s\"\n");
 }
 
 #[test]
@@ -761,6 +806,32 @@ fn a_rssn_call_is_resolved_and_pinned() {
         Type::Dyn(Rep::Real),
         "a derived overload pins dispatch but does not claim an exact result dimension"
     );
+}
+
+#[test]
+fn a_manifest_variadic_rssn_call_uses_the_tail_representation() {
+    let module = expect_ok("let result = Rssn.add(1, 2, 3)\n");
+    let [call] = module.rssn_calls.as_slice() else {
+        panic!("expected one pinned RSSN call");
+    };
+    let entry = aevia_rssn::registry().op("add").unwrap();
+    let signature = &entry.signatures[call.overload];
+    assert!(matches!(
+        signature.variadic,
+        Some((0, None, aevia_rssn::SigType::Real))
+    ));
+    assert_eq!(call.key, *entry.key(call.overload).unwrap());
+    assert_eq!(
+        scheme_of(&module, "result").ty,
+        Type::real(aevia_dim::Dim::one())
+    );
+}
+
+#[test]
+fn a_manifest_rssn_variadic_tail_checks_types_and_requires_the_fixed_prefix() {
+    expect_ok("let result = Rssn.and(true, false, true)\n");
+    expect_error("let result = Rssn.and(true, false, 1)\n", "E1003");
+    expect_error("let result = Rssn.and(true)\n", "E1003");
 }
 
 #[test]
@@ -1489,7 +1560,10 @@ fn check_with_capabilities(
         0,
         &module,
         &[],
-        &CheckOptions { capabilities },
+        &CheckOptions {
+            capabilities,
+            ..CheckOptions::default()
+        },
     );
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
@@ -1528,6 +1602,7 @@ fn jit_needs_the_core_jit_capability() {
         &[],
         &CheckOptions {
             capabilities: Capabilities::from_names(std::iter::empty::<&str>()),
+            ..CheckOptions::default()
         },
     );
     let detail = result

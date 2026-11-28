@@ -25,6 +25,7 @@ use crate::token::Token;
 use crate::token::TokenKind;
 use num_bigint::BigInt;
 use num_traits::Num;
+use std::borrow::Cow;
 use unicode_ident::is_xid_continue;
 use unicode_ident::is_xid_start;
 use unicode_normalization::UnicodeNormalization;
@@ -54,6 +55,8 @@ pub fn lex(
 /// Lexes an inline expression, used for string interpolation.
 ///
 /// `base` is the byte offset of `text` inside its file, so spans stay correct.
+/// Inline expressions suppress layout. Invalid text produces a single EOF
+/// token whose span covers the input.
 #[must_use]
 pub fn lex_inline(
     file: FileId,
@@ -66,11 +69,134 @@ pub fn lex_inline(
             LexOutput {
                 tokens: vec![Token::new(
                     TokenKind::Eof,
-                    Span::new(file, base, base + text.len()),
+                    Span::new(file, base, base.saturating_add(text.len())),
                 )],
                 docs: Vec::new(),
             }
         })
+}
+
+/// Lexes an interpolation while retaining diagnostic kinds and original byte
+/// offsets. Only backslashes protecting a quote or brace can disappear
+/// between the original slice and the expression passed to the lexer.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps inline lexing and offset reconstruction out of the parser"
+)]
+pub(crate) fn lex_interpolation(
+    span: Span,
+    original: &str,
+    source: &str,
+) -> Result<LexOutput, Diagnostics> {
+    let mut lexed = Lexer::new(span.file, source, span.start as usize).run_inline();
+    if original.len() <= source.len() {
+        return lexed;
+    }
+    let removed = removed_delimiter_escapes(original, source);
+    if removed.is_empty() {
+        return lexed;
+    }
+    let remap = |position: &mut Span| {
+        let original_offset = |offset: u32| {
+            let relative = offset.saturating_sub(span.start) as usize;
+            let missing = removed.partition_point(|&removed| removed < relative);
+            offset.saturating_add(u32::try_from(missing).unwrap_or(u32::MAX))
+        };
+        position.start = original_offset(position.start);
+        position.end = original_offset(position.end);
+    };
+    match &mut lexed {
+        | Ok(output) => {
+            for token in &mut output.tokens {
+                remap(&mut token.span);
+                if let TokenKind::Str(parts) = &mut token.kind {
+                    for part in parts {
+                        if let StringPart::Interpolation { span, .. } = part {
+                            remap(span);
+                        }
+                    }
+                }
+            }
+            for doc in &mut output.docs {
+                remap(&mut doc.span);
+            }
+        },
+        | Err(diagnostics) => {
+            for diagnostic in &mut diagnostics.items {
+                remap(&mut diagnostic.span);
+                for label in &mut diagnostic.labels {
+                    remap(&mut label.span);
+                }
+            }
+        },
+    }
+    lexed
+}
+
+/// Classifies an interpolation consisting of one ordinary ASCII identifier.
+/// These words have no delimiter escapes, parser lookahead, or layout.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps the interpolation fast path on the shared identifier rules"
+)]
+pub(crate) fn interpolation_identifier(
+    span: Span,
+    source: &str,
+) -> Option<(&str, Span)> {
+    const LAYOUT: [char; 4] = [' ', '\t', '\r', '\n'];
+    if span.len() != source.len() {
+        return None;
+    }
+    let body = source.trim_start_matches(LAYOUT);
+    let name = body.trim_end_matches(LAYOUT);
+    if !name
+        .as_bytes()
+        .first()
+        .is_some_and(|&byte| byte.is_ascii_alphabetic() || byte == b'_')
+        || ascii_identifier_prefix_len(name) != name.len()
+        || Keyword::from_word(name).is_some()
+    {
+        return None;
+    }
+    let start = (span.start as usize).saturating_add(source.len().saturating_sub(body.len()));
+    Some((
+        name,
+        Span::new(span.file, start, start.saturating_add(name.len())),
+    ))
+}
+
+fn ascii_identifier_prefix_len(text: &str) -> usize {
+    text.bytes()
+        .take_while(|&byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'\''))
+        .count()
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "isolates source offset reconstruction"
+)]
+fn removed_delimiter_escapes(
+    original: &str,
+    source: &str,
+) -> Vec<usize> {
+    let mut removed = Vec::new();
+    let mut original = original.bytes();
+    for (offset, byte) in source.bytes().enumerate() {
+        match original.next() {
+            | Some(raw) if raw == byte => {},
+            | Some(b'\\') if matches!(byte, b'"' | b'{' | b'}') && original.next() == Some(byte) =>
+            {
+                removed.push(offset);
+            },
+            // A host may supply its own tokens to parse_module. Without the
+            // original spelling, use the offsets of the supplied expression.
+            | _ => return Vec::new(),
+        }
+    }
+    if original.next().is_some() {
+        return Vec::new();
+    }
+    removed
 }
 
 struct Lexer<'a> {
@@ -82,9 +208,29 @@ struct Lexer<'a> {
     docs: Vec<DocComment>,
     indent_stack: Vec<usize>,
     bracket_depth: usize,
+    inline: bool,
     at_line_start: bool,
     line_has_token: bool,
     diagnostics: Diagnostics,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StringDelimiter {
+    Ordinary,
+    Raw,
+    Multiline,
+    Protected,
+    ProtectedRaw,
+}
+
+impl StringDelimiter {
+    const fn closing(self) -> &'static str {
+        match self {
+            | Self::Ordinary | Self::Raw => "\"",
+            | Self::Multiline => "\"\"\"",
+            | Self::Protected | Self::ProtectedRaw => "\\\"",
+        }
+    }
 }
 
 impl<'a> Lexer<'a> {
@@ -100,8 +246,9 @@ impl<'a> Lexer<'a> {
             pos: 0,
             tokens: Vec::new(),
             docs: Vec::new(),
-            indent_stack: vec![0],
+            indent_stack: Vec::new(),
             bracket_depth: 0,
+            inline: false,
             at_line_start: true,
             line_has_token: false,
             diagnostics: Diagnostics::new(),
@@ -111,16 +258,11 @@ impl<'a> Lexer<'a> {
     fn run(mut self) -> Result<LexOutput, Diagnostics> {
         // A UTF-8 BOM is allowed and ignored (§1.1).
         if self.src.starts_with('\u{feff}') {
-            self.pos += '\u{feff}'.len_utf8();
+            self.pos = self.pos.saturating_add('\u{feff}'.len_utf8());
         }
         // A shebang line is ignored.
-        if self.src[self.pos..].starts_with("#!") {
-            while let Some(c) = self.peek() {
-                if c == '\n' {
-                    break;
-                }
-                self.bump();
-            }
+        if self.remaining().starts_with("#!") {
+            self.skip_to_line_end();
         }
         self.scan();
         self.finish();
@@ -135,14 +277,10 @@ impl<'a> Lexer<'a> {
     }
 
     fn run_inline(mut self) -> Result<LexOutput, Diagnostics> {
-        // Layout inside an interpolation is not meaningful: the expression is
-        // bounded by braces, so treat it as already inside a bracket.
-        self.bracket_depth = 1;
+        // The braces bound the expression independently of its own delimiters.
+        self.inline = true;
         self.at_line_start = false;
         self.scan();
-        // Drop layout tokens the scanner may still have produced.
-        self.tokens
-            .retain(|token| !matches!(token.kind, TokenKind::Indent | TokenKind::Dedent));
         self.finish();
         if self.diagnostics.has_errors() {
             Err(self.diagnostics)
@@ -156,7 +294,7 @@ impl<'a> Lexer<'a> {
 
     fn scan(&mut self) {
         loop {
-            if self.at_line_start && self.bracket_depth == 0 {
+            if self.at_line_start && self.layout_enabled() {
                 if !self.handle_line_start() {
                     return;
                 }
@@ -174,7 +312,7 @@ impl<'a> Lexer<'a> {
                 | '"' => {
                     self.string();
                 },
-                | 'r' if self.peek_at(1) == Some('"') => {
+                | 'r' if self.remaining().starts_with("r\"") => {
                     self.bump();
                     self.raw_string();
                 },
@@ -182,7 +320,7 @@ impl<'a> Lexer<'a> {
                 | c if is_xid_start(c) || c == '_' => self.identifier(),
                 | '°' => self.degree_unit(),
                 | c if is_superscript(c) => self.superscript(),
-                | _ => self.punct(),
+                | _ => self.punct(c),
             }
         }
     }
@@ -191,13 +329,12 @@ impl<'a> Lexer<'a> {
         // A final line without a trailing newline still ends a logical line
         // (§1.4.1: every logical line ends with `NEWLINE`). The token is
         // zero-width at end of file, so positions are unaffected.
-        if self.line_has_token && self.bracket_depth == 0 {
+        if self.line_has_token && self.layout_enabled() {
             let at = self.mark();
             self.push(TokenKind::Newline, at, at);
             self.line_has_token = false;
         }
-        while self.indent_stack.len() > 1 {
-            self.indent_stack.pop();
+        while self.indent_stack.pop().is_some() {
             let at = self.mark();
             self.push(TokenKind::Dedent, at, at);
         }
@@ -205,35 +342,60 @@ impl<'a> Lexer<'a> {
         self.push(TokenKind::Eof, at, at);
     }
 
-    fn mark(&self) -> usize {
-        self.base + self.pos
+    const fn mark(&self) -> usize {
+        self.pos
+    }
+
+    const fn layout_enabled(&self) -> bool {
+        !self.inline && self.bracket_depth == 0
+    }
+
+    fn span(
+        &self,
+        start: usize,
+        end: usize,
+    ) -> Span {
+        Span::new(
+            self.file,
+            self.base.saturating_add(start),
+            self.base.saturating_add(end),
+        )
+    }
+
+    fn remaining(&self) -> &str {
+        self.src.get(self.pos..).unwrap_or_default()
     }
 
     fn peek(&self) -> Option<char> {
-        self.src[self.pos..].chars().next()
+        self.remaining().chars().next()
     }
 
     fn peek_at(
         &self,
         offset: usize,
     ) -> Option<char> {
-        self.src[self.pos..].chars().nth(offset)
+        self.remaining().chars().nth(offset)
     }
 
     fn bump(&mut self) -> Option<char> {
         let c = self.peek()?;
-        self.pos += c.len_utf8();
+        self.pos = self.pos.saturating_add(c.len_utf8());
         Some(c)
     }
 
     fn skip_spaces(&mut self) {
-        while let Some(c) = self.peek() {
-            if c == ' ' || c == '\t' {
-                self.pos += c.len_utf8();
-            } else {
-                break;
-            }
-        }
+        let length = self
+            .remaining()
+            .bytes()
+            .take_while(|&byte| matches!(byte, b' ' | b'\t'))
+            .count();
+        self.pos = self.pos.saturating_add(length);
+    }
+
+    fn skip_to_line_end(&mut self) {
+        let remaining = self.remaining();
+        let offset = remaining.find(['\r', '\n']).unwrap_or(remaining.len());
+        self.pos = self.pos.saturating_add(offset);
     }
 
     fn push(
@@ -245,8 +407,7 @@ impl<'a> Lexer<'a> {
         if !matches!(kind, TokenKind::Newline | TokenKind::Dedent) {
             self.line_has_token = true;
         }
-        self.tokens
-            .push(Token::new(kind, Span::new(self.file, start, end)));
+        self.tokens.push(Token::new(kind, self.span(start, end)));
     }
 
     fn emit(
@@ -265,7 +426,7 @@ impl<'a> Lexer<'a> {
         start: usize,
         end: usize,
     ) {
-        let span = Span::new(self.file, start, end);
+        let span = self.span(start, end);
         self.diagnostics
             .push(Diagnostic::error(code, message, span));
     }
@@ -280,7 +441,7 @@ impl<'a> Lexer<'a> {
         } else {
             self.bump();
         }
-        if self.bracket_depth == 0 {
+        if self.layout_enabled() {
             if self.line_has_token {
                 self.push(TokenKind::Newline, start, self.mark());
             }
@@ -299,15 +460,15 @@ impl<'a> Lexer<'a> {
                 match self.peek() {
                     | Some(' ') => {
                         self.bump();
-                        indent += 1;
+                        indent = indent.saturating_add(1);
                     },
                     | Some('\t') => {
                         let start = self.mark();
                         self.bump();
-                        indent += 1;
+                        indent = indent.saturating_add(1);
                         self.error("E0101", "tab character in indentation", start, self.mark());
                         // Keep measuring so the rest of the line still parses.
-                        while let Some(' ') | Some('\t') = self.peek() {
+                        while let Some(' ' | '\t') = self.peek() {
                             if self.peek() == Some('\t') {
                                 let at = self.mark();
                                 self.bump();
@@ -320,7 +481,7 @@ impl<'a> Lexer<'a> {
                             } else {
                                 self.bump();
                             }
-                            indent += 1;
+                            indent = indent.saturating_add(1);
                         }
                     },
                     | _ => break,
@@ -331,11 +492,7 @@ impl<'a> Lexer<'a> {
                     self.at_line_start = false;
                     return false;
                 },
-                | Some('\n') => {
-                    self.bump();
-                    continue;
-                },
-                | Some('\r') => {
+                | Some('\n' | '\r') => {
                     self.bump();
                     continue;
                 },
@@ -346,7 +503,7 @@ impl<'a> Lexer<'a> {
                         // that follows belongs to the current block level, not
                         // to an indent measured from the comment's tail.
                         self.skip_spaces();
-                        if matches!(self.peek(), Some('\n') | Some('\r') | None) {
+                        if matches!(self.peek(), Some('\n' | '\r') | None) {
                             continue;
                         }
                         self.apply_indent(*self.indent_stack.last().unwrap_or(&0));
@@ -359,11 +516,7 @@ impl<'a> Lexer<'a> {
                             self.at_line_start = false;
                             return false;
                         },
-                        | Some('\n') => {
-                            self.bump();
-                            continue;
-                        },
-                        | Some('\r') => {
+                        | Some('\n' | '\r') => {
                             self.bump();
                             continue;
                         },
@@ -388,7 +541,11 @@ impl<'a> Lexer<'a> {
             self.indent_stack.push(indent);
             self.push(TokenKind::Indent, at, at);
         } else if indent < current {
-            while self.indent_stack.len() > 1 && *self.indent_stack.last().unwrap_or(&0) > indent {
+            while self
+                .indent_stack
+                .last()
+                .is_some_and(|&level| level > indent)
+            {
                 self.indent_stack.pop();
                 self.push(TokenKind::Dedent, at, at);
             }
@@ -400,7 +557,9 @@ impl<'a> Lexer<'a> {
                     "E0102",
                     "inconsistent indentation",
                     at,
-                    at + indent.saturating_sub(*self.indent_stack.last().unwrap_or(&0)),
+                    at.saturating_add(
+                        indent.saturating_sub(*self.indent_stack.last().unwrap_or(&0)),
+                    ),
                 );
             }
         }
@@ -410,86 +569,104 @@ impl<'a> Lexer<'a> {
     /// the following text starts a new physical line.
     fn comment(&mut self) -> bool {
         let start = self.mark();
-        if self.src[self.pos..].starts_with("#-") {
-            self.pos += 2;
-            let mut depth = 1usize;
-            let mut newline = false;
-            while self.pos < self.src.len() {
-                if self.src[self.pos..].starts_with("#-") {
-                    self.pos += 2;
-                    depth += 1;
-                } else if self.src[self.pos..].starts_with("-#") {
-                    self.pos += 2;
-                    depth -= 1;
-                    if depth == 0 {
-                        break;
-                    }
-                } else {
-                    if self.peek() == Some('\n') {
-                        newline = true;
-                    }
-                    self.bump();
-                }
-            }
-            if depth != 0 {
+        if self.remaining().starts_with("#-") {
+            let (closed, newline) = self.skip_block_comment();
+            if !closed {
                 self.error("E0104", "unclosed block comment", start, self.mark());
             }
             return newline;
         }
-        if self.src[self.pos..].starts_with("##") {
-            self.pos += 2;
+        if self.remaining().starts_with("##") {
+            self.pos = self.pos.saturating_add(2);
             let text_start = self.pos;
-            while let Some(c) = self.peek() {
-                if c == '\n' {
-                    break;
-                }
-                self.bump();
-            }
-            let text = self.src[text_start..self.pos].trim().to_string();
+            self.skip_to_line_end();
+            let text = self
+                .src
+                .get(text_start..self.pos)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
             self.docs.push(DocComment {
-                span: Span::new(self.file, start, self.mark()),
+                span: self.span(start, self.mark()),
                 text,
             });
             return false;
         }
-        while let Some(c) = self.peek() {
-            if c == '\n' {
-                break;
-            }
-            self.bump();
-        }
+        self.skip_to_line_end();
         false
+    }
+
+    fn skip_block_comment(&mut self) -> (bool, bool) {
+        self.pos = self.pos.saturating_add(2);
+        // Comment delimiters and line breaks are ASCII. Scanning their bytes
+        // lets us skip UTF-8 text without decoding it, and stops only at an
+        // ASCII delimiter or EOF, both of which are character boundaries.
+        let content = self.remaining().as_bytes();
+        let mut bytes = content.iter();
+        let mut depth = 1usize;
+        let mut newline = false;
+        while let Some(&byte) = bytes.next() {
+            match byte {
+                | b'#' if bytes.as_slice().first() == Some(&b'-') => {
+                    bytes.next();
+                    depth = depth.saturating_add(1);
+                },
+                | b'-' if bytes.as_slice().first() == Some(&b'#') => {
+                    bytes.next();
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        break;
+                    }
+                },
+                | b'\r' | b'\n' => newline = true,
+                | _ => {},
+            }
+        }
+        self.pos = self
+            .pos
+            .saturating_add(content.len().saturating_sub(bytes.len()));
+        (depth == 0, newline)
+    }
+
+    fn skip_identifier(&mut self) -> bool {
+        let remaining = self.remaining();
+        let ascii = ascii_identifier_prefix_len(remaining);
+        let tail = remaining.get(ascii..).unwrap_or_default();
+        let unicode = if tail.as_bytes().first().is_some_and(|byte| !byte.is_ascii()) {
+            tail.char_indices()
+                .find_map(|(offset, ch)| {
+                    (!is_xid_continue(ch) && ch != '\'' && !('₀'..='₉').contains(&ch))
+                        .then_some(offset)
+                })
+                .unwrap_or(tail.len())
+        } else {
+            0
+        };
+        self.pos = self.pos.saturating_add(ascii).saturating_add(unicode);
+        unicode == 0
     }
 
     fn identifier(&mut self) {
         let start = self.mark();
-        self.bump();
-        while let Some(c) = self.peek() {
-            if is_xid_continue(c) || c == '\'' || ('₀'..='₉').contains(&c) {
-                self.bump();
-            } else {
-                break;
-            }
-        }
-        let raw = &self.src[start - self.base..self.pos];
+        let ascii = self.skip_identifier();
+        let raw = self.src.get(start..self.pos).unwrap_or_default();
         // §1.5.1: identifiers are compared in NFC, so `é` written as `e` plus a
         // combining accent is the same name as the precomposed one.
-        let normalised: String = raw.nfc().collect();
-        let text: &str = if normalised == raw {
-            raw
+        let text = if ascii {
+            Cow::Borrowed(raw)
         } else {
-            &normalised
+            Cow::Owned(raw.nfc().collect())
         };
-        let kind = match Keyword::from_word(text) {
+        let kind = match Keyword::from_word(&text) {
             | Some(keyword) => TokenKind::Keyword(keyword),
             | None => {
                 // Only ASCII capitals introduce a `UIDENT`: the spec's own
                 // example `Δt` is a value binding, not a constructor (§1.5.1).
                 let first = text.chars().next().unwrap_or('_');
                 if first.is_ascii_uppercase() {
-                    TokenKind::UpperIdent(text.to_string())
+                    TokenKind::UpperIdent(text.into_owned())
                 } else {
-                    TokenKind::Ident(text.to_string())
+                    TokenKind::Ident(text.into_owned())
                 }
             },
         };
@@ -504,7 +681,11 @@ impl<'a> Lexer<'a> {
         {
             self.bump();
         }
-        let text = self.src[start - self.base..self.pos].to_string();
+        let text = self
+            .src
+            .get(start..self.pos)
+            .unwrap_or_default()
+            .to_string();
         self.emit(TokenKind::Ident(text), start);
     }
 
@@ -517,10 +698,18 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
-        let text = self.src[start - self.base..self.pos].to_string();
+        let text = self
+            .src
+            .get(start..self.pos)
+            .unwrap_or_default()
+            .to_string();
         self.emit(TokenKind::Superscript(text), start);
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps numeric literal validation and error recovery together"
+    )]
     fn number(&mut self) {
         let start = self.mark();
         if self.peek() == Some('0')
@@ -646,10 +835,10 @@ impl<'a> Lexer<'a> {
                 self.error("E0106", "numeric literal ends with `_`", at, at);
             }
         }
-        if matches!(self.peek(), Some('e') | Some('E')) {
-            let mut lookahead = 1;
-            if matches!(self.peek_at(lookahead), Some('+') | Some('-')) {
-                lookahead += 1;
+        if matches!(self.peek(), Some('e' | 'E')) {
+            let mut lookahead = 1usize;
+            if matches!(self.peek_at(lookahead), Some('+' | '-')) {
+                lookahead = lookahead.saturating_add(1);
             }
             if self.peek_at(lookahead).is_some_and(|c| c.is_ascii_digit()) {
                 is_float = true;
@@ -678,7 +867,7 @@ impl<'a> Lexer<'a> {
                         "invalid floating-point literal",
                         start,
                         self.mark(),
-                    )
+                    );
                 },
             }
         } else {
@@ -689,27 +878,27 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps literal escapes and string recovery in one scanner"
+    )]
     fn string(&mut self) {
         let start = self.mark();
-        if self.src[self.pos..].starts_with("\"\"\"") {
+        if self.remaining().starts_with("\"\"\"") {
             self.multiline_string(start);
             return;
         }
-        self.pos += 1;
+        self.pos = self.pos.saturating_add(1);
         let mut parts: Vec<StringPart> = Vec::new();
         let mut text = String::new();
         loop {
             match self.peek() {
-                | None => {
+                | None | Some('\r' | '\n') => {
                     self.error("E0104", "unclosed string literal", start, self.mark());
                     break;
                 },
                 | Some('"') => {
                     self.bump();
-                    break;
-                },
-                | Some('\n') => {
-                    self.error("E0104", "unclosed string literal", start, self.mark());
                     break;
                 },
                 | Some('\\') => {
@@ -761,7 +950,11 @@ impl<'a> Lexer<'a> {
                                 }
                                 self.bump();
                             }
-                            let hex = self.src[hex_start..self.pos].to_string();
+                            let hex = self
+                                .src
+                                .get(hex_start..self.pos)
+                                .unwrap_or_default()
+                                .to_string();
                             if self.peek() != Some('}') {
                                 self.error(
                                     "E0104",
@@ -780,7 +973,7 @@ impl<'a> Lexer<'a> {
                                         format!("`\\u{{{hex}}}` is not a Unicode scalar value"),
                                         hex_start,
                                         self.pos,
-                                    )
+                                    );
                                 },
                             }
                         },
@@ -803,7 +996,10 @@ impl<'a> Lexer<'a> {
                     }
                     match self.interpolation() {
                         | Some(part) => parts.push(part),
-                        | None => break,
+                        | None => {
+                            self.skip_to_line_end();
+                            break;
+                        },
                     }
                 },
                 | Some(c) => {
@@ -822,84 +1018,193 @@ impl<'a> Lexer<'a> {
         let open = self.mark();
         self.bump(); // '{'
         let content_start = self.pos;
-        let mut depth = 1usize;
+        let mut protected_delimiters = Vec::new();
+        let before = self.diagnostics.items.len();
+        if !self.skip_interpolation(0, &mut protected_delimiters) {
+            if self.diagnostics.items.len() == before {
+                self.error(
+                    "E0104",
+                    "unclosed interpolation `{...}` in string",
+                    open,
+                    self.mark(),
+                );
+            }
+            return None;
+        }
+        let content_end = self.mark();
+        let raw = self.src.get(content_start..content_end).unwrap_or_default();
+        let span = self.span(content_start, content_end);
+        self.bump(); // '}'
+        // `"{}"` is a placeholder in other languages; here it is an
+        // interpolation with nothing in it.
+        if raw.trim().is_empty() {
+            let span = self.span(open, self.mark());
+            self.diagnostics.push(
+                Diagnostic::error("E0104", "empty interpolation `{}` in a string", span).with_help(
+                    "write an expression inside the braces, `\\{` for a literal brace, \\
+                     or a raw string r\"…\" (no interpolation) for a `format` template",
+                ),
+            );
+            return Some(StringPart::Text(String::new()));
+        }
+        let source = if protected_delimiters.is_empty() {
+            raw.to_owned()
+        } else {
+            let mut source =
+                String::with_capacity(raw.len().saturating_sub(protected_delimiters.len()));
+            let mut previous = content_start;
+            for slash in protected_delimiters {
+                source.push_str(self.src.get(previous..slash).unwrap_or_default());
+                previous = slash.saturating_add(1);
+            }
+            source.push_str(self.src.get(previous..content_end).unwrap_or_default());
+            source
+        };
+        Some(StringPart::Interpolation { source, span })
+    }
+
+    // Follow the lexical delimiters in the embedded expression without
+    // allocating its tokens; the parser lexes it on demand.
+    fn skip_interpolation(
+        &mut self,
+        nesting: usize,
+        protected_delimiters: &mut Vec<usize>,
+    ) -> bool {
+        let mut braces = 1usize;
         while let Some(c) = self.peek() {
+            let delimiter = match c {
+                | '"' if self.remaining().starts_with("\"\"\"") => Some(StringDelimiter::Multiline),
+                | '"' => Some(StringDelimiter::Ordinary),
+                | '\\' if self.remaining().starts_with("\\\"") => Some(StringDelimiter::Protected),
+                | 'r' if self.remaining().starts_with("r\"") => Some(StringDelimiter::Raw),
+                | 'r' if self.remaining().starts_with("r\\\"") => {
+                    Some(StringDelimiter::ProtectedRaw)
+                },
+                | _ => None,
+            };
+            if let Some(delimiter) = delimiter {
+                let start = self.mark();
+                if !self.skip_nested_string(delimiter, nesting, protected_delimiters) {
+                    self.pos = start;
+                    return false;
+                }
+                continue;
+            }
             match c {
-                | '{' => {
-                    depth += 1;
+                | '\\' if matches!(self.peek_at(1), Some('{' | '}')) => {
+                    protected_delimiters.push(self.pos);
                     self.bump();
+                    if self.peek() == Some('{') {
+                        braces = braces.saturating_add(1);
+                    } else if braces > 1 {
+                        braces = braces.saturating_sub(1);
+                    }
                 },
+                | '{' => braces = braces.saturating_add(1),
                 | '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        break;
-                    }
-                    self.bump();
-                },
-                | '\\' => {
-                    // An escape belongs to a nested string literal: consume the
-                    // backslash and its character together, so `\"` does not
-                    // look like the start of a string.
-                    self.bump();
-                    if self.peek().is_some() {
-                        self.bump();
+                    braces = braces.saturating_sub(1);
+                    if braces == 0 {
+                        return true;
                     }
                 },
-                | '"' => {
-                    // Skip a nested string so braces inside it do not count.
-                    self.bump();
-                    while let Some(inner) = self.peek() {
-                        if inner == '\\' {
-                            self.bump();
-                            self.bump();
-                        } else if inner == '"' {
-                            self.bump();
-                            break;
-                        } else {
-                            self.bump();
+                | '#' => {
+                    if self.remaining().starts_with("#-") {
+                        if !self.skip_block_comment().0 {
+                            return false;
                         }
+                    } else {
+                        self.skip_to_line_end();
                     }
+                    continue;
+                },
+                | c if is_xid_start(c) || c == '_' => {
+                    self.skip_identifier();
+                    continue;
+                },
+                | _ => {},
+            }
+            self.bump();
+        }
+        false
+    }
+
+    fn skip_nested_string(
+        &mut self,
+        delimiter: StringDelimiter,
+        nesting: usize,
+        protected_delimiters: &mut Vec<usize>,
+    ) -> bool {
+        const MAX_STRING_NESTING: usize = 96;
+        if nesting == MAX_STRING_NESTING {
+            let at = self.mark();
+            self.error("E0104", "string interpolation nesting is too deep", at, at);
+            return false;
+        }
+        let raw = matches!(
+            delimiter,
+            StringDelimiter::Raw | StringDelimiter::ProtectedRaw
+        );
+        let protected = matches!(
+            delimiter,
+            StringDelimiter::Protected | StringDelimiter::ProtectedRaw
+        );
+        if raw {
+            self.bump(); // 'r'
+        }
+        if protected {
+            protected_delimiters.push(self.pos);
+        }
+        let closing = delimiter.closing();
+        self.pos = self.pos.saturating_add(closing.len());
+        while let Some(c) = self.peek() {
+            if self.remaining().starts_with(closing) {
+                if protected {
+                    protected_delimiters.push(self.pos);
+                }
+                self.pos = self.pos.saturating_add(closing.len());
+                return true;
+            }
+            match c {
+                | '\r' | '\n' if delimiter != StringDelimiter::Multiline => return false,
+                | '\\' if !raw => self.skip_literal_escape(),
+                | '{' if !raw => {
+                    self.bump();
+                    if !self.skip_interpolation(nesting.saturating_add(1), protected_delimiters) {
+                        return false;
+                    }
+                    self.bump(); // '}'
                 },
                 | _ => {
                     self.bump();
                 },
             }
         }
-        if self.peek() != Some('}') {
-            self.error(
-                "E0104",
-                "unclosed interpolation `{...}` in string",
-                open,
-                self.mark(),
-            );
-            return None;
+        false
+    }
+
+    fn skip_literal_escape(&mut self) {
+        self.bump(); // '\\'
+        if self.bump() == Some('u') && self.peek() == Some('{') {
+            self.bump();
+            while let Some(c) = self.peek() {
+                if matches!(c, '"' | '\r' | '\n') {
+                    break;
+                }
+                self.bump();
+                if c == '}' {
+                    break;
+                }
+            }
         }
-        let source = unescape_source(&self.src[content_start..self.pos]);
-        let span = Span::new(self.file, self.base + content_start, self.base + self.pos);
-        self.bump(); // '}'
-        // `"{}"` is a placeholder in other languages; here it is an
-        // interpolation with nothing in it. Name the two ways out instead of
-        // the parser's "expected an expression".
-        if source.trim().is_empty() {
-            let span = Span::new(self.file, open, self.mark());
-            self.diagnostics.push(
-                Diagnostic::error("E0104", "empty interpolation `{}` in a string", span).with_help(
-                    "write an expression inside the braces, `\\{` for a literal brace, \
-                     or a raw string r\"…\" (no interpolation) for a `format` template",
-                ),
-            );
-            return Some(StringPart::Text(String::new()));
-        }
-        Some(StringPart::Interpolation { source, span })
     }
 
     fn raw_string(&mut self) {
         let start = self.mark();
-        self.pos += 1; // opening quote
+        self.pos = self.pos.saturating_add(1); // opening quote
         let content_start = self.pos;
         loop {
             match self.peek() {
-                | None | Some('\n') => {
+                | None | Some('\r' | '\n') => {
                     self.error("E0104", "unclosed raw string literal", start, self.mark());
                     break;
                 },
@@ -909,7 +1214,11 @@ impl<'a> Lexer<'a> {
                 },
             }
         }
-        let text = self.src[content_start..self.pos].to_string();
+        let text = self
+            .src
+            .get(content_start..self.pos)
+            .unwrap_or_default()
+            .to_string();
         if self.peek() == Some('"') {
             self.bump();
         }
@@ -920,112 +1229,132 @@ impl<'a> Lexer<'a> {
         &mut self,
         start: usize,
     ) {
-        self.pos += 3;
+        let delimiter = StringDelimiter::Multiline.closing();
+        self.pos = self.pos.saturating_add(delimiter.len());
         let content_start = self.pos;
-        let mut end = None;
-        while self.pos < self.src.len() {
-            if self.src[self.pos..].starts_with("\"\"\"") {
-                end = Some(self.pos);
-                self.pos += 3;
-                break;
-            }
-            self.bump();
-        }
-        let Some(end) = end else {
-            self.error(
-                "E0104",
-                "unclosed multi-line string literal",
-                start,
-                self.mark(),
-            );
-            return;
-        };
-        let raw = &self.src[content_start..end];
-        let text = dedent_multiline(raw);
-        let span = Span::new(self.file, start, end);
-        let parts = split_interpolations(&text, span, &mut self.diagnostics);
-        self.emit(TokenKind::Str(parts), start);
-    }
-
-    fn punct(&mut self) {
-        let start = self.mark();
-        const CANDIDATES: &[(&str, Punct)] = &[
-            ("...", Punct::Ellipsis),
-            ("..=", Punct::DotDotEq),
-            ("..", Punct::DotDot),
-            ("->", Punct::Arrow),
-            ("=>", Punct::FatArrow),
-            ("<-", Punct::LArrow),
-            ("|>", Punct::PipeGt),
-            ("<|", Punct::LtPipe),
-            ("::", Punct::ColonColon),
-            ("==", Punct::EqEq),
-            ("!=", Punct::NotEq),
-            ("<=", Punct::Le),
-            (">=", Punct::Ge),
-            ("&&", Punct::AndAnd),
-            ("||", Punct::OrOr),
-            ("(", Punct::LParen),
-            (")", Punct::RParen),
-            ("[", Punct::LBracket),
-            ("]", Punct::RBracket),
-            ("{", Punct::LBrace),
-            ("}", Punct::RBrace),
-            (",", Punct::Comma),
-            (";", Punct::Semicolon),
-            (":", Punct::Colon),
-            (".", Punct::Dot),
-            ("|", Punct::Pipe),
-            ("=", Punct::Equals),
-            ("+", Punct::Plus),
-            ("-", Punct::Minus),
-            ("*", Punct::Star),
-            ("/", Punct::Slash),
-            ("^", Punct::Caret),
-            ("@", Punct::At),
-            ("%", Punct::Percent),
-            ("<", Punct::Lt),
-            (">", Punct::Gt),
-            ("!", Punct::Bang),
-            ("?", Punct::Question),
-            ("√", Punct::Sqrt),
-            // Unicode spellings normalised to their ASCII meaning (§1.9).
-            ("·", Punct::Star),
-            ("×", Punct::Star),
-            ("÷", Punct::Slash),
-            ("−", Punct::Minus),
-            ("≤", Punct::Le),
-            ("≥", Punct::Ge),
-            ("≠", Punct::NotEq),
-        ];
-        for (text, punct) in CANDIDATES {
-            if self.src[self.pos..].starts_with(text) {
-                self.pos += text.len();
-                match punct {
-                    | Punct::LParen | Punct::LBracket | Punct::LBrace => {
-                        self.bracket_depth += 1;
-                    },
-                    | Punct::RParen | Punct::RBracket | Punct::RBrace => {
-                        self.bracket_depth = self.bracket_depth.saturating_sub(1);
-                    },
-                    | _ => {},
-                }
-                self.emit(TokenKind::Punct(*punct), start);
+        let mut interpolations = Vec::new();
+        while let Some(c) = self.peek() {
+            if self.remaining().starts_with(delimiter) {
+                let end = self.mark();
+                self.pos = self.pos.saturating_add(delimiter.len());
+                let raw = self.src.get(content_start..end).unwrap_or_default();
+                let span = self.span(start, end);
+                let parts = multiline_parts(raw, span, interpolations, &mut self.diagnostics);
+                self.emit(TokenKind::Str(parts), start);
                 return;
             }
+            match c {
+                | '\\' => self.skip_literal_escape(),
+                | '{' => {
+                    let open = self.pos.saturating_sub(content_start);
+                    let Some(part) = self.interpolation() else {
+                        let remaining = self.remaining();
+                        let skip = remaining
+                            .find(delimiter)
+                            .map_or(remaining.len(), |at| at.saturating_add(delimiter.len()));
+                        self.pos = self.pos.saturating_add(skip);
+                        return;
+                    };
+                    let after = self.pos.saturating_sub(content_start);
+                    interpolations.push((open..after, part));
+                },
+                | _ => {
+                    self.bump();
+                },
+            }
         }
-        let c = self.bump().unwrap_or('\0');
         self.error(
-            "E0105",
-            format!("invalid character `{c}`"),
+            "E0104",
+            "unclosed multi-line string literal",
             start,
             self.mark(),
         );
     }
+
+    fn punct(
+        &mut self,
+        first: char,
+    ) {
+        let bytes = self.remaining().as_bytes();
+        let next = bytes.get(1).copied();
+        let punct = match (first, next) {
+            | ('.', Some(b'.')) => {
+                match bytes.get(2) {
+                    | Some(b'.') => Punct::Ellipsis,
+                    | Some(b'=') => Punct::DotDotEq,
+                    | _ => Punct::DotDot,
+                }
+            },
+            | ('-', Some(b'>')) => Punct::Arrow,
+            | ('=', Some(b'>')) => Punct::FatArrow,
+            | ('<', Some(b'-')) => Punct::LArrow,
+            | ('|', Some(b'>')) => Punct::PipeGt,
+            | ('<', Some(b'|')) => Punct::LtPipe,
+            | (':', Some(b':')) => Punct::ColonColon,
+            | ('=', Some(b'=')) => Punct::EqEq,
+            | ('!', Some(b'=')) | ('≠', _) => Punct::NotEq,
+            | ('<', Some(b'=')) | ('≤', _) => Punct::Le,
+            | ('>', Some(b'=')) | ('≥', _) => Punct::Ge,
+            | ('&', Some(b'&')) => Punct::AndAnd,
+            | ('|', Some(b'|')) => Punct::OrOr,
+            | ('(', _) => Punct::LParen,
+            | (')', _) => Punct::RParen,
+            | ('[', _) => Punct::LBracket,
+            | (']', _) => Punct::RBracket,
+            | ('{', _) => Punct::LBrace,
+            | ('}', _) => Punct::RBrace,
+            | (',', _) => Punct::Comma,
+            | (';', _) => Punct::Semicolon,
+            | (':', _) => Punct::Colon,
+            | ('.', _) => Punct::Dot,
+            | ('|', _) => Punct::Pipe,
+            | ('=', _) => Punct::Equals,
+            | ('+', _) => Punct::Plus,
+            | ('-' | '−', _) => Punct::Minus,
+            | ('*' | '·' | '×', _) => Punct::Star,
+            | ('/' | '÷', _) => Punct::Slash,
+            | ('^', _) => Punct::Caret,
+            | ('@', _) => Punct::At,
+            | ('%', _) => Punct::Percent,
+            | ('<', _) => Punct::Lt,
+            | ('>', _) => Punct::Gt,
+            | ('!', _) => Punct::Bang,
+            | ('?', _) => Punct::Question,
+            | ('√', _) => Punct::Sqrt,
+            | _ => {
+                let start = self.mark();
+                self.pos = self.pos.saturating_add(first.len_utf8());
+                self.error(
+                    "E0105",
+                    format!("invalid character `{first}`"),
+                    start,
+                    self.mark(),
+                );
+                return;
+            },
+        };
+        let start = self.mark();
+        let width = if first.is_ascii() {
+            punct.as_str().len()
+        } else {
+            first.len_utf8()
+        };
+        self.pos = self.pos.saturating_add(width);
+        match punct {
+            | Punct::LParen | Punct::LBracket | Punct::LBrace => {
+                self.bracket_depth = self.bracket_depth.saturating_add(1);
+            },
+            | Punct::RParen | Punct::RBracket | Punct::RBrace => {
+                self.bracket_depth = self.bracket_depth.saturating_sub(1);
+            },
+            | _ => {},
+        }
+        self.emit(TokenKind::Punct(punct), start);
+    }
 }
 
 /// True for the characters that may appear in a superscript exponent.
-fn is_superscript(c: char) -> bool {
+const fn is_superscript(c: char) -> bool {
     matches!(
         c,
         '\u{2070}'
@@ -1040,128 +1369,60 @@ fn is_superscript(c: char) -> bool {
     )
 }
 
-/// Removes the first newline and the common indentation of a `"""` literal.
-/// Removes the escapes that only exist to protect the enclosing literal.
-///
-/// Inside `{...}` a nested string is written with plain quotes; a writer who
-/// escapes them (`\"`) means the same thing, and the parser should not see the
-/// backslash.
-fn unescape_source(source: &str) -> String {
-    let mut out = String::with_capacity(source.len());
-    let mut chars = source.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            match chars.peek() {
-                | Some('"') | Some('{') | Some('}') => {
-                    if let Some(escaped) = chars.next() {
-                        out.push(escaped);
-                    }
-                },
-                | _ => out.push('\\'),
-            }
-            continue;
-        }
-        out.push(ch);
-    }
-    out
-}
-
-/// Splits text into literal runs and interpolations.
-///
-/// `\{` is a literal brace, as in a single-line string. Literal runs keep the
-/// escapes of §1.7 — they are decoded here exactly as in a `"..."` literal, so
-/// `"""x\ty"""` contains a tab and not a `t`. The span is the literal's,
-/// because the dedented text no longer lines up with the source.
-fn split_interpolations(
-    text: &str,
+/// Dedents the literal text while using the already-scanned source ranges
+/// to splice in expression parts. Layout within an expression is ignored by
+/// the inline lexer, so embedded source can retain its original whitespace.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps multiline text normalization separate from delimiter scanning"
+)]
+fn multiline_parts(
+    raw: &str,
     span: Span,
+    interpolations: Vec<(std::ops::Range<usize>, StringPart)>,
     diagnostics: &mut Diagnostics,
 ) -> Vec<StringPart> {
-    let mut parts = Vec::new();
-    let mut literal = String::new();
-    let mut chars = text.char_indices().peekable();
-    let mut flush = |literal: &mut String, parts: &mut Vec<StringPart>| {
-        if literal.is_empty() {
-            return;
-        }
-        let raw = std::mem::take(literal);
-        let mut bad: Vec<String> = Vec::new();
-        let decoded = decode_escapes(&raw, |escape| bad.push(escape.to_string()));
-        for escape in bad {
-            diagnostics.push(Diagnostic::error(
-                "E0105",
-                format!("unknown escape `{escape}`"),
-                span,
-            ));
-        }
-        parts.push(StringPart::Text(decoded));
+    let (text, lines) = dedent_multiline(raw, !interpolations.is_empty());
+    let dedented_offset = |offset: usize| {
+        let line = lines.partition_point(|&(raw_start, _)| raw_start <= offset);
+        lines
+            .get(line.saturating_sub(1))
+            .map_or(0, |&(raw_start, text_start)| {
+                text_start.saturating_add(offset.saturating_sub(raw_start))
+            })
     };
-    while let Some((_, ch)) = chars.next() {
-        match ch {
-            | '\\' => {
-                // Keep the escape verbatim; the run is decoded when it is
-                // flushed, so `\{` never starts an interpolation.
-                literal.push('\\');
-                match chars.next() {
-                    | Some((_, 'u')) => {
-                        literal.push('u');
-                        if matches!(chars.peek(), Some((_, '{'))) {
-                            for (_, inner) in chars.by_ref() {
-                                literal.push(inner);
-                                if inner == '}' {
-                                    break;
-                                }
-                            }
-                        }
-                    },
-                    | Some((_, escaped)) => literal.push(escaped),
-                    | None => {},
-                }
-            },
-            | '{' => {
-                let start = chars.peek().map_or(text.len(), |(index, _)| *index);
-                let mut depth = 1usize;
-                let mut end = text.len();
-                while let Some((index, inner)) = chars.next() {
-                    match inner {
-                        | '{' => depth += 1,
-                        | '}' => {
-                            depth -= 1;
-                            if depth == 0 {
-                                end = index;
-                                break;
-                            }
-                        },
-                        | '\\' => {
-                            chars.next();
-                        },
-                        | '"' => {
-                            // A nested string may contain braces.
-                            for (_, quoted) in chars.by_ref() {
-                                if quoted == '"' {
-                                    break;
-                                }
-                            }
-                        },
-                        | _ => {},
-                    }
-                }
-                flush(&mut literal, &mut parts);
-                parts.push(StringPart::Interpolation {
-                    source: unescape_source(&text[start..end]),
+    let mut parts = Vec::new();
+    let mut append_text = |literal: &str, parts: &mut Vec<StringPart>| {
+        if !literal.is_empty() {
+            let decoded = decode_escapes(literal, |escape| {
+                diagnostics.push(Diagnostic::error(
+                    "E0105",
+                    format!("unknown escape `{escape}`"),
                     span,
-                });
-            },
-            | other => literal.push(other),
+                ));
+            });
+            parts.push(StringPart::Text(decoded));
         }
+    };
+    let mut previous = 0;
+    for (range, part) in interpolations {
+        let open = dedented_offset(range.start);
+        let after = dedented_offset(range.end);
+        append_text(text.get(previous..open).unwrap_or_default(), &mut parts);
+        parts.push(part);
+        previous = after;
     }
-    flush(&mut literal, &mut parts);
+    append_text(text.get(previous..).unwrap_or_default(), &mut parts);
     parts
 }
 
 /// Decodes the escapes of §1.7 (`\n`, `\t`, `\r`, `\0`, `\\`, `\"`, `\{`,
 /// `\}`, `\u{...}`). An unknown escape is reported through `on_error` and its
 /// character is kept, so no source text is lost.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps escape decoding separate from interpolation splitting"
+)]
 fn decode_escapes(
     text: &str,
     mut on_error: impl FnMut(&str),
@@ -1211,36 +1472,150 @@ fn decode_escapes(
     out
 }
 
-fn dedent_multiline(raw: &str) -> String {
-    let raw = raw.strip_prefix('\n').unwrap_or(raw);
-    let raw = raw.strip_prefix("\r\n").unwrap_or(raw);
-    let lines: Vec<&str> = raw.lines().collect();
-    let mut common: Option<usize> = None;
-    for line in &lines {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let indent = line.len() - line.trim_start_matches([' ', '\t']).len();
-        common = Some(common.map_or(indent, |value: usize| value.min(indent)));
-    }
-    let common = common.unwrap_or(0);
-    let mut out = String::new();
-    for (index, line) in lines.iter().enumerate() {
+/// Removes the first line ending and common indentation, returning the
+/// original and dedented start of each line. Only the literal's text uses
+/// normalized newlines; the expression ranges remain tied to the input.
+#[allow(clippy::single_call_fn, reason = "isolates indentation normalization")]
+fn dedent_multiline(
+    raw: &str,
+    track_offsets: bool,
+) -> (String, Vec<(usize, usize)>) {
+    let without_leading = raw
+        .strip_prefix("\r\n")
+        .or_else(|| raw.strip_prefix(['\r', '\n']));
+    let body = without_leading.unwrap_or(raw);
+    let leading = raw.len().saturating_sub(body.len());
+    let common = physical_lines(body)
+        .map(|(_, line)| line)
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            line.len()
+                .saturating_sub(line.trim_start_matches([' ', '\t']).len())
+        })
+        .min()
+        .unwrap_or(0);
+    let mut text = String::new();
+    let mut starts = Vec::new();
+    for (index, (start, line)) in physical_lines(body).enumerate() {
         if index > 0 {
-            out.push('\n');
+            text.push('\n');
         }
-        if line.trim().is_empty() {
-            continue;
+        if !line.trim().is_empty() {
+            if track_offsets {
+                starts.push((
+                    leading.saturating_add(start).saturating_add(common),
+                    text.len(),
+                ));
+            }
+            text.push_str(line.get(common..).unwrap_or_default());
         }
-        out.push_str(&line[common.min(line.len())..]);
     }
-    out
+    (text, starts)
+}
+
+fn physical_lines(raw: &str) -> impl Iterator<Item = (usize, &str)> {
+    let mut remaining = raw;
+    std::iter::from_fn(move || {
+        if remaining.is_empty() {
+            return None;
+        }
+        let start = raw.len().saturating_sub(remaining.len());
+        let end = remaining.find(['\r', '\n']).unwrap_or(remaining.len());
+        let (line, rest) = remaining.split_at(end);
+        remaining = rest
+            .strip_prefix("\r\n")
+            .or_else(|| rest.strip_prefix(['\r', '\n']))
+            .unwrap_or(rest);
+        Some((start, line))
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::token::TokenKind;
+
+    #[test]
+    fn punctuation_keeps_longest_matches_and_original_widths() {
+        let source =
+            "... ..= .. . => == = -> - <- <= <| < |> || | >= > :: : && != ! · × ÷ − ≤ ≥ ≠ √";
+        let lexed = lex_inline(1, source, 0);
+        let punct: Vec<_> = lexed
+            .tokens
+            .iter()
+            .filter_map(|token| {
+                match token.kind {
+                    | TokenKind::Punct(punct) => {
+                        let written = &source[token.span.start as usize..token.span.end as usize];
+                        Some((written, punct.as_str()))
+                    },
+                    | _ => None,
+                }
+            })
+            .collect();
+        let expected: Vec<_> = source
+            .split_whitespace()
+            .map(|written| {
+                let canonical = match written {
+                    | "·" | "×" => "*",
+                    | "÷" => "/",
+                    | "−" => "-",
+                    | "≤" => "<=",
+                    | "≥" => ">=",
+                    | "≠" => "!=",
+                    | _ => written,
+                };
+                (written, canonical)
+            })
+            .collect();
+        assert_eq!(punct, expected);
+    }
+
+    #[test]
+    fn unmatched_inline_closers_do_not_turn_layout_back_on() {
+        let lexed = lex_inline(7, ")\r\n\t42", 10);
+        assert!(matches!(
+            &lexed.tokens[..],
+            [
+                Token {
+                    kind: TokenKind::Punct(Punct::RParen),
+                    ..
+                },
+                Token {
+                    kind: TokenKind::Int(_),
+                    ..
+                },
+                Token {
+                    kind: TokenKind::Eof,
+                    ..
+                },
+            ]
+        ));
+    }
+
+    #[test]
+    fn inline_lexing_keeps_local_text_at_saturating_offsets() {
+        let output = lex_inline(7, "x + 1", usize::MAX);
+        assert!(
+            matches!(output.tokens.first().map(|token| &token.kind), Some(TokenKind::Ident(name)) if name == "x")
+        );
+        assert!(output.tokens.iter().all(|token| {
+            token.span
+                == Span {
+                    file: 7,
+                    start: u32::MAX,
+                    end: u32::MAX,
+                }
+        }));
+        let output = lex_inline(7, "\"", usize::MAX);
+        assert!(matches!(
+            output.tokens.as_slice(),
+            [Token {
+                kind: TokenKind::Eof,
+                ..
+            }]
+        ));
+    }
 
     fn kinds(source: &str) -> Vec<TokenKind> {
         let output = lex(0, source).expect("lexes");

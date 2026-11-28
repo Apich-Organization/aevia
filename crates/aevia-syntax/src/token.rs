@@ -101,7 +101,7 @@ impl Keyword {
 
     /// The source spelling.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             | Self::As => "as",
             | Self::Class => "class",
@@ -228,7 +228,7 @@ pub enum Punct {
 impl Punct {
     /// The source spelling.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             | Self::LParen => "(",
             | Self::RParen => ")",
@@ -283,15 +283,16 @@ impl fmt::Display for Punct {
 }
 
 /// One piece of a string literal.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StringPart {
     /// Literal text, with escapes already decoded.
     Text(String),
-    /// `{expr}`: the raw source of the embedded expression.
+    /// `{expr}`: the source of the embedded expression and its original range.
     Interpolation {
-        /// The expression source, without the braces.
+        /// The expression source, excluding the enclosing braces and any
+        /// backslashes that protect a quote or brace in the expression.
         source: String,
-        /// The span of the source, so sub-lexing reports correct positions.
+        /// The original byte range between the interpolation's braces.
         span: Span,
     },
 }
@@ -358,7 +359,7 @@ pub struct Token {
 impl Token {
     /// Creates a token.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         kind: TokenKind,
         span: Span,
     ) -> Self {

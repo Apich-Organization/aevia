@@ -69,6 +69,65 @@ fn code(output: &Output) -> i32 {
 }
 
 #[test]
+fn rssn_backend_selectors_are_available_from_the_cli() {
+    let scratch = Scratch::new("rssn-backend");
+    for name in ["interpreter", "cpu", "cpu-parallel"] {
+        let output = aevia(scratch.path(), &["devices", "--rssn-backend", name]);
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+        assert!(stdout(&output).contains(&format!("RSSN backend: {name}\n")));
+    }
+    let output = aevia(scratch.path(), &["--rssn-backend=auto", "devices"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let devices = stdout(&output);
+    assert!(devices.contains("RSSN choices: auto, interpreter"));
+    if devices
+        .lines()
+        .any(|line| line.contains("RSSN choices:") && line.contains("cranelift"))
+    {
+        let output = aevia(scratch.path(), &["--rssn-backend=jit", "devices"]);
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+        assert!(stdout(&output).contains("RSSN backend: cranelift\n"));
+    }
+    let denied = aevia(
+        scratch.path(),
+        &["--caps=", "--rssn-backend=gpu", "devices"],
+    );
+    assert_eq!(code(&denied), 2);
+    assert!(stderr(&denied).contains("requires the `gpu` capability"));
+    let invalid = aevia(scratch.path(), &["devices", "--rssn-backend=bogus"]);
+    assert_eq!(code(&invalid), 2);
+    assert!(stderr(&invalid).contains("backend `bogus` is unavailable"));
+}
+
+#[test]
+fn run_workers_use_the_checked_import_revision() {
+    let scratch = Scratch::new("worker-source-revision");
+    let original = "fn value(_i: Int): Int = 1\n";
+    let replacement = "fn value(_i: Int): Int = 2\n";
+    let helper = scratch.write("Helper.aev", original);
+    scratch.write(
+        "main.aev",
+        r#"import Helper as H
+
+fn main(): IO Unit = do
+    _ <- write_file("Helper.aev", "fn value(_i: Int): Int = 2\n")
+    let values = par_tabulate(64, H.value)
+    println("{sum(values)}")
+"#,
+    );
+    for jobs in ["1", "2"] {
+        std::fs::write(&helper, original).expect("restore original import");
+        let output = aevia(
+            scratch.path(),
+            &["--release", "--jobs", jobs, "run", "--no-cache", "main.aev"],
+        );
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+        assert_eq!(stdout(&output), "64\n", "jobs={jobs}");
+        assert_eq!(std::fs::read_to_string(&helper).unwrap(), replacement);
+    }
+}
+
+#[test]
 fn init_writes_a_package_that_runs() {
     let scratch = Scratch::new("init");
     let output = aevia(scratch.path(), &["init", "demo"]);
@@ -160,6 +219,49 @@ fn add_and_update_resolve_path_dependencies() {
     let output = aevia(&demo, &["run"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert_eq!(stdout(&output), "2000\n");
+}
+
+#[test]
+fn add_uses_the_requested_alias_for_a_path_dependency() {
+    let scratch = Scratch::new("add-path-alias");
+    assert_eq!(code(&aevia(scratch.path(), &["init", "dep"])), 0);
+    assert_eq!(code(&aevia(scratch.path(), &["init", "demo"])), 0);
+    scratch.write("dep/src/Convert.aev", "fn mm(x: Int): Int = x * 1000\n");
+    scratch.write(
+        "demo/src/main.aev",
+        "import Renamed.Convert as C\n\nfn main(): IO Unit = println(\"{C.mm(2)}\")\n",
+    );
+    let demo = scratch.path().join("demo");
+    let added = aevia(&demo, &["add", "../dep", "--as", "Renamed"]);
+    assert_eq!(code(&added), 0, "{}", stderr(&added));
+    let manifest = std::fs::read_to_string(demo.join("aevia.toml")).expect("manifest");
+    assert!(
+        manifest.contains("Renamed = { path = \"../dep\" }"),
+        "{manifest}"
+    );
+    let lock = std::fs::read_to_string(demo.join("aevia.lock")).expect("lock");
+    assert!(lock.contains("import = \"Renamed\""), "{lock}");
+    let run = aevia(&demo, &["--locked", "run"]);
+    assert_eq!(code(&run), 0, "{}", stderr(&run));
+    assert_eq!(stdout(&run), "2000\n");
+}
+
+#[test]
+fn add_rejects_extra_packages_before_mutating_the_manifest() {
+    let scratch = Scratch::new("add-extra-package");
+    assert_eq!(code(&aevia(scratch.path(), &["init", "one"])), 0);
+    assert_eq!(code(&aevia(scratch.path(), &["init", "two"])), 0);
+    assert_eq!(code(&aevia(scratch.path(), &["init", "demo"])), 0);
+    let demo = scratch.path().join("demo");
+    let manifest = demo.join("aevia.toml");
+    let lock = demo.join("aevia.lock");
+    let manifest_before = std::fs::read(&manifest).expect("manifest");
+    let lock_before = std::fs::read(&lock).expect("lock");
+    let added = aevia(&demo, &["add", "../one", "../two"]);
+    assert_eq!(code(&added), 2);
+    assert!(stderr(&added).contains("unexpected argument `../two`"));
+    assert_eq!(std::fs::read(&manifest).expect("manifest"), manifest_before);
+    assert_eq!(std::fs::read(&lock).expect("lock"), lock_before);
 }
 
 #[test]
@@ -437,6 +539,23 @@ fn clean_removes_the_build_directory_and_says_when_there_is_none() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn clean_keeps_the_contents_of_a_linked_cache_directory() {
+    let scratch = Scratch::new("clean-symlink");
+    assert_eq!(code(&aevia(scratch.path(), &["init", "demo"])), 0);
+    let demo = scratch.path().join("demo");
+    let outside = scratch.path().join("outside");
+    let retained = scratch.write("outside/data.txt", "keep this\n");
+    scratch.write("outside/registry/index", "cached registry data\n");
+    std::os::unix::fs::symlink(&outside, demo.join(".aevia")).unwrap();
+
+    let output = aevia(&demo, &["clean"]);
+    assert_ne!(code(&output), 0);
+    assert!(stderr(&output).contains("must be a cache directory"));
+    assert_eq!(std::fs::read_to_string(retained).unwrap(), "keep this\n");
+}
+
 #[test]
 fn lsp_serves_the_protocol_over_stdio() {
     use std::io::Write;
@@ -492,6 +611,56 @@ fn rssn_audit_reports_typed_callback_aliases() {
         text.contains(&format!("typed callback alias: {alias}")),
         "{text}"
     );
+}
+
+#[test]
+fn rssn_describe_reports_operator_docs_and_callable_binding() {
+    let scratch = Scratch::new("rssn-describe");
+    let output = aevia(
+        scratch.path(),
+        &[
+            "rssn",
+            "--describe",
+            "numerical_vector.num_signal_autocovariance",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let text = stdout(&output);
+    for expected in [
+        "numerical_vector.num_signal_autocovariance",
+        "biased sample autocovariances",
+        "crate::kernels::signal::autocovariance",
+        "Kernel signatures (declared)",
+        "Rssn.num_signal_autocovariance (typed)",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in {text}");
+    }
+    let unknown = aevia(scratch.path(), &["rssn", "--describe", "no_such_operator"]);
+    assert_eq!(code(&unknown), 1);
+    assert!(stderr(&unknown).contains("unknown operator `no_such_operator`"));
+    let missing = aevia(scratch.path(), &["rssn", "--describe"]);
+    assert_eq!(code(&missing), 2);
+}
+
+#[test]
+fn rssn_manifest_json_matches_the_linked_kernel() {
+    let scratch = Scratch::new("rssn-manifest-json");
+    let output = aevia(scratch.path(), &["rssn", "--manifest-json"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let exported: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("one plain JSON document");
+    let linked = aevia_rssn::kernel::kernel().manifest();
+    let expected: serde_json::Value =
+        serde_json::from_str(&linked.to_json()).expect("canonical RSSN manifest");
+    assert!(
+        exported == expected,
+        "the CLI must export the linked manifest"
+    );
+
+    let mixed = aevia(scratch.path(), &["rssn", "--manifest-json", "--audit"]);
+    assert_eq!(code(&mixed), 2);
+    assert!(mixed.stdout.is_empty());
+    assert!(stderr(&mixed).contains("--manifest-json must be used alone"));
 }
 
 #[test]
@@ -574,15 +743,16 @@ fn locked_refuses_an_out_of_date_lock_instead_of_rewriting_it() {
 }
 
 #[test]
-fn the_flags_with_no_effect_are_reported_rather_than_dropped() {
-    // §9.9 lists `--release` and `--jobs`. There is no code generator and no
-    // parallel phase, so the flags are accepted and the user is told so.
+fn release_and_jobs_flags_are_accepted() {
     let scratch = Scratch::new("flags");
     scratch.write("a.aev", "let x = 1\n");
     let output = aevia(scratch.path(), &["check", "--release", "a.aev"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
-    assert!(stderr(&output).contains("--release"), "{}", stderr(&output));
-    assert!(stderr(&output).contains("no effect"), "{}", stderr(&output));
+    assert!(
+        !stderr(&output).contains("no effect"),
+        "{}",
+        stderr(&output)
+    );
 
     // `--jobs` sizes the parallel-evaluation worker pool (§9.7): no note.
     let output = aevia(scratch.path(), &["check", "--jobs", "4", "a.aev"]);
@@ -636,6 +806,55 @@ fn test_filter_selects_by_name_and_refuses_an_empty_selection() {
 }
 
 #[test]
+fn source_tests_release_their_native_objects_after_success_and_failure() {
+    let scratch = Scratch::new("test-native-object-scope");
+    scratch.write("suite.aev", r#"
+let frame = unwrap_or(Rssn.dynamic("num_grid_frame_new", [to_value(1.0 m), to_value(1.0 s), to_value(1.0 K)]), to_value(0))
+
+fn object_count(): Int =
+    match Rssn.dynamic("num_native_usage", []) with
+    | Ok(data) ->
+        match from_value<{ objects: Int, bytes: Int }>(data) with
+        | Ok(info) -> info.objects
+        | Err(_) -> -1
+    | Err(_) -> -1
+
+fn allocate_grid(): Bool =
+    match Rssn.dynamic("num_grid_legacy_fdm_new", [frame, to_value([2])]) with
+    | Ok(_) -> true
+    | Err(_) -> false
+
+test "uses the file-scope frame" =
+    let before = object_count()
+    let allocated = allocate_grid()
+    before == 1 && allocated && object_count() == 2
+
+test "failure discards its objects" =
+    let allocated = allocate_grid()
+    allocated && object_count() == 0
+
+test "the next test can reuse the original frame" =
+    object_count() == 1 && allocate_grid()
+"#);
+    let output = aevia(scratch.path(), &["test", "suite.aev"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let out = stdout(&output);
+    assert!(
+        out.contains("test uses the file-scope frame ... ok"),
+        "{out}"
+    );
+    assert!(
+        out.contains("test failure discards its objects ... FAILED (returned false)"),
+        "{out}"
+    );
+    assert!(
+        out.contains("test the next test can reuse the original frame ... ok"),
+        "{out}"
+    );
+    assert!(out.contains("2 passed, 1 failed"), "{out}");
+}
+
+#[test]
 fn check_all_checks_modules_the_entry_does_not_import() {
     let scratch = Scratch::new("check-all");
     assert_eq!(code(&aevia(scratch.path(), &["init", "demo"])), 0);
@@ -652,6 +871,38 @@ fn check_all_checks_modules_the_entry_does_not_import() {
         stderr(&output).contains("orphan.aev"),
         "{}",
         stderr(&output)
+    );
+}
+
+#[test]
+fn check_all_reports_identical_errors_in_each_source_file() {
+    let scratch = Scratch::new("check-all-identical-errors");
+    assert_eq!(code(&aevia(scratch.path(), &["init", "demo"])), 0);
+    let demo = scratch.path().join("demo");
+    // These errors share a code, message, and byte range, but belong to
+    // separate modules. Their source locations must survive deduplication.
+    scratch.write(
+        "demo/src/First.aev",
+        "module First\n\nfn value(): Int = 1 m + 1\n",
+    );
+    scratch.write(
+        "demo/src/Other.aev",
+        "module Other\n\nfn value(): Int = 1 m + 1\n",
+    );
+
+    let output = aevia(&demo, &["--color", "never", "check", "--all"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert_eq!(errors.matches("error[E0401]").count(), 2, "{errors}");
+    let first = errors.find("First.aev:3:").expect("First source location");
+    let other = errors.find("Other.aev:3:").expect("Other source location");
+    assert!(first < other, "{errors}");
+    let status = stdout(&output);
+    assert_eq!(status.matches(": ok").count(), 1, "{status}");
+    assert!(status.contains("main.aev: ok"), "{status}");
+    assert!(
+        status.contains("checked 3 entries: 3 modules, 3 checks"),
+        "{status}"
     );
 }
 
@@ -738,6 +989,71 @@ fn check_accepts_several_files() {
 }
 
 #[test]
+fn lint_emits_one_uncolored_structured_report_for_multiple_files() {
+    let scratch = Scratch::new("lint-multiple-files");
+    scratch.write("First.aev", "fn value(): Int = 1 m + 1\n");
+    scratch.write("Clean.aev", "fn value(): Int = 1\n");
+    scratch.write("Other.aev", "\n\nfn value(): Int = 1 m + 1\n");
+
+    for format in ["json", "sarif"] {
+        let output = aevia(
+            scratch.path(),
+            &[
+                "--color",
+                "always",
+                "lint",
+                "--no-cache",
+                "--format",
+                format,
+                "Other.aev",
+                "Clean.aev",
+                "First.aev",
+            ],
+        );
+        assert_eq!(code(&output), 1, "{}", stderr(&output));
+        assert!(output.stderr.is_empty(), "{}", stderr(&output));
+        let report: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("one plain JSON document");
+        let (files, lines): (Vec<_>, Vec<_>) = if format == "json" {
+            assert_eq!(report["version"], 1);
+            assert_eq!(report["has_errors"], true);
+            report["diagnostics"]
+                .as_array()
+                .expect("diagnostics")
+                .iter()
+                .map(|item| {
+                    assert_eq!(item["code"], "E0401");
+                    (
+                        item["file"].as_str().unwrap(),
+                        item["start_line"].as_u64().unwrap(),
+                    )
+                })
+                .unzip()
+        } else {
+            assert_eq!(report["version"], "2.1.0");
+            assert_eq!(report["runs"].as_array().expect("runs").len(), 1);
+            report["runs"][0]["results"]
+                .as_array()
+                .expect("results")
+                .iter()
+                .map(|item| {
+                    assert_eq!(item["ruleId"], "E0401");
+                    let location = &item["locations"][0]["physicalLocation"];
+                    (
+                        location["artifactLocation"]["uri"].as_str().unwrap(),
+                        location["region"]["startLine"].as_u64().unwrap(),
+                    )
+                })
+                .unzip()
+        };
+        assert_eq!(files.len(), 2);
+        assert!(files[0].ends_with("Other.aev"), "{files:?}");
+        assert!(files[1].ends_with("First.aev"), "{files:?}");
+        assert_eq!(lines, vec![3, 1]);
+    }
+}
+
+#[test]
 fn check_expands_a_pattern_the_shell_did_not() {
     // PowerShell passes `*.aev` to a native executable verbatim, so the tool
     // expands the final component itself; a POSIX shell expands it first and
@@ -793,7 +1109,12 @@ fn the_help_lists_the_commands_that_exist() {
     // The doctest and bench protocols are documented where the user looks.
     assert!(text.contains("compile_fail"), "{text}");
     assert!(text.contains("median of N"), "{text}");
-    assert!(text.contains("no registry"), "{text}");
+    assert!(text.contains("aevia publish"), "{text}");
+    assert!(
+        text.contains("registry packages are resolved")
+            || text.contains("Registry packages are resolved"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -1054,7 +1375,7 @@ fn doctest_mode_says_so_when_there_is_nothing_to_check() {
     let output = aevia(scratch.path(), &["test", "--doc", "plain.aev"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("no ```aevia code blocks"),
+        stderr(&output).contains("no fenced `aevia` code blocks"),
         "{}",
         stderr(&output)
     );
@@ -1097,6 +1418,54 @@ fn bench_profile() -> &'static str {
     } else {
         "release"
     }
+}
+
+#[test]
+fn benchmark_baselines_require_matching_runtime_optimization() {
+    let scratch = Scratch::new("bench-release-setting");
+    scratch.write(
+        "bench.aev",
+        "@bench\nfn sample(): Int = if true then 42 else 0\n",
+    );
+    let output = aevia(
+        scratch.path(),
+        &[
+            "bench",
+            "--release",
+            "--iterations",
+            "1",
+            "--warmup",
+            "0",
+            "--save-baseline",
+            "baseline.json",
+            "bench.aev",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let saved: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(scratch.path().join("baseline.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved["optimized_ir"], true);
+    let output = aevia(
+        scratch.path(),
+        &[
+            "bench",
+            "--iterations",
+            "1",
+            "--warmup",
+            "0",
+            "--compare-baseline",
+            "baseline.json",
+            "bench.aev",
+        ],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("IR optimization settings"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]

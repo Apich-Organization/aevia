@@ -1,0 +1,377 @@
+## Native continuum methods execute in RSSN with retained dimensional references.
+import Rssn_numerical_vector as Native
+open Units.SI
+
+test "a cut tetrahedron preserves its open fraction when edge differences overflow" =
+    let max_value = 1.7976931348623157e308
+    Native.num_grid_simplex_positive_fraction([max_value, max_value, -max_value, -max_value]) == 0.5
+
+fn continuum_native(name: String, args: Tensor<1, Value>): Option<Value> =
+    match Rssn.dynamic(name, args) with
+    | Ok(value) -> Some(value)
+    | Err(_) -> None
+
+fn continuum_refs(): Option<Value> =
+    continuum_native("num_grid_mechanical_references", [to_value(2.0 m), to_value(4.0 s), to_value(3.0 kg), to_value(1.0 K)])
+
+fn continuum_frame(): Option<Value> =
+    continuum_native("num_grid_frame_new", [to_value(2.0 m), to_value(4.0 s), to_value(3.0 K)])
+
+test "prepared 3D Fourier modes retain the reference and conjugate signed frequencies" =
+    let frame = unwrap_or(continuum_frame(), to_value(0))
+    let coefficient = Native.num_analysis_complex_scalar_complex(1.0, 0.0)
+    let arguments = [frame, to_value([3, 1, 1]), to_value([2.0943951023931953, 1.0, 1.0]), to_value([coefficient, coefficient, coefficient]), to_value([1.0, 0.0, 0.0]), to_value(0.25), to_value(0.5), to_value(2)]
+    match continuum_native("num_grid_sm_advance_advection_diffusion_3d_modes", arguments) with
+    | Some(result) ->
+        match from_value<{ shape: Tensor<1, Int>, data: Tensor<1, Complex>, reference: Float[Temperature] }>(result) with
+        | Ok(modes) ->
+            let positive = at(modes.data, 1)
+            let negative = at(modes.data, 2)
+            modes.reference == 3.0 K && length(modes.data) == 3 && approx_eq(re(positive), 0.515625, 1e-14) && approx_eq(im(positive), -0.875, 1e-14) && approx_eq(re(positive), re(negative), 1e-14) && approx_eq(im(positive), -im(negative), 1e-14)
+        | Err(_) -> false
+    | None -> false
+
+test "prepared hyperelastic tangent restores the pressure reference" =
+    let refs = unwrap_or(continuum_refs(), to_value(0))
+    let material = unwrap_or(continuum_native("num_grid_hyper_material", [refs, to_value("NeoHookean"), to_value(10.0), to_value(0.25), to_value(1.0)]), to_value(0))
+    let identity = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    let direction = [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
+    let point = unwrap_or(continuum_native("num_grid_hyper_prepare_point", [material, to_value(identity)]), to_value(0))
+    let stress = unwrap_or(continuum_native("num_grid_hyper_point_tangent_action", [point, to_value(direction)]), to_value(0))
+    let energy = unwrap_or(continuum_native("num_grid_hyper_point_energy_density", [point]), to_value(0))
+    match (from_value<Tensor<2, Float[Mass/(Length*Time^2)]>>(stress), from_value<Float[Mass/(Length*Time^2)]>(energy)) with
+    | (Ok(delta), Ok(density)) -> delta[0, 0] == 1.125 Pa && delta[1, 1] == 0.375 Pa && density == 0.0 Pa
+    | _ -> false
+
+test "a prepared boundary-element plan reuses the fixed surface and returns kelvin" =
+    let frame = unwrap_or(continuum_frame(), to_value(0))
+    let center = to_value([0.0, 0.0, 0.0])
+    let mesh = unwrap_or(continuum_native("num_grid_bem_mesh_cube", [frame, to_value(1.0), center, to_value(1)]), to_value(0))
+    let kinds = map(fn (_: Int) => "Potential", range(0, 12))
+    let plan = unwrap_or(continuum_native("num_grid_bem_prepare3", [mesh, to_value(kinds)]), to_value(0))
+    let panels = unwrap_or(continuum_native("num_grid_bem_plan_panel_count", [plan]), to_value(0))
+    let values = map(fn (_: Int) => 2.0, range(0, 12))
+    let solution = unwrap_or(continuum_native("num_grid_bem_solve3_prepared", [plan, to_value(values)]), to_value(0))
+    let at_center = unwrap_or(continuum_native("num_grid_bem_eval3", [solution, center]), to_value(0))
+    match (from_value<Int>(panels), from_value<Float[Temperature]>(at_center)) with
+    | (Ok(12), Ok(potential)) -> approx_eq(potential, 6.0 K, 1e-2 K)
+    | _ -> false
+
+test "the exterior BEM potential decays and cannot be evaluated as an interior solution" =
+    let frame = unwrap_or(continuum_frame(), to_value(0))
+    let center = to_value([0.0, 0.0, 0.0])
+    let mesh = unwrap_or(continuum_native("num_grid_bem_mesh_icosphere", [frame, to_value(1.0), center, to_value(2)]), to_value(0))
+    let panels = range(0, 320)
+    let kinds = to_value(map(fn (_: Int) => "Potential", panels))
+    let values = to_value(map(fn (_: Int) => 1.0, panels))
+    let args = [mesh, kinds, values, to_value(8), to_value(1.5), to_value(1e-8), to_value(32), to_value(128)]
+    match continuum_native("num_grid_bem_exterior", args) with
+    | Some(solution) ->
+        let point = to_value([2.0, 0.0, 0.0])
+        let value = unwrap_or(continuum_native("num_grid_bem_eval3_exterior", [solution, point]), to_value(0))
+        match (from_value<Float[Temperature]>(value), continuum_native("num_grid_bem_eval3", [solution, center])) with
+        | (Ok(potential), None) -> approx_eq(potential, 1.5 K, 0.035 K)
+        | _ -> false
+    | None -> false
+
+fn triangle_program(expression: String, coordinate: Value, output: Value): Value =
+    let reference = unwrap_or(continuum_native("num_backend_reference", [output]), to_value(0))
+    unwrap_or(continuum_native("num_backend_compile_current", [to_value(expression), to_value(["x", "y"]), to_value([coordinate, coordinate]), reference, to_value(1000)]), to_value(0))
+
+test "prepared Cartesian FEM obeys its measured source budget" =
+    let frame = unwrap_or(continuum_frame(), to_value(0))
+    let plan = unwrap_or(continuum_native("num_grid_fem_cartesian_prepare", [frame, to_value([2, 2])]), to_value(0))
+    let coordinate = unwrap_or(continuum_native("num_backend_reference", [to_value(2.0 m)]), to_value(0))
+    let source = triangle_program("1", coordinate, to_value(0.75 K/m^2))
+    match continuum_native("num_grid_fem_cartesian_solve_prepared", [plan, source, to_value(16)]) with
+    | Some(value) ->
+        match from_value<{ shape: Tensor<1, Int>, data: Tensor<1, Float>, length_reference: Float[Length], time_reference: Float[Time], value_reference: Float[Temperature] }>(value) with
+        | Ok(result) -> result.shape == [3, 3] && approx_eq(at(result.data, 4) * result.value_reference, 0.28125 K, 1e-13 K)
+        | Err(_) -> false
+    | None -> false
+
+test "prepared triangular P2 geometry keeps the field dimension across a solve" =
+    let frame = unwrap_or(continuum_frame(), to_value(0))
+    let mesh = unwrap_or(continuum_native("num_triangle_rectangle", [frame, to_value([0.0, 1.0, 0.0, 1.0]), to_value(2), to_value(2)]), to_value(0))
+    let plan = unwrap_or(continuum_native("num_triangle_prepare", [mesh, to_value(2)]), to_value(0))
+    let dofs = unwrap_or(continuum_native("num_triangle_prepared_dofs", [plan]), to_value(0))
+    let coordinate = unwrap_or(continuum_native("num_backend_reference", [to_value(2.0 m)]), to_value(0))
+    let k = triangle_program("1", coordinate, to_value(1.0 m^2/s))
+    let c = triangle_program("0", coordinate, to_value(0.25 s^-1))
+    let f = triangle_program("0", coordinate, to_value(0.75 K/s))
+    let g = triangle_program("1+x+2*y", coordinate, to_value(3.0 K))
+    let problem = unwrap_or(continuum_native("num_triangle_problem", [frame, k, c, f, g, to_value(1000)]), to_value(0))
+    let solution = unwrap_or(continuum_native("num_triangle_solve_prepared", [plan, problem]), to_value(0))
+    match continuum_native("num_triangle_max_nodal_error", [solution, g, to_value(100)]) with
+    | Some(value) ->
+        match (from_value<Int>(dofs), from_value<Float[Temperature]>(value)) with
+        | (Ok(25), Ok(error)) -> error < 1e-10 K
+        | _ -> false
+    | None -> false
+
+test "periodic Helmholtz batches restore each measured field in order" =
+    match continuum_frame() with
+    | Some(frame) ->
+        match continuum_native("num_grid_fourier_new", [frame, to_value([4]), to_value([2.0])]) with
+        | Some(grid) ->
+            let forcings = [[1.5 K/m^2, 1.5 K/m^2, 1.5 K/m^2, 1.5 K/m^2], [3.0 K/m^2, 3.0 K/m^2, 3.0 K/m^2, 3.0 K/m^2]]
+            match continuum_native("num_grid_fourier_helmholtz_batch", [grid, to_value(forcings), to_value(0.5 m^-2)]) with
+            | Some(value) ->
+                match from_value<{ shape: Tensor<1, Int>, data: Tensor<1, Float>, length_reference: Float[Length], time_reference: Float[Time], value_reference: Float[Temperature] }>(value) with
+                | Ok(field) ->
+                    let first = at(field.data, 0) * field.value_reference
+                    let second = at(field.data, 4) * field.value_reference
+                    field.shape == [2, 4] && approx_eq(first, 3.0 K, 1e-10 K) && approx_eq(second, 6.0 K, 1e-10 K)
+                | Err(_) -> false
+            | None -> false
+        | None -> false
+    | None -> false
+
+test "sampled Dirichlet waves retain measured displacement with negative time steps" =
+    match continuum_frame() with
+    | Some(frame) ->
+        match continuum_native("num_grid_legacy_fdm_with_value", [frame, to_value([3, 3]), to_value(9.0 K)]) with
+        | Some(initial) ->
+            let rates = [2.0 K/s, 2.0 K/s, 2.0 K/s, 2.0 K/s, 2.0 K/s, 2.0 K/s, 2.0 K/s, 2.0 K/s, 2.0 K/s]
+            let args = [initial, to_value(rates), to_value([1.0 m, 1.0 m]), to_value(0.0 m/s), to_value(-0.25 s), to_value(5), to_value(2)]
+            match continuum_native("num_grid_legacy_fdm_solve_wave_dirichlet_sampled", args) with
+            | Some(value) ->
+                match from_value<{ steps: Tensor<1, Int>, grid_shape: Tensor<1, Int>, data: Tensor<2, Float[Temperature]> }>(value) with
+                | Ok(result) ->
+                    let last = result.data[3, 4]
+                    result.steps == [0, 2, 4, 5] && result.grid_shape == [3, 3] && approx_eq(last, 6.5 K, 1e-10 K)
+                | Err(_) -> false
+            | None -> false
+        | None -> false
+    | None -> false
+
+fn sphere_metric(x: Tensor<1, Float[Length]>): Tensor<2, Float[Temperature]> =
+    let s = sin(at(x, 0) / (2.0 m))
+    [[3.0 K, 0.0 K], [0.0 K, s * s * (3.0 K)]]
+
+test "the Ricci tensor and scalar restore their different physical dimensions" =
+    let point = [3.141592653589793 m, 0.4 m]
+    let args = [to_value(point), to_value(2.0 m), to_value(3.0 K), to_value(128)]
+    match Native.num_native_geometry_ricci_curvature(args, [to_callback(sphere_metric)]) with
+    | Ok(value) ->
+        match from_value<{ tensor: Tensor<2, Float[Length^-2]>, scalar: Float[Length^-2/Temperature] }>(value) with
+        | Ok(result) ->
+            let diag = result.tensor[0, 0]
+            approx_eq(diag, 0.25 m^-2, 1e-7 m^-2) && approx_eq(result.scalar, 0.16666666666666667 m^-2/K, 1e-7 m^-2/K)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "Crank–Nicolson keeps prescribed heat boundaries while warming the interior" =
+    match continuum_frame() with
+    | Some(frame) ->
+        let field = [1.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0]
+        let args = [frame, to_value([3, 3]), to_value([1.0, 2.0]), to_value(field), to_value(1.0), to_value(0.5), to_value(1)]
+        match continuum_native("num_grid_cnm_solve_heat_equation_2d_cn_adi_fixed_boundary", args) with
+        | Some(value) ->
+            match from_value<{ shape: Tensor<1, Int>, data: Tensor<1, Float>, length_reference: Float[Length], time_reference: Float[Time], value_reference: Float[Temperature] }>(value) with
+            | Ok(result) ->
+                let edge = at(result.data, 0) * result.value_reference
+                let center = at(result.data, 4) * result.value_reference
+                result.shape == [3, 3] && approx_eq(edge, 3.0 K, 1e-12 K) && approx_eq(center, (20.0 / 9.0) * (1.0 K), 1e-12 K)
+            | Err(_) -> false
+        | None -> false
+    | None -> false
+
+test "MAC divergence summaries preserve the active fluid area and flux dimensions" =
+    match continuum_refs() with
+    | Some(refs) ->
+        let args = [refs, to_value(2), to_value(3), to_value(100.0), to_value(0.0 s), to_value(0.01 s)]
+        match continuum_native("num_grid_legacy_cavity_mac", args) with
+        | Some(model) ->
+            match continuum_native("num_ns_divergence_summary", [model]) with
+            | Some(value) ->
+                match from_value<{ max_abs: Float[Time^-1], rms: Float[Time^-1], fluid_volume: Float[Length^2], net_outflow: Float[Length^2/Time] }>(value) with
+                | Ok(stats) ->
+                    let area = approx_eq(stats.fluid_volume, 4.0 m^2, 1e-12 m^2)
+                    let rms = approx_eq(stats.rms, 0.0 s^-1, 1e-12 s^-1)
+                    let flux = approx_eq(stats.net_outflow, 0.0 m^2/s, 1e-12 m^2/s)
+                    area && rms && flux
+                | Err(_) -> false
+            | None -> false
+        | None -> false
+    | None -> false
+
+test "prepared simplex geometry is shared by volume and measured integration" =
+    let vertices = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]
+    let coordinate = to_value(2.0 m)
+    let ordinate = to_value(3.0 s)
+    let backend = unwrap_or(Rssn.dynamic("num_backend_interpreter", []), to_value(0))
+    let x = unwrap_or(Rssn.dynamic("num_backend_reference", [coordinate]), to_value(0))
+    let y = unwrap_or(Rssn.dynamic("num_backend_reference", [ordinate]), to_value(0))
+    let program = unwrap_or(Rssn.dynamic("num_backend_compile", [backend, to_value("1"), to_value(["x", "y"]), to_value([x, x]), y, to_value(10000)]), to_value(0))
+    match continuum_native("num_linear_simplex_map_new", [to_value(vertices), coordinate]) with
+    | Some(simplex) ->
+        let area = match continuum_native("num_linear_simplex_map_volume", [simplex]) with
+                   | Some(value) -> unwrap_or(from_value<Float[Length^2]>(value), 0.0 m^2)
+                   | None -> 0.0 m^2
+        let args = [simplex, ordinate, program, to_value(1e-11), to_value(0.0), to_value(1000)]
+        match continuum_native("num_linear_integrate_simplex_map", args) with
+        | Some(value) ->
+            match from_value<{ value: Float[Length^2*Time], error: Float[Length^2*Time], evaluations: Int, converged: Bool }>(value) with
+            | Ok(integral) -> integral.converged && approx_eq(area, 2.0 m^2, 1e-12 m^2) && approx_eq(integral.value, 6.0 m^2*s, 1e-12 m^2*s)
+            | Err(_) -> false
+        | None -> false
+    | None -> false
+
+test "native BEM cube volume retains measured length cubed" =
+    match continuum_frame() with
+    | Some(frame) ->
+        match continuum_native("num_grid_bem_mesh_cube", [frame, to_value(1.0), to_value([0.0, 0.0, 0.0]), to_value(1)]) with
+        | Some(mesh) ->
+            match continuum_native("num_grid_bem_mesh_volume", [mesh]) with
+            | Some(value) ->
+                match from_value<Float[Length^3]>(value) with
+                | Ok(volume) -> approx_eq(volume, 8.0 m^3, 1e-10 m^3)
+                | Err(_) -> false
+            | None -> false
+        | None -> false
+    | None -> false
+
+test "native HLLC gas flux carries distinct conserved dimensions" =
+    match continuum_refs() with
+    | Some(refs) ->
+        match continuum_native("num_grid_gas_hllc", [refs, to_value([1.0, 2.0, 1.0]), to_value([1.0, 2.0, 1.0]), to_value(1.4)]) with
+        | Some(value) ->
+            match from_value<{ mass_flux: Float[Mass/Length^2/Time], momentum_flux: Float[Mass/Length/Time^2], energy_flux: Float[Mass/Time^3] }>(value) with
+            | Ok(flux) -> approx_eq(flux.mass_flux, 0.375 kg/m^2/s, 1e-12 kg/m^2/s) && approx_eq(flux.energy_flux, 0.515625 kg/s^3, 1e-12 kg/s^3)
+            | Err(_) -> false
+        | None -> false
+    | None -> false
+
+test "native hyperelastic Lame parameters preserve physical stress scale" =
+    match continuum_refs() with
+    | Some(refs) ->
+        match continuum_native("num_grid_hyper_material", [refs, to_value("NeoHookean"), to_value(10.0), to_value(0.25), to_value(1.0)]) with
+        | Some(material) ->
+            match continuum_native("num_grid_hyper_lame", [material]) with
+            | Some(value) ->
+                match from_value<{ normalized: Tensor<1, Float>, reference: Float[Mass/Length/Time^2] }>(value) with
+                | Ok(result) -> result.normalized == [4.0, 4.0] && approx_eq(result.reference, 0.09375 kg/m/s^2, 1e-12 kg/m/s^2)
+                | Err(_) -> false
+            | None -> false
+        | None -> false
+    | None -> false
+
+test "native finite element Poisson scenario returns field reference" =
+    match continuum_frame() with
+    | Some(frame) ->
+        match continuum_native("num_grid_fem_legacy_scenario1", [frame]) with
+        | Some(value) ->
+            match from_value<{ shape: Tensor<1, Int>, data: Tensor<1, Float>, length_reference: Float[Length], time_reference: Float[Time], value_reference: Float[Temperature] }>(value) with
+            | Ok(result) -> result.shape == [51] && approx_eq(at(result.data, 25) * result.value_reference, 0.75 K, 1e-8 K)
+            | Err(_) -> false
+        | None -> false
+    | None -> false
+
+test "native quadrilateral stiffness declares force per displacement units" =
+    match continuum_refs() with
+    | Some(refs) ->
+        match continuum_native("num_grid_quad_element", [refs, to_value([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]), to_value(10.0), to_value(0.25)]) with
+        | Some(value) ->
+            match from_value<{ rows: Int, cols: Int, entries: Tensor<1, Float>, entry_reference: Float[Mass/Time^2] }>(value) with
+            | Ok(result) -> decide(result.rows == 8) == Some(true) && decide(result.cols == 8) == Some(true) && approx_eq(result.entry_reference, 0.1875 kg/s^2, 1e-12 kg/s^2)
+            | Err(_) -> false
+        | None -> false
+    | None -> false
+
+test "native quadrilateral stiffness is invariant under a large common translation" =
+    let origin = 18014398509481984.0
+    let end = origin + 4.0
+    let translated = [[origin, origin], [end, origin], [end, end], [origin, end]]
+    match continuum_refs() with
+    | Some(refs) ->
+        match continuum_native("num_grid_quad_element", [refs, to_value(translated), to_value(1.0), to_value(0.0)]) with
+        | Some(value) ->
+            match from_value<{ rows: Int, cols: Int, entries: Tensor<1, Float>, entry_reference: Float[Mass/Time^2] }>(value) with
+            | Ok(result) -> approx_eq(result.entries[0], 0.5, 1e-13)
+            | Err(_) -> false
+        | None -> false
+    | None -> false
+
+test "a prepared simplex estimator retains its physical residual reference" =
+    let frame = unwrap_or(continuum_native("num_grid_frame_new", [to_value(4.0 m), to_value(2.0 s), to_value(3.0 K)]), to_value(0))
+    let mesh = unwrap_or(continuum_native("num_grid_simplex_rectangle", [frame, to_value(1), to_value(1), to_value([0.0, 0.0]), to_value([1.0, 1.0])]), to_value(0))
+    let space = unwrap_or(continuum_native("num_grid_fem_space_new", [mesh, to_value(1)]), to_value(0))
+    let estimator = unwrap_or(continuum_native("num_grid_fem_residual_estimator_new", [space]), to_value(0))
+    let datum = unwrap_or(continuum_native("num_grid_dirichlet", [frame, to_value(0.0)]), to_value(0))
+    let markers = unwrap_or(continuum_native("num_grid_marker_with_default", [datum]), to_value(0))
+    let position = unwrap_or(continuum_native("num_backend_reference", [to_value(4.0 m)]), to_value(0))
+    let time = unwrap_or(continuum_native("num_backend_reference", [to_value(2.0 s)]), to_value(0))
+    let source_ref = unwrap_or(continuum_native("num_backend_reference", [to_value(1.5 K/s)]), to_value(0))
+    let source = unwrap_or(continuum_native("num_backend_compile_current", [to_value("1+t"), to_value(["t", "x", "y", "z"]), to_value([time, position, position, position]), source_ref, to_value(10000)]), to_value(0))
+    let problem = unwrap_or(continuum_native("num_grid_fem_constant_problem", [markers, to_value(1.0), to_value(0.0), source, to_value(10000)]), to_value(0))
+    match continuum_native("num_grid_fem_residual_estimator_indicators", [estimator, problem, to_value(0.25), to_value([0.0, 0.0, 0.0, 0.0])]) with
+    | Some(value) ->
+        match from_value<{ indicators: Tensor<1, Float>, reference: Float[Temperature*Length^2/Time] }>(value) with
+        | Ok(result) -> length(result.indicators) == 2 && approx_eq(at(result.indicators, 0), 1.25, 1e-12) && approx_eq(result.reference, 24.0 K*m^2/s, 1e-12 K*m^2/s)
+        | Err(_) -> false
+    | None -> false
+
+fn continuum_tape_reference(value: Value): Value =
+    unwrap_or(continuum_native("num_backend_reference", [value]), to_value(0))
+
+fn continuum_tape_program(expression: String, names: Tensor<1, String>, inputs: Tensor<1, Value>, output: Value): Value =
+    unwrap_or(continuum_native("num_backend_compile_current", [to_value(expression), to_value(names), to_value(inputs), output, to_value(10000)]), to_value(0))
+
+test "native stiff method of lines evaluates time-dependent boundary programs in physical units" =
+    let grid = unwrap_or(continuum_native("num_analysis_pde_grid", [to_value([0.0 m]), to_value([2.0 m]), to_value([5]), to_value(2.0 m), to_value(4.0 s), to_value(3.0 K)]), to_value(0))
+    let length_ref = continuum_tape_reference(to_value(1.0 m))
+    let time_ref = continuum_tape_reference(to_value(1.0 s))
+    let field_ref = continuum_tape_reference(to_value(1.0 K))
+    let gradient_ref = continuum_tape_reference(to_value(1.0 K/m))
+    let curvature_ref = continuum_tape_reference(to_value(1.0 K/m^2))
+    let rate_ref = continuum_tape_reference(to_value(1.0 K/s))
+    let rhs = continuum_tape_program("0.5*x + 1 + 0.2*(ux - 0.5*(1+t)) + 0.1*uxx", ["t", "x", "u", "ux", "uxx"], [time_ref, length_ref, field_ref, gradient_ref, curvature_ref], rate_ref)
+    let initial = continuum_tape_program("0.5*x", ["x"], [length_ref], field_ref)
+    let left = continuum_tape_program("t", ["t"], [time_ref], field_ref)
+    let right = continuum_tape_program("0.5*(1+t)", ["t"], [time_ref], gradient_ref)
+    let args = [grid, to_value(["Dirichlet", "Neumann"]), left, right, to_value(1.0 s), to_value("Bdf3"), to_value(1e-8), to_value(1e-10 K), to_value(0.125 s), to_value(0.0 s), to_value(0.25 s), to_value(200), to_value(10000), rhs, initial]
+    match continuum_native("num_analysis_pde_method_of_lines_1d_timed", args) with
+    | Some(handle) ->
+        match continuum_native("num_analysis_pde_field_data", [handle]) with
+        | Some(value) ->
+            match from_value<{ values: Tensor<1, Float[Temperature]>, shape: Tensor<1, Int>, accepted_steps: Option<Int>, evaluations: Option<Int>, time: Float[Time] }>(value) with
+            | Ok(field) ->
+                let left_exact = approx_eq(field.values[0], 1.0 K, 1e-12 K)
+                let right_exact = approx_eq(field.values[4], 3.0 K, 1e-7 K)
+                field.time == 1.0 s && left_exact && right_exact && approx_eq(field.values[2], 2.0 K, 1e-7 K)
+            | Err(_) -> false
+        | None -> false
+    | None -> false
+
+type MultigridField = { shape: Tensor<1, Int>, data: Tensor<1, Float>, length_reference: Float[Length], time_reference: Float[Time], value_reference: Float[Temperature] }
+
+test "continuum multigrid resolves a very small measured forcing" =
+    let frame = unwrap_or(continuum_frame(), to_value(0))
+    let faces = unwrap_or(continuum_native("num_grid_faces_dirichlet_zero", [frame]), to_value(0))
+    let grid = unwrap_or(continuum_native("num_grid_structured_unit", [faces, to_value(1), to_value(9)]), to_value(0))
+    let length_ref = continuum_tape_reference(to_value(1.0 m))
+    let output_ref = continuum_tape_reference(to_value(1.0 K/m^2))
+    let source = continuum_tape_program("1e-200", ["x", "y", "z"], [length_ref, length_ref, length_ref], output_ref)
+    let options = to_value({ cycle = "Fmg", pre = 2, post = 2, max_cycles = 8, tol = 1e-10, coarsest_nodes = 9 })
+    let args = [grid, to_value(0.0), source, to_value(100), options]
+    match continuum_native("num_grid_solve_helmholtz_multigrid", args) with
+    | Some(handle) ->
+        match continuum_native("num_grid_multigrid_result", [handle]) with
+        | Some(value) ->
+            match from_value<{ field: MultigridField, residuals: Tensor<1, Float>, converged: Bool }>(value) with
+            | Ok(result) ->
+                let midpoint = result.field.data[4] * result.field.value_reference
+                result.converged && approx_eq(midpoint / 1e-200, 0.5 K, 1e-10 K)
+            | Err(_) -> false
+        | None -> false
+    | None -> false
+
+test "terminal TM FDTD returns the last measured time and field on one cell" =
+    let args = [to_value(1), to_value(1), to_value(2), to_value([0, 0]), to_value(0.25 Hz), to_value(2.0 m), to_value(1.0 m/s), to_value(2.0 V/m)]
+    match Rssn.dynamic("num_native_fdtd_model_run_final", args) with
+    | Ok(value) ->
+        match from_value<{ time: Float[Time], electric_field: Tensor<2, Float[Mass*Length/(Current*Time^3)]> }>(value) with
+        | Ok(result) -> result.time == 2.0 s && approx_eq(result.electric_field[0, 0], 0.00042299672814588904 V/m, 1e-14 V/m)
+        | Err(_) -> false
+    | Err(_) -> false

@@ -1,0 +1,58 @@
+## Physical numerical computing through generated RSSN contracts.
+## Run: bazel run //:aevia -- test examples/dimensioned_numerics.aev
+import Rssn_numerical_vector as V
+
+import Rssn_numerical_matrix as M
+
+import Rssn_numerical_stats as S
+
+import Rssn_numerical_callback as C
+
+let times = [0.0 s, 1.0 s, 2.0 s]
+
+let positions = [0.0 m, 2.0 m, 4.0 m]
+
+let interpolated = V.num_interp_ext_pchip(times, positions, 0.5 s)
+
+let coefficients = V.num_polyfit_normalized(times, positions, 1, 1.0 s)
+
+let predicted = V.num_polyval_normalized(coefficients, 1.5 s, 1.0 s)
+
+## These coefficients multiply powers of t/(1 s), so every coefficient has
+## length units. Unnormalized physical polynomials need different units for
+## each power and cannot be represented by one homogeneous coefficient tensor.
+test "interpolation and normalized polynomials retain length" = approx_eq(interpolated, 1.0 m, 1e-9 m) && approx_eq(predicted, 3.0 m, 1e-8 m)
+
+let fit = S.num_stats_ext_ols(3, 1, [0.0 s, 1.0 s, 2.0 s], [1.0 m, 3.0 m, 5.0 m], true)
+
+test "regression slope has velocity units" = approx_eq(at(fit.coefficients, 0), 2.0 m/s, 1e-8 m/s) && approx_eq(fit.intercept, 1.0 m, 1e-8 m)
+
+let factor = M.num_schur_schur([[4.0 m^2, 0.0 m^2], [0.0 m^2, 9.0 m^2]])
+
+let square_root = M.num_matfun_sqrtm([[4.0 m^2, 0.0 m^2], [0.0 m^2, 9.0 m^2]])
+
+test "matrix square root halves the dimension" = approx_eq(at(at(square_root, 0), 0), 2.0 m, 1e-8 m)
+
+## AD differentiates the expression in normalized x/(2 m), then restores
+## the output scale (3 s): d[3 s * (x/(2 m))^3]/dx at x=4 m is 18 s/m.
+let derivative = V.num_ad_gradient_scaled("x^3", ["x"], [4.0 m], 2.0 m, 3.0 s, "reverse")
+
+test "AD returns physical derivative units" = approx_eq(at(derivative, 0), 18.0 s/m, 1e-10 s/m)
+
+fn integrand(t: Float[Time]): Float[Length] = t / 1.0 s * 2.0 m
+
+test "Romberg integrates length over time" =
+    match C.num_romberg_typed(0.0 s, 2.0 s, 1e-8 m*s, 12, 10000, integrand) with
+    | Ok(r) -> r.converged && approx_eq(r.value, 4.0 m*s, 1e-7 m*s)
+    | Err(_) -> false
+
+fn objective(x: Tensor<1, Float[Length]>): Float[Length^2] = (at(x, 0) - 3.0 m) ^ 2
+
+fn gradient(x: Tensor<1, Float[Length]>): Tensor<1, Float[Length]> = [2.0 * (at(x, 0) - 3.0 m)]
+
+let controls = { coordinate_scale = 1.0 m, value_scale = 1.0 m^2, tolerance = 1e-9, max_iterations = 100, max_evaluations = 1000 }
+
+test "L-BFGS solves a measured objective in normalized coordinates" =
+    match C.num_lbfgs_scaled_typed([0.0 m], controls, objective, gradient) with
+    | Ok(r) -> r.converged && approx_eq(at(r.x, 0), 3.0 m, 1e-6 m)
+    | Err(_) -> false

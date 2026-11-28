@@ -1,0 +1,21 @@
+## Exact dyadic metadata and certified algebraic roots.
+import Rssn_Multiprecision as MP
+
+let one: MP.Dyadic = { mantissa = 1, exponent = 0, precision = 1 }
+
+let two: MP.Dyadic = { mantissa = 1, exponent = 1, precision = 1 }
+
+test "dyadic metadata preserves wide signed integers" =
+    let value: MP.Dyadic = { mantissa = -18446744073709551617, exponent = -3, precision = 65 }
+    MP.dyadic_mantissa(value) == Ok(-18446744073709551617) && MP.dyadic_exponent(value) == Ok(-3) && MP.dyadic_precision(value) == Ok(65) && MP.canonical_dyadic_rounding("ceil") == Ok("up")
+
+test "dyadic limits and exact cube root use typed records" =
+    let eight: MP.Dyadic = { mantissa = 1, exponent = 3, precision = 1 }
+    match MP.dyadic_limits() with
+    | Ok(limits) -> limits.max_precision == 32768 && limits.min_exponent == -262144 && MP.cbrt_dyadic(eight, 1, "nearest") == Ok(two)
+    | Err(_) -> false
+
+test "sqrt accepts an interval with a zero boundary" =
+    match MP.sqrt_ball({ midpoint = one, radius = one }, 8) with
+    | Ok(enclosure) -> MP.ball_contains_zero(enclosure) == Ok(true)
+    | Err(_) -> false

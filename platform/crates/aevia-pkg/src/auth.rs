@@ -19,6 +19,9 @@
 //! public half.
 
 use std::path::Path;
+use std::time::Duration;
+
+use tokio::time::Instant;
 
 use crate::App;
 use crate::config::Config;
@@ -26,7 +29,7 @@ use crate::error::CliError;
 use crate::keys;
 
 /// How long to poll when the server does not say when the code dies.
-const FALLBACK_LIFETIME_SECONDS: i64 = 900;
+const FALLBACK_LIFETIME_SECONDS: u64 = 900;
 
 /// `aevia-pkg login`: bind a key to an account.
 ///
@@ -35,6 +38,10 @@ const FALLBACK_LIFETIME_SECONDS: i64 = 900;
 /// A usage error for `--key` together with `--ssh`, a key that cannot be used,
 /// a device flow the publisher denies or lets expire, or a config file that
 /// cannot be written.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the login command owns the authorization flow and its polling deadline"
+)]
 pub async fn login(
     app: &App,
     key: Option<&str>,
@@ -53,18 +60,20 @@ pub async fn login(
     if let Some(reason) = local.unsupported_reason() {
         return Err(
             CliError::new(format!("`{}` cannot be bound: {reason}", local.fingerprint))
-                .with_next_step("generate an `ssh-ed25519` key with `ssh-keygen -t ed25519`"),
+                .with_next_step(
+                    "prefer an OpenPGP (GPG) key backed by a hardware key, or generate an \
+                     `ssh-ed25519` key with `ssh-keygen -t ed25519`",
+                ),
         );
     }
 
     let armored = keys::public_key(&local)?;
-    let label = label
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("aevia-pkg on {}", hostname()));
+    let label = label.map_or_else(|| format!("aevia-pkg on {}", hostname()), str::to_string);
     let start = app
         .client
         .device_start(local.kind.as_str(), &armored, &label)
         .await?;
+    keys::warn_key_preference(local.kind, app.quiet, &start.warnings);
 
     // The code and the URL are the command's output, so they go to stdout; the
     // polling chatter goes to stderr, where a `--json` pipe cannot see it.
@@ -81,22 +90,43 @@ pub async fn login(
         eprintln!("aevia-pkg: waiting for approval…");
     }
 
-    let deadline = chrono::DateTime::parse_from_rfc3339(&start.expires_at)
-        .map(|expires| expires.with_timezone(&chrono::Utc))
-        .unwrap_or_else(|_| {
-            chrono::Utc::now() + chrono::Duration::seconds(FALLBACK_LIFETIME_SECONDS)
-        });
+    // Convert the reported wall-clock expiry once, then use the same
+    // monotonic deadline for both the wait interval and the network request.
+    let remaining = chrono::DateTime::parse_from_rfc3339(&start.expires_at).map_or(
+        Duration::from_secs(FALLBACK_LIFETIME_SECONDS),
+        |expires| {
+            expires
+                .signed_duration_since(chrono::Utc::now())
+                .to_std()
+                .unwrap_or_default()
+        },
+    );
+    let now = Instant::now();
+    let deadline = now.checked_add(remaining).unwrap_or(now);
+    let interval = start.interval();
+    let expired = || {
+        CliError::new(format!(
+            "the device code expired before it was approved at {}",
+            start.verification_uri
+        ))
+        .with_next_step("run `aevia-pkg login` again for a fresh code")
+    };
 
     let publisher = loop {
-        if chrono::Utc::now() >= deadline {
-            return Err(CliError::new(format!(
-                "the device code expired before it was approved at {}",
-                start.verification_uri
-            ))
-            .with_next_step("run `aevia-pkg login` again for a fresh code"));
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(expired());
         }
-        tokio::time::sleep(start.interval()).await;
-        let poll = app.client.device_poll(&start.device_code).await?;
+        let wake = now
+            .checked_add(interval)
+            .map_or(deadline, |next| next.min(deadline));
+        tokio::time::sleep_until(wake).await;
+        if Instant::now() >= deadline {
+            return Err(expired());
+        }
+        let poll = tokio::time::timeout_at(deadline, app.client.device_poll(&start.device_code))
+            .await
+            .map_err(|_| expired())??;
         match poll.status.as_str() {
             | "approved" => {
                 break poll.publisher.ok_or_else(|| {
@@ -135,6 +165,10 @@ pub async fn login(
 }
 
 /// The machine's name, for a default key label.
+#[allow(
+    clippy::single_call_fn,
+    reason = "device labels account for platform-specific hostname discovery"
+)]
 fn hostname() -> String {
     ["COMPUTERNAME", "HOSTNAME", "HOST"]
         .iter()

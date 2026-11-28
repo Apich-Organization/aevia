@@ -82,9 +82,14 @@ const SECTIONS: Msg = Msg::new("Sections", "分区");
 const NO_VERSIONS: Msg = Msg::new("No versions have been published.", "尚未发布任何版本。");
 const NO_DEPENDENCIES: Msg = Msg::new("No dependencies.", "无依赖。");
 const DEPENDENTS: Msg = Msg::new("used by", "被依赖");
-const NO_DEPENDENTS: Msg = Msg::new("No published package depends on this one.", "尚无已发布的包依赖此包。");
+const NO_DEPENDENTS: Msg = Msg::new(
+    "No published package depends on this one.",
+    "尚无已发布的包依赖此包。",
+);
 const DOWNLOAD: Msg = Msg::new("download", "下载");
 const NOT_STATED: Msg = Msg::new("not stated", "未声明");
+const KEYWORDS: Msg = Msg::new("keywords", "关键词");
+const CATEGORIES: Msg = Msg::new("categories", "分类");
 const OWNERS: Msg = Msg::new("owners", "发布者");
 
 // The version and dependency tables.
@@ -96,7 +101,11 @@ const ARCHIVE: Msg = Msg::new("archive", "归档");
 const IMPORT: Msg = Msg::new("import", "导入");
 
 // The side panel.
+const EDITION: Msg = Msg::new("edition", "版次");
+const AUTHORS: Msg = Msg::new("authors", "作者");
 const LICENSE: Msg = Msg::new("license", "许可证");
+const HOMEPAGE: Msg = Msg::new("homepage", "主页");
+const DOCUMENTATION: Msg = Msg::new("documentation", "文档");
 const CREATED: Msg = Msg::new("created", "创建于");
 const CHECKSUM: Msg = Msg::new("checksum", "校验和");
 const SIGNED_BY: Msg = Msg::new("signed by", "签名者");
@@ -120,7 +129,7 @@ const SORTS: [(&str, Msg); 4] = [
 /// parameter rather than something the card infers from its context.
 ///
 /// This entry point renders English. The front page and the docs landing page
-pub(crate) fn card_in(
+pub fn card_in(
     lang: Lang,
     item: &CrateCard,
     href: &str,
@@ -162,6 +171,7 @@ pub(crate) fn card_in(
 /// The search box and the sort tabs are ordinary links and a GET form, so the
 /// page is fully usable with scripting off; the inline script only filters the
 /// rows already on the page while the reader types.
+#[must_use]
 pub fn crate_list(
     lang: Lang,
     list: &CrateList,
@@ -237,7 +247,7 @@ pub fn crate_list(
                 <p>{NO_RESULTS.of(lang)}</p>
                 <p class="muted">
                     {NO_RESULTS_HINT.of(lang)}
-                    <code>"aevia pkg publish"</code>
+                    <code>"aevia publish"</code>
                     {NO_RESULTS_HINT_END.of(lang)}
                 </p>
             </div>
@@ -280,11 +290,15 @@ pub fn crate_list(
                 <a href=format!("/crates?q={query}&sort={sort}&page={page}")>{NEXT.of(lang)}</a>
             }
         });
-        let last = list.last_page();
+        let page_count = list.last_page();
+        #[allow(
+            clippy::literal_string_with_formatting_args,
+            reason = "localized templates use named placeholders in different orders"
+        )]
         let position = PAGE_OF
             .of(lang)
             .replace("{page}", &list.page.to_string())
-            .replace("{last}", &last.to_string());
+            .replace("{last}", &page_count.to_string());
         view! {
             <nav class="pager" aria-label=PAGINATION.of(lang)>
                 {previous}
@@ -328,6 +342,7 @@ pub fn crate_list(
 /// routes: a version table, a dependency list and a README are all short enough
 /// that a reader scrolls, and a scroll keeps the install line and the sidebar
 /// in view while they compare versions.
+#[must_use]
 pub fn crate_page(
     lang: Lang,
     page: &CratePage,
@@ -341,6 +356,34 @@ pub fn crate_page(
         .clone()
         .unwrap_or_else(|| NO_DESCRIPTION.of(lang).to_string());
     let install = page.install_command();
+    let keyword_chips = (!page.keywords.is_empty()).then(|| {
+        let chips: Vec<AnyView> = page
+            .keywords
+            .iter()
+            .map(|keyword| {
+                let href = format!("/crates?q={}", query_param(keyword));
+                view! { <a class="chip" href=href>{keyword.clone()}</a> }.into_any()
+            })
+            .collect();
+        view! {
+            <h2>{KEYWORDS.of(lang)}</h2>
+            <p class="chips">{chips}</p>
+        }
+    });
+    let category_chips = (!page.categories.is_empty()).then(|| {
+        let chips: Vec<AnyView> = page
+            .categories
+            .iter()
+            .map(|category| {
+                let href = format!("/crates?q={}", query_param(category));
+                view! { <a class="chip" href=href>{category.clone()}</a> }.into_any()
+            })
+            .collect();
+        view! {
+            <h2>{CATEGORIES.of(lang)}</h2>
+            <p class="chips">{chips}</p>
+        }
+    });
     let selected_version = page.selected.version.clone();
 
     let docs_button = page.selected.docs.then(|| {
@@ -506,11 +549,49 @@ pub fn crate_page(
     let license = page
         .license
         .clone()
+        .or_else(|| page.license_file.clone())
         .unwrap_or_else(|| NOT_STATED.of(lang).to_string());
+    let edition_row = page.edition.as_ref().map(|edition| {
+        view! {
+            <div>
+                <dt>{EDITION.of(lang)}</dt>
+                <dd class="mono">{edition.clone()}</dd>
+            </div>
+        }
+    });
+    let authors_row = (!page.authors.is_empty()).then(|| {
+        let joined = page.authors.join(", ");
+        view! {
+            <div>
+                <dt>{AUTHORS.of(lang)}</dt>
+                <dd>{joined}</dd>
+            </div>
+        }
+    });
     let repository = match &page.repository {
         | Some(url) => view! { <a href=url.clone() rel="noreferrer">{url.clone()}</a> }.into_any(),
         | None => view! { <span class="muted">{NOT_STATED.of(lang)}</span> }.into_any(),
     };
+    let homepage_row = page.homepage.as_ref().map(|url| {
+        view! {
+            <div>
+                <dt>{HOMEPAGE.of(lang)}</dt>
+                <dd>
+                    <a href=url.clone() rel="noreferrer">{url.clone()}</a>
+                </dd>
+            </div>
+        }
+    });
+    let documentation_row = page.documentation.as_ref().map(|url| {
+        view! {
+            <div>
+                <dt>{DOCUMENTATION.of(lang)}</dt>
+                <dd>
+                    <a href=url.clone() rel="noreferrer">{url.clone()}</a>
+                </dd>
+            </div>
+        }
+    });
     let created_at = page.created_at.clone();
     let updated_at = page.updated_at.clone();
     let created = date_only(&page.created_at).to_string();
@@ -610,6 +691,8 @@ pub fn crate_page(
                     <aside class="side">
                         <h2>{PACKAGE.of(lang)}</h2>
                         <dl class="meta">
+                            {edition_row}
+                            {authors_row}
                             <div>
                                 <dt>{LICENSE.of(lang)}</dt>
                                 <dd>{license}</dd>
@@ -618,6 +701,8 @@ pub fn crate_page(
                                 <dt>{REPOSITORY.of(lang)}</dt>
                                 <dd>{repository}</dd>
                             </div>
+                            {homepage_row}
+                            {documentation_row}
                             <div>
                                 <dt>{CREATED.of(lang)}</dt>
                                 <dd>
@@ -635,6 +720,8 @@ pub fn crate_page(
                                 <dd class="mono">{downloads}</dd>
                             </div>
                         </dl>
+                        {keyword_chips}
+                        {category_chips}
                         <h2>{OWNERS.of(lang)}</h2>
                         <ul class="owners">{owners}</ul>
                         <h2>{format!("{} {selected_version}", VERSION.of(lang))}</h2>
@@ -696,10 +783,16 @@ mod tests {
         let id: PackageId = "apich/units-extra".parse().expect("valid identity");
         CratePage {
             id,
+            edition: Some("2026".to_string()),
+            authors: vec!["Apich Authors".to_string()],
             description: Some("Units and constants the compiler can check.".to_string()),
             license: Some("Apache-2.0".to_string()),
+            license_file: None,
             repository: Some("https://github.com/apich/units-extra".to_string()),
+            homepage: Some("https://aevia.org/units-extra".to_string()),
+            documentation: Some("https://docs.aevia.org/units-extra".to_string()),
             keywords: vec!["units".to_string()],
+            categories: vec!["science".to_string()],
             readme_html: Some("<p>Units.</p>".to_string()),
             versions: vec![version("1.2.0", true), version("1.1.0", false)],
             selected: version("1.2.0", true),
@@ -729,7 +822,7 @@ mod tests {
     #[test]
     fn a_crate_page_shows_the_install_line_versions_and_yank() {
         let html = crate_page(Lang::En, &page(), None);
-        assert!(html.contains("aevia pkg add apich/units-extra@1.2.0"));
+        assert!(html.contains("aevia add apich/units-extra@1.2.0"));
         assert!(html.contains("1.2.0"), "the selected version appears");
         assert!(html.contains("1.1.0"), "every version appears");
         assert!(
@@ -742,7 +835,20 @@ mod tests {
         assert!(html.contains("Kinematics"), "dependencies are listed");
         assert!(html.contains("apich/kinematics"), "the package is named");
         assert!(html.contains("/crates/apich/kinematics"), "and linked");
-        assert!(html.contains("apich/plot"), "reverse dependencies are listed");
+        assert!(
+            html.contains("apich/plot"),
+            "reverse dependencies are listed"
+        );
+        assert!(html.contains("Apich Authors"), "authors are shown");
+        assert!(
+            html.contains("https://aevia.org/units-extra"),
+            "homepage is shown"
+        );
+        assert!(
+            html.contains("https://docs.aevia.org/units-extra"),
+            "docs link is shown"
+        );
+        assert!(html.contains("science"), "categories are shown");
         assert!(html.contains("yank"), "a manager sees the yank control");
     }
 
@@ -777,7 +883,7 @@ mod tests {
         };
         let html = crate_list(Lang::En, &list, None);
         assert!(html.contains("No packages matched this search."));
-        assert!(html.contains("aevia pkg publish"));
+        assert!(html.contains("aevia publish"));
     }
 
     #[test]

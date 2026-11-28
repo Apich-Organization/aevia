@@ -1,15 +1,11 @@
-//! `f64` kernels for compressed sparse matrices (§8.4.1).
-//!
-//! Everything here takes the CSR arrays of a square-or-rectangular matrix
-//! (`row_ptr`, `col_idx`, `values`) and a dense right-hand side. Nothing is
-//! ever densified: the direct solver hands the entries to `faer`'s sparse LU
-//! (fill-reducing COLAMD ordering, left-looking numeric factorisation), and
-//! the iterative solver only needs the matrix-vector product.
-
+//! Typed CSR adapters to RSSN sparse kernels (§8.4.1).
+//! Matrix products, factorizations, iterations and preconditioners reside in RSSN.
 use crate::NumericError;
-use faer::linalg::solvers::Solve;
-use faer::sparse::SparseColMat;
-use faer::sparse::Triplet;
+pub use native::CgResult;
+pub use native::Krylov;
+pub use native::PrecondCgResult;
+pub use native::PrecondKind;
+use rssn::kernels::sparse_native as native;
 
 /// A borrowed CSR matrix.
 #[derive(Clone, Copy, Debug)]
@@ -27,385 +23,78 @@ pub struct Csr<'a> {
 }
 
 impl Csr<'_> {
-    /// `y = A x`.
+    const fn native(&self) -> native::Csr<'_> {
+        native::Csr {
+            rows: self.rows,
+            cols: self.cols,
+            row_ptr: self.row_ptr,
+            col_idx: self.col_idx,
+            values: self.values,
+        }
+    }
+
+    /// Matrix-vector product through the shared CSR kernel.
     ///
     /// # Errors
-    /// [`NumericError::ShapeMismatch`] when `x` does not have `cols` entries.
+    /// Invalid matrix storage or incompatible vector length.
     pub fn matvec(
         &self,
         x: &[f64],
     ) -> Result<Vec<f64>, NumericError> {
-        if x.len() != self.cols {
-            return Err(NumericError::ShapeMismatch(format!(
-                "matrix has {} columns, vector has {} entries",
-                self.cols,
-                x.len()
-            )));
-        }
-        let mut y = vec![0.0; self.rows];
-        for row in 0..self.rows {
-            let mut acc = 0.0;
-            for k in self.row_ptr[row]..self.row_ptr[row + 1] {
-                acc += self.values[k] * x[self.col_idx[k]];
-            }
-            y[row] = acc;
-        }
-        Ok(y)
+        self.native().matvec(x).map_err(Into::into)
     }
 }
 
-/// Solves `A x = b` by sparse LU.
+/// RSSN `lu_solve` adapter with the established Aevia result layout.
 ///
 /// # Errors
-/// [`NumericError::NotSquare`], [`NumericError::ShapeMismatch`] for a bad
-/// right-hand side, and [`NumericError::Singular`] when the factorisation
-/// fails or produces a non-finite solution.
+/// Invalid dimensions, sparse data, controls, or numerical factorization failure.
 pub fn lu_solve(
     a: &Csr<'_>,
     b: &[f64],
 ) -> Result<Vec<f64>, NumericError> {
-    if a.rows != a.cols {
-        return Err(NumericError::NotSquare);
-    }
-    if b.len() != a.rows {
-        return Err(NumericError::ShapeMismatch(format!(
-            "matrix has {} rows, right-hand side has {} entries",
-            a.rows,
-            b.len()
-        )));
-    }
-    let n = a.rows;
-    if n == 0 {
-        return Ok(Vec::new());
-    }
-    let mut triplets = Vec::with_capacity(a.values.len());
-    for row in 0..n {
-        for k in a.row_ptr[row]..a.row_ptr[row + 1] {
-            triplets.push(Triplet::new(row, a.col_idx[k], a.values[k]));
-        }
-    }
-    let matrix = SparseColMat::<usize, f64>::try_new_from_triplets(n, n, &triplets)
-        .map_err(|_| NumericError::Singular)?;
-    let lu = matrix.sp_lu().map_err(|_| NumericError::Singular)?;
-    let rhs = faer::Col::<f64>::from_fn(n, |i| b[i]);
-    let solution = lu.solve(&rhs);
-    let out: Vec<f64> = (0..n).map(|i| solution[i]).collect();
-    if out.iter().any(|value| !value.is_finite()) {
-        return Err(NumericError::Singular);
-    }
-    Ok(out)
+    native::lu_solve(&a.native(), b).map_err(Into::into)
 }
 
-/// The result of [`cg`].
-#[derive(Clone, Debug)]
-pub struct CgResult {
-    /// The final iterate.
-    pub x: Vec<f64>,
-    /// Iterations performed.
-    pub iterations: usize,
-    /// The final relative residual `‖b − A x‖ / ‖b‖` (`‖r‖` when `b = 0`).
-    pub residual: f64,
-    /// Whether the relative residual reached the tolerance.
-    pub converged: bool,
-}
-
-/// Unpreconditioned conjugate gradients for a symmetric positive-definite
-/// matrix, starting from zero.
+/// RSSN `cholesky_solve` adapter with the established Aevia result layout.
 ///
 /// # Errors
-/// [`NumericError::NotSquare`] and [`NumericError::ShapeMismatch`].
+/// Invalid dimensions, sparse data, controls, or numerical factorization failure.
+pub fn cholesky_solve(
+    a: &Csr<'_>,
+    b: &[f64],
+) -> Result<Vec<f64>, NumericError> {
+    native::cholesky_solve(&a.native(), b).map_err(Into::into)
+}
+
+/// RSSN `solve_auto` adapter with the established Aevia result layout.
+///
+/// # Errors
+/// Invalid dimensions, sparse data, controls, or numerical factorization failure.
+pub fn solve_auto(
+    a: &Csr<'_>,
+    b: &[f64],
+) -> Result<(Vec<f64>, &'static str), NumericError> {
+    native::solve_auto(&a.native(), b).map_err(Into::into)
+}
+
+/// RSSN `cg` adapter with the established Aevia result layout.
+///
+/// # Errors
+/// Invalid dimensions, sparse data, controls, or numerical factorization failure.
 pub fn cg(
     a: &Csr<'_>,
     b: &[f64],
     tolerance: f64,
     max_iterations: usize,
 ) -> Result<CgResult, NumericError> {
-    if a.rows != a.cols {
-        return Err(NumericError::NotSquare);
-    }
-    if b.len() != a.rows {
-        return Err(NumericError::ShapeMismatch(format!(
-            "matrix has {} rows, right-hand side has {} entries",
-            a.rows,
-            b.len()
-        )));
-    }
-    let n = a.rows;
-    let dot = |x: &[f64], y: &[f64]| x.iter().zip(y).map(|(p, q)| p * q).sum::<f64>();
-    let b_norm = dot(b, b).sqrt();
-    let scale = if b_norm > 0.0 { b_norm } else { 1.0 };
-    let mut x = vec![0.0; n];
-    let mut r = b.to_vec();
-    let mut p = r.clone();
-    let mut rs = dot(&r, &r);
-    let mut iterations = 0;
-    while iterations < max_iterations && rs.sqrt() / scale > tolerance {
-        let ap = a.matvec(&p)?;
-        let denominator = dot(&p, &ap);
-        if denominator <= 0.0 || !denominator.is_finite() {
-            return Err(NumericError::NotPositiveDefinite);
-        }
-        let alpha = rs / denominator;
-        for i in 0..n {
-            x[i] += alpha * p[i];
-            r[i] -= alpha * ap[i];
-        }
-        let next = dot(&r, &r);
-        let beta = next / rs;
-        for i in 0..n {
-            p[i] = r[i] + beta * p[i];
-        }
-        rs = next;
-        iterations += 1;
-    }
-    let residual = rs.sqrt() / scale;
-    Ok(CgResult {
-        x,
-        iterations,
-        residual,
-        converged: residual <= tolerance,
-    })
+    native::cg(&a.native(), b, tolerance, max_iterations).map_err(Into::into)
 }
 
-/// Whether `a` is exactly symmetric (pattern and values) with a positive
-/// diagonal: the cheap necessary conditions for a Cholesky attempt.
-fn looks_spd(a: &Csr<'_>) -> bool {
-    if a.rows != a.cols || a.rows == 0 {
-        return false;
-    }
-    let entry = |i: usize, j: usize| -> Option<f64> {
-        let row = &a.col_idx[a.row_ptr[i]..a.row_ptr[i + 1]];
-        row.binary_search(&j)
-            .ok()
-            .map(|p| a.values[a.row_ptr[i] + p])
-    };
-    for i in 0..a.rows {
-        match entry(i, i) {
-            | Some(d) if d > 0.0 => {},
-            | _ => return false,
-        }
-        for k in a.row_ptr[i]..a.row_ptr[i + 1] {
-            let j = a.col_idx[k];
-            if j != i && entry(j, i) != Some(a.values[k]) {
-                return false;
-            }
-        }
-    }
-    true
-}
-
-/// Solves `A x = b` by sparse Cholesky (`A = L Lᵀ`, lower triangle read).
+/// RSSN `cg_precond` adapter with the established Aevia result layout.
 ///
 /// # Errors
-/// [`NumericError::NotPositiveDefinite`] when `A` is not symmetric positive
-/// definite (or the factorisation breaks down), plus the shape errors of
-/// [`lu_solve`].
-pub fn cholesky_solve(
-    a: &Csr<'_>,
-    b: &[f64],
-) -> Result<Vec<f64>, NumericError> {
-    if a.rows != a.cols {
-        return Err(NumericError::NotSquare);
-    }
-    if b.len() != a.rows {
-        return Err(NumericError::ShapeMismatch(format!(
-            "matrix has {} rows, right-hand side has {} entries",
-            a.rows,
-            b.len()
-        )));
-    }
-    if !looks_spd(a) {
-        return Err(NumericError::NotPositiveDefinite);
-    }
-    let n = a.rows;
-    let mut triplets = Vec::with_capacity(a.values.len());
-    for row in 0..n {
-        for k in a.row_ptr[row]..a.row_ptr[row + 1] {
-            triplets.push(Triplet::new(row, a.col_idx[k], a.values[k]));
-        }
-    }
-    let matrix = SparseColMat::<usize, f64>::try_new_from_triplets(n, n, &triplets)
-        .map_err(|_| NumericError::NotPositiveDefinite)?;
-    let llt = matrix
-        .sp_cholesky(faer::Side::Lower)
-        .map_err(|_| NumericError::NotPositiveDefinite)?;
-    let rhs = faer::Col::<f64>::from_fn(n, |i| b[i]);
-    let solution = llt.solve(&rhs);
-    let out: Vec<f64> = (0..n).map(|i| solution[i]).collect();
-    if out.iter().any(|value| !value.is_finite()) {
-        return Err(NumericError::NotPositiveDefinite);
-    }
-    Ok(out)
-}
-
-/// Solves `A x = b`: sparse Cholesky when `A` is symmetric positive
-/// definite, otherwise (or when the factorisation fails) sparse LU. The
-/// second component names the factorisation used (`"Cholesky"` or `"LU"`).
-///
-/// # Errors
-/// As [`lu_solve`].
-pub fn solve_auto(
-    a: &Csr<'_>,
-    b: &[f64],
-) -> Result<(Vec<f64>, &'static str), NumericError> {
-    if let Ok(x) = cholesky_solve(a, b) {
-        return Ok((x, "Cholesky"));
-    }
-    lu_solve(a, b).map(|x| (x, "LU"))
-}
-
-/// The preconditioner a caller asks [`cg_precond`] for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PrecondKind {
-    /// No preconditioner.
-    Identity,
-    /// Diagonal scaling.
-    Jacobi,
-    /// Inverted diagonal blocks (rssn `Bsr::block_jacobi`).
-    BlockJacobi,
-    /// Incomplete LU with the sparsity pattern (block ILU(0) for a block
-    /// operand).
-    Ilu0,
-    /// Incomplete Cholesky with the sparsity pattern.
-    Ic0,
-    /// The strongest factorisation that succeeds.
-    Auto,
-}
-
-/// The result of [`cg_precond`].
-#[derive(Clone, Debug)]
-pub struct PrecondCgResult {
-    /// The final iterate.
-    pub x: Vec<f64>,
-    /// Iterations performed.
-    pub iterations: usize,
-    /// The relative residual `‖b − A x‖ / ‖b‖`.
-    pub residual: f64,
-    /// Whether the tolerance was reached.
-    pub converged: bool,
-    /// The preconditioner actually used: `"Identity"`, `"Jacobi"`,
-    /// `"BlockJacobi"`, `"BlockIlu0"`, `"Ilu0"` or `"Ic0"`.
-    pub precond: &'static str,
-}
-
-enum Built {
-    Identity,
-    Jacobi(Vec<f64>),
-    Block(rssn::kernels::bsr::BlockJacobi),
-    BlockIlu(rssn::kernels::bsr::Bilu0),
-    Ilu(rssn::kernels::krylov::Ilu0),
-    Ic(rssn::kernels::krylov::Ic0),
-}
-
-impl Built {
-    fn apply(
-        &self,
-        r: &[f64],
-        z: &mut [f64],
-    ) {
-        match self {
-            | Self::Identity => z.copy_from_slice(r),
-            | Self::Jacobi(inv) => {
-                for ((zi, ri), di) in z.iter_mut().zip(r).zip(inv) {
-                    *zi = ri * di;
-                }
-            },
-            | Self::Block(p) => p.apply(r, z),
-            | Self::BlockIlu(p) => p.apply(r, z),
-            | Self::Ilu(p) => p.apply(r, z),
-            | Self::Ic(p) => p.apply(r, z),
-        }
-    }
-
-    const fn name(&self) -> &'static str {
-        match self {
-            | Self::Identity => "Identity",
-            | Self::Jacobi(_) => "Jacobi",
-            | Self::Block(_) => "BlockJacobi",
-            | Self::BlockIlu(_) => "BlockIlu0",
-            | Self::Ilu(_) => "Ilu0",
-            | Self::Ic(_) => "Ic0",
-        }
-    }
-}
-
-/// The square block shape the block preconditioners use: the operand's own
-/// block when it is square, else the automatic choice.
-fn square_block(
-    csr: &rssn::kernels::krylov::Csr,
-    hint: Option<(usize, usize)>,
-) -> (usize, usize) {
-    match hint {
-        | Some((r, c)) if r == c && csr.rows.is_multiple_of(r) => (r, c),
-        | _ => rssn::kernels::bsr::choose_block_size(csr, &[(4, 4), (3, 3), (2, 2), (1, 1)]),
-    }
-}
-
-fn build_preconditioner(
-    csr: &rssn::kernels::krylov::Csr,
-    kind: PrecondKind,
-    block: Option<(usize, usize)>,
-) -> Built {
-    use rssn::kernels::bsr::Bsr;
-    let jacobi = || Built::Jacobi(csr.jacobi_inverse());
-    let blocked = || {
-        let (br, bc) = square_block(csr, block);
-        Bsr::from_csr(csr, br, bc).ok()
-    };
-    match kind {
-        | PrecondKind::Identity => Built::Identity,
-        | PrecondKind::Jacobi => jacobi(),
-        | PrecondKind::BlockJacobi => {
-            blocked()
-                .and_then(|b| b.block_jacobi().ok())
-                .map_or_else(jacobi, Built::Block)
-        },
-        | PrecondKind::Ilu0 => {
-            if block.is_some() {
-                blocked()
-                    .and_then(|b| b.bilu0().ok())
-                    .map(Built::BlockIlu)
-                    .or_else(|| csr.ilu0().map(Built::Ilu))
-                    .unwrap_or_else(jacobi)
-            } else {
-                csr.ilu0().map_or_else(jacobi, Built::Ilu)
-            }
-        },
-        | PrecondKind::Ic0 => csr.ic0().map_or_else(jacobi, Built::Ic),
-        | PrecondKind::Auto => {
-            if block.is_some()
-                && let Some(b) = blocked()
-            {
-                if let Ok(p) = b.bilu0() {
-                    return Built::BlockIlu(p);
-                }
-                if let Ok(p) = b.block_jacobi() {
-                    return Built::Block(p);
-                }
-            }
-            let auto = rssn::kernels::krylov::auto_preconditioner(csr);
-            match auto.kind() {
-                | rssn::kernels::krylov::AutoPreconditionerKind::Ic0 => {
-                    csr.ic0().map_or_else(jacobi, Built::Ic)
-                },
-                | rssn::kernels::krylov::AutoPreconditionerKind::Ilu0 => {
-                    csr.ilu0().map_or_else(jacobi, Built::Ilu)
-                },
-                | rssn::kernels::krylov::AutoPreconditionerKind::Jacobi => jacobi(),
-            }
-        },
-    }
-}
-
-/// Preconditioned conjugate gradients from a zero start.
-///
-/// `block` is the block shape of a block-CSR operand (`None` otherwise); it
-/// selects rssn's block Jacobi / block ILU(0) for those kinds. A
-/// factorisation that breaks down falls back to Jacobi, and the kind that was
-/// really applied is reported in the result.
-///
-/// # Errors
-/// [`NumericError::NotSquare`] and [`NumericError::ShapeMismatch`].
+/// Invalid dimensions, sparse data, controls, or numerical factorization failure.
 pub fn cg_precond(
     a: &Csr<'_>,
     b: &[f64],
@@ -414,67 +103,13 @@ pub fn cg_precond(
     kind: PrecondKind,
     block: Option<(usize, usize)>,
 ) -> Result<PrecondCgResult, NumericError> {
-    if a.rows != a.cols {
-        return Err(NumericError::NotSquare);
-    }
-    if b.len() != a.rows {
-        return Err(NumericError::ShapeMismatch(format!(
-            "matrix has {} rows, right-hand side has {} entries",
-            a.rows,
-            b.len()
-        )));
-    }
-    let csr = rssn::kernels::krylov::Csr {
-        rows: a.rows,
-        cols: a.cols,
-        indptr: a.row_ptr.to_vec(),
-        indices: a.col_idx.to_vec(),
-        values: a.values.to_vec(),
-    };
-    let built = build_preconditioner(&csr, kind, block);
-    let result = rssn::kernels::krylov::cg(
-        |x, y| csr.matvec(x, y),
-        |r, z| built.apply(r, z),
-        b,
-        None,
-        tolerance,
-        max_iterations,
-    );
-    Ok(PrecondCgResult {
-        x: result.x,
-        iterations: result.iterations,
-        residual: result.residual,
-        converged: result.converged,
-        precond: built.name(),
-    })
+    native::cg_precond(&a.native(), b, tolerance, max_iterations, kind, block).map_err(Into::into)
 }
 
-/// Which Krylov method [`krylov_precond`] runs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Krylov {
-    /// Restarted GMRES(`restart`) with right preconditioning: any square
-    /// nonsingular matrix; the residual norm never increases.
-    Gmres {
-        /// The restart length (the Krylov basis size before restarting).
-        restart: usize,
-    },
-    /// BiCGSTAB: any square nonsingular matrix, short recurrences (constant
-    /// memory), with a possibly irregular residual history.
-    Bicgstab,
-}
-
-/// Preconditioned GMRES or BiCGSTAB from a zero start, for a **general**
-/// (possibly nonsymmetric) square matrix.
-///
-/// The preconditioners are those of [`cg_precond`] except that `Ic0` and the
-/// symmetric `Auto` choice need a symmetric matrix: here `Ic0` is replaced by
-/// `Ilu0` and `Auto` tries `Ilu0` then `Jacobi`. A factorisation that breaks
-/// down falls back to Jacobi, and the kind actually applied is reported. The
-/// iteration is sequential (rssn's Krylov kernels), so the result does not
-/// depend on the thread count.
+/// RSSN `krylov_precond` adapter with the established Aevia result layout.
 ///
 /// # Errors
-/// [`NumericError::NotSquare`] and [`NumericError::ShapeMismatch`].
+/// Invalid dimensions, sparse data, controls, or numerical factorization failure.
 pub fn krylov_precond(
     a: &Csr<'_>,
     b: &[f64],
@@ -484,6 +119,51 @@ pub fn krylov_precond(
     kind: PrecondKind,
     block: Option<(usize, usize)>,
 ) -> Result<PrecondCgResult, NumericError> {
+    native::krylov_precond(
+        &a.native(),
+        b,
+        tolerance,
+        max_iterations,
+        method,
+        kind,
+        block,
+    )
+    .map_err(Into::into)
+}
+
+fn validate_csr(a: &Csr<'_>) -> Result<(), NumericError> {
+    if a.rows.checked_add(1) != Some(a.row_ptr.len())
+        || a.col_idx.len() != a.values.len()
+        || a.row_ptr.first() != Some(&0)
+        || a.row_ptr.last() != Some(&a.values.len())
+        || a.row_ptr.array_windows().any(|&[lo, hi]| lo > hi)
+        || a.col_idx.iter().any(|&column| column >= a.cols)
+    {
+        return Err(NumericError::ShapeMismatch("invalid CSR arrays".into()));
+    }
+    if a.values.iter().any(|v| !v.is_finite()) {
+        return Err(NumericError::Domain(
+            "sparse matrix contains non-finite entries".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn to_rssn_csr(a: &Csr<'_>) -> Result<rssn::kernels::krylov::Csr, NumericError> {
+    validate_csr(a)?;
+    Ok(rssn::kernels::krylov::Csr {
+        rows: a.rows,
+        cols: a.cols,
+        indptr: a.row_ptr.to_vec(),
+        indices: a.col_idx.to_vec(),
+        values: a.values.to_vec(),
+    })
+}
+
+fn prepare_iterative_system(
+    a: &Csr<'_>,
+    b: &[f64],
+) -> Result<Option<rssn::kernels::krylov::Csr>, NumericError> {
     if a.rows != a.cols {
         return Err(NumericError::NotSquare);
     }
@@ -494,49 +174,476 @@ pub fn krylov_precond(
             b.len()
         )));
     }
-    let csr = rssn::kernels::krylov::Csr {
-        rows: a.rows,
-        cols: a.cols,
-        indptr: a.row_ptr.to_vec(),
-        indices: a.col_idx.to_vec(),
-        values: a.values.to_vec(),
+    if a.rows == 0 {
+        validate_csr(a)?;
+        return Ok(None);
+    }
+    to_rssn_csr(a).map(Some)
+}
+
+const fn empty_iterative_solution() -> CgResult {
+    CgResult {
+        x: Vec::new(),
+        iterations: 0,
+        residual: 0.0,
+        converged: true,
+    }
+}
+
+/// Minimal Residual (MINRES) method for symmetric indefinite systems `A x = b`
+/// starting from zero (Paige–Saunders algorithm).
+///
+/// # Errors
+/// [`NumericError::NotSquare`] for a rectangular matrix,
+/// [`NumericError::ShapeMismatch`] for malformed CSR storage or an incompatible
+/// right-hand side, and [`NumericError::Domain`] for non-finite matrix values.
+pub fn minres(
+    a: &Csr<'_>,
+    b: &[f64],
+    tolerance: f64,
+    max_iterations: usize,
+) -> Result<CgResult, NumericError> {
+    let Some(csr) = prepare_iterative_system(a, b)? else {
+        return Ok(empty_iterative_solution());
     };
-    let kind = match kind {
-        | PrecondKind::Ic0 => PrecondKind::Ilu0,
-        | PrecondKind::Auto if block.is_none() => PrecondKind::Ilu0,
-        | other => other,
-    };
-    let built = build_preconditioner(&csr, kind, block);
-    let apply = |x: &[f64], y: &mut [f64]| csr.matvec(x, y);
-    let precondition = |r: &[f64], z: &mut [f64]| built.apply(r, z);
-    let result = match method {
-        | Krylov::Gmres { restart } => {
-            rssn::kernels::krylov::gmres(
-                apply,
-                precondition,
-                b,
-                None,
-                restart.max(1),
-                tolerance,
-                max_iterations,
-            )
-        },
-        | Krylov::Bicgstab => {
-            rssn::kernels::krylov::bicgstab(apply, precondition, b, None, tolerance, max_iterations)
-        },
-    };
-    Ok(PrecondCgResult {
+    let result = rssn::kernels::krylov_ext::minres(
+        |x, y| csr.matvec(x, y),
+        |x, y| y.copy_from_slice(x),
+        b,
+        None,
+        tolerance,
+        max_iterations,
+    );
+    Ok(CgResult {
         x: result.x,
         iterations: result.iterations,
         residual: result.residual,
         converged: result.converged,
-        precond: built.name(),
+    })
+}
+
+/// Which part of the spectrum a sparse eigensolver targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpectrumPart {
+    /// Eigenvalues of largest modulus.
+    LargestMagnitude,
+    /// Eigenvalues of smallest modulus.
+    SmallestMagnitude,
+    /// Largest real part (largest algebraic for symmetric matrices).
+    LargestReal,
+    /// Smallest real part (smallest algebraic for symmetric matrices).
+    SmallestReal,
+    /// Largest absolute imaginary part.
+    LargestImag,
+}
+
+impl From<SpectrumPart> for rssn::kernels::eigs::Which {
+    fn from(part: SpectrumPart) -> Self {
+        match part {
+            | SpectrumPart::LargestMagnitude => Self::LargestMagnitude,
+            | SpectrumPart::SmallestMagnitude => Self::SmallestMagnitude,
+            | SpectrumPart::LargestReal => Self::LargestReal,
+            | SpectrumPart::SmallestReal => Self::SmallestReal,
+            | SpectrumPart::LargestImag => Self::LargestImag,
+        }
+    }
+}
+
+/// Result of a sparse eigensolver (`eigs_sym`, `eigs`, `eigs_shift_invert`).
+#[derive(Clone, Debug)]
+pub struct SparseEigsResult {
+    /// Eigenvalues `(re, im)`.
+    pub values: Vec<crate::Complex>,
+    /// Real parts of the eigenvectors.
+    pub vectors_re: Vec<Vec<f64>>,
+    /// Imaginary parts of the eigenvectors.
+    pub vectors_im: Vec<Vec<f64>>,
+    /// Residual norms `‖A x − λ x‖`.
+    pub residuals: Vec<f64>,
+    /// Whether all requested eigenpairs converged.
+    pub converged: bool,
+    /// Number of sparse matrix-vector products performed.
+    pub matvecs: usize,
+}
+
+fn map_eigs_result(r: rssn::kernels::eigs::EigsResult) -> SparseEigsResult {
+    SparseEigsResult {
+        values: r
+            .values
+            .into_iter()
+            .map(|(re, im)| crate::Complex::new(re, im))
+            .collect(),
+        vectors_re: r.vectors_re,
+        vectors_im: r.vectors_im,
+        residuals: r.residuals,
+        converged: r.converged,
+        matvecs: r.matvecs,
+    }
+}
+
+/// Thick-restart Lanczos eigensolver for the `k` wanted eigenpairs of a
+/// symmetric sparse matrix (`rssn::kernels::eigs::eigs_sym`).
+///
+/// # Errors
+/// [`NumericError::NotSquare`] or [`NumericError::Domain`] when `k == 0` or `k > rows`.
+pub fn eigs_sym(
+    a: &Csr<'_>,
+    k: usize,
+    which: SpectrumPart,
+    tol: f64,
+    max_restarts: usize,
+) -> Result<SparseEigsResult, NumericError> {
+    if a.rows != a.cols {
+        return Err(NumericError::NotSquare);
+    }
+    if k == 0 || k > a.rows {
+        return Err(NumericError::Domain(format!(
+            "eigs_sym requires 1 <= k <= {}, got {k}",
+            a.rows
+        )));
+    }
+    let csr = to_rssn_csr(a)?;
+    let opts = rssn::kernels::eigs::EigsOptions {
+        ncv: 0,
+        tol,
+        max_restarts,
+        seed: 0x5eed,
+    };
+    let res =
+        rssn::kernels::eigs::eigs_sym(|x, y| csr.matvec(x, y), a.rows, k, which.into(), &opts)
+            .map_err(|_| NumericError::NotConverged)?;
+    Ok(map_eigs_result(res))
+}
+
+/// Implicitly restarted Arnoldi eigensolver for the `k` wanted eigenpairs of a
+/// general (possibly nonsymmetric) sparse matrix (`rssn::kernels::eigs::eigs`).
+///
+/// # Errors
+/// [`NumericError::NotSquare`] or [`NumericError::Domain`] when `k == 0` or `k > rows`.
+pub fn eigs(
+    a: &Csr<'_>,
+    k: usize,
+    which: SpectrumPart,
+    tol: f64,
+    max_restarts: usize,
+) -> Result<SparseEigsResult, NumericError> {
+    if a.rows != a.cols {
+        return Err(NumericError::NotSquare);
+    }
+    if k == 0 || k > a.rows {
+        return Err(NumericError::Domain(format!(
+            "eigs requires 1 <= k <= {}, got {k}",
+            a.rows
+        )));
+    }
+    let csr = to_rssn_csr(a)?;
+    let opts = rssn::kernels::eigs::EigsOptions {
+        ncv: 0,
+        tol,
+        max_restarts,
+        seed: 0x5eed,
+    };
+    let res = rssn::kernels::eigs::eigs(|x, y| csr.matvec(x, y), a.rows, k, which.into(), &opts)
+        .map_err(|_| NumericError::NotConverged)?;
+    Ok(map_eigs_result(res))
+}
+
+/// Shift-invert sparse eigensolver for the `k` eigenvalues of `A` closest to
+/// `sigma`, factoring `(A − σ I)` with sparse LU.
+///
+/// # Errors
+/// [`NumericError::NotSquare`], [`NumericError::Domain`], or [`NumericError::Singular`]
+/// if `A − σ I` is singular.
+pub fn eigs_shift_invert(
+    a: &Csr<'_>,
+    k: usize,
+    sigma: f64,
+    symmetric: bool,
+    tol: f64,
+    max_restarts: usize,
+) -> Result<SparseEigsResult, NumericError> {
+    if a.rows != a.cols {
+        return Err(NumericError::NotSquare);
+    }
+    if k == 0 || k > a.rows {
+        return Err(NumericError::Domain(format!(
+            "eigs_shift_invert requires 1 <= k <= {}, got {k}",
+            a.rows
+        )));
+    }
+    let csr = to_rssn_csr(a)?;
+    let opts = rssn::kernels::eigs::EigsOptions {
+        ncv: 0,
+        tol,
+        max_restarts,
+        seed: 0x5eed,
+    };
+    let res = rssn::kernels::eigs::eigs_csr_shift_invert(&csr, k, sigma, symmetric, &opts)
+        .map_err(|error| {
+            match error {
+                | rssn::kernels::eigs::ShiftInvertError::Invalid => {
+                    NumericError::Domain("invalid shift-invert parameters".into())
+                },
+                | rssn::kernels::eigs::ShiftInvertError::Singular => NumericError::Singular,
+                | rssn::kernels::eigs::ShiftInvertError::Eigen(_) => NumericError::NotConverged,
+            }
+        })?;
+    Ok(map_eigs_result(res))
+}
+
+/// Solves a symmetric positive-definite sparse system `A x = b` using smoothed-aggregation
+/// Algebraic Multigrid (`rssn::kernels::multigrid::Amg`) as a standalone solver.
+///
+/// # Errors
+/// [`NumericError::NotSquare`], [`NumericError::ShapeMismatch`], or
+/// [`NumericError::NotPositiveDefinite`] if AMG setup fails.
+pub fn amg_solve(
+    a: &Csr<'_>,
+    b: &[f64],
+    tolerance: f64,
+    max_cycles: usize,
+) -> Result<CgResult, NumericError> {
+    let Some(csr) = prepare_iterative_system(a, b)? else {
+        return Ok(empty_iterative_solution());
+    };
+    let opts = rssn::kernels::multigrid::AmgOptions::default();
+    let amg = rssn::kernels::multigrid::Amg::build(&csr, &opts)
+        .map_err(|_| NumericError::NotPositiveDefinite)?;
+    let res = amg.solve(b, None, tolerance, max_cycles);
+    let residual = res.history.last().copied().unwrap_or(0.0);
+    Ok(CgResult {
+        x: res.x,
+        iterations: res.history.len().saturating_sub(1),
+        residual,
+        converged: res.converged,
+    })
+}
+
+/// Solves a general (possibly nonsymmetric) sparse system `A x = b` using
+/// Ruge–Stüben Algebraic Multigrid (`rssn::kernels::amg_general::AmgGeneral`).
+///
+/// # Errors
+/// [`NumericError::NotSquare`], [`NumericError::ShapeMismatch`], or
+/// [`NumericError::Domain`] if AMG setup fails.
+pub fn amg_general_solve(
+    a: &Csr<'_>,
+    b: &[f64],
+    tolerance: f64,
+    max_cycles: usize,
+) -> Result<CgResult, NumericError> {
+    let Some(csr) = prepare_iterative_system(a, b)? else {
+        return Ok(empty_iterative_solution());
+    };
+    let opts = rssn::kernels::amg_general::AmgGeneralOptions::default();
+    let amg = rssn::kernels::amg_general::AmgGeneral::build(&csr, &opts)
+        .map_err(|_| NumericError::Domain("AMG setup requires positive diagonal".to_string()))?;
+    let res = amg.solve(b, None, tolerance, max_cycles);
+    let residual = res.history.last().copied().unwrap_or(0.0);
+    Ok(CgResult {
+        x: res.x,
+        iterations: res.history.len().saturating_sub(1),
+        residual,
+        converged: res.converged,
+    })
+}
+
+/// Conjugate gradients preconditioned with smoothed-aggregation AMG.
+///
+/// # Errors
+/// [`NumericError::NotSquare`], [`NumericError::ShapeMismatch`], or
+/// [`NumericError::NotPositiveDefinite`] if AMG setup fails.
+pub fn cg_amg(
+    a: &Csr<'_>,
+    b: &[f64],
+    tolerance: f64,
+    max_iterations: usize,
+) -> Result<CgResult, NumericError> {
+    let Some(csr) = prepare_iterative_system(a, b)? else {
+        return Ok(empty_iterative_solution());
+    };
+    let opts = rssn::kernels::multigrid::AmgOptions::default();
+    let amg = rssn::kernels::multigrid::Amg::build(&csr, &opts)
+        .map_err(|_| NumericError::NotPositiveDefinite)?;
+    let apply = |x: &[f64], y: &mut [f64]| csr.matvec(x, y);
+    let precondition = |r: &[f64], z: &mut [f64]| amg.precondition(r, z);
+    let res = rssn::kernels::krylov::cg(apply, precondition, b, None, tolerance, max_iterations);
+    Ok(CgResult {
+        x: res.x,
+        iterations: res.iterations,
+        residual: res.residual,
+        converged: res.converged,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    type IterativeSolver = fn(&Csr<'_>, &[f64], f64, usize) -> Result<CgResult, NumericError>;
+
+    const ITERATIVE_SOLVERS: [(&str, IterativeSolver); 4] = [
+        ("minres", minres),
+        ("amg_solve", amg_solve),
+        ("amg_general_solve", amg_general_solve),
+        ("cg_amg", cg_amg),
+    ];
+
+    #[test]
+    fn empty_iterative_systems_require_canonical_csr_storage() {
+        let empty = Csr {
+            rows: 0,
+            cols: 0,
+            row_ptr: &[0],
+            col_idx: &[],
+            values: &[],
+        };
+        let malformed = [
+            Csr {
+                row_ptr: &[],
+                ..empty
+            },
+            Csr {
+                row_ptr: &[1],
+                ..empty
+            },
+            Csr {
+                row_ptr: &[0, 0],
+                ..empty
+            },
+            Csr {
+                col_idx: &[0],
+                ..empty
+            },
+            Csr {
+                values: &[f64::NAN],
+                ..empty
+            },
+            Csr {
+                row_ptr: &[1],
+                col_idx: &[0],
+                values: &[1.0],
+                ..empty
+            },
+        ];
+        for (name, solve) in ITERATIVE_SOLVERS {
+            let report = solve(&empty, &[], 1e-10, 0).unwrap();
+            assert!(
+                report.x.is_empty() && report.converged,
+                "{name}: {report:?}"
+            );
+            assert_eq!(report.iterations, 0, "{name}");
+            assert_eq!(report.residual.to_bits(), 0.0_f64.to_bits(), "{name}");
+            for bad in malformed {
+                let error = solve(&bad, &[], 1e-10, 0).unwrap_err();
+                assert_eq!(error, bad.matvec(&[]).unwrap_err(), "{name}: {bad:?}");
+                assert!(
+                    matches!(error, NumericError::ShapeMismatch(_)),
+                    "{name}: {bad:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn iterative_systems_preserve_preflight_error_order() {
+        let malformed = Csr {
+            rows: 0,
+            cols: 0,
+            row_ptr: &[],
+            col_idx: &[],
+            values: &[],
+        };
+        let rectangular = Csr { cols: 1, ..malformed };
+        let non_finite = Csr {
+            rows: 1,
+            cols: 1,
+            row_ptr: &[0, 1],
+            col_idx: &[0],
+            values: &[f64::INFINITY],
+        };
+        for (name, solve) in ITERATIVE_SOLVERS {
+            assert_eq!(
+                solve(&rectangular, &[1.0], 1e-10, 1).unwrap_err(),
+                NumericError::NotSquare,
+                "{name}"
+            );
+            assert_eq!(
+                solve(&malformed, &[1.0], 1e-10, 1).unwrap_err(),
+                NumericError::ShapeMismatch(
+                    "matrix has 0 rows, right-hand side has 1 entries".into()
+                ),
+                "{name}"
+            );
+            assert!(
+                matches!(
+                    solve(&non_finite, &[1.0], 1e-10, 1),
+                    Err(NumericError::Domain(_))
+                ),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn iterative_diagonal_solves_match_componentwise_reference() {
+        let diagonal = [2.0, 4.0, 8.0, 16.0];
+        let a = Csr {
+            rows: 4,
+            cols: 4,
+            row_ptr: &[0, 1, 2, 3, 4],
+            col_idx: &[0, 1, 2, 3],
+            values: &diagonal,
+        };
+        let b = [2.0, -8.0, 4.0, 64.0];
+        for (name, solve) in ITERATIVE_SOLVERS {
+            let report = solve(&a, &b, 1e-10, 30).unwrap();
+            assert!(report.converged, "{name}: {report:?}");
+            assert_eq!(report.x.len(), b.len(), "{name}");
+            for ((value, rhs), scale) in report.x.iter().zip(b).zip(diagonal) {
+                let expected = rhs / scale;
+                assert!(
+                    (value - expected).abs() < 1e-9,
+                    "{name}: {value} vs {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn kernel_validates_borrowed_csr_before_indexing_and_zero_block_hints() {
+        let malformed = Csr {
+            rows: 1,
+            cols: 1,
+            row_ptr: &[0, 2],
+            col_idx: &[0],
+            values: &[1.0],
+        };
+        assert!(matches!(
+            malformed.matvec(&[1.0]),
+            Err(NumericError::ShapeMismatch(_))
+        ));
+        assert!(matches!(
+            lu_solve(&malformed, &[1.0]),
+            Err(NumericError::ShapeMismatch(_))
+        ));
+        let valid = Csr {
+            rows: 2,
+            cols: 2,
+            row_ptr: &[0, 1, 2],
+            col_idx: &[0, 1],
+            values: &[2.0, 3.0],
+        };
+        let result = cg_precond(
+            &valid,
+            &[2.0, 3.0],
+            1e-12,
+            10,
+            PrecondKind::BlockJacobi,
+            Some((0, 0)),
+        )
+        .unwrap();
+        assert!(result.converged);
+    }
 
     fn tridiagonal(n: usize) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
         let (mut ptr, mut idx, mut val) = (vec![0], Vec::new(), Vec::new());
@@ -840,5 +947,126 @@ mod tests {
         )
         .unwrap();
         assert!(!result.converged);
+    }
+
+    #[test]
+    fn minres_solves_symmetric_indefinite_system() {
+        // Diagonal + tridiagonal shifted to be indefinite: diag = [-4, -1, 2, 5, 8] with -0.5 off-diagonals.
+        let n = 5;
+        let (mut ptr, mut idx, mut val) = (vec![0], Vec::new(), Vec::new());
+        let diag = [-4.0, -1.0, 2.0, 5.0, 8.0];
+        for i in 0..n {
+            if i > 0 {
+                idx.push(i - 1);
+                val.push(-0.5);
+            }
+            idx.push(i);
+            val.push(diag[i]);
+            if i + 1 < n {
+                idx.push(i + 1);
+                val.push(-0.5);
+            }
+            ptr.push(idx.len());
+        }
+        let a = Csr {
+            rows: n,
+            cols: n,
+            row_ptr: &ptr,
+            col_idx: &idx,
+            values: &val,
+        };
+        let b = [1.0, -2.0, 3.0, -1.0, 4.0];
+        let direct = lu_solve(&a, &b).unwrap();
+        let res = minres(&a, &b, 1e-12, 100).unwrap();
+        assert!(res.converged, "minres residual: {}", res.residual);
+        for (p, q) in direct.iter().zip(&res.x) {
+            assert!((p - q).abs() < 1e-8);
+        }
+    }
+
+    #[test]
+    fn sparse_eigs_finds_extremal_and_shifted_eigenvalues() {
+        let n = 20;
+        let (ptr, idx, val) = tridiagonal(n);
+        let a = Csr {
+            rows: n,
+            cols: n,
+            row_ptr: &ptr,
+            col_idx: &idx,
+            values: &val,
+        };
+        // Largest eigenvalue of n-point 1D Laplacian is 4 * cos^2(pi / (2*(n+1)))
+        let sym = eigs_sym(&a, 2, SpectrumPart::LargestReal, 1e-9, 200).unwrap();
+        assert!(sym.converged);
+        let expected_max = 4.0
+            * (std::f64::consts::PI / (2.0 * (n as f64 + 1.0)))
+                .cos()
+                .powi(2);
+        assert!((sym.values[0].re - expected_max).abs() < 1e-7);
+
+        let general = eigs(&a, 1, SpectrumPart::LargestMagnitude, 1e-9, 200).unwrap();
+        assert!(general.converged);
+        assert!((general.values[0].re - expected_max).abs() < 1e-7);
+
+        // Shift-invert near 2.0
+        let shifted = eigs_shift_invert(&a, 2, 2.01, true, 1e-9, 200).unwrap();
+        assert!(shifted.converged);
+        assert!((shifted.values[0].re - 2.0).abs() < 0.2);
+    }
+
+    #[test]
+    fn amg_solvers_solve_2d_poisson() {
+        let m = 12;
+        let n = m * m;
+        let (ptr, idx, val) = poisson2d(m);
+        let a = Csr {
+            rows: n,
+            cols: n,
+            row_ptr: &ptr,
+            col_idx: &idx,
+            values: &val,
+        };
+        let b = vec![1.0; n];
+        let direct = cholesky_solve(&a, &b).unwrap();
+
+        let amg = amg_solve(&a, &b, 1e-10, 100).unwrap();
+        assert!(amg.converged);
+        for (p, q) in direct.iter().zip(&amg.x) {
+            assert!((p - q).abs() < 1e-6);
+        }
+
+        let amg_gen = amg_general_solve(&a, &b, 1e-10, 100).unwrap();
+        assert!(amg_gen.converged);
+        for (p, q) in direct.iter().zip(&amg_gen.x) {
+            assert!((p - q).abs() < 1e-6);
+        }
+
+        let pcg_amg = cg_amg(&a, &b, 1e-10, 100).unwrap();
+        assert!(pcg_amg.converged);
+        for (p, q) in direct.iter().zip(&pcg_amg.x) {
+            assert!((p - q).abs() < 1e-6);
+        }
+    }
+    #[test]
+    fn shift_invert_subtracts_shift_once_when_csr_contains_duplicate_diagonals() {
+        let a = Csr {
+            rows: 3,
+            cols: 3,
+            row_ptr: &[0, 2, 3, 4],
+            col_idx: &[0, 0, 1, 2],
+            values: &[1.0, 1.0, 5.0, 9.0],
+        };
+        let result = eigs_shift_invert(&a, 1, 1.8, true, 1e-10, 30).unwrap();
+        assert!(result.converged);
+        assert!((result.values[0].re - 2.0).abs() < 1e-10);
+        assert!(result.residuals[0] < 1e-10);
+        let malformed = Csr {
+            rows: 1,
+            cols: 1,
+            row_ptr: &[0, 2],
+            col_idx: &[0],
+            values: &[1.0],
+        };
+        assert!(minres(&malformed, &[1.0], 1e-8, 10).is_err());
     }
 }

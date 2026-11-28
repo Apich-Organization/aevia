@@ -1,0 +1,48 @@
+## Checked, reusable objectives and scoped scalar roots.
+import Rssn_Optimizer as O
+import Rssn_numerical_vector as Native
+
+let options = { iterations = 128, evaluations = 1024, tolerance = 1e-14, gradient_tolerance = 1e-12, seed = 7 }
+
+test "a prepared box supplies L-BFGS-B without re-reading the bounds" =
+    match O.sphere(2) with
+    | Ok(problem) ->
+        match O.with_bounds(problem, [1.0, 1.0], [4.0, 4.0]) with
+        | Ok(bounded) ->
+            match O.minimize(bounded, [2.0, 2.0], "lbfgsb", options) with
+            | Ok(result) -> (result.point == [1.0, 1.0] && result.cost == 2.0
+                && O.needs_bounds("lbfgsb") == Ok(true) && O.needs_gradient("lbfgsb") == Ok(true))
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "objective keeps the tape program after the original handle is released" =
+    match O.tape(["(x-p)^2"], ["x"], ["p"], [1.0], [1.0], [1.0]) with
+    | Ok(tape) ->
+        match O.prepare_checked(tape, 0, [3.0], true) with
+        | Ok(problem) ->
+            match O.release_tape(tape) with
+            | Ok(true) ->
+                match O.value_and_gradient(problem, [1.0]) with
+                | Ok(evaluated) -> evaluated.value == 4.0 && evaluated.gradient == [-4.0]
+                | Err(_) -> false
+            | _ -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "regression residuals use the stored response dimension" =
+    match O.regression([[0.0 m], [1.0 m], [2.0 m]], [0.0 s, 4.0 s, 8.0 s], 2.0 m, 4.0 s) with
+    | Ok(model) ->
+        (O.coefficient_count(model) == Ok(2)
+            && O.residuals(model, [to_value(1.0 s), to_value((2.0 s) / (1.0 m))], 4.0 s)
+                == Ok([1.0 s, -1.0 s, -3.0 s]))
+    | Err(_) -> false
+
+fn equation(x: Float): Float = x * x - 2.0
+fn derivative(x: Float): Float = 2.0 * x
+let root_options = { solver = "newton", lower = 0.0, upper = 2.0, tolerance = 1e-12, iterations = 128, evaluations = 256 }
+
+test "scoped Newton callback converges with an analytic derivative" =
+    match Native.num_optimizer_find_root_with_derivative_typed(equation, derivative, root_options) with
+    | Ok(result) -> result.converged && approx_eq(result.root, sqrt(2.0), 1e-10)
+    | Err(_) -> false

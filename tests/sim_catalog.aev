@@ -1,6 +1,6 @@
 ## Generated simulation modules (`Rssn_Sim_*`): typed parameters with the
 ## scenario's own defaults, method names as variants, witnessed results.
-## Run with: cargo run -p aevia-cli -- test tests/sim_catalog.aev
+## Run with: bazel run //:aevia -- test tests/sim_catalog.aev
 import Rssn_Sim_PoissonMultigrid as P
 
 import Rssn_Sim_SpinModel as S

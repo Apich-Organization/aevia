@@ -2,7 +2,7 @@
 ## wrote a signature for, typed from what the kernel observed itself doing. The
 ## wrappers have the same shape as the curated ones, and the same `Result`
 ## channel checks every answer.
-## Run with: cargo run -p aevia-cli -- test tests/domain_witnessed.aev
+## Run with: bazel run //:aevia -- test tests/domain_witnessed.aev
 import Rssn_LinearAlgebra as LA
 
 import Rssn_Calculus as C

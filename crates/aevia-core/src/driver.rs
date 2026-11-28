@@ -7,6 +7,18 @@
 //! Loading is a post-order walk, so a module is always checked after the
 //! modules it imports, and a cycle is reported rather than followed.
 
+#![deny(
+    missing_docs,
+    clippy::arithmetic_side_effects,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::nursery,
+    clippy::panic,
+    clippy::pedantic,
+    clippy::single_call_fn,
+    clippy::unwrap_used
+)]
+
 use crate::disk_cache::Counters;
 use crate::disk_cache::Digest;
 use crate::disk_cache::KeyInputs;
@@ -28,9 +40,12 @@ use aevia_types::check::CheckedModule;
 use aevia_types::check::Import;
 use aevia_types::check::InterfaceBinding;
 use aevia_types::check::ModuleInterface;
-use aevia_types::check::check_module_with_identity;
+use aevia_types::check::check_module_with_resolved_imports;
+use std::cell::OnceCell;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -61,6 +76,8 @@ pub struct ResolvedImport {
     pub prefix: String,
     /// Selected export names, or every exported name when absent.
     pub names: Option<Vec<String>>,
+    /// Whether `export import` / `export open` re-exports these names.
+    pub export: bool,
 }
 
 /// A whole program.
@@ -78,6 +95,7 @@ pub struct Program {
 
 impl Program {
     /// The module that defines `main`.
+    #[must_use]
     pub fn entry(&self) -> Option<&LoadedModule> {
         self.modules.last()
     }
@@ -92,6 +110,643 @@ impl Program {
             .iter()
             .find(|module| module.path == path)
             .map(|module| &module.checked)
+    }
+}
+
+/// A package-aware checked revision of an interactive source buffer.
+/// The ordinary compilation facade keeps expression inspection APIs reusable.
+pub struct ReplCompilation {
+    /// The checked entry and its diagnostics.
+    pub compilation: crate::Compilation,
+    /// The entry and imports in dependency order.
+    pub program: Program,
+    contexts: HashMap<(u32, u32, String), (Roots, ResolvedModule)>,
+    overlays: SourceOverlays,
+    roots: Option<Roots>,
+}
+
+impl std::ops::Deref for ReplCompilation {
+    type Target = crate::Compilation;
+
+    fn deref(&self) -> &Self::Target {
+        &self.compilation
+    }
+}
+
+/// A virtual entry that resolves package, registry and standard library imports.
+///
+/// Imported source snapshots are committed only after a successful submission;
+/// reset constructs a new compiler to observe changed files explicitly.
+pub struct ReplCompiler {
+    entry: PathBuf,
+    identity: crate::source::SourceIdentity,
+    sources: SourceMap,
+    source_ids: HashMap<ModuleKey, FileId>,
+    source_identities: HashMap<ModuleKey, aevia_types::keys::ModulePath>,
+    overlays: SourceOverlays,
+    contexts: HashMap<(u32, u32, String), (Roots, ResolvedModule)>,
+    roots: Option<Roots>,
+    resolutions: HashMap<Span, ModuleKey>,
+    cache: std::rc::Rc<std::cell::RefCell<CheckCache>>,
+    imports: Vec<String>,
+    imported_names: Vec<String>,
+}
+
+impl ReplCompiler {
+    /// Creates an interactive compiler rooted at `directory`.
+    #[must_use]
+    pub fn new(
+        directory: &Path,
+        identity: crate::source::SourceIdentity,
+    ) -> Self {
+        Self {
+            entry: crate::source::canonical_path(directory).join(".aevia-repl.aev"),
+            identity,
+            sources: SourceMap::new(),
+            source_ids: HashMap::new(),
+            source_identities: HashMap::new(),
+            overlays: SourceOverlays::new(),
+            contexts: HashMap::new(),
+            roots: None,
+            resolutions: HashMap::new(),
+            cache: std::rc::Rc::new(std::cell::RefCell::new(CheckCache::new())),
+            imports: Vec::new(),
+            imported_names: Vec::new(),
+        }
+    }
+
+    /// Describes the imports committed by the session.
+    #[must_use]
+    pub fn imports(&self) -> &[String] {
+        &self.imports
+    }
+
+    /// Names brought into scope by the session's committed imports.
+    #[must_use]
+    pub fn imported_names(&self) -> &[String] {
+        &self.imported_names
+    }
+
+    /// Checks a submission with imports relative to its optional source path.
+    pub fn compile(
+        &mut self,
+        source: &str,
+        origin: Option<&Path>,
+    ) -> ReplCompilation {
+        let roots = match self
+            .roots
+            .clone()
+            .map_or_else(|| repl_roots(&self.entry), Ok)
+        {
+            | Ok(roots) => roots,
+            | Err(error) => return self.failure(source, error),
+        };
+        let explicit_origin = origin;
+        let origin = origin.unwrap_or(&self.entry);
+        let origin_roots = match explicit_origin.map_or_else(|| Ok(roots.clone()), repl_roots) {
+            | Ok(roots) => roots,
+            | Err(error) => return self.failure(source, error),
+        };
+        let mut contexts = self.contexts.clone();
+        let entry_file = self
+            .source_ids
+            .get(&ModuleKey::physical(&roots.entry_module(&self.entry)))
+            .copied()
+            .unwrap_or(0);
+        let mut entry_import_roots = HashMap::new();
+        if let Ok(tokens) = lex(entry_file, source) {
+            let (module, _) = parse_module(entry_file, source, &tokens);
+            for declaration in &module.decls {
+                if matches!(declaration.kind, DeclKind::Import { .. }) {
+                    let key = (
+                        declaration.span.start,
+                        declaration.span.end,
+                        source
+                            .get(declaration.span.start as usize..declaration.span.end as usize)
+                            .unwrap_or("")
+                            .to_string(),
+                    );
+                    let context = contexts
+                        .entry(key)
+                        .or_insert_with(|| {
+                            (origin_roots.clone(), origin_roots.entry_module(origin))
+                        })
+                        .clone();
+                    entry_import_roots.insert(declaration.span, context);
+                }
+            }
+        }
+        let mut overlays = self.overlays.clone();
+        overlays.insert(&self.entry, source);
+        let entry_key = ModuleKey::physical(&roots.entry_module(&self.entry));
+        let mut loader = Loader {
+            roots: Some(roots.clone()),
+            sources: self.sources.clone(),
+            source_ids: self.source_ids.clone(),
+            source_identities: self.source_identities.clone(),
+            entry_identity: Some((entry_key, self.identity.clone())),
+            entry_import_roots,
+            skip_malformed_checks: true,
+            options: CheckOptions::default(),
+            overlay: overlays.clone(),
+            cache: Some(self.cache.clone()),
+            ..Loader::default()
+        };
+        let root = loader.load_entry(&self.entry);
+        self.source_ids = loader.source_ids.clone();
+        let (modules, sources, mut diagnostics, dependencies) = loader.finish(root);
+        // Text snapshots also retain the selected import instance. A retargeted
+        // symlink or a new higher-priority candidate must not silently pair old
+        // runtime values with a newly resolved nominal module.
+        for (site, target) in repl_resolutions(&modules, &self.source_ids) {
+            if self
+                .resolutions
+                .get(&site)
+                .is_some_and(|previous| previous != &target)
+            {
+                diagnostics.push(Diagnostic::error("E0607", "an imported module resolves to a different source than this session initialized", site)
+                    .with_help("use :reset to reload imports from the current package/filesystem"));
+            }
+        }
+        self.sources = sources.clone();
+        let compilation = crate::Compilation {
+            module: modules.last().map(|module| module.module.clone()),
+            checked: modules
+                .last()
+                .map_or_else(CheckedModule::default, |module| module.checked.clone()),
+            diagnostics: diagnostics.clone(),
+            sources: sources.clone(),
+        };
+        ReplCompilation {
+            compilation,
+            program: Program {
+                sources,
+                modules,
+                diagnostics,
+                dependencies,
+            },
+            contexts,
+            overlays,
+            roots: Some(roots),
+        }
+    }
+
+    /// Reports a cancelled submission without committing its imports.
+    #[must_use]
+    pub fn interrupted(
+        &self,
+        source: &str,
+    ) -> ReplCompilation {
+        self.failure_with_code(source, "E0812", "evaluation interrupted".to_string())
+    }
+
+    fn failure(
+        &self,
+        source: &str,
+        message: String,
+    ) -> ReplCompilation {
+        self.failure_with_code(source, "E0605", message)
+    }
+
+    fn failure_with_code(
+        &self,
+        source: &str,
+        code: &str,
+        message: String,
+    ) -> ReplCompilation {
+        let mut sources = SourceMap::new();
+        let file = sources.add("<repl>", source);
+        let mut diagnostics = Diagnostics::new();
+        diagnostics.push(Diagnostic::error(code, message, Span::new(file, 0, 0)));
+        ReplCompilation {
+            compilation: crate::Compilation {
+                module: None,
+                checked: CheckedModule::default(),
+                diagnostics: diagnostics.clone(),
+                sources: sources.clone(),
+            },
+            program: Program {
+                modules: Vec::new(),
+                sources,
+                diagnostics,
+                dependencies: Vec::new(),
+            },
+            contexts: self.contexts.clone(),
+            overlays: self.overlays.clone(),
+            roots: self.roots.clone(),
+        }
+    }
+
+    /// Retains the source snapshots and resolutions of a successful revision.
+    pub fn commit(
+        &mut self,
+        compilation: &ReplCompilation,
+    ) {
+        self.contexts.clone_from(&compilation.contexts);
+        self.overlays.clone_from(&compilation.overlays);
+        self.roots.clone_from(&compilation.roots);
+        self.resolutions = repl_resolutions(&compilation.program.modules, &self.source_ids);
+        self.imports.clear();
+        self.imported_names.clear();
+        let entry_file = compilation.program.entry().map(|module| module.file);
+        for module in &compilation.program.modules {
+            if Some(module.file) == entry_file {
+                continue;
+            }
+            if let Some((key, _)) = self
+                .source_ids
+                .iter()
+                .find(|(_, file)| **file == module.file)
+            {
+                self.source_identities
+                    .insert(key.clone(), module.checked.module_path());
+            }
+            if let Some(source) = compilation.sources.file(module.file)
+                && !source.name.starts_with("stdlib://")
+                && !source.name.starts_with("rssn://")
+            {
+                self.overlays
+                    .insert(&module.source.path, source.text.clone());
+            }
+        }
+        if let Some(entry) = compilation.program.entry() {
+            for import in &entry.imports {
+                let Some(module) = compilation
+                    .program
+                    .modules
+                    .iter()
+                    .find(|module| module.file == import.file)
+                else {
+                    continue;
+                };
+                let selection = import
+                    .names
+                    .as_ref()
+                    .map_or_else(String::new, |names| format!(" {{ {} }}", names.join(", ")));
+                self.imports.push(format!(
+                    "{}{}{}",
+                    module.path.join("."),
+                    if import.prefix.is_empty() {
+                        " (open)".to_string()
+                    } else {
+                        format!(" as {}", import.prefix)
+                    },
+                    selection
+                ));
+                for name in module.checked.exports.keys() {
+                    if import
+                        .names
+                        .as_ref()
+                        .is_none_or(|names| names.contains(name))
+                    {
+                        self.imported_names.push(if import.prefix.is_empty() {
+                            name.clone()
+                        } else {
+                            format!("{}.{name}", import.prefix)
+                        });
+                    }
+                }
+            }
+        }
+        self.imports.sort();
+        self.imports.dedup();
+        self.imported_names.sort();
+        self.imported_names.dedup();
+    }
+}
+
+fn repl_resolutions(
+    modules: &[LoadedModule],
+    ids: &HashMap<ModuleKey, FileId>,
+) -> HashMap<Span, ModuleKey> {
+    let mut resolutions = HashMap::new();
+    for module in modules {
+        for (declaration, edge) in module
+            .module
+            .decls
+            .iter()
+            .filter(|decl| matches!(decl.kind, DeclKind::Import { .. }))
+            .zip(&module.imports)
+        {
+            if let Some((key, _)) = ids.iter().find(|(_, file)| **file == edge.file) {
+                resolutions.insert(declaration.span, key.clone());
+            }
+        }
+    }
+    resolutions
+}
+
+#[expect(
+    clippy::single_call_fn,
+    reason = "collect shadowing names separately from binding the import scopes"
+)]
+fn repl_local_names(module: &Module) -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+    let mut patterns = Vec::new();
+    for declaration in &module.decls {
+        match &declaration.kind {
+            | DeclKind::Fn { name, .. } => {
+                names.insert(name.clone());
+            },
+            | DeclKind::Let { pattern, .. } => patterns.push(pattern),
+            | _ => {},
+        }
+    }
+    while let Some(pattern) = patterns.pop() {
+        use aevia_syntax::PatKind;
+        match &pattern.kind {
+            | PatKind::Var(name) => {
+                names.insert(name.clone());
+            },
+            | PatKind::Ctor { args, .. } | PatKind::Tuple(args) => patterns.extend(args),
+            | PatKind::Record(fields) => {
+                for (name, value) in fields {
+                    if let Some(value) = value {
+                        patterns.push(value);
+                    } else {
+                        names.insert(name.clone());
+                    }
+                }
+            },
+            | PatKind::Tensor { items, rest } => {
+                patterns.extend(items);
+                if let Some(name) = rest {
+                    names.insert(name.clone());
+                }
+            },
+            | PatKind::As { pattern, name } => {
+                patterns.push(pattern);
+                names.insert(name.clone());
+            },
+            | PatKind::Annot { pattern, .. } => patterns.push(pattern),
+            | _ => {},
+        }
+    }
+    names
+}
+
+fn repl_roots(origin: &Path) -> Result<Roots, String> {
+    let parent = origin.parent().unwrap_or_else(|| Path::new("."));
+    match crate::manifest::Package::find(parent).map_err(|error| error.render())? {
+        | Some(package) => {
+            package
+                .roots()
+                .map(|roots| roots.with_local(parent))
+                .map_err(|error| error.render())
+        },
+        | None => Ok(Roots::adjacent(origin)),
+    }
+}
+
+/// Runtime import instances retained for the lifetime of one REPL interpreter.
+#[derive(Default)]
+pub struct ReplRuntime {
+    scopes: HashMap<FileId, std::rc::Rc<crate::value::Scope>>,
+    exports: HashMap<FileId, HashMap<String, crate::Value>>,
+}
+
+impl ReplRuntime {
+    /// Atomically initialize new imports and the new entry declarations. A
+    /// failed or interrupted submission neither consumes dependency initializers
+    /// nor leaves a runtime module checked against a different source snapshot.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "retain the REPL checkpoint and complete rollback in one transaction"
+    )]
+    pub fn synchronize(
+        &mut self,
+        interp: &mut crate::Interp,
+        compilation: &ReplCompilation,
+        loaded: usize,
+        limit: usize,
+    ) -> Diagnostics {
+        if compilation.diagnostics.has_errors() {
+            return compilation.diagnostics.clone();
+        }
+        let checkpoint = (
+            interp.globals.clone(),
+            interp.symbol_counts.clone(),
+            interp.seed,
+            interp.constants_seeded,
+            interp.instance_methods.clone(),
+            interp.method_classes.clone(),
+            interp.class_keys.clone(),
+            interp.aliases.clone(),
+            interp.adts.clone(),
+            interp.module_scopes.clone(),
+            interp.file_scopes.clone(),
+            interp.file_keys.clone(),
+            interp.units.clone(),
+            interp.dims.clone(),
+            interp.context.clone(),
+            interp.active_scope.clone(),
+            interp.bindings.clone(),
+            interp.next_instance_export,
+            interp.current_module.clone(),
+            interp.current_constructors.clone(),
+            interp.instance_exports.clone(),
+            interp.instance_sites.clone(),
+            interp.module_units.clone(),
+            interp.expr_types.clone(),
+            interp.literal_reps.clone(),
+            interp.constant_regions.clone(),
+            interp.rssn_calls.clone(),
+            interp.rssn_call_sites.clone(),
+            interp.dictionaries.clone(),
+            interp.dictionary_sites.clone(),
+            interp.dyn_calls.clone(),
+            interp.registrations.clone(),
+            interp.method_refs.clone(),
+            interp.exports.clone(),
+        );
+        let old_instances = interp.context.instances.borrow().clone();
+        let old_scopes = self.scopes.clone();
+        let old_exports = self.exports.clone();
+        let mut diagnostics = self.prepare_imports(interp, &compilation.program);
+        if !diagnostics.has_errors()
+            && let Some(entry) = compilation.program.entry()
+        {
+            let declarations = &entry.module.decls;
+            let (bounded, _) = declarations.split_at(limit.min(declarations.len()));
+            let (previous, submitted) = bounded.split_at(loaded.min(bounded.len()));
+            if submitted.is_empty() {
+                interp.prepare_incremental_module(&entry.checked, previous);
+            } else if let Err((_, error)) =
+                interp.load_incremental_declarations(&entry.checked, previous, submitted)
+            {
+                diagnostics.push(error.diagnostic());
+            }
+        }
+        if !diagnostics.has_errors()
+            && let Err(error) = interp.check_cancelled()
+        {
+            diagnostics.push(error.diagnostic());
+        }
+        if diagnostics.has_errors() {
+            (
+                interp.globals,
+                interp.symbol_counts,
+                interp.seed,
+                interp.constants_seeded,
+                interp.instance_methods,
+                interp.method_classes,
+                interp.class_keys,
+                interp.aliases,
+                interp.adts,
+                interp.module_scopes,
+                interp.file_scopes,
+                interp.file_keys,
+                interp.units,
+                interp.dims,
+                interp.context,
+                interp.active_scope,
+                interp.bindings,
+                interp.next_instance_export,
+                interp.current_module,
+                interp.current_constructors,
+                interp.instance_exports,
+                interp.instance_sites,
+                interp.module_units,
+                interp.expr_types,
+                interp.literal_reps,
+                interp.constant_regions,
+                interp.rssn_calls,
+                interp.rssn_call_sites,
+                interp.dictionaries,
+                interp.dictionary_sites,
+                interp.dyn_calls,
+                interp.registrations,
+                interp.method_refs,
+                interp.exports,
+            ) = checkpoint;
+            *interp.context.instances.borrow_mut() = old_instances;
+            self.scopes = old_scopes;
+            self.exports = old_exports;
+        }
+        diagnostics
+    }
+
+    /// Initialize dependencies once and publish only the entry's explicit imports.
+    pub fn prepare_imports(
+        &mut self,
+        interp: &mut crate::Interp,
+        program: &Program,
+    ) -> Diagnostics {
+        let mut diagnostics = Diagnostics::new();
+        let Some(entry) = program.entry() else {
+            return diagnostics;
+        };
+        for module in &program.modules {
+            if module.file == entry.file {
+                break;
+            }
+            if let Err(error) = interp.check_cancelled() {
+                diagnostics.push(error.diagnostic());
+                return diagnostics;
+            }
+            if self.scopes.contains_key(&module.file) {
+                continue;
+            }
+            interp.prepare_module(&module.checked);
+            let imported = module
+                .imports
+                .iter()
+                .filter_map(|import| self.scopes.get(&import.file).cloned())
+                .collect();
+            let scope = interp.module_scope(imported);
+            self.bind_imports(module, &scope);
+            diagnostics.extend(interp.load_into(&module.module, &scope));
+            if diagnostics.has_errors() {
+                return diagnostics;
+            }
+            let values: HashMap<String, crate::Value> = module
+                .checked
+                .exports
+                .keys()
+                .filter_map(|name| {
+                    scope
+                        .lookup(name)
+                        .or_else(|| {
+                            module
+                                .imports
+                                .iter()
+                                .filter(|import| import.export)
+                                .filter(|import| {
+                                    import
+                                        .names
+                                        .as_ref()
+                                        .is_none_or(|names| names.contains(name))
+                                })
+                                .find_map(|import| {
+                                    self.exports
+                                        .get(&import.file)
+                                        .and_then(|exports| exports.get(name))
+                                        .cloned()
+                                })
+                        })
+                        .map(|value| (name.clone(), value))
+                })
+                .collect();
+            self.exports.insert(module.file, values);
+            self.scopes.insert(module.file, scope.clone());
+            interp.file_scopes.insert(module.file, scope);
+            interp
+                .file_keys
+                .insert(module.file, replica_file_key(module));
+        }
+        if let Err(error) = interp.check_cancelled() {
+            diagnostics.push(error.diagnostic());
+            return diagnostics;
+        }
+        let locals = repl_local_names(&entry.module);
+        for import in &entry.imports {
+            if let Some(values) = self.exports.get(&import.file) {
+                for (name, value) in values {
+                    if import
+                        .names
+                        .as_ref()
+                        .is_none_or(|names| names.contains(name))
+                    {
+                        let key = if import.prefix.is_empty() {
+                            name.clone()
+                        } else {
+                            format!("{}.{name}", import.prefix)
+                        };
+                        if !(locals.contains(&key) && interp.globals.contains_key(&key)) {
+                            crate::value::bump_environment();
+                            interp.globals.insert(key, value.clone());
+                        }
+                    }
+                }
+            }
+        }
+        diagnostics
+    }
+
+    fn bind_imports(
+        &self,
+        module: &LoadedModule,
+        scope: &std::rc::Rc<crate::value::Scope>,
+    ) {
+        for import in &module.imports {
+            if let Some(values) = self.exports.get(&import.file) {
+                for (name, value) in values {
+                    if import
+                        .names
+                        .as_ref()
+                        .is_none_or(|names| names.contains(name))
+                    {
+                        let key = if import.prefix.is_empty() {
+                            name.clone()
+                        } else {
+                            format!("{}.{name}", import.prefix)
+                        };
+                        crate::value::bump_environment();
+                        scope.vars.borrow_mut().insert(key, value.clone());
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -135,6 +790,20 @@ pub fn load_all_with_roots(
     roots: Roots,
     options: &CheckOptions,
 ) -> (Program, LoadStats) {
+    load_all_with_roots_and_disk_cache(entries, roots, options, None)
+}
+
+/// Loads all entry files together using a shared in-process graph.
+///
+/// Supplying an on-disk `.aevi` cache lets commands such as `aevia check --all`
+/// and `aevia lint --all` reuse and update cached modules.
+#[must_use]
+pub fn load_all_with_roots_and_disk_cache(
+    entries: &[PathBuf],
+    roots: Roots,
+    options: &CheckOptions,
+    disk: Option<&crate::disk_cache::DiskCache>,
+) -> (Program, LoadStats) {
     let mut roots = roots;
     for entry in entries {
         if let Some(dir) = entry.parent() {
@@ -144,13 +813,15 @@ pub fn load_all_with_roots(
     let mut loader = Loader {
         roots: Some(roots),
         options: options.clone(),
+        disk: disk.cloned(),
         ..Loader::default()
     };
+    let counters = loader.counters.clone();
     let mut root = None;
     for entry in entries {
-        let loaded = loader.load_entry(entry);
+        let loaded_entry = loader.load_entry(entry);
         if root.is_none() {
-            root = loaded;
+            root = loaded_entry;
         }
     }
     let files = loader.parsed.len();
@@ -160,10 +831,10 @@ pub fn load_all_with_roots(
         entries: entries.len(),
         files,
         modules: modules.len(),
-        checks: modules.len(),
+        checks: Counters::get(&counters.checked),
         diagnostics: diagnostics.items.len(),
-        disk_hits: 0,
-        disk_writes: 0,
+        disk_hits: Counters::get(&counters.disk_hits),
+        disk_writes: Counters::get(&counters.disk_writes),
     };
     (
         Program {
@@ -181,6 +852,7 @@ fn dedupe_diagnostics(diagnostics: &mut Diagnostics) {
     let mut seen = std::collections::HashSet::new();
     diagnostics.items.retain(|item| {
         seen.insert((
+            item.span.file,
             item.code.clone(),
             item.message.clone(),
             item.span.start,
@@ -248,6 +920,7 @@ pub fn load_with_roots_and_source(
 }
 
 /// Loads an entry and all its imports against one snapshot of unsaved buffers.
+///
 /// Physical buffers can be reached through aliases and multiple package owners;
 /// source identity is shared while nominal ownership/import context is retained.
 /// An overlaid import need not exist on disk yet.
@@ -298,6 +971,17 @@ struct Loader {
     /// dependencies, or the entry file's directory for a standalone file.
     roots: Option<Roots>,
     sources: SourceMap,
+    /// Interactive hosts reserve source ids across changes to the import graph.
+    source_ids: HashMap<ModuleKey, FileId>,
+    source_identities: HashMap<ModuleKey, aevia_types::keys::ModulePath>,
+    /// A virtual entry keeps its host identity independently of its disk anchor.
+    entry_identity: Option<(ModuleKey, crate::source::SourceIdentity)>,
+    /// A loaded REPL fragment can resolve imports from another package/directory.
+    entry_import_roots: HashMap<Span, (Roots, ResolvedModule)>,
+    context_roots: HashMap<ModuleKey, Roots>,
+    /// Interactive diagnostics stop at syntax errors; editor loads retain
+    /// their historical recovery-AST analysis by leaving this disabled.
+    skip_malformed_checks: bool,
     diagnostics: Diagnostics,
     /// Parsed modules by owning package and canonical source, in post-order.
     order: Vec<ModuleKey>,
@@ -350,7 +1034,8 @@ struct Loader {
 /// the cache is per process (a `watch` session, an editor, a REPL).
 #[derive(Default)]
 pub struct CheckCache {
-    entries: HashMap<String, CacheEntry>,
+    entries: HashMap<ModuleKey, CacheEntry>,
+    syntax: HashMap<ModuleKey, SyntaxEntry>,
     /// Modules reused from the cache on the most recent load.
     pub reused: usize,
     /// Modules checked on the most recent load.
@@ -360,8 +1045,25 @@ pub struct CheckCache {
 struct CacheEntry {
     file: FileId,
     fingerprint: u64,
+    interface_fingerprint: u64,
     diagnostics: Diagnostics,
     module: aevia_types::check::CheckedModule,
+}
+
+type Syntax = Result<(Module, Diagnostics), Diagnostics>;
+
+struct SyntaxEntry {
+    file: FileId,
+    source: String,
+    syntax: Syntax,
+}
+
+fn parse_source(
+    file: FileId,
+    source: &str,
+) -> Syntax {
+    let tokens = lex(file, source)?;
+    Ok(parse_module(file, source, &tokens))
 }
 
 impl CheckCache {
@@ -381,6 +1083,30 @@ impl CheckCache {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    fn parse(
+        &mut self,
+        key: &ModuleKey,
+        file: FileId,
+        source: &str,
+    ) -> Syntax {
+        if let Some(entry) = self.syntax.get(key)
+            && entry.file == file
+            && entry.source == source
+        {
+            return entry.syntax.clone();
+        }
+        let syntax = parse_source(file, source);
+        self.syntax.insert(
+            key.clone(),
+            SyntaxEntry {
+                file,
+                source: source.to_owned(),
+                syntax: syntax.clone(),
+            },
+        );
+        syntax
     }
 }
 
@@ -463,6 +1189,15 @@ fn load_configured(
     let counters = loader.counters.clone();
     let root = loader.load_entry(entry);
     let files = loader.parsed.len();
+    if let Some(cache) = cache {
+        let mut cache = cache.borrow_mut();
+        cache
+            .entries
+            .retain(|key, _| loader.parsed.contains_key(key));
+        cache
+            .syntax
+            .retain(|key, _| loader.parsed.contains_key(key));
+    }
     let (modules, sources, mut diagnostics, dependencies) = loader.finish(root);
     dedupe_diagnostics(&mut diagnostics);
     let stats = LoadStats {
@@ -499,14 +1234,18 @@ struct Parsed {
     context: ResolvedModule,
     file: FileId,
     module: Module,
+    syntax_failed: bool,
     path: Vec<String>,
-    imports: Vec<(
-        ModuleKey,
-        Vec<String>,
-        Option<String>,
-        bool,
-        Option<Vec<String>>,
-    )>,
+    imports: Vec<ParsedImport>,
+}
+
+struct ParsedImport {
+    target: ModuleKey,
+    path: Vec<String>,
+    prefix: String,
+    names: Option<Vec<String>>,
+    export: bool,
+    span: Span,
 }
 
 // A physical file can be instantiated by distinct owning packages. Dependency
@@ -525,6 +1264,10 @@ impl ModuleKey {
         }
     }
 
+    #[expect(
+        clippy::single_call_fn,
+        reason = "preserve the package identity in diagnostic dependency paths"
+    )]
     fn label(&self) -> String {
         match &self.owner {
             | Some(owner) => format!("{} [package {}]", self.path.display(), owner.display()),
@@ -546,6 +1289,13 @@ impl AsRef<Path> for ModuleKey {
 }
 
 impl Loader {
+    fn roots_for(
+        &self,
+        key: &ModuleKey,
+    ) -> Option<&Roots> {
+        self.context_roots.get(key).or(self.roots.as_ref())
+    }
+
     fn watch(
         &mut self,
         path: &Path,
@@ -579,6 +1329,10 @@ impl Loader {
         self.load_file(&self.entry_context(path), &[])
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "keep source precedence, cycle tracking and recursive import traversal in order"
+    )]
     fn load_file(
         &mut self,
         context: &ResolvedModule,
@@ -600,7 +1354,7 @@ impl Loader {
         if let Some(parsed) = self.parsed.get(&canonical) {
             if !expected.is_empty()
                 && parsed.module.name.is_some()
-                && self.roots.as_ref().is_some_and(|roots| {
+                && self.roots_for(&canonical).is_some_and(|roots| {
                     !roots.resolved_name_matches(context, &parsed.path, expected)
                 })
             {
@@ -648,11 +1402,10 @@ impl Loader {
         if physical {
             self.watch(&context.path);
         }
-        let source = match (&overlaid, &embedded) {
-            | (Some(source), _) => source.clone(),
-            | (None, Some((_, source))) => source.to_string(),
-            | (None, None) if kernel.is_some() => kernel.as_ref().unwrap().1.clone(),
-            | (None, None) => {
+        let source = match (&overlaid, &embedded, &kernel) {
+            | (Some(source), _, _) | (None, None, Some((_, source))) => source.clone(),
+            | (None, Some((_, source)), _) => source.to_string(),
+            | (None, None, None) => {
                 if let Some(source) = self.physical_sources.get(&canonical.path) {
                     source.clone()
                 } else {
@@ -684,15 +1437,41 @@ impl Loader {
             | (Some(_), _) => canonical.display().to_string(),
             | (None, Some((components, _))) => format!("stdlib://{}.aev", components.join("/")),
             | (None, None) => {
-                kernel
-                    .as_ref()
-                    .map(|(name, _)| format!("rssn://{name}.aev"))
-                    .unwrap_or_else(|| canonical.display().to_string())
+                kernel.as_ref().map_or_else(
+                    || canonical.display().to_string(),
+                    |(name, _)| format!("rssn://{name}.aev"),
+                )
             },
         };
-        let file = self.sources.add(display, &source);
-        let lexed = match lex(file, &source) {
-            | Ok(lexed) => lexed,
+        let display = if self
+            .entry_identity
+            .as_ref()
+            .is_some_and(|(entry, _)| entry == &canonical)
+        {
+            "<repl>".to_string()
+        } else {
+            display
+        };
+        let file = if let Some(file) = self.source_ids.get(&canonical).copied() {
+            self.sources.replace(file, display, &source);
+            file
+        } else {
+            let file = self.sources.add(display, &source);
+            self.source_ids.insert(canonical.clone(), file);
+            file
+        };
+        // Each synthetic entry is its own snippet or REPL submission. Keep
+        // reusable syntax for disk entries and imports of any origin.
+        let parsed = self
+            .cache
+            .as_ref()
+            .filter(|_| overlaid.is_none() || !self.stack.is_empty())
+            .map_or_else(
+                || parse_source(file, &source),
+                |cache| cache.borrow_mut().parse(&canonical, file, &source),
+            );
+        let (module, parse_diagnostics) = match parsed {
+            | Ok(parsed) => parsed,
             | Err(errors) => {
                 self.diagnostics.extend(errors);
                 // Remember the failure so a second importer does not report it
@@ -704,31 +1483,38 @@ impl Loader {
                         file,
                         module: Module {
                             name: None,
+                            private: false,
                             unit_system: None,
                             decls: Vec::new(),
                             file,
                         },
+                        syntax_failed: true,
                         path: Vec::new(),
                         imports: Vec::new(),
                     },
                 );
-                self.order.push(canonical.clone());
+                self.order.push(canonical);
                 return None;
             },
         };
-        let (module, parse_diagnostics) = parse_module(file, &source, &lexed);
+        let syntax_failed = parse_diagnostics.has_errors();
         self.diagnostics.extend(parse_diagnostics);
-        if self.diagnostics.has_errors() && self.stack.is_empty() {
-            // The entry file failed to parse; there is nothing to import.
-        }
 
-        let path = module_path(&module, &canonical);
+        let path = if let Some((entry, identity)) = &self.entry_identity
+            && entry == &canonical
+        {
+            identity.module_path(module.name.as_deref()).0
+        } else {
+            module_path(&module, &canonical)
+        };
         // §2.2.5 / appendix B: a module's declared name must match the path it
         // is imported by, or `import A.B` would name a module called `C`. The
         // entry file is exempt because it is not imported by a path.
-        let declared_matches = self.roots.as_ref().map_or(path == expected, |roots| {
-            roots.resolved_name_matches(context, &path, expected)
-        });
+        let declared_matches = self
+            .roots_for(&canonical)
+            .map_or(path == expected, |roots| {
+                roots.resolved_name_matches(context, &path, expected)
+            });
         if !expected.is_empty() && module.name.is_some() && !declared_matches {
             self.diagnostics.push(
                 Diagnostic::error(
@@ -756,13 +1542,31 @@ impl Loader {
                 alias,
                 names,
                 open,
+                export,
             } = &decl.kind
             else {
                 continue;
             };
-            let candidates = self.roots.as_ref().map_or_else(Vec::new, |roots| {
-                roots.module_candidates(context, import_path)
-            });
+            let Some((import_roots, importer)) = self
+                .entry_import_roots
+                .get(&decl.span)
+                .cloned()
+                .or_else(|| {
+                    self.context_roots
+                        .get(&canonical)
+                        .cloned()
+                        .map(|roots| (roots, context.clone()))
+                })
+                .or_else(|| self.roots.clone().map(|roots| (roots, context.clone())))
+            else {
+                self.diagnostics.push(Diagnostic::error(
+                    "E0607",
+                    "import roots are unavailable",
+                    decl.span,
+                ));
+                continue;
+            };
+            let candidates = import_roots.module_candidates(&importer, import_path);
             let resolved = candidates
                 .into_iter()
                 .find(|candidate| self.watch(&candidate.path));
@@ -786,8 +1590,9 @@ impl Loader {
                             path: key,
                             owner: None,
                         }
-                    } else if import_path.len() == 1 && import_path[0].starts_with("Rssn_") {
-                        let name = &import_path[0];
+                    } else if let [name] = import_path.as_slice()
+                        && name.starts_with("Rssn_")
+                    {
                         let Some(source) =
                             aevia_rssn::codegen::namespace_source(aevia_rssn::registry(), name)
                         else {
@@ -807,11 +1612,7 @@ impl Loader {
                             owner: None,
                         }
                     } else {
-                        let candidates = self
-                            .roots
-                            .as_ref()
-                            .map(|roots| roots.module_candidates(context, import_path))
-                            .unwrap_or_default();
+                        let candidates = import_roots.module_candidates(&importer, import_path);
                         let expected = candidates
                             .iter()
                             .map(|candidate| format!("`{}`", candidate.path.display()))
@@ -848,14 +1649,57 @@ impl Loader {
                     }
                 },
             };
-            if let Some(resolved) = self.load_file(&target, import_path) {
-                imports.push((
-                    resolved,
-                    import_path.clone(),
-                    alias.clone(),
-                    *open,
-                    names.clone(),
-                ));
+            let target_key = if self.stdlib.contains_key(&target.path)
+                || self.kernel_modules.contains_key(&target.path)
+            {
+                ModuleKey {
+                    path: target.path.clone(),
+                    owner: None,
+                }
+            } else {
+                ModuleKey::physical(&target)
+            };
+            self.context_roots
+                .entry(target_key.clone())
+                .or_insert(import_roots);
+            let resolved = self.load_file(&target, import_path).or_else(|| {
+                // Keep a failed lexical dependency edge so only its importers
+                // are stage-blocked; independent modules remain checkable.
+                (self.skip_malformed_checks
+                    && self
+                        .parsed
+                        .get(&target_key)
+                        .is_some_and(|parsed| parsed.syntax_failed))
+                .then_some(target_key)
+            });
+            if let Some(resolved) = resolved {
+                if self
+                    .parsed
+                    .get(&resolved)
+                    .is_some_and(|parsed| parsed.module.private && context.owner != target.owner)
+                {
+                    self.diagnostics.push(Diagnostic::error(
+                        "E0607",
+                        format!(
+                            "module `{}` is private to its package",
+                            import_path.join(".")
+                        ),
+                        decl.span,
+                    ));
+                }
+                let prefix = if *open || names.is_some() {
+                    String::new()
+                } else {
+                    alias.clone().unwrap_or_else(|| import_path.join("."))
+                };
+                imports.push(ParsedImport {
+                    target: resolved,
+                    path: import_path.clone(),
+                    prefix,
+                    names: names.clone(),
+                    export: *export,
+                    span: decl.span,
+                });
             }
         }
 
@@ -866,6 +1710,7 @@ impl Loader {
                 context: context.clone(),
                 file,
                 module,
+                syntax_failed,
                 path,
                 imports,
             },
@@ -874,6 +1719,10 @@ impl Loader {
         Some(canonical)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "keep checked interfaces, cache decisions and nominal reexports in dependency order"
+    )]
     fn finish(
         mut self,
         root: Option<ModuleKey>,
@@ -886,328 +1735,601 @@ impl Loader {
         let dependencies = std::mem::take(&mut self.dependencies)
             .into_values()
             .collect();
-        let sources = self.sources.clone();
         let Some(root) = root else {
-            return (Vec::new(), sources, self.diagnostics, dependencies);
+            return (Vec::new(), self.sources, self.diagnostics, dependencies);
         };
         // Every prefix each module is imported under, across all importers.
         let mut prefixes: HashMap<ModuleKey, Vec<String>> = HashMap::new();
-        for parsed in self.parsed.values() {
-            for (target, import_path, alias, open, names) in &parsed.imports {
-                let prefix = if *open || names.is_some() {
-                    String::new()
-                } else {
-                    alias.clone().unwrap_or_else(|| import_path.join("."))
-                };
-                let entry = prefixes.entry(target.clone()).or_default();
-                if !entry.contains(&prefix) {
-                    entry.push(prefix);
+        for parsed in self.order.iter().filter_map(|path| self.parsed.get(path)) {
+            for import in &parsed.imports {
+                let entry = prefixes.entry(import.target.clone()).or_default();
+                if !entry.contains(&import.prefix) {
+                    entry.push(import.prefix.clone());
                 }
             }
         }
         let mut modules: Vec<LoadedModule> = Vec::new();
+        let mut by_path: HashMap<ModuleKey, usize> = HashMap::new();
+        let mut by_file: HashMap<FileId, usize> = HashMap::new();
+        let mut syntax_blocked = HashSet::new();
         // The interface digest of each module already resolved (`None` when it
         // could not be digested), for the on-disk cache keys.
         let mut digests: HashMap<FileId, Option<Digest>> = HashMap::new();
+        // In-memory interface fingerprints in the same order as `modules`.
+        let mut interface_fingerprints = Vec::new();
         // The checked interfaces of the modules already resolved, in dependency
         // order (§7.4). They carry classes, instances and alias definitions, so
         // an importer can use a class it did not declare and expand an imported
         // alias instead of treating it as opaque.
-        for path in self.order.clone() {
-            let Some(parsed) = self.parsed.remove(&path) else {
-                continue;
-            };
-            // The imports of this module, as the checker wants them: one entry
-            // per resolved module, with the prefix its names are reachable
-            // under.
-            // Materialised only when the checker (or the in-memory fingerprint)
-            // needs them: a module restored from disk never clones its
-            // dependencies' export tables.
-            let mut import_specs: Vec<(String, usize, Option<Vec<String>>)> = Vec::new();
-            let mut runtime_imports = Vec::new();
-            let mut bindings = Vec::new();
-            for (target, import_path, alias, open, names) in &parsed.imports {
-                let Some((other_index, other)) = self
-                    .order
+        // Partition topological `self.order` into dependency-free waves while
+        // preserving the exact original order: a new wave starts only when a
+        // module imports another module in the current wave. Every module in
+        // a wave depends exclusively on modules from strictly earlier waves,
+        // so cache-miss modules within a wave can be typechecked in parallel
+        // without changing module order, FileIds, or diagnostics.
+        let mut waves: Vec<Vec<ModuleKey>> = Vec::new();
+        let mut wave_keys: HashSet<ModuleKey> = HashSet::new();
+        for path in std::mem::take(&mut self.order) {
+            let depends_on_wave = self.parsed.get(&path).is_some_and(|parsed| {
+                parsed
+                    .imports
                     .iter()
-                    .position(|candidate| candidate == target)
-                    .and_then(|index| modules.get(index).map(|module| (index, module)))
-                else {
+                    .any(|import| wave_keys.contains(&import.target))
+            });
+            if depends_on_wave || waves.is_empty() {
+                waves.push(Vec::new());
+                wave_keys.clear();
+            }
+            wave_keys.insert(path.clone());
+            if let Some(current) = waves.last_mut() {
+                current.push(path);
+            }
+        }
+
+        let exec_mode = aevia_rssn::execution::default_execution_mode();
+        for wave in waves {
+            // Prepare every module in this wave against already-committed
+            // earlier waves, then typecheck all cache misses in parallel when
+            // the wave has at least two independent misses.
+            enum WaveItem {
+                SyntaxBlocked {
+                    path: ModuleKey,
+                    parsed: Parsed,
+                },
+                Ready {
+                    path: ModuleKey,
+                    parsed: Parsed,
+                    runtime_imports: Vec<ResolvedImport>,
+                    print: Option<u64>,
+                    disk_key: Option<crate::disk_cache::Key>,
+                    memory_digest: Option<u64>,
+                    own_digest: Option<Digest>,
+                    loaded_from_disk: bool,
+                    checked: aevia_types::check::CheckResult,
+                },
+                NeedsCheck {
+                    path: ModuleKey,
+                    parsed: Parsed,
+                    runtime_imports: Vec<ResolvedImport>,
+                    print: Option<u64>,
+                    disk_key: Option<crate::disk_cache::Key>,
+                    identity: Option<aevia_types::ModulePath>,
+                    bindings: Vec<InterfaceBinding>,
+                    reexports: BTreeMap<Span, aevia_types::ModulePath>,
+                    imports: Vec<Import>,
+                    interfaces: Vec<ModuleInterface>,
+                },
+            }
+
+            let mut prepared: Vec<WaveItem> = Vec::with_capacity(wave.len());
+            for path in wave {
+                let Some(parsed) = self.parsed.remove(&path) else {
                     continue;
                 };
-                // `open` and a name list both bring names in unqualified;
-                // an alias or the module path qualifies them.
-                let prefix = if *open || names.is_some() {
-                    String::new()
-                } else {
-                    alias.clone().unwrap_or_else(|| import_path.join("."))
-                };
-                let span = parsed
-                    .module
-                    .decls
-                    .iter()
-                    .find(|decl| {
-                        matches!(&decl.kind, DeclKind::Import { path, .. } if path == import_path)
-                    })
-                    .map_or_else(Span::default, |decl| decl.span);
-                let exports = &other.checked.exports;
-                if let Some(selected) = names {
-                    // `import A.B { a, b }` brings only those names in, and a
-                    // name the module does not export is an error rather than
-                    // a silent no-op.
-                    for name in selected {
-                        if !exports.contains_key(name) {
-                            let note =
-                                missing_export_note(name, exports.keys().map(String::as_str));
-                            self.diagnostics.push(
-                                Diagnostic::error(
-                                    "E0301",
-                                    format!(
-                                        "module `{}` does not export `{name}`",
-                                        import_path.join(".")
-                                    ),
-                                    span,
-                                )
-                                .with_note(note),
-                            );
-                        }
-                    }
-                }
-                bindings.push(InterfaceBinding {
-                    module: other.checked.module_path(),
-                    prefix: prefix.clone(),
-                    names: names.clone(),
-                });
-                let runtime_names = names.as_ref().map(|names| {
-                    let selected: Vec<_> = names.iter().filter_map(|name| match other.checked.exports.get(name) {
-                        Some(aevia_types::Export::Type { adt } | aevia_types::Export::TypeCtor { adt, .. }) => Some(*adt),
-                        _ => None,
-                    }).collect();
-                    let mut expanded = names.clone();
-                    for (name, export) in &other.checked.exports {
-                        if matches!(export, aevia_types::Export::Ctor { adt, .. } | aevia_types::Export::TypeCtor { adt, .. } if selected.contains(adt)) && !expanded.contains(name) { expanded.push(name.clone()); }
-                    }
-                    expanded
-                });
-                runtime_imports.push(ResolvedImport {
-                    file: other.file,
-                    prefix: prefix.clone(),
-                    names: runtime_names,
-                });
-                import_specs.push((prefix, other_index, names.clone()));
-            }
-            // A module sees its dependency closure, never unrelated modules
-            // merely checked earlier in the package traversal.
-            let mut reachable = std::collections::HashSet::new();
-            let mut pending: Vec<_> = runtime_imports.iter().map(|import| import.file).collect();
-            while let Some(file) = pending.pop() {
-                if reachable.insert(file)
-                    && let Some(module) = modules.iter().find(|module| module.file == file)
-                {
-                    pending.extend(module.imports.iter().map(|import| import.file));
-                }
-            }
-            let interfaces = || -> Vec<ModuleInterface> {
-                modules
-                    .iter()
-                    .filter(|module| reachable.contains(&module.file))
-                    .map(|module| module.checked.interface())
-                    .collect()
-            };
-            let imports = || -> Vec<Import> {
-                import_specs
-                    .iter()
-                    .map(|(prefix, index, names)| {
-                        let mut exports = modules[*index].checked.exports.clone();
-                        if let Some(selected) = names {
-                            exports.retain(|name, _| selected.contains(name));
-                        }
-                        (prefix.clone(), exports)
-                    })
-                    .collect()
-            };
-            let identity = if self.stdlib.contains_key(&path.path)
-                || self.kernel_modules.contains_key(&path.path)
-            {
-                None
-            } else {
-                self.roots
-                    .as_ref()
-                    .map(|roots| roots.resolved_module_identity(&parsed.context, &parsed.path))
-            };
-            let cache_key = format!("{path:?}");
-            let print = self.cache.as_ref().map(|_| {
-                let text = self
-                    .sources
-                    .file(parsed.file)
-                    .map(|file| file.text.clone())
-                    .unwrap_or_default();
-                fingerprint(&[
-                    &text,
-                    &parsed.file,
-                    &imports(),
-                    &interfaces(),
-                    &identity,
-                    &bindings,
-                    &self.options,
-                ])
-            });
-            let reused = match (&self.cache, print) {
-                | (Some(cache), Some(print)) => {
-                    let cache = cache.borrow();
-                    cache.entries.get(&cache_key).and_then(|entry| {
-                        (entry.file == parsed.file && entry.fingerprint == print).then(|| {
-                            aevia_types::check::CheckResult {
-                                diagnostics: entry.diagnostics.clone(),
-                                module: entry.module.clone(),
-                            }
-                        })
-                    })
-                },
-                | _ => None,
-            };
-            // The on-disk key (§9.11). Generated kernel namespaces depend on
-            // the live manifest rather than on a source file, so they are
-            // never cached; a module whose dependency interfaces cannot all
-            // be digested is simply not cacheable.
-            let disk_key = match &self.disk {
-                | Some(disk) if !self.kernel_modules.contains_key(&path.path) => {
-                    let closure: Option<Vec<Digest>> = modules
-                        .iter()
-                        .filter(|module| reachable.contains(&module.file))
-                        .map(|module| digests.get(&module.file).copied().flatten())
-                        .collect();
-                    closure.and_then(|closure| {
-                        let text = self
-                            .sources
-                            .file(parsed.file)
-                            .map(|file| file.text.clone())
-                            .unwrap_or_default();
-                        let prefixes: Vec<String> = import_specs
+                if self.skip_malformed_checks
+                    && (parsed.syntax_failed
+                        || parsed
+                            .imports
                             .iter()
-                            .map(|(prefix, _, _)| prefix.clone())
-                            .collect();
-                        disk.key(&KeyInputs {
-                            text: &text,
-                            file: parsed.file,
-                            path: &parsed.path,
-                            identity: &identity,
-                            bindings: &bindings,
-                            prefixes: &prefixes,
-                            options: &self.options,
-                            interfaces: &closure,
-                        })
-                    })
-                },
-                | _ => None,
-            };
-            let mut own_digest: Option<Digest> = None;
-            let mut from_memory = false;
-            let mut loaded_from_disk = false;
-            let restored = match reused {
-                | Some(checked) => {
-                    from_memory = true;
-                    Some(checked)
-                },
-                | None => {
-                    match (&self.disk, &disk_key) {
-                        | (Some(disk), Some(key)) => {
-                            disk.load(key, parsed.file).map(|hit| {
-                                own_digest = Some(hit.interface);
-                                loaded_from_disk = true;
-                                Counters::bump(&self.counters.disk_hits);
-                                aevia_types::check::CheckResult {
-                                    diagnostics: hit.diagnostics,
-                                    module: hit.module,
+                            .any(|import| syntax_blocked.contains(&import.target)))
+                {
+                    prepared.push(WaveItem::SyntaxBlocked { path, parsed });
+                    continue;
+                }
+                let mut import_specs = Vec::new();
+                let mut reexports = Vec::new();
+                let mut runtime_imports = Vec::new();
+                let mut bindings = Vec::new();
+                for import in &parsed.imports {
+                    let ParsedImport {
+                        target,
+                        path: import_path,
+                        prefix,
+                        names,
+                        export,
+                        span,
+                    } = import;
+                    let Some(other) = by_path.get(target).and_then(|&index| modules.get(index))
+                    else {
+                        continue;
+                    };
+                    let exports = &other.checked.exports;
+                    if let Some(selected) = names {
+                        for name in selected {
+                            if !exports.contains_key(name) {
+                                let note =
+                                    missing_export_note(name, exports.keys().map(String::as_str));
+                                self.diagnostics.push(
+                                    Diagnostic::error(
+                                        "E0301",
+                                        format!(
+                                            "module `{}` does not export `{name}`",
+                                            import_path.join(".")
+                                        ),
+                                        *span,
+                                    )
+                                    .with_note(note),
+                                );
+                            }
+                        }
+                    }
+                    let module = other.checked.module_path();
+                    if *export {
+                        reexports.push((*span, module.clone()));
+                    }
+                    bindings.push(InterfaceBinding {
+                        module,
+                        prefix: prefix.clone(),
+                        names: names.clone(),
+                    });
+                    let runtime_names = names.as_ref().map(|names| {
+                        let selected: HashSet<_> = names
+                            .iter()
+                            .filter_map(|name| {
+                                match other.checked.exports.get(name) {
+                                    | Some(
+                                        aevia_types::Export::Type { adt }
+                                        | aevia_types::Export::TypeCtor { adt, .. },
+                                    ) => Some(*adt),
+                                    | _ => None,
                                 }
                             })
-                        },
-                        | _ => None,
-                    }
-                },
-            };
-            let checked = match restored {
-                | Some(checked) => {
-                    if from_memory && let Some(cache) = &self.cache {
-                        cache.borrow_mut().reused += 1;
-                    }
-                    checked
-                },
-                | None => {
-                    let checked = check_module_with_identity(
-                        parsed.file,
-                        &parsed.module,
-                        &imports(),
-                        &interfaces(),
-                        &self.options,
-                        identity,
-                        &bindings,
-                    );
-                    Counters::bump(&self.counters.checked);
-                    if let Some(cache) = &self.cache {
-                        cache.borrow_mut().checked += 1;
-                    }
-                    checked
-                },
-            };
-            if self.disk.is_some() {
-                if own_digest.is_none() {
-                    own_digest = crate::disk_cache::interface_digest(&checked.module.interface());
+                            .collect();
+                        let mut expanded = names.clone();
+                        if !selected.is_empty() {
+                            for (name, export) in &other.checked.exports {
+                                if matches!(export, aevia_types::Export::Ctor { adt, .. } | aevia_types::Export::TypeCtor { adt, .. } if selected.contains(adt))
+                                    && !expanded.contains(name)
+                                {
+                                    expanded.push(name.clone());
+                                }
+                            }
+                        }
+                        expanded
+                    });
+                    runtime_imports.push(ResolvedImport {
+                        file: other.file,
+                        prefix: prefix.clone(),
+                        names: runtime_names,
+                        export: *export,
+                    });
+                    import_specs.push((import, &other.checked));
                 }
-                digests.insert(parsed.file, own_digest);
-                // Only an error-free check is stored: its diagnostics are
-                // warnings, and every type it declares is complete.
-                if !from_memory
-                    && !loaded_from_disk
-                    && !checked.diagnostics.has_errors()
-                    && let (Some(disk), Some(key), Some(digest)) =
-                        (&self.disk, &disk_key, own_digest)
-                    && disk.store(
-                        key,
-                        parsed.file,
-                        digest,
-                        &checked.diagnostics,
-                        &checked.module,
-                    )
+                let mut reachable_indices = BTreeSet::new();
+                let mut pending: Vec<_> =
+                    runtime_imports.iter().map(|import| import.file).collect();
+                while let Some(file) = pending.pop() {
+                    if let Some(&index) = by_file.get(&file)
+                        && reachable_indices.insert(index)
+                        && let Some(module) = modules.get(index)
+                    {
+                        pending.extend(module.imports.iter().map(|import| import.file));
+                    }
+                }
+                let reachable = || {
+                    reachable_indices
+                        .iter()
+                        .filter_map(|&index| modules.get(index))
+                };
+                let identity = if let Some(identity) = self.source_identities.get(&path) {
+                    Some(identity.clone())
+                } else if let Some((entry, identity)) = &self.entry_identity
+                    && entry == &path
                 {
-                    Counters::bump(&self.counters.disk_writes);
+                    Some(identity.module_path(parsed.module.name.as_deref()))
+                } else if self.stdlib.contains_key(&path.path)
+                    || self.kernel_modules.contains_key(&path.path)
+                {
+                    None
+                } else {
+                    self.roots_for(&path)
+                        .map(|roots| roots.resolved_module_identity(&parsed.context, &parsed.path))
+                };
+                let print = self.cache.as_ref().and_then(|_| {
+                    let closure: Option<Vec<_>> = reachable_indices
+                        .iter()
+                        .map(|&index| interface_fingerprints.get(index).copied().flatten())
+                        .collect();
+                    let imports: Vec<_> =
+                        runtime_imports.iter().map(|import| import.file).collect();
+                    let text = self
+                        .sources
+                        .file(parsed.file)
+                        .map_or("", |file| file.text.as_str());
+                    Some(fingerprint(&[
+                        &text,
+                        &parsed.file,
+                        &imports,
+                        &closure?,
+                        &identity,
+                        &bindings,
+                        &reexports,
+                        &self.options,
+                    ]))
+                });
+                let reused = match (&self.cache, print) {
+                    | (Some(cache), Some(print)) => {
+                        let cache = cache.borrow();
+                        cache.entries.get(&path).and_then(|entry| {
+                            (entry.file == parsed.file && entry.fingerprint == print).then(|| {
+                                (
+                                    aevia_types::check::CheckResult {
+                                        diagnostics: entry.diagnostics.clone(),
+                                        module: entry.module.clone(),
+                                    },
+                                    entry.interface_fingerprint,
+                                )
+                            })
+                        })
+                    },
+                    | _ => None,
+                };
+                let disk_key = match &self.disk {
+                    | Some(disk) if !self.kernel_modules.contains_key(&path.path) => {
+                        let closure: Option<Vec<Digest>> = reachable()
+                            .map(|module| digests.get(&module.file).copied().flatten())
+                            .collect();
+                        closure.and_then(|closure| {
+                            let text = self
+                                .sources
+                                .file(parsed.file)
+                                .map_or("", |file| file.text.as_str());
+                            disk.key(&KeyInputs {
+                                text,
+                                file: parsed.file,
+                                path: &parsed.path,
+                                identity: &identity,
+                                bindings: &bindings,
+                                reexports: &reexports,
+                                options: &self.options,
+                                interfaces: &closure,
+                            })
+                        })
+                    },
+                    | _ => None,
+                };
+                let mut own_digest: Option<Digest> = None;
+                let mut memory_digest = None;
+                let mut loaded_from_disk = false;
+                let restored = match reused {
+                    | Some((checked, digest)) => {
+                        memory_digest = Some(digest);
+                        Some(checked)
+                    },
+                    | None => {
+                        match (&self.disk, &disk_key) {
+                            | (Some(disk), Some(key)) => {
+                                disk.load(key, parsed.file).map(|hit| {
+                                    own_digest = Some(hit.interface);
+                                    loaded_from_disk = true;
+                                    Counters::bump(&self.counters.disk_hits);
+                                    aevia_types::check::CheckResult {
+                                        diagnostics: hit.diagnostics,
+                                        module: hit.module,
+                                    }
+                                })
+                            },
+                            | _ => None,
+                        }
+                    },
+                };
+                if let Some(checked) = restored {
+                    prepared.push(WaveItem::Ready {
+                        path,
+                        parsed,
+                        runtime_imports,
+                        print,
+                        disk_key,
+                        memory_digest,
+                        own_digest,
+                        loaded_from_disk,
+                        checked,
+                    });
+                } else {
+                    let interfaces: Vec<ModuleInterface> = reachable()
+                        .map(|module| module.checked.interface())
+                        .collect();
+                    let imports: Vec<Import> = import_specs
+                        .iter()
+                        .map(|(import, checked)| {
+                            let exports = match &import.names {
+                                | Some(selected) => {
+                                    checked
+                                        .exports
+                                        .iter()
+                                        .filter(|(name, _)| selected.contains(name))
+                                        .map(|(name, export)| (name.clone(), export.clone()))
+                                        .collect()
+                                },
+                                | None => checked.exports.clone(),
+                            };
+                            (import.prefix.clone(), exports)
+                        })
+                        .collect();
+                    prepared.push(WaveItem::NeedsCheck {
+                        path,
+                        parsed,
+                        runtime_imports,
+                        print,
+                        disk_key,
+                        identity,
+                        bindings,
+                        reexports: reexports.into_iter().collect(),
+                        imports,
+                        interfaces,
+                    });
                 }
             }
-            if !from_memory && let (Some(cache), Some(print)) = (&self.cache, print) {
-                cache.borrow_mut().entries.insert(
-                    cache_key,
-                    CacheEntry {
-                        file: parsed.file,
-                        fingerprint: print,
-                        diagnostics: checked.diagnostics.clone(),
-                        module: checked.module.clone(),
-                    },
-                );
-            }
-            self.diagnostics.extend(checked.diagnostics.clone());
-            let aliases = prefixes
-                .get(&path)
-                .map(|list| {
-                    list.iter()
-                        .filter(|prefix| **prefix != parsed.path.join("."))
-                        .cloned()
+
+            let miss_count = prepared
+                .iter()
+                .filter(|item| matches!(item, WaveItem::NeedsCheck { .. }))
+                .count();
+            let options_ref = &self.options;
+            let checked_results: Vec<Option<aevia_types::check::CheckResult>> =
+                if miss_count >= 2 && aevia_rssn::should_split_for_mode(miss_count, 2, exec_mode) {
+                    use rayon::prelude::*;
+                    aevia_rssn::run_in_mode(exec_mode, || {
+                        prepared
+                            .par_iter()
+                            .map(|item| {
+                                let WaveItem::NeedsCheck {
+                                    parsed,
+                                    identity,
+                                    bindings,
+                                    reexports,
+                                    imports,
+                                    interfaces,
+                                    ..
+                                } = item
+                                else {
+                                    return None;
+                                };
+                                Some(check_module_with_resolved_imports(
+                                    parsed.file,
+                                    &parsed.module,
+                                    imports,
+                                    interfaces,
+                                    options_ref,
+                                    identity.clone(),
+                                    bindings,
+                                    reexports,
+                                ))
+                            })
+                            .collect()
+                    })
+                } else {
+                    prepared
+                        .iter()
+                        .map(|item| {
+                            let WaveItem::NeedsCheck {
+                                parsed,
+                                identity,
+                                bindings,
+                                reexports,
+                                imports,
+                                interfaces,
+                                ..
+                            } = item
+                            else {
+                                return None;
+                            };
+                            Some(check_module_with_resolved_imports(
+                                parsed.file,
+                                &parsed.module,
+                                imports,
+                                interfaces,
+                                options_ref,
+                                identity.clone(),
+                                bindings,
+                                reexports,
+                            ))
+                        })
                         .collect()
-                })
-                .unwrap_or_default();
-            modules.push(LoadedModule {
-                path: parsed.path,
-                file: parsed.file,
-                source: parsed.context,
-                module: parsed.module,
-                checked: checked.module,
-                aliases,
-                imports: runtime_imports,
-            });
+                };
+
+            for (item, fresh) in prepared.into_iter().zip(checked_results) {
+                match item {
+                    | WaveItem::SyntaxBlocked { path, parsed } => {
+                        by_path.insert(path.clone(), modules.len());
+                        by_file.insert(parsed.file, modules.len());
+                        syntax_blocked.insert(path);
+                        let checked = CheckedModule {
+                            name: parsed.module.name.clone(),
+                            anonymous_file: parsed.file,
+                            errors: 1,
+                            ..CheckedModule::default()
+                        };
+                        modules.push(LoadedModule {
+                            path: parsed.path,
+                            file: parsed.file,
+                            source: parsed.context,
+                            module: parsed.module,
+                            checked,
+                            aliases: Vec::new(),
+                            imports: Vec::new(),
+                        });
+                        if self.cache.is_some() {
+                            interface_fingerprints.push(None);
+                        }
+                    },
+                    | WaveItem::Ready {
+                        path,
+                        parsed,
+                        runtime_imports,
+                        print,
+                        disk_key,
+                        memory_digest,
+                        mut own_digest,
+                        loaded_from_disk,
+                        checked,
+                    } => {
+                        by_path.insert(path.clone(), modules.len());
+                        by_file.insert(parsed.file, modules.len());
+                        if memory_digest.is_some()
+                            && let Some(cache) = &self.cache
+                        {
+                            let mut cache = cache.borrow_mut();
+                            cache.reused = cache.reused.saturating_add(1);
+                        }
+                        let interface = OnceCell::new();
+                        let interface = || interface.get_or_init(|| checked.module.interface());
+                        if self.disk.is_some() {
+                            if own_digest.is_none() {
+                                own_digest = crate::disk_cache::interface_digest(interface());
+                            }
+                            digests.insert(parsed.file, own_digest);
+                            if memory_digest.is_none()
+                                && !loaded_from_disk
+                                && !checked.diagnostics.has_errors()
+                                && let (Some(disk), Some(key), Some(digest)) =
+                                    (&self.disk, &disk_key, own_digest)
+                                && disk.store(
+                                    key,
+                                    parsed.file,
+                                    digest,
+                                    &checked.diagnostics,
+                                    &checked.module,
+                                )
+                            {
+                                Counters::bump(&self.counters.disk_writes);
+                            }
+                        }
+                        if let Some(cache) = &self.cache {
+                            let interface_fingerprint =
+                                memory_digest.unwrap_or_else(|| fingerprint(&[interface()]));
+                            if memory_digest.is_none()
+                                && let Some(print) = print
+                            {
+                                cache.borrow_mut().entries.insert(
+                                    path.clone(),
+                                    CacheEntry {
+                                        file: parsed.file,
+                                        fingerprint: print,
+                                        interface_fingerprint,
+                                        diagnostics: checked.diagnostics.clone(),
+                                        module: checked.module.clone(),
+                                    },
+                                );
+                            }
+                            interface_fingerprints.push(Some(interface_fingerprint));
+                        }
+                        self.diagnostics.extend(checked.diagnostics.clone());
+                        let aliases = prefixes.get(&path).map_or_else(Vec::new, |list| {
+                            let path = parsed.path.join(".");
+                            list.iter()
+                                .filter(|prefix| **prefix != path)
+                                .cloned()
+                                .collect()
+                        });
+                        modules.push(LoadedModule {
+                            path: parsed.path,
+                            file: parsed.file,
+                            source: parsed.context,
+                            module: parsed.module,
+                            checked: checked.module,
+                            aliases,
+                            imports: runtime_imports,
+                        });
+                    },
+                    | WaveItem::NeedsCheck {
+                        path,
+                        parsed,
+                        runtime_imports,
+                        print,
+                        disk_key,
+                        ..
+                    } => {
+                        let Some(checked) = fresh else {
+                            continue;
+                        };
+                        by_path.insert(path.clone(), modules.len());
+                        by_file.insert(parsed.file, modules.len());
+                        Counters::bump(&self.counters.checked);
+                        if let Some(cache) = &self.cache {
+                            let mut cache = cache.borrow_mut();
+                            cache.checked = cache.checked.saturating_add(1);
+                        }
+                        let interface = OnceCell::new();
+                        let interface = || interface.get_or_init(|| checked.module.interface());
+                        if self.disk.is_some() {
+                            let own_digest = crate::disk_cache::interface_digest(interface());
+                            digests.insert(parsed.file, own_digest);
+                            if !checked.diagnostics.has_errors()
+                                && let (Some(disk), Some(key), Some(digest)) =
+                                    (&self.disk, &disk_key, own_digest)
+                                && disk.store(
+                                    key,
+                                    parsed.file,
+                                    digest,
+                                    &checked.diagnostics,
+                                    &checked.module,
+                                )
+                            {
+                                Counters::bump(&self.counters.disk_writes);
+                            }
+                        }
+                        if let Some(cache) = &self.cache {
+                            let interface_fingerprint = fingerprint(&[interface()]);
+                            if let Some(print) = print {
+                                cache.borrow_mut().entries.insert(
+                                    path.clone(),
+                                    CacheEntry {
+                                        file: parsed.file,
+                                        fingerprint: print,
+                                        interface_fingerprint,
+                                        diagnostics: checked.diagnostics.clone(),
+                                        module: checked.module.clone(),
+                                    },
+                                );
+                            }
+                            interface_fingerprints.push(Some(interface_fingerprint));
+                        }
+                        self.diagnostics.extend(checked.diagnostics.clone());
+                        let aliases = prefixes.get(&path).map_or_else(Vec::new, |list| {
+                            let path = parsed.path.join(".");
+                            list.iter()
+                                .filter(|prefix| **prefix != path)
+                                .cloned()
+                                .collect()
+                        });
+                        modules.push(LoadedModule {
+                            path: parsed.path,
+                            file: parsed.file,
+                            source: parsed.context,
+                            module: parsed.module,
+                            checked: checked.module,
+                            aliases,
+                            imports: runtime_imports,
+                        });
+                    },
+                }
+            }
         }
         // The entry file is last in dependency order, which is what `entry`
         // relies on; the walk already guarantees it.
         let _ = root;
-        (modules, sources, self.diagnostics, dependencies)
+        (modules, self.sources, self.diagnostics, dependencies)
     }
 }
 
@@ -1215,6 +2337,10 @@ impl Loader {
 ///
 /// A user type is nominal per module (D6): `A.Circle` takes its id from A's
 /// type, not from whichever same-named type the process registry finds first.
+#[expect(
+    clippy::single_call_fn,
+    reason = "keep constructor identity handling out of normal module bindings"
+)]
 fn publish_constructors(
     interp: &mut crate::Interp,
     module: &LoadedModule,
@@ -1227,6 +2353,7 @@ fn publish_constructors(
             continue;
         };
         let qualified = format!("{}.{name}", module.path.join("."));
+        crate::value::bump_environment();
         interp.globals.insert(qualified, value.clone());
         for alias in &module.aliases {
             let key = if alias.is_empty() {
@@ -1234,12 +2361,17 @@ fn publish_constructors(
             } else {
                 format!("{alias}.{name}")
             };
+            crate::value::bump_environment();
             interp.globals.insert(key, value.clone());
         }
     }
 }
 
 /// The name of a module in a diagnostic: its path, or `<entry>`.
+#[expect(
+    clippy::single_call_fn,
+    reason = "give the anonymous entry module a readable diagnostic label"
+)]
 fn module_label(path: &[String]) -> String {
     if path.is_empty() {
         "<entry>".to_string()
@@ -1249,6 +2381,10 @@ fn module_label(path: &[String]) -> String {
 }
 
 /// The name a module declares, or its file stem.
+#[expect(
+    clippy::single_call_fn,
+    reason = "keep the file stem fallback separate from checked module identity"
+)]
 fn module_path(
     module: &Module,
     file: &Path,
@@ -1257,8 +2393,20 @@ fn module_path(
         return name.clone();
     }
     file.file_stem()
-        .map(|stem| vec![stem.to_string_lossy().to_string()])
-        .unwrap_or_default()
+        .map_or_else(Vec::new, |stem| vec![stem.to_string_lossy().into_owned()])
+}
+
+#[expect(
+    clippy::unnecessary_debug_formatting,
+    reason = "file identities preserve escaped non-Unicode path bytes and package ownership"
+)]
+fn replica_file_key(module: &LoadedModule) -> std::sync::Arc<str> {
+    std::sync::Arc::from(format!(
+        "{}|{:?}|{:?}",
+        module.path.join("."),
+        module.source.path,
+        module.source.owner
+    ))
 }
 
 /// Evaluates a program's modules in order into `interp`.
@@ -1266,6 +2414,10 @@ fn module_path(
 /// Each module gets its own scope so that two modules may both define a
 /// private helper, and every top-level name is also exported under its
 /// qualified name so that importers can reach it.
+#[expect(
+    clippy::too_many_lines,
+    reason = "install module scopes and their exports in source dependency order"
+)]
 pub fn run_modules(
     interp: &mut crate::Interp,
     program: &Program,
@@ -1309,16 +2461,36 @@ pub fn run_modules(
                     } else {
                         format!("{}.{name}", import.prefix)
                     };
+                    crate::value::bump_environment();
                     scope.vars.borrow_mut().insert(key, value.clone());
                 }
             }
         }
-        interp.registrations = module.checked.registrations.clone();
+        interp
+            .registrations
+            .clone_from(&module.checked.registrations);
         diagnostics.extend(interp.load_into(&module.module, &scope));
         let names = crate::top_level_names(&module.module);
         let mut values = HashMap::new();
         for name in module.checked.exports.keys() {
-            if let Some(value) = scope.lookup(name) {
+            if let Some(value) = scope.lookup(name).or_else(|| {
+                module
+                    .imports
+                    .iter()
+                    .filter(|import| import.export)
+                    .filter(|import| {
+                        import
+                            .names
+                            .as_ref()
+                            .is_none_or(|names| names.contains(name))
+                    })
+                    .find_map(|import| {
+                        exports
+                            .get(&import.file)
+                            .and_then(|imported| imported.get(name))
+                            .cloned()
+                    })
+            }) {
                 values.insert(name.clone(), value);
             }
         }
@@ -1329,20 +2501,15 @@ pub fn run_modules(
                 } else {
                     format!("{}.{name}", module.path.join("."))
                 };
+                crate::value::bump_environment();
                 interp.globals.insert(key, value);
             }
         }
         exports.insert(module.file, values);
         interp.file_scopes.insert(module.file, scope.clone());
-        interp.file_keys.insert(
-            module.file,
-            std::sync::Arc::from(format!(
-                "{}|{:?}|{:?}",
-                module.path.join("."),
-                module.source.path,
-                module.source.owner
-            )),
-        );
+        interp
+            .file_keys
+            .insert(module.file, replica_file_key(module));
         scopes.insert(module.file, scope);
         if index == last {
             continue;
@@ -1366,6 +2533,7 @@ pub fn run_modules(
                 } else {
                     format!("{prefix}.{name}")
                 };
+                crate::value::bump_environment();
                 interp.globals.insert(to, value);
             }
         }
@@ -1378,6 +2546,10 @@ pub fn run_modules(
 /// A misspelling gets the closest export; a correctly spelt name that lives in
 /// a different standard-library module (`normal` is in `Stats.Distributions`,
 /// not `Stats`) gets the modules that do export it.
+#[expect(
+    clippy::single_call_fn,
+    reason = "format suggestions for an import whose selected name is absent"
+)]
 fn missing_export_note<'a>(
     name: &str,
     exports: impl IntoIterator<Item = &'a str>,
@@ -1385,11 +2557,7 @@ fn missing_export_note<'a>(
     if let Some(close) = aevia_types::check::closest_name(name, exports) {
         return format!("did you mean `{close}`?");
     }
-    let homes: Vec<String> = aevia_std::stdlib::module_paths()
-        .filter(|path| {
-            let components: Vec<&str> = path.split('/').collect();
-            aevia_std::stdlib::exports(&components).contains(&name)
-        })
+    let homes: Vec<String> = aevia_std::stdlib::modules_exporting(name)
         .map(|path| path.replace('/', "."))
         .take(3)
         .collect();

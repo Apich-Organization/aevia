@@ -129,6 +129,10 @@ fn the_operator_count_is_the_manifest_count() {
                 && line.contains(" = Rssn.invoke(")
         })
         .count();
+    let deferred = text
+        .lines()
+        .filter(|line| line.trim_start().starts_with("match Rssn.call_key("))
+        .count();
     let dynamic = text
         .lines()
         .filter(|line| {
@@ -136,9 +140,9 @@ fn the_operator_count_is_the_manifest_count() {
                 && (line.contains(" = Rssn.dynamic(") || line.contains(" = Rssn.call_ho("))
         })
         .count();
-    assert_eq!(pinned, typed);
+    assert_eq!(pinned + deferred, typed);
     assert_eq!(
-        pinned + dynamic,
+        pinned + deferred + dynamic,
         rows.len(),
         "each overload or unsigned operator needs one honest binding"
     );
@@ -326,6 +330,7 @@ fn spellable(ty: &aevia_rssn::SigType) -> bool {
 fn every_overlay_signature_is_generated_exactly() {
     use aevia_rssn::registry::render_type;
     let text = codegen::operators(registry());
+    let catalog = aevia_rssn::bindings::catalog(registry());
     let overlay: Vec<_> = registry()
         .ops()
         .filter(|op| op.source == aevia_rssn::Source::Overlay)
@@ -348,8 +353,8 @@ fn every_overlay_signature_is_generated_exactly() {
             op.name
         );
         for (index, signature) in op.signatures.iter().enumerate() {
-            let row = aevia_rssn::bindings::catalog(registry())
-                .into_iter()
+            let row = catalog
+                .iter()
                 .find(|row| row.op.name == op.name && row.overload == Some(index))
                 .expect("catalog row");
             if !matches!(row.coverage, aevia_rssn::bindings::Coverage::Typed)
@@ -366,28 +371,36 @@ fn every_overlay_signature_is_generated_exactly() {
                 .map(|byte| format!("{byte:02x}"))
                 .collect();
             let marker = format!("Rssn.invoke(\"{}\", \"{hash}\", ", op.name);
+            let result_marker = format!("Rssn.call_key(\"{}\", \"{hash}\", ", op.name);
             let declaration = text
                 .lines()
-                .find(|line| line.contains(&marker))
+                .find(|line| line.contains(&marker) || line.contains(&result_marker))
                 .unwrap_or_else(|| {
                     panic!(
                         "overload {index} of `{}` has no declaration pinning its key",
                         op.name
                     )
                 });
-            // `fn name(params): Ret = Rssn.invoke(…)` or a nullary
-            // `let name: Ret = Rssn.invoke(…)`: the declared type is the last
-            // `: …` before the call.
+            if declaration.contains(&result_marker) {
+                // Native nullary operations are lazy and preserve both the
+                // exact payload type and the checked kernel error channel.
+                assert!(text.lines().any(|line| {
+                    line.starts_with(&format!("fn {}(", row.name))
+                        && line.ends_with(&format!(
+                            ": Result<{}, OpError> =",
+                            render_type(&signature.ret)
+                        ))
+                }));
+                continue;
+            }
             let (signature_part, _) = declaration
-                .rsplit_once(" = Rssn.invoke(")
+                .split_once(" = Rssn.invoke(")
                 .unwrap_or_else(|| panic!("malformed declaration: {declaration}"));
-            let (_, declared_return) = signature_part
-                .rsplit_once(": ")
-                .unwrap_or_else(|| panic!("no declared return type: {declaration}"));
             let expected_return = render_type(&signature.ret);
-            assert_eq!(
-                declared_return, expected_return,
-                "overload {index} of `{}` does not state its overlay return type: {declaration}",
+            assert!(
+                signature_part.ends_with(&format!("): {expected_return}"))
+                    || signature_part == format!("let {}: {expected_return}", row.name),
+                "overload {index} of `{}` does not declare `{expected_return}`: {declaration}",
                 op.name
             );
         }

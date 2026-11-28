@@ -15,5 +15,5 @@ num-bigint.workspace = true
 num-rational.workspace = true
 num-traits.workspace = true
 
-[lints.rust]
-unsafe_code = "forbid"
+[lints]
+workspace = true

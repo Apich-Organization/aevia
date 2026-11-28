@@ -76,24 +76,81 @@ pub fn render(
     id: &PackageId,
     newest_first: &[Version],
 ) -> aevia_registry_core::Result<String> {
-    let mut body = String::new();
-    for version in newest_first.iter().rev() {
-        body.push_str(&record_of(id, version).to_line()?);
-        body.push('\n');
+    let mut body = Vec::new();
+    let mut tied = Vec::new();
+    for versions in newest_first
+        .chunk_by(|a, b| a.created_at == b.created_at)
+        .rev()
+    {
+        // Row IDs break timestamp ties so repeated catalogue reads of the
+        // same rows emit identical bytes.
+        if versions.iter().rev().is_sorted_by_key(|version| version.id) {
+            for version in versions.iter().rev() {
+                record_of(id, version).append_line(&mut body)?;
+            }
+        } else {
+            tied.extend(versions);
+            tied.sort_unstable_by_key(|version| version.id);
+            for &version in &tied {
+                record_of(id, version).append_line(&mut body)?;
+            }
+            tied.clear();
+        }
     }
-    Ok(body)
+    String::from_utf8(body).map_err(|error| {
+        aevia_registry_core::Error::new(
+            "E_JSON",
+            format!("cannot encode the index as UTF-8: {error}"),
+        )
+    })
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "HTTP validator parsing has focused unit tests"
+)]
+fn matches_validator(
+    headers: &HeaderMap,
+    etag: &str,
+) -> bool {
+    let values = headers.get_all(header::IF_NONE_MATCH);
+    let mut fields = values.iter().peekable();
+    let Some(first) = fields.next() else {
+        return false;
+    };
+    if first.as_bytes().trim_ascii() == b"*" {
+        return fields.peek().is_none();
+    }
+    std::iter::once(first).chain(fields).any(|field| {
+        let mut quoted = false;
+        field
+            .as_bytes()
+            .split(|byte| {
+                if *byte == b'"' {
+                    quoted = !quoted;
+                }
+                *byte == b',' && !quoted
+            })
+            .any(|candidate| {
+                // RFC 9110 compares opaque tags weakly for If-None-Match.
+                let candidate = candidate.trim_ascii();
+                candidate.strip_prefix(b"W/").unwrap_or(candidate) == etag.as_bytes()
+            })
+    })
 }
 
 /// `GET /api/v1/index/{owner}/{name}`
 ///
 /// # Errors
 ///
-/// `404` when the package has no versions.
+/// `404` when the package is unknown.
 pub async fn package_index(
     State(state): State<AppState>,
     Path((owner, name)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> ApiResult<Response> {
+    const CACHE: &str = "public, no-cache";
+
     let id = PackageId::new(&owner, &name).map_err(ApiError::from_core)?;
     let Some((package, owner_row)) =
         repo::package_by_handle(&state.pool, id.owner(), &id.name_key()).await?
@@ -106,23 +163,60 @@ pub async fn package_index(
     let versions = repo::versions(&state.pool, package.id).await?;
     let body = render(&id, &versions).map_err(ApiError::from_core)?;
     let etag = aevia_registry_core::index::etag(&body);
-    let revalidated = headers
-        .get(header::IF_NONE_MATCH)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|sent| sent.split(',').any(|candidate| candidate.trim() == etag));
-    if revalidated {
-        return Ok((StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response());
+    if matches_validator(&headers, &etag) {
+        return Ok((
+            StatusCode::NOT_MODIFIED,
+            [
+                (header::ETAG, etag),
+                (header::CACHE_CONTROL, CACHE.to_string()),
+            ],
+        )
+            .into_response());
     }
     Ok((
         StatusCode::OK,
         [
-            (header::CONTENT_TYPE, "text/plain; charset=utf-8".to_string()),
+            (
+                header::CONTENT_TYPE,
+                "text/plain; charset=utf-8".to_string(),
+            ),
             // Revalidate on every use: the body is cheap to build and a yank
             // must reach a client at its next resolution, not a minute later.
-            (header::CACHE_CONTROL, "public, no-cache".to_string()),
+            (header::CACHE_CONTROL, CACHE.to_string()),
             (header::ETAG, etag),
         ],
         body,
     )
         .into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    #[test]
+    fn validators_allow_opaque_bytes_and_commas_in_other_tags() {
+        let mut headers = HeaderMap::new();
+        assert!(!matches_validator(&headers, "\"current\""));
+        let value = HeaderValue::from_bytes(b"\"other,\xff\", W/\"current\"")
+            .unwrap_or_else(|error| panic!("valid opaque entity-tag bytes: {error}"));
+        headers.insert(header::IF_NONE_MATCH, value);
+        assert!(matches_validator(&headers, "\"current\""));
+        assert!(!matches_validator(&headers, "\"different\""));
+    }
+
+    #[test]
+    fn wildcard_is_a_complete_field_value() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::IF_NONE_MATCH,
+            HeaderValue::from_static("*, \"other\""),
+        );
+        assert!(!matches_validator(&headers, "\"current\""));
+        headers.insert(header::IF_NONE_MATCH, HeaderValue::from_static("*"));
+        assert!(matches_validator(&headers, "\"current\""));
+        headers.append(header::IF_NONE_MATCH, HeaderValue::from_static("\"other\""));
+        assert!(!matches_validator(&headers, "\"current\""));
+    }
 }

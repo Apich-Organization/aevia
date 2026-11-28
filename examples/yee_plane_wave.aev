@@ -1,0 +1,26 @@
+## Run: aevia test examples/yee_plane_wave.aev
+## A normal-incidence TF/SF line keeps electric and magnetic samples staggered.
+open Units.SI
+
+fn checked_native(name: String, args: Tensor<1, Value>): Value =
+    unwrap_or(Rssn.dynamic(name, args), to_value(0))
+
+test "the Yee incident line reports separate field units and times" =
+    let empty: Tensor<1, Value> = []
+    let controls = { cfl = 0.5, pml_cells = 0, pml_order = 3.0, pml_kappa_max = 1.0, dm_min_area = 0.01, pml_alpha_max = 0.0 s^-1, boundary = "PEC" }
+    let config = checked_native("num_analysis_yee_config_new", [to_value([8]), to_value([1.0 m]), to_value(1.0 m), to_value(1.0 m/s), to_value(1.0 ohm), to_value(1.0 V/m), to_value(controls), to_value(empty), to_value(empty), to_value(1000)])
+    let solver = checked_native("num_analysis_yee_new", [config])
+    let time_ref = checked_native("num_backend_reference", [to_value(1.0 s)])
+    let electric_ref = checked_native("num_backend_reference", [to_value(1.0 V/m)])
+    let wave = checked_native("num_backend_compile_current", [to_value("2"), to_value(["time"]), to_value([time_ref]), electric_ref, to_value(10000)])
+    match Rssn.dynamic("num_analysis_yee_set_plane_wave", [solver, to_value(2), to_value(5), to_value(0.0), wave, to_value(10), to_value(1000)]) with
+    | Ok(_) ->
+        let released = Rssn.dynamic("num_backend_release", [wave])
+        match Rssn.dynamic("num_analysis_yee_step", [solver]) with
+        | Ok(_) ->
+            let sample = checked_native("num_analysis_yee_plane_wave_sample", [solver, to_value(0)])
+            match from_value<Option<{ electric: Float[Mass*Length/(Current*Time^3)], magnetic: Float[Current/Length], electric_time: Float[Time], magnetic_time: Float[Time] }>>(sample) with
+            | Ok(Some(out)) -> is_ok(released) && out.electric == 2.0 V/m && out.magnetic == 0.0 A/m && out.electric_time == 0.5 s && out.magnetic_time == 0.25 s
+            | _ -> false
+        | Err(_) -> false
+    | Err(_) -> false

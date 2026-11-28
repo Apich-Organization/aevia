@@ -91,6 +91,18 @@ fn sinh_exp(x: Real[1]) = (sinh(x), (exp(x) - exp(-x)) / 2)
 }
 
 #[test]
+fn a_rule_can_reference_double_digit_parameter_indices() {
+    let (_, diagnostics) = load(
+        r#"@rule("demo/sin-subtraction")
+fn sin_subtraction(a: Real[1], b: Real[1], c: Real[1], d: Real[1], e: Real[1],
+    f: Real[1], g: Real[1], h: Real[1], i: Real[1], j: Real[1], k: Real[1]) =
+    (sin(b - k), sin(b) * cos(k) - cos(b) * sin(k))
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
 fn a_function_that_branches_on_its_argument_is_rejected() {
     let (_interp, diagnostics) = load(
         r#"@op("demo/relu")
@@ -176,6 +188,59 @@ fn main(): IO Unit = do
 }
 
 #[test]
+fn source_operator_requires_live_witnesses_before_either_dispatch_branch() {
+    use aevia_core::Mode;
+    use aevia_core::sym::Term;
+    use aevia_core::value::NumVal;
+    use aevia_dim::Dim;
+    use aevia_rssn::Sym;
+    use aevia_syntax::Span;
+
+    let source = r#"@op("probe/live_witness")
+fn ignore(left: Real[1], right: Real[1]): Real[1] = 1
+"#;
+    let compilation = aevia_core::compile("live_witness.aev", source);
+    assert!(
+        !compilation.diagnostics.has_errors(),
+        "{:?}",
+        compilation.diagnostics.items
+    );
+    for mode in [Mode::Ast, Mode::Ir] {
+        let mut interp = Interp::new(&compilation.checked).with_mode(mode);
+        let loaded = interp.load(compilation.module.as_ref().unwrap());
+        assert!(!loaded.has_errors(), "{mode:?}: {:?}", loaded.items);
+        let operator = interp.eval_toplevel("ignore").unwrap();
+        let number = Value::float(2.0);
+        let symbolic = |term| Value::Num(NumVal::symbolic(term, Dim::one()));
+        let local = Term::Sym("probe_x".to_string());
+        let stale = Term::foreign(Sym::new(u64::MAX, 0), "stale");
+        let expected = stale.try_free_symbols().unwrap_err();
+        let mut call = |left, right| {
+            interp
+                .apply(operator.clone(), vec![left, right], Span::default())
+                .map_err(Box::new)
+        };
+
+        assert_eq!(
+            call(number.clone(), number.clone()).unwrap().as_f64(),
+            Some(1.0)
+        );
+        let result = call(symbolic(local.clone()), number.clone()).unwrap();
+        assert!(aevia_core::value::show(&result).contains("probe/live_witness"));
+        for (left, right) in [
+            (symbolic(stale.clone()), number.clone()),
+            (symbolic(local.clone()), symbolic(stale.clone())),
+            (symbolic(Term::Add(vec![local, stale])), number),
+        ] {
+            let error = call(left, right).unwrap_err();
+            assert_eq!(error.code, expected.code, "{mode:?}");
+            assert_eq!(error.message, expected.message, "{mode:?}");
+            assert_eq!(error.span, Some(Span::default()), "{mode:?}");
+        }
+    }
+}
+
+#[test]
 fn a_rule_can_mention_a_source_operator() {
     let (_interp, diagnostics) = load(
         r#"@op("demo/softplus2")
@@ -186,4 +251,74 @@ fn softplus_neg(x: Real[1]) = (softplus(-x), softplus(x) - x)
 "#,
     );
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
+fn source_operator_wrappers_pin_their_own_declaration_across_rebinding() {
+    let source = r#"
+@op("demo/rebound_area")
+fn area(r: Real[L]): Real[L^2] = r * r
+let old_area = area
+fn area(text: String): String = text
+let original_node = old_area(symbol("r") * 1 m)
+let latest_area = area("latest")
+
+@op("demo/rebound_first")
+fn transform(x: Real[1]): Real[1] = x + 1
+let old_transform = transform
+@op("demo/rebound_second")
+fn transform(x: Real[1]): Real[1] = x * 2
+let first_node = old_transform(symbol("x"))
+let second_node = transform(symbol("x"))
+let first_number = old_transform(3)
+let second_number = transform(3)
+"#;
+    for (mode, optimized) in [
+        (aevia_core::Mode::Ast, false),
+        (aevia_core::Mode::Ir, false),
+        (aevia_core::Mode::Ir, true),
+    ] {
+        let compilation = aevia_core::compile("rebound-plugin.aev", source);
+        assert!(
+            !compilation.diagnostics.has_errors(),
+            "{:?}",
+            compilation.diagnostics.items
+        );
+        let mut interp = Interp::new(&compilation.checked)
+            .with_mode(mode)
+            .with_buffer();
+        interp.optimize_ir = optimized;
+        let diagnostics = interp.load(compilation.module.as_ref().unwrap());
+        assert!(
+            !diagnostics.has_errors(),
+            "{mode:?}: {:?}",
+            diagnostics.items
+        );
+        let node = interp.eval_toplevel("original_node").unwrap();
+        assert!(aevia_core::show(&node).contains("demo/rebound_area"));
+        let Value::Num(node) = node else {
+            panic!("expected symbolic numeric operator node");
+        };
+        assert_eq!(node.dim.to_plain_string(), "Length^2");
+        assert_eq!(
+            aevia_core::show(&interp.eval_toplevel("latest_area").unwrap()),
+            "latest"
+        );
+        assert!(
+            aevia_core::show(&interp.eval_toplevel("first_node").unwrap())
+                .contains("demo/rebound_first")
+        );
+        assert!(
+            aevia_core::show(&interp.eval_toplevel("second_node").unwrap())
+                .contains("demo/rebound_second")
+        );
+        assert_eq!(
+            aevia_core::show(&interp.eval_toplevel("first_number").unwrap()),
+            "4"
+        );
+        assert_eq!(
+            aevia_core::show(&interp.eval_toplevel("second_number").unwrap()),
+            "6"
+        );
+    }
 }

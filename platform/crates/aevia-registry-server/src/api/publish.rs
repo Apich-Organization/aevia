@@ -7,18 +7,27 @@
 //! with the statement. A publish that fails any of those leaves no trace except
 //! a spent nonce, which is exactly what a replay attempt should cost.
 
+use std::sync::Arc;
+
 use axum::Json;
+use axum::body::Bytes;
 use axum::extract::Multipart;
 use axum::extract::State;
+use axum::extract::multipart::Field;
 use axum::http::StatusCode;
 use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
+use tokio::sync::OwnedSemaphorePermit;
 
 use aevia_registry_core::PackageId;
 use aevia_registry_core::manifest::PackageManifest;
 use aevia_registry_core::manifest::RegistryMeta;
-use aevia_registry_core::manifest::first_paragraph;
+use aevia_registry_core::manifest::non_empty_trimmed;
+use aevia_registry_core::manifest::normalize_tag_list;
+use aevia_registry_core::manifest::validate_http_url;
+use aevia_registry_core::manifest::validate_relative_path;
+use aevia_registry_core::manifest::validate_required_publish_metadata;
 use aevia_registry_core::name::valid_crate_name;
 use aevia_registry_core::signature::SignerKey;
 use aevia_registry_core::statement::PublishStatement;
@@ -78,7 +87,9 @@ pub async fn challenge(
     check_version(&request.version)?;
     check_checksum(&request.checksum)?;
     let nonce = http::random_hex(16);
-    let expires = Utc::now().timestamp() + STATEMENT_LIFETIME_SECONDS;
+    let expires = Utc::now()
+        .timestamp()
+        .saturating_add(STATEMENT_LIFETIME_SECONDS);
     let statement = PublishStatement::new(
         id,
         request.version,
@@ -105,15 +116,187 @@ pub struct Envelope {
     pub signature: String,
     /// The public key that made the signature.
     pub key: SignerKey,
-    /// An override for the description discovered from the README.
+    /// An override for the language edition.
+    pub edition: Option<String>,
+    /// An override for the package authors list.
+    #[serde(default)]
+    pub authors: Vec<String>,
+    /// An override for the description declared in `aevia.toml`.
     pub description: Option<String>,
-    /// An override for the detected licence.
+    /// An override for the license expression declared in `aevia.toml`.
     pub license: Option<String>,
+    /// An override for `license-file`.
+    pub license_file: Option<String>,
     /// Up to five keywords.
     #[serde(default)]
     pub keywords: Vec<String>,
+    /// Up to five registry categories.
+    #[serde(default)]
+    pub categories: Vec<String>,
     /// Where the source lives.
     pub repository: Option<String>,
+    /// Project homepage URL.
+    pub homepage: Option<String>,
+    /// Documentation URL.
+    pub documentation: Option<String>,
+}
+
+struct ResolvedMetadata {
+    edition: Option<String>,
+    authors: Vec<String>,
+    description: Option<String>,
+    license: Option<String>,
+    license_file: Option<String>,
+    readme_path: Option<String>,
+    readme_text: Option<String>,
+    repository: Option<String>,
+    homepage: Option<String>,
+    documentation: Option<String>,
+    keywords: Vec<String>,
+    categories: Vec<String>,
+}
+
+fn first_non_empty(candidates: &[Option<&str>]) -> Option<String> {
+    candidates
+        .iter()
+        .find_map(|candidate| non_empty_trimmed(*candidate))
+}
+
+fn validate_optional_url(
+    raw: Option<String>,
+    field: &str,
+) -> ApiResult<Option<String>> {
+    raw.map(|url| validate_http_url(&url, field).map_err(ApiError::from_core))
+        .transpose()
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "publication metadata reconciles the manifest and the signed statement"
+)]
+fn resolve_publish_metadata(
+    envelope: &Envelope,
+    manifest: &PackageManifest,
+    declared: &RegistryMeta,
+    files: &[(String, String)],
+) -> ApiResult<ResolvedMetadata> {
+    let edition = first_non_empty(&[envelope.edition.as_deref(), manifest.edition.as_deref()]);
+    let raw_authors = if envelope.authors.is_empty() {
+        &manifest.authors
+    } else {
+        &envelope.authors
+    };
+    let authors =
+        normalize_tag_list(raw_authors, false, 64, "authors").map_err(ApiError::from_core)?;
+    let description = first_non_empty(&[
+        envelope.description.as_deref(),
+        manifest.description.as_deref(),
+        declared.description.as_deref(),
+    ]);
+    let license = first_non_empty(&[
+        envelope.license.as_deref(),
+        manifest.license.as_deref(),
+        declared.license.as_deref(),
+    ]);
+    let license_file = first_non_empty(&[
+        envelope.license_file.as_deref(),
+        manifest.license_file.as_deref(),
+    ])
+    .map(|path| validate_relative_path(&path, "license-file").map_err(ApiError::from_core))
+    .transpose()?;
+    let license_file_in_archive = license_file.as_deref().is_some_and(|rel| {
+        files
+            .iter()
+            .any(|(name, text)| name == rel && !text.trim().is_empty())
+    });
+    if let Some(rel) = license_file.as_deref()
+        && !license_file_in_archive
+    {
+        return Err(ApiError::bad_request(
+            "E_MANIFEST",
+            format!(
+                "`[package] license-file` names `{rel}`, which is missing or empty in the archive"
+            ),
+        ));
+    }
+    validate_required_publish_metadata(
+        description.as_deref(),
+        license.as_deref(),
+        license_file_in_archive,
+    )
+    .map_err(ApiError::from_core)?;
+
+    let readme_path = first_non_empty(&[manifest.readme.as_deref(), declared.readme.as_deref()])
+        .map(|path| validate_relative_path(&path, "readme").map_err(ApiError::from_core))
+        .transpose()?;
+    let readme_text = readme_path
+        .as_deref()
+        .and_then(|rel| {
+            files
+                .iter()
+                .find(|(name, _)| name == rel || name.eq_ignore_ascii_case(rel))
+                .map(|(_, text)| text.clone())
+        })
+        .or_else(|| {
+            files
+                .iter()
+                .find(|(name, _)| {
+                    name.eq_ignore_ascii_case("readme.md") || name.eq_ignore_ascii_case("readme")
+                })
+                .map(|(_, text)| text.clone())
+        });
+
+    let repository = validate_optional_url(
+        first_non_empty(&[
+            envelope.repository.as_deref(),
+            manifest.repository.as_deref(),
+            declared.repository.as_deref(),
+        ]),
+        "repository",
+    )?;
+    let homepage = validate_optional_url(
+        first_non_empty(&[envelope.homepage.as_deref(), manifest.homepage.as_deref()]),
+        "homepage",
+    )?;
+    let documentation = validate_optional_url(
+        first_non_empty(&[
+            envelope.documentation.as_deref(),
+            manifest.documentation.as_deref(),
+        ]),
+        "documentation",
+    )?;
+
+    let raw_keywords = if !envelope.keywords.is_empty() {
+        &envelope.keywords
+    } else if !manifest.keywords.is_empty() {
+        &manifest.keywords
+    } else {
+        &declared.keywords
+    };
+    let keywords =
+        normalize_tag_list(raw_keywords, true, 5, "keywords").map_err(ApiError::from_core)?;
+    let raw_categories = if envelope.categories.is_empty() {
+        &manifest.categories
+    } else {
+        &envelope.categories
+    };
+    let categories =
+        normalize_tag_list(raw_categories, true, 5, "categories").map_err(ApiError::from_core)?;
+
+    Ok(ResolvedMetadata {
+        edition,
+        authors,
+        description,
+        license,
+        license_file,
+        readme_path,
+        readme_text,
+        repository,
+        homepage,
+        documentation,
+        keywords,
+        categories,
+    })
 }
 
 /// The reply to a successful publish.
@@ -129,6 +312,10 @@ pub struct PublishResponse {
     pub docs_url: Option<String>,
     /// The log entry this publish created.
     pub log: LogRef,
+    /// Policy recommendations (for example preferring `OpenPGP` + hardware keys
+    /// when publishing with an SSH key).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// A reference to one transparency-log entry.
@@ -150,13 +337,26 @@ pub async fn publish(
     State(state): State<AppState>,
     mut multipart: Multipart,
 ) -> ApiResult<(StatusCode, Json<PublishResponse>)> {
+    let slot = Arc::new(
+        state
+            .publish_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| {
+                ApiError::new(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "E_PUBLISH_BUSY",
+                    "The registry is processing other releases. Try again shortly.",
+                )
+            })?,
+    );
     let mut envelope: Option<Envelope> = None;
-    let mut archive: Option<Vec<u8>> = None;
+    let mut archive: Option<Bytes> = None;
     while let Some(field) = multipart.next_field().await.map_err(|error| {
         ApiError::bad_request("E_MULTIPART", format!("malformed upload: {error}"))
     })? {
         match field.name() {
-            | Some("envelope") => {
+            | Some("envelope") if envelope.is_none() => {
                 let text = field.text().await.map_err(|error| {
                     ApiError::bad_request(
                         "E_MULTIPART",
@@ -167,14 +367,14 @@ pub async fn publish(
                     ApiError::bad_request("E_JSON", format!("the envelope is not JSON: {error}"))
                 })?);
             },
-            | Some("package") => {
-                let bytes = field.bytes().await.map_err(|error| {
-                    ApiError::bad_request(
-                        "E_MULTIPART",
-                        format!("cannot read the archive: {error}"),
-                    )
-                })?;
-                archive = Some(bytes.to_vec());
+            | Some("package") if archive.is_none() => {
+                archive = Some(read_archive_part(field).await?);
+            },
+            | Some("envelope" | "package") => {
+                return Err(ApiError::bad_request(
+                    "E_MULTIPART",
+                    "An upload part was repeated",
+                ));
             },
             | _ => {},
         }
@@ -212,7 +412,8 @@ pub async fn publish(
     let key_kind = authorised.key_kind.clone();
 
     // The archive must be the one that was signed.
-    let checksum = tarball::checksum(&archive);
+    let bytes = archive.clone();
+    let checksum = publication_task(&slot, move || tarball::checksum(&bytes)).await?;
     if !checksum.eq_ignore_ascii_case(&statement.checksum) {
         return Err(ApiError::bad_request(
             "E_TARBALL",
@@ -239,7 +440,8 @@ pub async fn publish(
     };
 
     // The archive must be a package, and it must be *this* package.
-    let files = tarball::text_files(&archive).map_err(ApiError::from_core)?;
+    let bytes = archive.clone();
+    let files = publication_task(&slot, move || tarball::text_files(&bytes)).await??;
     let manifest_text = files
         .iter()
         .find(|(name, _)| name == "aevia.toml")
@@ -277,30 +479,16 @@ pub async fn publish(
         .map_err(ApiError::from_core)?;
     check_dependencies(&state, &manifest).await?;
 
-    // Metadata: the envelope wins, then `aevia-pkg.toml`, then the README.
+    // Metadata: the envelope wins, then `aevia.toml`, then `aevia-pkg.toml`.
+    // Required publish fields (`description` and `license` or `license-file`)
+    // are enforced before any database row is written.
     let declared = files
         .iter()
         .find(|(name, _)| name == "aevia-pkg.toml")
         .and_then(|(_, text)| RegistryMeta::parse(text, "aevia-pkg.toml").ok())
         .unwrap_or_default();
-    let readme = files
-        .iter()
-        .find(|(name, _)| {
-            name.eq_ignore_ascii_case("readme.md") || name.eq_ignore_ascii_case("readme")
-        })
-        .map(|(_, text)| text.clone());
-    let description = envelope
-        .description
-        .clone()
-        .or(declared.description.clone())
-        .or_else(|| readme.as_deref().and_then(first_paragraph));
-    let license = envelope.license.clone().or(declared.license.clone());
-    let repository = envelope.repository.clone().or(declared.repository.clone());
-    let keywords: Vec<String> = if envelope.keywords.is_empty() {
-        declared.keywords.clone()
-    } else {
-        envelope.keywords.clone()
-    };
+    let meta = resolve_publish_metadata(&envelope, &manifest, &declared, &files)?;
+    drop(files);
 
     // The catalogue rows, the archive file and the log entry in one
     // transaction: either the version exists everywhere (row, dependency rows,
@@ -315,22 +503,12 @@ pub async fn publish(
         ))
     })?;
     let package =
-        match repo::package_by_identity(&state.pool, owner_id, &statement.name.name_key()).await? {
-            | Some(package) => package,
-            | None => {
-                repo::create_package(
-                    &state.pool,
-                    owner_id,
-                    statement.name.name(),
-                    &statement.name.name_key(),
-                )
-                .await?
-            },
-        };
+        repo::publication_package(&mut transaction, owner_id, statement.name.name()).await?;
+    let package_name = PackageId::new(statement.name.owner(), &package.name)?;
     let dependencies = serde_json::to_value(manifest.index_dependencies()).map_err(|error| {
         ApiError::internal(format!("cannot serialise the dependency list: {error}"))
     })?;
-    let version = repo::insert_version_in(
+    repo::insert_version_in(
         &mut transaction,
         &NewVersion {
             package_id: package.id,
@@ -340,15 +518,27 @@ pub async fn publish(
             manifest: serde_json::json!({
                 "name": manifest.name,
                 "version": manifest.version,
+                "edition": meta.edition,
                 "entry": manifest.entry,
+                "authors": meta.authors,
+                "description": meta.description,
+                "license": meta.license,
+                "license_file": meta.license_file,
+                "readme": meta.readme_path,
+                "repository": meta.repository,
+                "homepage": meta.homepage,
+                "documentation": meta.documentation,
+                "keywords": meta.keywords,
+                "categories": meta.categories,
             }),
             dependencies,
-            readme: readme.as_deref(),
+            readme: meta.readme_text.as_deref(),
             published_by: publisher.id,
             key_kind: &key_kind,
             fingerprint: &fingerprint,
             signature: &envelope.signature,
             statement: &envelope.statement,
+            build_docs: state.config.docs_enabled,
         },
     )
     .await
@@ -366,17 +556,25 @@ pub async fn publish(
     repo::update_package_meta(
         &mut *transaction,
         package.id,
-        description.as_deref(),
-        license.as_deref(),
-        repository.as_deref(),
-        &keywords,
+        &repo::PackageMetaUpdate {
+            edition: meta.edition.as_deref(),
+            authors: &meta.authors,
+            description: meta.description.as_deref(),
+            license: meta.license.as_deref(),
+            license_file: meta.license_file.as_deref(),
+            repository: meta.repository.as_deref(),
+            homepage: meta.homepage.as_deref(),
+            documentation: meta.documentation.as_deref(),
+            keywords: &meta.keywords,
+            categories: &meta.categories,
+        },
     )
     .await?;
     repo::touch_package(&mut *transaction, package.id).await?;
 
-    state
-        .storage
-        .write(&statement.name, &statement.version, &archive)?;
+    let storage = state.storage.clone();
+    let digest = checksum.clone();
+    publication_task(&slot, move || storage.write(&digest, &archive)).await??;
 
     let entry = repo::append_log_in(
         &mut transaction,
@@ -402,22 +600,24 @@ pub async fn publish(
         ))
     })?;
 
-    // Documentation, off the request path.
-    if state.config.docs_enabled {
-        spawn_docs_build(&state, version.id, statement.name.clone(), files);
-    } else {
-        repo::set_docs_status(&state.pool, version.id, "skipped", None).await?;
-    }
-
+    drop(slot);
     let docs_url = if state.config.docs_enabled {
-        Some(format!("/docs/{}/{}", statement.name, statement.version))
+        state.docs_wake.notify_one();
+        Some(format!("/docs/{package_name}/{}", statement.version))
     } else {
         None
     };
+    let warnings: Vec<String> = envelope
+        .key
+        .kind
+        .preference_warning()
+        .into_iter()
+        .map(str::to_string)
+        .collect();
     Ok((
         StatusCode::CREATED,
         Json(PublishResponse {
-            name: statement.name.to_string(),
+            name: package_name.to_string(),
             version: statement.version,
             checksum,
             docs_url,
@@ -425,74 +625,78 @@ pub async fn publish(
                 seq: entry.seq,
                 hash: entry.entry_hash,
             },
+            warnings,
         }),
     ))
 }
 
-/// Builds documentation in the background.
-///
-/// `spawn_blocking` because the compiler is synchronous and CPU-bound; a
-/// registry that rendered docs on the request thread would make a publish wait
-/// for a full parse of the package.
-fn spawn_docs_build(
-    state: &AppState,
-    version_id: i64,
-    name: PackageId,
-    files: Vec<(String, String)>,
-) {
-    let pool = state.pool.clone();
-    let package = name.to_string();
-    tokio::spawn(async move {
-        let built =
-            tokio::task::spawn_blocking(move || aevia_registry_docs::build(&files, &package)).await;
-        match built {
-            | Ok(Ok(docs)) => {
-                let pages: Vec<aevia_registry_db::models::DocsPage> = docs
-                    .pages
-                    .iter()
-                    .map(|page| {
-                        aevia_registry_db::models::DocsPage {
-                            version_id,
-                            path: page.path.clone(),
-                            title: page.title.clone(),
-                            html: page.html.clone(),
-                            decls: i32::try_from(page.decls).unwrap_or(i32::MAX),
-                            undocumented: i32::try_from(page.undocumented).unwrap_or(i32::MAX),
-                            source_file: page.source_file.clone(),
-                        }
-                    })
-                    .collect();
-                if let Err(error) = repo::replace_docs(&pool, version_id, &pages).await {
-                    tracing::error!(%error, version_id, "cannot store the documentation");
-                    let _ =
-                        repo::set_docs_status(&pool, version_id, "failed", Some(&error.message))
-                            .await;
-                    return;
-                }
-                if let Err(error) = repo::set_docs_status(&pool, version_id, "built", None).await {
-                    tracing::error!(%error, version_id, "cannot record the documentation state");
-                }
-            },
-            | Ok(Err(error)) => {
-                tracing::warn!(%error, version_id, "documentation failed to build");
-                let _ =
-                    repo::set_docs_status(&pool, version_id, "failed", Some(&error.message)).await;
-            },
-            | Err(error) => {
-                tracing::error!(%error, version_id, "the documentation task panicked");
-                let _ = repo::set_docs_status(
-                    &pool,
-                    version_id,
-                    "failed",
-                    Some("the documentation task did not finish"),
-                )
-                .await;
-            },
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "keep archive size and multipart framing checks together"
+    )
+)]
+async fn read_archive_part(mut field: Field<'_>) -> ApiResult<Bytes> {
+    let limit = usize::try_from(tarball::MAX_ARCHIVE_BYTES).unwrap_or(usize::MAX);
+    let mut archive = Some(Vec::new());
+    let mut first_chunk = None;
+    while let Some(chunk) = field.chunk().await.map_err(|error| {
+        ApiError::bad_request("E_MULTIPART", format!("cannot read the archive: {error}"))
+    })? {
+        let Some(bytes) = &mut archive else {
+            // Continue checking the framing after the stored bytes are released.
+            continue;
+        };
+        let length = first_chunk.as_ref().map_or(bytes.len(), Bytes::len);
+        let end = length.saturating_add(chunk.len());
+        if end > limit {
+            archive = None;
+            first_chunk = None;
+            continue;
         }
-    });
+        if chunk.is_empty() {
+            continue;
+        }
+        if length == 0 {
+            // A complete field in one chunk can keep Multer's allocation.
+            first_chunk = Some(chunk);
+            continue;
+        }
+        if end > bytes.capacity() {
+            let capacity = end.checked_next_power_of_two().unwrap_or(limit).min(limit);
+            bytes.reserve_exact(capacity.saturating_sub(bytes.len()));
+        }
+        if let Some(first_chunk) = first_chunk.take() {
+            bytes.extend_from_slice(&first_chunk);
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    archive
+        .map(|bytes| first_chunk.unwrap_or_else(|| Bytes::from(bytes)))
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "E_TARBALL",
+                "A package archive can be at most 16 MiB",
+            )
+        })
 }
 
-fn check_version(version: &str) -> ApiResult<()> {
+async fn publication_task<T: Send + 'static>(
+    slot: &Arc<OwnedSemaphorePermit>,
+    operation: impl FnOnce() -> T + Send + 'static,
+) -> ApiResult<T> {
+    let slot = slot.clone();
+    tokio::task::spawn_blocking(move || {
+        let _slot = slot;
+        operation()
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("a publication background task failed: {error}")))
+}
+
+pub(crate) fn check_version(version: &str) -> ApiResult<()> {
     let parsed = aevia_resolve::Version::parse(version).map_err(|error| {
         ApiError::bad_request(
             "E_VERSION",
@@ -570,6 +774,10 @@ pub fn dependency_problem(
 }
 
 /// Refuses a manifest whose dependencies cannot be resolved.
+#[allow(
+    clippy::single_call_fn,
+    reason = "publication checks dependency identity against the catalog before opening a transaction"
+)]
 async fn check_dependencies(
     state: &AppState,
     manifest: &PackageManifest,
@@ -592,17 +800,17 @@ async fn check_dependencies(
             )
         })?;
         let req = aevia_resolve::VersionReq::parse(&dependency.req).map_err(|error| {
-            ApiError::bad_request(
-                "E_DEPENDENCY",
-                format!("dependency `{id}`: {error}"),
-            )
+            ApiError::bad_request("E_DEPENDENCY", format!("dependency `{id}`: {error}"))
         })?;
         let Some((package, _)) =
             repo::package_by_handle(&state.pool, id.owner(), &id.name_key()).await?
         else {
             return Err(ApiError::bad_request(
                 "E_DEPENDENCY",
-                format!("`{id}` is not a package on this registry, so `{}` cannot resolve", dependency.label()),
+                format!(
+                    "`{id}` is not a package on this registry, so `{}` cannot resolve",
+                    dependency.label()
+                ),
             ));
         };
         let versions: Vec<(String, bool)> = repo::versions(&state.pool, package.id)
@@ -617,6 +825,10 @@ async fn check_dependencies(
     Ok(())
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "the signed checksum has an independent canonical wire format"
+)]
 fn check_checksum(checksum: &str) -> ApiResult<()> {
     let valid = checksum.strip_prefix("sha256:").is_some_and(|hex_part| {
         hex_part.len() == 64
@@ -637,6 +849,85 @@ fn check_checksum(checksum: &str) -> ApiResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn archive_part_keeps_exact_limit_and_malformed_precedence() {
+        use axum::Router;
+        use axum::body::Body;
+        use axum::body::to_bytes;
+        use axum::extract::DefaultBodyLimit;
+        use axum::http::Request;
+        use axum::http::header::CONTENT_TYPE;
+        use axum::routing::post;
+        use tower::ServiceExt as _;
+
+        async fn archive_only(mut multipart: Multipart) -> ApiResult<Bytes> {
+            let field = multipart
+                .next_field()
+                .await
+                .expect("archive header")
+                .expect("archive part");
+            read_archive_part(field).await
+        }
+
+        let router = Router::new()
+            .route("/", post(archive_only))
+            .layer(DefaultBodyLimit::max(20 * 1024 * 1024));
+        let limit = usize::try_from(tarball::MAX_ARCHIVE_BYTES).expect("package limit fits usize");
+        for (size, complete, status, code) in [
+            (0, true, StatusCode::OK, None),
+            (3, true, StatusCode::OK, None),
+            (limit, true, StatusCode::OK, None),
+            (
+                limit.saturating_add(1),
+                true,
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Some("E_TARBALL"),
+            ),
+            (
+                limit.saturating_add(1),
+                false,
+                StatusCode::BAD_REQUEST,
+                Some("E_MULTIPART"),
+            ),
+        ] {
+            let mut body =
+                b"--archive-boundary\r\nContent-Disposition: form-data; name=\"package\"\r\n\r\n"
+                    .to_vec();
+            body.resize(body.len().saturating_add(size), b'x');
+            if complete {
+                body.extend_from_slice(b"\r\n--archive-boundary--\r\n");
+            }
+            let request = Request::post("/")
+                .header(
+                    CONTENT_TYPE,
+                    "multipart/form-data; boundary=archive-boundary",
+                )
+                .body(Body::from(body))
+                .expect("multipart request");
+            let response = router.clone().oneshot(request).await.expect("response");
+            assert_eq!(
+                response.status(),
+                status,
+                "{size} bytes complete={complete}"
+            );
+            let body = to_bytes(response.into_body(), limit)
+                .await
+                .expect("response bytes");
+            if let Some(code) = code {
+                let error: serde_json::Value = serde_json::from_slice(&body).expect("JSON error");
+                assert_eq!(
+                    error
+                        .pointer("/error/code")
+                        .and_then(serde_json::Value::as_str),
+                    Some(code)
+                );
+            } else {
+                assert_eq!(body.len(), size);
+                assert!(body.iter().all(|&byte| byte == b'x'));
+            }
+        }
+    }
 
     fn versions(list: &[(&str, bool)]) -> Vec<(String, bool)> {
         list.iter()
@@ -659,7 +950,10 @@ mod tests {
     fn a_requirement_nothing_satisfies_is_explained_with_what_exists() {
         let all = versions(&[("1.0.0", false), ("1.2.0", false)]);
         let problem = dependency_problem("o/a", &req("^3"), &all).expect("unresolvable");
-        assert!(problem.contains("`o/a`") && problem.contains("^3"), "{problem}");
+        assert!(
+            problem.contains("`o/a`") && problem.contains("^3"),
+            "{problem}"
+        );
         assert!(problem.contains("available: 1.0.0, 1.2.0"), "{problem}");
     }
 
@@ -670,7 +964,10 @@ mod tests {
         assert!(problem.contains("yanked"), "{problem}");
         let none = versions(&[("1.0.0", true)]);
         let problem = dependency_problem("o/a", &req("*"), &none).expect("unresolvable");
-        assert!(problem.contains("no version that is not yanked"), "{problem}");
+        assert!(
+            problem.contains("no version that is not yanked"),
+            "{problem}"
+        );
     }
 
     #[test]

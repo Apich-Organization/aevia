@@ -101,6 +101,7 @@ fn a_caller_owned_capability_set_can_grant_jit() {
 
     let options = aevia_types::check::CheckOptions {
         capabilities: aevia_types::check::Capabilities::from_names(["core.jit"]),
+        ..aevia_types::check::CheckOptions::default()
     };
     let checked = aevia_types::check::check_module_with_options(file, &module, &[], &options);
     assert!(

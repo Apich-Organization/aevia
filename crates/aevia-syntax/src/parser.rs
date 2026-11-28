@@ -10,11 +10,42 @@
 //! Errors are recovered per declaration: a bad declaration is dropped and
 //! parsing continues at the next line, so one mistake does not hide the rest.
 
-use crate::ast::*;
+use crate::ast::AttrArg;
+use crate::ast::Attribute;
+use crate::ast::BinOp;
+use crate::ast::BlockStmt;
+use crate::ast::ClassMethod;
+use crate::ast::Constructor;
+use crate::ast::Decl;
+use crate::ast::DeclKind;
+use crate::ast::DimAst;
+use crate::ast::DoStmt;
+use crate::ast::Expr;
+use crate::ast::ExprKind;
+use crate::ast::InstanceMethod;
+use crate::ast::Kind;
+use crate::ast::MatchArm;
+use crate::ast::Module;
+use crate::ast::NatAst;
+use crate::ast::NumberLit;
+use crate::ast::Param;
+use crate::ast::Pat;
+use crate::ast::PatKind;
+use crate::ast::PatLit;
+use crate::ast::ShapeAst;
+use crate::ast::ShapeItem;
+use crate::ast::SliceAst;
+use crate::ast::StrPiece;
+use crate::ast::Ty;
+use crate::ast::TyKind;
+use crate::ast::TypeBody;
+use crate::ast::TypeParam;
+use crate::ast::UnOp;
 use crate::diagnostic::Diagnostic;
 use crate::diagnostic::Diagnostics;
 use crate::lexer::LexOutput;
-use crate::lexer::lex_inline;
+use crate::lexer::interpolation_identifier;
+use crate::lexer::lex_interpolation;
 use crate::span::FileId;
 use crate::span::Span;
 use crate::token::DocComment;
@@ -29,6 +60,7 @@ use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::ToPrimitive;
 use num_traits::Zero;
+use std::collections::HashSet;
 
 /// A name or dotted name can receive explicit type arguments. This is a
 /// syntactic check only; the checker resolves the path and callable identity.
@@ -38,6 +70,18 @@ fn is_named_type_callee(expr: &Expr) -> bool {
         | ExprKind::Field { base, .. } => is_named_type_callee(base),
         | _ => false,
     }
+}
+
+fn bare_name_expr(
+    name: String,
+    span: Span,
+) -> Expr {
+    let kind = if name == "_" {
+        ExprKind::Placeholder
+    } else {
+        ExprKind::Var(name)
+    };
+    Expr::new(kind, span)
 }
 
 /// Parses a lexed file into a module.
@@ -80,6 +124,7 @@ pub fn parse_expression(
 struct Parser<'a> {
     tokens: &'a [Token],
     docs: &'a [DocComment],
+    eof: Token,
     doc_cursor: usize,
     file: FileId,
     source: &'a str,
@@ -103,6 +148,7 @@ impl<'a> Parser<'a> {
         Self {
             tokens,
             docs,
+            eof: Token::new(TokenKind::Eof, Span::new(file, source.len(), source.len())),
             doc_cursor: 0,
             file,
             source,
@@ -116,11 +162,7 @@ impl<'a> Parser<'a> {
     // ----- token helpers -------------------------------------------------
 
     fn token(&self) -> &Token {
-        // The lexer always ends the stream with `Eof`, so the fallback is only
-        // reachable if a caller slices tokens by hand.
-        self.tokens
-            .get(self.pos)
-            .unwrap_or_else(|| &self.tokens[self.tokens.len() - 1])
+        self.tokens.get(self.pos).unwrap_or(&self.eof)
     }
 
     fn kind(&self) -> &TokenKind {
@@ -148,7 +190,7 @@ impl<'a> Parser<'a> {
         offset: usize,
     ) -> &TokenKind {
         self.tokens
-            .get(self.pos + offset)
+            .get(self.pos.saturating_add(offset))
             .map_or(&TokenKind::Eof, |token| &token.kind)
     }
 
@@ -214,12 +256,10 @@ impl<'a> Parser<'a> {
         matches!(self.kind(), TokenKind::Ident(text) if text == name)
     }
 
-    fn bump(&mut self) -> Token {
-        let token = self.token().clone();
+    fn bump(&mut self) {
         if !self.at_eof() {
-            self.pos += 1;
+            self.pos = self.pos.saturating_add(1);
         }
-        token
     }
 
     fn eat_punct(
@@ -268,10 +308,7 @@ impl<'a> Parser<'a> {
         if self.eat_punct(punct) {
             return true;
         }
-        self.error_here(
-            "E0202",
-            format!("expected `{punct}`, found {}", self.describe()),
-        );
+        self.expectation(format!("expected `{punct}`, found {}", self.describe()));
         false
     }
 
@@ -282,10 +319,7 @@ impl<'a> Parser<'a> {
         if self.eat_kw(keyword) {
             return true;
         }
-        self.error_here(
-            "E0202",
-            format!("expected `{keyword}`, found {}", self.describe()),
-        );
+        self.expectation(format!("expected `{keyword}`, found {}", self.describe()));
         false
     }
 
@@ -302,10 +336,10 @@ impl<'a> Parser<'a> {
         if self.line_end_consumed() {
             return;
         }
-        self.error_here(
-            "E0202",
-            format!("expected end of line, found {}", self.describe()),
-        );
+        if self.physical_declaration_boundary() {
+            return;
+        }
+        self.expectation(format!("expected end of line, found {}", self.describe()));
         // Skip the rest of the line: one mistake, one diagnostic, and the next
         // declaration starts from a known place.
         self.recover();
@@ -314,11 +348,8 @@ impl<'a> Parser<'a> {
     /// True when the construct just parsed ended with a block, which consumed
     /// the `NEWLINE` before its `DEDENT` — the grammar's `NEWLINE?`.
     fn line_end_consumed(&self) -> bool {
-        self.pos > 0
-            && matches!(
-                self.tokens[self.pos - 1].kind,
-                TokenKind::Newline | TokenKind::Dedent
-            )
+        self.previous_token()
+            .is_some_and(|token| matches!(token.kind, TokenKind::Newline | TokenKind::Dedent))
     }
 
     fn describe(&self) -> String {
@@ -349,26 +380,159 @@ impl<'a> Parser<'a> {
         expected: &str,
     ) {
         let found = self.describe();
-        self.error_here("E0202", format!("expected {expected}, found {found}"));
+        self.expectation(format!("expected {expected}, found {found}"));
+    }
+
+    /// Nested parsers often fail at the same unconsumed separator. The first
+    /// expectation explains the missing operand; repeated closers/line-end
+    /// expectations at that very cursor are consequences of that error.
+    fn expectation(
+        &mut self,
+        message: impl Into<String>,
+    ) {
+        let span = self.span();
+        if self
+            .diagnostics
+            .items
+            .last()
+            .is_some_and(|diagnostic| diagnostic.span == span)
+        {
+            return;
+        }
+        self.error("E0202", message, span);
+    }
+
+    /// These tokens belong to the caller of an operand/type/pattern parser.
+    /// Leaving them in place lets that caller consume its own closer instead
+    /// of turning one missing operand into several missing delimiters.
+    fn operand_boundary(&self) -> bool {
+        matches!(
+            self.kind(),
+            TokenKind::Eof
+                | TokenKind::Newline
+                | TokenKind::Dedent
+                | TokenKind::Punct(
+                    Punct::RParen
+                        | Punct::RBracket
+                        | Punct::RBrace
+                        | Punct::Comma
+                        | Punct::Equals
+                        | Punct::Colon
+                        | Punct::FatArrow
+                        | Punct::Arrow
+                )
+                | TokenKind::Keyword(Keyword::Else | Keyword::Then | Keyword::In | Keyword::With)
+        )
+    }
+
+    /// An unclosed delimiter suppresses lexer NEWLINE tokens. Recover a
+    /// subsequent declaration from its physical source line in that case.
+    fn physical_declaration_boundary(&self) -> bool {
+        let TokenKind::Keyword(
+            keyword @ (Keyword::Let
+            | Keyword::Fn
+            | Keyword::Type
+            | Keyword::Unit
+            | Keyword::Dimension
+            | Keyword::Import
+            | Keyword::Open
+            | Keyword::Test
+            | Keyword::Class
+            | Keyword::Instance
+            | Keyword::Derive
+            | Keyword::Private),
+        ) = self.kind()
+        else {
+            return false;
+        };
+        if self.pos == 0 {
+            return false;
+        }
+        let previous = self.previous_span().end as usize;
+        let current = self.span().start as usize;
+        self.source
+            .get(previous..current)
+            .is_some_and(|between| between.contains(['\r', '\n']))
+            && match keyword {
+                | Keyword::Let => !self.let_has_in(),
+                | Keyword::Fn => self.is_fn_decl_start(),
+                | _ => true,
+            }
+    }
+
+    /// Synchronize a failed item locally, preserving a comma, an owning
+    /// closer, a layout boundary, or a new declaration. Nested junk is skipped
+    /// as a unit so its internal commas do not end the outer recovery region.
+    fn recover_item(&mut self) {
+        self.recover_delimited(true);
+    }
+
+    fn recover_group(&mut self) {
+        self.recover_delimited(false);
+    }
+
+    fn recover_delimited(
+        &mut self,
+        comma_boundary: bool,
+    ) {
+        let mut nested = Vec::new();
+        while !self.at_eof() && !self.at_newline() && !self.at_dedent() {
+            if nested.is_empty()
+                && ((comma_boundary && self.operand_boundary())
+                    || matches!(
+                        self.kind(),
+                        TokenKind::Punct(Punct::RParen | Punct::RBracket | Punct::RBrace)
+                    )
+                    || self.physical_declaration_boundary())
+            {
+                break;
+            }
+            match self.kind() {
+                | TokenKind::Punct(Punct::LParen) => nested.push(Punct::RParen),
+                | TokenKind::Punct(Punct::LBracket) => nested.push(Punct::RBracket),
+                | TokenKind::Punct(Punct::LBrace) => nested.push(Punct::RBrace),
+                | TokenKind::Punct(close @ (Punct::RParen | Punct::RBracket | Punct::RBrace)) => {
+                    if nested.last() == Some(close) {
+                        nested.pop();
+                    } else {
+                        break;
+                    }
+                },
+                | _ => {},
+            }
+            self.bump();
+        }
+    }
+
+    fn close_item(
+        &mut self,
+        close: Punct,
+        failed: bool,
+    ) {
+        if failed {
+            self.eat_punct(close);
+        } else {
+            self.expect_punct(close);
+        }
     }
 
     fn take_doc(
         &mut self,
         before: u32,
     ) -> Option<String> {
-        let mut text: Option<String> = None;
-        while let Some(doc) = self.docs.get(self.doc_cursor) {
-            if doc.span.end <= before {
-                text = Some(match text {
-                    | Some(previous) => format!("{previous}\n{}", doc.text),
-                    | None => doc.text.clone(),
-                });
-                self.doc_cursor += 1;
-            } else {
-                break;
-            }
+        let mut docs = self
+            .docs
+            .get(self.doc_cursor..)?
+            .iter()
+            .take_while(|doc| doc.span.end <= before);
+        let mut text = docs.next()?.text.clone();
+        self.doc_cursor = self.doc_cursor.saturating_add(1);
+        for doc in docs {
+            text.push('\n');
+            text.push_str(&doc.text);
+            self.doc_cursor = self.doc_cursor.saturating_add(1);
         }
-        text
+        Some(text)
     }
 
     // ----- module and declarations --------------------------------------
@@ -376,8 +540,30 @@ impl<'a> Parser<'a> {
     fn module(&mut self) -> Module {
         let file = self.file;
         let mut name = None;
+        let mut private = false;
         let mut unit_system = None;
         self.skip_newlines();
+        if self.at_kw(Keyword::Private)
+            && matches!(self.kind_at(1), TokenKind::Keyword(Keyword::Module))
+        {
+            self.bump();
+            private = true;
+        } else if self.at_punct(Punct::At)
+            && (matches!(self.kind_at(1), TokenKind::Keyword(Keyword::Private))
+                || matches!(self.kind_at(1), TokenKind::Ident(attr) if attr == "private"))
+        {
+            let mut look = 2;
+            while matches!(self.kind_at(look), TokenKind::Newline) {
+                look = look.saturating_add(1);
+            }
+            if matches!(self.kind_at(look), TokenKind::Keyword(Keyword::Module)) {
+                self.bump();
+                self.bump();
+                self.eat_newline();
+                self.skip_newlines();
+                private = true;
+            }
+        }
         if self.at_kw(Keyword::Module) {
             self.bump();
             name = Some(self.module_path());
@@ -421,6 +607,7 @@ impl<'a> Parser<'a> {
         }
         Module {
             name,
+            private,
             unit_system,
             decls,
             file,
@@ -452,6 +639,9 @@ impl<'a> Parser<'a> {
     fn recover(&mut self) {
         // Skip to the end of the line, then let `module` skip the newline.
         while !self.at_eof() && !self.at_newline() && !self.at_dedent() {
+            if self.physical_declaration_boundary() {
+                break;
+            }
             self.bump();
         }
         self.eat_newline();
@@ -470,18 +660,27 @@ impl<'a> Parser<'a> {
         }
         let private_span = self.span();
         let private = self.eat_kw(Keyword::Private);
+        let export = !private
+            && (self.ident_is("export") || self.ident_is("pub"))
+            && matches!(
+                self.kind_at(1),
+                TokenKind::Keyword(Keyword::Import | Keyword::Open)
+            );
+        if export {
+            self.bump();
+        }
         let kind = match self.kind().clone() {
-            | TokenKind::Keyword(Keyword::Import) => self.import_decl(false)?,
-            | TokenKind::Keyword(Keyword::Open) => self.import_decl(true)?,
+            | TokenKind::Keyword(Keyword::Import) => self.import_decl(false, export),
+            | TokenKind::Keyword(Keyword::Open) => self.import_decl(true, export),
             | TokenKind::Keyword(Keyword::Dimension) => self.dimension_decl()?,
             | TokenKind::Keyword(Keyword::Unit) => self.unit_decl()?,
             | TokenKind::Keyword(Keyword::Type) => self.type_decl()?,
             | TokenKind::Keyword(Keyword::Class) => self.class_decl()?,
             | TokenKind::Keyword(Keyword::Instance) => self.instance_decl()?,
-            | TokenKind::Keyword(Keyword::Derive) => self.derive_decl()?,
+            | TokenKind::Keyword(Keyword::Derive) => self.derive_decl(),
             | TokenKind::Keyword(Keyword::Fn) => self.fn_decl()?,
             | TokenKind::Keyword(Keyword::Let) => self.let_decl()?,
-            | TokenKind::Keyword(Keyword::Test) => self.test_decl()?,
+            | TokenKind::Keyword(Keyword::Test) => self.test_decl(),
             | _ => {
                 self.unexpected("a declaration");
                 return None;
@@ -537,6 +736,14 @@ impl<'a> Parser<'a> {
             "rule",
             // §9.12: a `bench` declaration is a function `aevia bench` times.
             "bench",
+            "doc",
+            "hidden",
+            "private",
+            "allow",
+            "warn",
+            "deny",
+            "forbid",
+            "relax_result",
         ];
         if !KNOWN.contains(&attr.name.as_str()) {
             self.error(
@@ -547,11 +754,13 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn previous_token(&self) -> Option<&Token> {
+        self.tokens.get(self.pos.checked_sub(1)?)
+    }
+
     fn previous_span(&self) -> Span {
-        if self.pos == 0 {
-            return self.span();
-        }
-        self.tokens[self.pos - 1].span
+        self.previous_token()
+            .map_or_else(|| self.span(), |token| token.span)
     }
 
     fn attribute(&mut self) -> Attribute {
@@ -561,6 +770,10 @@ impl<'a> Parser<'a> {
             | TokenKind::Ident(name) | TokenKind::UpperIdent(name) => {
                 self.bump();
                 name
+            },
+            | TokenKind::Keyword(Keyword::Private) => {
+                self.bump();
+                "private".to_string()
             },
             | _ => {
                 self.unexpected("an attribute name");
@@ -605,7 +818,8 @@ impl<'a> Parser<'a> {
     fn import_decl(
         &mut self,
         open: bool,
-    ) -> Option<DeclKind> {
+        export: bool,
+    ) -> DeclKind {
         self.bump(); // import / open
         let path = self.module_path();
         let mut alias = None;
@@ -617,8 +831,7 @@ impl<'a> Parser<'a> {
                 self.unexpected("a module alias");
             }
         }
-        let mut names = None;
-        if self.eat_punct(Punct::LBrace) {
+        let names = if self.eat_punct(Punct::LBrace) {
             let mut list = Vec::new();
             while !self.at_punct(Punct::RBrace) && !self.at_eof() {
                 match self.kind().clone() {
@@ -636,15 +849,18 @@ impl<'a> Parser<'a> {
                 }
             }
             self.expect_punct(Punct::RBrace);
-            names = Some(list);
-        }
+            Some(list)
+        } else {
+            None
+        };
         self.expect_newline();
-        Some(DeclKind::Import {
+        DeclKind::Import {
             path,
             alias,
             names,
             open,
-        })
+            export,
+        }
     }
 
     fn dimension_decl(&mut self) -> Option<DeclKind> {
@@ -683,8 +899,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let mut offset = None;
-        if self.ident_is("offset") {
+        let offset = if self.ident_is("offset") {
             self.bump();
             let offset_scale = self.unit_scale()?;
             let offset_unit = if self.starts_unit_atom() {
@@ -692,8 +907,10 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            offset = Some((offset_scale, offset_unit));
-        }
+            Some((offset_scale, offset_unit))
+        } else {
+            None
+        };
         let prefixable = if self.ident_is("prefixable") {
             self.bump();
             true
@@ -739,6 +956,10 @@ impl<'a> Parser<'a> {
         }
     }
 
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "exact rational operations check nonzero divisors"
+    )]
     fn unit_scale(&mut self) -> Option<Scale> {
         let negative = self.eat_punct(Punct::Minus);
         if self.ident_is("pi") {
@@ -905,6 +1126,7 @@ impl<'a> Parser<'a> {
 
     fn constructor(&mut self) -> Constructor {
         let start = self.span();
+        let private = self.eat_kw(Keyword::Private);
         let name = match self.kind().clone() {
             | TokenKind::UpperIdent(name) => {
                 self.bump();
@@ -926,6 +1148,7 @@ impl<'a> Parser<'a> {
             self.expect_punct(Punct::RParen);
         }
         Constructor {
+            private,
             name,
             args,
             span: start.join(self.previous_span()),
@@ -1008,6 +1231,7 @@ impl<'a> Parser<'a> {
                 if self.at_dedent() || self.at_eof() {
                     break;
                 }
+                let private = self.eat_kw(Keyword::Private);
                 let method_name = match self.kind().clone() {
                     | TokenKind::Ident(name) => {
                         self.bump();
@@ -1033,7 +1257,11 @@ impl<'a> Parser<'a> {
                     self.expect_punct(Punct::Colon);
                     self.ty()
                 };
-                methods.push((method_name, ty));
+                methods.push(ClassMethod {
+                    private,
+                    name: method_name,
+                    ty,
+                });
                 self.expect_newline();
             }
             self.expect_dedent();
@@ -1081,6 +1309,7 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 let start = self.span();
+                let private = self.eat_kw(Keyword::Private);
                 let name = match self.kind().clone() {
                     | TokenKind::Ident(name) => {
                         self.bump();
@@ -1097,6 +1326,7 @@ impl<'a> Parser<'a> {
                 self.expect_punct(Punct::Equals);
                 let body = self.expr();
                 methods.push(InstanceMethod {
+                    private,
                     name,
                     params,
                     ret,
@@ -1111,7 +1341,7 @@ impl<'a> Parser<'a> {
         Some(DeclKind::Instance { class, ty, methods })
     }
 
-    fn derive_decl(&mut self) -> Option<DeclKind> {
+    fn derive_decl(&mut self) -> DeclKind {
         self.bump();
         let mut classes = Vec::new();
         loop {
@@ -1134,7 +1364,7 @@ impl<'a> Parser<'a> {
         self.expect_kw(Keyword::For);
         let ty = self.ty();
         self.expect_newline();
-        Some(DeclKind::Derive { classes, ty })
+        DeclKind::Derive { classes, ty }
     }
 
     fn fn_decl(&mut self) -> Option<DeclKind> {
@@ -1179,7 +1409,9 @@ impl<'a> Parser<'a> {
         if !self.expect_punct(Punct::LParen) {
             return params;
         }
+        let mut failed = false;
         while !self.at_punct(Punct::RParen) && !self.at_eof() {
+            let before = self.diagnostics.items.len();
             let start = self.span();
             let pattern = self.binding_pattern();
             let ty = if self.eat_punct(Punct::Colon) {
@@ -1187,6 +1419,29 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
+            if self.diagnostics.items.len() > before {
+                failed = true;
+                // Inside the parentheses only `,` and `)` end a parameter:
+                // a stray `=` or `:` (an expression boundary elsewhere) is
+                // part of the bad parameter, not the start of the body.
+                loop {
+                    self.recover_item();
+                    let stray = self.operand_boundary()
+                        && !matches!(
+                            self.kind(),
+                            TokenKind::Eof
+                                | TokenKind::Newline
+                                | TokenKind::Dedent
+                                | TokenKind::Punct(
+                                    Punct::Comma | Punct::RParen | Punct::RBracket | Punct::RBrace
+                                )
+                        );
+                    if !stray {
+                        break;
+                    }
+                    self.bump();
+                }
+            }
             params.push(Param {
                 pattern,
                 ty,
@@ -1196,14 +1451,20 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        self.expect_punct(Punct::RParen);
+        self.close_item(Punct::RParen, failed);
         params
     }
 
     fn let_decl(&mut self) -> Option<DeclKind> {
         self.bump();
         let rec = self.eat_kw(Keyword::Rec);
+        let before = self.diagnostics.items.len();
         let pattern = self.binding_pattern();
+        if self.diagnostics.items.len() > before {
+            // The declaration owner performs recovery once. Recovering here
+            // as well would skip the following valid declaration.
+            return None;
+        }
         let ty = if self.eat_punct(Punct::Colon) {
             Some(self.ty())
         } else {
@@ -1220,7 +1481,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn test_decl(&mut self) -> Option<DeclKind> {
+    fn test_decl(&mut self) -> DeclKind {
         self.bump();
         let name = match self.kind().clone() {
             | TokenKind::Str(parts) => {
@@ -1233,8 +1494,7 @@ impl<'a> Parser<'a> {
                             | StringPart::Interpolation { .. } => None,
                         }
                     })
-                    .collect::<Vec<_>>()
-                    .join("")
+                    .collect::<String>()
             },
             | _ => {
                 self.unexpected("a test name");
@@ -1244,20 +1504,20 @@ impl<'a> Parser<'a> {
         self.expect_punct(Punct::Equals);
         let body = self.expr();
         self.expect_newline();
-        Some(DeclKind::Test { name, body })
+        DeclKind::Test { name, body }
     }
 
     // ----- expressions ---------------------------------------------------
 
     fn expr(&mut self) -> Expr {
-        self.depth += 1;
+        self.depth = self.depth.saturating_add(1);
         if self.depth > MAX_DEPTH {
-            self.depth -= 1;
+            self.depth = self.depth.saturating_sub(1);
             self.error_here("E0202", "expression nesting is too deep");
             return Expr::new(ExprKind::Error, self.span());
         }
         let result = self.expr_inner();
-        self.depth -= 1;
+        self.depth = self.depth.saturating_sub(1);
         result
     }
 
@@ -1344,16 +1604,16 @@ impl<'a> Parser<'a> {
         loop {
             match self.kind_at(offset) {
                 | TokenKind::Newline | TokenKind::Dedent | TokenKind::Eof => return false,
-                | TokenKind::Keyword(Keyword::Let) => pending += 1,
+                | TokenKind::Keyword(Keyword::Let) => pending = pending.saturating_add(1),
                 | TokenKind::Keyword(Keyword::In) => {
                     if pending == 0 {
                         return true;
                     }
-                    pending -= 1;
+                    pending = pending.saturating_sub(1);
                 },
                 | _ => {},
             }
-            offset += 1;
+            offset = offset.saturating_add(1);
         }
     }
 
@@ -1887,14 +2147,14 @@ impl<'a> Parser<'a> {
             return Expr::new(ExprKind::Error, self.span());
         }
         let result = self.unary_expr_inner();
-        self.depth -= 1;
+        self.depth = self.depth.saturating_sub(1);
         result
     }
 
     fn enter_depth(&mut self) -> bool {
-        self.depth += 1;
+        self.depth = self.depth.saturating_add(1);
         if self.depth > MAX_DEPTH {
-            self.depth -= 1;
+            self.depth = self.depth.saturating_sub(1);
             self.error_here("E0202", "expression nesting is too deep");
             return false;
         }
@@ -1943,19 +2203,29 @@ impl<'a> Parser<'a> {
         left
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps one grammar production and its recovery paths together"
+    )]
     fn postfix_expr(&mut self) -> Expr {
         let mut expr = self.primary();
         loop {
             if self.at_punct(Punct::LParen) {
                 self.bump();
                 let mut args = Vec::new();
+                let mut failed = false;
                 while !self.at_punct(Punct::RParen) && !self.at_eof() {
+                    let before = self.diagnostics.items.len();
                     args.push(self.expr());
+                    if self.diagnostics.items.len() > before {
+                        failed = true;
+                        self.recover_item();
+                    }
                     if !self.eat_punct(Punct::Comma) {
                         break;
                     }
                 }
-                self.expect_punct(Punct::RParen);
+                self.close_item(Punct::RParen, failed);
                 let span = expr.span.join(self.previous_span());
                 expr = Expr::new(
                     ExprKind::Call {
@@ -1969,13 +2239,19 @@ impl<'a> Parser<'a> {
             if self.at_punct(Punct::LBracket) {
                 self.bump();
                 let mut indices = Vec::new();
+                let mut failed = false;
                 while !self.at_punct(Punct::RBracket) && !self.at_eof() {
+                    let before = self.diagnostics.items.len();
                     indices.push(self.slice());
+                    if self.diagnostics.items.len() > before {
+                        failed = true;
+                        self.recover_item();
+                    }
                     if !self.eat_punct(Punct::Comma) {
                         break;
                     }
                 }
-                self.expect_punct(Punct::RBracket);
+                self.close_item(Punct::RBracket, failed);
                 let span = expr.span.join(self.previous_span());
                 expr = Expr::new(
                     ExprKind::Index {
@@ -2215,8 +2491,28 @@ impl<'a> Parser<'a> {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps one grammar production and its recovery paths together"
+    )]
     fn primary(&mut self) -> Expr {
         let start = self.span();
+        if self.physical_declaration_boundary() {
+            // A missing operand inside an unclosed delimiter must not parse
+            // the following `let` as a let-in expression and swallow that
+            // declaration. Point at the insertion site after the operator.
+            let insertion = self.previous_span().end;
+            self.error(
+                "E0202",
+                "expected an expression before the next declaration",
+                Span {
+                    file: self.file,
+                    start: insertion,
+                    end: insertion,
+                },
+            );
+            return Expr::new(ExprKind::Error, start);
+        }
         match self.kind().clone() {
             | TokenKind::Int(value) => {
                 self.bump();
@@ -2258,11 +2554,7 @@ impl<'a> Parser<'a> {
             | TokenKind::Keyword(Keyword::Do) => self.do_expr(),
             | TokenKind::Ident(name) => {
                 self.bump();
-                if name == "_" {
-                    Expr::new(ExprKind::Placeholder, start)
-                } else {
-                    Expr::new(ExprKind::Var(name), start)
-                }
+                bare_name_expr(name, start)
             },
             | TokenKind::UpperIdent(name) => {
                 self.bump();
@@ -2290,20 +2582,28 @@ impl<'a> Parser<'a> {
             | TokenKind::Punct(Punct::LBracket) => {
                 self.bump();
                 let mut items = Vec::new();
+                let mut failed = false;
                 while !self.at_punct(Punct::RBracket) && !self.at_eof() {
+                    let before = self.diagnostics.items.len();
                     items.push(self.expr());
+                    if self.diagnostics.items.len() > before {
+                        failed = true;
+                        self.recover_item();
+                    }
                     if !self.eat_punct(Punct::Comma) {
                         break;
                     }
                 }
-                self.expect_punct(Punct::RBracket);
+                self.close_item(Punct::RBracket, failed);
                 Expr::new(ExprKind::Tensor(items), start.join(self.previous_span()))
             },
             | _ => {
                 // A recovery node, so the checker does not invent a second
                 // error for an expression the parser already rejected.
                 self.unexpected("an expression");
-                self.bump();
+                if !self.operand_boundary() && !self.physical_declaration_boundary() {
+                    self.bump();
+                }
                 Expr::new(ExprKind::Error, start)
             },
         }
@@ -2314,9 +2614,21 @@ impl<'a> Parser<'a> {
         source: &str,
         span: Span,
     ) -> Expr {
-        let file_source: &'a str = self.source;
-        let lexed = lex_inline(self.file, source, usize::try_from(span.start).unwrap_or(0));
-        let mut parser = Parser::new(&lexed.tokens, &lexed.docs, self.file, file_source);
+        // An ordinary leaf expression enters both `expr` and `unary_expr`.
+        if self.depth.saturating_add(2) <= MAX_DEPTH
+            && let Some((name, location)) = interpolation_identifier(span, source)
+        {
+            return bare_name_expr(name.to_owned(), location);
+        }
+        let lexed = match lex_interpolation(span, self.text_of(span), source) {
+            | Ok(lexed) => lexed,
+            | Err(diagnostics) => {
+                self.diagnostics.extend(diagnostics);
+                return Expr::new(ExprKind::Error, span);
+            },
+        };
+        let mut parser = Parser::new(&lexed.tokens, &lexed.docs, self.file, self.source);
+        parser.depth = self.depth;
         let expr = parser.expr();
         parser.skip_newlines();
         if parser.diagnostics.has_errors() {
@@ -2358,14 +2670,14 @@ impl<'a> Parser<'a> {
                             "E0108",
                             "expected a unit after the numeric literal",
                             self.span(),
-                        )
+                        );
                     },
                     | _ => {
                         self.error(
                             "E0209",
                             "`(` after a numeric literal must contain a unit expression",
                             self.span(),
-                        )
+                        );
                     },
                 }
                 None
@@ -2424,18 +2736,28 @@ impl<'a> Parser<'a> {
                 self.bump();
             }
         }
+        let before = self.diagnostics.items.len();
         let first = self.expr();
+        let mut failed = self.diagnostics.items.len() > before;
+        if failed {
+            self.recover_item();
+        }
         if self.at_punct(Punct::Comma) {
             let mut items = vec![first];
             while self.eat_punct(Punct::Comma) {
                 if self.at_punct(Punct::RParen) {
                     break;
                 }
+                let before = self.diagnostics.items.len();
                 items.push(self.expr());
+                if self.diagnostics.items.len() > before {
+                    failed = true;
+                    self.recover_item();
+                }
             }
-            self.expect_punct(Punct::RParen);
+            self.close_item(Punct::RParen, failed);
             let span = start.join(self.previous_span());
-            if items.len() == 1 {
+            if items.len() == 1 && !failed {
                 // §2.3.14: single-element tuples are not supported.
                 self.error(
                     "E0202",
@@ -2445,7 +2767,7 @@ impl<'a> Parser<'a> {
             }
             return Expr::new(ExprKind::Tuple(items), span);
         }
-        self.expect_punct(Punct::RParen);
+        self.close_item(Punct::RParen, failed);
         first
     }
 
@@ -2487,40 +2809,51 @@ impl<'a> Parser<'a> {
     }
 
     fn field_inits(&mut self) -> Vec<(String, Expr)> {
-        let mut fields: Vec<(String, Expr)> = Vec::new();
+        let mut fields = Vec::new();
+        let mut names = HashSet::new();
         while !self.at_punct(Punct::RBrace) && !self.at_eof() {
-            let name_span = self.span();
-            let name = match self.kind().clone() {
-                | TokenKind::Ident(name) => {
-                    self.bump();
-                    name
-                },
-                | _ => {
-                    self.unexpected("a field name");
-                    break;
-                },
+            let Some((name, name_span)) = self.record_field_name() else {
+                break;
             };
             let value = if self.eat_punct(Punct::Equals) {
-                self.expr()
+                let before = self.diagnostics.items.len();
+                let value = self.expr();
+                if self.diagnostics.items.len() > before {
+                    self.recover_item();
+                }
+                value
             } else {
                 let span = self.span();
-                Expr::new(ExprKind::Var(name.clone()), span)
+                Expr::new(ExprKind::Var(name.to_owned()), span)
             };
             // §2.3.8: a record is a set of fields, so a repeated one has no
             // meaning — report it rather than silently keeping the last.
-            if fields.iter().any(|(existing, _)| *existing == name) {
+            if !names.insert(name) {
                 self.error(
                     "E0208",
                     format!("duplicate field `{name}` in record"),
                     name_span,
                 );
             }
-            fields.push((name, value));
+            fields.push((name.to_owned(), value));
             if !self.eat_punct(Punct::Comma) {
                 break;
             }
         }
         fields
+    }
+
+    /// Borrows the normalized name from the token stream so duplicate checks
+    /// can share it while the AST keeps ownership of its field names.
+    fn record_field_name(&mut self) -> Option<(&'a str, Span)> {
+        let token = self.tokens.get(self.pos)?;
+        if let TokenKind::Ident(name) = &token.kind {
+            self.bump();
+            Some((name, token.span))
+        } else {
+            self.unexpected("a field name");
+            None
+        }
     }
 
     // ----- patterns ------------------------------------------------------
@@ -2571,6 +2904,10 @@ impl<'a> Parser<'a> {
         pat
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps one grammar production and its recovery paths together"
+    )]
     fn pattern_atom(&mut self) -> Pat {
         let start = self.span();
         match self.kind().clone() {
@@ -2619,8 +2956,7 @@ impl<'a> Parser<'a> {
                             | StringPart::Interpolation { .. } => None,
                         }
                     })
-                    .collect::<Vec<_>>()
-                    .join("");
+                    .collect::<String>();
                 Pat::new(PatKind::Lit(PatLit::Str(text)), start)
             },
             | TokenKind::Keyword(Keyword::True) => {
@@ -2727,7 +3063,9 @@ impl<'a> Parser<'a> {
                     self.error_here("E0204", format!("invalid pattern: {found}"));
                 }
                 let span = self.span();
-                self.bump();
+                if !self.operand_boundary() && !self.physical_declaration_boundary() {
+                    self.bump();
+                }
                 Pat::new(PatKind::Error, span)
             },
         }
@@ -2736,14 +3074,14 @@ impl<'a> Parser<'a> {
     // ----- types ---------------------------------------------------------
 
     fn ty(&mut self) -> Ty {
-        self.depth += 1;
+        self.depth = self.depth.saturating_add(1);
         if self.depth > MAX_DEPTH {
-            self.depth -= 1;
+            self.depth = self.depth.saturating_sub(1);
             self.error_here("E0202", "type nesting is too deep");
             return Ty::new(TyKind::Unit, self.span());
         }
         let result = self.ty_inner();
-        self.depth -= 1;
+        self.depth = self.depth.saturating_sub(1);
         result
     }
 
@@ -2863,7 +3201,8 @@ impl<'a> Parser<'a> {
             },
             | TokenKind::Punct(Punct::LBrace) => {
                 self.bump();
-                let mut fields: Vec<(String, Ty)> = Vec::new();
+                let mut fields = Vec::new();
+                let mut names = HashSet::new();
                 let mut rest = None;
                 while !self.at_punct(Punct::RBrace) && !self.at_eof() {
                     if self.eat_punct(Punct::Ellipsis) {
@@ -2873,28 +3212,20 @@ impl<'a> Parser<'a> {
                         }
                         break;
                     }
-                    let name_span = self.span();
-                    let name = match self.kind().clone() {
-                        | TokenKind::Ident(name) => {
-                            self.bump();
-                            name
-                        },
-                        | _ => {
-                            self.unexpected("a field name");
-                            break;
-                        },
+                    let Some((name, name_span)) = self.record_field_name() else {
+                        break;
                     };
                     self.expect_punct(Punct::Colon);
                     let ty = self.ty();
                     // §2.3.8: a record type is a set of fields.
-                    if fields.iter().any(|(existing, _)| *existing == name) {
+                    if !names.insert(name) {
                         self.error(
                             "E0208",
                             format!("duplicate field `{name}` in record type"),
                             name_span,
                         );
                     }
-                    fields.push((name, ty));
+                    fields.push((name.to_owned(), ty));
                     if !self.eat_punct(Punct::Comma) {
                         break;
                     }
@@ -2907,12 +3238,18 @@ impl<'a> Parser<'a> {
             },
             | _ => {
                 self.unexpected("a type");
-                self.bump();
+                if !self.operand_boundary() && !self.physical_declaration_boundary() {
+                    self.bump();
+                }
                 Ty::new(TyKind::Unit, start)
             },
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps one grammar production and its recovery paths together"
+    )]
     fn named_type(
         &mut self,
         name: String,
@@ -3218,8 +3555,20 @@ impl<'a> Parser<'a> {
     fn nat_atom(&mut self) -> NatAst {
         match self.kind().clone() {
             | TokenKind::Int(value) => {
+                let span = self.span();
                 self.bump();
-                NatAst::Lit(value.to_usize().unwrap_or(0))
+                let Some(value) = value.to_usize() else {
+                    self.error(
+                        "E0202",
+                        format!(
+                            "type-level natural literal exceeds the supported maximum of {}",
+                            usize::MAX
+                        ),
+                        span,
+                    );
+                    return NatAst::Lit(0);
+                };
+                NatAst::Lit(value)
             },
             | TokenKind::Ident(name) | TokenKind::UpperIdent(name) => {
                 self.bump();
@@ -3292,50 +3641,87 @@ impl<'a> Parser<'a> {
             },
             | TokenKind::Punct(Punct::LParen) => {
                 self.bump();
+                let before = self.diagnostics.items.len();
                 let inner = self.dim();
-                self.expect_punct(Punct::RParen);
+                if !self.eat_punct(Punct::RParen) {
+                    if self.diagnostics.items.len() == before {
+                        self.expect_punct(Punct::RParen);
+                    }
+                    self.recover_group();
+                    self.eat_punct(Punct::RParen);
+                }
                 DimAst::Paren(Box::new(inner))
             },
             | _ => {
                 self.unexpected("a dimension");
-                self.bump();
+                if !self.operand_boundary() && !self.physical_declaration_boundary() {
+                    self.bump();
+                }
                 DimAst::One
             },
         }
     }
 
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "exact rational operations check nonzero divisors"
+    )]
     fn exponent(&mut self) -> BigRational {
         let negative = self.eat_punct(Punct::Minus);
         if self.eat_punct(Punct::LParen) {
-            let numerator = self.signed_int();
-            let mut value = BigRational::from_integer(numerator);
+            let before = self.diagnostics.items.len();
+            let mut value = self.exponent_number();
             if self.eat_punct(Punct::Slash) {
-                let denominator = self.signed_int();
-                if denominator == BigInt::from(0) {
-                    self.error_here("E0202", "zero denominator in exponent");
+                let denominator_span = self.span();
+                let denominator = self.exponent_number();
+                if denominator.is_zero() {
+                    self.error("E0202", "zero denominator in exponent", denominator_span);
                 } else {
-                    value /= BigRational::from_integer(denominator);
+                    value /= denominator;
                 }
             }
-            self.expect_punct(Punct::RParen);
+            let failed = self.diagnostics.items.len() > before;
+            if failed {
+                self.recover_group();
+            }
+            self.close_item(Punct::RParen, failed);
             return if negative { -value } else { value };
         }
-        let value = BigRational::from_integer(self.signed_int());
+        if self.at_punct(Punct::Minus) {
+            self.unexpected("a single signed exponent (for example `-2` or `(-1/2)`)");
+            return BigRational::from_integer(BigInt::from(1));
+        }
+        let value = self.exponent_number();
         if negative { -value } else { value }
     }
 
-    fn signed_int(&mut self) -> BigInt {
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "exact rational operations check nonzero divisors"
+    )]
+    fn exponent_number(&mut self) -> BigRational {
         let negative = self.eat_punct(Punct::Minus);
-        match self.kind().clone() {
-            | TokenKind::Int(value) => {
-                self.bump();
-                if negative { -value } else { value }
-            },
-            | _ => {
-                self.unexpected("an integer");
-                BigInt::from(1)
-            },
+        let span = self.span();
+        if !matches!(self.kind(), TokenKind::Int(_) | TokenKind::Float(_)) {
+            self.unexpected("an integer or decimal exponent (for example `2` or `(1/2)`)");
+            return BigRational::from_integer(BigInt::from(1));
         }
+        // Use the original decimal spelling, never the lexer's rounded f64.
+        let value = self
+            .number_text()
+            .and_then(|text| {
+                let value = aevia_dim::parse_decimal(&text);
+                if value.is_none() {
+                    self.error(
+                        "E0202",
+                        "decimal exponent exceeds the supported exact decimal range",
+                        span,
+                    );
+                }
+                value
+            })
+            .unwrap_or_else(|| BigRational::from_integer(BigInt::from(1)));
+        if negative { -value } else { value }
     }
 
     fn starts_unit_atom(&self) -> bool {
@@ -3372,7 +3758,7 @@ impl<'a> Parser<'a> {
     /// Whether the current token touches both its neighbours.
     fn tight_unit_operator(&self) -> bool {
         let current = self.span();
-        let Some(next) = self.tokens.get(self.pos + 1) else {
+        let Some(next) = self.tokens.get(self.pos.saturating_add(1)) else {
             return false;
         };
         self.pos > 0 && self.previous_span().end == current.start && current.end == next.span.start
@@ -3416,8 +3802,15 @@ impl<'a> Parser<'a> {
             },
             | TokenKind::Punct(Punct::LParen) => {
                 self.bump();
+                let before = self.diagnostics.items.len();
                 let inner = self.unit_expr()?;
-                self.expect_punct(Punct::RParen);
+                if !self.eat_punct(Punct::RParen) {
+                    if self.diagnostics.items.len() == before {
+                        self.error_here("E0209", "expected `)` after the unit expression");
+                    }
+                    self.recover_group();
+                    self.eat_punct(Punct::RParen);
+                }
                 Some(UnitExpr::Paren(Box::new(inner)))
             },
             | TokenKind::Ident(name) | TokenKind::UpperIdent(name) => {
@@ -3444,6 +3837,10 @@ impl<'a> Parser<'a> {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps the span fallback for nested declarations explicit"
+)]
 fn decl_span(kind: &DeclKind) -> Span {
     // Used only for nested function declarations, where the exact span is not
     // observable; the body's span is the best available approximation.
@@ -3454,7 +3851,7 @@ fn decl_span(kind: &DeclKind) -> Span {
     }
 }
 
-fn operator_name(punct: Punct) -> Option<&'static str> {
+const fn operator_name(punct: Punct) -> Option<&'static str> {
     Some(match punct {
         | Punct::Plus => "+",
         | Punct::Minus => "-",
@@ -3476,6 +3873,10 @@ fn operator_name(punct: Punct) -> Option<&'static str> {
 }
 
 /// Converts a superscript run such as `⁻¹` or `⁽⁻¹⁾` to an integer exponent.
+#[allow(
+    clippy::single_call_fn,
+    reason = "isolates Unicode exponent decoding and overflow checks"
+)]
 fn parse_superscript(text: &str) -> Option<i32> {
     let mut value: i32 = 0;
     let mut negative = false;
@@ -3483,7 +3884,7 @@ fn parse_superscript(text: &str) -> Option<i32> {
     for c in text.chars() {
         match c {
             | '\u{2070}'..='\u{2079}' => {
-                let digit = (c as u32) - 0x2070;
+                let digit = (c as u32).checked_sub(0x2070)?;
                 value = value
                     .checked_mul(10)?
                     .checked_add(i32::try_from(digit).ok()?)?;
@@ -3520,13 +3921,34 @@ fn parse_superscript(text: &str) -> Option<i32> {
     if !saw_digit {
         return None;
     }
-    Some(if negative { -value } else { value })
+    if negative {
+        value.checked_neg()
+    } else {
+        Some(value)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::lexer::lex;
+
+    #[test]
+    fn host_token_stream_may_be_empty_or_missing_its_eof() {
+        let empty = LexOutput {
+            tokens: Vec::new(),
+            docs: Vec::new(),
+        };
+        let (module, diagnostics) = parse_module(0, "", &empty);
+        assert!(module.decls.is_empty() && !diagnostics.has_errors());
+
+        let source = "let x = 1\n";
+        let mut truncated = lex(0, source).expect("lexes");
+        truncated.tokens.pop();
+        let (module, diagnostics) = parse_module(0, source, &truncated);
+        assert_eq!(module.decls.len(), 1);
+        assert!(!diagnostics.has_errors());
+    }
 
     fn parse(source: &str) -> Module {
         let lexed = lex(0, source).expect("lexes");
@@ -3582,6 +4004,166 @@ mod tests {
         };
         assert!(value.is_decimal());
         assert_eq!(unit.to_source(), "m/s^2");
+    }
+
+    #[test]
+    fn malformed_expression_regions_report_one_primary_error() {
+        for source in [
+            "f(1 + )",
+            "f(, 2)",
+            "f(1,,2)",
+            "f(@ bad)",
+            "[1 + , 2]",
+            "xs[1 + ]",
+            "(1 + )",
+            "(1 + @ bad)",
+            "f([1 + ])",
+            "f(1 + ]",
+            "if true then",
+            "1 m^oops",
+            "1 m^(oops)",
+            "1 m^(1/)",
+            "1 m^(1/0)",
+            "1 m^(1/0",
+            "f(,",
+            "{ first = @ bad }",
+            "3 (m/)",
+            "f(3 (m, s), 1)",
+            "3 (m^oops)",
+            "1 m^--2",
+            "1 m^(1,,2)",
+        ] {
+            let diagnostics = parse_expression(0, source).unwrap_err();
+            assert_eq!(
+                diagnostics.items.len(),
+                1,
+                "{source}: {:?}",
+                diagnostics.items
+            );
+        }
+    }
+
+    #[test]
+    fn argument_and_declaration_boundaries_keep_independent_errors() {
+        let diagnostics = parse_expression(0, "f(1 + , 2 + )").unwrap_err();
+        assert_eq!(diagnostics.items.len(), 2, "{:?}", diagnostics.items);
+        let source = "let first = f(1 + )\nlet second = g(, 2)\nlet good = 7\n";
+        let lexed = lex(0, source).unwrap();
+        let (module, diagnostics) = parse_module(0, source, &lexed);
+        assert_eq!(diagnostics.items.len(), 2, "{:?}", diagnostics.items);
+        assert!(module.decls.iter().any(|decl| {
+            matches!(&decl.kind, DeclKind::Let { pattern, .. }
+            if matches!(&pattern.kind, PatKind::Var(name) if name == "good"))
+        }));
+        assert!(
+            diagnostics
+                .items
+                .iter()
+                .all(|error| error.message.contains("an expression"))
+        );
+    }
+
+    #[test]
+    fn recovery_after_missing_closers_preserves_later_physical_declarations() {
+        for source in [
+            "let first = f(1\nlet second = @\nlet good = 7\n",
+            "let first = f(1 +\nlet second = @\nlet good = 7\n",
+        ] {
+            let lexed = lex(0, source).unwrap();
+            let (module, diagnostics) = parse_module(0, source, &lexed);
+            assert_eq!(diagnostics.items.len(), 2, "{:?}", diagnostics.items);
+            assert!(
+                diagnostics.items[0].message.contains("expected `)`")
+                    || diagnostics.items[0]
+                        .message
+                        .contains("expected an expression")
+            );
+            assert!(module.decls.iter().any(|decl| {
+                matches!(&decl.kind, DeclKind::Let { pattern, .. }
+            if matches!(&pattern.kind, PatKind::Var(name) if name == "good"))
+            }));
+        }
+    }
+
+    #[test]
+    fn malformed_bindings_types_and_units_recover_at_their_owner() {
+        for source in [
+            "let =\nlet good = 7\n",
+            "fn f(: Int): Int = 1\nlet good = 7\n",
+            "let x: = 1\nlet good = 7\n",
+            "unit bad: Length = nope\nlet good = 7\n",
+            "not a declaration\nlet good = 7\n",
+        ] {
+            let lexed = lex(0, source).unwrap();
+            let (module, diagnostics) = parse_module(0, source, &lexed);
+            assert_eq!(
+                diagnostics.items.len(),
+                1,
+                "{source}: {:?}",
+                diagnostics.items
+            );
+            assert!(module.decls.iter().any(|decl| {
+                matches!(&decl.kind, DeclKind::Let { pattern, .. }
+                if matches!(&pattern.kind, PatKind::Var(name) if name == "good"))
+            }));
+        }
+        let source = "1 m^(1/0)";
+        let diagnostics = parse_expression(0, source).unwrap_err();
+        assert_eq!(
+            &source
+                [diagnostics.items[0].span.start as usize..diagnostics.items[0].span.end as usize],
+            "0"
+        );
+    }
+
+    #[test]
+    fn decimal_unit_exponents_normalize_without_float_rounding() {
+        for (exponent, expected) in [
+            ("1.5", "m^(3/2)"),
+            ("-0.25", "m^(-1/4)"),
+            ("(1.5)", "m^(3/2)"),
+            ("(0.5/0.25)", "m^2"),
+            ("1.5e+1", "m^15"),
+            ("1e-1", "m^(1/10)"),
+            ("1_0.0_0", "m^10"),
+            ("9007199254740993.0", "m^9007199254740993"),
+        ] {
+            let expression = parse_expression(0, &format!("1 m^{exponent}")).unwrap();
+            let ExprKind::Quantity { unit, .. } = expression.kind else {
+                panic!("expected quantity");
+            };
+            assert_eq!(unit.to_source(), expected, "{exponent}");
+        }
+        let expression = parse_expression(0, "1 m^1e-400").unwrap();
+        let ExprKind::Quantity {
+            unit: UnitExpr::Pow(_, exponent),
+            ..
+        } = expression.kind
+        else {
+            panic!("expected unit power");
+        };
+        assert_eq!(
+            exponent,
+            BigRational::new(BigInt::from(1), BigInt::from(10).pow(400))
+        );
+    }
+
+    #[test]
+    fn invalid_decimal_exponents_report_errors_instead_of_panicking() {
+        for source in [
+            "1 m^1e999999999",
+            "1 m^1e-9223372036854775808",
+            "1 m^(1.5/0.0)",
+        ] {
+            let diagnostics = parse_expression(0, source).unwrap_err();
+            assert_eq!(
+                diagnostics.items.len(),
+                1,
+                "{source}: {:?}",
+                diagnostics.items
+            );
+            assert_eq!(diagnostics.items[0].code, "E0202");
+        }
     }
 
     #[test]
@@ -3880,5 +4462,109 @@ mod tests {
         let lexed = lex(0, source).expect("lexes");
         let (_, diagnostics) = parse_module(0, source, &lexed);
         assert!(diagnostics.has_errors());
+    }
+
+    #[test]
+    fn parses_new_attributes_and_doc_hidden() {
+        let source = "\
+@doc(hidden)
+@allow(unused)
+@warn(shadow)
+@deny(dead_code)
+@forbid(unsafe_op)
+@relax_result
+fn a(): Int = 1
+
+@hidden
+@private
+fn b(): Int = 2
+";
+        let module = parse(source);
+        assert_eq!(module.decls.len(), 2);
+        assert!(module.decls[0].is_doc_hidden());
+        assert!(module.decls[0].has_attribute("relax_result"));
+        assert!(module.decls[1].is_doc_hidden());
+        assert!(module.decls[1].has_attribute("private"));
+    }
+
+    #[test]
+    fn parses_visibility_and_reexports() {
+        let m1 = parse("private module Secret\n");
+        assert!(m1.private);
+        assert_eq!(m1.name, Some(vec!["Secret".to_string()]));
+
+        let m2 = parse("@private\nmodule HiddenMod\n");
+        assert!(m2.private);
+        assert_eq!(m2.name, Some(vec!["HiddenMod".to_string()]));
+
+        let m3 = parse(
+            "\
+export import Math { sin }
+pub import Units.SI as SI
+export open Core
+import Plain
+
+type Box = | private Inner(Int) | Public
+
+class C a where
+    private helper(x: a): a
+    show(x: a): String
+
+instance C for Int where
+    private helper(x: Int): Int = x
+    show(x: Int): String = \"0\"
+",
+        );
+        assert!(matches!(
+            &m3.decls[0].kind,
+            DeclKind::Import {
+                export: true,
+                open: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &m3.decls[1].kind,
+            DeclKind::Import {
+                export: true,
+                open: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &m3.decls[2].kind,
+            DeclKind::Import {
+                export: true,
+                open: true,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &m3.decls[3].kind,
+            DeclKind::Import {
+                export: false,
+                open: false,
+                ..
+            }
+        ));
+        let DeclKind::Type {
+            body: TypeBody::Variants(variants),
+            ..
+        } = &m3.decls[4].kind
+        else {
+            panic!("expected variants");
+        };
+        assert!(variants[0].private);
+        assert!(!variants[1].private);
+        let DeclKind::Class { methods, .. } = &m3.decls[5].kind else {
+            panic!("expected class");
+        };
+        assert!(methods[0].private);
+        assert!(!methods[1].private);
+        let DeclKind::Instance { methods, .. } = &m3.decls[6].kind else {
+            panic!("expected instance");
+        };
+        assert!(methods[0].private);
+        assert!(!methods[1].private);
     }
 }

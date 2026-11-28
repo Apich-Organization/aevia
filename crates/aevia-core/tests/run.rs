@@ -1154,3 +1154,36 @@ fn nan_and_i_have_the_types_the_checker_promises() {
     let unit_imaginary = num("let j = i", "j");
     assert!(matches!(unit_imaginary.kind, NumKind::Complex(re, im) if re == 0.0 && im == 1.0));
 }
+
+#[test]
+fn rounding_preserves_integer_and_exact_quantity_representations() {
+    let integer = num("let n = ceil(9007199254740993)", "n");
+    assert!(
+        matches!(integer.kind, NumKind::Int(value) if value.as_i64() == Some(9_007_199_254_740_993))
+    );
+
+    let quantity = num(
+        "let distance: Real[Length] = -2.25 m\nlet n = floor(distance)",
+        "n",
+    );
+    assert!(!quantity.dim.is_one());
+    assert!(
+        matches!(quantity.kind, NumKind::Exact(value) if value.is_integer() && value.to_integer() == (-3).into())
+    );
+}
+
+#[test]
+fn scalar_classification_and_decimal_rounding_handle_extremes() {
+    assert!(matches!(
+        value("let n = is_finite(2^1024)", "n"),
+        Value::Bool(true)
+    ));
+    assert!(matches!(
+        value("let n = is_infinite(-oo)", "n"),
+        Value::Bool(true)
+    ));
+    let zero = num("let n = round(1.25, -9223372036854775808)", "n");
+    assert!(matches!(zero.kind, NumKind::Float(value) if value == 0.0));
+    let large = num("let n = round(1e308, 20)", "n");
+    assert!(matches!(large.kind, NumKind::Float(value) if value == 1e308));
+}

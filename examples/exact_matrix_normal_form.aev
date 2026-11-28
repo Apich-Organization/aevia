@@ -1,0 +1,17 @@
+## Normalize measurements, then compute the Smith form and its exact transforms.
+import Rssn_Numeric as Numeric
+
+let measured: Tensor<2, Real[Length]> = [[4 m, 6 m], [10 m, 8 m]]
+
+let form: Result<Numeric.SmithForm, OpError> =
+    match Numeric.exact_matrix(measured, 1 m) with
+    | Ok(normalized) -> Numeric.exact_smith(normalized)
+    | Err(failure) -> Err(failure)
+
+fn main(): IO Unit = do
+    println("Smith form and transforms: {form}")
+
+test "normalized integer matrix has invariant factors two and fourteen" =
+    match form with
+    | Ok(result) -> result.form == [[2, 0], [0, 14]]
+    | Err(_) -> false

@@ -1,0 +1,16 @@
+## Fused and interval multiprecision trigonometry.
+import Rssn_Multiprecision as MP
+
+let one: MP.Dyadic = { mantissa = 1, exponent = 0, precision = 1 }
+
+test "fused sine and cosine match the separate enclosures" =
+    match MP.sin_cos_dyadic(one, 16) with
+    | Ok(pair) -> Ok(pair.sin) == MP.sin_dyadic(one, 16) && Ok(pair.cos) == MP.cos_dyadic(one, 16)
+    | Err(_) -> false
+
+test "tangent rejects an interval that crosses a pole" =
+    let midpoint: MP.Dyadic = { mantissa = 3, exponent = -1, precision = 2 }
+    let radius: MP.Dyadic = { mantissa = 1, exponent = -3, precision = 1 }
+    match MP.tan_ball({ midpoint = midpoint, radius = radius }, 32) with
+    | Err(_) -> true
+    | Ok(_) -> false

@@ -22,6 +22,7 @@ use aevia_core::manifest::valid_package_name;
 use aevia_resolve::Index as _;
 use aevia_resolve::Version;
 use aevia_resolve::VersionReq;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -43,13 +44,17 @@ fn current() -> Result<Package, String> {
 }
 
 /// `aevia init <name>`
+#[allow(
+    clippy::single_call_fn,
+    reason = "the init command validates the package and writes its initial layout"
+)]
 pub fn init(args: &[String]) -> ExitCode {
     let Some(name) = args.first() else {
         eprintln!("aevia init: expected a package name, as in `aevia init kinematics`");
         return ExitCode::from(2);
     };
-    if args.len() > 1 {
-        eprintln!("aevia init: expected one package name, found `{}`", args[1]);
+    if let Some(extra) = args.get(1) {
+        eprintln!("aevia init: expected one package name, found `{extra}`");
         return ExitCode::from(2);
     }
     if !valid_package_name(name) {
@@ -78,7 +83,7 @@ pub fn init(args: &[String]) -> ExitCode {
     }
     let main = dir.join(&manifest.entry);
     let source = format!(
-        "## {name}\n##\n## `aevia run` runs `main`; `aevia fmt` formats this file.\n\nfn main(): IO Unit = do\n    println(\"hello from {name}\")\n"
+        "## {name}\n##\n## `aevia run` runs `main`; `aevia fmt` formats this file.\nfn main(): IO Unit = do\n    println(\"hello from {name}\")\n"
     );
     for (path, text) in [
         (dir.join("aevia.toml"), manifest.render()),
@@ -112,6 +117,11 @@ pub fn init(args: &[String]) -> ExitCode {
 }
 
 /// `aevia add <path>` (with `--locked`, adding a dependency is refused).
+#[allow(
+    clippy::single_call_fn,
+    clippy::too_many_lines,
+    reason = "the add command distinguishes local and registry dependencies"
+)]
 pub fn add(
     args: &[String],
     locked: bool,
@@ -123,7 +133,7 @@ pub fn add(
         match arg.as_str() {
             | "--offline" => options.offline = true,
             | "--as" => {
-                let Some(name) = iter.next() else {
+                let Some(name) = iter.next().filter(|value| !value.starts_with('-')) else {
                     eprintln!("aevia add: `--as` expects the import root to use");
                     return ExitCode::from(2);
                 };
@@ -141,6 +151,10 @@ pub fn add(
     };
     if path.starts_with('-') {
         eprintln!("aevia add: `{path}` is not an option of `aevia add` (`--as NAME`, `--offline`)");
+        return ExitCode::from(2);
+    }
+    if let Some(extra) = positional.get(1) {
+        eprintln!("aevia add: unexpected argument `{extra}` (add one package per command)");
         return ExitCode::from(2);
     }
     if let Some(spec) = registry_spec(path) {
@@ -180,7 +194,9 @@ pub fn add(
             return ExitCode::from(1);
         },
     };
-    let key = import_root(&dependency_manifest.name);
+    let key = options
+        .alias
+        .unwrap_or_else(|| import_root(&dependency_manifest.name));
     let dependency = Dependency::Path {
         path: path.replace('\\', "/"),
     };
@@ -319,6 +335,10 @@ struct RegistrySpec {
 /// A directory that holds an `aevia.toml` is always a path dependency; anything
 /// else that spells `owner/name` (optionally `@requirement`) is a registry
 /// package, and a bare `name` is a package of the official scope.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps registry coordinates separate from local path handling"
+)]
 fn registry_spec(arg: &str) -> Option<RegistrySpec> {
     if arg.starts_with(['.', '/', '\\']) || arg.contains('\\') || arg.contains(':') {
         return None;
@@ -350,6 +370,10 @@ fn registry_spec(arg: &str) -> Option<RegistrySpec> {
 }
 
 /// Asks `aevia-pkg` to download the index of `package` into `registry`.
+#[allow(
+    clippy::single_call_fn,
+    reason = "maps registry process failures to package resolution diagnostics"
+)]
 fn fetch_index(
     registry: &DirRegistry,
     package: &str,
@@ -420,6 +444,10 @@ fn vendor(
 }
 
 /// The newest release (not a pre-release, not yanked) in a cached index.
+#[allow(
+    clippy::single_call_fn,
+    reason = "selects a compatible active registry release"
+)]
 fn newest_release(
     registry: &DirRegistry,
     package: &str,
@@ -433,6 +461,11 @@ fn newest_release(
         .max()
 }
 
+#[allow(
+    clippy::single_call_fn,
+    clippy::too_many_lines,
+    reason = "keeps the registry validation and manifest update in one transaction"
+)]
 fn add_registry(
     spec: &RegistrySpec,
     options: &RegistryOptions,
@@ -549,6 +582,10 @@ fn add_registry(
 }
 
 /// Writes the lock when it changed; with `--locked` a change is an error.
+#[allow(
+    clippy::single_call_fn,
+    reason = "regenerates a lock only after the manifest change succeeds"
+)]
 fn finish_lock(
     package: &Package,
     lock: &aevia_core::manifest::Lock,
@@ -620,6 +657,10 @@ fn split_flags(
 /// `aevia update [owner/name…]` — with `--locked`, a change is an error rather
 /// than a write. Without names every registry package moves to the newest
 /// compatible version; with names only those do and the rest stay locked.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the update command refreshes package dependencies and lock state"
+)]
 pub fn update(
     args: &[String],
     locked: bool,
@@ -690,6 +731,10 @@ pub fn update(
 /// `aevia fetch [--offline] [--force]` — make `.aevia/registry` hold verified
 /// sources for everything `aevia.lock` names (re-resolving first if the lock is
 /// stale, without writing it).
+#[allow(
+    clippy::single_call_fn,
+    reason = "the fetch command materializes the verified dependency graph"
+)]
 pub fn fetch(args: &[String]) -> ExitCode {
     let (options, force, names) = match split_flags("fetch", args) {
         | Ok(parsed) => parsed,
@@ -762,6 +807,10 @@ pub fn fetch(args: &[String]) -> ExitCode {
 }
 
 /// `aevia tree [--offline]` — the dependency tree: path and registry packages.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the tree command displays resolved dependency relationships"
+)]
 pub fn tree(args: &[String]) -> ExitCode {
     let (options, _, names) = match split_flags("tree", args) {
         | Ok(parsed) => parsed,
@@ -806,6 +855,10 @@ pub fn tree(args: &[String]) -> ExitCode {
 /// `src/` for the conventional `src/main.aev`. The command removes `.aevia/`
 /// from both places and otherwise says there is nothing to clean. It never
 /// claims to have removed a cache that does not exist.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the clean command applies registry preservation to each cache directory"
+)]
 pub fn clean(args: &[String]) -> ExitCode {
     let mut with_registry = false;
     for arg in args {
@@ -832,8 +885,25 @@ pub fn clean(args: &[String]) -> ExitCode {
             caches.push(beside_entry);
         }
     }
-    caches.retain(|cache| cache.exists());
-    if caches.is_empty() {
+    let mut existing = Vec::new();
+    for cache in caches {
+        match std::fs::symlink_metadata(&cache) {
+            | Ok(meta) if meta.is_dir() => existing.push(cache),
+            | Ok(_) => {
+                eprintln!(
+                    "aevia clean: `{}` must be a cache directory",
+                    cache.display()
+                );
+                return ExitCode::from(1);
+            },
+            | Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            | Err(error) => {
+                eprintln!("aevia clean: cannot inspect `{}`: {error}", cache.display());
+                return ExitCode::from(1);
+            },
+        }
+    }
+    if existing.is_empty() {
         println!(
             "nothing to clean: `{}` does not exist (`aevia check` and `aevia run` write the \
              per-module `.aevi` cache there)",
@@ -841,7 +911,7 @@ pub fn clean(args: &[String]) -> ExitCode {
         );
         return ExitCode::SUCCESS;
     }
-    for cache in caches {
+    for cache in existing {
         let files = count_files(&cache);
         // `.aevia/registry` holds downloaded, verified packages and their
         // indexes: not a build product, and not recoverable offline. It stays
@@ -876,6 +946,10 @@ pub fn clean(args: &[String]) -> ExitCode {
 
 /// Removes everything under `dir` except `keep` (and the directories on the
 /// way to it); returns how many files went.
+#[allow(
+    clippy::single_call_fn,
+    reason = "cache removal and its reported count use the same operation"
+)]
 fn remove_except(
     dir: &Path,
     keep: Option<&Path>,
@@ -885,18 +959,31 @@ fn remove_except(
         std::fs::remove_dir_all(dir)?;
         return Ok(files);
     };
-    let mut removed = 0;
+    let mut removed = 0usize;
     for entry in std::fs::read_dir(dir)? {
-        let path = entry?.path();
+        let entry = entry?;
+        let path = entry.path();
         if path == keep {
             continue;
         }
-        if path.is_dir() {
-            removed += count_files(&path);
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            removed = removed.saturating_add(count_files(&path));
             std::fs::remove_dir_all(&path)?;
         } else {
+            // A Windows junction or directory symlink is removed as a directory.
+            // No recursive file count should traverse the link.
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::FileTypeExt as _;
+                if kind.is_symlink_dir() {
+                    std::fs::remove_dir(&path)?;
+                    removed = removed.saturating_add(1);
+                    continue;
+                }
+            }
             std::fs::remove_file(&path)?;
-            removed += 1;
+            removed = removed.saturating_add(1);
         }
     }
     Ok(removed)
@@ -910,9 +997,8 @@ fn count_files(dir: &Path) -> usize {
     entries
         .flatten()
         .map(|entry| {
-            let path = entry.path();
-            if path.is_dir() {
-                count_files(&path)
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                count_files(&entry.path())
             } else {
                 1
             }
@@ -937,63 +1023,116 @@ pub fn sources_under(dir: &Path) -> Vec<PathBuf> {
 /// is a directory, which keeps the rule simple and the errors honest. A
 /// pattern that matches nothing is left as it was, so the file-not-found
 /// diagnostic names exactly what the user wrote.
+/// Patterns sharing a directory use one scan and emit sorted matches in
+/// argument order, including repeated matches.
 #[must_use]
 pub fn expand_globs(names: &[String]) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    for name in names {
-        if !name.contains('*') && !name.contains('?') {
-            paths.push(PathBuf::from(name));
-            continue;
-        }
-        let (parent, pattern) = match name.rfind(['/', '\\']) {
-            | Some(index) => (&name[..index], &name[index + 1..]),
-            | None => (".", name.as_str()),
-        };
-        let Ok(entries) = std::fs::read_dir(if parent.is_empty() {
-            "."
-        } else {
-            parent
-        }) else {
-            paths.push(PathBuf::from(name));
-            continue;
-        };
-        let mut matches: Vec<PathBuf> = entries
-            .flatten()
-            .filter(|entry| {
-                wildcard_matches(
-                    &pattern.chars().collect::<Vec<_>>(),
-                    &entry
-                        .file_name()
-                        .to_string_lossy()
-                        .chars()
-                        .collect::<Vec<_>>(),
-                )
+    struct Glob<'a> {
+        parent: &'a str,
+        pattern: &'a str,
+        matches: Vec<PathBuf>,
+    }
+
+    let has_pattern = |name: &str| name.contains('*') || name.contains('?');
+    if names.iter().all(|name| !has_pattern(name)) {
+        return names.iter().map(PathBuf::from).collect();
+    }
+    // Keep one output slot per argument so duplicates and argument order survive grouping.
+    let mut arguments: Vec<_> = names
+        .iter()
+        .map(|name| {
+            has_pattern(name).then(|| {
+                let (parent, pattern) = name.rsplit_once(['/', '\\']).map_or(
+                    (".", name.as_str()),
+                    |(parent, pattern)| {
+                        let directory =
+                            if parent.is_empty() || (cfg!(windows) && parent.ends_with(':')) {
+                                name.get(..parent.len().saturating_add(1)).unwrap_or(parent)
+                            } else {
+                                parent
+                            };
+                        (directory, pattern)
+                    },
+                );
+                Glob {
+                    parent,
+                    pattern,
+                    matches: Vec::new(),
+                }
             })
-            .map(|entry| PathBuf::from(parent).join(entry.file_name()))
-            .collect();
-        if matches.is_empty() {
-            paths.push(PathBuf::from(name));
+        })
+        .collect();
+    let mut directories: HashMap<&Path, Vec<&mut Glob<'_>>> = HashMap::new();
+    for glob in arguments.iter_mut().flatten() {
+        directories
+            .entry(Path::new(glob.parent))
+            .or_default()
+            .push(glob);
+    }
+    for (directory, mut globs) in directories {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let filename = entry.file_name();
+            let spelling = filename.to_string_lossy();
+            for glob in &mut globs {
+                if wildcard_matches(glob.pattern, &spelling) {
+                    glob.matches.push(Path::new(glob.parent).join(&filename));
+                }
+            }
+        }
+    }
+    let mut paths = Vec::new();
+    for (name, glob) in names.iter().zip(arguments) {
+        if let Some(mut glob) = glob
+            && !glob.matches.is_empty()
+        {
+            glob.matches.sort();
+            paths.extend(glob.matches);
         } else {
-            matches.sort();
-            paths.extend(matches);
+            paths.push(PathBuf::from(name));
         }
     }
     paths
 }
 
 /// Shell-style matching of one file name against `*`/`?`.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps filename matching separate from filesystem traversal"
+)]
 fn wildcard_matches(
-    pattern: &[char],
-    name: &[char],
+    pattern: &str,
+    name: &str,
 ) -> bool {
-    match pattern.split_first() {
-        | None => name.is_empty(),
-        | Some(('*', rest)) => (0..=name.len()).any(|start| wildcard_matches(rest, &name[start..])),
-        | Some(('?', rest)) => !name.is_empty() && wildcard_matches(rest, &name[1..]),
-        | Some((character, rest)) => {
-            name.first() == Some(character) && wildcard_matches(rest, &name[1..])
-        },
+    let mut pattern = pattern.chars();
+    let mut name = name.chars();
+    let mut current = name.next();
+    let mut star = None;
+    while let Some(character) = current {
+        let mut next_pattern = pattern.clone();
+        match next_pattern.next() {
+            | Some('*') => {
+                pattern = next_pattern;
+                // `name` is already past the scalar currently being compared.
+                star = Some((pattern.clone(), name.clone()));
+            },
+            | Some(next) if next == character || next == '?' => {
+                pattern = next_pattern;
+                current = name.next();
+            },
+            | _ => {
+                let Some((suffix, consumed)) = &mut star else {
+                    return false;
+                };
+                pattern = suffix.clone();
+                current = consumed.next();
+                name = consumed.clone();
+            },
+        }
     }
+    pattern.all(|character| character == '*')
 }
 
 fn collect(
@@ -1009,6 +1148,186 @@ fn collect(
             collect(&path, out);
         } else if path.extension().is_some_and(|extension| extension == "aev") {
             out.push(path);
+        }
+    }
+}
+
+#[cfg(test)]
+mod glob_tests {
+    use super::expand_globs;
+    use super::wildcard_matches;
+    use std::path::Path;
+    use std::path::PathBuf;
+
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(label: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "aevia-package-globs-{label}-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn spelling(path: &Path) -> String {
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn directory_groups_keep_argument_order_and_the_spelling_of_each_argument() {
+        let scratch = Scratch::new("order");
+        let shared = scratch.0.join("shared");
+        let other = scratch.0.join("other");
+        std::fs::create_dir_all(shared.join("folder.aev")).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        for entry in ["z.aev", "猫.aev", "x\u{301}.aev", "plain.txt"] {
+            std::fs::write(shared.join(entry), "").unwrap();
+        }
+        std::fs::write(other.join("first.aev"), "").unwrap();
+
+        let literal = scratch.0.join("missing.aev");
+        let alias = shared.join(".");
+        let glob = spelling(&shared.join("*.aev"));
+        let missing = spelling(&shared.join("absent*.aev"));
+        let actual = expand_globs(&[
+            glob.clone(),
+            spelling(&literal),
+            spelling(&other.join("*.aev")),
+            spelling(&alias.join("?.aev")),
+            missing.clone(),
+            glob,
+        ]);
+        let mut shared_matches =
+            ["folder.aev", "z.aev", "猫.aev", "x\u{301}.aev"].map(|basename| shared.join(basename));
+        shared_matches.sort();
+        let mut alias_matches = ["z.aev", "猫.aev"].map(|basename| alias.join(basename));
+        alias_matches.sort();
+        let expected = shared_matches
+            .iter()
+            .cloned()
+            .chain([literal, other.join("first.aev")])
+            .chain(alias_matches)
+            .chain([PathBuf::from(missing)])
+            .chain(shared_matches.iter().cloned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual
+                .iter()
+                .map(|path| path.as_os_str())
+                .collect::<Vec<_>>(),
+            expected
+                .iter()
+                .map(|path| path.as_os_str())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn unavailable_directories_are_retried_by_the_next_expansion() {
+        let scratch = Scratch::new("refresh");
+        let directory = scratch.0.join("sources");
+        let patterns = [
+            spelling(&directory.join("*.aev")),
+            spelling(&directory.join("?.aev")),
+        ];
+        let fallback = patterns.each_ref().map(PathBuf::from);
+        assert_eq!(expand_globs(&patterns), fallback);
+
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(directory.join("a.aev"), "").unwrap();
+        assert_eq!(
+            expand_globs(&patterns),
+            [directory.join("a.aev"), directory.join("a.aev")]
+        );
+
+        std::fs::rename(&directory, scratch.0.join("previous")).unwrap();
+        std::fs::write(&directory, "").unwrap();
+        assert_eq!(expand_globs(&patterns), fallback);
+        std::fs::remove_file(&directory).unwrap();
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(directory.join("b.aev"), "").unwrap();
+        assert_eq!(
+            expand_globs(&patterns),
+            [directory.join("b.aev"), directory.join("b.aev")]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lossy_matching_keeps_the_native_filename() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let scratch = Scratch::new("native");
+        let directory = scratch.0.join("literal?component");
+        std::fs::create_dir(&directory).unwrap();
+        let filename = OsString::from_vec(b"\xff.aev".to_vec());
+        let original = directory.join(filename);
+        std::fs::write(&original, "").unwrap();
+        assert_eq!(
+            expand_globs(&[spelling(&directory.join("?.aev"))]),
+            [original]
+        );
+    }
+
+    #[test]
+    fn wildcard_backtracking_matches_a_unicode_dynamic_program() {
+        fn words(alphabet: &[char]) -> Vec<String> {
+            let mut values = vec![String::new()];
+            let mut layer = values.clone();
+            for _ in 0..4 {
+                layer = layer
+                    .iter()
+                    .flat_map(|prefix| {
+                        alphabet
+                            .iter()
+                            .map(move |character| format!("{prefix}{character}"))
+                    })
+                    .collect();
+                values.extend(layer.iter().cloned());
+            }
+            values
+        }
+        fn reference(
+            pattern: &str,
+            name: &str,
+        ) -> bool {
+            let name: Vec<_> = name.chars().collect();
+            let mut row = vec![false; name.len() + 1];
+            row[0] = true;
+            for token in pattern.chars() {
+                let mut next = vec![false; name.len() + 1];
+                next[0] = token == '*' && row[0];
+                for (index, &character) in name.iter().enumerate() {
+                    next[index + 1] = match token {
+                        | '*' => row[index + 1] || next[index],
+                        | '?' => row[index],
+                        | literal => literal == character && row[index],
+                    };
+                }
+                row = next;
+            }
+            row[name.len()]
+        }
+        let filenames = words(&['a', 'é', '\u{301}']);
+        for pattern in words(&['a', 'é', '*', '?']) {
+            for name in &filenames {
+                assert_eq!(
+                    wildcard_matches(&pattern, name),
+                    reference(&pattern, name),
+                    "{pattern:?} against {name:?}"
+                );
+            }
         }
     }
 }

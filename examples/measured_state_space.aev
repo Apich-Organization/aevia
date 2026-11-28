@@ -1,0 +1,38 @@
+## Predict the pressure response to a held force input.
+import Rssn_numerical_matrix as Control
+
+let a = [[-2.0 Hz]]
+
+let b = [[3.0 m/N/s]]
+
+let c = [[4.0 Pa/m]]
+
+let d = [[5.0 Pa/N]]
+
+let initial = [0.0 m]
+
+let force = [[1.0 N], [1.0 N], [1.0 N]]
+
+let period = 0.25 s
+
+let times = [0.0 s, 0.25 s, 0.5 s]
+
+let model = Control.num_control_c2d_zoh(a, b, c, d, period)
+
+let discrete = Control.num_control_simulate_discrete(model, initial, force)
+
+let continuous = Control.num_control_simulate_continuous(a, b, c, d, initial, force, times)
+
+fn main(): IO Unit = do
+    println("Sample period: {model.dt}")
+    println("Pressure samples: {discrete}")
+
+test "the portable model retains the sample period" = model.dt == period
+
+test "zero-order hold integrates the input map" = approx_eq(model.b[0, 0], 1.5 m/N * (1.0 - exp(-0.5)), 1e-12 m/N)
+
+test "the first sample includes direct feedthrough" = discrete[0, 0] == 5.0 Pa
+
+test "continuous and discrete simulation agree at the sample times" = approx_eq(discrete[2, 0], continuous[2, 0], 1e-12 Pa)
+
+test "the forced response agrees with the closed form" = approx_eq(continuous[2, 0], 5.0 Pa + 6.0 Pa * (1.0 - exp(-1.0)), 1e-12 Pa)

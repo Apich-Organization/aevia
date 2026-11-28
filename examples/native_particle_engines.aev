@@ -1,0 +1,294 @@
+## Native particle, continuum and quantum entry points with checked unit contracts.
+## Run: bazel run //:aevia -- test examples/native_particle_engines.aev
+import Rssn_numerical_vector as Native
+
+fn native(name: String, args: Tensor<1, Value>): Option<Value> =
+    match Rssn.dynamic(name, args) with
+    | Ok(value) -> Some(value)
+    | Err(_) -> None
+
+fn reciprocal_energy(result: Option<Value>): Option<Float> =
+    match result with
+    | Some(value) ->
+        match from_value<{ energy: Float, forces: Tensor<2, Float>, virial: Tensor<2, Float> }>(value) with
+        | Ok(output) -> Some(output.energy)
+        | Err(_) -> None
+    | None -> None
+
+fn native_rdf_frame(frame: Value, box_length: Float[Length], positions: Tensor<2, Float[Length]>): Option<Value> =
+    let accumulator = native("num_native_engine_rdf_new_d1", [frame, to_value(1), to_value(1.0 m)])
+    let box = native("num_native_engine_box_periodic_d1", [frame, to_value([box_length])])
+    match (accumulator, box) with
+    | (Some(rdf), Some(cell)) ->
+        match native("num_native_engine_system_new_d1", [cell, to_value(positions)]) with
+        | Some(system) ->
+            match native("num_native_engine_rdf_add_frame_d1", [rdf, system]) with
+            | Some(_) -> Some(rdf)
+            | None -> None
+        | None -> None
+    | _ -> None
+
+test "merging RDF partitions uses each frame's population and volume" =
+    let refs = [to_value(1.0 kg), to_value(4.0 m), to_value(1.0 s), to_value(1.0 C)]
+    match native("num_native_md_frame", refs) with
+    | Some(frame) ->
+        let first = native_rdf_frame(frame, 4.0 m, [[0.0 m], [0.5 m]])
+        let second = native_rdf_frame(frame, 8.0 m, [[0.0 m], [0.5 m], [3.0 m]])
+        match (first, second) with
+        | (Some(destination), Some(source)) ->
+            match native("num_native_engine_rdf_merge_d1", [destination, source]) with
+            | Some(_) ->
+                match native("num_native_engine_rdf_result_d1", [destination]) with
+                | Some(value) ->
+                    match from_value<{ radius: Tensor<1, Float[Length]>, density_ratio: Tensor<1, Float> }>(value) with
+                    | Ok(out) -> at(out.radius, 0) == 0.5 m && approx_eq(at(out.density_ratio, 0), 16.0 / 17.0, 1e-14)
+                    | Err(_) -> false
+                | None -> false
+            | None -> false
+        | _ -> false
+    | None -> false
+
+test "Morse radial evaluation returns measured energy and an attractive force" =
+    let refs = [to_value(2.0 kg), to_value(4.0 m), to_value(2.0 s), to_value(1.0 C)]
+    match native("num_native_md_frame", refs) with
+    | Some(frame) ->
+        let inputs = [frame, to_value(1.5 m), to_value(2.0 J), to_value(2.0 m^-1), to_value(1.0 m)]
+        match native("num_native_md_morse_radial", inputs) with
+        | Some(value) ->
+            match from_value<{ energy: Float[Mass*Length^2/Time^2], radial_force: Float[Mass*Length/Time^2] }>(value) with
+            | Ok(result) ->
+                let decay = exp(-1.0)
+                let delta = 1.0 - decay
+                approx_eq(result.energy, (2.0 * delta * delta) * 1.0 J, 1e-14 J) && approx_eq(result.radial_force, (-8.0 * delta * decay) * 1.0 J/m, 1e-14 J/m)
+            | Err(_) -> false
+        | None -> false
+    | None -> false
+
+test "prepared planar FMM returns each measured source field in position order" =
+    let frame = unwrap_or(native("num_native_md_frame", [to_value(2.0 kg), to_value(4.0 m), to_value(2.0 s), to_value(1.0 C)]), to_value(0))
+    let coordinates = to_value([[0.0 m, 0.0 m], [2.0 m, 0.0 m]])
+    let controls = to_value({ order = 6, leaf_size = 2, theta = 0.5, softening = 0.0 m })
+    let plan = unwrap_or(native("num_native_fmm_prepare2d", [frame, coordinates, controls]), to_value(0))
+    match native("num_native_fmm_evaluate2d", [plan, to_value([2.0 C, 4.0 C]), to_value(2.0 C)]) with
+    | Some(value) ->
+        match from_value<Tensor<2, Float[Current*Time/Length]>>(value) with
+        | Ok(field) -> field[0, 0] == 2.0 C/m && field[1, 0] == -1.0 C/m
+        | Err(_) -> false
+    | None -> false
+
+test "chain acceleration uses physical units and original body order" =
+    let masses = to_value([1.0 kg, 3.0 kg])
+    let positions = to_value([[0.0 m, 0.0 m, 0.0 m], [2.0 m, 0.0 m, 0.0 m]])
+    let velocities = to_value([[0.0 m/s, 0.0 m/s, 0.0 m/s], [0.0 m/s, 0.0 m/s, 0.0 m/s]])
+    let chain = unwrap_or(native("num_analysis_nbody_chain_new", [to_value(8.0 m^3*kg^-1*s^-2), masses, positions, velocities, to_value(4.0 m), to_value(2.0 kg), to_value(2.0 s)]), to_value(0))
+    match native("num_analysis_nbody_chain_accelerations", [chain]) with
+    | Some(value) ->
+        match from_value<Tensor<2, Float[Length/Time^2]>>(value) with
+        | Ok(a) -> a[0, 0] == 6.0 m/s^2 && a[1, 0] == -2.0 m/s^2
+        | Err(_) -> false
+    | None -> false
+
+test "sparse periodic MD finds a measured interaction across a large box" =
+    let frame = unwrap_or(native("num_native_md_frame", [to_value(1.0 kg), to_value(1.0 m), to_value(1.0 s), to_value(1.0 C)]), to_value(0))
+    let box = unwrap_or(native("num_native_engine_box_periodic_d3", [frame, to_value([1e7 m, 1e7 m, 1e7 m])]), to_value(0))
+    let positions = to_value([[9999999.875 m, 0.0 m, 0.0 m], [0.125 m, 0.0 m, 0.0 m]])
+    let system = unwrap_or(native("num_native_engine_system_new_d3", [box, positions]), to_value(0))
+    let term = unwrap_or(native("num_native_engine_pair_new", [frame, to_value("Morse"), to_value({ depth = 1.0 J, alpha = 1.0 / (1.0 m), r0 = 0.25 m })]), to_value(0))
+    let field = unwrap_or(native("num_native_engine_forcefield_new_d3", [frame, to_value([term]), to_value(1.0 m)]), to_value(0))
+    let list = unwrap_or(native("num_native_engine_neighbours_new_d3", [frame, to_value(1.0 m), to_value(0.0 m)]), to_value(0))
+    let forces = unwrap_or(native("num_native_engine_compute_forces_d3", [system, field, list]), to_value(0))
+    match native("num_native_engine_forces_data_d3", [forces]) with
+    | Some(value) ->
+        match from_value<{ energy: Float[Mass*Length^2/Time^2], forces: Tensor<2, Float[Mass*Length/Time^2]>, virial: Tensor<2, Float[Mass*Length^2/Time^2]> }>(value) with
+        | Ok(result) -> result.energy == -1.0 J && result.forces[0, 0] == 0.0 N
+        | Err(_) -> false
+    | None -> false
+
+type NativeIsingObservables = { energy: Float[Mass*Length^2/Time^2], magnetization: Float, heat_capacity_over_kB: Float, susceptibility: Float[Time^2/Mass/Length^2], binder: Option<Float> }
+
+test "online seeded Ising retains measured energy and counts complete sample intervals" =
+    let frame = unwrap_or(native("num_native_md_frame", [to_value(2.0 kg), to_value(1.0 m), to_value(1.0 s), to_value(1.0 C)]), to_value(0))
+    let args = [frame, to_value(1), to_value(1), to_value(4.345782309623952e23 K), to_value(7), to_value(8), to_value(3), to_value(31)]
+    match native("num_native_ising_measure_seeded", args) with
+    | Some(value) ->
+        match from_value<{ spins: Tensor<1, Int>, samples: Int, observables: NativeIsingObservables }>(value) with
+        | Ok(result) ->
+            match result.observables.binder with
+            | Some(binder) -> length(result.spins) == 1 && result.samples == 2 && approx_eq(result.observables.energy, -4.0 J, 1e-12 J) && approx_eq(binder, 2.0/3.0, 1e-12)
+            | None -> false
+        | Err(_) -> false
+    | None -> false
+
+test "native quantum spin sampling enforces its sweep work budget" =
+    let frame = unwrap_or(native("num_native_md_frame", [to_value(2.0 kg), to_value(1.0 m), to_value(1.0 s), to_value(1.0 C)]), to_value(0))
+    let args = [frame, to_value(2), to_value([[0, 1]]), to_value(0.0 J), to_value(1e-12 / (1.0 J)), to_value(31)]
+    let short = unwrap_or(native("num_native_sse_new", args), to_value(0))
+    let exact = unwrap_or(native("num_native_sse_new", args), to_value(0))
+    match native("num_native_sse_sweep", [short, to_value(49)]) with
+    | Some(_) -> false
+    | None ->
+        match native("num_native_sse_sample", [short]) with
+        | Some(_) -> false
+        | None ->
+            match native("num_native_sse_sweep", [exact, to_value(50)]) with
+            | Some(_) ->
+                match native("num_native_sse_constant", [exact]) with
+                | Some(constant) ->
+                    match from_value<Float[Mass*Length^2/Time^2]>(constant) with
+                    | Ok(energy) -> approx_eq(energy, 0.1 J, 1e-12 J)
+                    | Err(_) -> false
+                | None -> false
+            | None -> false
+
+test "legacy SPH joint density and force update preserves ordered reduced-unit rows" =
+    let state = unwrap_or(native("num_native_mm_system_new", [to_value([[0.75, 1.0], [1.25, 1.0]]), to_value(1.0), to_value(1.0), to_value([0.0, 0.0]), to_value(0.1), to_value(1.0), to_value(1.0), to_value([2.0, 2.0])]), to_value(0))
+    match native("num_native_mm_compute_density_and_forces", [state]) with
+    | Some(_) ->
+        match native("num_native_mm_state", [state]) with
+        | Some(value) ->
+            match from_value<{ positions: Tensor<2, Float>, velocities: Tensor<2, Float>, forces: Tensor<2, Float>, density: Tensor<1, Float>, pressure: Tensor<1, Float> }>(value) with
+            | Ok(result) -> result.positions[0, 0] == 0.75 && result.positions[1, 0] == 1.25 && result.density[0] > 0.0 && result.forces[0, 0] == -result.forces[1, 0]
+            | Err(_) -> false
+        | None -> false
+    | None -> false
+
+test "Potts heat-bath probabilities preserve color order without a sweep" =
+    let frame = unwrap_or(native("num_native_md_normalized_frame", []), to_value(0))
+    let model = unwrap_or(native("num_native_spin_potts_new_d2", [frame, to_value([3, 4]), to_value(true), to_value(4), to_value(0.0), to_value(17)]), to_value(0))
+    match native("num_native_spin_potts_heat_bath_probabilities_d2", [model, to_value(0)]) with
+    | Some(value) ->
+        match from_value<Tensor<1, Float>>(value) with
+        | Ok(probabilities) -> probabilities == [0.25, 0.25, 0.25, 0.25]
+        | Err(_) -> false
+    | None -> false
+
+test "prepared Ewald matches the direct sum on a neutral pair" =
+    let frame = unwrap_or(native("num_native_md_normalized_frame", []), to_value(0))
+    let box = unwrap_or(native("num_native_engine_box_periodic_d3", [frame, to_value([10.0, 10.0, 10.0])]), to_value(0))
+    let system = unwrap_or(native("num_native_engine_system_new_d3", [box, to_value([[1.0, 1.0, 1.0], [3.0, 1.0, 1.0]])]), to_value(0))
+    let velocity = to_value([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
+    match native("num_native_engine_system_set_state_d3", [system, velocity, to_value([1.0, 1.0]), to_value([1.0, -1.0])]) with
+    | Some(_) ->
+        let plan = unwrap_or(native("num_native_ewald_reciprocal_plan_new", [system, to_value(0.75), to_value(3)]), to_value(0))
+        let direct = reciprocal_energy(native("num_native_ewald_ewald_reciprocal_cell", [system, to_value(0.75), to_value(1.0), to_value(3)]))
+        let prepared = reciprocal_energy(native("num_native_ewald_reciprocal_plan_evaluate", [plan, system, to_value(1.0)]))
+        match prepared with
+        | Some(value) -> value != 0.0 && approx_eq(value, unwrap_or(direct, 0.0), 1e-12)
+        | None -> false
+    | None -> false
+
+test "prepared SPH density keeps mass per length and particle order" =
+    let frame = unwrap_or(native("num_native_md_frame", [to_value(2.0 kg), to_value(4.0 m), to_value(3.0 s), to_value(1.0 C)]), to_value(0))
+    let masses = to_value([2.0 kg, 3.0 kg])
+    let positions = to_value([[1.0 m], [5.0 m]])
+    let energy = to_value([1.0 m^2/s^2, 1.0 m^2/s^2])
+    let gas = unwrap_or(native("num_native_sph_new_d1", [frame, positions, masses, energy, to_value([0.0 m]), to_value([10.0 m]), to_value(["Open"])]), to_value(0))
+    let plan = unwrap_or(native("num_native_sph_density_plan_new_d1", [gas, to_value(1.0 m)]), to_value(0))
+    match native("num_native_sph_density_plan_evaluate_d1", [plan, masses, to_value([0.5 m, 1.0 m]), to_value("CubicSpline")]) with
+    | Some(value) ->
+        match from_value<Tensor<1, Float[Mass/Length]>>(value) with
+        | Ok(density) -> approx_eq(at(density, 0), 2.6666666666666665 kg/m, 1e-12 kg/m) && approx_eq(at(density, 1), 2.0 kg/m, 1e-12 kg/m)
+        | Err(_) -> false
+    | None -> false
+
+test "prepared PIC uses the same weights for measured charge and field transfers" =
+    let permittivity_area = 1.0 C^2*s^2/(kg*m)
+    let grid = unwrap_or(native("num_analysis_pic_grid_new", [to_value(8), to_value(8.0 m), to_value(2.0 m), to_value(1.0 s), to_value(2.0 C), to_value(permittivity_area)]), to_value(0))
+    let plan = unwrap_or(native("num_analysis_pic_assignment_new", [grid, to_value([0.0 m, 1.5 m]), to_value("CIC")]), to_value(0))
+    let density = unwrap_or(native("num_analysis_pic_assignment_deposit", [plan, to_value([2.0 C, 4.0 C])]), to_value(0))
+    let field = to_value([0.0 s, 1.0 s, 2.0 s, 3.0 s, 4.0 s, 5.0 s, 6.0 s, 7.0 s])
+    let gathered = unwrap_or(native("num_analysis_pic_assignment_gather", [plan, field, to_value(2.0 s)]), to_value(0))
+    match from_value<Tensor<1, Float[Current*Time/Length]>>(density) with
+    | Ok(rho) ->
+        match from_value<Tensor<1, Float[Time]>>(gathered) with
+        | Ok(trace) -> length(rho) == 8 && at(rho, 0) == 2.0 C/m && at(rho, 1) == 2.0 C/m && at(rho, 2) == 2.0 C/m && at(trace, 1) == 1.5 s
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "native dimension generic MD box preserves exact geometric volume" =
+    match native("num_native_md_normalized_frame", []) with
+    | Some(frame) ->
+        match native("num_native_engine_box_periodic_d3", [frame, to_value([2.0, 3.0, 4.0])]) with
+        | Some(box) ->
+            match native("num_native_engine_box_volume_d3", [box]) with
+            | Some(value) ->
+                match from_value<Float>(value) with
+                | Ok(volume) -> volume == 24.0
+                | Err(_) -> false
+            | None -> false
+        | None -> false
+    | None -> false
+
+test "classical particle energy retains SI mass length time dimensions" =
+    match native("num_native_classical_particle_new", [to_value(2.0 kg), to_value([0.0 m, 0.0 m, 0.0 m]), to_value([3.0 m/s, 0.0 m/s, 0.0 m/s])]) with
+    | Some(particle) ->
+        match native("num_native_classical_particle_kinetic_energy", [particle]) with
+        | Some(value) ->
+            match from_value<Float[Mass*Length^2/Time^2]>(value) with
+            | Ok(energy) -> approx_eq(energy, 9.0 J, 1e-12 J)
+            | Err(_) -> false
+        | None -> false
+    | None -> false
+
+test "native multigrid maps its unit domain to physical references" =
+    match native("num_native_mtm_solve_poisson_1d_multigrid", [to_value(3), to_value([2.0 K/m^2, 2.0 K/m^2, 2.0 K/m^2]), to_value(20), to_value(2.0 m), to_value(3.0 K)]) with
+    | Some(value) ->
+        match from_value<{ solution: Tensor<1, Float[Temperature]>, shape: Tensor<1, Int>, domain_reference: Float[Length] }>(value) with
+        | Ok(result) -> result.shape == [5] && approx_eq(at(result.solution, 2), 1.0 K, 1e-8 K)
+        | Err(_) -> false
+    | None -> false
+
+test "native GPE density has inverse area units and unit normalization" =
+    match native("num_native_gpe_run_ground_state", [to_value([4, 4]), to_value([2.0 m, 2.0 m]), to_value(1.0 kg), to_value(1.0 m), to_value(1e32 s), to_value(2), to_value(0.0 J*m^2), to_value(0.0 J/m^2)]) with
+    | Some(value) ->
+        match from_value<Tensor<2, Float[Length^-2]>>(value) with
+        | Ok(density) -> approx_eq(density[0, 0], 0.25 m^-2, 1e-12 m^-2)
+        | Err(_) -> false
+    | None -> false
+
+test "native split step uses explicit normalized coordinates when requested" =
+    match native("num_native_split_centered_normalized", [to_value([4]), to_value([2.0]), to_value(1.0)]) with
+    | Some(solver) ->
+        match native("num_native_split_norm2", [solver, to_value([1.0, 1.0, 1.0, 1.0])]) with
+        | Some(value) ->
+            match from_value<Float>(value) with
+            | Ok(norm) -> approx_eq(norm, 2.0, 1e-12)
+            | Err(_) -> false
+        | None -> false
+    | None -> false
+
+test "zero-step GPE on one cell returns a measured normalized initial density" =
+    let inputs = [to_value([1, 1]), to_value([2.0 m, 4.0 m]), to_value(1.0 kg), to_value(2.0 m), to_value(0.0 s), to_value(0), to_value(0.0 J*m^2), to_value(0.0 J/m^2)]
+    match native("num_native_gpe_run_ground_state", inputs) with
+    | Some(value) ->
+        match from_value<Tensor<2, Float[Length^-2]>>(value) with
+        | Ok(density) -> approx_eq(density[0, 0], 0.125 m^-2, 1e-12 m^-2)
+        | Err(_) -> false
+    | None -> false
+
+test "a prepared physical Schrodinger plan accepts signed time on one cell" =
+    let arguments = [to_value([1, 1]), to_value([2.0 m, 3.0 m]), to_value(-0.25 s), to_value(1.0 J*s), to_value(1.0 kg), to_value([1.0 J])]
+    let initial = [Native.num_analysis_complex_scalar_complex(1.0 m^-1, 0.0 m^-1)]
+    match native("num_native_quantum_schrodinger_plan_new", arguments) with
+    | Some(plan) ->
+        match native("num_native_quantum_schrodinger_plan_evolve", [plan, to_value(initial), to_value(4)]) with
+        | Some(value) ->
+            match from_value<{ time: Float[Time], final_psi: Tensor<1, Complex[Length^-1]> }>(value) with
+            | Ok(out) -> out.time == -1.0 s && approx_eq(re(at(out.final_psi, 0)), 0.5403023058681398 m^-1, 1e-14 m^-1) && approx_eq(im(at(out.final_psi, 0)), 0.8414709848078965 m^-1, 1e-14 m^-1)
+            | Err(_) -> false
+        | None -> false
+    | None -> false
+
+test "a prepared linear wave on an odd periodic grid retains its amplitude units" =
+    let potential = 1.054571817e-34 J
+    let samples = [0.5 m^(-1/2), 0.5 m^(-1/2), 0.5 m^(-1/2), 0.5 m^(-1/2), 0.5 m^(-1/2)]
+    let arguments = [to_value([5]), to_value([7.0 m]), to_value(2.0 kg), to_value([potential, potential, potential, potential, potential]), to_value(0.125 s), to_value(4.0 m), to_value(2.0 s), to_value("Yoshida4")]
+    match native("num_native_split_linear_plan_new", arguments) with
+    | Some(plan) ->
+        match native("num_native_split_linear_plan_evolve", [plan, to_value(samples), to_value(4)]) with
+        | Some(value) ->
+            match from_value<Tensor<1, Complex[Length^(-1/2)]>>(value) with
+            | Ok(wave) -> length(wave) == 5 && approx_eq(re(at(wave, 0)), 0.4387912809451864 m^(-1/2), 1e-12 m^(-1/2)) && approx_eq(im(at(wave, 0)), -0.2397127693021015 m^(-1/2), 1e-12 m^(-1/2))
+            | Err(_) -> false
+        | None -> false
+    | None -> false

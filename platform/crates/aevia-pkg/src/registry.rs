@@ -20,12 +20,16 @@
 //!
 //! Resolution is `aevia-resolve`, the crate the toolchain links, so a version
 //! chosen here is the version `aevia update` chooses. The resolver is
-//! synchronous; fetching is not. They are joined by a loop: resolve against
-//! the cached index; when the resolver says a package's index is not cached,
-//! download it (unless `--offline`) and resolve again.
+//! synchronous; fetching is not. Each resolution retains the parsed index of
+//! every package it reads. When the resolver needs a missing index, the client
+//! downloads and validates it (unless `--offline`), atomically writes the
+//! original text, and adds the parsed records to the current view. A refresh
+//! replaces both copies before resolving again.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
+use std::io::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -43,6 +47,7 @@ use aevia_resolve::Resolution;
 use aevia_resolve::ResolveError;
 use aevia_resolve::Root;
 use aevia_resolve::SparseIndex;
+use aevia_resolve::SparseRecord;
 use aevia_resolve::Summary;
 use aevia_resolve::Version;
 use aevia_resolve::VersionReq;
@@ -68,6 +73,10 @@ impl Cache {
     /// Opens the cache at `explicit`, else `$AEVIA_REGISTRY_DIR`, else
     /// `.aevia/registry` next to the package found from `start`.
     #[must_use]
+    #[allow(
+        clippy::single_call_fn,
+        reason = "cache location follows explicit, environment and workspace precedence"
+    )]
     pub fn locate(
         explicit: Option<&Path>,
         start: &Path,
@@ -90,12 +99,6 @@ impl Cache {
         }
     }
 
-    /// A cache rooted exactly at `root`.
-    #[must_use]
-    pub fn at(root: PathBuf) -> Self {
-        Self { root }
-    }
-
     /// The cache root.
     #[must_use]
     pub fn root(&self) -> &Path {
@@ -107,10 +110,7 @@ impl Cache {
         base: &str,
         id: &PackageId,
     ) -> PathBuf {
-        self.root
-            .join(base)
-            .join(id.owner())
-            .join(id.name_key())
+        self.root.join(base).join(id.owner()).join(id.name_key())
     }
 
     /// Where the index text of a package is kept.
@@ -182,21 +182,83 @@ impl Cache {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "index replacement must expose old or complete new contents to readers"
+)]
 fn write_atomically(
     path: &Path,
     bytes: &[u8],
 ) -> Result<(), CliError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| {
-            CliError::new(format!("cannot create `{}`: {error}", parent.display()))
-        })?;
-    }
-    let temporary = path.with_extension("partial");
-    std::fs::write(&temporary, bytes).map_err(|error| {
-        CliError::new(format!("cannot write `{}`: {error}", temporary.display()))
+    let parent = path.parent().ok_or_else(|| {
+        CliError::new(format!(
+            "the cache path `{}` has no directory",
+            path.display()
+        ))
     })?;
-    std::fs::rename(&temporary, path)
-        .map_err(|error| CliError::new(format!("cannot move `{}`: {error}", path.display())))
+    std::fs::create_dir_all(parent)
+        .map_err(|error| CliError::new(format!("cannot create `{}`: {error}", parent.display())))?;
+    // Each writer gets its own staging file in the destination directory.
+    let staging = tempfile::Builder::new();
+    #[cfg(unix)]
+    let staging = {
+        use std::os::unix::fs::PermissionsExt as _;
+        // Match normal index file creation, including the user's umask.
+        let mut staging = staging;
+        staging.permissions(std::fs::Permissions::from_mode(0o666));
+        staging
+    };
+    let mut temporary = staging
+        .tempfile_in(parent)
+        .map_err(|error| CliError::new(format!("cannot stage `{}`: {error}", path.display())))?;
+    temporary.write_all(bytes).map_err(|error| {
+        CliError::new(format!(
+            "cannot write `{}`: {error}",
+            temporary.path().display()
+        ))
+    })?;
+    // Close the writer before publishing, so another Windows writer can
+    // replace this index as soon as the move completes.
+    let staged = temporary.into_temp_path();
+    #[cfg(windows)]
+    let result = persist_index(staged, path, std::thread::sleep);
+    #[cfg(not(windows))]
+    let result = staged.persist(path);
+    result.map_err(|error| {
+        CliError::new(format!("cannot move `{}`: {}", path.display(), error.error))
+    })
+}
+
+#[cfg(windows)]
+#[allow(
+    clippy::single_call_fn,
+    reason = "Windows replacement retries retain the same temporary file"
+)]
+fn persist_index(
+    mut staged: tempfile::TempPath,
+    path: &Path,
+    mut wait: impl FnMut(std::time::Duration),
+) -> Result<(), tempfile::PathPersistError> {
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    for delay_ms in [1, 2, 4, 8, 16, 32, 64, 128] {
+        match staged.persist(path) {
+            | Ok(()) => return Ok(()),
+            | Err(error)
+                if matches!(
+                    error.error.raw_os_error(),
+                    Some(ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION)
+                ) =>
+            {
+                // MoveFileEx may encounter a reader or another replacement.
+                // Keep the existing index available and retry the same move.
+                staged = error.path;
+                wait(std::time::Duration::from_millis(delay_ms));
+            },
+            | Err(error) => return Err(error),
+        }
+    }
+    staged.persist(path)
 }
 
 /// An [`Index`] over the cache directory.
@@ -206,8 +268,12 @@ pub struct CacheIndex<'a> {
 }
 
 impl<'a> CacheIndex<'a> {
-    /// A fresh view of the cache.
+    /// A view of the cache for one resolution and its fetch rounds.
     #[must_use]
+    #[allow(
+        clippy::single_call_fn,
+        reason = "parse cache entries on demand for one resolution"
+    )]
     pub fn new(cache: &'a Cache) -> Self {
         Self {
             cache,
@@ -221,8 +287,16 @@ impl<'a> CacheIndex<'a> {
         &self,
         package: &str,
         version: &Version,
-    ) -> Option<aevia_resolve::SparseRecord> {
+    ) -> Option<SparseRecord> {
         self.loaded.borrow().record(package, version).cloned()
+    }
+
+    fn replace_records(
+        &self,
+        package: &str,
+        records: Vec<SparseRecord>,
+    ) {
+        self.loaded.borrow_mut().insert_records(package, records);
     }
 }
 
@@ -236,10 +310,7 @@ impl Index for CacheIndex<'_> {
                 .parse::<PackageId>()
                 .map_err(|_| IndexError::missing(package))?;
             let text = self.cache.read_index(&id).ok_or_else(|| {
-                IndexError::unavailable(
-                    package,
-                    format!("the index of `{package}` is not cached"),
-                )
+                IndexError::unavailable(package, format!("the index of `{package}` is not cached"))
             })?;
             self.loaded
                 .borrow_mut()
@@ -255,22 +326,31 @@ impl Index for CacheIndex<'_> {
     }
 }
 
-/// Downloads the index of `id` into the cache.
+/// Downloads the index of `id` into the cache and returns its validated records.
 ///
 /// # Errors
 ///
-/// The registry's error, or a filesystem failure.
+/// Offline mode, the registry's error, or a filesystem failure.
 pub async fn fetch_index(
     app: &App,
     cache: &Cache,
     id: &PackageId,
-) -> Result<(), CliError> {
+) -> Result<Vec<SparseRecord>, CliError> {
+    if app.offline {
+        return Err(
+            CliError::new(format!("cannot fetch the index of `{id}` (offline)"))
+                .with_next_step("run the command again without `--offline`"),
+        );
+    }
     let text = app.client.index_text(id.owner(), id.name()).await?;
     // Parse before storing, so a damaged response never replaces a good file.
-    aevia_resolve::sparse::parse_text(&text).map_err(|error| {
-        CliError::new(format!("the registry's index of `{id}` is damaged: {error}"))
+    let records = aevia_resolve::sparse::parse_text(&text).map_err(|error| {
+        CliError::new(format!(
+            "the registry's index of `{id}` is damaged: {error}"
+        ))
     })?;
-    cache.write_index(id, &text)
+    cache.write_index(id, &text)?;
+    Ok(records)
 }
 
 /// What a resolution needs besides the requirements.
@@ -279,8 +359,7 @@ pub struct Plan<'a> {
     pub cache: &'a Cache,
     /// No network: a package that is not cached is an error.
     pub offline: bool,
-    /// Download the index of every package the resolution touches, even when a
-    /// cached copy exists (`update`).
+    /// Refresh each selected package once, including packages already in the cache.
     pub refresh: bool,
     /// Versions to prefer.
     pub locked: BTreeMap<String, BTreeSet<Version>>,
@@ -296,7 +375,7 @@ pub async fn resolve_closure(
     app: &App,
     plan: &Plan<'_>,
     dependencies: Vec<Dependency>,
-) -> Result<(Resolution, BTreeMap<String, aevia_resolve::SparseRecord>), CliError> {
+) -> Result<(Resolution, BTreeMap<String, SparseRecord>), CliError> {
     let roots = [Root {
         id: "this package".to_string(),
         dependencies,
@@ -307,10 +386,8 @@ pub async fn resolve_closure(
     };
     let mut refreshed: BTreeSet<String> = BTreeSet::new();
     let mut fetches = 0;
+    let index = CacheIndex::new(plan.cache);
     loop {
-        // A refresh re-downloads each touched package once, before the first
-        // resolution that would read it.
-        let index = CacheIndex::new(plan.cache);
         match aevia_resolve::resolve(&roots, &index, &options) {
             | Ok(resolution) => {
                 let mut stale = Vec::new();
@@ -325,39 +402,51 @@ pub async fn resolve_closure(
                     let mut records = BTreeMap::new();
                     for chosen in &resolution.packages {
                         if let Some(record) = index.record(&chosen.package, &chosen.version) {
-                            records.insert(format!("{} {}", chosen.package, chosen.version), record);
+                            records
+                                .insert(format!("{} {}", chosen.package, chosen.version), record);
                         }
                     }
                     return Ok((resolution, records));
                 }
+                reserve_index_fetches(&mut fetches, stale.len())?;
                 for package in stale {
                     let id: PackageId = package.parse().map_err(CliError::from)?;
-                    fetch_index(app, plan.cache, &id).await?;
-                    fetches += 1;
+                    let records = fetch_index(app, plan.cache, &id).await?;
+                    index.replace_records(&package, records);
                 }
             },
             | Err(ResolveError::Index(error)) if error.kind == IndexErrorKind::Unavailable => {
                 if plan.offline {
-                    return Err(CliError::new(format!(
-                        "{} (offline)",
-                        error.message
-                    ))
-                    .with_next_step("run the command again without `--offline`"));
+                    return Err(CliError::new(format!("{} (offline)", error.message))
+                        .with_next_step("run the command again without `--offline`"));
                 }
-                fetches += 1;
-                if fetches > MAX_FETCHES {
-                    return Err(CliError::new(format!(
-                        "the requirements reach more than {MAX_FETCHES} packages"
-                    )));
-                }
+                reserve_index_fetches(&mut fetches, 1)?;
                 let id: PackageId = error.package.parse().map_err(CliError::from)?;
-                fetch_index(app, plan.cache, &id).await?;
+                let records = fetch_index(app, plan.cache, &id).await?;
+                index.replace_records(&error.package, records);
+                refreshed.insert(error.package);
             },
             | Err(other) => {
                 return Err(CliError::new(format!("E0606: {other}")));
             },
         }
     }
+}
+
+fn reserve_index_fetches(
+    requested: &mut usize,
+    additional: usize,
+) -> Result<(), CliError> {
+    let Some(total) = requested
+        .checked_add(additional)
+        .filter(|total| *total <= MAX_FETCHES)
+    else {
+        return Err(CliError::new(format!(
+            "resolving the requirements needs more than {MAX_FETCHES} index requests"
+        )));
+    };
+    *requested = total;
+    Ok(())
 }
 
 /// The dependencies of `./aevia.toml` that name registry packages.
@@ -373,11 +462,7 @@ fn manifest_dependencies(manifest: &PackageManifest) -> Result<Vec<Dependency>, 
         .map(|(label, package, req)| {
             let req = VersionReq::parse(&req)
                 .map_err(|error| CliError::new(format!("dependency `{label}`: {error}")))?;
-            Ok(Dependency {
-                label,
-                package,
-                req,
-            })
+            Ok(Dependency { label, package, req })
         })
         .collect()
 }
@@ -448,14 +533,7 @@ pub async fn vendor_version(
     force: bool,
 ) -> Result<bool, CliError> {
     let dest = cache.source_dir(id, version);
-    if !force
-        && let Ok(marker) = std::fs::read_to_string(dest.join(MARKER))
-        && marker
-            .lines()
-            .next()
-            .is_some_and(|first| first.trim().eq_ignore_ascii_case(expected))
-        && dest.join("aevia.toml").is_file()
-    {
+    if !force && cached_source(&dest, expected) {
         return Ok(false);
     }
     let verified = fetch::verify(app, id, version).await?;
@@ -466,17 +544,62 @@ pub async fn vendor_version(
         ))
         .with_next_step("the registry changed a published version; do not use it"));
     }
-    if dest.exists() {
-        std::fs::remove_dir_all(&dest).map_err(|error| {
+    let parent = dest
+        .parent()
+        .ok_or_else(|| CliError::new("the registry cache has no package parent"))?;
+    std::fs::create_dir_all(parent).map_err(|error| {
+        CliError::new(format!(
+            "cannot create the package cache `{}`: {error}",
+            parent.display()
+        ))
+    })?;
+    let staging = tempfile::Builder::new()
+        .prefix(".stage-")
+        .tempdir_in(parent)
+        .map_err(|error| CliError::new(format!("cannot stage the package: {error}")))?;
+    let source = staging.path().join("source");
+    let written = tarball::unpack(&verified.bytes, &source).map_err(CliError::from)?;
+    std::fs::write(
+        source.join(MARKER),
+        format!(
+            "{}\n{} {}\n",
+            verified.checksum, verified.id, verified.version
+        ),
+    )
+    .map_err(|error| CliError::new(format!("cannot record the checksum: {error}")))?;
+    let writer = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(parent.join(".vendor.lock"))
+        .map_err(|error| CliError::new(format!("cannot open the package cache lock: {error}")))?;
+    writer
+        .lock()
+        .map_err(|error| CliError::new(format!("cannot lock the package cache: {error}")))?;
+    if !force && cached_source(&dest, expected) {
+        return Ok(false);
+    }
+    let previous = staging.path().join("previous");
+    let have_previous = dest.exists();
+    if have_previous {
+        std::fs::rename(&dest, &previous).map_err(|error| {
             CliError::new(format!("cannot replace `{}`: {error}", dest.display()))
         })?;
     }
-    let written = tarball::unpack(&verified.bytes, &dest).map_err(CliError::from)?;
-    std::fs::write(
-        dest.join(MARKER),
-        format!("{}\n{} {}\n", verified.checksum, verified.id, verified.version),
-    )
-    .map_err(|error| CliError::new(format!("cannot record the checksum: {error}")))?;
+    if let Err(error) = std::fs::rename(&source, &dest) {
+        if have_previous && let Err(restore) = std::fs::rename(&previous, &dest) {
+            let preserved = staging.keep();
+            return Err(CliError::new(format!(
+                "cannot install `{}`: {error}. Previous files remain in `{}`: {restore}",
+                dest.display(),
+                preserved.display()
+            )));
+        }
+        return Err(CliError::new(format!(
+            "cannot install `{}`: {error}",
+            dest.display()
+        )));
+    }
     if !app.quiet {
         println!(
             "vendored {} {} ({} files, {}), signed by {} {}",
@@ -491,6 +614,23 @@ pub async fn vendor_version(
     Ok(true)
 }
 
+fn cached_source(
+    dest: &Path,
+    expected: &str,
+) -> bool {
+    dest.join("aevia.toml").is_file()
+        && std::fs::read_to_string(dest.join(MARKER)).is_ok_and(|marker| {
+            marker
+                .lines()
+                .next()
+                .is_some_and(|first| first.trim().eq_ignore_ascii_case(expected))
+        })
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "vendoring verifies each locked package and reports download counts"
+)]
 async fn vendor_resolution(
     app: &App,
     cache: &Cache,
@@ -498,20 +638,32 @@ async fn vendor_resolution(
     records: &BTreeMap<String, aevia_resolve::SparseRecord>,
     force: bool,
 ) -> Result<usize, CliError> {
-    let mut count = 0;
+    let mut count = 0usize;
     for chosen in &resolution.packages {
         let id: PackageId = chosen.package.parse().map_err(CliError::from)?;
         let expected = records
             .get(&chosen.to_string())
-            .map(|record| record.checksum.clone())
-            .unwrap_or_default();
-        if vendor_version(app, cache, &id, &chosen.version.to_string(), &expected, force).await? {
-            count += 1;
+            .map_or_default(|record| record.checksum.clone());
+        if vendor_version(
+            app,
+            cache,
+            &id,
+            &chosen.version.to_string(),
+            &expected,
+            force,
+        )
+        .await?
+        {
+            count = count.saturating_add(1);
         }
     }
     Ok(count)
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "resolution output must remain consistent between CLI entry points"
+)]
 fn print_resolution(
     resolution: &Resolution,
     records: &BTreeMap<String, aevia_resolve::SparseRecord>,
@@ -535,8 +687,7 @@ fn print_resolution(
     for chosen in &resolution.packages {
         let checksum = records
             .get(&chosen.to_string())
-            .map(|record| record.checksum.as_str())
-            .unwrap_or("?");
+            .map_or("?", |record| record.checksum.as_str());
         println!("{} {}  {checksum}", chosen.package, chosen.version);
     }
 }
@@ -548,6 +699,10 @@ fn print_resolution(
 /// # Errors
 ///
 /// The first download that fails.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the index command owns its offline cache and raw output behavior"
+)]
 pub async fn index_command(
     app: &App,
     cache: &Cache,
@@ -570,6 +725,10 @@ pub async fn index_command(
 /// # Errors
 ///
 /// An unsatisfiable requirement, or a download that does not verify.
+#[allow(
+    clippy::single_call_fn,
+    reason = "adding a dependency resolves, vendors and updates the applicable manifests"
+)]
 pub async fn add(
     app: &App,
     cache: &Cache,
@@ -577,9 +736,7 @@ pub async fn add(
     alias: Option<&str>,
 ) -> Result<(), CliError> {
     let (id, requested) = package::parse_requirement_target(target)?;
-    let label = alias
-        .map(str::to_string)
-        .unwrap_or_else(|| package::import_root(id.name()));
+    let label = alias.map_or_else(|| package::import_root(id.name()), str::to_string);
     let key = id.key();
     let plan = Plan {
         cache,
@@ -634,14 +791,17 @@ pub async fn add(
 /// # Errors
 ///
 /// A missing lock, or a download that does not verify.
+#[allow(
+    clippy::single_call_fn,
+    reason = "vendor has an independent command contract for targets and lockfiles"
+)]
 pub async fn vendor(
     app: &App,
     cache: &Cache,
     targets: &[String],
     force: bool,
 ) -> Result<(), CliError> {
-    let mut wanted: BTreeSet<(String, String, String)> = BTreeSet::new();
-    if targets.is_empty() {
+    let wanted = if targets.is_empty() {
         let root = package::find_root(&here()?).ok_or_else(|| {
             CliError::new("no `aevia.toml` in the current directory or any parent")
                 .with_next_step("run inside a package, or name `owner/name@version` targets")
@@ -651,21 +811,24 @@ pub async fn vendor(
             CliError::new(format!("cannot read `{}`: {error}", lock.display()))
                 .with_next_step("run `aevia update` to write it")
         })?;
-        wanted = lock_registry_entries(&text);
+        lock_registry_entries(&text)
     } else {
-        for target in targets {
-            let (id, version) = package::parse_target(target)?;
-            let version = version.ok_or_else(|| {
-                CliError::usage(format!("`{target}` names no version; write `{id}@1.2.3`"))
-            })?;
-            wanted.insert((id.key(), version, String::new()));
-        }
-    }
-    let mut vendored = 0;
+        targets
+            .iter()
+            .map(|target| {
+                let (id, version) = package::parse_target(target)?;
+                let version = version.ok_or_else(|| {
+                    CliError::usage(format!("`{target}` names no version; write `{id}@1.2.3`"))
+                })?;
+                Ok((id.key(), version, String::new()))
+            })
+            .collect::<Result<_, CliError>>()?
+    };
+    let mut vendored = 0usize;
     for (name, version, checksum) in &wanted {
         let id: PackageId = name.parse().map_err(CliError::from)?;
         if vendor_version(app, cache, &id, version, checksum, force).await? {
-            vendored += 1;
+            vendored = vendored.saturating_add(1);
         }
         // The index too, so the toolchain can resolve offline afterwards.
         if cache.read_index(&id).is_none() && !app.offline {
@@ -688,6 +851,10 @@ pub async fn vendor(
 /// # Errors
 ///
 /// A download failure.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the update command refreshes and compares available versions"
+)]
 pub async fn update(
     app: &App,
     cache: &Cache,
@@ -705,29 +872,39 @@ pub async fn update(
         println!("nothing is cached in `{}`", cache.root().display());
         return Ok(());
     }
-    let versions_of = |text: Option<String>| -> BTreeSet<String> {
-        text.and_then(|text| aevia_resolve::sparse::parse_text(&text).ok())
-            .map(|records| {
-                records
-                    .into_iter()
-                    .map(|record| {
-                        format!("{}{}", record.version, if record.yanked { " (yanked)" } else { "" })
-                    })
-                    .collect()
+    let versions_of = |records: Vec<SparseRecord>| -> BTreeSet<String> {
+        records
+            .into_iter()
+            .map(|record| {
+                format!(
+                    "{}{}",
+                    record.version,
+                    if record.yanked {
+                        " (yanked)"
+                    } else {
+                        ""
+                    }
+                )
             })
-            .unwrap_or_default()
+            .collect()
     };
     for id in ids {
-        let before = versions_of(cache.read_index(&id));
-        fetch_index(app, cache, &id).await?;
-        let after = versions_of(cache.read_index(&id));
+        let before = cache
+            .read_index(&id)
+            .and_then(|text| aevia_resolve::sparse::parse_text(&text).ok())
+            .map_or_default(versions_of);
+        let after = versions_of(fetch_index(app, cache, &id).await?);
         let added: Vec<&String> = after.difference(&before).collect();
         if added.is_empty() {
             println!("{id}: up to date");
         } else {
             println!(
                 "{id}: {}",
-                added.iter().map(|v| format!("+{v}")).collect::<Vec<_>>().join(" ")
+                added
+                    .iter()
+                    .map(|v| format!("+{v}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
             );
         }
     }
@@ -744,6 +921,10 @@ fn load_package(start: &Path) -> Result<(PathBuf, PackageManifest), CliError> {
 /// # Errors
 ///
 /// An unsatisfiable manifest.
+#[allow(
+    clippy::single_call_fn,
+    reason = "dependency tree generation resolves the package before choosing an output format"
+)]
 pub async fn tree(
     app: &App,
     cache: &Cache,
@@ -757,13 +938,20 @@ pub async fn tree(
         locked: locked_hints(&root.join("aevia.lock")),
     };
     let (resolution, _) = resolve_closure(app, &plan, dependencies).await?;
-    print!("{}", render_tree(&manifest.name, &manifest.version, &resolution));
+    print!(
+        "{}",
+        render_tree(&manifest.name, &manifest.version, &resolution)
+    );
     Ok(())
 }
 
 /// Renders a resolution as a tree under the root package; a package reached
 /// twice is expanded once and marked `(*)` afterwards.
 #[must_use]
+#[allow(
+    clippy::single_call_fn,
+    reason = "dependency tree rendering handles ordering and repeated edges separately"
+)]
 pub fn render_tree(
     name: &str,
     version: &str,
@@ -779,18 +967,27 @@ pub fn render_tree(
         let mut edges = resolution.edges_from(node);
         edges.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| a.to.cmp(&b.to)));
         for (position, edge) in edges.iter().enumerate() {
-            let last = position + 1 == edges.len();
+            let last = position == edges.len().saturating_sub(1);
             let target = Node::Package(edge.to.clone());
             let has_children = !resolution.edges_from(&target).is_empty();
             let repeated = !seen.insert(edge.to.to_string());
-            out.push_str(&format!(
-                "{prefix}{}{} {} {}{}\n",
-                if last { "└── " } else { "├── " },
+            let _ = writeln!(
+                out,
+                "{prefix}{}{} {} {}{}",
+                if last {
+                    "└── "
+                } else {
+                    "├── "
+                },
                 edge.label,
                 edge.to.package,
                 edge.to.version,
-                if repeated && has_children { " (*)" } else { "" }
-            ));
+                if repeated && has_children {
+                    " (*)"
+                } else {
+                    ""
+                }
+            );
             if !repeated {
                 let next = format!("{prefix}{}", if last { "    " } else { "│   " });
                 walk(resolution, &target, &next, seen, out);
@@ -815,6 +1012,10 @@ pub fn render_tree(
 /// # Errors
 ///
 /// An unsatisfiable manifest, or (with `--check`) a lock that has drifted.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the lock command supports both reporting and checking a resolution"
+)]
 pub async fn lock(
     app: &App,
     cache: &Cache,
@@ -845,8 +1046,7 @@ pub async fn lock(
                 chosen.version.to_string(),
                 records
                     .get(&chosen.to_string())
-                    .map(|record| record.checksum.clone())
-                    .unwrap_or_default(),
+                    .map_or_default(|record| record.checksum.clone()),
             )
         })
         .collect();
@@ -857,7 +1057,10 @@ pub async fn lock(
     let held = lock_registry_entries(&text);
     let problems = lock_drift(&expected, &held);
     if problems.is_empty() {
-        println!("aevia.lock matches the registry ({} package(s))", expected.len());
+        println!(
+            "aevia.lock matches the registry ({} package(s))",
+            expected.len()
+        );
         Ok(())
     } else {
         Err(CliError::new(format!(
@@ -870,6 +1073,10 @@ pub async fn lock(
 
 /// Differences between the packages a resolution wants and the lock's.
 #[must_use]
+#[allow(
+    clippy::single_call_fn,
+    reason = "lock comparison reports additions, removals and checksum changes independently"
+)]
 pub fn lock_drift(
     expected: &BTreeSet<(String, String, String)>,
     held: &BTreeSet<(String, String, String)>,
@@ -890,10 +1097,7 @@ pub fn lock_drift(
         }
     }
     for (name, version, _) in held {
-        if !expected
-            .iter()
-            .any(|(n, v, _)| n == name && v == version)
-        {
+        if !expected.iter().any(|(n, v, _)| n == name && v == version) {
             problems.push(format!("in the lock but not required: {name} {version}"));
         }
     }
@@ -905,6 +1109,35 @@ mod tests {
     use super::*;
 
     const LOCK: &str = "version = 1\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\nimport = \"App\"\nsource = \"root\"\n\n[[package]]\nname = \"apich/plot\"\nversion = \"2.1.0\"\nimport = \"Plot\"\nsource = \"registry+aevia\"\nchecksum = \"sha256:aa\"\n\n[[package]]\nname = \"dep\"\nversion = \"0.2.0\"\nimport = \"Dep\"\nsource = \"path+../dep\"\nhash = \"fnv1a64:00\"\n\n[[package]]\nname = \"apich/units\"\nversion = \"1.2.0\"\nimport = \"Units\"\nsource = \"registry+aevia\"\nchecksum = \"sha256:bb\"\n";
+
+    #[tokio::test]
+    async fn direct_index_commands_honor_offline_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::locate(Some(dir.path()), dir.path());
+        let app = App {
+            client: crate::api::Client::new("http://127.0.0.1:1").unwrap(),
+            config: crate::config::Config::default(),
+            home: dir.path().to_path_buf(),
+            json: false,
+            quiet: true,
+            offline: true,
+            cache: None,
+        };
+        let targets = ["apich/plot".to_string()];
+        let index_error = index_command(&app, &cache, &targets).await.unwrap_err();
+        let update_error = update(&app, &cache, &targets).await.unwrap_err();
+        assert!(index_error.message.contains("offline"));
+        assert_eq!(index_error, update_error);
+    }
+
+    #[test]
+    fn index_refresh_batches_obey_the_same_fetch_budget() {
+        let mut requested = 0;
+        assert!(reserve_index_fetches(&mut requested, MAX_FETCHES).is_ok());
+        assert!(reserve_index_fetches(&mut requested, 1).is_err());
+        assert!(reserve_index_fetches(&mut requested, usize::MAX).is_err());
+        assert_eq!(requested, MAX_FETCHES);
+    }
 
     #[test]
     fn only_registry_entries_are_read_from_a_lock() {
@@ -944,9 +1177,21 @@ mod tests {
             "sha256:aa".to_string(),
         ));
         let problems = lock_drift(&expected, &held);
-        assert!(problems.iter().any(|p| p.contains("missing from the lock: apich/units 1.3.0")));
-        assert!(problems.iter().any(|p| p.contains("apich/plot 2.1.0") && p.contains("sha256:zz")));
-        assert!(problems.iter().any(|p| p.contains("not required: apich/units 1.2.0")));
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("missing from the lock: apich/units 1.3.0"))
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("apich/plot 2.1.0") && p.contains("sha256:zz"))
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("not required: apich/units 1.2.0"))
+        );
     }
 
     fn line(
@@ -962,38 +1207,147 @@ mod tests {
 
     #[test]
     fn a_cache_index_resolves_offline_and_reports_what_it_lacks() {
-        let dir = std::env::temp_dir().join(format!("aevia-pkg-cache-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let cache = Cache::at(dir.clone());
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache {
+            root: dir.path().to_path_buf(),
+        };
         let plot: PackageId = "apich/plot".parse().unwrap();
         let units: PackageId = "apich/units".parse().unwrap();
         cache
             .write_index(
                 &plot,
-                &(line("apich/plot", "1.0.0", "{\"package\":\"apich/units\",\"req\":\"^1\"}")
-                    + &line("apich/plot", "1.1.0", "{\"package\":\"apich/units\",\"req\":\"^1.2\"}")),
+                &(line(
+                    "apich/plot",
+                    "1.0.0",
+                    "{\"package\":\"apich/units\",\"req\":\"^1\"}",
+                ) + &line(
+                    "apich/plot",
+                    "1.1.0",
+                    "{\"package\":\"apich/units\",\"req\":\"^1.2\"}",
+                )),
             )
             .unwrap();
         let roots = [Root {
             id: "this package".to_string(),
-            dependencies: vec![Dependency::new("apich/plot", VersionReq::parse("^1").unwrap())],
+            dependencies: vec![Dependency::new(
+                "apich/plot",
+                VersionReq::parse("^1").unwrap(),
+            )],
         }];
         let index = CacheIndex::new(&cache);
-        let error = aevia_resolve::resolve(&roots, &index, &Options::default()).expect_err("units missing");
+        let error =
+            aevia_resolve::resolve(&roots, &index, &Options::default()).expect_err("units missing");
         assert_eq!(error.unavailable_package(), Some("apich/units"));
+        // Loaded Plot records stay stable for this resolution. A later
+        // command sees the file written by a concurrent process.
         cache
-            .write_index(
-                &units,
-                &(line("apich/units", "1.0.0", "") + &line("apich/units", "1.2.0", "")),
-            )
+            .write_index(&plot, &line("apich/plot", "2.0.0", ""))
             .unwrap();
-        let index = CacheIndex::new(&cache);
-        let resolution = aevia_resolve::resolve(&roots, &index, &Options::default()).expect("resolves");
+        let text = line("apich/units", "1.0.0", "") + &line("apich/units", "1.2.0", "");
+        let records = aevia_resolve::sparse::parse_text(&text).unwrap();
+        cache.write_index(&units, &text).unwrap();
+        index.replace_records(&units.key(), records);
+        let resolution =
+            aevia_resolve::resolve(&roots, &index, &Options::default()).expect("resolves");
         let tree = render_tree("app", "0.1.0", &resolution);
         assert!(tree.contains("apich/plot apich/plot 1.1.0"), "{tree}");
         assert!(tree.contains("Units apich/units 1.2.0"), "{tree}");
         assert_eq!(cache.cached_packages().len(), 2);
-        let _ = std::fs::remove_dir_all(&dir);
+        let fresh = CacheIndex::new(&cache);
+        assert!(aevia_resolve::resolve(&roots, &fresh, &Options::default()).is_err());
+    }
+
+    #[test]
+    fn refreshing_an_index_replaces_the_previously_parsed_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache {
+            root: dir.path().to_path_buf(),
+        };
+        let id: PackageId = "apich/plot".parse().unwrap();
+        cache
+            .write_index(&id, &line("apich/plot", "1.0.0", ""))
+            .unwrap();
+        let index = CacheIndex::new(&cache);
+        let version = Version::parse("1.0.0").unwrap();
+        assert!(!index.summaries(&id.key()).unwrap().is_empty());
+        assert!(index.record(&id.key(), &version).is_some());
+        let revised = line("apich/plot", "1.1.0", "");
+        let records = aevia_resolve::sparse::parse_text(&revised).unwrap();
+        cache.write_index(&id, &revised).unwrap();
+        index.replace_records(&id.key(), records);
+        assert!(index.record(&id.key(), &version).is_none());
+        assert!(
+            index
+                .record(&id.key(), &Version::parse("1.1.0").unwrap())
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn concurrent_cache_writers_leave_one_complete_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache {
+            root: dir.path().to_path_buf(),
+        };
+        let id: PackageId = "apich/plot".parse().unwrap();
+        let bodies: Vec<_> = (0..4)
+            .map(|i| line("apich/plot", &format!("1.0.{i}"), "").repeat(1000))
+            .collect();
+        cache
+            .write_index(&id, &line("apich/plot", "0.9.0", ""))
+            .unwrap();
+        for _ in 0..8 {
+            let start = std::sync::Barrier::new(bodies.len());
+            std::thread::scope(|scope| {
+                for body in &bodies {
+                    let (cache, id, start) = (&cache, &id, &start);
+                    scope.spawn(move || {
+                        start.wait();
+                        cache.write_index(id, body).unwrap();
+                    });
+                }
+            });
+            assert!(bodies.contains(&cache.read_index(&id).unwrap()));
+        }
+        let path = cache.index_file(&id);
+        let entries = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(entries, [path]);
+        assert_eq!(cache.cached_packages(), [id]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn index_replacement_retries_without_removing_the_previous_destination() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("index");
+        std::fs::write(&destination, b"previous").unwrap();
+        let mut reader = Some(
+            std::fs::File::options()
+                .read(true)
+                // Allow reads and writes, while denying deletion/replacement.
+                .share_mode(0x01 | 0x02)
+                .open(&destination)
+                .unwrap(),
+        );
+        let mut temporary = tempfile::NamedTempFile::new_in(directory.path()).unwrap();
+        temporary.write_all(b"replacement").unwrap();
+        let staging = temporary.path().to_path_buf();
+        let mut waits = Vec::new();
+        persist_index(temporary.into_temp_path(), &destination, |delay| {
+            assert_eq!(std::fs::read(&destination).unwrap(), b"previous");
+            assert_eq!(std::fs::read(&staging).unwrap(), b"replacement");
+            assert!(reader.take().is_some());
+            waits.push(delay);
+        })
+        .unwrap();
+        assert_eq!(waits, [std::time::Duration::from_millis(1)]);
+        assert_eq!(std::fs::read(&destination).unwrap(), b"replacement");
+        assert!(!staging.exists());
     }
 
     #[test]

@@ -109,16 +109,16 @@ impl PublishStatement {
     /// `E_STATEMENT` for a wrong tag, a missing or repeated field, a field out
     /// of order, a malformed version or checksum.
     pub fn parse(text: &str) -> Result<Self> {
-        let fields = parse_fields(
+        let [name, version, checksum, nonce, expires] = parse_fields(
             text,
             PUBLISH_TAG,
-            &["name", "version", "checksum", "nonce", "expires"],
+            ["name", "version", "checksum", "nonce", "expires"],
         )?;
-        let name = fields[0].parse::<PackageId>()?;
-        let version = parse_version(&fields[1])?;
-        let checksum = parse_checksum(&fields[2])?;
-        let nonce = parse_nonce(&fields[3])?;
-        let expires = parse_expires(&fields[4])?;
+        let name = name.parse::<PackageId>()?;
+        let version = parse_version(version)?;
+        let checksum = parse_checksum(checksum)?;
+        let nonce = parse_nonce(nonce)?;
+        let expires = parse_expires(expires)?;
         Ok(Self {
             name,
             version,
@@ -130,7 +130,7 @@ impl PublishStatement {
 
     /// Whether the statement has run out of time at `now`.
     #[must_use]
-    pub fn is_expired(
+    pub const fn is_expired(
         &self,
         now: i64,
     ) -> bool {
@@ -192,14 +192,14 @@ impl YankStatement {
     ///
     /// `E_STATEMENT` under the same rules as [`PublishStatement::parse`].
     pub fn parse(text: &str) -> Result<Self> {
-        let fields = parse_fields(
+        let [name, version, yanked, nonce, expires] = parse_fields(
             text,
             YANK_TAG,
-            &["name", "version", "yanked", "nonce", "expires"],
+            ["name", "version", "yanked", "nonce", "expires"],
         )?;
-        let name = fields[0].parse::<PackageId>()?;
-        let version = parse_version(&fields[1])?;
-        let yanked = match fields[2].as_str() {
+        let name = name.parse::<PackageId>()?;
+        let version = parse_version(version)?;
+        let yanked = match yanked {
             | "true" => true,
             | "false" => false,
             | other => {
@@ -209,8 +209,8 @@ impl YankStatement {
                 ));
             },
         };
-        let nonce = parse_nonce(&fields[3])?;
-        let expires = parse_expires(&fields[4])?;
+        let nonce = parse_nonce(nonce)?;
+        let expires = parse_expires(expires)?;
         Ok(Self {
             name,
             version,
@@ -222,7 +222,7 @@ impl YankStatement {
 
     /// Whether the statement has run out of time at `now`.
     #[must_use]
-    pub fn is_expired(
+    pub const fn is_expired(
         &self,
         now: i64,
     ) -> bool {
@@ -272,7 +272,7 @@ impl Statement {
 
     /// The package the statement concerns.
     #[must_use]
-    pub fn name(&self) -> &PackageId {
+    pub const fn name(&self) -> &PackageId {
         match self {
             | Self::Publish(statement) => &statement.name,
             | Self::Yank(statement) => &statement.name,
@@ -299,7 +299,7 @@ impl Statement {
 
     /// The expiry, in unix seconds.
     #[must_use]
-    pub fn expires(&self) -> i64 {
+    pub const fn expires(&self) -> i64 {
         match self {
             | Self::Publish(statement) => statement.expires,
             | Self::Yank(statement) => statement.expires,
@@ -308,7 +308,7 @@ impl Statement {
 
     /// `publish` or `yank`, for logs and the transparency ledger.
     #[must_use]
-    pub fn kind(&self) -> &'static str {
+    pub const fn kind(&self) -> &'static str {
         match self {
             | Self::Publish(_) => "publish",
             | Self::Yank(_) => "yank",
@@ -317,7 +317,7 @@ impl Statement {
 
     /// Whether the statement has run out of time at `now`.
     #[must_use]
-    pub fn is_expired(
+    pub const fn is_expired(
         &self,
         now: i64,
     ) -> bool {
@@ -325,11 +325,11 @@ impl Statement {
     }
 }
 
-fn parse_fields(
-    text: &str,
+fn parse_fields<'a, const N: usize>(
+    text: &'a str,
     tag: &str,
-    expected: &[&str],
-) -> Result<Vec<String>> {
+    expected: [&str; N],
+) -> Result<[&'a str; N]> {
     let mut lines = text.lines();
     match lines.next() {
         | Some(first) if first.trim_end() == tag => {},
@@ -341,8 +341,8 @@ fn parse_fields(
         },
         | None => return Err(Error::new(E_STATEMENT, "the statement is empty")),
     }
-    let mut values = Vec::new();
-    for (index, expected_key) in expected.iter().enumerate() {
+    let mut values = [""; N];
+    for (index, (expected_key, slot)) in expected.iter().zip(&mut values).enumerate() {
         let Some(line) = lines.next() else {
             return Err(Error::new(
                 E_STATEMENT,
@@ -352,7 +352,7 @@ fn parse_fields(
         let Some((key, value)) = line.split_once(':') else {
             return Err(Error::new(
                 E_STATEMENT,
-                format!("line {} is not `key: value`", index + 2),
+                format!("line {} is not `key: value`", index.saturating_add(2)),
             ));
         };
         if key.trim() != *expected_key {
@@ -360,7 +360,7 @@ fn parse_fields(
                 E_STATEMENT,
                 format!(
                     "line {} is `{}`; the canonical order is {}",
-                    index + 2,
+                    index.saturating_add(2),
                     key.trim(),
                     expected.join(", ")
                 ),
@@ -373,7 +373,7 @@ fn parse_fields(
                 format!("`{expected_key}` is empty"),
             ));
         }
-        values.push(value.to_string());
+        *slot = value;
     }
     if let Some(extra) = lines.find(|line| !line.trim().is_empty()) {
         return Err(Error::new(
@@ -402,6 +402,10 @@ fn parse_version(version: &str) -> Result<String> {
     Ok(version.to_string())
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "the signed checksum has a separate canonical form"
+)]
 fn parse_checksum(checksum: &str) -> Result<String> {
     let Some(hex_part) = checksum.strip_prefix("sha256:") else {
         return Err(Error::new(
@@ -501,7 +505,11 @@ mod tests {
             .render()
             .replace("version: 0.2.0", "version: 0.2.0+b1");
         let error = PublishStatement::parse(&text).expect_err("refused");
-        assert!(error.message.contains("build metadata"), "{}", error.message);
+        assert!(
+            error.message.contains("build metadata"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]

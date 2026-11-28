@@ -7,11 +7,14 @@ license.workspace = true
 repository.workspace = true
 
 [features]
+default = ["jit", "gpu-wgpu", "npy"]
 jit = ["aevia-rssn/jit"]
+gpu-wgpu = ["aevia-rssn/gpu-wgpu"]
+npy = ["aevia-rssn/npy"]
 
 [dependencies]
 aevia-stdlib-model = { path = "../../crates/aevia-stdlib-model" }
 aevia-rssn.workspace = true
 
-[lints.rust]
-unsafe_code = "forbid"
+[lints]
+workspace = true

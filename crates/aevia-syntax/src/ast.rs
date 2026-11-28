@@ -21,7 +21,7 @@ pub fn placeholder_param_name(index: usize) -> String {
 }
 
 /// A literal number in a unit literal.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NumberLit {
     /// An integer coefficient: `3 m` is `Real[L]` by default.
     Int(BigInt),
@@ -55,7 +55,7 @@ impl NumberLit {
 
     /// True for the decimal form.
     #[must_use]
-    pub fn is_decimal(&self) -> bool {
+    pub const fn is_decimal(&self) -> bool {
         matches!(self, Self::Decimal(_))
     }
 }
@@ -124,7 +124,7 @@ pub enum BinOp {
 impl BinOp {
     /// The source spelling, for diagnostics.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             | Self::Add => "+",
             | Self::Sub => "-",
@@ -159,7 +159,7 @@ pub struct Expr {
 impl Expr {
     /// Creates an expression node.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         kind: ExprKind,
         span: Span,
     ) -> Self {
@@ -345,6 +345,10 @@ pub struct Param {
 
 /// A statement inside a block.
 #[derive(Clone, Debug)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "preserves the public syntax tree representation without additional allocations"
+)]
 pub enum BlockStmt {
     /// `let p = e`
     Let {
@@ -392,6 +396,10 @@ pub enum DoStmt {
 
 /// An index or slice inside `[...]`.
 #[derive(Clone, Debug)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "preserves the public syntax tree representation without additional allocations"
+)]
 pub enum SliceAst {
     /// `i`
     Index(Expr),
@@ -423,7 +431,7 @@ pub struct Pat {
 impl Pat {
     /// Creates a pattern node.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         kind: PatKind,
         span: Span,
     ) -> Self {
@@ -480,7 +488,7 @@ pub enum PatKind {
 }
 
 /// A literal allowed in a pattern.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PatLit {
     /// An integer.
     Int(BigInt),
@@ -504,7 +512,7 @@ pub struct Ty {
 impl Ty {
     /// Creates a type node.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         kind: TyKind,
         span: Span,
     ) -> Self {
@@ -647,9 +655,9 @@ pub enum NatAst {
     /// A variable.
     Var(String),
     /// `a + b`.
-    Add(Box<NatAst>, Box<NatAst>),
+    Add(Box<Self>, Box<Self>),
     /// `a * b` (`b` must be a literal for the equation to stay linear).
-    Mul(Box<NatAst>, Box<NatAst>),
+    Mul(Box<Self>, Box<Self>),
 }
 
 /// A dimension expression as written in a type.
@@ -660,13 +668,13 @@ pub enum DimAst {
     /// `L`, `Length`, `d`, `Currency`.
     Name(String),
     /// `a*b`
-    Mul(Box<DimAst>, Box<DimAst>),
+    Mul(Box<Self>, Box<Self>),
     /// `a/b`
-    Div(Box<DimAst>, Box<DimAst>),
+    Div(Box<Self>, Box<Self>),
     /// `a^n`
-    Pow(Box<DimAst>, num_rational::BigRational),
+    Pow(Box<Self>, num_rational::BigRational),
     /// `(a)`
-    Paren(Box<DimAst>),
+    Paren(Box<Self>),
 }
 
 impl DimAst {
@@ -682,7 +690,11 @@ impl DimAst {
                 if exponent.denom().is_one() {
                     format!("{}^{}", base.to_source(), exponent.numer())
                 } else {
-                    format!("{}^{}", base.to_source(), crate::ast::format_rat(exponent))
+                    format!(
+                        "{}^({})",
+                        base.to_source(),
+                        aevia_dim::format_rational(exponent)
+                    )
                 }
             },
             | Self::Paren(inner) => format!("({})", inner.to_source()),
@@ -690,9 +702,6 @@ impl DimAst {
     }
 }
 
-fn format_rat(value: &num_rational::BigRational) -> String {
-    aevia_dim::format_rational(value)
-}
 
 /// The kind of a type parameter.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -731,7 +740,7 @@ impl Kind {
 
     /// The source spelling.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             | Self::Type => "Type",
             | Self::Dim => "Dim",
@@ -812,6 +821,25 @@ impl Decl {
     ) -> bool {
         self.attribute(name).is_some()
     }
+
+    /// True when `@hidden` or `@doc(hidden)` is present.
+    #[must_use]
+    pub fn is_doc_hidden(&self) -> bool {
+        if self.has_attribute("hidden") {
+            return true;
+        }
+        self.attrs.iter().any(|attr| {
+            attr.name == "doc"
+                && attr.args.iter().any(|arg| {
+                    match (&arg.name, &arg.value.kind) {
+                        | (None, ExprKind::Var(name)) | (Some(name), ExprKind::Bool(true)) => {
+                            name == "hidden"
+                        },
+                        | _ => false,
+                    }
+                })
+        })
+    }
 }
 
 /// The shape of a declaration.
@@ -827,6 +855,8 @@ pub enum DeclKind {
         names: Option<Vec<String>>,
         /// True for `open`.
         open: bool,
+        /// True for `export import` / `pub import` / `export open`.
+        export: bool,
     },
     /// `dimension Currency` or `dimension Area = L^2`
     Dimension {
@@ -866,7 +896,7 @@ pub enum DeclKind {
         /// Its parameters.
         params: Vec<TypeParam>,
         /// The method signatures.
-        methods: Vec<(String, Ty)>,
+        methods: Vec<ClassMethod>,
     },
     /// `instance Show for Vec2 where ...`
     Instance {
@@ -917,9 +947,22 @@ pub enum DeclKind {
     },
 }
 
+/// A method signature inside a type class.
+#[derive(Clone, Debug)]
+pub struct ClassMethod {
+    /// Whether `private` was written.
+    pub private: bool,
+    /// The method name.
+    pub name: String,
+    /// The method type signature.
+    pub ty: Ty,
+}
+
 /// A method definition inside an instance.
 #[derive(Clone, Debug)]
 pub struct InstanceMethod {
+    /// Whether `private` was written.
+    pub private: bool,
     /// The method name.
     pub name: String,
     /// Its parameters.
@@ -946,6 +989,8 @@ pub enum TypeBody {
 /// One variant constructor.
 #[derive(Clone, Debug)]
 pub struct Constructor {
+    /// Whether `private` was written.
+    pub private: bool,
     /// The constructor name.
     pub name: String,
     /// Its argument types.
@@ -959,6 +1004,8 @@ pub struct Constructor {
 pub struct Module {
     /// The declared module name, if any.
     pub name: Option<Vec<String>>,
+    /// Whether `private` or `@private` was written on the module header.
+    pub private: bool,
     /// The module's unit system (§5.11), from `module M with units natural`.
     pub unit_system: Option<(String, crate::span::Span)>,
     /// The declarations, in source order.

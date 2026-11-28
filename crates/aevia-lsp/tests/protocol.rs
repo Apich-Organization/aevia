@@ -423,6 +423,19 @@ fn a_request_before_initialize_is_refused() {
 }
 
 #[test]
+fn execute_command_refuses_anything_but_an_open_file_document() {
+    let (_, replies) = run(&[
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"workspace/executeCommand","params":{"command":"aevia.runFile","arguments":["--no-cache"]}}"#,
+        r#"{"jsonrpc":"2.0","id":3,"method":"workspace/executeCommand","params":{"command":"aevia.runFile","arguments":["file:///not-open.aev"]}}"#,
+        r#"{"jsonrpc":"2.0","id":4,"method":"shutdown","params":null}"#,
+        r#"{"jsonrpc":"2.0","method":"exit"}"#,
+    ]);
+    assert_eq!(reply(&replies, 2)["error"]["code"], -32602);
+    assert_eq!(reply(&replies, 3)["error"]["code"], -32602);
+}
+
+#[test]
 fn exit_without_shutdown_is_ungraceful() {
     let (exit, _) = run(&[
         r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
@@ -521,6 +534,62 @@ fn run_json(messages: Vec<Value>) -> (Exit, Vec<Value>) {
         .collect();
     let borrowed: Vec<&str> = owned.iter().map(String::as_str).collect();
     run(&borrowed)
+}
+
+#[test]
+fn semantic_token_ranges_keep_partial_tokens_and_follow_utf16_edits() {
+    use serde_json::json;
+
+    let uri = "untitled:viewport.aev";
+    let source = "\r\nlet purple = \"😀\"\r\nlet result = (\"😀\", purple)\r\nlet after = 1\r\n";
+    let range = |line, start, end| json!({"start":{"line":line,"character":start},"end":{"line":line,"character":end}});
+    let request = |id, range| {
+        json!({"jsonrpc":"2.0","id":id,"method":"textDocument/semanticTokens/range",
+            "params":{"textDocument":{"uri":uri},"range":range}})
+    };
+    let change = |version, range, text| {
+        json!({"jsonrpc":"2.0","method":"textDocument/didChange","params":{
+            "textDocument":{"uri":uri,"version":version},"contentChanges":[{"range":range,"text":text}]}})
+    };
+    let (_, replies) = run_json(vec![
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{
+            "textDocument":{"uri":uri,"version":1,"text":source}}}),
+        request(2, range(2, 21, 22)),
+        request(3, range(2, 19, 20)),
+        request(4, range(2, 21, 21)),
+        request(5, range(2, 30, 35)),
+        request(6, range(2, 22, 21)),
+        request(7, range(20, 0, 1)),
+        change(2, range(2, 16, 17), "broken"),
+        request(8, range(2, 21, 22)),
+        change(2, range(2, 15, 17), "a"),
+        request(9, range(2, 20, 21)),
+        json!({"jsonrpc":"2.0","id":10,"method":"shutdown"}),
+        json!({"jsonrpc":"2.0","method":"exit"}),
+    ]);
+    assert_eq!(
+        reply(&replies, 1)["result"]["capabilities"]["semanticTokensProvider"]["range"],
+        true
+    );
+    for id in [2, 8] {
+        assert_eq!(
+            reply(&replies, id)["result"]["data"],
+            json!([2, 20, 6, 5, 0]),
+            "{replies:#?}"
+        );
+    }
+    for id in [3, 4, 5] {
+        assert_eq!(reply(&replies, id)["result"]["data"], json!([]));
+    }
+    for id in [6, 7] {
+        assert_eq!(reply(&replies, id)["error"]["code"], -32602);
+    }
+    assert_eq!(
+        reply(&replies, 9)["result"]["data"],
+        json!([2, 19, 6, 5, 0])
+    );
+    assert_eq!(published(&replies, uri).len(), 2);
 }
 
 /// A package whose `B` imports `A`, and the URIs/positions a client would use.
@@ -906,6 +975,58 @@ fn references_rename_and_its_edits_cross_files() {
 }
 
 #[test]
+fn document_highlights_follow_symbol_identity_in_the_open_buffer() {
+    let (_package, uri, _a_uri) = imported_package("document-highlights");
+    let source = "module B\nimport A\nlet first = A.sqrt(1.0 m)\nlet second = A.sqrt(2.0 m)\nfn local(sqrt: Int): Int = sqrt\n";
+    let (_exit, replies) = run_json(vec![
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+        serde_json::json!({
+            "jsonrpc":"2.0","method":"textDocument/didOpen",
+            "params":{"textDocument":{"uri":uri,"version":1,"text":source}}
+        }),
+        serde_json::json!({
+            "jsonrpc":"2.0","id":2,"method":"textDocument/documentHighlight",
+            "params":{"textDocument":{"uri":uri},"position":{"line":2,"character":16}}
+        }),
+        serde_json::json!({
+            "jsonrpc":"2.0","id":3,"method":"textDocument/documentHighlight",
+            "params":{"textDocument":{"uri":uri},"position":{"line":4,"character":29}}
+        }),
+        serde_json::json!({
+            "jsonrpc":"2.0","id":4,"method":"textDocument/documentHighlight",
+            "params":{"textDocument":{"uri":uri},"position":{"line":2,"character":22}}
+        }),
+        serde_json::json!({"jsonrpc":"2.0","id":5,"method":"shutdown","params":null}),
+        serde_json::json!({"jsonrpc":"2.0","method":"exit"}),
+    ]);
+    assert_eq!(
+        reply(&replies, 1)["result"]["capabilities"]["documentHighlightProvider"],
+        true
+    );
+    let imports = &reply(&replies, 2)["result"];
+    assert_eq!(imports.as_array().map(Vec::len), Some(2), "{replies:#?}");
+    assert_eq!(
+        imports[0]["range"],
+        serde_json::json!({
+            "start": {"line": 2, "character": 14},
+            "end": {"line": 2, "character": 18}
+        })
+    );
+    assert_eq!(imports[1]["range"]["start"]["line"], 3);
+    let locals = &reply(&replies, 3)["result"];
+    assert_eq!(locals.as_array().map(Vec::len), Some(2), "{replies:#?}");
+    assert_eq!(
+        locals[0]["range"]["start"],
+        serde_json::json!({"line":4,"character":9})
+    );
+    assert_eq!(
+        locals[1]["range"]["start"],
+        serde_json::json!({"line":4,"character":27})
+    );
+    assert_eq!(reply(&replies, 4)["result"], serde_json::json!([]));
+}
+
+#[test]
 fn rename_refusals_are_errors_with_reasons() {
     let package = TempPackage::new("rename-refusals");
     let a_source = "module A\n\nfn sqrt(x: Real[L]): Real[L] = x\nfn magnitude(): Int = 1\n";
@@ -1220,6 +1341,61 @@ fn rename_uses_unsaved_import_ranges_and_open_document_versions() {
     assert!(new_b.contains("A.renamed()"), "{new_b}");
 }
 
+#[cfg(unix)]
+#[test]
+fn imports_and_rename_share_the_winning_open_alias_revision() {
+    use serde_json::json;
+
+    let package = TempPackage::new("open-alias-revision");
+    let primary = "module A\n\nfn value(): Int = 1\n";
+    let alias_text = "module A\n\n## Editable overlay.\n\nfn value(): Int = 2\n";
+    let changed_alias = "module A\n\n## Edited overlay.\n\n\nfn value(): Float = 2.0\n";
+    let importer = "module B\nimport A\nlet got = A.value()\n";
+    let file = package.write("src/A.aev", primary);
+    let alias = package.path("src/Alias.aev");
+    std::os::unix::fs::symlink(&file, &alias).unwrap();
+    let primary_uri = aevia_lsp::protocol::uri_from_path(&file);
+    let alias_uri = aevia_lsp::protocol::uri_from_path(&alias);
+    let importer_uri = aevia_lsp::protocol::uri_from_path(&package.write("src/B.aev", importer));
+    let open = |uri: &str, version, text: &str| json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri,"version":version,"text":text}}});
+    let change = |uri: &str, version, text: &str| json!({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":uri,"version":version},"contentChanges":[{"text":text}]}});
+    let query = |id, method| {
+        json!({"jsonrpc":"2.0","id":id,"method":method,"params":{"textDocument":{"uri":importer_uri},
+            "position":position_of(importer,"value",1),"newName":"renamed"}})
+    };
+    let (_, replies) = run_json(vec![
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+        open(&primary_uri, 4, primary),
+        open(&alias_uri, 8, alias_text),
+        open(&importer_uri, 5, importer),
+        change(&primary_uri, 5, "module A\n\nfn value(): Bool = true\n"),
+        query(2, "textDocument/hover"),
+        change(&alias_uri, 9, changed_alias),
+        query(3, "textDocument/hover"),
+        query(4, "textDocument/rename"),
+        json!({"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":alias_uri}}}),
+        query(5, "textDocument/hover"),
+        json!({"jsonrpc":"2.0","id":6,"method":"shutdown"}),
+        json!({"jsonrpc":"2.0","method":"exit"}),
+    ]);
+    for (id, expected) in [(2, "Int"), (3, "Float"), (5, "Bool")] {
+        assert!(
+            reply(&replies, id)["result"].to_string().contains(expected),
+            "{replies:#?}"
+        );
+    }
+    let edits = reply(&replies, 4)["result"]["documentChanges"]
+        .as_array()
+        .unwrap();
+    let changed = edits
+        .iter()
+        .find(|edit| edit["textDocument"]["uri"] == alias_uri)
+        .unwrap_or_else(|| panic!("{edits:#?}"));
+    assert_eq!(changed["textDocument"]["version"], 9);
+    let renamed = apply_changes(changed_alias, changed["edits"].as_array().unwrap());
+    assert!(renamed.contains("fn renamed(): Float = 2.0"), "{renamed}");
+}
+
 #[test]
 fn module_queries_follow_exact_owner_edges_and_rename_the_correct_dependency() {
     let package = TempPackage::new("owner-import-edges");
@@ -1370,6 +1546,15 @@ fn filesystem_notifications_refresh_closed_dependencies_without_a_hover_request(
             .unwrap()
             .is_empty()
     );
+    // Opening enough other files evicts the checked importer from the program
+    // cache. The watcher still has to remember what triggered its load.
+    for index in 0..aevia_analysis::cache::CAPACITY {
+        let spare = "let spare = 0\n";
+        let path = package.write(&format!("src/Spare{index}.aev"), spare);
+        let uri = aevia_lsp::protocol::uri_from_path(&path);
+        server.handle(serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri,"version":1,"text":spare}}}));
+    }
+    assert_eq!(messages.try_iter().count(), aevia_analysis::cache::CAPACITY);
     std::fs::write(&a, "module A\nfn value(): Bool = true\n").unwrap();
     server.handle(serde_json::json!({"jsonrpc":"2.0","method":"workspace/didChangeWatchedFiles","params":{"changes":[{"uri":a_uri,"type":2}]}}));
     let changed: Vec<Value> = messages.try_iter().collect();
@@ -1425,6 +1610,36 @@ fn retargeted_symlink_dependencies_refresh_when_the_new_target_changes() {
             .is_empty(),
         "{changed:#?}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_cached_open_overlay_follows_an_alias_when_it_is_retargeted() {
+    let package = TempPackage::new("retargeted-overlay");
+    let one = package.write("src/One.aev", "module A\nfn value(): Int = 1\n");
+    let two = package.write("src/Two.aev", "module A\nfn value(): Bool = true\n");
+    let alias = package.path("src/A.aev");
+    std::os::unix::fs::symlink(&one, &alias).unwrap();
+    let source = "import A\nlet got = A.value()\n";
+    let uri = aevia_lsp::protocol::uri_from_path(&package.write("src/B.aev", source));
+    let alias_uri = aevia_lsp::protocol::uri_from_path(&alias);
+    let (out, messages) = std::sync::mpsc::channel();
+    let mut server = aevia_lsp::Server::new(out);
+    server.handle(serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}));
+    server.handle(serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":alias_uri,"version":1,"text":"module A\nfn value(): Float = 1.0\n"}}}));
+    server.handle(serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri,"version":1,"text":source}}}));
+    let hover = |id| serde_json::json!({"jsonrpc":"2.0","id":id,"method":"textDocument/hover","params":{"textDocument":{"uri":uri},"position":{"line":1,"character":13}}});
+    server.handle(hover(2));
+    std::fs::remove_file(&alias).unwrap();
+    std::os::unix::fs::symlink(&two, &alias).unwrap();
+    server.handle(hover(3));
+    let replies: Vec<_> = messages.try_iter().collect();
+    for id in [2, 3] {
+        assert!(
+            reply(&replies, id)["result"].to_string().contains("Float"),
+            "{replies:#?}"
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -1522,4 +1737,88 @@ fn virtual_buffers_get_versioned_rename_edits_and_callback_signature_help() {
         .find(|item| item["label"] == "to_callback")
         .unwrap();
     assert_eq!(callback["kind"], 3, "function completion kind");
+}
+
+#[test]
+fn malformed_requests_and_lifecycle_notifications_do_not_mutate_documents() {
+    let (exit, replies) = run(&[
+        r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"untitled:source","version":1,"text":"let x = 1"}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"shutdown"}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"initialize","params":{}}"#,
+        r#"{"jsonrpc":"2.0","id":{},"method":"textDocument/hover"}"#,
+        r#"{"jsonrpc":"2.0","id":3,"method":false}"#,
+        r#"{"jsonrpc":"2.0","id":4,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"untitled:source"}}}"#,
+        r#"{"jsonrpc":"2.0","id":5,"method":"shutdown"}"#,
+        r#"{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"untitled:source"}}}"#,
+        r#"{"jsonrpc":"2.0","method":"exit"}"#,
+    ]);
+    assert_eq!(exit, Exit::Graceful);
+    assert_eq!(reply(&replies, 1)["error"]["code"], -32002);
+    assert!(
+        replies
+            .iter()
+            .any(|message| message["id"].is_null() && message["error"]["code"] == -32600)
+    );
+    assert_eq!(reply(&replies, 3)["error"]["code"], -32600);
+    assert!(reply(&replies, 4)["result"].is_null());
+    assert!(published(&replies, "untitled:source").is_empty());
+}
+
+#[test]
+fn editor_queries_follow_locals_and_recover_signatures_while_typing() {
+    use serde_json::json;
+
+    let uri = "untitled:editing";
+    let header = "fn choose(label: String, local_count: Int): Int = local_count";
+    let complete = r#"let value = choose(")", 2)"#;
+    let unfinished = r#"let value = choose(")", "#;
+    let position = |line, character| json!({"textDocument":{"uri":uri},"position":{"line":line,"character":character}});
+    let completion = position(0, header.rfind("local_count").unwrap());
+    let signature = position(1, complete.find('2').unwrap());
+    let recovered = position(1, unfinished.len());
+    let (_, replies) = run_json(vec![
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{
+            "textDocument":{"uri":uri,"version":1,"text":format!("{header}\n{complete}\n")}
+        }}),
+        json!({"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":completion}),
+        json!({"jsonrpc":"2.0","id":3,"method":"textDocument/signatureHelp","params":signature}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didChange","params":{
+            "textDocument":{"uri":uri,"version":2},
+            "contentChanges":[{"text":format!("{header}\n{unfinished}\n")}]
+        }}),
+        json!({"jsonrpc":"2.0","id":4,"method":"textDocument/signatureHelp","params":recovered}),
+        json!({"jsonrpc":"2.0","id":5,"method":"shutdown"}),
+        json!({"jsonrpc":"2.0","method":"exit"}),
+    ]);
+    let items = reply(&replies, 2)["result"]
+        .as_array()
+        .expect("completions");
+    assert!(items.iter().any(|item| item["label"] == "local_count"));
+    for id in [3, 4] {
+        let result = &reply(&replies, id)["result"];
+        assert_eq!(
+            result["signatures"][0]["label"],
+            "choose: (String, Int) -> Int"
+        );
+        assert_eq!(result["activeParameter"], 1);
+    }
+}
+
+#[test]
+fn code_actions_honor_the_requested_kind_and_scratch_code_has_no_run_lens() {
+    let (_, replies) = run(&[
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+        r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"untitled:source","version":1,"text":"let bad = 1 m + 1\nfn main(): IO Unit = println(42)\n"}}}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/codeAction","params":{"textDocument":{"uri":"untitled:source"},"range":{"start":{"line":0,"character":12},"end":{"line":0,"character":12}},"context":{"diagnostics":[],"only":["quickfix"]}}}"#,
+        r#"{"jsonrpc":"2.0","id":3,"method":"textDocument/codeAction","params":{"textDocument":{"uri":"untitled:source"},"range":{"start":{"line":0,"character":12},"end":{"line":0,"character":12}},"context":{"diagnostics":[],"only":["source.organizeImports"]}}}"#,
+        r#"{"jsonrpc":"2.0","id":4,"method":"textDocument/codeLens","params":{"textDocument":{"uri":"untitled:source"}}}"#,
+        r#"{"jsonrpc":"2.0","id":5,"method":"shutdown"}"#,
+        r#"{"jsonrpc":"2.0","method":"exit"}"#,
+    ]);
+    let fixes = reply(&replies, 2)["result"].as_array().expect("fixes");
+    assert!(!fixes.is_empty());
+    assert!(fixes.iter().all(|fix| fix["kind"] == "quickfix"));
+    assert_eq!(reply(&replies, 3)["result"], serde_json::json!([]));
+    assert_eq!(reply(&replies, 4)["result"], serde_json::json!([]));
 }

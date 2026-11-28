@@ -43,7 +43,7 @@ pub enum Sort {
 impl Sort {
     /// The wire name, which is the spelling the server documents.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             | Self::Relevance => "relevance",
             | Self::Downloads => "downloads",
@@ -58,6 +58,10 @@ impl Sort {
 /// # Errors
 ///
 /// The registry's error, or a JSON failure when serialising the answer.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the search command owns its pagination parameters and output schema"
+)]
 pub async fn search(
     app: &App,
     query: &str,
@@ -106,6 +110,10 @@ pub async fn search(
 /// # Errors
 ///
 /// The registry's error, or a JSON failure when serialising the answer.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the info command selects human-readable or JSON package metadata"
+)]
 pub async fn info(
     app: &App,
     id: &aevia_registry_core::PackageId,
@@ -120,20 +128,41 @@ pub async fn info(
 }
 
 /// Prints a package page for a person.
+#[allow(
+    clippy::single_call_fn,
+    reason = "human package details have their own stable field labels and ordering"
+)]
 fn print_page(page: &CratePage) {
     println!("{} {}", page.id, page.selected.version);
     if let Some(description) = &page.description {
         println!("{description}");
     }
     println!();
+    if let Some(edition) = &page.edition {
+        println!("edition     {edition}");
+    }
+    if !page.authors.is_empty() {
+        println!("authors     {}", page.authors.join(", "));
+    }
     if let Some(license) = &page.license {
         println!("license     {license}");
+    } else if let Some(license_file) = &page.license_file {
+        println!("license     file:{license_file}");
     }
     if let Some(repository) = &page.repository {
         println!("repository  {repository}");
     }
+    if let Some(homepage) = &page.homepage {
+        println!("homepage    {homepage}");
+    }
+    if let Some(documentation) = &page.documentation {
+        println!("docs        {documentation}");
+    }
     if !page.keywords.is_empty() {
         println!("keywords    {}", page.keywords.join(", "));
+    }
+    if !page.categories.is_empty() {
+        println!("categories  {}", page.categories.join(", "));
     }
     println!(
         "downloads   {} across {} version{}",
@@ -190,6 +219,10 @@ fn print_page(page: &CratePage) {
 ///
 /// `E_KEY` when a key file cannot be read. A missing `gpg` is a warning, not a
 /// failure: an SSH-only publisher still gets their list.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the key list command owns local discovery and output formatting"
+)]
 pub fn key_list(app: &App) -> Result<(), CliError> {
     let keys = keys::discover(None)?;
     if keys.is_empty() {
@@ -217,6 +250,8 @@ pub fn key_list(app: &App) -> Result<(), CliError> {
         }
         if let Some(reason) = key.unsupported_reason() {
             println!("    unusable: {reason}");
+        } else if let Some(warning) = key.kind.preference_warning() {
+            println!("    note: {warning}");
         }
     }
     Ok(())
@@ -227,6 +262,10 @@ pub fn key_list(app: &App) -> Result<(), CliError> {
 /// # Errors
 ///
 /// A usage error when no key can be chosen, `E_KEY` when it cannot be read.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the key show command combines a local key and its registry status"
+)]
 pub async fn key_show(
     app: &App,
     fingerprint: Option<&str>,
@@ -252,6 +291,8 @@ pub async fn key_show(
     println!("default     {}", if is_default { "yes" } else { "no" });
     if let Some(reason) = local.unsupported_reason() {
         println!("usable      no: {reason}");
+    } else if let Some(warning) = local.kind.preference_warning() {
+        println!("warning     {warning}");
     }
 
     // Registration is a network question, so a failure here is reported as an
@@ -262,9 +303,8 @@ pub async fn key_show(
                 "registered  yes{}",
                 status
                     .publisher
-                    .map(|publisher| format!(" — {}", publisher.label()))
-                    .unwrap_or_default()
-            )
+                    .map_or_default(|publisher| format!(" — {}", publisher.label()))
+            );
         },
         | Ok(_) => {
             println!("registered  no");
@@ -284,6 +324,10 @@ pub async fn key_show(
 ///
 /// Only a failure to read the current directory or a malformed config, both of
 /// which mean nothing else could work either.
+#[allow(
+    clippy::single_call_fn,
+    reason = "status reports configuration, local keys and registry reachability together"
+)]
 pub async fn status(app: &App) -> Result<(), CliError> {
     let cwd = std::env::current_dir()
         .map_err(|error| CliError::new(format!("cannot read the current directory: {error}")))?;
@@ -293,18 +337,12 @@ pub async fn status(app: &App) -> Result<(), CliError> {
             .map(|manifest| (root, manifest))
     });
     let keys = keys::discover(None).unwrap_or_default();
-    let default = app
-        .config
-        .default_key
-        .as_deref()
-        .and_then(|fingerprint| keys::find(&keys, fingerprint))
-        .map(|key| key.fingerprint.clone())
-        .or_else(|| {
-            match keys.as_slice() {
-                | [only] => Some(only.fingerprint.clone()),
-                | _ => None,
-            }
-        });
+    let default_key = keys::resolve(&keys, None, &app.config).ok();
+    let default = default_key.as_ref().map(|key| key.fingerprint.clone());
+    let default_kind = default_key
+        .as_ref()
+        .map(|key| key.kind)
+        .or(app.config.default_key_kind);
 
     // `None` means "no key was chosen at all", which is a different answer from
     // "the registry could not be asked", and a publisher reading `status` needs
@@ -326,7 +364,7 @@ pub async fn status(app: &App) -> Result<(), CliError> {
             "registry": app.client.base(),
             "config": app.home.join("config.toml").display().to_string(),
             "default_key": default,
-            "default_key_kind": app.config.default_key_kind.map(|kind| kind.as_str()),
+            "default_key_kind": default_kind.map(aevia_registry_core::signature::KeyKind::as_str),
             "registered": match &registration {
                 | Some(Ok(status)) => serde_json::Value::Bool(status.registered),
                 | _ => serde_json::Value::Null,
@@ -359,13 +397,13 @@ pub async fn status(app: &App) -> Result<(), CliError> {
         | Some(fingerprint) => {
             println!(
                 "default key  {fingerprint}{}",
-                app.config
-                    .default_key_kind
-                    .map(|kind| format!(" ({})", kind.as_str()))
-                    .unwrap_or_default()
-            )
+                default_kind.map_or_default(|kind| format!(" ({})", kind.as_str()))
+            );
         },
         | None => println!("default key  none — run `aevia-pkg login`"),
+    }
+    if let Some(kind) = default_kind {
+        keys::warn_key_preference(kind, app.quiet, &[]);
     }
     match &registration {
         | Some(Ok(status)) if status.registered => {
@@ -374,9 +412,8 @@ pub async fn status(app: &App) -> Result<(), CliError> {
                 status
                     .publisher
                     .as_ref()
-                    .map(|publisher| format!(" — {}", publisher.label()))
-                    .unwrap_or_default()
-            )
+                    .map_or_default(|publisher| format!(" — {}", publisher.label()))
+            );
         },
         | Some(Ok(_)) => println!("registered   no — run `aevia-pkg login`"),
         | Some(Err(message)) => println!("registered   unknown ({message})"),
@@ -403,7 +440,7 @@ pub async fn status(app: &App) -> Result<(), CliError> {
                 manifest.name,
                 manifest.version,
                 root.display()
-            )
+            );
         },
         | None => println!("package      none in `{}` or above", cwd.display()),
     }
@@ -412,6 +449,10 @@ pub async fn status(app: &App) -> Result<(), CliError> {
 
 /// Reads the config for `status`, so a broken file is a line, not a crash.
 #[must_use]
+#[allow(
+    clippy::single_call_fn,
+    reason = "status renders a configuration error alongside its remaining observations"
+)]
 pub fn load_config(home: &Path) -> (Config, Option<String>) {
     match Config::load(home) {
         | Ok(config) => (config, None),

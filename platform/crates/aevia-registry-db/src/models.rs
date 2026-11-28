@@ -16,14 +16,26 @@ pub struct Publisher {
     pub id: i64,
     /// `github`, `orcid` or `github-org`.
     pub kind: String,
-    /// The normalised handle.
+    /// The permanent Aevia namespace.
     pub handle: String,
+    /// The stable GitHub account ID, once independently verified.
+    pub github_id: Option<i64>,
     /// The name the provider shows.
     pub display_name: Option<String>,
     /// The avatar the provider shows.
     pub avatar_url: Option<String>,
     /// When the account first signed in.
     pub created_at: DateTime<Utc>,
+}
+
+/// An organisation whose installation and active membership were verified.
+pub struct GithubOrganisation {
+    /// Stable GitHub organisation account ID.
+    pub github_id: i64,
+    /// Current login, used to claim a namespace for a new registry identity.
+    pub login: String,
+    /// The avatar reported by GitHub.
+    pub avatar_url: Option<String>,
 }
 
 /// A public key bound to a publisher.
@@ -58,14 +70,26 @@ pub struct Package {
     pub name: String,
     /// `lower(name)`.
     pub name_key: String,
+    /// Language edition declared in `aevia.toml`.
+    pub edition: Option<String>,
+    /// Package authors declared in `aevia.toml`.
+    pub authors: Vec<String>,
     /// One sentence.
     pub description: Option<String>,
     /// An SPDX identifier.
     pub license: Option<String>,
+    /// Custom license file path when `license-file` is used.
+    pub license_file: Option<String>,
     /// Where the source lives.
     pub repository: Option<String>,
+    /// Project homepage URL.
+    pub homepage: Option<String>,
+    /// Documentation URL.
+    pub documentation: Option<String>,
     /// Up to five keywords.
     pub keywords: Vec<String>,
+    /// Up to five registry categories.
+    pub categories: Vec<String>,
     /// When the package first appeared.
     pub created_at: DateTime<Utc>,
     /// When it last changed.
@@ -212,6 +236,17 @@ pub struct LogEntry {
     pub created_at: DateTime<Utc>,
 }
 
+/// The newest transparency log entry's cursor and digest.
+#[derive(Clone, Debug)]
+pub struct LogHead {
+    /// The entry's sequence number.
+    pub seq: i64,
+    /// The hash of the newest entry.
+    pub entry_hash: String,
+    /// When it was appended.
+    pub created_at: DateTime<Utc>,
+}
+
 /// A package as a list shows it: with its owner and its newest version.
 #[derive(Clone, Debug, sqlx::FromRow)]
 pub struct PackageSummary {
@@ -252,6 +287,23 @@ pub struct Dependent {
     pub req: String,
 }
 
+/// One published version, as the feed lists it.
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct Release {
+    /// The owner's handle.
+    pub owner_handle: String,
+    /// The package name, as its author spells it.
+    pub name: String,
+    /// The version.
+    pub version: String,
+    /// The package's sentence.
+    pub description: Option<String>,
+    /// `sha256:<hex>`.
+    pub checksum: String,
+    /// When it was published.
+    pub created_at: DateTime<Utc>,
+}
+
 /// The columns a new version writes.
 pub struct NewVersion<'a> {
     /// The package.
@@ -278,4 +330,21 @@ pub struct NewVersion<'a> {
     pub signature: &'a str,
     /// The statement.
     pub statement: &'a str,
+    /// Whether a documentation job should be queued for this version.
+    pub build_docs: bool,
+}
+
+/// The information needed to rebuild documentation from an immutable archive.
+#[derive(sqlx::FromRow)]
+pub struct DocsJob {
+    /// Registry version identifier.
+    pub version_id: i64,
+    /// Published version string.
+    pub version: String,
+    /// The signed archive digest.
+    pub checksum: String,
+    /// Package owner path segment.
+    pub owner: String,
+    /// Canonical package name.
+    pub name: String,
 }

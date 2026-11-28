@@ -1,0 +1,39 @@
+[package]
+name = "zed_aevia"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+zed_extension_api = "0.7.0"
+
+[lints.rust]
+missing_docs = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+arithmetic_side_effects = "deny"
+dbg_macro = "deny"
+expect_used = "deny"
+implicit_clone = "deny"
+indexing_slicing = "deny"
+missing_safety_doc = "deny"
+same_item_push = "deny"
+single_call_fn = "deny"
+todo = "deny"
+undocumented_unsafe_blocks = "deny"
+unimplemented = "deny"
+unnecessary_safety_comment = "deny"
+unwrap_used = "deny"
+
+# Not part of the aevia workspace: Zed builds this crate for wasm32-wasip2 on its own.
+[workspace]

@@ -3,14 +3,13 @@
 //! Run it in release, because the question is what a user waits for:
 //!
 //! ```console
-//! CARGO_BUILD_JOBS=4 cargo run -p aevia-std --release --example matmul_bench
+//! bazel run //:benchmark -- matmul
 //! ```
 //!
-//! "before" is [`aevia_std::linalg::legacy::matmul`], the hand-written triple
-//! loop the runtime's `@` operator still runs; "after" is
-//! [`aevia_std::linalg::matmul`], the `faer` kernel. Both are given the same
-//! 256×256 operands and are run enough times that the number is a median, not a
-//! single sample that happened to be scheduled well.
+//! The benchmark compares the sequential [`aevia_std::linalg::legacy::matmul`]
+//! with [`aevia_std::linalg::matmul`], the blocked kernel used by the dense
+//! matrix `@` fast path. Both use identical 256×256 operands. The reported
+//! time is the median across samples.
 //!
 //! `RAYON_NUM_THREADS` is honoured: `faer` reads the global rayon pool.
 
@@ -45,9 +44,10 @@ fn report(
     elapsed: Duration,
 ) {
     let seconds = elapsed.as_secs_f64();
+    let millis = seconds * 1e3;
     let flops = 2.0 * (N as f64).powi(3);
     println!(
-        "{label:<10} {seconds:>8.3} ms   {:>7.2} GFLOP/s",
+        "{label:<10} {millis:>8.3} ms   {:>7.2} GFLOP/s",
         flops / seconds / 1e9
     );
 }

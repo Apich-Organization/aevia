@@ -1,5 +1,5 @@
 ## Conformance tests for dimensions and arithmetic.
-## Run with: cargo run -p aevia-cli -- test tests/kinematics.aev
+## Run with: bazel run //:aevia -- test tests/kinematics.aev
 let g = 9.80665 m/s^2
 
 fn fall_time(h: Float[L]): Float[T] = sqrt(2 * h / g)

@@ -1,24 +1,29 @@
 //! GitHub sign-in, through a GitHub App.
 //!
-//! The App is used for two things: the user-authorisation flow (which proves
-//! the handle) and the installation listing (which proves organisation
-//! membership). Nothing is written until both calls succeed.
+//! The authenticated profile establishes the user's stable GitHub ID. An
+//! organisation grant also requires active membership and installation access
+//! for the same numeric organisation ID.
+
+use std::collections::BTreeMap;
+use std::collections::HashSet;
+use std::fmt::Write as _;
+use std::time::Duration;
 
 use axum::extract::Query;
 use axum::extract::State;
 use axum::http::HeaderMap;
+use axum::http::header;
 use axum::response::IntoResponse;
 use axum::response::Redirect;
 use axum::response::Response;
-use chrono::Utc;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
+use aevia_registry_db::models::GithubOrganisation;
 use aevia_registry_db::repo;
 
-use crate::auth::Identity;
 use crate::auth::Provider;
 use crate::error::PageError;
-use crate::http;
 use crate::state::AppState;
 use crate::state::safe_next;
 
@@ -48,6 +53,7 @@ struct TokenResponse {
 
 #[derive(Deserialize)]
 struct GithubUser {
+    id: i64,
     login: String,
     name: Option<String>,
     avatar_url: Option<String>,
@@ -65,10 +71,22 @@ struct Installation {
 
 #[derive(Deserialize)]
 struct Account {
+    id: i64,
     login: String,
     avatar_url: Option<String>,
     #[serde(rename = "type")]
     kind: String,
+}
+
+#[derive(Deserialize)]
+struct Membership {
+    state: String,
+    organization: Organisation,
+}
+
+#[derive(Deserialize)]
+struct Organisation {
+    id: i64,
 }
 
 /// `GET /auth/github/start`
@@ -87,15 +105,7 @@ pub async fn start(
         ));
     };
     let next = safe_next(params.next.as_deref());
-    let state_token = http::random_hex(16);
-    repo::create_oauth_state(
-        &state.pool,
-        &state_token,
-        Provider::Github.as_str(),
-        &next,
-        Utc::now() + chrono::Duration::minutes(10),
-    )
-    .await?;
+    let state_token = super::issue_state(&state, Provider::Github, &next).await?;
     let redirect_uri = state.config.url("/auth/github/callback");
     let target = format!(
         "https://github.com/login/oauth/authorize?client_id={}&state={}&redirect_uri={}&allow_signup=false",
@@ -103,7 +113,9 @@ pub async fn start(
         state_token,
         urlencode(&redirect_uri),
     );
-    Ok(Redirect::temporary(&target).into_response())
+    let mut response = Redirect::temporary(&target).into_response();
+    super::set_state_cookie(&mut response, &state, Provider::Github, Some(&state_token));
+    Ok(response)
 }
 
 /// `GET /auth/github/callback`
@@ -130,13 +142,7 @@ pub async fn callback(
             "the sign-in callback is missing its code or state",
         ));
     };
-    let Some(next) =
-        repo::take_oauth_state(&state.pool, &state_token, Provider::Github.as_str()).await?
-    else {
-        return Err(PageError::forbidden(
-            "this sign-in link has expired or was already used; start again from /login",
-        ));
-    };
+    let next = super::take_state(&state, Provider::Github, &state_token, &headers).await?;
 
     let redirect_uri = state.config.url("/auth/github/callback");
     let token: TokenResponse = state
@@ -185,39 +191,40 @@ pub async fn callback(
         .await
         .map_err(|error| PageError::internal(format!("GitHub's profile is not JSON: {error}")))?;
 
-    let handle = aevia_registry_core::name::normalize_owner(&user.login);
-    let identity = Identity {
-        kind: "github",
-        handle: handle.clone(),
-        display_name: user.name,
-        avatar_url: user.avatar_url,
-    };
-    let publisher = crate::auth::upsert(&state, &identity).await?;
+    let publisher = repo::upsert_github_user(
+        &state.pool,
+        user.id,
+        &user.login,
+        user.name.as_deref(),
+        user.avatar_url.as_deref(),
+    )
+    .await?
+    .ok_or_else(|| {
+        PageError::forbidden(
+            "This GitHub account cannot claim the Aevia namespace. For an existing account, \
+             contact the registry operator for a reviewed identity binding.",
+        )
+    })?;
 
-    // Organisation membership: only installations the user can actually reach.
-    // A failure here must not block sign-in — it only limits which scopes the
-    // user may publish under.
-    match installations(&state, &access_token).await {
-        | Ok(orgs) => {
-            for (org, avatar) in orgs {
-                if let Ok(org_publisher) =
-                    repo::upsert_org(&state.pool, &org, None, avatar.as_deref()).await
-                    && let Err(error) = repo::record_membership(
-                        &state.pool,
-                        &org_publisher.handle,
-                        publisher.id,
-                        "member",
-                    )
-                    .await
-                {
-                    tracing::warn!(%error, org = %org, "cannot record organisation membership");
-                }
+    let generation = repo::begin_membership_refresh(&state.pool, publisher.id).await?;
+    match tokio::time::timeout(
+        Duration::from_secs(15),
+        organisation_scopes(&state, &access_token),
+    )
+    .await
+    {
+        | Ok(Ok(orgs)) => {
+            if let Err(error) =
+                repo::finish_membership_refresh(&state.pool, publisher.id, generation, &orgs).await
+            {
+                tracing::warn!(%error, "cannot persist GitHub organisation scopes");
             }
         },
-        | Err(error) => tracing::warn!(%error, "cannot list GitHub App installations"),
+        | Ok(Err(error)) => tracing::warn!(%error, "cannot refresh GitHub organisation scopes"),
+        | Err(_) => tracing::warn!("GitHub organisation scope lookup timed out"),
     }
 
-    let response = crate::state::sign_in(
+    let mut response = crate::state::sign_in(
         &state,
         publisher.id,
         &next,
@@ -226,52 +233,109 @@ pub async fn callback(
             .and_then(|value| value.to_str().ok()),
     )
     .await?;
+    super::set_state_cookie(&mut response, &state, Provider::Github, None);
     Ok(response)
 }
 
-async fn installations(
+#[allow(
+    clippy::single_call_fn,
+    reason = "GitHub organisation membership is a separate authorization request"
+)]
+async fn organisation_scopes(
     state: &AppState,
     access_token: &str,
-) -> Result<Vec<(String, Option<String>)>, aevia_registry_core::Error> {
-    let response = state
-        .http
-        .get("https://api.github.com/user/installations")
-        .header(axum::http::header::ACCEPT, "application/vnd.github+json")
-        .header(
-            axum::http::header::AUTHORIZATION,
-            format!("Bearer {access_token}"),
-        )
-        .send()
-        .await
-        .map_err(|error| {
-            aevia_registry_core::Error::new("E_HTTP", format!("cannot list installations: {error}"))
-        })?;
-    if !response.status().is_success() {
-        return Err(aevia_registry_core::Error::new(
-            "E_HTTP",
-            format!(
-                "GitHub answered {} for the installation list",
-                response.status()
-            ),
-        ));
-    }
-    let list: InstallationList = response.json().await.map_err(|error| {
-        aevia_registry_core::Error::new(
-            "E_HTTP",
-            format!("the installation list is not JSON: {error}"),
-        )
-    })?;
-    Ok(list
-        .installations
+) -> Result<Vec<GithubOrganisation>, aevia_registry_core::Error> {
+    let (installations, memberships) = tokio::try_join!(
+        collect_pages(
+            state,
+            access_token,
+            "https://api.github.com/user/installations",
+            |value: InstallationList| value.installations
+        ),
+        collect_pages(
+            state,
+            access_token,
+            "https://api.github.com/user/memberships/orgs",
+            |value: Vec<Membership>| value
+        ),
+    )?;
+    Ok(verified_organisations(installations, memberships))
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "membership claims have their own pagination and scope policy"
+)]
+fn verified_organisations(
+    installations: Vec<Installation>,
+    memberships: Vec<Membership>,
+) -> Vec<GithubOrganisation> {
+    let active: HashSet<_> = memberships
         .into_iter()
-        .filter(|installation| installation.account.kind == "Organization")
-        .map(|installation| {
+        .filter(|membership| membership.state == "active" && membership.organization.id > 0)
+        .map(|membership| membership.organization.id)
+        .collect();
+    let granted: BTreeMap<_, _> = installations
+        .into_iter()
+        .map(|installation| installation.account)
+        .filter(|account| account.kind == "Organization" && active.contains(&account.id))
+        .map(|account| {
             (
-                aevia_registry_core::name::normalize_owner(&installation.account.login),
-                installation.account.avatar_url,
+                account.id,
+                GithubOrganisation {
+                    github_id: account.id,
+                    login: account.login,
+                    avatar_url: account.avatar_url,
+                },
             )
         })
-        .collect())
+        .collect();
+    granted.into_values().collect()
+}
+
+async fn collect_pages<T: DeserializeOwned, Item>(
+    state: &AppState,
+    token: &str,
+    endpoint: &str,
+    into_items: impl Fn(T) -> Vec<Item>,
+) -> Result<Vec<Item>, aevia_registry_core::Error> {
+    let mut items = Vec::new();
+    for page in 1..=20 {
+        let response = state
+            .http
+            .get(endpoint)
+            .query(&[("per_page", 100), ("page", page)])
+            .header(header::ACCEPT, "application/vnd.github+json")
+            .bearer_auth(token)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|error| github_error(&error))?;
+        let has_next = response
+            .headers()
+            .get(header::LINK)
+            .and_then(|links| links.to_str().ok())
+            .is_some_and(|links| links.contains("rel=\"next\""));
+        let document = response
+            .json()
+            .await
+            .map_err(|error| github_error(&error))?;
+        items.extend(into_items(document));
+        if !has_next {
+            return Ok(items);
+        }
+    }
+    Err(aevia_registry_core::Error::new(
+        "E_HTTP",
+        "GitHub membership pagination exceeded the request budget",
+    ))
+}
+
+fn github_error(error: &reqwest::Error) -> aevia_registry_core::Error {
+    aevia_registry_core::Error::new(
+        "E_HTTP",
+        format!("GitHub organisation data request failed: {error}"),
+    )
 }
 
 fn urlencode(value: &str) -> String {
@@ -281,8 +345,37 @@ fn urlencode(value: &str) -> String {
             | b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 out.push(char::from(byte));
             },
-            | _ => out.push_str(&format!("%{byte:02X}")),
+            | _ => {
+                let _ = write!(out, "%{byte:02X}");
+            },
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn github_identity_grants_require_matching_active_organisation_ids() {
+        let installations = serde_json::from_value(serde_json::json!([
+            {"account": {"id": 11, "login": "renamed-lab", "type": "Organization"}},
+            {"account": {"id": 22, "login": "original-lab", "type": "Organization"}},
+            {"account": {"id": 33, "login": "pending-lab", "type": "Organization"}},
+            {"account": {"id": 44, "login": "personal-account", "type": "User"}}
+        ]))
+        .unwrap();
+        let memberships = serde_json::from_value(serde_json::json!([
+            {"state": "active", "organization": {"id": 11, "login": "original-lab"}},
+            {"state": "pending", "organization": {"id": 33, "login": "pending-lab"}},
+            {"state": "active", "organization": {"id": 44, "login": "personal-account"}}
+        ]))
+        .unwrap();
+
+        let scopes = verified_organisations(installations, memberships);
+        assert_eq!(scopes.len(), 1);
+        assert_eq!(scopes[0].github_id, 11);
+        assert_eq!(scopes[0].login, "renamed-lab");
+    }
 }

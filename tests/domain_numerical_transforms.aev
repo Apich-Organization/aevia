@@ -1,0 +1,36 @@
+import Rssn_numerical_callback as Callback
+import Rssn_NumericalTransforms as Transform
+
+fn amplitude(_x: Float): Complex[Time] = complex(2.0 s, 1.0 s)
+fn ramp(x: Float): Float = x
+fn laplace(x: Complex): Complex = complex(1.0, 0.0) / (x + complex(1.25, -0.4))
+
+test "the checked Mellin routes evaluate a complex sample once" =
+    match Callback.num_transform_mellin_checked_typed(complex(0.0, 0.0), 1.0, 1e-10 s, 16, 15, amplitude) with
+    | Ok(result) -> result.converged && result.evaluations == 15 && approx_eq(re(result.value), 4.0 s, 1e-12 s) && approx_eq(im(result.value), 2.0 s, 1e-12 s)
+    | Err(_) -> false
+
+test "Hilbert subtraction agrees with a linear density" =
+    match Callback.num_transform_hilbert_checked_typed(0.0, 1.0, 1e-10, 16, 512, ramp) with
+    | Ok(result) -> result.converged && approx_eq(result.value, -0.6366197723675814, 1e-12)
+    | Err(_) -> false
+
+test "both fixed Laplace contours agree with a complex exponential" =
+    let expected = complex_exp(complex(-0.9375, 0.3))
+    let talbot = Callback.num_transform_laplace_talbot_checked_typed(0.75, 1e-6, 32, 48, laplace)
+    let parabola = Callback.num_transform_laplace_parabola_checked_typed(0.75, 1e-5, 40, 62, laplace)
+    match (talbot, parabola) with
+    | (Ok(t), Ok(p)) -> approx_eq(magnitude(t.value - expected), 0.0, 1e-6) && approx_eq(magnitude(p.value - expected), 0.0, 1e-5) && t.evaluations == 48 && p.evaluations == 62
+    | _ -> false
+
+test "Borel coefficients preserve units" =
+    let a = [complex(1.0 s, 0.0 s), complex(2.0 s, 0.0 s), complex(6.0 s, 0.0 s)]
+    match Transform.borel_series(a, complex(0.5, 0.0)) with
+    | Ok(result) -> approx_eq(re(result), 2.75 s, 1e-12 s)
+    | Err(_) -> false
+
+test "Meijer G uses a pole-separating contour" =
+    let call = Transform.meijer_g([], [complex(0.0, 0.0)], 1, 0, complex(1.3, 0.2), 0.5, 25.0, 1e-9, 256)
+    match call with
+    | Ok(result) -> result.converged && approx_eq(magnitude(result.value - complex_exp(complex(-1.3, -0.2))), 0.0, 1e-8)
+    | Err(_) -> false

@@ -1,0 +1,246 @@
+Prelude	abs	取绝对值并保留原量纲，例如 `abs(-3 m)` 得到 `3 m`。复数的模用 `magnitude` 计算。
+Prelude	all	判断谓词是否对每个元素都成立。输入为空张量时返回 `true`。
+Prelude	and_then	串联可能失败的操作。输入为 `Some(x)` 或 `Ok(x)` 时调用 `f(x)`，直接返回该调用产生的 `Option` 或 `Result`。输入为 `None` 或 `Err` 时原样传递。
+Prelude	any	判断是否至少有一个元素满足谓词。输入为空张量时返回 `false`。
+Prelude	apply	将 `x` 传给函数 `f`。需要把「调用函数」这个操作本身作为值传递时，可以使用 `apply`。
+Prelude	argmax	返回向量中首个最大元素的位置。比较时跳过 `NaN`，空向量会触发运行时错误。
+Prelude	argmin	返回向量中首个最小元素的位置。比较时跳过 `NaN`，空向量会触发运行时错误。
+Prelude	argsort	返回使原数据按升序排列的一组索引。排序稳定，相等元素的索引保持原顺序。
+Prelude	assuming	在假定命题 `p` 为真的条件下执行无参函数 `thunk`，让函数内的符号化简使用该假设。支持 `x > 0` 等简单谓词。
+Prelude	by_cases	命题 `p` 可判定时，仅执行相应的 `yes()` 或 `no()`。命题尚不可判定时构造符号条件表达式，可用于定义分段函数。
+Prelude	ceil	向上取整，保留量纲。例如 `ceil(-2.2)` 得到 `-2`。
+Prelude	clamp	把 `x` 限制在闭区间 `[lo, hi]` 内，超出区间时取最近的端点。三个参数须具有相同量纲。
+Prelude	compare	比较两个值并返回 `Some(Less)`、`Some(Equal)` 或 `Some(Greater)`。遇到 `NaN` 等不可排序的值时返回 `None`。需要总能返回顺序时使用 `total_compare`。
+Prelude	compose	组合两个函数，先调用 `g`，再把结果传给 `f`。按执行顺序书写时，可用管道表达式 `x |> g |> f`。
+Prelude	concat	拼接两个字符串或两个相容的一维集合。组合标签和数据值时也可用字符串插值。
+Prelude	const	返回第一个参数，忽略第二个参数。调用时须同时给出两个参数。需要一个忽略输入的函数时，可写作 `x => const(a, x)`。
+Prelude	contains	判断子串 `part` 是否在字符串 `s` 的任意位置出现。
+Prelude	cumprod	沿向量依次累乘，返回各位置之前及该位置所有元素的乘积。元素须无量纲，例如 `[1, 2, 3]` 得到 `[1, 2, 6]`。
+Prelude	cumsum	沿向量依次累加，返回每个位置的前缀和并保留量纲。例如 `[1, 2, 3]` 得到 `[1, 3, 6]`。
+Prelude	curry	把双参数函数变成可分两次调用的函数。第一次传入第一个参数，得到等待第二个参数的函数。
+Prelude	decide	请求判定一个符号命题。能够判定时返回 `Some(true)` 或 `Some(false)`，无法判定时返回 `None`。普通布尔值总可判定。
+Prelude	div	向负无穷取整的整数除法，例如 `div(-7, 2)` 得到 `-4`。它与 `mod` 配合满足 `a == div(a, b) * b + mod(a, b)`。若需向零截断，可用 `quot`。整数用 `/` 相除得到精确的实数。
+Prelude	drop	去掉前 `n` 个元素，矩阵按行处理。集合不足 `n` 个元素时返回空张量。
+Prelude	ends_with	判断字符串 `s` 是否以指定后缀结尾。
+Prelude	enumerate	把每个元素和它的位置包装成含 `index` 与 `value` 两个字段的记录。位置从零开始。
+Prelude	eprintln	把值和随后的换行写入标准错误。进度及诊断信息可以走这一路径，让标准输出继续专用于结果。
+Prelude	factorial	精确计算非负整数的阶乘。例如 `factorial(25)` 会保留结果的全部数字，结果无量纲。非整数参数可使用 `gamma` 作延拓。
+Prelude	filter	按照输入顺序保留满足谓词的元素。处理矩阵时逐行检查，处理表格时把每行作为记录传给谓词。
+Prelude	find	查找第一个满足谓词的元素，找到时返回 `Some`，没有匹配项时返回 `None`。
+Prelude	first	返回第一个元素。矩阵返回首行，空张量返回 `None`，其余情况用 `Some` 包装结果。
+Prelude	flatten	按行读取秩至少为二的张量，将其展平为向量。若需要指定新的形状，可用 `reshape`。
+Prelude	flip	生成一个交换了两个参数顺序的函数。
+Prelude	floor	向下取整，保留量纲。例如 `floor(-2.7)` 得到 `-3`。
+Prelude	fold	从左到右折叠集合。以给定值作为初始累加器，每步把累加器和下一个元素交给合并函数。
+Prelude	fold_left	从左到右折叠集合，以给定值作为初始累加器。合并函数先接收当前累加器，再接收下一个元素。
+Prelude	format	用模板及参数构造格式化文本。占位符可按顺序取用参数，也可指定参数的位置。
+Prelude	gcd	求两个整数的最大公约数。结果无量纲且非负，两个参数都是零时返回零。
+Prelude	id	原样返回参数，适合用作默认的函数参数。
+Prelude	is_err	判断一个 `Result` 是否为 `Err`。
+Prelude	is_finite	检查一个数是否为有限值。浮点数为正无穷、负无穷或 `NaN` 时返回 `false`。
+Prelude	is_infinite	判断一个值是否为正无穷或负无穷。`NaN` 和普通数值都返回 `false`。
+Prelude	is_nan	判断浮点值是否为 `NaN`。`NaN` 与自身也不相等，因此应使用此函数检测。
+Prelude	is_none	判断一个 `Option` 是否为 `None`。
+Prelude	is_ok	判断一个 `Result` 是否为 `Ok`。
+Prelude	is_some	判断一个 `Option` 是否包含值。
+Prelude	join	`join(sep, parts)` 在字符串向量的元素之间插入分隔符 `sep`，是 `split` 的逆操作。\n\n`join(left, right, key)` 按指定列对两张表做内连接。每对键值相同的行产生一行。结果按左表行顺序排列，同一左表行的匹配按右表顺序排列。列按原顺序保留左表各列，并追加右表的非键列。缺少键列或出现有歧义的列名时，报 `E0903`。
+Prelude	last	返回最后一个元素。矩阵返回末行，空张量返回 `None`，其余情况用 `Some` 包装结果。
+Prelude	lcm	求两个整数的最小公倍数。结果无量纲，任一参数为零时返回零。
+Prelude	length	返回集合的长度。字符串的长度按 Unicode 字素簇计数，一枚由多个字符组合而成的字形可计为一个位置。
+Prelude	lower	把字符串中的字母转换为小写。
+Prelude	map	按输入顺序将函数应用于集合元素。对于支持的高秩张量重载，函数每次接收一行。
+Prelude	map2	用一个双参数函数逐对处理两个形状相同的张量。输出保持原形状。
+Prelude	map_err	转换 `Result` 中的错误，原样保留 `Ok`。例如可在使用 `?` 传播错误前统一错误类型。
+Prelude	max	在量纲相同的两个数中取较大值。求整个张量的最大值用 `max_all`。
+Prelude	mean	计算任意秩张量中全部元素的算术平均值，保留元素的量纲。整数张量的结果是精确的 `Real` 商。
+Prelude	min	在量纲相同的两个数中取较小值。求整个张量的最小值用 `min_all`。
+Prelude	mod	求与向下取整的除法 `div` 对应的余数。结果无量纲，其符号随除数而定，例如 `mod(-7, 3)` 得到 `2`。正除数 `b` 使余数落在 `[0, b)` 内，适合循环索引。让余数的符号随被除数时用 `rem`。
+Prelude	not	对布尔值作逻辑取反。
+Prelude	ok	把 `Result` 转换成 `Option`。成功值用 `Some` 保留，错误丢弃并返回 `None`。
+Prelude	ok_or	把 `Option` 转换成 `Result`。有值时返回 `Ok`，为 `None` 时用第二个参数构造 `Err`。
+Prelude	par_map	把函数应用于每个元素，工作可分配给多个线程。输出始终保持输入顺序，因而与线程数无关。适用于 `Int` 和 `Float` 数据，符号 `Real` 用 `map` 处理。
+Prelude	parse_float	将十进制或科学计数法文本解析成浮点值，例如 `"2.5"` 或 `"1e-3"`。成功时返回 `Ok`，无效文本返回 `Err(ParseError)`。
+Prelude	parse_int	忽略首尾空白，将十进制文本解析成整数。成功时返回 `Ok(n)`，无效文本返回 `Err(ParseError)`。
+Prelude	partial_compare	按偏序比较两个浮点数，任一输入为 `NaN` 时返回 `None`。需要辨别无法比较的情况时可使用此函数。
+Prelude	print	把值写入标准输出，末尾不换行。它返回 `IO Unit`，由交互式环境执行该 IO 表达式时实际输出。
+Prelude	println	把值和随后的换行写入标准输出。它返回 `IO Unit`，交互式环境会执行该操作一次。可用字符串插值组合标签和不同类型的值。
+Prelude	prod	求任意秩张量中全部元素的乘积。元素须无量纲，因为有量纲的乘积会随相乘元素的数量改变结果量纲。
+Prelude	quot	向零截断的整数除法，例如 `quot(-7, 2)` 得到 `-3`。搭配 `rem` 求余，向下取整时则用 `div`。
+Prelude	range	构造一个不包含终点的整数序列。可选步长可以为正或负，且须非零。
+Prelude	rank	返回张量的轴数，标量为零，向量为一，矩阵为二。各轴的长度可用 `shape` 查询。
+Prelude	rem	求与向零截断的除法 `quot` 对应的余数，符号随被除数而定。例如 `rem(-7, 3)` 得到 `-1`。若要让符号随除数而定，可用 `mod`。
+Prelude	replace	将字符串 `s` 中每一处 `from` 替换成 `to`，返回替换后的文本。
+Prelude	repr	生成可写回源码的文本，保留数值的求值阶段，例如精确值或浮点值。调用它只返回文本，可用 `println` 输出。
+Prelude	reverse	反转张量的第一条轴，矩阵的行顺序随之反转。反转其他轴时使用 `reverse_axis`。
+Prelude	reverse_axis	沿指定轴反转张量。例如 `reverse_axis(m, 1)` 会把矩阵的每一行从左到右翻转。
+Prelude	rng	用种子构造伪随机数生成器。每次调用返回的无参函数，都会得到序列中下一个落在 `[0, 1)` 内的数。相同种子产生相同序列，无需指定种子时可用 `random()`。
+Prelude	round	四舍五入并保留量纲，恰好在中点时向远离零的一侧取整。例如 `2.5` 得到 `3`，`-2.5` 得到 `-3`。可用第二个整数参数指定小数位数，负值表示取整到十位、百位等。
+Prelude	shape	查询张量各轴的长度。形状和元素携带的物理量纲分别检查。
+Prelude	show	把值转换为便于阅读的显示文本。可用 `println` 输出，也可直接将值插入字符串。要生成保留数值阶段的源码表示，使用 `repr`。
+Prelude	sign	将数值的符号表示为整数 `-1`、`0` 或 `1`。输出与输入量纲无关。
+Prelude	sort	稳定地按升序排列元素。要求元素可全序比较，例如 `Int`、`String` 和 `Bool`。浮点数据用 `sort_float`。矩阵的行按字典序排列。
+Prelude	sort_axis	沿指定轴对各个一维切片分别排序，保持原张量形状。
+Prelude	sort_by	使用返回 `Ordering` 的自定义比较函数稳定排序。比较结果相等的元素保持输入顺序。
+Prelude	sort_by_key	按 `f(x)` 为各元素生成的键稳定排序。适合只需比较单一字段或派生量的场景。
+Prelude	sort_float	将浮点数据按升序排列。第二个参数为 `true` 时把 `NaN` 放在末尾，为 `false` 时放在开头。
+Prelude	split	在字符串 `s` 中每次出现分隔符 `sep` 的位置切开，返回由各段组成的字符串向量。
+Prelude	starts_with	判断字符串 `s` 是否以指定前缀开头。
+Prelude	sum	可对张量元素求和，也可给出函数和上下界来计算有限和。空张量返回与当前数值阶段相容的零。
+Prelude	sym_eq	构造两个精确值相等的符号命题。精确表达式的相等性不一定可判定，可用 `decide` 尝试得到布尔结论。
+Prelude	sym_lt	构造第一个精确值小于第二个精确值的符号命题。可用 `decide` 尝试判定。
+Prelude	sym_ne	构造两个精确值不相等的符号命题。可用 `decide` 尝试判定。
+Prelude	take	取前 `n` 个元素，不足 `n` 个时取全部。矩阵按行处理。
+Prelude	to_float	将数值转换为浮点数并保留量纲。仍含自由符号的值无法转换，因此返回 `Result`。可处理 `Err` 或用 `unwrap_or` 提供默认值。
+Prelude	to_int	将无量纲数向零截断为整数。需要其他取整规则时，先用 `round`、`floor` 或 `ceil`。
+Prelude	to_latex	生成值的 LaTeX 标记文本。可用 `println` 输出标记，也可在交互式环境中用 `:latex EXPR` 查看。
+Prelude	to_pretty	将结构化值排版成易读的多行字符串。用 `println` 输出该字符串，或在交互式环境中用 `:pretty EXPR` 查看。
+Prelude	to_real	将整数或浮点数转换为精确的 `Real` 并保留量纲。浮点值会转换成其实际存储的精确有理数，例如 `to_real(0.5)` 得到 `1/2`。
+Prelude	to_typst	生成值的 Typst 标记文本，供后续排版或输出。
+Prelude	total_compare	按全序比较两个值，总能返回 `Ordering`。可用于 `sort_by`，也可为集合建立确定的排序。
+Prelude	trim	去掉字符串首尾的空白。
+Prelude	trunc	丢弃小数部分，向零取整。例如 `trunc(-2.7)` 得到 `-2`。
+Prelude	uncurry	把分两次接收参数的函数转换成一次接收两个参数的函数。
+Prelude	unwrap_or	取出 `Some` 或 `Ok` 中的值。遇到 `None` 或 `Err` 时返回给定的默认值。
+Prelude	upper	把字符串中的字母转换为大写。
+Prelude	xor	对两个布尔值作逻辑异或，恰有一个为真时才返回 `true`。
+Prelude	zero	产生数值类型和量纲由上下文决定的加法单位元。可作为逐项求和时的初始累加器。
+Prelude	zip	按位置配对两个张量的元素，处理到较短的一个为止。可配合 `map` 处理各组元素，也可用 `zip_with` 直接合并同形状的数据。
+Prelude	zip_with	用函数逐对合并两个形状相同的张量，保留形状。其行为与 `map2` 相同。
+Math	acos	计算反余弦，以弧度返回角度。实数输入须无量纲且位于 `[-1, 1]`，超出范围会触发运行时错误 `E0806`。
+Math	acosh	计算反双曲余弦，输入和结果均无量纲。实数输入须至少为 `1`，更小的参数会触发运行时错误 `E0806`。
+Math	asin	计算反正弦，以弧度返回角度。实数输入须无量纲且位于 `[-1, 1]`，超出范围会触发运行时错误 `E0806`。
+Math	asinh	计算反双曲正弦。所有无量纲实数均可作为输入，结果无量纲。
+Math	atan	计算反正切，以弧度返回位于 `(-pi/2, pi/2)` 内的角度。需要由平面坐标确定象限时使用 `atan2`。
+Math	atan2	计算正 x 轴到点 `(x, y)` 的有向角，弧度范围为 `(-pi, pi]`。调用时先传 `y`，再传 `x`。两个坐标须有相同量纲，例如都可用长度表示，所得角度无量纲。
+Math	atanh	计算反双曲正切，输入和结果均无量纲。输入超出 `[-1, 1]` 时触发运行时错误 `E0806`，浮点输入恰为 `-1` 或 `1` 时分别得到负无穷或正无穷。
+Math	cbrt	求整数、精确实数或浮点数的实立方根，允许负数输入。结果量纲是输入量纲的三分之一次方，例如 `cbrt(8 m^3)` 得到 `2 m`。
+Math	cos	计算余弦。参数和结果均无量纲，可以使用 `deg` 等角度单位，角度单位按精确比例换算。
+Math	cosh	计算双曲余弦，输入和结果均无量纲。
+Math	curry	把双参数函数变成可分两次调用的函数。先传入第一个参数，所得函数再接收第二个参数。
+Math	e	欧拉常数 `e`，约为 2.718，以精确的符号实数表示，与 `exp(1)` 相等。需要浮点近似时使用 `approx`。
+Math	exp	计算以 `e` 为底的指数函数，输入和结果均无量纲。精确输入可以保留为符号结果，浮点输入用于数值计算。
+Math	hypot	计算向量 `(a, b)` 的欧几里得长度，即 `sqrt(a^2 + b^2)`，避免中间平方溢出。两个分量须具有相同量纲，结果保留该量纲。
+Math	i	表示复数的虚数单位，平方等于 `-1`。例如 `3 + 4*i` 构成一个复数。
+Math	ln	计算自然对数，输入和结果均无量纲。正数可按输入阶段得到精确表达式或浮点结果，零的对数为负无穷。实数对数的定义域检查与符号化简分别处理。
+Math	log	计算自然对数，与 `ln` 相同。输入和结果均无量纲。有自由符号的输入可以保留为符号结果，实数输入仍须符合对数的定义域。
+Math	log10	计算以 `10` 为底的对数。输入和结果均无量纲。精确表达式可保留为符号结果，浮点计算须符合实数对数的定义域。
+Math	log2	计算以 `2` 为底的对数。输入和结果均无量纲。精确表达式可保留为符号结果，浮点计算须符合实数对数的定义域。
+Math	nan	表示 IEEE 浮点类型的非数值 `NaN`。它与任何数值都不相等，包括自身，因此检测时使用 `is_nan`。
+Math	oo	表示精确实数中的正无穷，可用于任意相容量纲的极限点或积分端点。负无穷写作 `-oo`。无法在扩展实数中求值的组合保留为符号表达式。
+Math	partial	固定双参数函数的第一个参数，得到只接受第二个参数的函数。
+Math	pi	表示精确的无量纲圆周率。需要浮点近似时使用 `approx`。
+Math	sin	计算正弦。参数和结果均无量纲，可以使用 `deg` 等角度单位，角度单位按精确比例换算。
+Math	sinh	计算双曲正弦，输入和结果均无量纲。
+Math	sqrt	求平方根。输入为精确值时，结果可保留为精确值或符号表达式。浮点输入得到数值结果，量纲取输入量纲的二分之一次方。
+Math	tan	计算正切。参数和结果均无量纲，可以使用 `deg` 等角度单位，角度单位按精确比例换算。
+Math	tanh	计算双曲正切。有限实数输入和结果均无量纲，数学值位于开区间 `(-1, 1)`。
+Math	uncurry	把分两次接收参数的函数转换成一次接收两个参数的函数。
+Math.Special	bessel_j0	计算零阶第一类贝塞尔函数 `J₀(x)`。
+Math.Special	bessel_jn	计算整数阶 `n` 的第一类贝塞尔函数 `Jₙ(x)`。
+Math.Special	bessel_y0	在 `x > 0` 时计算零阶第二类贝塞尔函数 `Y₀(x)`。
+Math.Special	bessel_yn	在 `x > 0` 时计算整数阶 `n` 的第二类贝塞尔函数 `Yₙ(x)`。
+Math.Special	beta	计算贝塔函数 `B(a, b) = gamma(a) * gamma(b) / gamma(a + b)`。两个输入和结果均无量纲。
+Math.Special	chebyshev_t	计算第一类切比雪夫多项式 `Tₙ(x)`，结果无量纲。对于 `[-1, 1]` 内的 `x`，可用 `cos(n * acos(x))` 表示。
+Math.Special	chebyshev_u	计算第二类切比雪夫多项式 `Uₙ(x)`，结果无量纲。
+Math.Special	erf	误差函数等于 `exp(-t^2)` 从零到 `x` 的积分乘以 `2/sqrt(pi)`。实数的函数值在 `(-1, 1)` 内且无量纲，可用于计算正态分布的累积分布函数。
+Math.Special	erfc	计算互补误差函数 `1 - erf(x)`，结果无量纲。对较大的正数直接用 `erfc` 可避免两个接近的数相减造成的精度损失。
+Math.Special	fresnel_c	计算菲涅耳余弦积分 `C(x)`，即 `cos(pi * t^2 / 2)` 从零到 `x` 的积分。结果无量纲，精确输入保留符号形式，浮点输入得到浮点结果。
+Math.Special	fresnel_s	计算菲涅耳正弦积分 `S(x)`，即 `sin(pi * t^2 / 2)` 从零到 `x` 的积分。结果无量纲，精确输入保留可微分或积分的符号形式，浮点输入得到浮点结果。
+Math.Special	gamma	计算把阶乘推广到非整数参数的伽马函数。对正整数 `n`，有 `gamma(n) == factorial(n - 1)`。输入和结果均无量纲，零和负整数是极点，浮点计算在极点附近可得到无穷大或绝对值很大的数。
+Math.Special	hermite_h	计算物理学约定下的厄米多项式 `Hₙ(x)`，例如可用于表达量子谐振子的波函数。
+Math.Special	j1	计算一阶第一类贝塞尔函数 `J₁(x)`，即 `bessel_j1`。
+Math.Special	laguerre_l	计算拉盖尔多项式 `Lₙ(x)`，例如可用于表示氢原子径向波函数。
+Math.Special	legendre_p	计算次数为 `n` 的勒让德多项式 `Pₙ(x)`。该多项式族在 `[-1, 1]` 上正交。
+Math.Special	lgamma	计算 `gamma(x)` 绝对值的自然对数，结果无量纲。大参数下可直接计算对数，避免先求 `gamma(x)` 导致溢出。
+Math.Special	y1	计算一阶第二类贝塞尔函数 `Y₁(x)`，即 `bessel_y1`。
+Math.Special	zeta	计算黎曼 ζ 函数，输入和结果均无量纲。例如 `zeta(2)` 等于 `pi^2/6`，在 `1` 处有极点。
+Math.Complex	arg	计算复数的辐角，弧度范围为 `(-pi, pi]`，所得角度无量纲。
+Math.Complex	complex	使用具有共同量纲的实部和虚部构造复数。
+Math.Complex	complex_exp	计算无量纲复数 `z` 的复指数 `e^z`。
+Math.Complex	complex_ln	计算无量纲复数自然对数的主值，结果的虚部位于 `(-pi, pi]`。
+Math.Complex	complex_sin	计算无量纲复数的正弦。
+Math.Complex	complex_sqrt	计算复数平方根的主值，结果量纲是输入量纲的二分之一次方。
+Math.Complex	conj	取复共轭，将虚部变号，保留实部和量纲。
+Math.Complex	cos	计算余弦，支持无量纲复数和实数输入。实数角度可用 `deg` 等单位表示，角度单位按精确比例换算。
+Math.Complex	im	取复数的虚部，保留原量纲。
+Math.Complex	magnitude	计算复数的模，保留原量纲。复数的绝对值用此函数求得。
+Math.Complex	re	取复数的实部，保留原量纲。
+Math.NumberTheory	factor	对整数做质因数分解，返回由「质数、指数」对组成的向量，例如 `factor(12)` 得到 `[(2, 2), (3, 1)]`。对精确表达式则在有理数域上分解因式，保留量纲。
+Math.NumberTheory	gcd	求两个整数的最大公约数。结果无量纲且非负，两个参数都是零时返回零。
+Math.NumberTheory	is_prime	判断整数是否为质数。负数、零和一都返回 `false`。
+Math.NumberTheory	lcm	求两个整数的最小公倍数。结果无量纲，任一参数为零时返回零。
+Math.NumberTheory	mod_pow	直接计算整数幂在正模数下的精确余数，结果在 [0, modulus) 内。所有参数支持任意精度整数，指数必须非负，模数必须为正。
+Math.NumberTheory	primes	返回由所有不大于 `n` 的质数组成的向量。
+Math.Combinatorics	binomial	精确计算从 `n` 个元素中选出 `k` 个的组合数，返回无量纲整数。若 `k > n`，结果为零。
+Math.Combinatorics	permutations	计算 `n` 个不同元素的排列总数 `n!`，结果无量纲。
+Math.Geometry	distance	计算两个点之间的欧几里得距离。两个点须由等长坐标向量表示，所得距离保留坐标的量纲。
+Math.Geometry	polygon_area	按边界顺序提供简单多边形的顶点，将每一行写成一对 `(x, y)` 坐标。函数使用鞋带公式计算面积，结果量纲是坐标量纲的平方。
+Math.Geometry	tetrahedron_volume	由四行三列的有限坐标计算非负体积。结果量纲是坐标量纲的立方，与顶点顺序无关。共面或重复顶点的体积为零。坐标或计算所得体积非有限时报告定义域错误。
+Tensor	fill	用同一个值填充指定形状的张量，保留该值的数值类型和量纲。例如 `fill(2.0 m, 3)` 得到含三个 `2 m` 的向量。
+Tensor	ones	创建各元素均为一的张量，每个参数给出一条轴的长度。元素默认为 `Float`，也可显式指定类型，例如 `ones<Int>(3)`。
+Tensor	zeros	创建各元素均为零的张量，每个参数给出一条轴的长度。例如 `zeros(3)` 得到向量，`zeros(2, 3)` 得到两行三列的矩阵。元素默认为 `Float`，可用 `zeros<Int>(3)` 或 `zeros<Real>(3)` 指定类型，形状为编译期常量时还可用 `zeros_of<[2, 3]>()` 将其纳入类型。
+Calculus	antiderivative	求函数的符号原函数，返回的函数把积分常数取为零。原函数的输出量纲是原输出量纲与输入量纲的乘积。无法求出封闭形式时调用失败，计算定积分可用 `defint` 或 `quadrature`。
+Calculus	curl	计算三分量向量场在指定点的旋度。坐标须具有长度量纲，旋度各分量的量纲等于原向量场量纲除以长度。
+Calculus	defint	求函数从 `a` 到 `b` 的精确定积分，允许用 `oo` 表示无穷端点。结果量纲为函数输出量纲乘以输入量纲。若在该区间无法求出封闭形式，返回 `Err(MathError)`。对浮点函数进行数值积分可用 `quadrature`。
+Calculus	diff	返回原函数的符号导函数。把求值点传给导函数即可得到该处导数。导数的量纲等于输出量纲除以输入量纲，例如位置对时间的导数可用 `m/s` 表示。只能数值求值的函数可用 `numeric_deriv`。
+Calculus	diff_at	求函数在 `x` 处的导数，等价于先用 `diff` 得到导函数，再在该点求值。
+Calculus	divergence	计算向量场在指定点的散度，把每个场分量对其对应坐标的偏导数相加。
+Calculus	grad	求向量输入的标量函数在指定点的梯度，返回各坐标方向偏导数组成的向量。分量的量纲等于输出量纲除以输入量纲。浮点函数可用 `grad_f`。
+Calculus	grad_f	用自动微分求浮点标量函数在给定向量处的梯度。结果的形状和量纲与 `grad` 遵循相同规则。
+Calculus	hessian	计算标量函数在指定点的海森矩阵，各元素为二阶偏导数。元素量纲等于输出量纲除以输入量纲的平方。
+Calculus	jacobian	计算向量函数在指定点的雅可比矩阵。第 `i` 行是第 `i` 个输出分量的梯度，因此 `n` 个输入、`m` 个输出得到 `m × n` 矩阵。矩阵元素的量纲等于输出量纲除以输入量纲。
+Calculus	laplacian	计算标量场在指定点的拉普拉斯算子值，即各坐标方向的纯二阶偏导数之和。结果量纲等于输出量纲除以输入量纲的平方。
+Calculus	limit	求函数输入趋近 `x` 时的极限，保留函数输出的量纲。无穷远的极限用 `oo` 或 `-oo`。无法判定时返回 `Err(MathError)`。
+Calculus	numeric_deriv	返回浮点函数的数值导函数。原函数调用了仅支持数值求值的操作时，可用它计算导数。需要精确的符号导数时使用 `diff`。
+Calculus	product	对整数索引从 `a` 到 `b` 逐项计算 `f(k)` 并精确累乘，包含两端。存在封闭形式时也可使用符号边界或 `oo`。各项须无量纲，有量纲的累乘用 `product_dyn`。
+Calculus	product_dyn	允许对有量纲的项作累乘。由于乘积的量纲取决于相乘项数，结果使用动态类型 `Dyn`。
+Calculus	quadrature	在区间 `[a, b]` 上对浮点函数进行数值积分。收敛时返回 `Ok(value)`，结果量纲等于函数输出量纲乘以输入量纲。数值方法未收敛时返回 `Err(MathError)`。
+Calculus	series	求函数在 `x0` 附近截至 `n` 阶的泰勒展开，返回精确表达式。
+Calculus	sum	可对张量元素求和，也可给出函数和上下界来计算有限和。空张量返回与当前数值阶段相容的零。
+Calculus	sum_f	以浮点算术计算 `f(k)` 从整数 `a` 到整数 `b` 的和，包含两端。需要精确值或符号结果时使用 `sum`。
+Solve	linsolve	求线性方程组 `A x = b` 的解。矩阵非方阵或奇异时返回 `Err(LinAlgError)`，成功时解的量纲等于 `b` 的量纲除以 `A` 的量纲。超定系统可用 `lstsq`。
+Solve	nsolve	从 `x0` 出发数值搜索函数的一个根。收敛时返回 `Ok(root)`，根与起始点的量纲相同。迭代未收敛时返回 `Err(MathError)`，可检查失败原因或换一个起始点。`root` 是它的别名。
+Solve	nsolve_f	从浮点起始点数值搜索浮点函数的一个根。迭代未收敛时返回 `Err(MathError)`。
+Solve	root	从 `x0` 附近数值搜索函数的一个根，返回 `Result`。它是 `nsolve` 的别名。
+Solve	solve	以符号方式求 `f(x) = 0` 的实根。成功时的记录包含根、重数、所依赖的条件（如 `a != 0`）以及表示是否列全的 `complete` 标志。需要数值搜索时使用 `nsolve`。
+Solve	solve_complex	以符号方式求复值函数 `f(x) = 0` 的根，包括非实根。结果沿用 `solve` 的记录结构，给出根、重数、依赖条件和表示是否列全的 `complete` 标志。
+Solve	solve_system	从初始向量 `x0` 出发求方程组 `f(x) = 0`。函数 `f` 的输入向量和输出向量须等长。成功时返回 `Ok(solution)`，失败时返回 `Err(MathError)`。
+Optimize	least_squares	从 `x0` 出发寻找使残差向量各分量的平方和最小的一组参数，适合用观测数据拟合模型。线性模型可直接用 `lstsq`，其精确输入可走精确计算路径。
+Optimize	maximize	从给定起点搜索向量输入的标量函数的局部最大值点。成功时的 `Result` 包含取得最大值的参数向量。
+Optimize	minimize	从给定起点搜索向量输入的标量函数的局部最小值点，成功时在 `Result` 中返回相应参数向量。找到哪个局部最小值取决于起点。求局部最大值点用 `maximize`，浮点函数可用 `minimize_f`。
+Optimize	minimize_f	从指定的浮点向量搜索浮点标量函数的局部最小值点。成功时的 `Result` 包含相应参数向量。
+Stats	centroid	对一组 `Point` 的各坐标分别取平均，得到这些点的质心。
+Stats	corr	计算两个等长向量的皮尔逊相关系数。结果无量纲，取值在 `[-1, 1]` 内。
+Stats	cov	计算两个等长向量的样本协方差。结果量纲为两组元素量纲的乘积。
+Stats	histogram	将有限样本分入 `bins` 个等宽区间，`bins` 必须为正整数。返回各区间的整数计数和 `bins + 1` 个 Float 边界，边界沿用样本量纲。
+Stats	kurtosis	计算样本的超额峰度，即标准化四阶中心矩减三。这个无量纲统计量可用于衡量分布尾部的厚度。
+Stats	mean	计算任意秩张量中全部元素的算术平均值，保留元素的量纲。整数张量的结果是精确的 `Real` 商。
+Stats	median	将向量排序后取中间值。长度为偶数时取中间两个值的平均，结果保留元素量纲。
+Stats	mode	返回向量中出现最频繁的值。若多个值并列，取其中最小的一个，保留原量纲。
+Stats	quantile	计算比例 `q` 对应的分位数，要求 `q` 位于 `[0, 1]`。在相邻排序样本间使用线性插值，结果保留数据的量纲。`q = 0.5` 对应中位数。
+Stats	quantiles	对无量纲且位于 `[0, 1]` 的概率向量批量计算第 7 型分位数。各查询共用一次样本排序，结果保留样本量纲、查询顺序和重复项。精确输入使用有理数插值。样本必须非空且各元素有限，空概率向量得到空结果。
+Stats	skewness	计算样本偏度，结果无量纲。右侧长尾对应正偏度。
+Stats	std	计算样本标准差，保留样本元素的量纲。单元素样本的标准差为零。
+Stats	var	样本至少有两个元素时，以 `n - 1` 为分母计算样本方差。单元素样本的方差为零。第二个参数为 `true` 时改算总体方差，分母为 `n`。结果量纲是元素量纲的平方。
+Stats.Distributions	Normal	正态分布，也称高斯分布。均值 `mu` 和标准差 `sigma` 均采用随机变量的量纲。
+Stats.Distributions	Uniform	定义在 `lo` 到 `hi` 之间的连续均匀分布。两个端点的量纲均与随机变量相同。
+Stats.Distributions	Exponential	以 `rate` 为速率的指数分布。速率量纲是随机变量量纲的倒数，均值为 `1/rate`。
+Stats.Distributions	Gamma	伽马分布。形状参数无量纲，速率的量纲是随机变量量纲的倒数。
+Stats.Distributions	Beta	支撑区间为 `[0, 1]` 的贝塔分布。形状参数 `alpha` 和 `beta` 均无量纲。
+Stats.Distributions	ChiSquared	自由度为 `df` 的卡方分布。
+Stats.Distributions	StudentT	自由度为 `df` 的 Student t 分布。
+Stats.Distributions	Poisson	均值为 `lambda` 的泊松计数分布。
+Stats.Distributions	Binomial	进行 `n` 次独立试验，每次的成功概率均为 `p`。二项分布描述这 `n` 次试验中的成功次数。
+Stats.Distributions	LogNormal	对数正态分布。随机变量的自然对数服从均值为 `mu`、标准差为 `sigma` 的正态分布，两参数均无量纲。
+Stats.Distributions	Weibull	韦布尔分布。形状参数无量纲，尺度参数沿用随机变量的量纲。
+Stats.Distributions	Cauchy	柯西分布。位置参数 `loc` 与尺度参数和随机变量具有相同量纲。这个分布的均值与方差均不存在。
+Stats.Distributions	F	分子自由度为 `df1`、分母自由度为 `df2` 的 F 分布，常用于描述方差之比。
+Stats.Distributions	NegativeBinomial	负二项分布描述第 `r` 次成功前发生的失败次数。每次试验的成功概率均为 `p`，失败次数从零计起。
+Stats.Distributions	Geometric	几何分布描述首次成功前发生的失败次数。每次试验的成功概率均为 `p`，失败次数从零计起。
+Stats.Distributions	Distribution	用分布构造器创建的概率分布值，例如 `Normal({ mu = 0.0, sigma = 1.0 })`。它可传给 `pdf`、`cdf`、`cdf_batch`、`dist_quantile`、`sample` 或 `sample_n`。构造器参数可携带量纲，例如描述长度的正态分布可用米表示均值和标准差，此时密度以每米计。
+Stats.Distributions	cdf	计算从给定分布抽取的值不大于 `x` 的概率。结果无量纲且位于 `[0, 1]` 内。
+Stats.Distributions	cdf_batch	对查询向量的各元素计算累积概率。查询点采用分布的量纲，结果无量纲并保留查询顺序和重复项。分布参数有效时，空查询向量返回空结果。无效参数或 NaN 查询点会引发定义域错误。
+Stats.Distributions	dist_quantile	返回给定概率下的分布分位数，结果具有分布的量纲。概率必须无量纲且在 [0, 1] 内。概率为 0 或 1 时返回支撑集的下端或上端，端点可以是无穷。无效的参数或概率会引发定义域错误。
+Stats.Distributions	pdf	计算分布在 `x` 处的概率密度，或者离散分布在该点的概率质量。密度量纲是 `x` 量纲的倒数，概率质量无量纲。分布可用 `Normal`、`Uniform` 等构造器创建。
+Stats.Distributions	sample	从分布中随机抽取一个值，返回一个 IO 操作。需要重现抽样序列时，使用带种子的 `sample_n`。
+Stats.Distributions	sample_n	从分布中抽取 `n` 个值。传入 `Some(seed)` 可重现抽样序列，传入 `None` 则随机抽样。

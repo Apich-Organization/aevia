@@ -24,3 +24,15 @@ target
 # Per-module .aevi cache and build products (spec 9.11)
 .aevia/
 .claude/
+
+editors/zed/grammars/
+editors/jetbrains/.intellijPlatform/localPlatformArtifacts/
+
+# Python verification tools
+__pycache__/
+
+# Bazel outputs and workstation configuration
+/.bazel-cache/
+/.bazelrc.local
+/bazel-*
+/dist/

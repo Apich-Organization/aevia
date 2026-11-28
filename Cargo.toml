@@ -13,6 +13,7 @@ members = [
     "crates/aevia-fmt",
     "crates/aevia-doc",
     "crates/aevia-analysis",
+    "crates/aevia-lint",
     "crates/aevia-lsp",
     "crates/aevia-cli",
     "tools/aevia-stdlib-gen",
@@ -21,19 +22,15 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.0-beta.1"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.100"
 license = "Apache-2.0"
 repository = "https://github.com/Apich-Organization/aevia"
 
 [workspace.dependencies]
 num-bigint = { version = "0.4", features = ["serde"] }
 num-rational = { version = "0.4", features = ["serde"] }
-# The `f64` linear-algebra backend: blocked GEMM and LAPACK-class factorisations.
-# `sparse-linalg` backs the sparse LU of `aevia_std::sparse` (the `rand` and
-# `npy` features are still unused here).
-faer = { version = "0.24", default-features = false, features = ["std", "rayon", "sparse-linalg"] }
 num-integer = "0.1"
 num-traits = "0.2"
 indexmap = { version = "2", features = ["serde"] }
@@ -41,26 +38,35 @@ unicode-ident = "1"
 unicode-normalization = "0.1"
 unicode-segmentation = "1"
 serde_json = "1"
-# The `.aevi` checked-module cache (spec 9.11): serde types, compact binary codec.
 serde = { version = "1", features = ["derive", "rc"] }
-bincode = "1"
+# Native encoding and schema fingerprinting for the checked-module cache.
+bincode-next = "3.2"
 
 aevia-dim = { path = "crates/aevia-dim" }
 aevia-syntax = { path = "crates/aevia-syntax" }
 aevia-types = { path = "crates/aevia-types" }
+aevia-stdlib-model = { path = "crates/aevia-stdlib-model" }
 aevia-ir = { path = "crates/aevia-ir" }
 aevia-resolve = { path = "crates/aevia-resolve" }
-aevia-core = { path = "crates/aevia-core" }
-aevia-rssn = { path = "crates/aevia-rssn" }
+aevia-core = { path = "crates/aevia-core", default-features = false }
+aevia-rssn = { path = "crates/aevia-rssn", default-features = false }
 aevia-fmt = { path = "crates/aevia-fmt" }
 aevia-doc = { path = "crates/aevia-doc" }
 aevia-analysis = { path = "crates/aevia-analysis" }
+aevia-lint = { path = "crates/aevia-lint" }
 aevia-lsp = { path = "crates/aevia-lsp" }
 
 [profile.release]
-opt-level = 3
-lto = "thin"
+lto = true
 codegen-units = 1
+# Numerical callback interruptions must return typed errors to callers.
+panic = "unwind"
+opt-level = 3
+strip = true
+debug = false
+debug-assertions = false
+overflow-checks = false
+incremental = true
 
 # Keep source locations in test backtraces without copying full dependency
 # variable/type debug information into every integration-test executable.
@@ -76,11 +82,30 @@ debug = "line-tables-only"
 debug = "line-tables-only"
 
 # Optimised but quick to rebuild: for measuring the interpreter while working
-# on it (`cargo build --profile profiling -p aevia-cli`). Release numbers are
+# on it (`bazel build //:toolchain_profiling`). Release numbers are
 # still the ones to quote.
 [profile.profiling]
 inherits = "release"
-lto = false
+lto = "thin"
 codegen-units = 16
 incremental = true
 debug = "line-tables-only"
+strip = "none"
+
+[workspace.lints.rust]
+future_incompatible = { level = "deny", priority = -1 }
+nonstandard_style = { level = "deny", priority = -1 }
+rust_2018_idioms = { level = "deny", priority = -1 }
+improper_ctypes_definitions = "deny"
+unreachable_code = "deny"
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+dbg_macro = "deny"
+implicit_clone = "deny"
+missing_safety_doc = "deny"
+same_item_push = "deny"
+todo = "deny"
+undocumented_unsafe_blocks = "deny"
+unnecessary_safety_comment = "deny"

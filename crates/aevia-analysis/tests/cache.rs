@@ -98,22 +98,75 @@ fn an_unchanged_package_is_loaded_once() {
 }
 
 #[test]
+fn adjacent_requests_share_materialized_editor_tables_until_an_edit() {
+    let (package, source) = imported_package("editor-tables");
+    let path = package.path("src/B.aev");
+    let mut cache = AnalysisCache::new();
+    let first = cache.program_with_source(&path, &source);
+    let document = document(&source);
+    let first = cache.analyze_program(&document, first);
+    let repeated = cache.program_with_source(&path, &source);
+    let repeated = cache.analyze_program(&document, repeated);
+    assert!(!first.outline().is_empty());
+    assert!(!first.highlighted_tokens().is_empty());
+    assert!(std::ptr::eq(first.outline(), repeated.outline()));
+    assert!(std::ptr::eq(
+        first.highlighted_tokens(),
+        repeated.highlighted_tokens()
+    ));
+
+    let changed_text = format!("{source}\nlet another = A.value()\n");
+    let changed = cache.program_with_source(&path, &changed_text);
+    let changed_document = Document::new("B.aev", 2, changed_text);
+    let changed = cache.analyze_program(&changed_document, changed);
+    assert!(!std::ptr::eq(first.outline(), changed.outline()));
+    assert!(!std::ptr::eq(
+        first.highlighted_tokens(),
+        changed.highlighted_tokens()
+    ));
+    assert!(
+        changed
+            .outline()
+            .iter()
+            .any(|symbol| symbol.name == "another")
+    );
+    assert!(
+        !first
+            .outline()
+            .iter()
+            .any(|symbol| symbol.name == "another")
+    );
+    assert_eq!(cache.loads(), 2);
+}
+
+#[test]
 fn editing_an_import_invalidates_and_the_new_value_is_seen() {
     let (package, source) = imported_package("import-edit");
     let path = package.path("src/B.aev");
     let mut cache = AnalysisCache::new();
     let first = cache.program(&path);
     let document = document(&source);
-    let before = hover(&Analysis::from_program(&document, first), &source, "value");
+    let old_analysis = cache.analyze_program(&document, first);
+    let before = hover(&old_analysis, &source, "value");
     assert!(before.contains("Int"), "{before}");
+    let offset = u32::try_from(source.find("value").expect("call site")).expect("offset");
+    let old_references = old_analysis.references(offset, true);
+    assert_eq!(old_references.len(), 2);
 
-    // A new return type changes the import's content and length.
-    package.write("src/A.aev", "module A\n\nfn value(): Float = 1.0\n");
+    // The imported declaration changes type and moves down a line.
+    package.write("src/A.aev", "module A\n\n\nfn value(): Float = 1.0\n");
     let second = cache.program(&path);
     assert_eq!(cache.loads(), 2, "the changed import did not invalidate");
-    let after = hover(&Analysis::from_program(&document, second), &source, "value");
+    let new_analysis = cache.analyze_program(&document, second);
+    let after = hover(&new_analysis, &source, "value");
     assert!(after.contains("Float"), "{after}");
     assert!(!after.contains("Int"), "the old scheme was served: {after}");
+    let previous = old_analysis.definition(offset).expect("old definition");
+    let current = new_analysis.definition(offset).expect("new definition");
+    assert_eq!(current.document, previous.document);
+    assert_eq!(current.range.start.line, previous.range.start.line + 1);
+    assert_eq!(old_analysis.references(offset, true), old_references);
+    assert!(new_analysis.references(offset, true).contains(&current));
 }
 
 #[test]
@@ -131,7 +184,7 @@ fn adding_a_missing_module_invalidates() {
         "a missing import was clean"
     );
 
-    // Creating the module must invalidate: the walk sees a new `.aev`.
+    // The candidate observed as missing now resolves to a source file.
     package.write("src/A.aev", "module A\n\nfn value(): Int = 1\n");
     let second = cache.program(&path);
     assert_eq!(cache.loads(), 2, "the new module did not invalidate");
@@ -187,16 +240,14 @@ fn an_unrelated_file_outside_the_roots_does_not_invalidate() {
 }
 
 #[test]
-fn a_same_length_edit_of_the_entry_is_detected_by_the_content_hash() {
-    let (package, _) = imported_package("entry-edit");
+fn a_same_length_edit_of_the_entry_is_detected_by_the_exact_content_check() {
+    let (package, source) = imported_package("entry-edit");
     let path = package.path("src/B.aev");
     let mut cache = AnalysisCache::new();
     let _ = cache.program(&path);
-    // Same length, different content: only the content hash can see this.
-    package.write(
-        "src/B.aev",
-        "module B\n\nimport A\n\nlet got = A.value(9)\n",
-    );
+    let replacement = source.replace("A.value", "A.other");
+    assert_eq!(source.len(), replacement.len());
+    package.write("src/B.aev", &replacement);
     let _ = cache.program(&path);
     assert_eq!(cache.loads(), 2, "a same-length entry edit was not seen");
 }

@@ -3,7 +3,7 @@
 //! # Why the events are rewritten instead of the string
 //!
 //! A README is written by the package author, so it may contain anything the
-//! CommonMark dialect accepts: tables, footnotes, fenced blocks with an info
+//! `CommonMark` dialect accepts: tables, footnotes, fenced blocks with an info
 //! string, relative links to the sibling `.md` files `aevia doc` writes. The
 //! three conventions the site needs — a `language-*` class on fenced code, a
 //! `target`/`rel` pair on outbound links, and extensionless module links — are
@@ -36,8 +36,15 @@ use pulldown_cmark::Options;
 use pulldown_cmark::Parser;
 use pulldown_cmark::Tag;
 use pulldown_cmark::TagEnd;
+use std::borrow::Cow;
+use std::sync::LazyLock;
 
-use crate::html::escape;
+use crate::html::push_escaped;
+
+const OPTIONS: Options = Options::ENABLE_TABLES
+    .union(Options::ENABLE_FOOTNOTES)
+    .union(Options::ENABLE_STRIKETHROUGH)
+    .union(Options::ENABLE_TASKLISTS);
 
 /// Renders Markdown to HTML with the registry's conventions.
 ///
@@ -58,80 +65,138 @@ use crate::html::escape;
 /// ```
 #[must_use]
 pub fn render_markdown(markdown: &str) -> String {
-    let mut options = Options::empty();
-    options.insert(Options::ENABLE_TABLES);
-    options.insert(Options::ENABLE_FOOTNOTES);
-    options.insert(Options::ENABLE_STRIKETHROUGH);
-    options.insert(Options::ENABLE_TASKLISTS);
-    let parser = Parser::new_ext(markdown, options);
-    let mut rendered = String::with_capacity(markdown.len() + markdown.len() / 2);
-    pulldown_cmark::html::push_html(&mut rendered, transform(parser));
-    sanitise(&rendered)
+    render(markdown, None)
 }
 
-/// Rewrites the events whose rendering the site's conventions change.
-fn transform<'a>(parser: Parser<'a>) -> impl Iterator<Item = Event<'a>> + 'a {
-    parser.flat_map(|event| adapt(event))
+/// Renders a platform manual chapter with its edition-specific link resolver.
+///
+/// Fences marked `aevia,run` carry an extra class so the book can progressively
+/// enhance them. Package documentation never marks its examples this way.
+#[must_use]
+pub fn render_manual_markdown(
+    markdown: &str,
+    resolve_link: &dyn Fn(&str) -> String,
+) -> String {
+    render(markdown, Some(resolve_link))
+}
+
+fn render(
+    markdown: &str,
+    manual_links: Option<&dyn Fn(&str) -> String>,
+) -> String {
+    let mut needs_sanitiser = false;
+    let mut rendered = String::with_capacity(markdown.len().saturating_add(markdown.len() / 2));
+    pulldown_cmark::html::push_html(
+        &mut rendered,
+        Parser::new_ext(markdown, OPTIONS).map(|event| {
+            needs_sanitiser = needs_sanitiser || !is_plain_prose(&event);
+            adapt(event, manual_links)
+        }),
+    );
+    if needs_sanitiser {
+        sanitise(&rendered)
+    } else {
+        rendered
+    }
+}
+
+/// True for renderer-generated prose whose HTML requires no attributes or
+/// normalisation. Raw HTML, links, and all other events use the full policy.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps the plain-prose allowlist separate from rendering and URL adaptation"
+)]
+fn is_plain_prose(event: &Event<'_>) -> bool {
+    match event {
+        | Event::Start(Tag::Paragraph | Tag::Emphasis | Tag::Strong | Tag::Strikethrough)
+        | Event::End(
+            TagEnd::Paragraph | TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough,
+        )
+        | Event::SoftBreak => true,
+        | Event::Text(text) | Event::Code(text) => {
+            !text.chars().any(|character| {
+                character.is_control() || matches!(character, '<' | '>' | '&' | '\u{a0}')
+            })
+        },
+        | _ => false,
+    }
 }
 
 /// Rewrites one event, or returns it unchanged.
-fn adapt<'a>(event: Event<'a>) -> Option<Event<'a>> {
+#[allow(
+    clippy::single_call_fn,
+    reason = "the Markdown event adapter isolates link and code-fence transformations"
+)]
+fn adapt<'a>(
+    event: Event<'a>,
+    manual_links: Option<&dyn Fn(&str) -> String>,
+) -> Event<'a> {
     match event {
-        | Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {
-            let language = info
-                .split([' ', '\t', ','])
-                .next()
-                .map(language_class)
-                .unwrap_or_default();
-            let open = if language.is_empty() {
-                "<pre><code>".to_string()
-            } else {
-                format!("<pre><code class=\"language-{language}\">")
+        | Event::Start(Tag::CodeBlock(kind)) => {
+            let info = match &kind {
+                | CodeBlockKind::Fenced(info) => info.as_ref(),
+                | CodeBlockKind::Indented => "",
             };
-            Some(Event::Html(CowStr::Boxed(open.into_boxed_str())))
+            let mut words = info.split([',', ' ', '\t']).filter(|word| !word.is_empty());
+            let language = words.next().map_or_else(String::new, language_class);
+            if language.is_empty() {
+                return Event::Html(CowStr::Borrowed("<pre><code>"));
+            }
+            let interactive =
+                manual_links.is_some() && language == "aevia" && words.any(|word| word == "run");
+            let extra = if interactive {
+                " interactive-example"
+            } else {
+                ""
+            };
+            let open = format!("<pre><code class=\"language-{language}{extra}\">");
+            Event::Html(CowStr::Boxed(open.into_boxed_str()))
         },
-        | Event::End(TagEnd::CodeBlock) => Some(Event::Html(CowStr::Borrowed("</code></pre>\n"))),
+        | Event::End(TagEnd::CodeBlock) => Event::Html(CowStr::Borrowed("</code></pre>\n")),
         | Event::Start(Tag::Link {
             link_type,
             dest_url,
             title,
             id,
         }) => {
-            if is_absolute_http(&dest_url) {
+            let rewritten = match manual_links {
+                | Some(resolve) => Cow::Owned(resolve(&dest_url)),
+                | None => rewrite_md_link(&dest_url),
+            };
+            if is_absolute_http(&rewritten) {
                 let mut open = String::from("<a href=\"");
-                open.push_str(&escape(&dest_url));
+                push_escaped(&mut open, &rewritten);
                 open.push('"');
                 if !title.is_empty() {
                     open.push_str(" title=\"");
-                    open.push_str(&escape(&title));
+                    push_escaped(&mut open, &title);
                     open.push('"');
                 }
                 open.push_str(" rel=\"noopener noreferrer\" target=\"_blank\">");
-                Some(Event::Html(CowStr::Boxed(open.into_boxed_str())))
+                Event::Html(CowStr::Boxed(open.into_boxed_str()))
             } else {
-                let rewritten = rewrite_md_link(&dest_url);
-                if rewritten == dest_url.as_ref() {
-                    Some(Event::Start(Tag::Link {
-                        link_type,
-                        dest_url,
-                        title,
-                        id,
-                    }))
+                let dest_url = if rewritten.as_ref() == dest_url.as_ref() {
+                    dest_url
                 } else {
-                    Some(Event::Start(Tag::Link {
-                        link_type,
-                        dest_url: CowStr::Boxed(rewritten.into_boxed_str()),
-                        title,
-                        id,
-                    }))
-                }
+                    CowStr::Boxed(rewritten.into_owned().into_boxed_str())
+                };
+                Event::Start(Tag::Link {
+                    link_type,
+                    dest_url,
+                    title,
+                    id,
+                })
             }
         },
-        | other => Some(other),
+        | other => other,
     }
 }
 
 /// The class-safe form of a fence's info string.
+#[allow(
+    clippy::single_call_fn,
+    reason = "fence class names use an independently defined character set"
+)]
 fn language_class(info: &str) -> String {
     info.chars()
         .filter(|character| {
@@ -142,17 +207,25 @@ fn language_class(info: &str) -> String {
 }
 
 /// Whether a link destination is an absolute `http` or `https` URL.
+#[allow(
+    clippy::single_call_fn,
+    reason = "HTTP link classification determines which links open a new window"
+)]
 fn is_absolute_http(url: &str) -> bool {
-    let lowered = url.to_ascii_lowercase();
-    lowered.starts_with("http://") || lowered.starts_with("https://")
+    url.split_once("://").is_some_and(|(scheme, _)| {
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    })
 }
 
 /// Whether a URL carries a scheme, so it is not a relative path.
+#[allow(
+    clippy::single_call_fn,
+    reason = "RFC-style scheme syntax distinguishes relative documentation links"
+)]
 fn has_scheme(url: &str) -> bool {
-    let Some(colon) = url.find(':') else {
+    let Some((scheme, _)) = url.split_once(':') else {
         return false;
     };
-    let scheme = &url[..colon];
     !scheme.is_empty()
         && scheme
             .chars()
@@ -171,21 +244,22 @@ fn has_scheme(url: &str) -> bool {
 /// because anchors are stable across the two renderers. Anything that is not a
 /// relative `.md` link — an absolute URL, an anchor, a path with a scheme, a
 /// link to `notes.txt` — is left exactly as written.
-fn rewrite_md_link(url: &str) -> String {
-    if url.is_empty()
-        || url.starts_with('#')
-        || url.starts_with('/')
-        || url.starts_with("//")
-        || has_scheme(url)
-    {
-        return url.to_string();
+#[allow(
+    clippy::single_call_fn,
+    reason = "package documentation route rewriting is tested independently of HTML emission"
+)]
+fn rewrite_md_link(url: &str) -> Cow<'_, str> {
+    if url.is_empty() || url.starts_with('#') || url.starts_with('/') || has_scheme(url) {
+        return Cow::Borrowed(url);
     }
     let cut = url.find(['?', '#']).unwrap_or(url.len());
     let (path, rest) = url.split_at(cut);
-    if path.to_ascii_lowercase().ends_with(".md") {
-        format!("{}{rest}", &path[..path.len() - 3])
+    if let Some((stem, extension)) = path.rsplit_once('.')
+        && extension.eq_ignore_ascii_case("md")
+    {
+        Cow::Owned(format!("{stem}{rest}"))
     } else {
-        url.to_string()
+        Cow::Borrowed(url)
     }
 }
 
@@ -195,52 +269,94 @@ fn rewrite_md_link(url: &str) -> String {
 /// genuinely uses, and a few attributes that make images and collapsible
 /// sections work. `rel` is forced on every link so a target=_blank page cannot
 /// reach back through `window.opener`.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the independent sanitization policy is shared by all Markdown entry points"
+)]
 fn sanitise(html: &str) -> String {
-    let mut builder = ammonia::Builder::default();
-    builder
-        .add_tags(&[
-            "details",
-            "summary",
-            "kbd",
-            "samp",
-            "var",
-            "figure",
-            "figcaption",
-            "del",
-            "ins",
-            "picture",
-            "source",
-            "abbr",
-            "dl",
-            "dt",
-            "dd",
-            "sup",
-            "sub",
-            "mark",
-        ])
-        .add_tag_attributes(
-            "img",
-            &["src", "alt", "title", "width", "height", "loading"],
-        )
-        .add_tag_attributes("source", &["srcset", "type", "media", "sizes"])
-        .add_tag_attributes("details", &["open"])
-        .add_tag_attributes("abbr", &["title"])
-        // `target` is allowed because `link_rel` above guarantees the
-        // `noopener noreferrer` that makes a new tab safe.
-        .add_tag_attributes("a", &["target"])
-        .add_tag_attributes("code", &["class"])
-        .add_tag_attributes("pre", &["class"])
-        .add_tag_attributes("span", &["class"])
-        .add_tag_attributes("div", &["class"])
-        .add_tag_attributes("th", &["align", "scope", "colspan", "rowspan"])
-        .add_tag_attributes("td", &["align", "colspan", "rowspan"])
-        .link_rel(Some("noopener noreferrer"));
-    builder.clean(html).to_string()
+    static POLICY: LazyLock<ammonia::Builder<'static>> = LazyLock::new(|| {
+        let mut builder = ammonia::Builder::default();
+        builder
+            .add_tags(&[
+                "details",
+                "summary",
+                "kbd",
+                "samp",
+                "var",
+                "figure",
+                "figcaption",
+                "del",
+                "ins",
+                "picture",
+                "source",
+                "abbr",
+                "dl",
+                "dt",
+                "dd",
+                "sup",
+                "sub",
+                "mark",
+            ])
+            .add_tag_attributes(
+                "img",
+                &["src", "alt", "title", "width", "height", "loading"],
+            )
+            .add_tag_attributes("source", &["srcset", "type", "media", "sizes"])
+            .add_tag_attributes("details", &["open"])
+            .add_tag_attributes("abbr", &["title"])
+            // `target` is allowed because `link_rel` above guarantees the
+            // `noopener noreferrer` that makes a new tab safe.
+            .add_tag_attributes("a", &["target"])
+            .add_tag_attributes("code", &["class"])
+            .add_tag_attributes("pre", &["class"])
+            .add_tag_attributes("span", &["class"])
+            .add_tag_attributes("div", &["class"])
+            .add_tag_attributes("th", &["align", "scope", "colspan", "rowspan"])
+            .add_tag_attributes("td", &["align", "colspan", "rowspan"])
+            .link_rel(Some("noopener noreferrer"));
+        builder
+    });
+    POLICY.clean(html).to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skipping_the_html_parser_preserves_rendering() {
+        let plain = [
+            "",
+            "Ordinary prose with an apostrophe's mark and \"quotes\".",
+            "中文和 λ 都保留。",
+            "`inline code` and **bold**, *emphasis*, ~~struck~~.",
+            "A soft\nwrap.\n\nA second paragraph.",
+        ];
+        let checked = [
+            "A hard  \nwrap.",
+            "`vector<T>` & non-breaking\u{a0}space.",
+            "[module](Kinematics.md) and <strong>inline HTML</strong>",
+            "# Heading\n\n- Item",
+            "```aevia\nlet x = 1\n```",
+            "A\0B",
+            "An entity &amp; a line\rbreak.",
+        ];
+        for (cases, plain_only) in [(&plain[..], true), (&checked[..], false)] {
+            for source in cases {
+                assert_eq!(
+                    Parser::new_ext(source, OPTIONS).all(|event| is_plain_prose(&event)),
+                    plain_only,
+                    "{source:?}"
+                );
+                let mut old_html = String::new();
+                pulldown_cmark::html::push_html(
+                    &mut old_html,
+                    Parser::new_ext(source, OPTIONS).map(|event| adapt(event, None)),
+                );
+                assert_eq!(render_markdown(source), sanitise(&old_html), "{source:?}");
+            }
+        }
+    }
 
     #[test]
     fn a_table_survives() {

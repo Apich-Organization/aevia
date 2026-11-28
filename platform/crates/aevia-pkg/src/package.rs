@@ -1,13 +1,11 @@
 //! The package in the current directory: finding it, packing it, naming it.
 //!
-//! # Why the manifest is read through `aevia-registry-core`
+//! # The registry manifest reader
 //!
-//! `aevia_core::manifest` owns the real parser, but that crate links the RSSN
-//! kernel. `aevia-registry-core` re-implements the same subset — same keys,
-//! same refusals — precisely so a registry client can read `aevia.toml` without
-//! building a computer-algebra system. This module uses that reader, which
-//! means `aevia-pkg` accepts exactly the manifests `aevia check` accepts: a
-//! package that publishes here is a package that builds there.
+//! This client uses [`PackageManifest`] to read package metadata and
+//! dependencies without linking the RSSN kernel. Publication uses
+//! `[package] entry` or its default, `src/main.aev`. The toolchain also reads
+//! `[lib]` and validates lint settings when it checks the package.
 //!
 //! # Why the archive is built by `aevia-registry-core` too
 //!
@@ -76,6 +74,10 @@ pub fn load_from(start: &Path) -> Result<Package, CliError> {
 ///
 /// `E_TARBALL` when the tree cannot be packed — a missing entry file, an
 /// archive over the size limit, an unreadable file.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the package command hands off parsed metadata and its source directory together"
+)]
 pub fn pack(package: &Package) -> Result<Vec<u8>, CliError> {
     tarball::pack_dir(&package.root, &package.manifest).map_err(CliError::from)
 }
@@ -87,6 +89,10 @@ pub fn pack(package: &Package) -> Result<Vec<u8>, CliError> {
 /// as clean because refusing to publish an unpacked tarball of a source release
 /// would be worse than publishing one that happens to sit in a git checkout.
 #[must_use]
+#[allow(
+    clippy::single_call_fn,
+    reason = "publish checks tracked and untracked file state independently of packing"
+)]
 pub fn dirty_files(root: &Path) -> Option<Vec<String>> {
     let output = Command::new("git")
         .arg("-C")
@@ -189,6 +195,10 @@ pub fn valid_version(version: &str) -> bool {
 /// is used only to print the line a publisher pastes into `aevia.toml`, so the
 /// worst a divergence could do is print a key the toolchain then refuses.
 #[must_use]
+#[allow(
+    clippy::single_call_fn,
+    reason = "default module aliases follow the package-to-identifier conversion policy"
+)]
 pub fn import_root(name: &str) -> String {
     let mut out = String::new();
     for part in name.split(['_', '-']).filter(|part| !part.is_empty()) {
@@ -261,11 +271,7 @@ mod tests {
 
     #[test]
     fn a_bad_target_is_refused_with_the_reason() {
-        for spec in [
-            "units-extra",
-            "apich/units@1.0",
-            "apich/9lives",
-        ] {
+        for spec in ["units-extra", "apich/units@1.0", "apich/9lives"] {
             let error = parse_target(spec).expect_err(spec);
             assert!(!error.message.is_empty(), "{spec}");
         }

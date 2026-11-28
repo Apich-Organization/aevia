@@ -256,6 +256,64 @@ fn the_lock_file_is_byte_identical_when_nothing_changed() {
 }
 
 #[test]
+fn local_hash_workers_preserve_lock_bytes_and_first_alias_error() {
+    let scratch = Scratch::new("local-hash-workers");
+    let mut dependencies = String::new();
+    for (alias, path) in [
+        ("A", "z-first"),
+        ("B", "a-second"),
+        ("C", "c-third"),
+        ("D", "d-fourth"),
+        ("Z", "z-first"),
+    ] {
+        scratch.write(
+            &format!("{path}/aevia.toml"),
+            &manifest(path, "src/lib.aev", ""),
+        );
+        scratch.write(&format!("{path}/src/lib.aev"), "let value = 1\n");
+        dependencies.push_str(&format!("{alias} = {{ path = \"../{path}\" }}\n"));
+    }
+    scratch.write(
+        "pkg/aevia.toml",
+        &manifest("pkg", "src/main.aev", &dependencies),
+    );
+    let entry = scratch.write("pkg/src/main.aev", "fn main(): IO Unit = ()\n");
+    let package = Package::owning(&entry).unwrap().unwrap();
+    let pool = |threads| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+    };
+    let serial = pool(1);
+    let parallel = pool(2);
+    let one = serial.install(|| package.resolve()).unwrap();
+    let two = parallel.install(|| package.resolve()).unwrap();
+    assert_eq!(one.render(), two.render());
+    assert_eq!(two.packages.len(), 6);
+    let hash = |alias| {
+        two.packages
+            .iter()
+            .find(|entry| entry.import == alias)
+            .unwrap()
+            .hash
+            .as_ref()
+    };
+    assert!(hash("A").is_some());
+    assert_eq!(hash("A"), hash("Z"));
+
+    for path in ["z-first", "a-second"] {
+        std::fs::remove_dir_all(scratch.path().join(path).join("src")).unwrap();
+        scratch.write(&format!("{path}/src"), "not a directory");
+    }
+    let expected = serial.install(|| package.resolve()).unwrap_err();
+    let observed = parallel.install(|| package.resolve()).unwrap_err();
+    assert_eq!(observed, expected);
+    assert_eq!(observed.code, "E0607");
+    assert!(observed.message.contains("z-first"), "{}", observed.message);
+}
+
+#[test]
 fn the_lock_changes_when_a_dependency_changes() {
     // A lock file is only worth having if a diff means a real change.
     let scratch = Scratch::new("lock-change");

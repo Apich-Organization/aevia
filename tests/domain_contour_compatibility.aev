@@ -1,0 +1,46 @@
+import Rssn_Contour as Contour
+import Rssn_numerical_callback as Numeric
+
+fn density(_z: Complex[Length]): Complex[Time] = complex(2.0 s, 0.0 s)
+fn simple_pole(z: Complex[Length]): Complex[Time] = complex(1.0 m*s, 0.0 m*s) / z
+fn real_pole(x: Float[Length]): Complex[Time] = simple_pole(complex(to_real(x), 0.0 m))
+
+test "fixed and adaptive residue agree with a measured circular integral" =
+    let fixed = Numeric.num_contour_residue_infinity_fixed_typed(2.0 m, 16, 3.0 m, 4.0 s, 32, simple_pole)
+    let adaptive = Numeric.num_contour_residue_infinity_checked_typed(2.0 m, 3.0 m, 4.0 s, 1e-9 m*s, 32, 1024, simple_pole)
+    let limited = Numeric.num_contour_residue_infinity_fixed_typed(2.0 m, 16, 3.0 m, 4.0 s, 31, simple_pole)
+    match (fixed, adaptive, limited) with
+    | (Ok(a), Ok(b), Err(_)) -> b.converged && approx_eq(re(a), -1.0 m*s, 1e-12 m*s) && approx_eq(re(b.value), re(a), 1e-12 m*s)
+    | _ -> false
+
+test "principal value keeps paired samples and the measured amplitude" =
+    match Numeric.num_contour_principal_value_checked_typed(-1.0 m, 2.0 m, [0.0 m], 2.0 m, 1.0 s, 1e-10 m*s, 32, 1024, real_pole) with
+    | Ok(v) -> v.converged && approx_eq(re(v.value), 0.6931471805599453 m*s, 1e-10 m*s)
+    | Err(_) -> false
+
+test "whole-path and single-segment adapters share the same panel rule" =
+    match Contour.bromwich(0.0 m, 2.0 m) with
+    | Ok(path) ->
+        let single = Numeric.num_contour_integrate_segment_checked_typed(path, 2.0 m, 2.0 s, 1e-10 m*s, 24, 128, density)
+        let whole = Numeric.num_contour_integrate_checked_typed(path, 2.0 m, 2.0 s, 1e-10 m*s, 24, 128, density)
+        match (single, whole) with
+        | (Ok(a), Ok(b)) -> a.evaluations == 15 && b.evaluations == 15 && approx_eq(im(a.value), im(b.value), 1e-12 m*s)
+        | _ -> false
+    | Err(_) -> false
+
+test "legacy value-only contour routes keep their units and path orientation" =
+    match Contour.bromwich(0.0 m, 2.0 m) with
+    | Ok(path) ->
+        let single = Numeric.num_contour_integrate_segment_typed(path, 2.0 m, 2.0 s, 1e-10 m*s, 128, density)
+        let whole = Numeric.num_contour_integrate_typed(path, 2.0 m, 2.0 s, 1e-10 m*s, 128, density)
+        match (single, whole) with
+        | (Ok(a), Ok(b)) -> approx_eq(im(a), 8.0 m*s, 1e-12 m*s) && approx_eq(im(b), im(a), 1e-12 m*s)
+        | _ -> false
+    | Err(_) -> false
+
+test "legacy value-only principal value preserves pole filtering and reverse-zero" =
+    let forward = Numeric.num_contour_principal_value_typed(-1.0 m, 2.0 m, [0.0 m, 0.0 m, 4.0 m], 2.0 m, 1.0 s, 1e-10 m*s, 1024, real_pole)
+    let reverse = Numeric.num_contour_principal_value_typed(2.0 m, -1.0 m, [0.0 m], 2.0 m, 1.0 s, 1e-10 m*s, 1, real_pole)
+    match (forward, reverse) with
+    | (Ok(a), Ok(b)) -> approx_eq(re(a), 0.6931471805599453 m*s, 1e-10 m*s) && approx_eq(magnitude(b), 0.0 m*s, 1e-15 m*s)
+    | _ -> false

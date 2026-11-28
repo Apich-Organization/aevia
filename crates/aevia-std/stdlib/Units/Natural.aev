@@ -1,20 +1,21 @@
-## The constants in natural units: c = hbar = k_B = epsilon_0 = 1.
+# Generated from the RSSN kernel manifest.
+# Regenerate with `bazel run //:refresh_stdlib`.
+# RSSN 3.0.0-beta.1, API 2
+## Physical constants in particle-physics natural units: c = hbar = k_B = epsilon_0 = 1 (Heaviside-Lorentz); every mechanical, thermal and electromagnetic dimension is a power of energy.
 ##
-## particle-physics natural units: c = hbar = k_B = epsilon_0 = 1 (Heaviside-Lorentz); every mechanical, thermal and electromagnetic dimension is a power of energy.
-##
-## Generated from the rssn Kernel Manifest (`manifest.unit_systems` and
-## `manifest.constants`, §5.11.7). Do not edit; regenerate with
-## `cargo run -p aevia-stdlib-gen -- --write`.
-## rssn 3.0.0-rc.1, api 2
+## Use `module Example with units natural` to apply the same convention
+## to your module's unit literals and dimension annotations.
 module Units.Natural with units natural
 
-## Faraday constant (SI 2019 definition, exact); an irrational power of the unity constants, so a Float
+## Faraday constant (SI 2019 definition, exact).
+## The conversion uses a fractional power, so this constant is a `Float` in these units.
 let f: Float[1/Amount] = 1.823637436512817e23 mol^-1
 ## Newtonian constant of gravitation (CODATA 2022, measured)
 let g: Real[Length^3/(Mass*Time^2)] = 0.000000000066743 m^3*kg^-1*s^-2
 ## conductance quantum (SI 2019 definition, exact)
 let g_0: Real[Current^2*Time^3/(Length^2*Mass)] = 0.00007748091729 A^2*m^-2*kg^-1*s^3
-## Josephson constant (SI 2019 definition, exact); an irrational power of the unity constants, so a Float
+## Josephson constant (SI 2019 definition, exact).
+## The conversion uses a fractional power, so this constant is a `Float` in these units.
 let k_J: Float = 9.639127479592409e-2
 ## luminous efficacy (SI 2019 definition, exact)
 let k_cd: Real[Luminosity*Time^3/(Length^2*Mass)] = 683 m^-2*cd*kg^-1*s^3
@@ -22,7 +23,8 @@ let k_cd: Real[Luminosity*Time^3/(Length^2*Mass)] = 683 m^-2*cd*kg^-1*s^3
 let m_u: Real[Mass/Amount] = 0.001 mol^-1*kg
 ## Avogadro constant (SI 2019 definition, exact)
 let n_A: Real[1/Amount] = 602214076000000000000000 mol^-1
-## magnetic flux quantum (SI 2019 definition, exact); an irrational power of the unity constants, so a Float
+## magnetic flux quantum (SI 2019 definition, exact).
+## The conversion uses a fractional power, so this constant is a `Float` in these units.
 let phi_0: Float = 1.0374382970800772e1
 ## molar gas constant (SI 2019 definition, exact)
 let r: Real[Length^2*Mass/(Amount*Temperature*Time^2)] = 8.31446261815324 mol^-1*m^2*kg*K^-1*s^-2
@@ -42,7 +44,8 @@ let atm: Real[Mass/(Length*Time^2)] = 101325 m^-1*kg*s^-2
 let c: Real[Length/Time] = 299792458 m*s^-1
 ## caesium hyperfine frequency (SI 2019 definition, exact)
 let dnu_Cs: Real[1/Time] = 9192631770 s^-1
-## elementary charge (SI 2019 definition, exact); an irrational power of the unity constants, so a Float
+## elementary charge (SI 2019 definition, exact).
+## The conversion uses a fractional power, so this constant is a `Float` in these units.
 let e: Float = 3.0282212076902987e-1
 ## vacuum electric permittivity (CODATA 2022, measured)
 let epsilon_0: Real[Current^2*Time^4/(Length^3*Mass)] = 0.0000000000088541878188 A^2*m^-3*kg^-1*s^4
@@ -64,7 +67,8 @@ let m_p: Real[Mass] = 0.00000000000000000000000000167262192595 kg
 let m_u_2: Real[Mass] = 0.00000000000000000000000000166053906892 kg
 ## vacuum magnetic permeability (CODATA 2022, measured)
 let mu_0: Real[Length*Mass/(Current^2*Time^2)] = 0.00000125663706127 A^-2*m*kg*s^-2
-## Bohr magneton (CODATA 2022, measured); an irrational power of the unity constants, so a Float
+## Bohr magneton (CODATA 2022, measured).
+## The conversion uses a fractional power, so this constant is a `Float` in these units.
 let mu_B: Float[Time^2/(Length^2*Mass)] = 1.84938443822728e12 m^-2*kg^-1*s^2
 ## Stefan-Boltzmann constant (CODATA 2022, measured)
 let sigma_SB: Real[Mass/(Temperature^4*Time^3)] = 0.00000005670374419 kg*K^-4*s^-3

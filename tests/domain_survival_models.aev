@@ -1,0 +1,24 @@
+## Portable survival estimates, physical times and relative hazards.
+import Rssn_Statistics as Stats
+
+test "Kaplan-Meier median retains observed time units" =
+    match Stats.kaplan_meier([2000.0 ms, 3.0 s, 5.0 s, 6.0 s, 8.0 s, 9.0 s], [true, false, true, true, false, false], 0.95) with
+    | Err(_) -> false
+    | Ok(curve) -> Stats.median_survival(curve) == Ok(Some(6.0 s))
+
+test "a curve that never reaches one half has no median" =
+    match Stats.kaplan_meier([1.0 s, 2.0 s, 3.0 s], [true, false, false], 0.95) with
+    | Err(_) -> false
+    | Ok(curve) -> Stats.median_survival(curve) == Ok(None)
+
+test "a fitted Cox record predicts higher relative hazards for the earlier-event group" =
+    match Stats.fit_cox([1.0 s, 2.0 s, 4.0 s, 7.0 s, 3.0 s, 5.0 s, 6.0 s, 8.0 s], [true, true, true, false, true, true, false, true], [[1.0], [1.0], [1.0], [1.0], [0.0], [0.0], [0.0], [0.0]], "efron", 20, 0.0000000001) with
+    | Err(_) -> false
+    | Ok(model) -> match Stats.predict_cox(model, [[0.0], [1.0]]) with
+        | Err(_) -> false
+        | Ok(hazards) -> hazards[0] == 1.0 && hazards[1] > 1.0
+
+test "Kaplan-Meier reports an all-censored sample" =
+    match Stats.kaplan_meier([1.0 s, 2.0 s], [false, false], 0.95) with
+    | Err(_) -> true
+    | Ok(_) -> false

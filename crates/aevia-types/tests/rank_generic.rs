@@ -16,7 +16,7 @@ fn codes_of(source: &str) -> Vec<String> {
         .items
         .iter()
         .filter(|diagnostic| diagnostic.severity == aevia_syntax::Severity::Error)
-        .map(|diagnostic| diagnostic.code.to_string())
+        .map(|diagnostic| diagnostic.code.clone())
         .collect()
 }
 

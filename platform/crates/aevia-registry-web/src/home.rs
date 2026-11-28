@@ -14,6 +14,8 @@ use leptos::prelude::AnyView;
 use leptos::prelude::*;
 
 use crate::Msg;
+use crate::cli::INSTALL_PREREQUISITES;
+use crate::cli::installer_commands;
 use crate::crates::card_in;
 use crate::layout;
 use crate::thousands;
@@ -41,7 +43,11 @@ const LEDE: Msg = Msg::new(
 );
 const COPY_LABEL: Msg = Msg::new("Copy the install command", "复制安装命令");
 const COPY: Msg = Msg::new("copy", "复制");
+const INSTALL_UNIX: Msg = Msg::new("macOS / Linux", "macOS / Linux");
+const INSTALL_WINDOWS: Msg = Msg::new("Windows PowerShell", "Windows PowerShell");
+const INSTALL_PKG: Msg = Msg::new("package", "安装包");
 const BROWSE: Msg = Msg::new("browse crates", "浏览包");
+const CLI_GUIDE: Msg = Msg::new("command line", "命令行");
 const READ_DOCS: Msg = Msg::new("read the docs", "阅读文档");
 const STAT_PACKAGES: Msg = Msg::new("packages", "包");
 const STAT_VERSIONS: Msg = Msg::new("versions", "版本");
@@ -64,9 +70,9 @@ const SIGNATURE_BODY: Msg = Msg::new(
 );
 const DOCS_TITLE: Msg = Msg::new("Docs built by the compiler", "文档由编译器生成");
 const DOCS_BODY: Msg = Msg::new(
-    "The compiler reads `##` comments at publish time and renders them from the same syntax tree \
+    "The compiler reads ## comments at publish time and renders them from the same syntax tree \
      it type-checks, so the documentation cannot drift from the code it describes.",
-    "编译器在发布时读取 `##` 注释，并从它做类型检查的同一棵语法树渲染页面，因此文档不会与它\
+    "编译器在发布时读取 ## 注释，并从它做类型检查的同一棵语法树渲染页面，因此文档不会与它\
      描述的代码脱节。",
 );
 
@@ -75,10 +81,12 @@ const DOCS_BODY: Msg = Msg::new(
 /// `recent` is truncated to six here rather than by the caller: the front page
 /// is the only consumer that wants a fixed count, and keeping the cut next to
 /// the grid means the grid and the count cannot drift apart.
+#[must_use]
 pub fn home(
     lang: Lang,
     stats: &SiteStats,
     recent: &[CrateCard],
+    base_url: &str,
     viewer: Option<&Viewer>,
 ) -> String {
     let cards: Vec<AnyView> = recent
@@ -91,6 +99,7 @@ pub fn home(
     let versions = thousands(stats.versions);
     let downloads = thousands(stats.downloads);
     let publishers = thousands(stats.publishers);
+    let [sh_install, ps_install] = installer_commands(base_url);
 
     layout::page(
         lang,
@@ -101,20 +110,49 @@ pub fn home(
             <section class="hero">
                 <h1>{HEADLINE.of(lang)}</h1>
                 <p class="lede">{LEDE.of(lang)}</p>
-                <div class="install">
-                    <code id="install-home">"aevia pkg add <owner>/<name>"</code>
-                    <button
-                        type="button"
-                        class="copy"
-                        data-copy="#install-home"
-                        aria-label=COPY_LABEL.of(lang)
-                    >
-                        {COPY.of(lang)}
-                    </button>
+                <p>{INSTALL_PREREQUISITES.of(lang)}</p>
+                <div class="install-stack">
+                    <div class="install">
+                        <span class="install-tag">{INSTALL_UNIX.of(lang)}</span>
+                        <code id="install-sh">{sh_install}</code>
+                        <button
+                            type="button"
+                            class="copy"
+                            data-copy="#install-sh"
+                            aria-label=COPY_LABEL.of(lang)
+                        >
+                            {COPY.of(lang)}
+                        </button>
+                    </div>
+                    <div class="install">
+                        <span class="install-tag">{INSTALL_WINDOWS.of(lang)}</span>
+                        <code id="install-ps">{ps_install}</code>
+                        <button
+                            type="button"
+                            class="copy"
+                            data-copy="#install-ps"
+                            aria-label=COPY_LABEL.of(lang)
+                        >
+                            {COPY.of(lang)}
+                        </button>
+                    </div>
+                    <div class="install">
+                        <span class="install-tag">{INSTALL_PKG.of(lang)}</span>
+                        <code id="install-home">"aevia add <owner>/<name>"</code>
+                        <button
+                            type="button"
+                            class="copy"
+                            data-copy="#install-home"
+                            aria-label=COPY_LABEL.of(lang)
+                        >
+                            {COPY.of(lang)}
+                        </button>
+                    </div>
                 </div>
                 <div class="actions">
                     <a class="btn" href="/crates">{BROWSE.of(lang)}</a>
                     <a class="btn btn-ghost" href="/docs">{READ_DOCS.of(lang)}</a>
+                    <a class="btn btn-ghost" href="/cli">{CLI_GUIDE.of(lang)}</a>
                 </div>
             </section>
             <div class="hero-grid">
@@ -175,9 +213,18 @@ mod tests {
 
     #[test]
     fn the_front_page_shows_the_install_line_and_the_counts() {
-        let html = home(Lang::En, &stats(), &[], None);
+        let html = home(Lang::En, &stats(), &[], "https://aevia.apich.org", None);
         assert!(
-            html.contains("aevia pkg add &lt;owner&gt;/&lt;name&gt;"),
+            html.contains("curl -fsSL 'https://aevia.apich.org/install.sh' | sh"),
+            "the Unix install one-liner is present"
+        );
+        assert!(
+            html.contains("irm 'https://aevia.apich.org/install.ps1'"),
+            "the PowerShell install one-liner is present"
+        );
+        assert!(html.contains("gh auth login"));
+        assert!(
+            html.contains("aevia add &lt;owner&gt;/&lt;name&gt;"),
             "the install line is present and escaped"
         );
         assert!(html.contains("1,204"), "package count");
@@ -193,12 +240,12 @@ mod tests {
 
     #[test]
     fn the_chinese_front_page_is_chinese() {
-        let html = home(Lang::Zh, &stats(), &[], None);
+        let html = home(Lang::Zh, &stats(), &[], "https://aevia.apich.org", None);
         assert!(html.contains("为 Aevia 语言提供带签名的包"), "headline");
         assert!(html.contains("最近发布"), "recent section");
         assert!(html.contains("lang=\"zh-CN\""), "document language");
         assert!(
-            html.contains("aevia pkg add &lt;owner&gt;/&lt;name&gt;"),
+            html.contains("aevia add &lt;owner&gt;/&lt;name&gt;"),
             "the command stays untranslated"
         );
     }
@@ -217,7 +264,7 @@ mod tests {
                 }
             })
             .collect();
-        let html = home(Lang::En, &stats(), &items, None);
+        let html = home(Lang::En, &stats(), &items, "https://aevia.apich.org", None);
         assert_eq!(html.matches("class=\"card\"").count(), 6);
         assert!(html.contains("apich/pkg5"));
         assert!(!html.contains("apich/pkg6"));

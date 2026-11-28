@@ -1,0 +1,52 @@
+## Run: bazel run //:aevia -- test examples/native_backend.aev
+## Expressions use dimensionless normalized coordinates; handles retain each axis unit.
+## This program uses the active RSSN backend. Run the same example with
+## `--rssn-backend cpu`, `--rssn-backend cranelift`, or a GPU selector from `aevia devices`.
+import Rssn_numerical_matrix as N
+
+let backend = unwrap_or(N.num_backend_current([]), to_value(0))
+
+let x_reference = unwrap_or(N.num_backend_reference([to_value(2.0 m)]), to_value(0))
+
+let t_reference = unwrap_or(N.num_backend_reference([to_value(1.0 s)]), to_value(0))
+
+let output_reference = unwrap_or(N.num_backend_reference([to_value(2.0 m/s)]), to_value(0))
+
+let compiled = unwrap_or(N.num_backend_compile([backend, to_value("x/t"), to_value(["x", "t"]), to_value([x_reference, t_reference]), output_reference, to_value(100000)]), to_value(0))
+
+let x = unwrap_or(N.num_backend_value([to_value(4.0 m)]), to_value(0))
+
+let t = unwrap_or(N.num_backend_value([to_value(2.0 s)]), to_value(0))
+
+let wrong_axis = unwrap_or(N.num_backend_value([to_value(4.0 s)]), to_value(0))
+
+test "native compiled program keeps mixed input references and output units" =
+    match N.num_backend_call([compiled, to_value([x, t])]) with
+    | Ok(value) ->
+        match from_value<Float[Length/Time]>(value) with
+        | Ok(speed) -> approx_eq(speed, 2.0 m/s, 1e-12 m/s)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "native compiled columns use the actual batch executor" =
+    match N.num_backend_call_batch_par([compiled, to_value([[x, x], [t, t]])]) with
+    | Ok(value) ->
+        match from_value<Tensor<1, Float[Length/Time]>>(value) with
+        | Ok(speeds) -> length(speeds) == 2 && all(fn (speed: Float[Length/Time]) => approx_eq(speed, 2.0 m/s, 1e-12 m/s), speeds)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "native compiled program rejects the wrong physical input axis" =
+    match N.num_backend_call([compiled, to_value([wrong_axis, t])]) with
+    | Ok(_) -> false
+    | Err(_) -> true
+
+test "native compiled columns accept directly measured samples per axis" =
+    let positions = to_value([1.0 m, 4.0 m, 9.0 m])
+    let times = to_value([1.0 s, 2.0 s, 3.0 s])
+    match Rssn.dynamic("num_backend_call_batch_columns", [compiled, to_value(3), to_value([positions, times])]) with
+    | Ok(value) ->
+        match from_value<Tensor<1, Float[Length/Time]>>(value) with
+        | Ok(speeds) -> length(speeds) == 3 && speeds[0] == 1.0 m/s && speeds[1] == 2.0 m/s && speeds[2] == 3.0 m/s
+        | Err(_) -> false
+    | Err(_) -> false

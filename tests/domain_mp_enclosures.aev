@@ -1,0 +1,35 @@
+## Checked expression enclosures and Lipschitz widening.
+import Rssn_Multiprecision as MP
+
+let zero: MP.Dyadic = { mantissa = 0, exponent = 0, precision = 1 }
+
+let one: MP.Dyadic = { mantissa = 1, exponent = 0, precision = 1 }
+
+let two: MP.Dyadic = { mantissa = 1, exponent = 1, precision = 1 }
+
+let negative_one: MP.Dyadic = { mantissa = -1, exponent = 0, precision = 1 }
+
+let interval: MP.DyadicBall = { midpoint = one, radius = one }
+
+test "the exact parser returns dyadic bounds for composed elementary calls" =
+    match MP.enclose_expression("sqrt(81) + hypot(3, 4) + cbrt(-8)", 4) with
+    | Err(_) -> false
+    | Ok(result) ->
+        match MP.ball_endpoints(result, 4) with
+        | Err(_) -> false
+        | Ok(bounds) -> bounds.lower.mantissa == 12 && bounds.lower == bounds.upper
+
+test "parse and interval domain errors survive the call boundary" =
+    match MP.enclose_expression("sqrt(-1)", 24) with
+    | Err(_) -> true
+    | Ok(_) -> false
+
+test "Lipschitz widening preserves a supplied midpoint and both endpoints" =
+    match MP.widen_ball_lipschitz(interval, zero, two, 1) with
+    | Err(_) -> false
+    | Ok(result) -> result.midpoint == zero && result.radius == two
+
+test "a negative Lipschitz bound is rejected" =
+    match MP.widen_ball_lipschitz(interval, zero, negative_one, 1) with
+    | Err(_) -> true
+    | Ok(_) -> false

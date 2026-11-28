@@ -1,6 +1,6 @@
 ## `Rssn_Group` and `Rssn_Graph`: nominal handle types over kernel terms, and
 ## 0-based permutations shared with `Rssn_Combinatorics` through a codec.
-## Run with: cargo run -p aevia-cli -- test tests/domain_groups_graphs.aev
+## Run with: bazel run //:aevia -- test tests/domain_groups_graphs.aev
 import Rssn_Group as G
 
 import Rssn_Graph as H

@@ -1,0 +1,12 @@
+common --enable_bzlmod
+common --noenable_workspace
+common --lockfile_mode=off
+build --show_timestamps
+build:release --compilation_mode=opt --config=llvm-overlay --define=rssn_cpu_baseline=distribution
+build:llvm-overlay --define=aevia_llvm_optimizer=1
+build:release-max --config=release --define=rssn_lto=fat --define=rssn_codegen_units=1
+build:release-local --compilation_mode=opt --define=rssn_lto=off
+test --test_output=errors
+test --test_env=AEVIA_TEST_DATABASE_URL
+test --test_timeout=60,300,900,10800
+try-import %workspace%/.bazelrc.local

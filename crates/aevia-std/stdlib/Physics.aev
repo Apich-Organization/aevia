@@ -1,7 +1,18 @@
 ## The `Physics` module of §8.20.
-##
-## Generated standard library; do not edit.
-## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Generated standard library; do not edit.
+# Regenerate with `bazel run //:refresh_stdlib`.
 module Physics
 
+## Runs a named simulation scenario of the scientific kernel (for example "ising") from JSON parameters and returns its JSON result, or Err(SimError) for an unknown scenario or bad parameters.
+##
+## **Signature:** `simulate : (String, Json) -> Result<Json, SimError>`
+##
+## Most scenarios also have a typed wrapper module such as Physics.Ising, which is easier to use.
+##
+## **Examples:**
+## ```text
+## simulate("ising", to_json({ width = 8, height = 8, temperature = 2.0, mc_steps = 100, seed = Some(1) }))
+## ```
+##
+## *Source: Aevia standard library guide.*
 let simulate = simulate

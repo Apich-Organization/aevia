@@ -28,6 +28,20 @@
 //! ```
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
 // Checker nodes and diagnostics are deliberately unboxed plain data, and inference helpers thread
 // explicit context; boxing would only add indirection.
 #![allow(
@@ -77,6 +91,7 @@ pub use check::check_module;
 pub use check::check_module_with_imports;
 pub use check::check_module_with_interfaces;
 pub use check::check_module_with_options;
+pub use check::check_module_with_resolved_imports;
 pub use class::ClassTable;
 pub use class::Origin;
 pub use class::Resolution;

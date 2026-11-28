@@ -15,9 +15,9 @@
 //! The chapters total about half a megabyte of Markdown. Rendering it per
 //! request would spend a CPU-second of parsing to produce bytes that never
 //! change between deploys, so the whole book is rendered once and held in
-//! memory. A reload means a restart, which is the right granularity for a
-//! document that ships with a release.
+//! memory. The server refreshes this snapshot when the mounted source changes.
 
+use std::fmt::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -52,7 +52,6 @@ const ORDER: &[&str] = &[
     "13-extensibility.md",
     "appendix-a-grammar.md",
     "appendix-b-diagnostics.md",
-    "appendix-c-changelog.md",
 ];
 
 /// The English title of each chapter, for the bilingual navigation.
@@ -60,6 +59,10 @@ const ORDER: &[&str] = &[
 /// A Chinese heading is unreadable to an English reader who is looking for the
 /// chapter on, say, row polymorphism. These titles are the ones the language
 /// repository's own English index uses, so the site and the repository agree.
+#[allow(
+    clippy::single_call_fn,
+    reason = "English display fallbacks share an auditable table"
+)]
 fn english_title(slug: &str) -> &'static str {
     match slug {
         | "index" => "Aevia Language Specification",
@@ -79,7 +82,6 @@ fn english_title(slug: &str) -> &'static str {
         | "13-extensibility" => "Extensibility and RSSN integration",
         | "appendix-a-grammar" => "Appendix A — Grammar",
         | "appendix-b-diagnostics" => "Appendix B — Diagnostics",
-        | "appendix-c-changelog" => "Appendix C — Changelog",
         | _ => "",
     }
 }
@@ -89,6 +91,10 @@ fn english_title(slug: &str) -> &'static str {
 /// These are reading aids, not translations: each states what the chapter
 /// decides, so a reader can tell whether it is the chapter they need. The
 /// normative text stays the author's.
+#[allow(
+    clippy::single_call_fn,
+    reason = "English descriptions are catalog metadata independent of the chapter body"
+)]
 fn english_summary(slug: &str) -> Option<&'static str> {
     let summary = match slug {
         | "index" => {
@@ -177,29 +183,27 @@ fn english_summary(slug: &str) -> Option<&'static str> {
             "The diagnostic catalogue: error codes, severities, the message format, \
              and the requirement that every error carry at least one actionable fix."
         },
-        | "appendix-c-changelog" => {
-            "The audit history: what each revision changed, which review round \
-             produced it, and the implementation boundaries that are still open."
-        },
         | _ => return None,
     };
     Some(summary)
 }
 
 /// Whether a chapter is normative.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the specification records normative status separately from the title"
+)]
 fn normative(slug: &str) -> bool {
-    // The index states the rules; the examples, the rationale and the changelog
-    // are explanation. Everything else is the standard.
-    !matches!(
-        slug,
-        "index" | "11-examples" | "12-rationale" | "appendix-c-changelog"
-    )
+    // The index states the rules; the examples and the rationale are
+    // explanation. Everything else is the standard.
+    !matches!(slug, "index" | "11-examples" | "12-rationale")
 }
 
 /// The specification, rendered once.
 #[derive(Clone, Debug)]
 pub struct SpecStore {
     book: SpecBook,
+    sources: std::collections::BTreeMap<String, [Option<String>; 2]>,
     directory: PathBuf,
 }
 
@@ -217,27 +221,62 @@ impl SpecStore {
             );
             return Ok(Self {
                 book: SpecBook::default(),
+                sources: std::collections::BTreeMap::new(),
                 directory: directory.to_path_buf(),
             });
         }
         let mut chapters = Vec::new();
+        let mut sources = std::collections::BTreeMap::new();
         let mut revision = String::new();
         for name in ORDER {
             let path = directory.join(name);
             if !path.is_file() {
                 continue;
             }
-            let text = std::fs::read_to_string(&path).map_err(|error| {
-                Error::new(E_SPEC, format!("cannot read `{}`: {error}", path.display()))
-            })?;
+            let text = crate::reload::read_document(&path, crate::reload::MARKDOWN_LIMIT).map_err(
+                |error| Error::new(E_SPEC, format!("cannot read `{}`: {error}", path.display())),
+            )?;
             let text = text.replace("\r\n", "\n");
             if let Some(found) = highest_revision(&text)
                 && found > revision
             {
                 revision = found;
             }
+            if first_heading(&text).is_none() {
+                return Err(Error::new(
+                    E_SPEC,
+                    format!("`{}` has no chapter title", path.display()),
+                ));
+            }
             let slug = slug_of(name);
-            chapters.push(render_chapter(&slug, &text));
+            let mut chapter = render_chapter(&slug, &text);
+            // The English edition sits beside the Chinese one in `en/` and has
+            // the same file name; a chapter without it stays Chinese-only.
+            let english = directory.join("en").join(name);
+            let translated = if english.is_file() {
+                let translated =
+                    crate::reload::read_document(&english, crate::reload::MARKDOWN_LIMIT).map_err(
+                        |error| {
+                            Error::new(
+                                E_SPEC,
+                                format!("cannot read `{}`: {error}", english.display()),
+                            )
+                        },
+                    )?;
+                let translated = translated.replace("\r\n", "\n");
+                if first_heading(&translated).is_none() {
+                    return Err(Error::new(
+                        E_SPEC,
+                        format!("`{}` has no chapter title", english.display()),
+                    ));
+                }
+                attach_english(&mut chapter, &translated);
+                Some(translated)
+            } else {
+                None
+            };
+            sources.insert(slug, [translated, Some(text)]);
+            chapters.push(chapter);
         }
         tracing::info!(
             chapters = chapters.len(),
@@ -247,20 +286,44 @@ impl SpecStore {
         );
         Ok(Self {
             book: SpecBook { revision, chapters },
+            sources,
             directory: directory.to_path_buf(),
         })
     }
 
     /// The rendered book.
     #[must_use]
-    pub fn book(&self) -> &SpecBook {
+    pub const fn book(&self) -> &SpecBook {
         &self.book
     }
 
     /// Whether anything was loaded.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.book.chapters.is_empty()
+    }
+
+    pub(crate) fn markdown(
+        &self,
+        slug: &str,
+        lang: aevia_registry_core::Lang,
+    ) -> Option<&str> {
+        let [english, chinese] = self.sources.get(slug)?;
+        match lang {
+            | aevia_registry_core::Lang::En => english.as_deref(),
+            | aevia_registry_core::Lang::Zh => chinese.as_deref(),
+        }
+    }
+
+    pub(crate) fn loses_chapter(
+        &self,
+        previous: &Self,
+    ) -> bool {
+        previous.book.chapters.iter().any(|chapter| {
+            self.book
+                .chapter(&chapter.slug)
+                .is_none_or(|next| chapter.html_en.is_some() && next.html_en.is_none())
+        })
     }
 
     /// Where it was read from, for the log line and the "not mounted" notice.
@@ -281,6 +344,10 @@ fn slug_of(name: &str) -> String {
 }
 
 /// `04-dimensions` → `04`; `appendix-a-grammar` → `A`.
+#[allow(
+    clippy::single_call_fn,
+    reason = "chapter numbers follow the source filename convention"
+)]
 fn number_of(slug: &str) -> String {
     if let Some((head, _)) = slug.split_once('-')
         && head.chars().all(|character| character.is_ascii_digit())
@@ -296,6 +363,10 @@ fn number_of(slug: &str) -> String {
 }
 
 /// Renders one chapter: title, body, table of contents.
+#[allow(
+    clippy::single_call_fn,
+    reason = "one chapter can be rendered and verified without loading the full specification"
+)]
 fn render_chapter(
     slug: &str,
     text: &str,
@@ -322,8 +393,39 @@ fn render_chapter(
         words: word_count(text),
         html,
         toc,
+        html_en: None,
+        toc_en: Vec::new(),
+        words_en: 0,
         normative: normative(slug),
     }
+}
+
+/// Adds the English edition of a chapter.
+///
+/// The English heading replaces the hand-written title table: it is the real
+/// title, taken from the file, so the two cannot drift.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the second edition supplies its own content and navigation metadata"
+)]
+fn attach_english(
+    chapter: &mut SpecChapter,
+    text: &str,
+) {
+    let body = rewrite_links(&strip_first_heading(text));
+    let html = aevia_registry_docs::render_markdown(&body);
+    let (html, toc) = inject_heading_ids(&html);
+    if let Some(heading) = first_heading(text) {
+        // `00 — Overview: what Aevia is` is listed as `Overview`.
+        let short = strip_number(&heading);
+        let short = short.split([':', '：']).next().unwrap_or(&short).trim();
+        if !short.is_empty() {
+            chapter.title_en = short.to_string();
+        }
+    }
+    chapter.words_en = word_count(text);
+    chapter.html_en = Some(html);
+    chapter.toc_en = toc;
 }
 
 /// Drops a leading `00 — ` from a chapter heading.
@@ -341,8 +443,7 @@ fn strip_number(title: &str) -> String {
         .strip_prefix('—')
         .or_else(|| rest.strip_prefix('-'))
         .or_else(|| rest.strip_prefix('–'))
-        .map(str::trim_start)
-        .unwrap_or(rest);
+        .map_or(rest, str::trim_start);
     if rest.is_empty() {
         trimmed.to_string()
     } else {
@@ -378,9 +479,10 @@ fn strip_first_heading(text: &str) -> String {
 fn rewrite_links(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
     let mut rest = body;
-    while let Some(index) = rest.find("](") {
-        out.push_str(&rest[..index + 2]);
-        rest = &rest[index + 2..];
+    while let Some((before, after)) = rest.split_once("](") {
+        out.push_str(before);
+        out.push_str("](");
+        rest = after;
         let Some(close) = rest.find(')') else {
             break;
         };
@@ -393,6 +495,10 @@ fn rewrite_links(body: &str) -> String {
     out
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "link resolution follows a policy independent of Markdown scanning"
+)]
 fn rewrite_target(target: &str) -> String {
     const REPO: &str = "https://github.com/Apich-Organization/aevia/blob/main";
     if let Some(rest) = target.strip_prefix("../") {
@@ -421,7 +527,14 @@ fn rewrite_target(target: &str) -> String {
 /// would be noise. The slug keeps CJK characters, so a Chinese heading gets a
 /// readable, stable anchor instead of a numbered one.
 fn inject_heading_ids(html: &str) -> (String, Vec<SpecHeading>) {
-    let mut out = String::with_capacity(html.len() + 256);
+    heading_ids(html, "")
+}
+
+pub(crate) fn heading_ids(
+    html: &str,
+    prefix: &str,
+) -> (String, Vec<SpecHeading>) {
+    let mut out = String::with_capacity(html.len());
     let mut toc = Vec::new();
     let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut rest = html;
@@ -430,39 +543,33 @@ fn inject_heading_ids(html: &str) -> (String, Vec<SpecHeading>) {
             out.push_str(rest);
             break;
         };
-        let (level, tag_len) = start;
-        let open_end = match rest[start.1..].find('>') {
-            | Some(offset) => start.1 + offset,
-            | None => {
-                out.push_str(rest);
-                break;
-            },
-        };
+        let (level, offset) = start;
+        let (before, heading) = rest.split_at(offset);
         let close_tag = format!("</h{level}>");
-        let Some(close) = rest[open_end..].find(&close_tag) else {
+        let Some((opening, content)) = heading.split_once('>') else {
             out.push_str(rest);
             break;
         };
-        let inner = &rest[open_end + 1..open_end + close];
+        let Some((inner, after)) = content.split_once(&close_tag) else {
+            out.push_str(rest);
+            break;
+        };
         let text = strip_tags(inner);
-        let base = slugify(&text);
-        let count = seen.entry(base.clone()).or_insert(0);
-        *count += 1;
+        let base = format!("{prefix}{}", slugify(&text));
+        let count = seen.entry(base.clone()).or_insert(0usize);
+        *count = count.saturating_add(1);
         let id = if *count == 1 {
             base
         } else {
             format!("{base}-{}", *count)
         };
-        // `close` is the offset of `</hN>` from `open_end`, so the element
-        // runs to `open_end + close + close_tag.len()`. Getting this off by one
-        // truncates the closing tag and swallows the next paragraph's `<`.
-        let end = open_end + close + close_tag.len();
-        out.push_str(&rest[..open_end]);
-        out.push_str(&format!(" id=\"{id}\""));
-        out.push_str(&rest[open_end..end]);
+        out.push_str(before);
+        out.push_str(opening);
+        let _ = write!(out, " id=\"{id}\">");
+        out.push_str(inner);
+        out.push_str(&close_tag);
         toc.push(SpecHeading { level, text, id });
-        rest = &rest[end..];
-        let _ = tag_len;
+        rest = after;
     }
     (out, toc)
 }
@@ -472,6 +579,10 @@ fn inject_heading_ids(html: &str) -> (String, Vec<SpecHeading>) {
 /// The earliest, not the outermost: a chapter whose first heading is an `h3`
 /// must not have its `h2` further down processed first, or the ids land in the
 /// wrong order and the `h3` is skipped.
+#[allow(
+    clippy::single_call_fn,
+    reason = "heading recognition has its own tag and ordering rules"
+)]
 fn find_heading(text: &str) -> Option<(u8, usize)> {
     let mut best: Option<(u8, usize)> = None;
     for level in [2u8, 3, 4] {
@@ -486,12 +597,16 @@ fn find_heading(text: &str) -> Option<(u8, usize)> {
 }
 
 /// Removes tags from a fragment, for a heading's text.
+#[allow(
+    clippy::single_call_fn,
+    reason = "heading labels remove markup before producing anchors and counts"
+)]
 fn strip_tags(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut depth = 0usize;
     for character in html.chars() {
         match character {
-            | '<' => depth += 1,
+            | '<' => depth = depth.saturating_add(1),
             | '>' => depth = depth.saturating_sub(1),
             | other if depth == 0 => out.push(other),
             | _ => {},
@@ -501,6 +616,10 @@ fn strip_tags(html: &str) -> String {
     decode_entities(&collapsed)
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "HTML entities in heading labels follow one decoding policy"
+)]
 fn decode_entities(text: &str) -> String {
     text.replace("&amp;", "&")
         .replace("&lt;", "<")
@@ -511,6 +630,10 @@ fn decode_entities(text: &str) -> String {
 }
 
 /// A URL-safe anchor that keeps letters, digits and CJK characters.
+#[allow(
+    clippy::single_call_fn,
+    reason = "heading anchors preserve a defined character set for stable links"
+)]
 fn slugify(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut dash = false;
@@ -541,11 +664,11 @@ fn word_count(text: &str) -> usize {
     for character in text.chars() {
         let cjk = matches!(character, '\u{4e00}'..='\u{9fff}');
         if cjk {
-            count += 1;
+            count = count.saturating_add(1);
             in_word = false;
         } else if character.is_alphanumeric() {
             if !in_word {
-                count += 1;
+                count = count.saturating_add(1);
                 in_word = true;
             }
         } else {
@@ -556,11 +679,15 @@ fn word_count(text: &str) -> usize {
 }
 
 /// The highest `Revision N` mentioned in a chapter.
+#[allow(
+    clippy::single_call_fn,
+    reason = "chapter revision recognition follows a separate metadata grammar"
+)]
 fn highest_revision(text: &str) -> Option<String> {
     let mut best: Option<u32> = None;
     let mut rest = text;
-    while let Some(index) = rest.find("Revision ") {
-        rest = &rest[index + 9..];
+    while let Some((_, suffix)) = rest.split_once("Revision ") {
+        rest = suffix;
         let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
         if let Ok(value) = digits.parse::<u32>()
             && best.is_none_or(|best| value > best)
@@ -574,6 +701,40 @@ fn highest_revision(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_english_edition_replaces_the_title_and_brings_its_own_body() {
+        let mut chapter =
+            render_chapter("00-overview", "# 00 — 总览：定义\n\n## 0.1 定义\n\n正文\n");
+        assert!(chapter.html_en.is_none());
+        attach_english(
+            &mut chapter,
+            "# 00 — Overview: what it is\n\n## 0.1 Definition\n\nBody text\n",
+        );
+        assert_eq!(chapter.title_en, "Overview");
+        let html = chapter.html_en.clone().expect("an English body");
+        assert!(html.contains("Body text"));
+        assert!(
+            chapter.html.contains("正文"),
+            "the Chinese body is untouched"
+        );
+        assert_eq!(chapter.toc_en.len(), 1);
+        assert_eq!(chapter.toc_en[0].text, "0.1 Definition");
+    }
+
+    #[test]
+    fn the_repository_spec_loads_with_its_english_chapter() {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../spec");
+        if !directory.join("00-overview.md").is_file() {
+            return;
+        }
+        let store = SpecStore::load(&directory).expect("the spec loads");
+        let overview = store.book().chapter("00-overview").expect("chapter 00");
+        if directory.join("en/00-overview.md").is_file() {
+            assert!(overview.html_en.is_some());
+            assert_eq!(overview.title_en, "Overview");
+        }
+    }
 
     #[test]
     fn slugs_and_numbers_come_from_the_file_names() {

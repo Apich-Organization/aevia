@@ -2,9 +2,9 @@
 //!
 //! Chapter 8 of the specification is the contract: it declares the names, and
 //! this crate holds the numerics behind them. `aevia-core` owns the values and
-//! the dispatch; nothing here knows what a `Value` is, which keeps the
-//! algorithms testable on their own and keeps the runtime free of linear
-//! algebra.
+//! the dispatch; nothing here knows what a `Value` is. RSSN owns numerical
+//! algorithms; this crate validates language contracts, adapts callbacks and
+//! shapes, translates errors, and preserves Aevia exact arithmetic.
 //!
 //! The layering is deliberate:
 //!
@@ -15,15 +15,29 @@
 //!   sources this crate ships, not a second implementation;
 //! * [`linalg`], [`stats`], [`dist`], [`calc`], [`fft`], [`interp`], [`ode`],
 //!   [`sde`], [`pde`], [`complex`], [`number`], [`geom`] and [`table`] are the
-//!   numeric and data kernels, all on `f64`/`BigRational` slices;
+//!   typed adapters over RSSN numerical kernels and exact/data operations;
 //! * `aevia-core` converts between those slices and runtime values.
 //!
-//! Where a result can be exact it is kept exact: `median` of `[1, 2, 4]` is the
-//! rational `2`, and `linalg::det` answers a rational for a rational matrix.
-//! The float path is used only when an element is a float or when the algorithm
-//! has no exact form (eigenvalues, the SVD).
+//! The language runtime selects the exact or floating-point path. For example,
+//! `det([[1/3, 0], [0, 1]])` returns `1/3`. The floating-point matrix adapters
+//! support approximate decompositions such as eigenvalue and singular value
+//! decompositions.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
 #![allow(clippy::needless_range_loop, clippy::many_single_char_names)]
 // Tuples of factors (LU, QR, SVD, eigen pairs) are returned as-is to match the formulas.
 #![allow(clippy::type_complexity)]
@@ -51,6 +65,8 @@ pub mod table;
 /// Why a numeric kernel refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NumericError {
+    /// The embedding host cancelled the computation.
+    Cancelled,
     /// A matrix was expected to be square and was not.
     NotSquare,
     /// The shapes of two operands do not agree.
@@ -70,13 +86,13 @@ pub enum NumericError {
 impl NumericError {
     /// The name of the `LinAlgError`/`MathError` constructor this maps to.
     #[must_use]
-    pub fn constructor(&self) -> &'static str {
+    pub const fn constructor(&self) -> &'static str {
         match self {
+            | Self::Cancelled => "Cancelled",
             | Self::NotSquare | Self::ShapeMismatch(_) => "ShapeMismatch",
             | Self::Singular => "Singular",
             | Self::NotPositiveDefinite => "NotPositiveDefinite",
-            | Self::NotConverged => "NotConverged",
-            | Self::Domain(_) | Self::Empty => "NotConverged",
+            | Self::NotConverged | Self::Domain(_) | Self::Empty => "NotConverged",
         }
     }
 }
@@ -87,6 +103,7 @@ impl std::fmt::Display for NumericError {
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         match self {
+            | Self::Cancelled => f.write_str("computation cancelled"),
             | Self::NotSquare => f.write_str("the matrix is not square"),
             | Self::ShapeMismatch(detail) => write!(f, "shape mismatch: {detail}"),
             | Self::Singular => f.write_str("the matrix is singular"),
@@ -98,92 +115,20 @@ impl std::fmt::Display for NumericError {
     }
 }
 
-/// A complex number, in the same layout `Complex<ρ,d>` has at run time.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Complex {
-    /// The real part.
-    pub re: f64,
-    /// The imaginary part.
-    pub im: f64,
-}
-
-impl Complex {
-    /// A complex number.
-    #[must_use]
-    pub const fn new(
-        re: f64,
-        im: f64,
-    ) -> Self {
-        Self { re, im }
-    }
-
-    /// The modulus.
-    #[must_use]
-    pub fn abs(self) -> f64 {
-        self.re.hypot(self.im)
-    }
-
-    /// The argument, in `(-π, π]`.
-    #[must_use]
-    pub fn arg(self) -> f64 {
-        self.im.atan2(self.re)
-    }
-
-    /// The conjugate.
-    #[must_use]
-    pub fn conj(self) -> Self {
-        Self::new(self.re, -self.im)
-    }
-
-    /// `self * other`.
-    #[must_use]
-    #[allow(clippy::should_implement_trait)] // checked/fallible arithmetic, not `std::ops::Mul`
-    pub fn mul(
-        self,
-        other: Self,
-    ) -> Self {
-        Self::new(
-            self.re * other.re - self.im * other.im,
-            self.re * other.im + self.im * other.re,
-        )
-    }
-
-    /// `self / other`.
-    #[must_use]
-    #[allow(clippy::should_implement_trait)] // checked/fallible arithmetic, not `std::ops::Div`
-    pub fn div(
-        self,
-        other: Self,
-    ) -> Self {
-        let denominator = other.re * other.re + other.im * other.im;
-        Self::new(
-            (self.re * other.re + self.im * other.im) / denominator,
-            (self.im * other.re - self.re * other.im) / denominator,
-        )
-    }
-
-    /// `exp(self)`.
-    #[must_use]
-    pub fn exp(self) -> Self {
-        let scale = self.re.exp();
-        Self::new(scale * self.im.cos(), scale * self.im.sin())
-    }
-
-    /// `ln(self)`, the principal branch.
-    #[must_use]
-    pub fn ln(self) -> Self {
-        Self::new(self.abs().ln(), self.arg())
-    }
-
-    /// The principal square root.
-    #[must_use]
-    pub fn sqrt(self) -> Self {
-        let modulus = self.abs();
-        if modulus == 0.0 {
-            return Self::default();
+impl From<rssn::kernels::numeric_common::NumericError> for NumericError {
+    fn from(error: rssn::kernels::numeric_common::NumericError) -> Self {
+        use rssn::kernels::numeric_common::NumericError as KernelError;
+        match error {
+            | KernelError::NotSquare => Self::NotSquare,
+            | KernelError::ShapeMismatch(message) => Self::ShapeMismatch(message),
+            | KernelError::Singular => Self::Singular,
+            | KernelError::NotPositiveDefinite => Self::NotPositiveDefinite,
+            | KernelError::NotConverged => Self::NotConverged,
+            | KernelError::Domain(message) => Self::Domain(message),
+            | KernelError::Empty => Self::Empty,
         }
-        let re = ((modulus + self.re) / 2.0).sqrt();
-        let im = ((modulus - self.re) / 2.0).sqrt().copysign(self.im);
-        Self::new(re, im)
     }
 }
+
+/// The RSSN-owned complex scalar; Aevia preserves its public representation.
+pub use rssn::kernels::complex_scalar::Complex;

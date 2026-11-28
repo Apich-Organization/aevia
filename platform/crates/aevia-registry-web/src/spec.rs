@@ -1,27 +1,13 @@
-//! The language specification, served from the repository that owns it.
+//! The pages for the Aevia language specification.
 //!
-//! # Why the site renders the chapters instead of a bundled edition
+//! The registry server loads the chapter Markdown from the language
+//! repository and supplies a rendered snapshot to these page functions.
+//! The combined page assembles those same chapters in order.
 //!
-//! The language repository already ships `Aevia-Language-Specification.md`, a
-//! single file stitched together by `tools/bundle_spec.py`. Serving *that* would
-//! mean the site shows whatever the last person remembered to regenerate. This
-//! module reads `spec/*.md` itself, in the same order the bundler uses, so the
-//! site and the repository cannot disagree — and the single-page view is
-//! produced here rather than checked in.
-//!
-//! # Why the interface is bilingual but the text is not
-//!
-//! The normative chapters are written in Chinese; the index and the ecosystem
-//! are English. Translating 480 KB of normative text is a job for a translator
-//! with review, not for a build step, and a machine translation of a language
-//! specification is worse than none — a reader cannot tell which sentences are
-//! load-bearing. So the arrangement is explicit rather than hidden:
-//!
-//! * every label, heading and navigation element is bilingual;
-//! * every chapter carries an English title and, where one has been written, an
-//!   English abstract, so an English reader can find and understand the shape of
-//!   a chapter before reading the normative text;
-//! * the Chinese text is presented as the normative one, labelled as such.
+//! The Chinese edition is normative. The English edition is a reference.
+//! Pages in English use the translated body and headings when available.
+//! A chapter without a translated body can show its English abstract
+//! alongside the Chinese text.
 
 use aevia_registry_core::Lang;
 use aevia_registry_core::vm::SpecBook;
@@ -38,11 +24,8 @@ use crate::thousands;
 
 const TITLE: Msg = Msg::new("language specification", "语言规范");
 const LEDE: Msg = Msg::new(
-    "The normative design of Aevia: grammar, typing rules, dimensions, units, \
-     runtime and the rssn backend. Written in Chinese; every chapter carries an \
-     English title and abstract.",
-    "Aevia 的规范设计：文法、类型规则、量纲、单位、运行时与 rssn 后端。正文为中文，\
-     每章附英文标题与摘要。",
+    "Aevia's grammar, type system, units, runtime and RSSN interface. The Chinese edition is normative. The English edition provides a reference.",
+    "Aevia 的文法、类型系统、单位、运行时与 RSSN 接口。中文为规范文本，英文供参考。",
 );
 const SINGLE_PAGE: Msg = Msg::new("read it as one page", "单页阅读全文");
 const BACK_TO_INDEX: Msg = Msg::new("all chapters", "全部章节");
@@ -56,6 +39,10 @@ const PREVIOUS: Msg = Msg::new("previous", "上一章");
 const NEXT: Msg = Msg::new("next", "下一章");
 const CONTENTS: Msg = Msg::new("contents", "目录");
 const REVISION: Msg = Msg::new("revision", "修订版");
+const ENGLISH_ABSTRACT: Msg = Msg::new(
+    "The English abstract precedes the Chinese text.",
+    "英文摘要之后是中文原文。",
+);
 const NOT_NORMATIVE_NOTE: Msg = Msg::new(
     "The Chinese text below is normative. The abstract is a reading aid, not a \
      substitute for it.",
@@ -168,10 +155,9 @@ pub fn spec_index(
     )
 }
 
-/// Renders `/spec/{slug}`.
+/// Renders a chapter that the caller resolved for `/spec/{slug}`.
 ///
-/// Returns `None` when the chapter does not exist, so the caller can serve its
-/// own 404 rather than an empty page.
+/// The caller handles a missing chapter before invoking this renderer.
 #[must_use]
 pub fn spec_page(
     book: &SpecBook,
@@ -194,12 +180,17 @@ pub fn spec_page(
     } else {
         view! { <span class="badge badge-quiet">{INFORMATIVE.of(lang)}</span> }.into_any()
     };
+    let english = (lang == Lang::En)
+        .then_some(chapter.html_en.as_ref())
+        .flatten();
     let abstract_block = match (&chapter.summary_en, lang) {
+        | _ if english.is_some() => ().into_any(),
         | (Some(summary), Lang::En) => {
             view! {
                 <aside class="abstract">
                     <h2>{ABSTRACT.of(lang)}</h2>
                     <p>{summary.clone()}</p>
+                    <p class="note">{ENGLISH_ABSTRACT.of(lang)}</p>
                     <p class="note">{NOT_NORMATIVE_NOTE.of(lang)}</p>
                 </aside>
             }
@@ -207,8 +198,10 @@ pub fn spec_page(
         },
         | _ => ().into_any(),
     };
-    let toc = toc_block(&chapter.toc, lang);
-    let html = chapter.html.clone();
+    let (toc, html) = match english {
+        | Some(html) => (toc_block(&chapter.toc_en, lang), html.clone()),
+        | None => (toc_block(&chapter.toc, lang), chapter.html.clone()),
+    };
     let previous = book.previous(&chapter.slug).map(|chapter| {
         (
             format!("/spec/{}", chapter.slug),
@@ -233,6 +226,9 @@ pub fn spec_page(
                     <header class="spec-head">
                         <p class="eyebrow">{chapter_label(lang, &number)}</p>
                         <h1>{title.clone()}</h1>
+                        {(english.is_some() || lang == Lang::Zh).then(|| view! {
+                            <a href=format!("/spec/{}.md?lang={}", chapter.slug, lang.code())>"Markdown"</a>
+                        })}
                         <p class="subtitle">{other}</p>
                         <p class="meta">
                             {badge}
@@ -288,7 +284,10 @@ pub fn spec_all(
             } else {
                 other.to_string()
             };
-            let html = chapter.html.clone();
+            let html = match (lang, &chapter.html_en) {
+                | (Lang::En, Some(html)) => html.clone(),
+                | _ => chapter.html.clone(),
+            };
             view! {
                 <section class="spec-chapter" id=id>
                     <h2>{title}</h2>
@@ -405,6 +404,10 @@ fn toc_block(
 }
 
 /// The previous/next pair at the foot of a chapter.
+#[allow(
+    clippy::single_call_fn,
+    reason = "previous and next chapter links use distinct relation and presentation"
+)]
 fn chapter_nav(
     lang: Lang,
     previous: Option<(String, String)>,
@@ -443,6 +446,10 @@ fn chapter_nav(
 /// in the store; the English index page is the reverse. `primary_title` picks
 /// the one that matches the interface language, falling back to whatever the
 /// chapter has.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the current chapter chooses its localized full title"
+)]
 fn primary_title(
     chapter: &SpecChapter,
     lang: Lang,
@@ -457,6 +464,10 @@ fn primary_title(
 ///
 /// A template with a prefix would render "第 04", which is not Chinese; the
 /// unit belongs after the number, so the two languages need their own shape.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the chapter label needs a language-specific number position"
+)]
 fn chapter_label(
     lang: Lang,
     number: &str,

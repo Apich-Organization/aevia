@@ -1,0 +1,9 @@
+import Rssn_numerical_vector as V
+
+test "Richardson extrapolation preserves the measured tensor domain" =
+    let diagonal: Tensor<1, Float[Length]> = V.num_convergence_richardson_extrapolation([11.0 m, 4.25 m, 3.265625 m, 3.0634765625 m])
+    approx_eq(at(diagonal, 3), 3.0 m, 1e-13 m)
+
+test "Richardson finite measured estimate survives an overflowing numerator" =
+    let diagonal: Tensor<1, Float[Length]> = V.num_convergence_richardson_extrapolation_with([1e308 m, 1e308 m], 4.0)
+    approx_eq(at(diagonal, 1) / (1e308 m), 1.0, 1e-15)

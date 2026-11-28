@@ -1,0 +1,20 @@
+## Certified real powers with exact signed and rational exponents.
+import Rssn_Multiprecision as MP
+
+let zero: MP.Dyadic = { mantissa = 0, exponent = 0, precision = 1 }
+
+let one: MP.Dyadic = { mantissa = 1, exponent = 0, precision = 1 }
+
+let neg_one: MP.Dyadic = { mantissa = -1, exponent = 0, precision = 1 }
+
+let neg_eight: MP.Dyadic = { mantissa = -1, exponent = 3, precision = 1 }
+
+test "signed integer powers handle the minimum i64 exponent" = MP.powi_dyadic(neg_one, -9223372036854775808, 1) == Ok({ midpoint = one, radius = zero })
+
+test "rational powers reduce the denominator before checking the domain" =
+    match MP.power_dyadic_ratio(neg_eight, 2, 6, 16) with
+    | Ok(value) ->
+        match MP.power_dyadic_ratio(neg_eight, 2, 4, 16) with
+        | Err(_) -> MP.dyadic_sign(value.midpoint) == Ok(-1)
+        | Ok(_) -> false
+    | Err(_) -> false

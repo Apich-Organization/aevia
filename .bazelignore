@@ -1,0 +1,7 @@
+.bazel-cache
+target
+platform/target
+editors/vscode/node_modules
+editors/jetbrains/.gradle
+editors/jetbrains/build
+dist

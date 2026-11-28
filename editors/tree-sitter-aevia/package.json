@@ -1,0 +1,9 @@
+{
+  "name": "tree-sitter-aevia",
+  "version": "0.1.0",
+  "description": "Lexical tree-sitter grammar for the Aevia language",
+  "license": "Apache-2.0",
+  "tree-sitter": [
+    { "scope": "source.aevia", "file-types": ["aev"], "highlights": "queries/highlights.scm" }
+  ]
+}

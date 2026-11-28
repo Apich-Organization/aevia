@@ -1,0 +1,58 @@
+## Normalized SISO transfer models over the typed native bridge.
+import Rssn_Control as Control
+
+fn fails<T>(result: Result<T, OpError>): Bool =
+    match result with
+    | Err(_) -> true
+    | Ok(_) -> false
+
+fn close(result: Result<Complex, OpError>, expected: Complex): Bool =
+    match result with
+    | Ok(value) -> approx_eq(magnitude(value - expected), 0.0, 1e-12)
+    | Err(_) -> false
+
+test "prepared transfer methods classify poles and expose complex zeros" =
+    match Control.transfer_new_proper([0.0, 2.0, 4.0], [0.0, 1.0, 3.0, 2.0]) with
+    | Ok(model) ->
+        match Control.transfer_zeros(model) with
+        | Ok(zeros) ->
+            (zeros == [complex(-2.0, 0.0)]
+                && Control.transfer_order(model) == Ok(2)
+                && Control.is_proper(model) == Ok(true)
+                && Control.is_strictly_proper(model) == Ok(true)
+                && Control.is_stable(model) == Ok(true)
+                && Control.release_transfer(model) == Ok(true))
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "negative feedback uses the same plan on both sides of the loop" =
+    match Control.transfer_new([1.0], [1.0, 1.0]) with
+    | Ok(model) ->
+        match Control.negative_feedback(model, model) with
+        | Ok(closed) ->
+            let answer = Control.transfer_evaluate(closed, complex(0.0, 1.0))
+            (close(answer, complex(0.6, -0.2))
+                && Control.release_transfer(closed) == Ok(true)
+                && Control.release_transfer(model) == Ok(true))
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "a first-order loop has a 120 degree phase margin and no phase crossover" =
+    match Control.transfer_new([2.0], [1.0, 1.0]) with
+    | Ok(model) ->
+        match Control.transfer_margins(model) with
+        | Ok(margins) ->
+            match (margins.gain_db, margins.phase_degrees) with
+            | (None, Some(phase)) -> approx_eq(phase, 120.0, 1e-9) && Control.release_transfer(model) == Ok(true)
+            | _ -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "step response preserves normalized samples and rejects duplicate times" =
+    match Control.transfer_new_proper([2.0], [1.0]) with
+    | Ok(model) ->
+        (Control.step_response(model, [0.0, 0.1, 1.0]) == Ok([2.0, 2.0, 2.0])
+            && fails(Control.step_response(model, [0.0, 0.0]))
+            && Control.release_transfer(model) == Ok(true)
+            && fails(Control.transfer_order(model)))
+    | Err(_) -> false

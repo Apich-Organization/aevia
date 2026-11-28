@@ -1,0 +1,404 @@
+# `Calculus`
+
+Source: `stdlib/Calculus.aev`
+
+The `Calculus` module of §8.20.
+
+## `let antiderivative`
+
+```aevia
+let antiderivative = antiderivative
+```
+
+antiderivative(f) returns a symbolic antiderivative as a function, with the constant of integration taken as zero.
+
+**Signature:** `antiderivative : (Real[d] -> Real[e]) -> (Real[d] -> Real[e*d])`
+
+The result dimension is output times input. When no closed form exists the call fails; use defint or quadrature for a definite integral.
+
+**Examples:**
+```text
+antiderivative(fn x => 2 * x)(3)
+```
+
+*Source: Aevia standard library guide.*
+## `let curl`
+
+```aevia
+let curl = curl
+```
+
+The curl of a three-component vector field at a point.
+
+**Signature:** `curl : ((Tensor<1, Real[L]> -> Tensor<1, Real[d]>), Tensor<1, Real[L]>) -> Tensor<1, Real[d/L]>`
+
+**Kernel signature** (derived):
+- `curl : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+- `curl : (Tensor<1, Dyn<term>>, Tensor<1, Symbol>) -> Tensor<1, Dyn<term>>`
+
+**Dimensions:** argument 1 divided by argument 2
+
+The coordinates must have a length dimension, and the result has the field's dimension per length.
+
+**Examples:**
+```text
+curl(fn v => [v[1], -v[0], 0], [1, 2, 3])
+```
+
+*Source: Aevia standard library guide.*
+## `let defint`
+
+```aevia
+let defint = defint
+```
+
+defint(f, a, b) is the exact definite integral of f from a to b, as a Result: Err(MathError) when the integrand has no closed form on the interval.
+
+**Signature:** `defint : (Real[d] -> Real[e], Real[d], Real[d]) -> Result<Real[e*d], MathError>`
+
+**Kernel signature** (overlay):
+- `defint : (Dyn<term>, Symbol, Dyn<term>, Dyn<term>) -> Dyn<term>`
+
+**Dimensions:** argument 1 multiplied by argument 2
+
+Bounds may be oo. For a numeric integral of a Float function use quadrature.
+
+**Examples:**
+```text
+defint(fn x => x^2, 0, 3)
+```
+
+*Source: Aevia standard library guide.*
+## `let diff`
+
+```aevia
+let diff = diff
+```
+
+diff(f) returns the symbolic derivative of f as a new function; differentiate at a point by calling the result.
+
+**Signature:** `diff : (Real[d] -> Real[e]) -> (Real[d] -> Real[e/d])`
+
+**Kernel signature** (overlay):
+- `diff : (Dyn<term>, Symbol) -> Dyn<term>`
+- `diff : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+
+**Dimensions:** argument 1 divided by argument 2
+
+The derivative's dimension is that of the output divided by the input, so differentiating a position in m with respect to a time in s gives m/s. Use numeric_deriv for functions you can only evaluate numerically.
+
+**Examples:**
+```text
+diff(fn t => t^3)(2)
+```
+
+*Source: Aevia standard library guide.*
+## `let diff_at`
+
+```aevia
+let diff_at = diff_at
+```
+
+diff_at(f, x) is the derivative of f evaluated at x; it is shorthand for diff(f)(x).
+
+**Signature:** `diff_at : ((Real[d] -> Real[e]), Real[d]) -> Real[e/d]`
+
+**Examples:**
+```text
+diff_at(fn x => x^3, 2)
+```
+
+*Source: Aevia standard library guide.*
+## `let divergence`
+
+```aevia
+let divergence = divergence
+```
+
+The divergence of a vector field at a point: the sum of the partial derivative of each component with respect to its own coordinate.
+
+**Signature:** `divergence : ((Tensor<1, Real[d]> -> Tensor<1, Real[e]>), Tensor<1, Real[d]>) -> Real[e/d]`
+
+**Examples:**
+```text
+divergence(fn v => [v[0]^2, v[1]^2], [1, 2])
+```
+
+*Source: Aevia standard library guide.*
+## `let grad`
+
+```aevia
+let grad = grad
+```
+
+grad(f, x) is the gradient of a scalar function of a vector, evaluated at x: the vector of partial derivatives.
+
+**Signature:** `grad : ((Tensor<1, Real[d]> -> Real[e]), Tensor<1, Real[d]>) -> Tensor<1, Real[e/d]>`
+
+**Kernel signature** (derived):
+- `grad : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+- `grad : (Int, Tensor<1, Symbol>) -> Tensor<1, Dyn<term>>`
+- `grad : (Dyn<term>, Tensor<1, Symbol>) -> Tensor<1, Dyn<term>>`
+
+**Dimensions:** argument 1 divided by argument 2
+
+Each component has the dimension of the output over the input. For Float functions use grad_f.
+
+**Examples:**
+```text
+grad(fn v => v[0]^2 + v[1]^2, [1, 2])
+```
+
+*Source: Aevia standard library guide.*
+## `let grad_f`
+
+```aevia
+let grad_f = grad_f
+```
+
+Gradient of a Float scalar function of a vector at a point, computed by automatic differentiation rather than symbolically.
+
+**Signature:** `grad_f : ((Tensor<1, Float[d]> -> Float[e]), Tensor<1, Float[d]>) -> Tensor<1, Float[e/d]>`
+
+Same shape and dimension rules as grad.
+
+**Examples:**
+```text
+grad_f(fn v => v[0]^2 + v[1]^2, [1.0, 2.0])
+```
+
+*Source: Aevia standard library guide.*
+## `let hessian`
+
+```aevia
+let hessian = hessian
+```
+
+hessian(f, x) is the matrix of second partial derivatives of a scalar function at x.
+
+**Signature:** `hessian : ((Tensor<1, Real[d]> -> Real[e]), Tensor<1, Real[d]>) -> Tensor<2, Real[e/d^2]>`
+
+**Kernel signature** (derived):
+- `hessian : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+- `hessian : (Dyn<term>, Tensor<1, Symbol>) -> Tensor<2, Dyn<term>>`
+
+**Dimensions:** kernel rule `DiffN { f: 0, x: 1, n: 2 }`
+
+Its entries have the dimension of the output over the input squared.
+
+**Examples:**
+```text
+hessian(fn v => v[0]^2 * v[1], [1, 2])
+```
+
+*Source: Aevia standard library guide.*
+## `let jacobian`
+
+```aevia
+let jacobian = jacobian
+```
+
+jacobian(f, x) is the matrix of partial derivatives of a vector function at x: row i holds the gradient of output i, so a function from n inputs to m outputs gives an m x n matrix.
+
+**Signature:** `jacobian : ((Tensor<1, Real[d]> -> Tensor<1, Real[e]>), Tensor<1, Real[d]>) -> Tensor<2, Real[e/d]>`
+
+**Kernel signature** (derived):
+- `jacobian : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+- `jacobian : (Tensor<1, Dyn<term>>, Tensor<1, Symbol>) -> Tensor<2, Dyn<term>>`
+
+**Dimensions:** argument 1 divided by argument 2
+
+**Examples:**
+```text
+jacobian(fn v => [v[0] * v[1], v[0] + v[1]], [2, 3])
+```
+
+*Source: Aevia standard library guide.*
+## `let laplacian`
+
+```aevia
+let laplacian = laplacian
+```
+
+The Laplacian of a scalar field at a point: the sum of its second partial derivatives.
+
+**Signature:** `laplacian : ((Tensor<1, Real[d]> -> Real[e]), Tensor<1, Real[d]>) -> Real[e/d^2]`
+
+**Kernel signature** (overlay):
+- `laplacian : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+
+**Dimensions:** kernel rule `DiffN { f: 0, x: 1, n: 2 }`
+
+The result dimension is the output over the input squared.
+
+**Examples:**
+```text
+laplacian(fn v => v[0]^2 + v[1]^2, [1, 2])
+```
+
+*Source: Aevia standard library guide.*
+## `let limit`
+
+```aevia
+let limit = limit
+```
+
+limit(f, x) is the limit of f as its argument approaches x, as a Result; use oo or -oo for limits at infinity.
+
+**Signature:** `limit : (Real[d] -> Real[e], Real[d]) -> Result<Real[e], MathError>`
+
+**Kernel signature** (overlay):
+- `limit : () -> Dyn<term> with 0... x Dyn<term>`
+
+**Dimensions:** the result has the dimension of argument 1
+
+Err(MathError) means the kernel could not decide the limit.
+
+**Examples:**
+```text
+limit(fn x => sin(x) / x, 0)
+```
+
+*Source: Aevia standard library guide.*
+## `let numeric_deriv`
+
+```aevia
+let numeric_deriv = numeric_deriv
+```
+
+Returns the derivative of a Float function as a new Float function, computed numerically rather than symbolically.
+
+**Signature:** `numeric_deriv : (Float[d] -> Float[e]) -> (Float[d] -> Float[e/d])`
+
+Use it when the function calls numeric-only code; use diff when you want an exact result.
+
+**Examples:**
+```text
+numeric_deriv(fn x => x * x)(3.0)
+```
+
+*Source: Aevia standard library guide.*
+## `let product`
+
+```aevia
+let product = product
+```
+
+product(f, a, b) is the exact product of f(k) for k from a to b, both integers; bounds may be symbolic or oo when a closed form exists.
+
+**Signature:** `product : (Real[1] -> Real[1], Real[1], Real[1]) -> Real[1]`
+
+**Kernel signature** (overlay):
+- `product : (Dyn<term>, Symbol, Dyn<term>, Dyn<term>) -> Dyn<term>`
+
+**Dimensions:** kernel rule `ProductOver { f: 0, index: 1 }`
+
+The terms must be dimensionless; use product_dyn for dimensioned terms.
+
+**Examples:**
+```text
+product(fn k => k, 1, 5)
+```
+
+*Source: Aevia standard library guide.*
+## `let product_dyn`
+
+```aevia
+let product_dyn = product_dyn
+```
+
+Like product, but for terms that carry a dimension.
+
+**Signature:** `product_dyn : (Real[1] -> Real[d], Real[1], Real[1]) -> Dyn<Real>`
+
+The result is a dynamically typed value (Dyn) because the dimension of a product depends on the number of terms.
+
+**Examples:**
+```text
+product_dyn(fn k => k, 1, 5)
+```
+
+*Source: Aevia standard library guide.*
+## `let quadrature`
+
+```aevia
+let quadrature = quadrature
+```
+
+quadrature(f, a, b) integrates a Float function numerically over [a, b] and returns Ok(value), or Err(MathError) if the method does not converge.
+
+**Signature:** `quadrature : (Float[d] -> Float[e], Float[d], Float[d]) -> Result<Float[e*d], MathError>`
+
+The result dimension is output times input.
+
+**Examples:**
+```text
+quadrature(fn x => x * x, 0.0, 3.0)
+```
+
+*Source: Aevia standard library guide.*
+## `let series`
+
+```aevia
+let series = series
+```
+
+series(f, x0, n) is the Taylor expansion of f about x0 up to order n, as an exact expression.
+
+**Signature:** `series : (Real[d] -> Real[e], Real[d], Int) -> Real[e]`
+
+**Examples:**
+```text
+series(fn x => exp(x), 0, 3)
+```
+
+*Source: Aevia standard library guide.*
+## `let sum`
+
+```aevia
+let sum = sum
+```
+
+Sum tensor elements, or use the function-and-bounds overload for a finite summation.
+
+**Signature:** `sum : Tensor<n, Scalar<ρ,d>> -> Scalar<ρ,d>`
+
+**Signature:** `sum : (Tensor<n, Scalar<ρ,d>>, Int) -> Tensor<n, Scalar<ρ,d>>`
+
+**Signature:** `sum : (Real[1] -> Real[d], Real[1], Real[1]) -> Real[d]`
+
+**Kernel signature** (overlay):
+- `sum : (Tensor<_, Real>) -> Real`
+- `sum : (Tensor<_, Real>, Int) -> Tensor<_, Real>`
+- `sum : (Dyn<term>, Symbol, Dyn<term>, Dyn<term>) -> Dyn<term>`
+- `sum : (Dyn<term>) -> Dyn<term>`
+- ... and 1 more overloads
+
+**Dimensions:** kernel rule `SumOver { f: 0, index: 1 }`
+
+Empty tensor reductions return a phase-appropriate zero.
+
+**Examples:**
+```text
+sum([1, 2, 3])
+```
+
+*Source: Aevia standard library guide.*
+## `let sum_f`
+
+```aevia
+let sum_f = sum_f
+```
+
+sum_f(f, a, b) adds f(k) for the integers k from a to b using Float arithmetic.
+
+**Signature:** `sum_f : (Float[1] -> Float[d], Float[1], Float[1]) -> Float[d]`
+
+Use sum when you want an exact or symbolic result.
+
+**Examples:**
+```text
+sum_f(fn k => 1.0 / (k * k), 1.0, 100.0)
+```
+
+*Source: Aevia standard library guide.*

@@ -1,0 +1,38 @@
+## Run: aevia test examples/native_jacobian.aev
+## These low-level mass/Jacobian coefficients use explicitly normalized
+## coordinates. RHS-derived Jacobians additionally retain physical tape refs.
+## A native handle is an ordinary argument; it never enters the visitor callback.
+import Rssn_numerical_vector as V
+
+import Rssn_numerical_callback as C
+
+let matrix = unwrap_or(V.num_analysis_jacobian_dense([to_value([[2.0, 1.0], [1.0, 3.0]])]), to_value(0))
+
+fn visit(_row: Int, _column: Int, _value: Float): Bool = true
+
+test "native matrix visitor admits its checked ordinary handle" =
+    match C.num_analysis_jacobian_for_each_typed(matrix, 4, visit) with
+    | Ok(done) -> done
+    | Err(_) -> false
+
+test "native visitor enforces the actual callback count" =
+    match C.num_analysis_mass_for_each_typed(matrix, 3, visit) with
+    | Ok(_) -> false
+    | Err(_) -> true
+
+test "native mass action uses the retained native matrix" =
+    match V.num_analysis_mass_matvec([matrix, to_value([3.0, 4.0])]) with
+    | Ok(value) ->
+        match from_value<Tensor<1, Float>>(value) with
+        | Ok(result) -> result[0] == 10.0 && result[1] == 15.0
+        | Err(_) -> false
+    | Err(_) -> false
+
+let gaussian = unwrap_or(V.num_analysis_gaussian_new([to_value(0.0 m), to_value(1.0 m)]), to_value(0))
+
+test "ordinary object carriers do not certify a different native kind" =
+    match C.num_analysis_jacobian_for_each_typed(gaussian, 4, visit) with
+    | Ok(_) -> false
+    | Err(_) -> true
+
+fn main(): IO Unit = println("Native matrix visitor and checked object arguments")

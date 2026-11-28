@@ -16,6 +16,8 @@
 //! `cargo run -p aevia-stdlib-gen -- --write` to regenerate,
 //! or pass `--check` to verify without modifying files.
 
+use std::sync::OnceLock;
+
 /// One embedded module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Module {
@@ -32,6 +34,41 @@ pub use aevia_stdlib_model::stdlib::spec_module_sources;
 
 include!("stdlib_table.rs");
 
+type ExportCache = OnceLock<Vec<&'static str>>;
+
+static EXPORTS: [ExportCache; MODULES.len()] = [const { OnceLock::new() }; MODULES.len()];
+
+fn module_entries() -> impl Iterator<Item = (&'static Module, &'static ExportCache)> {
+    modules().iter().zip(&EXPORTS)
+}
+
+fn entry_by_path(path: &str) -> Option<(&'static Module, &'static ExportCache)> {
+    module_entries().find(|(module, _)| module.path == path)
+}
+
+fn entry_by_segments(path: &[&str]) -> Option<(&'static Module, &'static ExportCache)> {
+    let (&last, parents) = path.split_last()?;
+    if parents.is_empty() {
+        return entry_by_path(last);
+    }
+    let length = parents.iter().fold(last.len(), |length, parent| {
+        length.saturating_add(parent.len()).saturating_add(1)
+    });
+    module_entries().find(|(module, _)| {
+        module.path.len() == length
+            && parents.iter().try_fold(module.path, |remaining, parent| {
+                remaining.strip_prefix(parent)?.strip_prefix('/')
+            }) == Some(last)
+    })
+}
+
+fn module_exports(
+    module: &'static Module,
+    cache: &'static ExportCache,
+) -> &'static [&'static str] {
+    cache.get_or_init(|| parse_exports(module.source))
+}
+
 /// Every embedded module, in catalog order.
 #[must_use]
 pub fn modules() -> &'static [Module] {
@@ -46,10 +83,10 @@ pub fn module_paths() -> impl Iterator<Item = &'static str> {
 /// The embedded source of module `path` (`["Units", "SI"]` → `Units/SI.aev`).
 #[must_use]
 pub fn source(path: &[&str]) -> Option<&'static str> {
-    modules()
-        .iter()
-        .find(|module| module.path == path.join("/"))
-        .map(|module| module.source)
+    match path {
+        | [path] => source_by_path(path),
+        | _ => entry_by_segments(path).map(|(module, _)| module.source),
+    }
 }
 
 /// Whether `path` names one of the standard-library modules.
@@ -58,17 +95,32 @@ pub fn is_module_name(path: &[&str]) -> bool {
     source(path).is_some()
 }
 
-/// The top-level names a module exports, as written in its source.
+/// The top-level names a module exports, with duplicates removed.
 ///
-/// This parses the small, declarative form the tree uses (`module …`, `let x =
-/// …`, `fn f(…)`, `type T…`); it is not a general declaration parser, and does
-/// not need to be: the source is generated in exactly that shape and the
-/// conformance test checks the two agree.
+/// The generated declaration forms determine the names. Each module's names
+/// are collected once, and the caller receives its own vector.
 #[must_use]
 pub fn exports(path: &[&str]) -> Vec<&'static str> {
-    let Some(source) = source(path) else {
-        return Vec::new();
-    };
+    entry_by_segments(path).map_or_else(Vec::new, |(module, cache)| {
+        module_exports(module, cache).to_vec()
+    })
+}
+
+/// The embedded module paths that export `name`, in catalog order.
+/// Paths use the slash-separated form returned by [`module_paths`].
+pub fn modules_exporting(name: &str) -> impl Iterator<Item = &'static str> + '_ {
+    module_entries().filter_map(move |(module, cache)| {
+        module_exports(module, cache)
+            .contains(&name)
+            .then_some(module.path)
+    })
+}
+
+#[expect(
+    clippy::single_call_fn,
+    reason = "separates the generated declaration grammar from cached module lookup"
+)]
+fn parse_exports(source: &'static str) -> Vec<&'static str> {
     let mut out: Vec<&'static str> = Vec::new();
     let mut in_sum = false;
     for line in source.lines() {
@@ -77,10 +129,7 @@ pub fn exports(path: &[&str]) -> Vec<&'static str> {
             continue;
         }
         let variants = if let Some(rest) = line.strip_prefix("type ") {
-            let rhs = rest
-                .split_once('=')
-                .map(|(_, rhs)| rhs.trim_start())
-                .unwrap_or("");
+            let rhs = rest.split_once('=').map_or("", |(_, rhs)| rhs.trim_start());
             in_sum = rhs.is_empty() || rhs.starts_with('|');
             if in_sum { rhs } else { "" }
         } else if in_sum && line.starts_with('|') {
@@ -124,10 +173,7 @@ pub fn exports(path: &[&str]) -> Vec<&'static str> {
 /// A lookup from module path to source, for the loader fallback.
 #[must_use]
 pub fn source_by_path(path: &str) -> Option<&'static str> {
-    modules()
-        .iter()
-        .find(|module| module.path == path)
-        .map(|module| module.source)
+    entry_by_path(path).map(|(module, _)| module.source)
 }
 
 /// The module path a file path is expected to carry: `A/B.aev` → `A/B`.
@@ -136,11 +182,8 @@ pub fn source_by_path(path: &str) -> Option<&'static str> {
 /// the embedded tree.
 #[must_use]
 pub fn path_from_file(file: &str) -> Option<&'static str> {
-    module_paths().find(|path| {
-        let mut expected = String::from(*path);
-        expected.push_str(".aev");
-        expected == file
-    })
+    let path = file.strip_suffix(".aev")?;
+    entry_by_path(path).map(|(module, _)| module.path)
 }
 
 #[cfg(test)]
@@ -167,10 +210,22 @@ mod tests {
     #[test]
     fn constructible_types_follow_the_specification() {
         let spec = std::fs::read_to_string(spec_path()).expect("spec/08-stdlib.md");
-        let changed = spec.replace("| Rk4 | Dopri5", "| Rk4 | NewMethod | Dopri5");
+        let changed = spec.replacen("| Rk4 | Dopri5", "| Rk4 | NewMethod | Dopri5", 1);
+        assert_ne!(
+            changed, spec,
+            "the fixture must insert a new specification constructor"
+        );
         let generated = spec_module_sources(&changed);
         let ode = &generated.iter().find(|(path, _)| path == "Ode").unwrap().1;
-        assert!(ode.contains("| NewMethod |"));
+        // Exercise the generated language contract, independent of whether
+        // variants are emitted on one line or on continuation lines.
+        let probe = format!("{ode}\nlet generated_method: OdeMethod = NewMethod\n");
+        let compilation = aevia_core::compile("generated_solver_type.aev", &probe);
+        assert!(
+            !compilation.diagnostics.has_errors(),
+            "a constructor inserted into the specification must be usable in generated source: {:?}",
+            compilation.diagnostics.items
+        );
         assert!(ode.contains("type OdeOpts<s>"));
         let sde = &generated.iter().find(|(path, _)| path == "Sde").unwrap().1;
         assert!(sde.contains("    | EulerMaruyama\n    | Milstein\n"));
@@ -198,6 +253,65 @@ mod tests {
         let sde = exports(&["Sde"]);
         assert!(sde.contains(&"General") && sde.contains(&"Adaptive"));
         assert!(!exports(&["Physics", "Ising"]).contains(&"Ok"));
+    }
+
+    #[test]
+    fn embedded_paths_match_components_and_file_names_exactly() {
+        for module in modules() {
+            let parts = module.path.split('/').collect::<Vec<_>>();
+            assert_eq!(source(&parts), Some(module.source), "{}", module.path);
+            assert_eq!(
+                source(&[module.path]),
+                Some(module.source),
+                "{}",
+                module.path
+            );
+            assert_eq!(
+                path_from_file(&format!("{}.aev", module.path)),
+                Some(module.path)
+            );
+        }
+        for path in [
+            &[][..],
+            &[""],
+            &["Data", ""],
+            &["Data", "/Csv"],
+            &["data", "Csv"],
+        ] {
+            assert!(source(path).is_none(), "{path:?}");
+            assert!(exports(path).is_empty(), "{path:?}");
+        }
+        for file in [
+            "Data/Csv",
+            "Data/Csv.AEV",
+            "./Data/Csv.aev",
+            "Data/Csv.aev.aev",
+            ".aev",
+        ] {
+            assert_eq!(path_from_file(file), None, "{file}");
+        }
+    }
+
+    #[test]
+    fn modules_exporting_retains_catalog_order_and_cached_names() {
+        assert_eq!(
+            modules_exporting("zeros").collect::<Vec<_>>(),
+            ["Tensor", "LinearAlgebra"]
+        );
+        assert_eq!(
+            modules_exporting("erf").collect::<Vec<_>>(),
+            ["Math/Special"]
+        );
+        assert!(
+            modules_exporting("not_a_builtin_or_constructor")
+                .next()
+                .is_none()
+        );
+
+        let mut names = exports(&["Tensor"]);
+        assert!(names.contains(&"zeros"));
+        names.clear();
+        assert!(exports(&["Tensor"]).contains(&"zeros"));
     }
 
     #[test]

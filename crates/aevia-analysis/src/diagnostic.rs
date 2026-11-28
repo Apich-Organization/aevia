@@ -56,9 +56,8 @@ pub struct Diagnostic {
 
 /// Converts one compiler diagnostic, or drops it.
 ///
-/// Returns `None` when the diagnostic's primary span belongs to a file other
-/// than `file`, or when its secondary labels do — a label in another file
-/// cannot be placed in this document either.
+/// Returns `None` when the primary span belongs to another file. Secondary
+/// labels are retained only when they belong to `file`.
 #[must_use]
 pub fn convert(
     diagnostic: &aevia_syntax::Diagnostic,
@@ -101,7 +100,14 @@ pub fn convert(
     })
 }
 
-fn severity(severity: SyntaxSeverity) -> Severity {
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "keep the compiler-to-editor severity table explicit"
+    )
+)]
+const fn severity(severity: SyntaxSeverity) -> Severity {
     match severity {
         | SyntaxSeverity::Error => Severity::Error,
         | SyntaxSeverity::Warning => Severity::Warning,
@@ -135,6 +141,24 @@ mod tests {
         assert_eq!(
             converted.message,
             "dimension mismatch\nexpected Real[L], found Int\n= left:  L\nhelp: divide by a unit"
+        );
+    }
+
+    #[test]
+    fn labels_in_mixed_newlines_keep_their_own_utf16_columns() {
+        use crate::Position;
+
+        let doc = Document::new("a.aev", 1, "Ω\r😀x\r\nend");
+        let compiler = CompilerDiagnostic::error("E0401", "mismatch", Span::new(0, 7, 8))
+            .with_label(Span::new(0, 10, 13), "here");
+        let converted = convert(&compiler, 0, &doc).unwrap();
+        assert_eq!(
+            converted.range,
+            Range::new(Position::new(1, 2), Position::new(1, 3))
+        );
+        assert_eq!(
+            converted.related[0].range,
+            Range::new(Position::new(2, 0), Position::new(2, 3))
         );
     }
 

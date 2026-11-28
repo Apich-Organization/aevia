@@ -111,13 +111,14 @@ let zero = identity(-0.0)
 }
 
 #[test]
-fn tail_jump_respects_rebound_function() {
+fn tail_jump_keeps_the_recursive_lexical_binding() {
     let source = r#"@jit
 fn sum(n: Float, acc: Float): Float = if n <= 0.0 then acc else sum(n - 1.0, acc + n)
 fn replacement(n: Float, acc: Float): Float = 42.0
 let warmed = sum(3.0, 0.0)
 let original = sum
 let sum = replacement
+let latest = sum(3.0, 0.0)
 "#;
     let compilation = compile("rebind.aev", source);
     assert!(
@@ -140,7 +141,11 @@ let sum = replacement
             Default::default(),
         )
         .unwrap();
-    assert_eq!(aevia_core::value::repr(&value), "42.0");
+    assert_eq!(aevia_core::value::repr(&value), "6.0");
+    assert_eq!(
+        aevia_core::value::repr(&interp.eval_toplevel("latest").unwrap()),
+        "42.0"
+    );
 }
 
 #[test]

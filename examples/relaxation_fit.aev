@@ -1,0 +1,34 @@
+module RelaxationFit
+
+## Model a first-order response with a known equilibrium and initial state.
+fn model(age: Float[Time], lifetime: Float[Time]): Float[Length] =
+    1.0 m + 4.0 m * exp(-age / lifetime)
+
+## Squared misfit integrated over four equally weighted observations.
+fn loss(ages: Tensor<[4], Float[Time]>, readings: Tensor<[4], Float[Length]>, lifetime: Float[Time]): Float[Length^2] =
+    let predicted = [model(ages[0], lifetime), model(ages[1], lifetime), model(ages[2], lifetime), model(ages[3], lifetime)]
+    let residuals = predicted - readings
+    sum(residuals * residuals)
+
+## Evaluate a small, documented candidate grid before using a continuous optimizer.
+fn candidates(ages: Tensor<[4], Float[Time]>, readings: Tensor<[4], Float[Length]>) =
+    let choices = [1.0 s, 1.5 s, 2.0 s, 2.5 s, 3.0 s]
+    let scores = par_map(fn lifetime => loss(ages, readings, lifetime), choices)
+    { lifetimes = choices, scores = scores }
+
+let ages = [0.0 s, 1.0 s, 2.0 s, 4.0 s]
+
+let samples = [5.0 m, 3.42612264 m, 2.47151776 m, 1.54134113 m]
+
+test "zero-time prediction does not depend on lifetime" =
+    model(0.0 s, 1.0 s) == model(0.0 s, 3.0 s)
+
+test "the synthetic observations select the two-second grid point" =
+    let fit = candidates(ages, samples)
+    fit.scores[2] < 0.00000001 m^2 && fit.scores[1] > fit.scores[2] && fit.scores[3] > fit.scores[2]
+
+fn main(): IO Unit = do
+    let fit = candidates(ages, samples)
+    println("Candidate lifetimes: {fit.lifetimes}")
+    println("Squared residual sums: {fit.scores}")
+    println("Verify the minimum and inspect its neighbors before refining the grid.")

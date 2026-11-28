@@ -87,6 +87,7 @@ fn namespaces_cover_the_same_manifest_and_parse() {
     let mut names = BTreeSet::new();
     let mut invokes = 0;
     let mut dynamic_calls = 0;
+    let mut typed_result_calls = 0;
     for (name, source) in &files {
         assert!(names.insert(name), "duplicate generated file {name}");
         let module_name = name.strip_suffix(".aev").expect("module extension");
@@ -109,6 +110,10 @@ fn namespaces_cover_the_same_manifest_and_parse() {
                     && line.contains(" = Rssn.invoke(")
             })
             .count();
+        typed_result_calls += source
+            .lines()
+            .filter(|line| line.trim_start().starts_with("match Rssn.call_key("))
+            .count();
         dynamic_calls += source
             .lines()
             .filter(|line| {
@@ -122,7 +127,7 @@ fn namespaces_cover_the_same_manifest_and_parse() {
         .iter()
         .filter(|row| matches!(row.coverage, Coverage::Typed))
         .count();
-    assert_eq!(invokes, typed);
+    assert_eq!(invokes + typed_result_calls, typed);
     assert_eq!(dynamic_calls, rows.len() - typed);
 }
 
@@ -145,4 +150,115 @@ fn callback_signatures_use_an_explicit_callback_facade() {
             "{line}"
         );
     }
+}
+
+#[test]
+fn native_option_facades_accept_only_the_exact_two_case_shape() {
+    use aevia_rssn::SigType as S;
+    use aevia_rssn::registry::option_payload;
+    let cases = vec![("Some".into(), vec![S::Float]), ("None".into(), vec![])];
+    assert_eq!(option_payload(&cases), Some(&S::Float));
+    assert_eq!(
+        codegen::declaration_type(&S::Variant(cases)),
+        "Option<Float>"
+    );
+    for malformed in [
+        vec![("Some".into(), vec![S::Float])],
+        vec![("Some".into(), vec![S::Float]), ("Some".into(), vec![])],
+        vec![("Some".into(), vec![]), ("None".into(), vec![])],
+        vec![
+            ("Some".into(), vec![S::Float]),
+            ("None".into(), vec![S::Int]),
+        ],
+        vec![
+            ("Some".into(), vec![S::Float]),
+            ("None".into(), vec![]),
+            ("Other".into(), vec![]),
+        ],
+    ] {
+        assert!(option_payload(&malformed).is_none());
+        assert_eq!(
+            codegen::declaration_type(&S::Variant(malformed)),
+            "Dyn<term>"
+        );
+    }
+    let rows = catalog(registry());
+    for name in [
+        "num_stats_ext_kde",
+        "num_stats_ext_t_test_one_sample",
+        "num_geometry_segment_intersection_2d",
+    ] {
+        let row = rows.iter().find(|row| row.op.name == name).expect(name);
+        assert_eq!(row.coverage, Coverage::Typed, "{name}");
+    }
+}
+
+#[test]
+fn native_reverse_ad_has_a_typed_callback_facade() {
+    let rows = catalog(registry());
+    let row = rows
+        .iter()
+        .find(|row| row.op.name == "num_native_reverse_gradient_scaled")
+        .expect("registered reverse AD callback");
+    assert_eq!(
+        row.typed_callback_name.as_deref(),
+        Some("num_native_reverse_gradient_scaled_typed"),
+        "{:?}",
+        row.coverage
+    );
+    let source = codegen::operators(registry());
+    let declaration = source
+        .lines()
+        .find(|line| line.starts_with("fn num_native_reverse_gradient_scaled_typed<"))
+        .expect("typed callback declaration");
+    assert!(declaration.contains("NativeAdVar"), "{declaration}");
+}
+
+#[test]
+fn native_nullary_operations_are_lazy_keyed_results() {
+    let registry = registry();
+    let text = codegen::operators(registry);
+    let rows = catalog(registry);
+    let native = rows
+        .iter()
+        .find(|row| row.op.name == "num_native_jit_target_key")
+        .expect("native JIT probe registered even without the optional feature");
+    assert!(matches!(native.coverage, Coverage::Typed));
+    assert!(text.contains(&format!("fn {}(): Result<Int, OpError> =", native.name)));
+    assert!(!text.contains(&format!("let {}:", native.name)));
+    let key = native.op.key(0).unwrap();
+    let hash = key
+        .signature_hash
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    assert!(text.contains(&format!(
+        "match Rssn.call_key(\"num_native_jit_target_key\", \"{hash}\", []) with"
+    )));
+}
+
+#[test]
+fn native_visitors_use_value_carriers_only_for_their_ordinary_object_arguments() {
+    let source = codegen::operators(registry());
+    for name in [
+        "num_analysis_jacobian_for_each_typed",
+        "num_analysis_mass_for_each_typed",
+    ] {
+        let declaration = source
+            .lines()
+            .find(|line| line.starts_with(&format!("fn {name}(")))
+            .expect("exact native visitor facade");
+        assert!(declaration.contains("a0: Value,"), "{declaration}");
+        assert!(
+            declaration.contains("(Int, Int, Float) -> Bool"),
+            "{declaration}"
+        );
+        assert!(!declaration.contains("Dyn<term>"), "{declaration}");
+    }
+    // Genuine opaque callback payloads keep their sealed native AD type.
+    let reverse = source
+        .lines()
+        .find(|line| line.starts_with("fn num_native_reverse_gradient_scaled_typed<"))
+        .expect("reverse AD facade");
+    assert!(reverse.contains("NativeAdVar"), "{reverse}");
 }

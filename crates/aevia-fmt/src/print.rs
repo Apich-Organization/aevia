@@ -11,7 +11,32 @@
 //! a gap here is a reported failure, never a silent rewrite.
 
 use crate::comments::Comment;
-use aevia_syntax::ast::*;
+use crate::comments::physical_lines;
+use aevia_syntax::Span;
+use aevia_syntax::ast::BinOp;
+use aevia_syntax::ast::BlockStmt;
+use aevia_syntax::ast::Decl;
+use aevia_syntax::ast::DeclKind;
+use aevia_syntax::ast::DimAst;
+use aevia_syntax::ast::DoStmt;
+use aevia_syntax::ast::Expr;
+use aevia_syntax::ast::ExprKind;
+use aevia_syntax::ast::Module;
+use aevia_syntax::ast::NatAst;
+use aevia_syntax::ast::NumberLit;
+use aevia_syntax::ast::Param;
+use aevia_syntax::ast::Pat;
+use aevia_syntax::ast::PatKind;
+use aevia_syntax::ast::PatLit;
+use aevia_syntax::ast::ShapeAst;
+use aevia_syntax::ast::ShapeItem;
+use aevia_syntax::ast::SliceAst;
+use aevia_syntax::ast::StrPiece;
+use aevia_syntax::ast::Ty;
+use aevia_syntax::ast::TyKind;
+use aevia_syntax::ast::TypeBody;
+use aevia_syntax::ast::TypeParam;
+use aevia_syntax::ast::UnOp;
 use std::fmt::Write as _;
 
 /// The four spaces one level of layout is indented by.
@@ -78,6 +103,9 @@ pub struct Printer {
     error: Option<String>,
     /// The original text, so a blank line between statements can be kept.
     source: Option<String>,
+    /// Complete source tokens for strings with source-sensitive interpolations.
+    preserved_strings: Vec<Span>,
+    line_ending: &'static str,
     /// The declaration being printed, for the failure message.
     subject: String,
 }
@@ -94,6 +122,8 @@ impl Printer {
             next_comment: 0,
             error: None,
             source: None,
+            preserved_strings: Vec::new(),
+            line_ending: "\n",
             subject: "the file".to_string(),
         }
     }
@@ -110,6 +140,20 @@ impl Printer {
         self
     }
 
+    #[allow(
+        clippy::single_call_fn,
+        reason = "configures the source-layout details used by the file formatter"
+    )]
+    pub(crate) fn with_source_layout(
+        mut self,
+        line_ending: &'static str,
+        preserved_strings: Vec<Span>,
+    ) -> Self {
+        self.line_ending = line_ending;
+        self.preserved_strings = preserved_strings;
+        self
+    }
+
     /// Whether the source has a blank line between byte offsets `from` and `to`.
     fn blank_between(
         &self,
@@ -122,11 +166,10 @@ impl Printer {
         // The first piece is the rest of the previous statement's line and
         // the last one is the indentation before the next statement; any
         // piece between them that is whitespace only is a blank line.
-        let lines: Vec<&str> = text.split('\n').collect();
-        lines.len() > 2
-            && lines[1..lines.len() - 1]
-                .iter()
-                .any(|line| line.trim().is_empty())
+        let mut lines = physical_lines(text);
+        lines.next();
+        lines.next_back();
+        lines.any(|line| line.trim().is_empty())
     }
 
     /// Prints `module`.
@@ -138,12 +181,32 @@ impl Printer {
         mut self,
         module: &Module,
     ) -> Result<String, String> {
+        if let Some(first) = self.comments.first()
+            && first.text.starts_with("#!")
+            && (first.start == 0
+                || (first.start == '\u{feff}'.len_utf8()
+                    && self
+                        .source
+                        .as_deref()
+                        .is_some_and(|text| text.starts_with('\u{feff}'))))
+        {
+            // The executable-file marker belongs before the module header.
+            self.flush_comments(first.start.saturating_add(1));
+        }
         if let Some(name) = &module.name {
+            let prefix = if module.private {
+                "private "
+            } else {
+                ""
+            };
             match &module.unit_system {
                 | Some((system, _)) => {
-                    self.line(&format!("module {} with units {system}", name.join(".")));
+                    self.line(&format!(
+                        "{prefix}module {} with units {system}",
+                        name.join(".")
+                    ));
                 },
-                | None => self.line(&format!("module {}", name.join("."))),
+                | None => self.line(&format!("{prefix}module {}", name.join("."))),
             }
             self.blank();
         }
@@ -202,13 +265,17 @@ impl Printer {
         if text.is_empty() {
             return;
         }
+        self.begin_text();
+        self.out.push_str(text);
+    }
+
+    fn begin_text(&mut self) {
         if self.at_line_start {
             for _ in 0..self.indent {
                 self.out.push_str(UNIT);
             }
             self.at_line_start = false;
         }
-        self.out.push_str(text);
     }
 
     fn newline(&mut self) {
@@ -216,7 +283,7 @@ impl Printer {
         while self.out.ends_with(' ') {
             self.out.pop();
         }
-        self.out.push('\n');
+        self.out.push_str(self.line_ending);
         self.at_line_start = true;
     }
 
@@ -250,8 +317,12 @@ impl Printer {
 
     fn blank(&mut self) {
         self.end_line();
-        if !self.out.is_empty() && !self.out.ends_with("\n\n") {
-            self.out.push('\n');
+        let already_blank = self
+            .out
+            .strip_suffix(self.line_ending)
+            .is_some_and(|text| text.ends_with(self.line_ending));
+        if !self.out.is_empty() && !already_blank {
+            self.out.push_str(self.line_ending);
         }
         self.at_line_start = true;
     }
@@ -275,16 +346,21 @@ impl Printer {
             if comment.start >= offset {
                 break;
             }
-            let indent = UNIT.repeat(self.indent);
-            let text = comment.render(&indent);
+            // The opening marker follows the surrounding layout. Later
+            // lines are the comment's own text and keep their indentation.
+            let text = comment.render_with("", self.line_ending);
             self.push(&text);
             self.end_line();
-            self.next_comment += 1;
+            self.next_comment = self.next_comment.saturating_add(1);
         }
     }
 
     // ----- declarations ---------------------------------------------------
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps the grammar cases together in one exhaustive AST match"
+    )]
     fn decl(
         &mut self,
         decl: &Decl,
@@ -292,7 +368,7 @@ impl Printer {
         self.flush_comments(usize::try_from(decl.span.start).unwrap_or(0));
         self.subject = describe(decl);
         if let Some(doc) = &decl.doc {
-            for line in doc.lines() {
+            for line in doc.split('\n') {
                 if line.trim().is_empty() {
                     self.line("##");
                 } else {
@@ -301,27 +377,26 @@ impl Printer {
             }
         }
         for attr in &decl.attrs {
-            let mut text = format!("@{}", attr.name);
+            self.push("@");
+            self.push(&attr.name);
             if !attr.args.is_empty() {
-                text.push('(');
+                self.push("(");
                 for (index, arg) in attr.args.iter().enumerate() {
                     if index > 0 {
-                        text.push_str(", ");
+                        self.push(", ");
                     }
                     if let Some(name) = &arg.name {
-                        let _ = write!(text, "{name} = ");
+                        self.push(name);
+                        self.push(" = ");
                     }
-                    match Printer::new(Vec::new()).expression(&arg.value) {
-                        | Ok(rendered) => text.push_str(&rendered),
-                        | Err(error) => {
-                            self.fail(format!("an attribute argument cannot be printed: {error}"));
-                            return;
-                        },
+                    self.expr(&arg.value, Ctx::tail());
+                    if self.error.is_some() {
+                        return;
                     }
                 }
-                text.push(')');
+                self.push(")");
             }
-            self.line(&text);
+            self.end_line();
         }
         if decl.private {
             self.push("private ");
@@ -332,9 +407,11 @@ impl Printer {
                 alias,
                 names,
                 open,
+                export,
             } => {
                 let mut text = format!(
-                    "{} {}",
+                    "{}{} {}",
+                    if *export { "export " } else { "" },
                     if *open { "open" } else { "import" },
                     path.join(".")
                 );
@@ -396,7 +473,12 @@ impl Printer {
                     | TypeBody::Variants(variants) => {
                         text.push_str(" =");
                         for variant in variants {
-                            let _ = write!(text, " | {}", variant.name);
+                            let priv_kw = if variant.private {
+                                "private "
+                            } else {
+                                ""
+                            };
+                            let _ = write!(text, " | {priv_kw}{}", variant.name);
                             if !variant.args.is_empty() {
                                 let args = variant
                                     .args
@@ -428,12 +510,17 @@ impl Printer {
                 }
                 text.push_str(" where");
                 self.line(&text);
-                self.indent += 1;
-                for (method, ty) in methods {
-                    let rendered = self.ty_text(ty);
-                    self.line(&format!("{method}: {rendered}"));
+                self.indent = self.indent.saturating_add(1);
+                for method in methods {
+                    let rendered = self.ty_text(&method.ty);
+                    let priv_kw = if method.private {
+                        "private "
+                    } else {
+                        ""
+                    };
+                    self.line(&format!("{priv_kw}{}: {rendered}", method.name));
                 }
-                self.indent -= 1;
+                self.indent = self.indent.saturating_sub(1);
             },
             | DeclKind::Instance { class, ty, methods } => {
                 let head = self.ty_text(ty);
@@ -442,10 +529,15 @@ impl Printer {
                     text.push_str(" where");
                 }
                 self.line(&text);
-                self.indent += 1;
+                self.indent = self.indent.saturating_add(1);
                 for method in methods {
                     let params = self.params(&method.params);
-                    let mut text = format!("{}({params})", method.name);
+                    let priv_kw = if method.private {
+                        "private "
+                    } else {
+                        ""
+                    };
+                    let mut text = format!("{priv_kw}{}({params})", method.name);
                     if let Some(ret) = &method.ret {
                         let rendered = self.ty_text(ret);
                         let _ = write!(text, ": {rendered}");
@@ -454,7 +546,7 @@ impl Printer {
                     self.push(&text);
                     self.body(&method.body);
                 }
-                self.indent -= 1;
+                self.indent = self.indent.saturating_sub(1);
             },
             | DeclKind::Derive { classes, ty } => {
                 let head = self.ty_text(ty);
@@ -521,10 +613,10 @@ impl Printer {
             },
             | ExprKind::Match { .. } => {
                 self.end_line();
-                self.indent += 1;
+                self.indent = self.indent.saturating_add(1);
                 self.expr(expr, Ctx::tail());
                 self.end_line();
-                self.indent -= 1;
+                self.indent = self.indent.saturating_sub(1);
             },
             | _ => {
                 self.push(" ");
@@ -554,7 +646,7 @@ impl Printer {
         &mut self,
         pat: &Pat,
     ) -> String {
-        let mut printer = Printer::new(Vec::new());
+        let mut printer = Self::new(Vec::new());
         printer.pattern(pat);
         if let Some(error) = printer.error {
             self.fail(error);
@@ -567,7 +659,7 @@ impl Printer {
         &mut self,
         ty: &Ty,
     ) -> String {
-        let mut printer = Printer::new(Vec::new());
+        let mut printer = Self::new(Vec::new());
         printer.ty(ty, false);
         if let Some(error) = printer.error {
             self.fail(error);
@@ -577,6 +669,10 @@ impl Printer {
 
     // ----- expressions ----------------------------------------------------
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps the grammar cases together in one exhaustive AST match"
+    )]
     fn expr(
         &mut self,
         expr: &Expr,
@@ -616,7 +712,7 @@ impl Printer {
             | ExprKind::Bool(value) => self.push(if *value { "true" } else { "false" }),
             | ExprKind::Int(value) => self.push(&value.to_string()),
             | ExprKind::Float(text) => self.push(text),
-            | ExprKind::Str(pieces) => self.string(pieces),
+            | ExprKind::Str(pieces) => self.string(expr.span, pieces),
             | ExprKind::Quantity { value, unit } => {
                 match value {
                     | NumberLit::Int(value) => self.push(&value.to_string()),
@@ -641,11 +737,18 @@ impl Printer {
                 let (left_prec, right_prec) = if *op == BinOp::Pow {
                     (POSTFIX, UNARY)
                 } else if is_right_associative(*op) {
-                    (prec + 1, prec)
+                    (prec.saturating_add(1), prec)
                 } else {
-                    (prec, prec + 1)
+                    (prec, prec.saturating_add(1))
                 };
-                self.expr(left, Ctx::operand(left_prec));
+                if *op == BinOp::Pow && matches!(left.kind, ExprKind::Quantity { .. }) {
+                    // A caret after a unit is parsed as its exponent, even with spaces.
+                    self.push("(");
+                    self.expr(left, Ctx::bracketed());
+                    self.push(")");
+                } else {
+                    self.expr(left, Ctx::operand(left_prec));
+                }
                 let separator = format!(" {} ", op.as_str());
                 self.push(&separator);
                 self.expr(right, Ctx::operand(right_prec));
@@ -674,16 +777,16 @@ impl Printer {
                 self.push(">");
             },
             | ExprKind::Lambda { params, ret, body } => {
-                let bare = params.len() == 1
-                    && params[0].ty.is_none()
+                if let [param] = params.as_slice()
+                    && param.ty.is_none()
                     && !matches!(
-                        params[0].pattern.kind,
+                        param.pattern.kind,
                         PatKind::Tuple(_) | PatKind::Annot { .. }
-                    );
-                if bare {
+                    )
+                {
                     // `fn t => …` is the form the corpus writes; `fn (t) => …`
                     // is the same tree, but a bare parameter list is not.
-                    let pattern = self.pattern_text(&params[0].pattern);
+                    let pattern = self.pattern_text(&param.pattern);
                     self.push("fn ");
                     self.push(&pattern);
                 } else {
@@ -779,7 +882,7 @@ impl Printer {
             },
             | ExprKind::Block { stmts, tail } => {
                 self.end_line();
-                self.indent += 1;
+                self.indent = self.indent.saturating_add(1);
                 let mut previous_end: Option<usize> = None;
                 for stmt in stmts {
                     if let Some(end) = previous_end
@@ -825,12 +928,12 @@ impl Printer {
                     self.end_line();
                 }
                 self.flush_comments(usize::try_from(expr.span.end).unwrap_or(usize::MAX));
-                self.indent -= 1;
+                self.indent = self.indent.saturating_sub(1);
             },
             | ExprKind::Do { stmts } => {
                 self.push("do");
                 self.end_line();
-                self.indent += 1;
+                self.indent = self.indent.saturating_add(1);
                 let mut previous_end: Option<usize> = None;
                 for stmt in stmts {
                     if let Some(end) = previous_end
@@ -870,7 +973,7 @@ impl Printer {
                     }
                 }
                 self.flush_comments(usize::try_from(expr.span.end).unwrap_or(usize::MAX));
-                self.indent -= 1;
+                self.indent = self.indent.saturating_sub(1);
             },
             | ExprKind::Record { base, fields } => {
                 self.push("{ ");
@@ -975,25 +1078,33 @@ impl Printer {
         &mut self,
         expr: &Expr,
     ) {
-        if matches!(expr.kind, ExprKind::Block { .. }) {
-            self.expr(expr, Ctx::tail());
-        } else {
+        if !matches!(expr.kind, ExprKind::Block { .. }) {
             self.push(" ");
-            self.expr(expr, Ctx::tail());
         }
+        self.expr(expr, Ctx::tail());
     }
 
     fn string(
         &mut self,
+        span: Span,
         pieces: &[StrPiece],
     ) {
+        if self.preserved_strings.binary_search(&span).is_ok() {
+            self.begin_text();
+            if let (Ok(start), Ok(end), Some(source)) = (
+                usize::try_from(span.start),
+                usize::try_from(span.end),
+                &self.source,
+            ) && let Some(text) = source.get(start..end)
+            {
+                self.out.push_str(text);
+                return;
+            }
+        }
         self.push("\"");
         for piece in pieces {
             match piece {
-                | StrPiece::Text(text) => {
-                    let escaped = escape(text);
-                    self.push(&escaped);
-                },
+                | StrPiece::Text(text) => escape_into(&mut self.out, text),
                 | StrPiece::Expr(inner) => {
                     self.push("{");
                     self.expr(inner, Ctx::bracketed());
@@ -1103,6 +1214,10 @@ impl Printer {
     // ----- types ----------------------------------------------------------
 
     /// Prints a type. `atom` asks for a form that `ty_atom` accepts.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps the grammar cases together in one exhaustive AST match"
+    )]
     fn ty(
         &mut self,
         ty: &Ty,
@@ -1233,11 +1348,11 @@ impl Printer {
                 if atom {
                     self.push("(");
                 }
-                if args.len() == 1 {
+                if let [arg] = args.as_slice() {
                     // `a -> b` is how a one-argument function type is written;
                     // `(a) -> b` is the same tree, and a tuple argument keeps
                     // its own brackets.
-                    self.ty(&args[0], true);
+                    self.ty(arg, true);
                 } else {
                     self.push("(");
                     for (index, arg) in args.iter().enumerate() {
@@ -1293,9 +1408,13 @@ impl Printer {
                     .iter()
                     .position(|arg| matches!(arg.kind, TyKind::DimArg(_)))
                     .unwrap_or(args.len());
-                if split > 0 {
+                let Some((ordinary, dimensions)) = args.split_at_checked(split) else {
+                    self.fail("could not separate type and dimension arguments");
+                    return;
+                };
+                if !ordinary.is_empty() {
                     self.push("<");
-                    for (index, arg) in args[..split].iter().enumerate() {
+                    for (index, arg) in ordinary.iter().enumerate() {
                         if index > 0 {
                             self.push(", ");
                         }
@@ -1303,7 +1422,7 @@ impl Printer {
                     }
                     self.push(">");
                 }
-                for arg in &args[split..] {
+                for arg in dimensions {
                     match &arg.kind {
                         | TyKind::DimArg(dim) => {
                             let text = format!("[{}]", dim.to_source());
@@ -1312,7 +1431,7 @@ impl Printer {
                         | _ => {
                             self.fail(
                                 "a type argument after a dimension argument has no source form",
-                            )
+                            );
                         },
                     }
                 }
@@ -1421,7 +1540,11 @@ impl Printer {
 
 /// The binding power of an expression, and whether it is a form that greedily
 /// consumes what follows it.
-fn precedence(kind: &ExprKind) -> (u8, bool) {
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps expression precedence aligned with the parser"
+)]
+const fn precedence(kind: &ExprKind) -> (u8, bool) {
     match kind {
         | ExprKind::If { .. }
         | ExprKind::Match { .. }
@@ -1442,7 +1565,7 @@ fn precedence(kind: &ExprKind) -> (u8, bool) {
     }
 }
 
-fn binary_prec(op: BinOp) -> u8 {
+const fn binary_prec(op: BinOp) -> u8 {
     match op {
         | BinOp::Pipe | BinOp::PipeBack => PIPE,
         | BinOp::Or => OR,
@@ -1455,7 +1578,11 @@ fn binary_prec(op: BinOp) -> u8 {
     }
 }
 
-fn is_right_associative(op: BinOp) -> bool {
+#[allow(
+    clippy::single_call_fn,
+    reason = "gives the associativity table an explicit name"
+)]
+const fn is_right_associative(op: BinOp) -> bool {
     matches!(op, BinOp::Or | BinOp::And | BinOp::Cons)
 }
 
@@ -1466,6 +1593,10 @@ fn block_stmt_start(stmt: &BlockStmt) -> usize {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "documents the distinct source spans across block statements"
+)]
 fn block_stmt_end(stmt: &BlockStmt) -> usize {
     match stmt {
         | BlockStmt::Let { value, .. } => usize::try_from(value.span.end).unwrap_or(0),
@@ -1473,6 +1604,10 @@ fn block_stmt_end(stmt: &BlockStmt) -> usize {
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "documents the distinct source spans across do statements"
+)]
 fn do_stmt_end(stmt: &DoStmt) -> usize {
     match stmt {
         | DoStmt::Let { value, .. } | DoStmt::Bind { value, .. } => {
@@ -1543,7 +1678,6 @@ fn scale_into(
     use num_traits::One;
     let numer = scale.rat.numer();
     let denom = scale.rat.denom();
-    let negative_one = -numer.clone();
     match scale.pi {
         | 0 => {
             if denom.is_one() {
@@ -1553,7 +1687,7 @@ fn scale_into(
             }
             true
         },
-        | 1 if numer.is_one() || negative_one.is_one() => {
+        | 1 if numer.magnitude().is_one() => {
             out.push_str(if numer.is_one() {
                 "pi"
             } else {
@@ -1571,7 +1705,15 @@ fn scale_into(
 /// Escapes a string's contents for a single-line `"…"` literal.
 #[must_use]
 pub fn escape(text: &str) -> String {
-    let mut out = String::new();
+    let mut out = String::with_capacity(text.len());
+    escape_into(&mut out, text);
+    out
+}
+
+fn escape_into(
+    out: &mut String,
+    text: &str,
+) {
     for c in text.chars() {
         match c {
             | '\\' => out.push_str("\\\\"),
@@ -1588,7 +1730,6 @@ pub fn escape(text: &str) -> String {
             | c => out.push(c),
         }
     }
-    out
 }
 
 fn quote(text: &str) -> String {

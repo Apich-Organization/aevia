@@ -408,3 +408,18 @@ fn a_step_keeps_the_rank_and_the_element_type() {
             .collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn strides_and_bounds_accept_integers_beyond_float_range() {
+    let mut interp = session(&format!(
+        "{VECTOR}let huge = 10 ^ 400\nlet first = v[::huge]\nlet last = v[::-huge]\nlet all = v[-huge:huge]\nlet first_char = \"abc\"[::huge]\nlet last_char = \"abc\"[::-huge]\n"
+    ));
+    let first = interp.eval_toplevel("first").expect("first");
+    let last = interp.eval_toplevel("last").expect("last");
+    let all = interp.eval_toplevel("all").expect("all");
+    assert_eq!(values(&first), [1.5]);
+    assert_eq!(values(&last), [8.0]);
+    assert_eq!(values(&all), [1.5, -2.25, 3.0, 0.5, 8.0]);
+    assert!(matches!(interp.eval_toplevel("first_char"), Ok(Value::Str(s)) if &*s == "a"));
+    assert!(matches!(interp.eval_toplevel("last_char"), Ok(Value::Str(s)) if &*s == "c"));
+}

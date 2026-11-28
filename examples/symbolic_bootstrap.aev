@@ -1,0 +1,22 @@
+## Run: aevia test examples/symbolic_bootstrap.aev
+import Rssn_Numeric as N
+
+let median: Real = symbol("median")
+let samples = [1.0, 1.0, 1.0, 5.0, 5.0]
+let percentile = N.bootstrap_ci(samples, median, 0.1, 400, 7)
+let basic = N.bootstrap_basic_ci(samples, median, 0.1, 400, 7)
+let invalid = N.bootstrap_basic_ci(samples, median, 1.0, 400, 7)
+
+let reflected_bounds =
+    match (percentile, basic) with
+    | (Ok(percentiles), Ok(bounds)) -> percentiles == [1.0, 5.0] && bounds == [-3.0, 1.0]
+    | _ -> false
+
+let rejects_invalid_alpha =
+    match invalid with
+    | Ok(_) -> false
+    | Err(_) -> true
+
+test "the basic bootstrap reflects the sampled median bounds around the observed median" = reflected_bounds
+
+test "the bootstrap requires a significance level strictly between zero and one" = rejects_invalid_alpha

@@ -1,0 +1,21 @@
+{
+    "dap": {
+        "aevia": {
+            "url": "https://github.com/Apich-Organization/aevia",
+            "run": {
+                "command": ["aevia", "debug", "--stdio"],
+                "supportsSourceRequest": false
+            },
+            "configurations": {
+                "launch": {
+                    "request": {
+                        "command": "launch",
+                        "program": "${file}",
+                        "args": "${args|list}",
+                        "cwd": "${workdir}"
+                    }
+                }
+            }
+        }
+    }
+}

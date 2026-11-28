@@ -148,6 +148,25 @@ fn a_name_list_imports_only_those_names() {
 }
 
 #[test]
+fn a_missing_export_points_to_the_import_that_requested_it() {
+    let scratch = Scratch::new("missing-export-span");
+    scratch.write("Values.aev", "module Values\nlet present = 1\n");
+    let source = "import Values as V\nimport Values { absent }\n";
+    let entry = scratch.write("main.aev", source);
+    let program = driver::load(&entry);
+    let diagnostic = program
+        .diagnostics
+        .items
+        .iter()
+        .find(|item| item.code == "E0301" && item.message.contains("does not export `absent`"))
+        .expect("missing export diagnostic");
+    assert_eq!(
+        diagnostic.span.start as usize,
+        source.find("import Values {").unwrap()
+    );
+}
+
+#[test]
 fn modules_are_checked_before_their_importers() {
     let scratch = Scratch::new("order");
     scratch.write(

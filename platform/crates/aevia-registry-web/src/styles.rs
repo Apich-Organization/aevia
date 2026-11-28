@@ -620,6 +620,25 @@ tbody th {
   word-break: break-all;
 }
 
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0 0 1rem;
+}
+
+.chip {
+  padding: 0.1rem 0.55rem;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 999px;
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+
+.chip:hover {
+  text-decoration: underline;
+}
+
 .badge {
   display: inline-block;
   font-size: 0.6875rem;
@@ -636,6 +655,15 @@ tbody th {
   color: var(--warn-fg);
   border-color: var(--warn-fg);
   background: var(--warn-bg);
+}
+
+.notice-warn {
+  margin: 12px 0 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--warn-fg);
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  font-size: 0.875rem;
 }
 
 /* Pagination */
@@ -812,16 +840,11 @@ tbody th {
 /* Documentation */
 
 .meter {
-  height: 6px;
-  background: var(--code-bg);
-  border: 1px solid var(--line);
-  margin: 6px 0 4px;
-}
-
-.meter span {
   display: block;
-  height: 100%;
-  background: var(--accent);
+  width: 100%;
+  height: 6px;
+  accent-color: var(--accent);
+  margin: 6px 0 4px;
 }
 
 .docs-layout {
@@ -1626,9 +1649,138 @@ a.provider:hover {
   margin: 20px 0 28px;
 }
 
+/* Stacked toolchain install one-liners on the front page. */
+.install-stack {
+  display: grid;
+  gap: 8px;
+  margin: 20px 0;
+  max-width: 680px;
+}
+
+.install-stack .install {
+  margin: 0;
+  max-width: none;
+}
+
+.install-tag {
+  padding: 10px 12px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  border-right: 1px solid var(--line);
+  white-space: nowrap;
+  align-self: center;
+  user-select: none;
+}
+
+/* Standard library documentation items. */
+.stdlib-items {
+  display: grid;
+  gap: 20px;
+  margin-top: 24px;
+}
+
+.stdlib-item {
+  border: 1px solid var(--line);
+  padding: 16px 18px;
+  background: var(--bg);
+}
+
+.stdlib-item-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.stdlib-kind {
+  font-size: 0.75rem;
+  font-family: var(--mono);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  padding: 1px 6px;
+}
+
+.stdlib-sig {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  overflow-x: auto;
+}
+
+.stdlib-examples h4 {
+  font-size: 0.8125rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 12px 0 6px;
+}
+
+.manual-index {
+  max-width: 72ch;
+  margin: 0 auto;
+}
+
+.manual-toc li {
+  margin-block: 0.4rem;
+}
+
+.manual-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-block: 1.5rem;
+}
+
+.manual-local-toc ul {
+  list-style: none;
+  padding-inline-start: 0;
+}
+
+.manual-toc-level-3 { margin-inline-start: 1rem; }
+.manual-toc-level-4 { margin-inline-start: 2rem; }
+
+.spec-nav a[aria-current="page"] {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.playground {
+  margin-block: 1.25rem;
+}
+
+.playground textarea {
+  display: block;
+  width: 100%;
+  min-height: 10em;
+  padding: 0.8rem;
+  resize: vertical;
+  font-family: var(--mono);
+  tab-size: 4;
+}
+
+.playground button {
+  margin-top: 0.5rem;
+}
+
+.playground output {
+  display: block;
+  margin-top: 0.5rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+}
+
+@media print {
+  .topbar, .footer, .skip { display: none; }
+  .manual-combined { max-width: none; }
+  .manual-combined pre { white-space: pre-wrap; }
+}
+
 "#;
 
-/// The script served inline at the end of every page.
+/// The script served as a separate asset.
 ///
 /// It does two things and nothing else: copy an install line to the clipboard,
 /// and filter the crate table while the reader types. Both are enhancements —
@@ -1674,6 +1826,65 @@ pub const APP_JS: &str = r#"(function () {
       flash(button, "press ctrl+c");
     }
   });
+
+  var playground = document.querySelector("[data-playground]");
+  if (playground) {
+    playground.querySelectorAll("pre > code.interactive-example").forEach(function (code) {
+      var box = document.createElement("div");
+      box.className = "playground";
+      var editor = document.createElement("textarea");
+      editor.setAttribute("aria-label", playground.dataset.label);
+      editor.setAttribute("spellcheck", "false");
+      editor.value = code.textContent;
+      editor.rows = Math.min(28, Math.max(6, editor.value.split("\n").length));
+      var button = document.createElement("button");
+      button.className = "btn";
+      button.type = "button";
+      button.textContent = playground.dataset.run;
+      var output = document.createElement("output");
+      output.setAttribute("aria-live", "polite");
+      box.append(editor, button, output);
+      code.parentElement.replaceWith(box);
+
+      button.addEventListener("click", async function () {
+        var source = editor.value;
+        if (!source.trim() || new TextEncoder().encode(source).length > 16384) {
+          output.textContent = playground.dataset.input;
+          return;
+        }
+        button.disabled = true;
+        output.textContent = playground.dataset.running;
+        try {
+          var reply = await fetch(playground.dataset.playground, {
+            method: "POST",
+            credentials: "omit",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({source: source})
+          });
+          if (!reply.ok) {
+            output.textContent = reply.status === 429 ? playground.dataset.busy
+              : reply.status === 413 || reply.status === 400 ? playground.dataset.input
+              : playground.dataset.unavailable;
+            return;
+          }
+          var result = await reply.json();
+          var messages = [result.stdout, result.stderr];
+          if (result.status === "timeout") {
+            messages.push(playground.dataset.timeout);
+          } else if (result.status === "output_limit") {
+            messages.push(playground.dataset.limit);
+          } else if (result.status !== "success") {
+            messages.push(playground.dataset.failed);
+          }
+          output.textContent = messages.filter(Boolean).join("\n") || playground.dataset.empty;
+        } catch (_) {
+          output.textContent = playground.dataset.unavailable;
+        } finally {
+          button.disabled = false;
+        }
+      });
+    });
+  }
 
   var input = document.querySelector("[data-filter]");
   var table = input ? document.querySelector(input.getAttribute("data-filter")) : null;

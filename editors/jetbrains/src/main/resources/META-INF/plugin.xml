@@ -1,0 +1,53 @@
+<idea-plugin>
+    <id>dev.aevia.jetbrains</id>
+    <name>Aevia</name>
+    <vendor>The Aevia authors</vendor>
+    <description><![CDATA[
+        Language support for <b>Aevia</b> (<code>.aev</code>): syntax highlighting and the
+        <code>aevia-lsp</code> language server &mdash; diagnostics, hover, completion,
+        go to definition, references, rename, signature help, formatting and semantic tokens.
+        <p>Requires <code>aevia-lsp</code> (or the <code>aevia</code> CLI) on PATH, or the
+        <code>AEVIA_LSP</code> environment variable pointing at the executable.</p>
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>org.jetbrains.plugins.textmate</depends>
+    <depends>com.redhat.devtools.lsp4ij</depends>
+    <depends optional="true" config-file="aevia-terminal.xml">org.jetbrains.plugins.terminal</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <textmate.bundleProvider implementation="dev.aevia.jetbrains.AeviaTextMateBundleProvider"/>
+        <notificationGroup id="Aevia" displayType="BALLOON"/>
+    </extensions>
+
+    <actions>
+        <action id="Aevia.RunFile"
+                class="dev.aevia.jetbrains.AeviaRunFileAction"
+                text="Run Aevia File"
+                description="Run the current .aev file with aevia run"
+                icon="AllIcons.Actions.Execute">
+            <add-to-group group-id="RunMenu" anchor="first"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="first"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt R"/>
+        </action>
+        <action id="Aevia.TestFile"
+                class="dev.aevia.jetbrains.AeviaTestFileAction"
+                text="Test Aevia File"
+                description="Run tests in the current .aev file with aevia test"
+                icon="AllIcons.RunConfigurations.TestState.Run">
+            <add-to-group group-id="RunMenu" anchor="after" relative-to-action="Aevia.RunFile"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="after" relative-to-action="Aevia.RunFile"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt T"/>
+        </action>
+    </actions>
+
+    <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
+        <server id="aevia" name="Aevia Language Server"
+                factoryClass="dev.aevia.jetbrains.AeviaLanguageServerFactory">
+            <description><![CDATA[Runs <code>aevia-lsp --stdio</code> for Aevia files.]]></description>
+        </server>
+        <fileNamePatternMapping patterns="*.aev" serverId="aevia" languageId="aevia"/>
+        <debugAdapterServer id="aevia" name="Aevia"
+                            factoryClass="dev.aevia.jetbrains.AeviaDebugAdapterFactory"/>
+    </extensions>
+</idea-plugin>

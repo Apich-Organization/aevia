@@ -1,0 +1,25 @@
+## Principal inverse circular and hyperbolic functions of complex dyadic rectangles.
+import Rssn_Multiprecision as MP
+
+let zero: MP.Dyadic = { mantissa = 0, exponent = 0, precision = 1 }
+
+let one: MP.Dyadic = { mantissa = 1, exponent = 0, precision = 1 }
+
+let zero_ball: MP.DyadicBall = { midpoint = zero, radius = zero }
+
+let one_ball: MP.DyadicBall = { midpoint = one, radius = zero }
+
+let origin: MP.DyadicRectangle = { real = zero_ball, imag = zero_ball }
+
+let point_one: MP.DyadicRectangle = { real = one_ball, imag = zero_ball }
+
+let point_i: MP.DyadicRectangle = { real = zero_ball, imag = one_ball }
+
+test "inverse circular functions preserve exact origin and endpoint values" = MP.asin_complex_rectangle(origin, 1) == Ok(origin) && MP.acos_complex_rectangle(point_one, 1) == Ok(origin) && MP.atan_complex_rectangle(origin, 1) == Ok(origin)
+
+test "inverse hyperbolic functions preserve exact origin and endpoint values" = MP.asinh_complex_rectangle(origin, 1) == Ok(origin) && MP.acosh_complex_rectangle(point_one, 1) == Ok(origin) && MP.atanh_complex_rectangle(origin, 1) == Ok(origin)
+
+test "inverse tangent rejects the imaginary unit branch point" =
+    match MP.atan_complex_rectangle(point_i, 32) with
+    | Err(_) -> true
+    | Ok(_) -> false

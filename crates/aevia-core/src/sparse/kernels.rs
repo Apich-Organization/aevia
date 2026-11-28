@@ -5,6 +5,25 @@
 //! each scalar operation through the language's own arithmetic so exact
 //! values stay exact).
 
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unreachable,
+        clippy::unwrap_used
+    )
+)]
+
 use super::Entries;
 use super::R;
 use super::Store;
@@ -23,7 +42,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 /// The scalar arithmetic a kernel needs, for one element class.
-pub(crate) trait Ring<T: Clone> {
+pub(super) trait Ring<T: Clone> {
     fn add(
         &mut self,
         a: &T,
@@ -55,7 +74,7 @@ pub(crate) trait Ring<T: Clone> {
     ) -> T;
 }
 
-pub(crate) struct FloatRing;
+pub(super) struct FloatRing;
 
 impl Ring<f64> for FloatRing {
     fn add(
@@ -105,7 +124,7 @@ impl Ring<f64> for FloatRing {
     }
 }
 
-pub(crate) struct ValueRing<'a> {
+pub(super) struct ValueRing<'a> {
     pub interp: &'a mut Interp,
     pub span: Span,
 }
@@ -172,50 +191,123 @@ impl Ring<Value> for ValueRing<'_> {
     }
 }
 
-/// Drops every entry equal to zero.
-pub(crate) fn clean<T: Clone, Rg: Ring<T>>(
-    entries: Entries<T>,
-    ring: &Rg,
-) -> Entries<T> {
-    if entries.vals.iter().all(|v| !ring.is_zero(v)) {
-        return entries;
-    }
-    let mut out = Entries::empty(entries.rank);
-    for (i, value) in entries.vals.iter().enumerate() {
-        if !ring.is_zero(value) {
-            out.push(entries.coord(i), value.clone());
-        }
-    }
-    out
+fn invalid_layout() -> EvalError {
+    EvalError::new(
+        "E0802",
+        "sparse coordinates or storage do not match the shape",
+    )
 }
 
-/// Sorts unordered `(coordinate, value)` triplets, sums duplicates and drops
-/// zeros.
-pub(crate) fn assemble<T: Clone, Rg: Ring<T>>(
+fn shape_overflow() -> EvalError {
+    EvalError::new(
+        "E0802",
+        "sparse operation output exceeds the representable size",
+    )
+}
+
+fn reserved<T>(count: usize) -> R<Vec<T>> {
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(count)
+        .map_err(|_| shape_overflow())?;
+    Ok(values)
+}
+
+fn filled<T: Clone>(
+    count: usize,
+    value: T,
+) -> R<Vec<T>> {
+    let mut values = reserved(count)?;
+    values.resize(count, value);
+    Ok(values)
+}
+
+fn coordinates(
+    coords: &[usize],
+    rank: usize,
+    index: usize,
+) -> Option<&[usize]> {
+    let start = index.checked_mul(rank)?;
+    coords.get(start..start.checked_add(rank)?)
+}
+
+fn matches_rank<T>(entries: &Entries<T>) -> bool {
+    entries.rank.checked_mul(entries.vals.len()) == Some(entries.coords.len())
+}
+
+fn stored_entries<T>(entries: &Entries<T>) -> R<impl Iterator<Item = (&[usize], &T)>> {
+    if !matches_rank(entries) {
+        return Err(invalid_layout());
+    }
+    let iter = entries.vals.iter().enumerate().filter_map(|(i, value)| {
+        coordinates(&entries.coords, entries.rank, i).map(|coord| (coord, value))
+    });
+    Ok(iter)
+}
+
+/// Drops every entry equal to zero.
+fn clean<T: Clone, Rg: Ring<T>>(
+    entries: Entries<T>,
+    ring: &Rg,
+) -> R<Entries<T>> {
+    if !matches_rank(&entries) {
+        return Err(invalid_layout());
+    }
+    if entries.vals.iter().all(|v| !ring.is_zero(v)) {
+        return Ok(entries);
+    }
+    let mut out = Entries::empty(entries.rank);
+    for (coord, value) in stored_entries(&entries)? {
+        if !ring.is_zero(value) {
+            out.push(coord, value.clone());
+        }
+    }
+    Ok(out)
+}
+
+/// Sorts unordered coordinate/value triplets, sums duplicates and drops zeros.
+pub(super) fn assemble<T: Clone, Rg: Ring<T>>(
     rank: usize,
     coords: &[usize],
     vals: Vec<T>,
     ring: &mut Rg,
 ) -> R<Entries<T>> {
-    let n = vals.len();
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|a, b| coords[a * rank..(a + 1) * rank].cmp(&coords[b * rank..(b + 1) * rank]));
-    let mut out: Entries<T> = Entries::empty(rank);
-    for &k in &order {
-        let coord = &coords[k * rank..(k + 1) * rank];
-        let duplicate = out.len() > 0 && out.coord(out.len() - 1) == coord;
-        if duplicate {
-            let last = out.vals.len() - 1;
-            out.vals[last] = ring.add(&out.vals[last], &vals[k])?;
-        } else {
-            out.push(coord, vals[k].clone());
+    if rank.checked_mul(vals.len()) != Some(coords.len()) {
+        return Err(invalid_layout());
+    }
+    let mut entries = vals
+        .into_iter()
+        .enumerate()
+        .map(|(i, value)| {
+            let coord = coordinates(coords, rank, i).ok_or_else(invalid_layout)?;
+            Ok((coord, value))
+        })
+        .collect::<R<Vec<_>>>()?;
+    // Equal coordinates must retain their original input order for arithmetic.
+    entries.sort_by_key(|(coord, _)| *coord);
+    let mut out = Entries::empty(rank);
+    let mut pending: Option<(&[usize], T)> = None;
+    for (coord, value) in entries {
+        if let Some((last_coord, last_value)) = pending.as_mut()
+            && *last_coord == coord
+        {
+            *last_value = ring.add(last_value, &value)?;
+        } else if let Some((last_coord, last_value)) = pending.replace((coord, value))
+            && !ring.is_zero(&last_value)
+        {
+            out.push(last_coord, last_value);
         }
     }
-    Ok(clean(out, ring))
+    if let Some((coord, value)) = pending
+        && !ring.is_zero(&value)
+    {
+        out.push(coord, value);
+    }
+    Ok(out)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Merge {
+pub(super) enum Merge {
     Add,
     Sub,
     Mul,
@@ -223,58 +315,61 @@ pub(crate) enum Merge {
 
 /// `a + b`, `a - b` or the Hadamard product, over the union (resp.
 /// intersection) of the patterns.
-pub(crate) fn merge<T: Clone, Rg: Ring<T>>(
+pub(super) fn merge<T: Clone, Rg: Ring<T>>(
     a: &Entries<T>,
     b: &Entries<T>,
     mode: Merge,
     ring: &mut Rg,
 ) -> R<Entries<T>> {
+    if a.rank != b.rank {
+        return Err(invalid_layout());
+    }
     let mut out = Entries::empty(a.rank);
-    let (mut i, mut j) = (0, 0);
-    while i < a.len() || j < b.len() {
-        let order = if i >= a.len() {
-            Ordering::Greater
-        } else if j >= b.len() {
-            Ordering::Less
-        } else {
-            a.coord(i).cmp(b.coord(j))
+    let mut left = stored_entries(a)?.peekable();
+    let mut right = stored_entries(b)?.peekable();
+    loop {
+        let order = match (left.peek(), right.peek()) {
+            | (Some((a, _)), Some((b, _))) => a.cmp(b),
+            | (Some(_), None) => Ordering::Less,
+            | (None, Some(_)) => Ordering::Greater,
+            | (None, None) => break,
         };
         match order {
             | Ordering::Equal => {
+                let (coord, a) = left.next().ok_or_else(invalid_layout)?;
+                let (_, b) = right.next().ok_or_else(invalid_layout)?;
                 let value = match mode {
-                    | Merge::Add => ring.add(&a.vals[i], &b.vals[j])?,
-                    | Merge::Sub => ring.sub(&a.vals[i], &b.vals[j])?,
-                    | Merge::Mul => ring.mul(&a.vals[i], &b.vals[j])?,
+                    | Merge::Add => ring.add(a, b)?,
+                    | Merge::Sub => ring.sub(a, b)?,
+                    | Merge::Mul => ring.mul(a, b)?,
                 };
-                out.push(a.coord(i), value);
-                i += 1;
-                j += 1;
+                out.push(coord, value);
             },
             | Ordering::Less => {
+                let (coord, value) = left.next().ok_or_else(invalid_layout)?;
                 if mode != Merge::Mul {
-                    out.push(a.coord(i), a.vals[i].clone());
+                    out.push(coord, value.clone());
                 }
-                i += 1;
             },
             | Ordering::Greater => {
+                let (coord, value) = right.next().ok_or_else(invalid_layout)?;
                 if mode != Merge::Mul {
                     let value = if mode == Merge::Sub {
-                        let zero = ring.zero_like(&b.vals[j]);
-                        ring.sub(&zero, &b.vals[j])?
+                        let zero = ring.zero_like(value);
+                        ring.sub(&zero, value)?
                     } else {
-                        b.vals[j].clone()
+                        value.clone()
                     };
-                    out.push(b.coord(j), value);
+                    out.push(coord, value);
                 }
-                j += 1;
             },
         }
     }
-    Ok(clean(out, ring))
+    clean(out, ring)
 }
 
 /// Applies `f` to every stored value; the result is cleaned.
-pub(crate) fn map_values<T: Clone, Rg: Ring<T>>(
+pub(super) fn map_values<T: Clone, Rg: Ring<T>>(
     a: &Entries<T>,
     ring: &mut Rg,
     mut f: impl FnMut(&mut Rg, &T) -> R<T>,
@@ -283,88 +378,149 @@ pub(crate) fn map_values<T: Clone, Rg: Ring<T>>(
     for value in &a.vals {
         vals.push(f(ring, value)?);
     }
-    Ok(clean(
+    clean(
         Entries {
             rank: a.rank,
             coords: a.coords.clone(),
             vals,
         },
         ring,
-    ))
+    )
 }
 
-/// The flat row-major offset of `coord` in `shape`.
-pub(crate) fn flat_index(
+/// The flat row-major offset of an in-bounds coordinate in `shape`.
+pub(super) fn flat_index(
     coord: &[usize],
     shape: &[usize],
-) -> usize {
-    let mut flat = 0usize;
-    for (c, e) in coord.iter().zip(shape) {
-        flat = flat * e + c;
+) -> Option<usize> {
+    if coord.len() != shape.len() {
+        return None;
     }
-    flat
+    coord
+        .iter()
+        .zip(shape)
+        .try_fold(0usize, |flat, (&coordinate, &extent)| {
+            if coordinate >= extent {
+                return None;
+            }
+            flat.checked_mul(extent)?.checked_add(coordinate)
+        })
 }
 
 /// The coordinates of a flat row-major offset.
-pub(crate) fn unflatten(
+pub(super) fn unflatten(
     mut flat: usize,
     shape: &[usize],
     out: &mut [usize],
 ) {
-    for axis in (0..shape.len()).rev() {
-        let extent = shape[axis].max(1);
-        out[axis] = flat % extent;
-        flat /= extent;
+    for (&extent, coordinate) in shape.iter().rev().zip(out.iter_mut().rev()) {
+        // An empty axis contributes zero and leaves the quotient unchanged.
+        if let Some(extent) = std::num::NonZeroUsize::new(extent) {
+            *coordinate = flat % extent;
+            flat /= extent;
+        } else {
+            *coordinate = 0;
+        }
     }
 }
 
 /// `sparse ∘ dense` over the stored entries only.
-pub(crate) fn hadamard_dense<T: Clone, Rg: Ring<T>>(
+pub(super) fn hadamard_dense<T: Clone, Rg: Ring<T>>(
     a: &Entries<T>,
     shape: &[usize],
     dense: &[T],
     ring: &mut Rg,
 ) -> R<Entries<T>> {
     let mut out = Entries::empty(a.rank);
-    for i in 0..a.len() {
-        let value = ring.mul(&a.vals[i], &dense[flat_index(a.coord(i), shape)])?;
-        out.push(a.coord(i), value);
+    for (coord, sparse) in stored_entries(a)? {
+        let rhs = flat_index(coord, shape)
+            .and_then(|offset| dense.get(offset))
+            .ok_or_else(invalid_layout)?;
+        let value = ring.mul(sparse, rhs)?;
+        out.push(coord, value);
     }
-    Ok(clean(out, ring))
+    clean(out, ring)
 }
 
-/// The transpose of a rank-2 entry list (a stable counting sort by column).
-pub(crate) fn transpose<T: Clone>(
+pub(super) fn transpose<T: Clone>(
     a: &Entries<T>,
     cols: usize,
-) -> Entries<T> {
-    let nnz = a.len();
-    let mut start = vec![0usize; cols + 1];
-    for i in 0..nnz {
-        start[a.coord(i)[1] + 1] += 1;
+) -> R<Entries<T>> {
+    if a.rank != 2 || !matches_rank(a) {
+        return Err(invalid_layout());
     }
-    for c in 0..cols {
-        start[c + 1] += start[c];
+    let (coords, _) = a.coords.as_chunks::<2>();
+    if let Some(order) = transpose_order(coords, cols)? {
+        let mut out = Entries::empty(2);
+        out.coords = reserved(a.coords.len())?;
+        out.vals = reserved(a.vals.len())?;
+        for index in order {
+            let &[row, col] = coords.get(index).ok_or_else(invalid_layout)?;
+            let value = a.vals.get(index).ok_or_else(invalid_layout)?;
+            out.push(&[col, row], value.clone());
+        }
+        return Ok(out);
     }
-    let mut coords = vec![0usize; nnz * 2];
-    let mut slots: Vec<Option<T>> = vec![None; nnz];
-    for i in 0..nnz {
-        let c = a.coord(i)[1];
-        let pos = start[c];
-        start[c] += 1;
-        coords[pos * 2] = c;
-        coords[pos * 2 + 1] = a.coord(i)[0];
-        slots[pos] = Some(a.vals[i].clone());
+    let mut transposed = reserved(a.len())?;
+    for (coord, value) in stored_entries(a)? {
+        let [row, col] = coord else {
+            return Err(invalid_layout());
+        };
+        if *col >= cols {
+            return Err(invalid_layout());
+        }
+        transposed.push(([*col, *row], value));
     }
-    Entries {
-        rank: 2,
-        coords,
-        vals: slots.into_iter().flatten().collect(),
+    transposed.sort_unstable_by_key(|(coord, _)| *coord);
+    let mut out = Entries::empty(2);
+    out.coords = reserved(a.coords.len())?;
+    out.vals = reserved(a.vals.len())?;
+    for (coord, value) in transposed {
+        out.push(&coord, value.clone());
     }
+    Ok(out)
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "keep the counting strategy and its scratch bounds together"
+)]
+fn transpose_order(
+    coords: &[[usize; 2]],
+    cols: usize,
+) -> R<Option<Vec<usize>>> {
+    // Canonical source rows yield sorted indices within each destination row.
+    // Bound the column workspace by the number of stored entries.
+    if coords.len() < 64 || cols > coords.len() || coords.array_windows::<2>().any(|[a, b]| a >= b)
+    {
+        return Ok(None);
+    }
+    let Ok(mut starts) = filled(cols, 0_usize) else {
+        return Ok(None);
+    };
+    let Ok(mut order) = filled(coords.len(), 0_usize) else {
+        return Ok(None);
+    };
+    for &[_, col] in coords {
+        let count = starts.get_mut(col).ok_or_else(invalid_layout)?;
+        *count = count.saturating_add(1);
+    }
+    let mut end = 0_usize;
+    for count in &mut starts {
+        let next = end.saturating_add(*count);
+        *count = end;
+        end = next;
+    }
+    for (index, &[_, col]) in coords.iter().enumerate() {
+        let next = starts.get_mut(col).ok_or_else(invalid_layout)?;
+        *order.get_mut(*next).ok_or_else(invalid_layout)? = index;
+        *next = next.saturating_add(1);
+    }
+    Ok(Some(order))
 }
 
 /// CSR arrays of a rank-2 entry list.
-pub(crate) struct Csr<'a, T: Clone> {
+pub(super) struct Csr<'a, T: Clone> {
     pub rows: usize,
     pub cols: usize,
     pub ptr: Cow<'a, [usize]>,
@@ -372,78 +528,157 @@ pub(crate) struct Csr<'a, T: Clone> {
     pub vals: Cow<'a, [T]>,
 }
 
-pub(crate) fn csr_of<T: Clone>(
+impl<T: Clone> Csr<'_, T> {
+    fn row(
+        &self,
+        row: usize,
+    ) -> R<impl Iterator<Item = (usize, &T)>> {
+        let [start, end] = self
+            .ptr
+            .get(row..)
+            .and_then(<[usize]>::first_chunk::<2>)
+            .copied()
+            .ok_or_else(invalid_layout)?;
+        let idx = self.idx.get(start..end).ok_or_else(invalid_layout)?;
+        let vals = self.vals.get(start..end).ok_or_else(invalid_layout)?;
+        Ok(idx.iter().copied().zip(vals))
+    }
+}
+
+fn compressed_layout(
+    rows: usize,
+    cols: usize,
+    ptr: &[usize],
+    idx: &[usize],
+    nvalues: usize,
+) -> R<()> {
+    if rows.checked_add(1) != Some(ptr.len())
+        || ptr.first() != Some(&0)
+        || ptr.last() != Some(&idx.len())
+        || nvalues != idx.len()
+        || ptr.array_windows::<2>().any(|[start, end]| start > end)
+        || idx.iter().any(|&col| col >= cols)
+    {
+        return Err(invalid_layout());
+    }
+    Ok(())
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "converting entries to owned CSR is independent of borrowing existing storage"
+)]
+fn csr_of<T: Clone>(
     e: Entries<T>,
     rows: usize,
     cols: usize,
-) -> Csr<'static, T> {
-    let mut ptr = vec![0usize; rows + 1];
-    let mut idx = Vec::with_capacity(e.len());
-    for i in 0..e.len() {
-        ptr[e.coord(i)[0] + 1] += 1;
-        idx.push(e.coord(i)[1]);
+) -> R<Csr<'static, T>> {
+    if e.rank != 2 || !matches_rank(&e) {
+        return Err(invalid_layout());
     }
-    for r in 0..rows {
-        ptr[r + 1] += ptr[r];
+    let mut ptr = filled(rows.checked_add(1).ok_or_else(shape_overflow)?, 0usize)?;
+    let mut idx = reserved(e.len())?;
+    for [row, col] in e.coords.as_chunks::<2>().0 {
+        if *col >= cols {
+            return Err(invalid_layout());
+        }
+        let count = row
+            .checked_add(1)
+            .and_then(|index| ptr.get_mut(index))
+            .ok_or_else(invalid_layout)?;
+        *count = count.saturating_add(1);
+        idx.push(*col);
     }
-    Csr {
+    let mut cumulative = 0usize;
+    for count in &mut ptr {
+        cumulative = cumulative.saturating_add(*count);
+        *count = cumulative;
+    }
+    Ok(Csr {
         rows,
         cols,
         ptr: Cow::Owned(ptr),
         idx: Cow::Owned(idx),
         vals: Cow::Owned(e.vals),
-    }
+    })
 }
 
-pub(crate) fn entries_of_csr<T: Clone>(csr: &Csr<'_, T>) -> Entries<T> {
-    let mut coords = Vec::with_capacity(csr.idx.len() * 2);
-    for r in 0..csr.rows {
-        for k in csr.ptr[r]..csr.ptr[r + 1] {
-            coords.push(r);
-            coords.push(csr.idx[k]);
+pub(super) fn entries_of_csr<T: Clone>(csr: &Csr<'_, T>) -> R<Entries<T>> {
+    let mut coords = reserved(csr.idx.len().checked_mul(2).ok_or_else(shape_overflow)?)?;
+    for row in 0..csr.rows {
+        for (column, _) in csr.row(row)? {
+            coords.extend([row, column]);
         }
     }
-    Entries {
+    Ok(Entries {
         rank: 2,
         coords,
         vals: csr.vals.to_vec(),
-    }
+    })
 }
 
 /// `A · B` (Gustavson's row-wise algorithm); the result is sorted and cleaned.
-pub(crate) fn spgemm<T: Clone, Rg: Ring<T>>(
+pub(super) fn spgemm<T: Clone, Rg: Ring<T>>(
     a: &Csr<'_, T>,
     b: &Csr<'_, T>,
     ring: &mut Rg,
 ) -> R<Csr<'static, T>> {
-    let mut acc: Vec<Option<T>> = vec![None; b.cols];
-    let mut touched: Vec<usize> = Vec::new();
-    let mut ptr = Vec::with_capacity(a.rows + 1);
+    if a.cols != b.rows {
+        return Err(invalid_layout());
+    }
+    // Keep the direct indexed workspace when its size follows the stored
+    // matrix. Wide logical axes use a map sized by the products they visit.
+    let mut dense = (b.cols <= b.idx.len().saturating_mul(4).max(256))
+        .then(|| filled(b.cols, None).ok())
+        .flatten();
+    let mut touched = Vec::new();
+    let mut sparse = HashMap::new();
+    let mut row = Vec::new();
+    let mut ptr = reserved(a.rows.checked_add(1).ok_or_else(shape_overflow)?)?;
     ptr.push(0);
     let mut idx = Vec::new();
     let mut vals = Vec::new();
     for i in 0..a.rows {
-        for ka in a.ptr[i]..a.ptr[i + 1] {
-            let j = a.idx[ka];
-            for kb in b.ptr[j]..b.ptr[j + 1] {
-                let c = b.idx[kb];
-                let product = ring.mul(&a.vals[ka], &b.vals[kb])?;
-                match &mut acc[c] {
-                    | slot @ None => {
-                        *slot = Some(product);
-                        touched.push(c);
-                    },
-                    | Some(sum) => *sum = ring.add(sum, &product)?,
+        for (j, left) in a.row(i)? {
+            for (column, right) in b.row(j)? {
+                let product = ring.mul(left, right)?;
+                if let Some(dense) = dense.as_mut() {
+                    let slot = dense.get_mut(column).ok_or_else(invalid_layout)?;
+                    if slot.is_none() {
+                        touched.push(column);
+                    }
+                    accumulate(slot, product, ring)?;
+                } else {
+                    match sparse.entry(column) {
+                        | std::collections::hash_map::Entry::Vacant(slot) => {
+                            slot.insert(product);
+                        },
+                        | std::collections::hash_map::Entry::Occupied(mut slot) => {
+                            *slot.get_mut() = ring.add(slot.get(), &product)?;
+                        },
+                    }
                 }
             }
         }
-        touched.sort_unstable();
-        for c in touched.drain(..) {
-            if let Some(value) = acc[c].take()
-                && !ring.is_zero(&value)
-            {
-                idx.push(c);
+        let mut emit = |column, value| {
+            if !ring.is_zero(&value) {
+                idx.push(column);
                 vals.push(value);
+            }
+        };
+        if let Some(dense) = dense.as_mut() {
+            touched.sort_unstable();
+            for &column in &touched {
+                if let Some(value) = dense.get_mut(column).and_then(Option::take) {
+                    emit(column, value);
+                }
+            }
+            touched.clear();
+        } else {
+            row.extend(sparse.drain());
+            row.sort_unstable_by_key(|(column, _)| std::cmp::Reverse(*column));
+            while let Some((column, value)) = row.pop() {
+                emit(column, value);
             }
         }
         ptr.push(idx.len());
@@ -469,22 +704,41 @@ fn accumulate<T: Clone, Rg: Ring<T>>(
     Ok(())
 }
 
+fn dense_row<T>(
+    data: &[T],
+    row: usize,
+    width: usize,
+) -> Option<&[T]> {
+    let start = row.checked_mul(width)?;
+    data.get(start..start.checked_add(width)?)
+}
+
 /// `A · X` for a dense `X` of `n` columns (`n = 1` is the matrix-vector
 /// product); the result is `rows × n`, row-major, `None` where nothing was
 /// accumulated.
-pub(crate) fn spmm<T: Clone, Rg: Ring<T>>(
+#[allow(
+    clippy::single_call_fn,
+    reason = "the generic sparse-dense kernel works with every scalar ring"
+)]
+pub(super) fn spmm<T: Clone, Rg: Ring<T>>(
     a: &Csr<'_, T>,
     x: &[T],
     n: usize,
     ring: &mut Rg,
 ) -> R<Vec<Option<T>>> {
-    let mut out: Vec<Option<T>> = vec![None; a.rows * n];
-    for i in 0..a.rows {
-        for k in a.ptr[i]..a.ptr[i + 1] {
-            let j = a.idx[k];
-            for c in 0..n {
-                let product = ring.mul(&a.vals[k], &x[j * n + c])?;
-                accumulate(&mut out[i * n + c], product, ring)?;
+    if a.cols.checked_mul(n) != Some(x.len()) {
+        return Err(invalid_layout());
+    }
+    let mut out = filled(a.rows.checked_mul(n).ok_or_else(shape_overflow)?, None)?;
+    if out.is_empty() {
+        return Ok(out);
+    }
+    for (i, output) in out.chunks_exact_mut(n).enumerate() {
+        for (j, left) in a.row(i)? {
+            let right = dense_row(x, j, n).ok_or_else(invalid_layout)?;
+            for (slot, item) in output.iter_mut().zip(right) {
+                let product = ring.mul(left, item)?;
+                accumulate(slot, product, ring)?;
             }
         }
     }
@@ -505,23 +759,32 @@ const ROW_BLOCK: usize = 256;
 /// Bit-identical to [`spmm`] with [`FloatRing`] (the first product of an
 /// entry is stored, later ones are added in column order) and to itself under
 /// any thread count: each output row is computed by exactly one work item.
-pub(crate) fn spmm_f64(
+#[allow(
+    clippy::single_call_fn,
+    reason = "the float-specific kernel owns deterministic work partitioning"
+)]
+pub(super) fn spmm_f64(
     a: &Csr<'_, f64>,
     x: &[f64],
     n: usize,
-) -> Vec<Option<f64>> {
+) -> R<Vec<Option<f64>>> {
     use rayon::prelude::*;
-    let mut out: Vec<Option<f64>> = vec![None; a.rows * n];
-    if out.is_empty() {
-        return out;
+    if a.cols.checked_mul(n) != Some(x.len()) {
+        return Err(invalid_layout());
     }
-    let block = |(index, chunk): (usize, &mut [Option<f64>])| {
-        for (local, row_out) in chunk.chunks_mut(n).enumerate() {
-            let i = index * ROW_BLOCK + local;
-            for k in a.ptr[i]..a.ptr[i + 1] {
-                let j = a.idx[k];
-                for (c, slot) in row_out.iter_mut().enumerate() {
-                    let product = a.vals[k] * x[j * n + c];
+    let mut out = filled(a.rows.checked_mul(n).ok_or_else(shape_overflow)?, None)?;
+    if out.is_empty() {
+        return Ok(out);
+    }
+    let block_rows = a.rows.min(ROW_BLOCK);
+    let block_size = block_rows.checked_mul(n).ok_or_else(shape_overflow)?;
+    let block = |(index, chunk): (usize, &mut [Option<f64>])| -> Option<()> {
+        let first = index.checked_mul(block_rows)?;
+        for (i, row_out) in (first..).zip(chunk.chunks_exact_mut(n)) {
+            for (j, left) in a.row(i).ok()? {
+                let right = dense_row(x, j, n)?;
+                for (slot, item) in row_out.iter_mut().zip(right) {
+                    let product = left * item;
                     *slot = Some(match *slot {
                         | None => product,
                         | Some(sum) => sum + product,
@@ -529,15 +792,22 @@ pub(crate) fn spmm_f64(
                 }
             }
         }
+        Some(())
     };
-    if a.vals.len().saturating_mul(n) >= PARALLEL_WORK {
-        out.par_chunks_mut(ROW_BLOCK * n)
+    if aevia_rssn::execution::should_split(a.vals.len().saturating_mul(n), PARALLEL_WORK)
+        && a.rows > block_rows
+    {
+        out.par_chunks_mut(block_size)
             .enumerate()
-            .for_each(block);
+            .try_for_each(block)
+            .ok_or_else(invalid_layout)?;
     } else {
-        out.chunks_mut(ROW_BLOCK * n).enumerate().for_each(block);
+        out.chunks_mut(block_size)
+            .enumerate()
+            .try_for_each(block)
+            .ok_or_else(invalid_layout)?;
     }
-    out
+    Ok(out)
 }
 
 /// `A · X` for a block-CSR `A` (`ptr`/`idx` over blocks, `vals` row-major
@@ -546,7 +816,11 @@ pub(crate) fn spmm_f64(
 /// The padding zeros inside a block are skipped, and every output entry
 /// accumulates its products in column order, so the result is bit-identical
 /// to the CSR kernel [`spmm`] with the `f64` ring.
-pub(crate) fn bsr_spmm_f64(
+#[allow(
+    clippy::single_call_fn,
+    reason = "the block kernel owns its block addressing and work partitioning"
+)]
+pub(super) fn bsr_spmm_f64(
     ptr: &[usize],
     idx: &[usize],
     vals: &[f64],
@@ -554,57 +828,116 @@ pub(crate) fn bsr_spmm_f64(
     rows: usize,
     x: &[f64],
     n: usize,
-) -> Vec<f64> {
+) -> R<Vec<f64>> {
     use rayon::prelude::*;
     let (br, bc) = block;
-    let bs = br * bc;
-    let mut out = vec![0.0; rows * n];
-    if out.is_empty() {
-        return out;
+    if br == 0 || bc == 0 || !rows.is_multiple_of(br) {
+        return Err(invalid_layout());
     }
-    // One work item per block row: it owns `br` output rows outright.
-    let block_row = |(ib, chunk): (usize, &mut [f64])| {
-        for (r, row) in chunk.chunks_mut(n).enumerate() {
-            for k in ptr[ib]..ptr[ib + 1] {
-                for c in 0..bc {
-                    let v = vals[k * bs + r * bc + c];
-                    if v != 0.0 {
-                        let xr = &x[(idx[k] * bc + c) * n..(idx[k] * bc + c + 1) * n];
-                        for (o, xv) in row.iter_mut().zip(xr) {
-                            *o += v * xv;
+    let bs = br.checked_mul(bc).ok_or_else(shape_overflow)?;
+    if idx.len().checked_mul(bs) != Some(vals.len()) {
+        return Err(invalid_layout());
+    }
+    let block_rows = rows.checked_div(br).ok_or_else(invalid_layout)?;
+    if n == 0 {
+        compressed_layout(block_rows, usize::MAX, ptr, idx, idx.len())?;
+        return if x.is_empty() {
+            Ok(Vec::new())
+        } else {
+            Err(invalid_layout())
+        };
+    }
+    if !x.len().is_multiple_of(n) {
+        return Err(invalid_layout());
+    }
+    let x_rows = x.len().checked_div(n).ok_or_else(invalid_layout)?;
+    if !x_rows.is_multiple_of(bc) {
+        return Err(invalid_layout());
+    }
+    let block_cols = x_rows.checked_div(bc).ok_or_else(invalid_layout)?;
+    compressed_layout(block_rows, block_cols, ptr, idx, idx.len())?;
+
+    let mut out = filled(rows.checked_mul(n).ok_or_else(shape_overflow)?, 0.0)?;
+    if out.is_empty() {
+        return Ok(out);
+    }
+    // One work item per block row. It owns all `br` output rows.
+    let block_size = br.checked_mul(n).ok_or_else(shape_overflow)?;
+    let block_row = |(ib, chunk): (usize, &mut [f64])| -> Option<()> {
+        let [start, end] = ptr
+            .get(ib..)
+            .and_then(<[usize]>::first_chunk::<2>)
+            .copied()?;
+        let (start_value, end_value) = (start.checked_mul(bs)?, end.checked_mul(bs)?);
+        let columns = idx.get(start..end)?;
+        let blocks = vals.get(start_value..end_value)?;
+        for (r, row) in chunk.chunks_exact_mut(n).enumerate() {
+            let mut first_product = true;
+            for (&column, block_vals) in columns.iter().zip(blocks.chunks_exact(bs)) {
+                let stored_row = dense_row(block_vals, r, bc)?;
+                let first = column.checked_mul(bc)?;
+                for (c, &value) in (first..).zip(stored_row) {
+                    if value != 0.0 {
+                        let xr = dense_row(x, c, n)?;
+                        if first_product {
+                            // Like CSR, store the first product directly so
+                            // a negative-zero product keeps its sign.
+                            for (out, item) in row.iter_mut().zip(xr) {
+                                *out = value * item;
+                            }
+                            first_product = false;
+                        } else {
+                            for (out, item) in row.iter_mut().zip(xr) {
+                                *out += value * item;
+                            }
                         }
                     }
                 }
             }
         }
+        Some(())
     };
-    if vals.len().saturating_mul(n) >= PARALLEL_WORK {
-        out.par_chunks_mut(br * n).enumerate().for_each(block_row);
+    if aevia_rssn::execution::should_split(vals.len().saturating_mul(n), PARALLEL_WORK)
+        && block_rows > 1
+    {
+        out.par_chunks_mut(block_size)
+            .enumerate()
+            .try_for_each(block_row)
+            .ok_or_else(invalid_layout)?;
     } else {
-        out.chunks_mut(br * n).enumerate().for_each(block_row);
+        out.chunks_mut(block_size)
+            .enumerate()
+            .try_for_each(block_row)
+            .ok_or_else(invalid_layout)?;
     }
-    out
+    Ok(out)
 }
 
 /// `X · B` for a dense `X` of `p` rows (`p = 1` is vector-matrix).
-pub(crate) fn dense_spmm<T: Clone, Rg: Ring<T>>(
-    x: &[T],
-    p: usize,
-    b: &Csr<'_, T>,
+pub(super) fn dense_spmm<T: Clone, Rg: Ring<T>>(
+    data: &[T],
+    rows: usize,
+    right: &Csr<'_, T>,
     ring: &mut Rg,
 ) -> R<Vec<Option<T>>> {
-    let k = b.rows;
-    let n = b.cols;
-    let mut out: Vec<Option<T>> = vec![None; p * n];
-    for r in 0..p {
-        for kk in 0..k {
-            let xv = &x[r * k + kk];
-            if ring.is_zero(xv) {
+    let inner = right.rows;
+    let columns = right.cols;
+    if rows.checked_mul(inner) != Some(data.len()) {
+        return Err(invalid_layout());
+    }
+    let mut out = filled(rows.checked_mul(columns).ok_or_else(shape_overflow)?, None)?;
+    if out.is_empty() || inner == 0 {
+        return Ok(out);
+    }
+    for (source, output) in data.chunks_exact(inner).zip(out.chunks_exact_mut(columns)) {
+        for (inner_index, source_value) in source.iter().enumerate() {
+            if ring.is_zero(source_value) {
                 continue;
             }
-            for kb in b.ptr[kk]..b.ptr[kk + 1] {
-                let product = ring.mul(xv, &b.vals[kb])?;
-                accumulate(&mut out[r * n + b.idx[kb]], product, ring)?;
+            for (column, sparse_value) in right.row(inner_index)? {
+                let product = ring.mul(source_value, sparse_value)?;
+                let slot = output.get_mut(column).ok_or_else(invalid_layout)?;
+                accumulate(slot, product, ring)?;
             }
         }
     }
@@ -612,33 +945,38 @@ pub(crate) fn dense_spmm<T: Clone, Rg: Ring<T>>(
 }
 
 /// `A ⊗ B` as a CSR matrix.
-pub(crate) fn kron<T: Clone, Rg: Ring<T>>(
+pub(super) fn kron<T: Clone, Rg: Ring<T>>(
     a: &Csr<'_, T>,
     b: &Csr<'_, T>,
     ring: &mut Rg,
 ) -> R<Csr<'static, T>> {
-    let rows = a.rows * b.rows;
-    let mut ptr = Vec::with_capacity(rows + 1);
+    let rows = a.rows.checked_mul(b.rows).ok_or_else(shape_overflow)?;
+    let cols = a.cols.checked_mul(b.cols).ok_or_else(shape_overflow)?;
+    let mut ptr = reserved(rows.checked_add(1).ok_or_else(shape_overflow)?)?;
     ptr.push(0);
     let mut idx = Vec::new();
     let mut vals = Vec::new();
-    for i in 0..a.rows {
-        for p in 0..b.rows {
-            for ka in a.ptr[i]..a.ptr[i + 1] {
-                for kb in b.ptr[p]..b.ptr[p + 1] {
-                    let value = ring.mul(&a.vals[ka], &b.vals[kb])?;
-                    if !ring.is_zero(&value) {
-                        idx.push(a.idx[ka] * b.cols + b.idx[kb]);
-                        vals.push(value);
+    if rows != 0 {
+        for i in 0..a.rows {
+            for p in 0..b.rows {
+                for (a_column, left) in a.row(i)? {
+                    let first = a_column.checked_mul(b.cols).ok_or_else(shape_overflow)?;
+                    for (b_column, right) in b.row(p)? {
+                        let value = ring.mul(left, right)?;
+                        if !ring.is_zero(&value) {
+                            let column = first.checked_add(b_column).ok_or_else(shape_overflow)?;
+                            idx.push(column);
+                            vals.push(value);
+                        }
                     }
                 }
+                ptr.push(idx.len());
             }
-            ptr.push(idx.len());
         }
     }
     Ok(Csr {
         rows,
-        cols: a.cols * b.cols,
+        cols,
         ptr: Cow::Owned(ptr),
         idx: Cow::Owned(idx),
         vals: Cow::Owned(vals),
@@ -646,7 +984,7 @@ pub(crate) fn kron<T: Clone, Rg: Ring<T>>(
 }
 
 /// The sum of every stored entry (`None` for an empty list).
-pub(crate) fn sum_all<T: Clone, Rg: Ring<T>>(
+pub(super) fn sum_all<T: Clone, Rg: Ring<T>>(
     a: &Entries<T>,
     ring: &mut Rg,
 ) -> R<Option<T>> {
@@ -659,27 +997,45 @@ pub(crate) fn sum_all<T: Clone, Rg: Ring<T>>(
 
 /// The sum over `axis`, keeping the axis with extent 1, as a dense row-major
 /// buffer of `shape` with `shape[axis] = 1`.
-pub(crate) fn sum_axis<T: Clone, Rg: Ring<T>>(
+pub(super) fn sum_axis<T: Clone, Rg: Ring<T>>(
     a: &Entries<T>,
     shape: &[usize],
     axis: usize,
     ring: &mut Rg,
 ) -> R<Vec<Option<T>>> {
     let mut reduced = shape.to_vec();
-    reduced[axis] = 1;
-    let count: usize = reduced.iter().product();
-    let mut out: Vec<Option<T>> = vec![None; count];
-    let mut coord = vec![0usize; shape.len()];
-    for i in 0..a.len() {
-        coord.copy_from_slice(a.coord(i));
-        coord[axis] = 0;
-        accumulate(
-            &mut out[flat_index(&coord, &reduced)],
-            a.vals[i].clone(),
-            ring,
-        )?;
+    *reduced.get_mut(axis).ok_or_else(invalid_layout)? = 1;
+    let count = crate::value::checked_element_count(&reduced).ok_or_else(shape_overflow)?;
+    let mut out = filled(count, None)?;
+    for (coord, value) in stored_entries(a)? {
+        let mut flat = 0usize;
+        if coord.len() != shape.len() {
+            return Err(invalid_layout());
+        }
+        for (i, (&coordinate, &extent)) in coord.iter().zip(shape).enumerate() {
+            if coordinate >= extent {
+                return Err(invalid_layout());
+            }
+            if i != axis {
+                flat = flat
+                    .checked_mul(extent)
+                    .and_then(|base| base.checked_add(coordinate))
+                    .ok_or_else(shape_overflow)?;
+            }
+        }
+        let slot = out.get_mut(flat).ok_or_else(invalid_layout)?;
+        accumulate(slot, value.clone(), ring)?;
     }
     Ok(out)
+}
+
+fn select_axes(
+    coord: &[usize],
+    axes: &[usize],
+) -> R<Vec<usize>> {
+    axes.iter()
+        .map(|&axis| coord.get(axis).copied().ok_or_else(invalid_layout))
+        .collect()
 }
 
 /// The pairwise contraction of two sparse tensors (a sparse `tensordot`).
@@ -687,35 +1043,36 @@ pub(crate) fn sum_axis<T: Clone, Rg: Ring<T>>(
 /// The result's axes are the free axes of `a`, in order, then the free axes
 /// of `b`, in order. Entries are accumulated in a sorted map, so the result
 /// is sorted and duplicate-free; zeros are dropped.
-pub(crate) fn contract<T: Clone, Rg: Ring<T>>(
+pub(super) fn contract<T: Clone, Rg: Ring<T>>(
     a: &Entries<T>,
     b: &Entries<T>,
     axes_a: &[usize],
     axes_b: &[usize],
     ring: &mut Rg,
 ) -> R<Entries<T>> {
+    if axes_a.len() != axes_b.len()
+        || axes_a.iter().any(|&axis| axis >= a.rank)
+        || axes_b.iter().any(|&axis| axis >= b.rank)
+    {
+        return Err(invalid_layout());
+    }
     let free_a: Vec<usize> = (0..a.rank).filter(|x| !axes_a.contains(x)).collect();
     let free_b: Vec<usize> = (0..b.rank).filter(|x| !axes_b.contains(x)).collect();
-    let mut groups: HashMap<Vec<usize>, Vec<(Vec<usize>, T)>> = HashMap::new();
-    for j in 0..b.len() {
-        let coord = b.coord(j);
-        let key: Vec<usize> = axes_b.iter().map(|x| coord[*x]).collect();
-        let free: Vec<usize> = free_b.iter().map(|x| coord[*x]).collect();
-        groups
-            .entry(key)
-            .or_default()
-            .push((free, b.vals[j].clone()));
+    let mut groups: HashMap<Vec<usize>, Vec<(Vec<usize>, &T)>> = HashMap::new();
+    for (coord, value) in stored_entries(b)? {
+        let key = select_axes(coord, axes_b)?;
+        let free = select_axes(coord, &free_b)?;
+        groups.entry(key).or_default().push((free, value));
     }
     let mut result: BTreeMap<Vec<usize>, T> = BTreeMap::new();
-    for i in 0..a.len() {
-        let coord = a.coord(i);
-        let key: Vec<usize> = axes_a.iter().map(|x| coord[*x]).collect();
+    for (coord, left) in stored_entries(a)? {
+        let key = select_axes(coord, axes_a)?;
         let Some(matches) = groups.get(&key) else {
             continue;
         };
-        let free: Vec<usize> = free_a.iter().map(|x| coord[*x]).collect();
+        let free = select_axes(coord, &free_a)?;
         for (free_other, value) in matches {
-            let product = ring.mul(&a.vals[i], value)?;
+            let product = ring.mul(left, value)?;
             let mut target = free.clone();
             target.extend_from_slice(free_other);
             match result.get_mut(&target) {
@@ -726,11 +1083,16 @@ pub(crate) fn contract<T: Clone, Rg: Ring<T>>(
             }
         }
     }
-    let mut out = Entries::empty(free_a.len() + free_b.len());
+    let mut out = Entries::empty(
+        free_a
+            .len()
+            .checked_add(free_b.len())
+            .ok_or_else(shape_overflow)?,
+    );
     for (coord, value) in result {
         out.push(&coord, value);
     }
-    Ok(clean(out, ring))
+    clean(out, ring)
 }
 
 /// Direct solution of `A x = b` by Gaussian elimination on sparse rows, for
@@ -740,54 +1102,61 @@ pub(crate) fn contract<T: Clone, Rg: Ring<T>>(
 /// Pivoting picks, among the rows with a nonzero in the current column, the
 /// one with the fewest stored entries (Markowitz-style, to limit fill).
 /// Returns `Ok(None)` when the matrix is singular.
-pub(crate) fn solve_elimination<T: Clone, Rg: Ring<T>>(
+#[allow(
+    clippy::single_call_fn,
+    reason = "pivoting and substitution form a scalar-generic solver"
+)]
+pub(super) fn solve_elimination<T: Clone, Rg: Ring<T>>(
     a: &Csr<'_, T>,
     b: &[T],
     ring: &mut Rg,
 ) -> R<Option<Vec<T>>> {
     let n = a.rows;
-    let mut rows: Vec<BTreeMap<usize, T>> = (0..n)
-        .map(|r| {
-            (a.ptr[r]..a.ptr[r + 1])
-                .map(|k| (a.idx[k], a.vals[k].clone()))
-                .collect()
-        })
-        .collect();
-    let mut rhs: Vec<T> = b.to_vec();
+    if a.cols != n || b.len() != n {
+        return Err(invalid_layout());
+    }
+    let mut rows = reserved(n)?;
+    for r in 0..n {
+        let row: BTreeMap<_, _> = a
+            .row(r)?
+            .map(|(column, value)| (column, value.clone()))
+            .collect();
+        rows.push(row);
+    }
+    let mut rhs = b.to_vec();
     for col in 0..n {
-        let mut pivot: Option<usize> = None;
-        for r in col..n {
-            if rows[r].get(&col).is_some_and(|v| !ring.is_zero(v))
-                && pivot.is_none_or(|p| rows[r].len() < rows[p].len())
-            {
-                pivot = Some(r);
-            }
-        }
-        let Some(p) = pivot else {
+        let pivot = rows
+            .iter()
+            .enumerate()
+            .skip(col)
+            .filter(|(_, row)| row.get(&col).is_some_and(|v| !ring.is_zero(v)))
+            .min_by_key(|(_, row)| row.len())
+            .map(|(position, _)| position);
+        let Some(pivot) = pivot else {
             return Ok(None);
         };
-        rows.swap(col, p);
-        rhs.swap(col, p);
-        let pivot_row: Vec<(usize, T)> = rows[col]
-            .iter()
-            .filter(|(c, _)| **c > col)
-            .map(|(c, v)| (*c, v.clone()))
-            .collect();
-        let pivot_value = rows[col][&col].clone();
-        let pivot_rhs = rhs[col].clone();
-        for r in col + 1..n {
-            let Some(entry) = rows[r].get(&col).cloned() else {
+        rows.swap(col, pivot);
+        rhs.swap(col, pivot);
+        let (row, trailing) = rows
+            .get_mut(col..)
+            .and_then(<[_]>::split_first_mut)
+            .ok_or_else(invalid_layout)?;
+        let (pivot_rhs, trailing_rhs) = rhs
+            .get_mut(col..)
+            .and_then(<[_]>::split_first_mut)
+            .ok_or_else(invalid_layout)?;
+        let pivot_value = row.get(&col).ok_or_else(invalid_layout)?;
+        for (other, other_rhs) in trailing.iter_mut().zip(trailing_rhs) {
+            let Some(entry) = other.remove(&col) else {
                 continue;
             };
             if ring.is_zero(&entry) {
-                rows[r].remove(&col);
                 continue;
             }
-            let factor = ring.div(&entry, &pivot_value)?;
-            rows[r].remove(&col);
-            for (c, v) in &pivot_row {
+            let factor = ring.div(&entry, pivot_value)?;
+            for (c, v) in row.iter().filter(|(c, _)| **c > col) {
                 let scaled = ring.mul(&factor, v)?;
-                let updated = match rows[r].get(c) {
+                let updated = match other.get(c) {
                     | Some(existing) => ring.sub(existing, &scaled)?,
                     | None => {
                         let zero = ring.zero_like(&scaled);
@@ -795,32 +1164,33 @@ pub(crate) fn solve_elimination<T: Clone, Rg: Ring<T>>(
                     },
                 };
                 if ring.is_zero(&updated) {
-                    rows[r].remove(c);
+                    other.remove(c);
                 } else {
-                    rows[r].insert(*c, updated);
+                    other.insert(*c, updated);
                 }
             }
-            let scaled = ring.mul(&factor, &pivot_rhs)?;
-            rhs[r] = ring.sub(&rhs[r], &scaled)?;
+            let scaled = ring.mul(&factor, pivot_rhs)?;
+            *other_rhs = ring.sub(other_rhs, &scaled)?;
         }
     }
-    let mut x: Vec<Option<T>> = vec![None; n];
-    for r in (0..n).rev() {
-        let mut value = rhs[r].clone();
-        for (c, v) in rows[r].iter().filter(|(c, _)| **c > r) {
-            let Some(xc) = &x[*c] else {
+    let mut x = filled(n, None)?;
+    for (r, (row, rhs)) in rows.iter().zip(&rhs).enumerate().rev() {
+        let mut value = rhs.clone();
+        for (c, v) in row.iter().filter(|(c, _)| **c > r) {
+            let Some(xc) = x.get(*c).ok_or_else(invalid_layout)? else {
                 continue;
             };
             let product = ring.mul(v, xc)?;
             value = ring.sub(&value, &product)?;
         }
-        x[r] = Some(ring.div(&value, &rows[r][&r])?);
+        let pivot = row.get(&r).ok_or_else(invalid_layout)?;
+        *x.get_mut(r).ok_or_else(invalid_layout)? = Some(ring.div(&value, pivot)?);
     }
     Ok(Some(x.into_iter().flatten().collect()))
 }
 
 /// A zero error for kernels that need a stored value class they do not have.
-pub(crate) fn class_error(span: Span) -> EvalError {
+pub(super) fn class_error(span: Span) -> EvalError {
     err(
         "E0809",
         "internal error: the sparse storage class does not match the kernel",
@@ -829,11 +1199,13 @@ pub(crate) fn class_error(span: Span) -> EvalError {
 }
 
 /// Borrow the typed CSR arrays of a `Csr`-format tensor, or build them.
-pub(crate) fn csr_parts<'a, T: Store>(
-    data: &'a super::SparseData,
+pub(super) fn csr_parts<T: Store>(
+    data: &super::SparseData,
     span: Span,
-) -> R<Csr<'a, T>> {
-    if data.rank() != 2 {
+) -> R<Csr<'_, T>> {
+    use super::Pattern;
+    use super::SparseFormat;
+    let [rows, cols] = data.shape.as_slice() else {
         return Err(err(
             "E0802",
             format!(
@@ -842,19 +1214,235 @@ pub(crate) fn csr_parts<'a, T: Store>(
             ),
             span,
         ));
-    }
-    if let (super::SparseFormat::Csr, super::Pattern::Compressed { ptr, idx }) =
-        (data.format, &data.pattern)
-    {
-        let vals = T::view(&data.values).ok_or_else(|| class_error(span))?;
-        return Ok(Csr {
-            rows: data.shape[0],
-            cols: data.shape[1],
-            ptr: Cow::Borrowed(ptr),
-            idx: Cow::Borrowed(idx),
-            vals: Cow::Borrowed(vals),
-        });
+    };
+    let [rows, cols] = [*rows, *cols];
+    let stored = T::view(&data.values).ok_or_else(|| class_error(span))?;
+    let malformed = || invalid_layout().at(span);
+    match (data.format, &data.pattern) {
+        | (SparseFormat::Csr, Pattern::Compressed { ptr, idx }) => {
+            compressed_layout(rows, cols, ptr, idx, stored.len())
+                .map_err(|error| error.at(span))?;
+            return Ok(Csr {
+                rows,
+                cols,
+                ptr: Cow::Borrowed(ptr),
+                idx: Cow::Borrowed(idx),
+                vals: Cow::Borrowed(stored),
+            });
+        },
+        | (SparseFormat::Csc, Pattern::Compressed { ptr, idx }) => {
+            compressed_layout(cols, rows, ptr, idx, stored.len())
+                .map_err(|error| error.at(span))?;
+        },
+        | (SparseFormat::Coo, Pattern::Coords(coords)) => {
+            if stored.len().checked_mul(2) != Some(coords.len())
+                || coords
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .any(|[row, col]| *row >= rows || *col >= cols)
+            {
+                return Err(malformed());
+            }
+        },
+        | (SparseFormat::Bcsr, Pattern::Blocked { ptr, idx }) => {
+            let (br, bc) = data.block;
+            if br == 0
+                || bc == 0
+                || !rows.is_multiple_of(br)
+                || !cols.is_multiple_of(bc)
+                || idx
+                    .len()
+                    .checked_mul(br)
+                    .and_then(|count| count.checked_mul(bc))
+                    != Some(stored.len())
+            {
+                return Err(malformed());
+            }
+            let block_rows = rows.checked_div(br).ok_or_else(malformed)?;
+            let block_cols = cols.checked_div(bc).ok_or_else(malformed)?;
+            compressed_layout(block_rows, block_cols, ptr, idx, idx.len())
+                .map_err(|error| error.at(span))?;
+        },
+        | _ => return Err(malformed()),
     }
     let entries = data.entries::<T>().ok_or_else(|| class_error(span))?;
-    Ok(csr_of(entries, data.shape[0], data.shape[1]))
+    csr_of(entries, rows, cols).map_err(|error| error.at(span))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counted_transpose_matches_sorted_transpose_with_exact_ieee_payloads() -> R<()> {
+        let mut floats = Entries::empty(2);
+        let mut integers = Entries::empty(2);
+        for row in 0..32_usize {
+            for col in 0..8_usize {
+                if (row + col) % 3 == 0 {
+                    continue;
+                }
+                let value = match (row + col) % 4 {
+                    | 0 => -0.0,
+                    | 1 => f64::from_bits(0x7ff8_0000_0000_0050),
+                    | 2 => f64::INFINITY,
+                    | _ => 1.25,
+                };
+                floats.push(&[row, col], value);
+                integers.push(&[row, col], u128::MAX - (row * 8 + col) as u128);
+            }
+        }
+        let coords = floats.coords.as_chunks::<2>().0;
+        assert!(transpose_order(coords, 8)?.is_some());
+        assert!(transpose_order(coords, usize::MAX)?.is_none());
+        let counted = transpose(&floats, 8)?;
+        let sorted = transpose(&floats, usize::MAX)?;
+        assert_eq!(counted.coords, sorted.coords);
+        assert!(
+            counted
+                .vals
+                .into_iter()
+                .zip(sorted.vals)
+                .all(|(a, b)| a.to_bits() == b.to_bits())
+        );
+
+        let counted = transpose(&integers, 8)?;
+        let sorted = transpose(&integers, usize::MAX)?;
+        assert_eq!(counted.coords, sorted.coords);
+        assert_eq!(counted.vals, sorted.vals);
+        Ok(())
+    }
+
+    #[test]
+    fn transpose_preserves_noncanonical_order_fallback_and_invalid_layout_errors() -> R<()> {
+        let empty = transpose(&Entries::<f64>::empty(2), 0)?;
+        assert!(empty.coords.is_empty() && empty.vals.is_empty());
+        let mut entries = Entries::empty(2);
+        for row in 1..65_usize {
+            entries.push(&[row, row % 8], row);
+        }
+        entries.push(&[0, 0], 99);
+        let order = transpose_order(entries.coords.as_chunks::<2>().0, 8)?;
+        assert!(order.is_none());
+        let fallback = transpose(&entries, 8)?;
+        assert_eq!(fallback.coords.get(..2), Some([0, 0].as_slice()));
+        assert_eq!(fallback.vals.first(), Some(&99));
+
+        let mut malformed = Entries::empty(2);
+        for row in 0..65_usize {
+            malformed.push(&[row, 8], row);
+        }
+        assert_eq!(
+            transpose(&malformed, 8).err().map(|error| error.code),
+            Some("E0802")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn flat_offsets_reject_wrong_rank_bounds_and_overflow() {
+        assert_eq!(flat_index(&[1, 2], &[2, 3]), Some(5));
+        assert_eq!(flat_index(&[1], &[2, 3]), None);
+        assert_eq!(flat_index(&[0], &[0]), None);
+        assert_eq!(flat_index(&[0, 3], &[2, 3]), None);
+        assert_eq!(flat_index(&[usize::MAX - 1, 1], &[usize::MAX, 2]), None);
+    }
+
+    #[test]
+    fn sparse_workspace_follows_stored_nonzeros_on_wide_axes() -> R<()> {
+        let last = usize::MAX - 1;
+        let left = csr_of(assemble(2, &[0, 0], vec![2.0], &mut FloatRing)?, 1, 1)?;
+        let right_entries = assemble(2, &[0, last], vec![3.0], &mut FloatRing)?;
+        let transposed = transpose(&right_entries, usize::MAX)?;
+        assert_eq!(transposed.coords, [last, 0]);
+        assert_eq!(transposed.vals, [3.0]);
+        let right = csr_of(right_entries, 1, usize::MAX)?;
+        let product = spgemm(&left, &right, &mut FloatRing)?;
+        assert_eq!(product.cols, usize::MAX);
+        let entries = entries_of_csr(&product)?;
+        assert_eq!(entries.coords, [0, last]);
+        assert_eq!(entries.vals, [6.0]);
+
+        let right = csr_of(assemble(2, &[0, 1], vec![4.0], &mut FloatRing)?, 1, 2)?;
+        let entries = entries_of_csr(&spgemm(&left, &right, &mut FloatRing)?)?;
+        assert_eq!(entries.coords, [0, 1]);
+        assert_eq!(entries.vals, [8.0]);
+        Ok(())
+    }
+
+    #[test]
+    fn sparse_products_report_malformed_layouts_before_dereferencing() -> R<()> {
+        let matrix = csr_of(assemble(2, &[0, 0], vec![2.0], &mut FloatRing)?, 1, 1)?;
+        let serial = spmm(&matrix, &[3.0, -0.0], 2, &mut FloatRing)?;
+        let specialized = spmm_f64(&matrix, &[3.0, -0.0], 2)?;
+        assert_eq!(serial, specialized);
+        assert_eq!(
+            specialized.last().copied().flatten().map(f64::to_bits),
+            Some((-0.0f64).to_bits()),
+        );
+        let blocked = bsr_spmm_f64(&[0, 1], &[0], &[2.0], (1, 1), 1, &[3.0, -0.0], 2)?;
+        assert!(
+            blocked
+                .into_iter()
+                .zip(specialized)
+                .all(|(bcsr, csr)| Some(bcsr.to_bits()) == csr.map(f64::to_bits))
+        );
+        assert_eq!(
+            spmm_f64(&matrix, &[], 1).err().map(|error| error.code),
+            Some("E0802")
+        );
+        assert_eq!(
+            bsr_spmm_f64(&[0, 2], &[0], &[1.0], (1, 1), 1, &[1.0], 1)
+                .err()
+                .map(|error| error.code),
+            Some("E0802"),
+        );
+        assert_eq!(
+            bsr_spmm_f64(
+                &[0, 1],
+                &[0],
+                &[2.0, 0.0, 0.0, 3.0],
+                (2, 2),
+                2,
+                &[4.0, 5.0],
+                1
+            )?,
+            [8.0, 15.0],
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mutable_host_shape_and_block_metadata_are_validated() -> R<()> {
+        let make = |format| -> R<super::super::SparseData> {
+            let entries = assemble(2, &[0, 0], vec![1.0], &mut FloatRing)?;
+            super::super::SparseData::from_entries(
+                format,
+                vec![1, 1],
+                aevia_dim::Dim::one(),
+                None,
+                2,
+                entries,
+            )
+            .map_err(|message| EvalError::new("E0802", message))
+        };
+        let mut csr = make(super::super::SparseFormat::Csr)?;
+        csr.shape = vec![usize::MAX, 1];
+        let mut blocked = make(super::super::SparseFormat::Bcsr)?;
+        blocked.block = (0, 1);
+        assert_eq!(
+            csr_parts::<f64>(&csr, Span::default())
+                .err()
+                .map(|error| error.code),
+            Some("E0802")
+        );
+        assert_eq!(
+            csr_parts::<f64>(&blocked, Span::default())
+                .err()
+                .map(|error| error.code),
+            Some("E0802")
+        );
+        Ok(())
+    }
 }

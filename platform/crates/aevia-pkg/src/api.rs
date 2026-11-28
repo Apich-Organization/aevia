@@ -59,6 +59,10 @@ pub struct PublishAccepted {
     /// The transparency-log entry the publish appended.
     #[serde(default)]
     pub log: Option<LogPosition>,
+    /// Policy warnings returned by the server (e.g. preferring `OpenPGP` +
+    /// hardware keys over SSH).
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 /// A position in the transparency log.
@@ -107,6 +111,10 @@ pub struct DeviceStart {
     /// How often to poll, in seconds.
     #[serde(default)]
     pub interval: u64,
+    /// Policy warnings returned by the server (e.g. preferring `OpenPGP` +
+    /// hardware keys over SSH).
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 impl DeviceStart {
@@ -164,6 +172,10 @@ impl Client {
     /// A usage error when the URL cannot be parsed or the TLS backend cannot be
     /// initialised, both of which are configuration mistakes rather than
     /// transient failures.
+    #[allow(
+        clippy::single_call_fn,
+        reason = "client setup validates the base URL and installs the registry transport defaults"
+    )]
     pub fn new(base: &str) -> Result<Self, CliError> {
         let base = base.trim().trim_end_matches('/').to_string();
         if !base.starts_with("http://") && !base.starts_with("https://") {
@@ -587,6 +599,10 @@ struct ErrorBody {
 /// The fallback matters: a reverse proxy in front of the registry answers with
 /// HTML, and "the registry answered 502" plus a line of that HTML is far more
 /// actionable than a JSON parse error.
+#[allow(
+    clippy::single_call_fn,
+    reason = "proxy errors and registry error documents use separate decoding rules"
+)]
 fn server_error(
     status: u16,
     body: &str,
@@ -616,37 +632,39 @@ fn server_error(
 /// A boundary that appeared in the payload would split the upload in the wrong
 /// place; the chance is vanishingly small, but checking costs one scan and
 /// removes the question.
+#[allow(
+    clippy::single_call_fn,
+    reason = "multipart boundaries must remain absent from the uploaded archive"
+)]
 fn multipart_boundary(archive: &[u8]) -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_nanos())
-        .unwrap_or(0);
+        .map_or(0, |elapsed| elapsed.as_nanos());
     let mut boundary = format!("aevia-pkg-{}-{nanos}", std::process::id());
-    while contains(archive, boundary.as_bytes()) {
+    while archive
+        .windows(boundary.len())
+        .any(|window| window == boundary.as_bytes())
+    {
         boundary.push('x');
     }
     boundary
 }
 
-fn contains(
-    haystack: &[u8],
-    needle: &[u8],
-) -> bool {
-    if needle.is_empty() || haystack.len() < needle.len() {
-        return false;
-    }
-    haystack
-        .windows(needle.len())
-        .any(|window| window == needle)
-}
-
 /// Assembles the two-part `multipart/form-data` body.
+#[allow(
+    clippy::single_call_fn,
+    reason = "multipart part names and their binary framing form a single wire contract"
+)]
 fn multipart_body(
     boundary: &str,
     envelope: &str,
     archive: &[u8],
 ) -> Vec<u8> {
-    let mut body = Vec::with_capacity(archive.len() + envelope.len() + 512);
+    let capacity = archive
+        .len()
+        .saturating_add(envelope.len())
+        .saturating_add(512);
+    let mut body = Vec::with_capacity(capacity);
     body.extend_from_slice(
         format!(
             "--{boundary}\r\n\
@@ -706,7 +724,11 @@ mod tests {
     fn a_boundary_that_occurs_in_the_archive_is_extended() {
         let archive = b"aevia-pkg-1-2";
         let boundary = multipart_boundary(archive);
-        assert!(!contains(archive, boundary.as_bytes()));
+        assert!(
+            !archive
+                .windows(boundary.len())
+                .any(|window| window == boundary.as_bytes())
+        );
     }
 
     #[test]
@@ -724,6 +746,7 @@ mod tests {
             verification_uri: "https://aevia.apich.org/activate".to_string(),
             expires_at: String::new(),
             interval: 0,
+            warnings: Vec::new(),
         };
         assert_eq!(start.interval(), Duration::from_secs(5));
     }

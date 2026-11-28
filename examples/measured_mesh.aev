@@ -1,0 +1,25 @@
+## Measure a triangle and a tetrahedral mesh from coordinates in metres.
+import Rssn_numerical_vector as Mesh
+
+let planar = [[0.0 m, 0.0 m], [2.0 m, 0.0 m], [0.0 m, 3.0 m]]
+
+let triangles = Mesh.num_meshgen_delaunay_2d_incremental(planar)
+
+let areas = Mesh.num_meshgen_triangle_areas(planar, triangles)
+
+let coordinates = [[0.0 m, 0.0 m, 0.0 m], [2.0 m, 0.0 m, 0.0 m], [0.0 m, 3.0 m, 0.0 m], [0.0 m, 0.0 m, 1.0 m], [0.0 m, 0.0 m, -2.0 m]]
+
+let tetrahedra = [[0, 1, 2, 3], [0, 2, 1, 4]]
+
+let volumes = Mesh.num_meshgen_tetra_volumes(coordinates, tetrahedra)
+
+let boundary = Mesh.num_meshgen_boundary_faces(tetrahedra)
+
+fn main(): IO Unit = do
+    println("Triangle areas: {areas}")
+    println("Tetrahedron volumes: {volumes}")
+    println("Oriented boundary faces: {boundary}")
+
+test "triangle area retains square metres" = areas == [3.0 m^2]
+
+test "tetrahedron volumes retain cubic metres and input order" = volumes == [1.0 m^3, 2.0 m^3]

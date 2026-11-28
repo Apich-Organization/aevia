@@ -1,0 +1,30 @@
+## Structural CSR multiplication, transpose and regularized least squares.
+import Rssn_Numeric as N
+
+let a: N.CsrMatrix<Float[Length]> = { rows = 2, cols = 3, indptr = [0, 2, 3], indices = [0, 2, 1], values = [1.0 m, 2.0 m, 3.0 m] }
+
+let b: N.CsrMatrix<Float[Time]> = { rows = 3, cols = 2, indptr = [0, 2, 3, 4], indices = [0, 1, 0, 1], values = [4.0 s, 1.0 s, 5.0 s, 6.0 s] }
+
+let one_column: N.CsrMatrix<Float[Length]> = { rows = 2, cols = 1, indptr = [0, 1, 1], indices = [0], values = [2.0 m] }
+
+test "transpose preserves shape and measured sparse entries" =
+    match N.csr_transpose(a) with
+    | Err(_) -> false
+    | Ok(t) -> t.rows == 3 && t.cols == 2 && t.indices == [0, 1, 0] && t.values == [1.0 m, 3.0 m, 2.0 m]
+
+test "sparse and dense rectangular products produce the same measured entries" =
+    match N.csr_matmul_sparse(a, b) with
+    | Err(_) -> false
+    | Ok(sparse) -> match N.csr_matmul_dense(a, [[4.0 s, 1.0 s], [5.0 s, 0.0 s], [0.0 s, 6.0 s]]) with
+        | Err(_) -> false
+        | Ok(dense) -> sparse.values[0] == dense[0, 0] && sparse.values[1] == dense[0, 1] && sparse.values[2] == dense[1, 0]
+
+test "damped LSQR returns a converged measured solution" =
+    match N.csr_lsqr(one_column, [6.0 s, 8.0 s], 1.0 m, 1e-12, 50) with
+    | Err(_) -> false
+    | Ok(solution) -> solution.converged && abs(solution.x[0] * 1.0 m / 1.0 s - 2.4) < 1e-12 && solution.residual > 0.8
+
+test "invalid row pointers return an operator error" =
+    match N.csr_transpose({ rows = 1, cols = 1, indptr = [0, 2], indices = [0], values = [1.0 m] }) with
+    | Err(_) -> true
+    | Ok(_) -> false

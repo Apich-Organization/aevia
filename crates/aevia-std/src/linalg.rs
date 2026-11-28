@@ -2,54 +2,139 @@
 //!
 //! Matrices are row-major `&[f64]` with an explicit row and column count.
 //!
-//! The `f64` kernels — `matmul`, `det`, `inv`, `solve`, `lu`, `qr` — run on
-//! [`faer`](https://codeberg.org/sarah-quinones/faer), which is a blocked,
-//! optionally parallel BLAS/LAPACK-class backend; [`legacy`] holds the code
-//! they replaced (`nalgebra` for the factorisations, a triple loop for
-//! `matmul`) and is what answers a shape `faer` cannot express.
-//!
-//! `eig`, `eigvals`, `svd`, `lstsq` and `cholesky` are still `nalgebra`'s.
-//! They are iterative and were not in scope for the backend change; moving
-//! them would have to be justified by a measurement of its own.
+//! Floating-point arithmetic and factorizations run in [`rssn::kernels::dense`].
+//! This module validates and marshals Aevia's shapes and complex values. The
+//! optimized determinant/solve/product family retains its blocked faer backend
+//! in RSSN; eigendecompositions and SVD use RSSN's shared implementations.
 //!
 //! Where exactness matters the path does not come near either float backend:
 //! `lu_exact` and `qr_exact` run over `BigRational` so an exact matrix keeps an
 //! exact decomposition, which is the promise `Scalar<ρ,d>` makes when `ρ` is
-//! `Real`. Nothing in this module accepts an exact value — every entry point
-//! takes `&[f64]`, so a `Real` matrix cannot reach `faer` at all.
+//! `Real`. The rational adapters delegate to RSSN's exact dense module;
+//! floating-point adapters accept only `&[f64]`.
 //!
-//! `svd` is the *economy* decomposition: `u` is `rows × k`, `s` has `k` entries
-//! and `vt` is `k × cols` with `k = min(rows, cols)`, so `a = u diag(s) vt`
-//! exactly. A full square `u` would need `rows - k` extra columns that carry no
-//! information about `a`.
+//! `svd` returns economy factors. For `k = min(rows, cols)`, `u` is `rows × k`,
+//! `s` has `k` entries and `vt` is `k × cols`. Their product `u diag(s) vt`
+//! reconstructs the matrix up to floating-point error.
 
 use crate::Complex;
 use crate::NumericError;
 use num_rational::BigRational;
+#[cfg(test)]
 use num_traits::One;
-use num_traits::Signed;
 use num_traits::Zero;
+use std::alloc::Layout;
 
-mod faer_backend;
+pub use rssn::kernels::contractions::ContractionError;
+pub use rssn::kernels::contractions::contract_rectangular;
+
+mod extended;
 pub mod legacy;
 
-use legacy::matrix;
-use legacy::vector;
+pub use extended::MatrixNorm;
+pub use extended::cond;
+pub use extended::cond_norm;
+pub use extended::eigvals_generalized;
+pub use extended::expm;
+pub use extended::logm;
+pub use extended::lyapunov;
+pub use extended::norm;
+pub use extended::pinv;
+pub use extended::pinv_tol;
+pub use extended::qr_pivoted;
+pub use extended::qz;
+pub use extended::schur;
+pub use extended::sqrtm;
+pub use extended::sylvester;
 
-/// `true` when a dimension is empty, in which case `faer` asserts instead of
-/// answering and [`legacy`] answers.
-fn empty(
+#[cfg(test)]
+use legacy::matrix;
+use rssn::kernels::dense;
+use rssn::kernels::dense::optimized;
+
+fn dense_error(error: dense::DenseError) -> NumericError {
+    match error {
+        | dense::DenseError::Cancelled => NumericError::Cancelled,
+        | dense::DenseError::Shape => {
+            NumericError::ShapeMismatch("incompatible dense matrix dimensions".into())
+        },
+        | dense::DenseError::Singular => NumericError::Singular,
+        | dense::DenseError::NoConvergence => NumericError::NotConverged,
+        | dense::DenseError::NonFinite => {
+            NumericError::Domain("dense operation requires finite inputs".into())
+        },
+    }
+}
+
+fn check_storage<T>(
     rows: usize,
     cols: usize,
-) -> bool {
-    rows == 0 || cols == 0
+    matrix: &[T],
+) -> Result<(), NumericError> {
+    if rows.checked_mul(cols) == Some(matrix.len()) {
+        Ok(())
+    } else {
+        Err(NumericError::ShapeMismatch(
+            "matrix shape does not match storage".into(),
+        ))
+    }
+}
+
+fn output_len<T>(
+    rows: usize,
+    cols: usize,
+) -> Result<usize, NumericError> {
+    rows.checked_mul(cols)
+        .filter(|count| Layout::array::<T>(*count).is_ok())
+        .ok_or_else(|| {
+            NumericError::ShapeMismatch(format!("{rows}x{cols} result storage is too large"))
+        })
+}
+
+fn filled<T: Clone>(
+    count: usize,
+    value: T,
+) -> Result<Vec<T>, NumericError> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(count)
+        .map_err(|_| NumericError::ShapeMismatch("dense result storage is too large".into()))?;
+    out.resize(count, value);
+    Ok(out)
+}
+
+fn check_float_input(
+    rows: usize,
+    cols: usize,
+    a: &[f64],
+) -> Result<(), NumericError> {
+    check_storage(rows, cols, a)?;
+    if a.iter().any(|v| !v.is_finite()) {
+        return Err(NumericError::Domain(
+            "matrix contains non-finite entries".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn kernel_matrix(
+    rows: usize,
+    cols: usize,
+    a: &[f64],
+) -> Result<dense::Mat, NumericError> {
+    check_float_input(rows, cols, a)?;
+    Ok(dense::Mat {
+        rows,
+        cols,
+        data: a.to_vec(),
+    })
 }
 
 /// The determinant of a square matrix.
 ///
 /// # Errors
 ///
-/// [`NumericError::NotSquare`] when the matrix is not square.
+/// [`NumericError::NotSquare`] for a non-square matrix, [`NumericError::ShapeMismatch`]
+/// for inconsistent storage, or [`NumericError::Domain`] for non-finite entries.
 pub fn det(
     rows: usize,
     cols: usize,
@@ -58,17 +143,15 @@ pub fn det(
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
-    if rows == 0 {
-        return legacy::det(rows, cols, a);
-    }
-    faer_backend::det(rows, cols, a)
+    optimized::det(rows, cols, a).map_err(dense_error)
 }
 
 /// The inverse of a square matrix.
 ///
 /// # Errors
 ///
-/// [`NumericError::Singular`] when it has none.
+/// [`NumericError::Singular`] when the matrix has no inverse. The same shape
+/// and finite-input checks as [`det`] apply.
 pub fn inv(
     rows: usize,
     cols: usize,
@@ -77,17 +160,15 @@ pub fn inv(
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
-    if rows == 0 {
-        return legacy::inv(rows, cols, a);
-    }
-    faer_backend::inv(rows, cols, a)
+    optimized::inv(rows, cols, a).map_err(dense_error)
 }
 
 /// Solves `A x = b` for a square `A`.
 ///
 /// # Errors
 ///
-/// [`NumericError::Singular`] when the system has no unique solution.
+/// [`NumericError::Singular`] when the system has no unique solution. The
+/// shape and finite-input checks apply to both operands.
 pub fn solve(
     rows: usize,
     cols: usize,
@@ -97,27 +178,20 @@ pub fn solve(
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
-    if rows == 0 {
-        return legacy::solve(rows, cols, a, b);
-    }
-    faer_backend::solve(rows, cols, a, b)
+    optimized::solve(rows, cols, a, b).map_err(dense_error)
 }
 
 /// The product of a `rows × inner` matrix and an `inner × cols` one.
 ///
-/// The runtime's `@` still runs [`legacy::matmul`], which is the same loop it
-/// has always run; this is the backend that operator can be moved onto. The
-/// two do **not** agree bit for bit — `faer` blocks the inner loop, and
-/// reassociating a sum changes its last bits — so a caller that needs the old
-/// bits has to ask for them.
-///
-/// A zero extent answers zeros rather than failing; the runtime's own `@`
-/// declines a zero inner extent before it gets here.
+/// The dense matrix `@` fast path uses this blocked `faer` product.
+/// [`legacy::matmul`] preserves sequential floating-point accumulation when the
+/// accumulation order matters. A zero inner extent produces a zero-filled
+/// matrix, and a zero output extent produces an empty buffer.
 ///
 /// # Errors
 ///
-/// [`NumericError::ShapeMismatch`] when either operand's length is not
-/// `rows * inner` or `inner * cols`.
+/// [`NumericError::ShapeMismatch`] for inconsistent or unrepresentable storage,
+/// and [`NumericError::Domain`] for non-finite entries.
 pub fn matmul(
     rows: usize,
     inner: usize,
@@ -125,43 +199,37 @@ pub fn matmul(
     a: &[f64],
     b: &[f64],
 ) -> Result<Vec<f64>, NumericError> {
-    if empty(rows, cols) || inner == 0 {
-        if rows * inner != a.len() || inner * cols != b.len() {
-            return Err(NumericError::ShapeMismatch(format!(
-                "{rows}x{inner} times {inner}x{cols} needs {} and {} elements, found {} and {}",
-                rows * inner,
-                inner * cols,
-                a.len(),
-                b.len()
-            )));
-        }
-        return Ok(legacy::matmul(rows, inner, cols, a, b));
+    let count = output_len::<f64>(rows, cols)?;
+    if rows == 0 || inner == 0 || cols == 0 {
+        check_float_input(rows, inner, a)?;
+        check_float_input(inner, cols, b)?;
+        return filled(count, 0.0);
     }
-    faer_backend::matmul(rows, inner, cols, a, b)
+    optimized::matmul(rows, inner, cols, a, b).map_err(dense_error)
 }
 
 /// The minimum-norm least-squares solution of `A x = b` (§8.4).
 ///
-/// `lstsq` is defined for a matrix of any shape: a tall matrix has one
-/// least-squares answer, a wide one has infinitely many and this returns the
-/// one of smallest norm, which is what the pseudo-inverse gives.
+/// The thin SVD selects the minimum-norm solution for rectangular or
+/// rank-deficient systems. Singular values at or below `1e-12` are discarded.
 ///
 /// # Errors
 ///
-/// [`NumericError::ShapeMismatch`] when `b` does not have `rows` entries.
+/// Inconsistent or unrepresentable storage, non-finite input, or failure of
+/// the factorization to converge.
 pub fn lstsq(
     rows: usize,
     cols: usize,
     a: &[f64],
     b: &[f64],
 ) -> Result<Vec<f64>, NumericError> {
-    let matrix = matrix(rows, cols, a)?;
-    let rhs = vector(rows, b)?;
-    let svd = matrix.svd(true, true);
-    let solution = svd
-        .solve(&rhs, 1e-12)
-        .map_err(|_| NumericError::NotConverged)?;
-    Ok(solution.as_slice().to_vec())
+    let count = output_len::<f64>(cols, 1)?;
+    if rows == 0 || cols == 0 {
+        check_float_input(rows, cols, a)?;
+        check_float_input(rows, 1, b)?;
+        return filled(count, 0.0);
+    }
+    optimized::lstsq(rows, cols, a, b).map_err(dense_error)
 }
 
 /// The eigenvalues and eigenvectors of a square matrix.
@@ -182,22 +250,29 @@ pub fn eig(
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
-    let matrix = matrix(rows, cols, a)?;
-    let values: Vec<Complex> = matrix
-        .complex_eigenvalues()
-        .into_iter()
-        .map(|value| Complex::new(value.re, value.im))
-        .collect();
-    if values.len() != rows {
-        return Err(NumericError::NotConverged);
+    let count = output_len::<Complex>(rows, cols)?;
+    let result = dense::eigen(&kernel_matrix(rows, cols, a)?).map_err(dense_error)?;
+    // Marshal RSSN's per-column eigenvectors into Aevia's row-major matrix.
+    if result.values.len() != rows
+        || result.vectors.len() != cols
+        || result.vectors.iter().any(|vector| vector.len() != rows)
+    {
+        return Err(NumericError::ShapeMismatch(
+            "unexpected eigenvector matrix shape".into(),
+        ));
     }
-    let mut vectors = vec![Complex::default(); rows * rows];
-    for (column, value) in values.iter().enumerate() {
-        let vector = eigenvector(rows, a, *value)?;
-        for row in 0..rows {
-            vectors[row * rows + column] = vector[row];
+    let mut vectors = filled(count, Complex::default())?;
+    for (column, vector) in result.vectors.into_iter().enumerate() {
+        for (row, value) in vectors.chunks_exact_mut(cols.max(1)).zip(vector) {
+            let cell = row.get_mut(column).ok_or(NumericError::NotConverged)?;
+            *cell = Complex::new(value.re, value.im);
         }
     }
+    let values = result
+        .values
+        .into_iter()
+        .map(|(re, im)| Complex::new(re, im))
+        .collect();
     Ok((values, vectors))
 }
 
@@ -214,109 +289,11 @@ pub fn eigvals(
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
-    Ok(matrix(rows, cols, a)?
-        .complex_eigenvalues()
+    Ok(dense::eigenvalues(&kernel_matrix(rows, cols, a)?)
+        .map_err(dense_error)?
         .into_iter()
-        .map(|value| Complex::new(value.re, value.im))
+        .map(|(re, im)| Complex::new(re, im))
         .collect())
-}
-
-/// An eigenvector for `lambda`, from the null space of `A - lambda I`.
-///
-/// The null space is found by complex Gaussian elimination: the reduced matrix
-/// has a free column (the eigenvalue makes it singular), the free variable is
-/// set to one and the rest is back-substituted. When rounding leaves the matrix
-/// non-singular the answer falls back to the last basis vector, which is a
-/// legitimate (if uninteresting) representative and keeps the shape promise.
-fn eigenvector(
-    n: usize,
-    a: &[f64],
-    lambda: Complex,
-) -> Result<Vec<Complex>, NumericError> {
-    let mut m: Vec<Vec<Complex>> = (0..n)
-        .map(|row| {
-            (0..n)
-                .map(|column| {
-                    let entry = a[row * n + column];
-                    if row == column {
-                        Complex::new(entry - lambda.re, -lambda.im)
-                    } else {
-                        Complex::new(entry, 0.0)
-                    }
-                })
-                .collect()
-        })
-        .collect();
-    // Row echelon form with partial pivoting by modulus.
-    let mut pivot_of_row = vec![usize::MAX; n];
-    let mut row = 0;
-    for column in 0..n {
-        let mut best = row;
-        for candidate in row..n {
-            if m[candidate][column].abs() > m[best][column].abs() {
-                best = candidate;
-            }
-        }
-        if m[best][column].abs() < 1e-12 {
-            continue;
-        }
-        m.swap(row, best);
-        let pivot = m[row][column];
-        for inner in column..n {
-            m[row][inner] = m[row][inner].div(pivot);
-        }
-        for other in 0..n {
-            if other == row {
-                continue;
-            }
-            let factor = m[other][column];
-            if factor.abs() == 0.0 {
-                continue;
-            }
-            for inner in column..n {
-                let term = factor.mul(m[row][inner]);
-                m[other][inner] =
-                    Complex::new(m[other][inner].re - term.re, m[other][inner].im - term.im);
-            }
-        }
-        pivot_of_row[row] = column;
-        row += 1;
-        if row == n {
-            break;
-        }
-    }
-    let taken: Vec<usize> = pivot_of_row
-        .iter()
-        .copied()
-        .filter(|&c| c != usize::MAX)
-        .collect();
-    let free = (0..n).find(|column| !taken.contains(column));
-    let Some(free) = free else {
-        // No free column: numerical noise. Any vector is as good as another.
-        let mut vector = vec![Complex::default(); n];
-        vector[n - 1] = Complex::new(1.0, 0.0);
-        return Ok(vector);
-    };
-    let mut vector = vec![Complex::default(); n];
-    vector[free] = Complex::new(1.0, 0.0);
-    for (row, &column) in pivot_of_row.iter().enumerate() {
-        if column == usize::MAX {
-            continue;
-        }
-        vector[column] = Complex::new(-m[row][free].re, -m[row][free].im);
-    }
-    // Normalise so that the vectors of a matrix are comparable across runs.
-    let norm = vector
-        .iter()
-        .map(|value| value.re * value.re + value.im * value.im)
-        .sum::<f64>()
-        .sqrt();
-    if norm > 0.0 {
-        for value in &mut vector {
-            *value = Complex::new(value.re / norm, value.im / norm);
-        }
-    }
-    Ok(vector)
 }
 
 /// The economy singular value decomposition (§8.4).
@@ -332,26 +309,12 @@ pub fn svd(
     cols: usize,
     a: &[f64],
 ) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>), NumericError> {
-    let matrix = matrix(rows, cols, a)?;
-    let k = rows.min(cols);
-    let svd = matrix.svd(true, true);
-    let u = svd.u.ok_or(NumericError::NotConverged)?;
-    let vt = svd.v_t.ok_or(NumericError::NotConverged)?;
-    // `nalgebra` returns the thin factors; make the shape promise explicit.
-    let mut u_out = vec![0.0; rows * k];
-    for row in 0..rows {
-        for column in 0..k.min(u.ncols()) {
-            u_out[row * k + column] = u[(row, column)];
-        }
+    if rows == 0 || cols == 0 {
+        check_storage(rows, cols, a)?;
+        return Ok((Vec::new(), Vec::new(), Vec::new()));
     }
-    let mut vt_out = vec![0.0; k * cols];
-    for row in 0..k.min(vt.nrows()) {
-        for column in 0..cols {
-            vt_out[row * cols + column] = vt[(row, column)];
-        }
-    }
-    let s: Vec<f64> = svd.singular_values.iter().copied().collect();
-    Ok((u_out, s, vt_out))
+    let factors = dense::svd(&kernel_matrix(rows, cols, a)?).map_err(dense_error)?;
+    Ok((factors.u.data, factors.s, factors.v.transpose().data))
 }
 
 /// The QR decomposition `A = Q R` with `Q` orthonormal.
@@ -361,16 +324,34 @@ pub fn svd(
 ///
 /// # Errors
 ///
-/// [`NumericError::NotConverged`] when the decomposition fails.
+/// [`NumericError::ShapeMismatch`] for inconsistent or unrepresentable
+/// storage, and [`NumericError::Domain`] for non-finite entries.
 pub fn qr(
     rows: usize,
     cols: usize,
     a: &[f64],
 ) -> Result<(Vec<f64>, Vec<f64>), NumericError> {
-    if empty(rows, cols) {
-        return legacy::qr(rows, cols, a);
+    let count = output_len::<f64>(rows, rows)?;
+    if rows == 0 || cols == 0 {
+        return empty_qr(rows, cols, a, count);
     }
-    faer_backend::qr(rows, cols, a)
+    optimized::qr(rows, cols, a).map_err(dense_error)
+}
+
+fn empty_qr(
+    rows: usize,
+    cols: usize,
+    a: &[f64],
+    count: usize,
+) -> Result<(Vec<f64>, Vec<f64>), NumericError> {
+    check_storage(rows, cols, a)?;
+    let mut q = filled(count, 0.0)?;
+    for (index, row) in q.chunks_exact_mut(rows.max(1)).enumerate() {
+        if let Some(diagonal) = row.get_mut(index) {
+            *diagonal = 1.0;
+        }
+    }
+    Ok((q, Vec::new()))
 }
 
 /// The LU decomposition with partial pivoting: `P A = L U`.
@@ -386,17 +367,16 @@ pub fn lu(
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
-    if rows == 0 {
-        return legacy::lu(rows, cols, a);
-    }
-    faer_backend::lu(rows, cols, a)
+    optimized::lu(rows, cols, a).map_err(dense_error)
 }
 
-/// The lower-triangular Cholesky factor `L` with `A = L Lᵀ`.
+/// The Cholesky factor `L` of the symmetric matrix represented by the input's
+/// lower triangle. For symmetric `A`, `A = L Lᵀ`.
 ///
 /// # Errors
 ///
-/// [`NumericError::NotPositiveDefinite`] when `A` is not positive definite.
+/// [`NumericError::NotPositiveDefinite`] when the lower triangle represents a
+/// matrix that is not positive definite. The input must be square and finite.
 pub fn cholesky(
     rows: usize,
     cols: usize,
@@ -405,204 +385,90 @@ pub fn cholesky(
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
-    let matrix = matrix(rows, cols, a)?;
-    let factor = matrix.cholesky().ok_or(NumericError::NotPositiveDefinite)?;
-    let l = factor.l();
-    let mut out = vec![0.0; rows * rows];
-    for row in 0..rows {
-        for column in 0..rows {
-            out[row * rows + column] = l[(row, column)];
-        }
-    }
-    Ok(out)
+    dense::cholesky(&kernel_matrix(rows, cols, a)?)
+        .map(|factor| factor.data)
+        .map_err(|error| {
+            match error {
+                | dense::DenseError::Singular => NumericError::NotPositiveDefinite,
+                | other => dense_error(other),
+            }
+        })
 }
 
-/// The lower triangle of a matrix, the rest zeroed.
+/// The lower triangle of a matrix, with the remaining entries zeroed.
+/// Inconsistent dimensions return an empty buffer.
 #[must_use]
 pub fn tril(
     rows: usize,
     cols: usize,
     a: &[f64],
 ) -> Vec<f64> {
-    let mut out = vec![0.0; a.len()];
-    for row in 0..rows {
-        for column in 0..cols.min(row + 1) {
-            out[row * cols + column] = a[row * cols + column];
-        }
+    if a.is_empty() || check_storage(rows, cols, a).is_err() {
+        return Vec::new();
     }
-    out
+    dense::reference::tril(rows, cols, a)
 }
 
-/// The upper triangle of a matrix, the rest zeroed.
+/// The upper triangle of a matrix, with the remaining entries zeroed.
+/// Inconsistent dimensions return an empty buffer.
 #[must_use]
 pub fn triu(
     rows: usize,
     cols: usize,
     a: &[f64],
 ) -> Vec<f64> {
-    let mut out = vec![0.0; a.len()];
-    for row in 0..rows {
-        for column in row..cols {
-            out[row * cols + column] = a[row * cols + column];
-        }
+    if a.is_empty() || check_storage(rows, cols, a).is_err() {
+        return Vec::new();
     }
-    out
+    dense::reference::triu(rows, cols, a)
 }
 
 // ----- exact decompositions ------------------------------------------------
 
 /// An exact LU decomposition with partial pivoting: `P A = L U`.
 ///
-/// Exactness is the point: `lu([[1,2],[3,4]])` answers rationals, and a
-/// singular matrix is reported rather than turned into `inf`.
+/// RSSN owns the exact rational arithmetic and returns valid factors even for
+/// singular matrices with zero pivots.
 ///
 /// # Errors
 ///
-/// [`NumericError::NotSquare`] when the matrix is not square.
+/// [`NumericError::ShapeMismatch`] for inconsistent or overflowing dimensions.
 pub fn lu_exact(
     n: usize,
     a: &[BigRational],
 ) -> Result<(Vec<BigRational>, Vec<BigRational>, Vec<BigRational>), NumericError> {
-    if n * n != a.len() {
-        return Err(NumericError::ShapeMismatch(format!(
-            "{n}x{n} needs {} elements, found {}",
-            n * n,
-            a.len()
-        )));
-    }
-    let mut u: Vec<BigRational> = a.to_vec();
-    let mut l = vec![BigRational::zero(); n * n];
-    let mut p = vec![BigRational::zero(); n * n];
-    for index in 0..n {
-        l[index * n + index] = BigRational::one();
-        p[index * n + index] = BigRational::one();
-    }
-    for column in 0..n {
-        let mut pivot = column;
-        while pivot < n && u[pivot * n + column].is_zero() {
-            pivot += 1;
-        }
-        if pivot == n {
-            // Singular: no pivot in this column. Continue with the identity,
-            // which is what an exact `L U` of a singular matrix is.
-            continue;
-        }
-        if pivot != column {
-            for inner in 0..n {
-                u.swap(pivot * n + inner, column * n + inner);
-                p.swap(pivot * n + inner, column * n + inner);
-            }
-            for inner in 0..column {
-                l.swap(pivot * n + inner, column * n + inner);
-            }
-        }
-        let lead = u[column * n + column].clone();
-        for row in column + 1..n {
-            let factor = u[row * n + column].clone() / &lead;
-            l[row * n + column] = factor.clone();
-            for inner in column..n {
-                let term = factor.clone() * u[column * n + inner].clone();
-                u[row * n + inner] -= term;
-            }
-        }
-    }
-    Ok((p, l, u))
+    dense::exact::lu_exact(n, a).map_err(exact_error)
 }
 
-/// An exact QR decomposition by modified Gram-Schmidt.
+/// Exact rational QR in row-major storage, with `Q` of shape `rows × rows`
+/// and `R` of shape `rows × cols`. Nonzero columns of `Q` are orthonormal.
+/// Unused columns of `Q` are zero.
 ///
 /// # Errors
-///
-/// [`NumericError::ShapeMismatch`] when the matrix is not `rows × cols`.
+/// Invalid dimensions or a norm requiring irrational arithmetic.
 pub fn qr_exact(
     rows: usize,
     cols: usize,
     a: &[BigRational],
 ) -> Result<(Vec<BigRational>, Vec<BigRational>), NumericError> {
-    if rows * cols != a.len() {
-        return Err(NumericError::ShapeMismatch(format!(
-            "{rows}x{cols} needs {} elements, found {}",
-            rows * cols,
-            a.len()
-        )));
+    let count = output_len::<BigRational>(rows, rows)?;
+    if rows == 0 || cols == 0 {
+        check_storage(rows, cols, a)?;
+        return Ok((filled(count, BigRational::zero())?, Vec::new()));
     }
-    let mut q = vec![BigRational::zero(); rows * rows];
-    let mut r = vec![BigRational::zero(); rows * cols];
-    for column in 0..cols {
-        let mut v: Vec<BigRational> = (0..rows)
-            .map(|row| a[row * cols + column].clone())
-            .collect();
-        for inner in 0..column.min(rows) {
-            let mut dot = BigRational::zero();
-            for row in 0..rows {
-                dot += q[row * rows + inner].clone() * v[row].clone();
-            }
-            r[inner * cols + column] = dot.clone();
-            for row in 0..rows {
-                let term = dot.clone() * q[row * rows + inner].clone();
-                v[row] -= term;
-            }
-        }
-        let norm = v.iter().fold(BigRational::zero(), |acc, value| {
-            acc + value.clone() * value.clone()
-        });
-        if norm.is_zero() {
-            continue;
-        }
-        let Some(length) = exact_sqrt(&norm) else {
-            return Err(NumericError::Domain(
-                "an exact QR of this matrix needs an irrational square root".to_string(),
-            ));
-        };
-        r[column * cols + column] = length.clone();
-        if column < rows {
-            for row in 0..rows {
-                q[row * rows + column] = v[row].clone() / &length;
-            }
-        }
-    }
-    Ok((q, r))
+    dense::exact::qr_exact(rows, cols, a).map_err(exact_error)
 }
 
 /// The exact square root of a non-negative rational, when it has one.
 #[must_use]
 pub fn exact_sqrt(value: &BigRational) -> Option<BigRational> {
-    if value.is_negative() {
-        return None;
-    }
-    let numerator = integer_sqrt(value.numer())?;
-    let denominator = integer_sqrt(value.denom())?;
-    Some(BigRational::new(numerator, denominator))
+    dense::exact::exact_sqrt(value)
 }
 
-/// The integer square root, when the argument is a perfect square.
-fn integer_sqrt(value: &num_bigint::BigInt) -> Option<num_bigint::BigInt> {
-    use num_bigint::BigInt;
-    use num_traits::ToPrimitive;
-    if value.is_zero() {
-        return Some(BigInt::zero());
-    }
-    if value.is_negative() {
-        return None;
-    }
-    // Newton's method on integers: exact, and it never needs a float that
-    // cannot hold the value.
-    let mut guess: BigInt = {
-        let bits = value.bits();
-        BigInt::one() << ((bits as usize).div_ceil(2))
-    };
-    loop {
-        let next = (&guess + value / &guess) >> 1;
-        if next >= guess {
-            break;
-        }
-        guess = next;
-    }
-    if &guess * &guess == *value {
-        let _ = guess.to_u64();
-        Some(guess)
-    } else {
-        None
+fn exact_error(error: dense::exact::ExactError) -> NumericError {
+    match error {
+        | dense::exact::ExactError::Shape => NumericError::ShapeMismatch(error.to_string()),
+        | dense::exact::ExactError::IrrationalNorm => NumericError::Domain(error.to_string()),
     }
 }
 
@@ -636,6 +502,44 @@ mod tests {
                 unit * 8.0 - 4.0 + 0.25
             })
             .collect()
+    }
+
+    #[test]
+    fn empty_inputs_do_not_hide_overflowing_output_shapes() {
+        assert!(matmul(usize::MAX, 0, 2, &[], &[]).is_err());
+        assert!(qr(usize::MAX, 0, &[]).is_err());
+    }
+
+    #[test]
+    fn empty_inputs_check_output_byte_capacity() {
+        let max_floats = isize::MAX.unsigned_abs() / size_of::<f64>();
+        let too_many_rows = 1 << (usize::BITS / 2 - 1);
+        for result in [
+            matmul(max_floats + 1, 0, 1, &[], &[]).map(|_| ()),
+            lstsq(0, max_floats + 1, &[], &[]).map(|_| ()),
+            qr(too_many_rows, 0, &[]).map(|_| ()),
+            qr_exact(too_many_rows, 0, &[]).map(|_| ()),
+            legacy::qr(too_many_rows, 0, &[]).map(|_| ()),
+        ] {
+            assert!(matches!(result, Err(NumericError::ShapeMismatch(_))));
+        }
+    }
+
+    #[test]
+    fn empty_outputs_skip_unused_extents() {
+        assert_eq!(matmul(0, usize::MAX, 0, &[], &[]), Ok(vec![]));
+        assert_eq!(svd(0, usize::MAX, &[]), Ok((vec![], vec![], vec![])));
+        assert_eq!(qr_exact(0, usize::MAX, &[]), Ok((vec![], vec![])));
+        assert_eq!(qr(2, 0, &[]), Ok((vec![1.0, 0.0, 0.0, 1.0], vec![])));
+        assert_eq!(lstsq(0, 3, &[], &[]), Ok(vec![0.0; 3]));
+        assert!(tril(usize::MAX, 0, &[]).is_empty());
+    }
+
+    #[test]
+    fn compatibility_buffers_reject_inconsistent_storage() {
+        assert!(tril(2, 2, &[1.0]).is_empty());
+        assert!(triu(2, 2, &[1.0]).is_empty());
+        assert!(legacy::matmul(2, 2, 2, &[1.0], &[1.0; 4]).is_empty());
     }
 
     #[test]
@@ -804,6 +708,41 @@ mod tests {
         assert_eq!(exact_sqrt(&BigRational::from_integer(2.into())), None);
     }
 
+    #[test]
+    fn exact_kernel_handles_dependent_wide_columns_and_large_squares() {
+        let data: Vec<_> = [0, 3, 0, 0, 0, 4]
+            .into_iter()
+            .map(|value| BigRational::from_integer(value.into()))
+            .collect();
+        let (q, r) = qr_exact(2, 3, &data).unwrap();
+        for row in 0..2 {
+            for column in 0..3 {
+                let rebuilt = (0..2)
+                    .map(|k| &q[row * 2 + k] * &r[k * 3 + column])
+                    .fold(BigRational::from_integer(0.into()), |a, b| a + b);
+                assert_eq!(rebuilt, data[row * 3 + column]);
+            }
+        }
+        let root = num_bigint::BigInt::one() << 200;
+        assert_eq!(
+            exact_sqrt(&BigRational::from_integer(&root * &root)),
+            Some(BigRational::from_integer(root))
+        );
+        assert!(lu_exact(usize::MAX, &[]).is_err());
+        assert!(qr_exact(usize::MAX, 0, &[]).is_err());
+    }
+
+    #[test]
+    fn reference_kernel_retains_signed_zero_and_sequential_accumulation() {
+        let result = legacy::matmul(1, 1, 1, &[-0.0], &[1.0]);
+        assert_eq!(result[0].to_bits(), (-0.0_f64).to_bits());
+        assert_eq!(
+            legacy::matmul(1, 3, 1, &[1e16, 1.0, -1e16], &[1.0; 3]),
+            vec![0.0]
+        );
+        assert_eq!(legacy::qr(3, 0, &[]), Ok((vec![0.0; 9], vec![])));
+    }
+
     // --- the `faer` backend against the implementation it replaced ---------
 
     #[test]
@@ -896,8 +835,8 @@ mod tests {
 
     #[test]
     fn an_empty_matrix_is_still_answered() {
-        // `faer` asserts on a zero dimension; the legacy path answers, and the
-        // dispatch sends it there.
+        // The RSSN optimized adapter handles zero dimensions before invoking
+        // a faer factorization.
         assert_eq!(det(0, 0, &[]), Ok(1.0));
         assert_eq!(inv(0, 0, &[]), Ok(Vec::new()));
         assert_eq!(
@@ -918,5 +857,26 @@ mod tests {
             solve(2, 2, &[1.0, 0.0, 0.0, 1.0], &[1.0]),
             Err(NumericError::ShapeMismatch(_))
         ));
+    }
+    #[test]
+    fn shared_kernel_eigenvectors_remain_valid_for_uniformly_tiny_matrices() {
+        let a = [2e-20, 1e-20, 1e-20, 2e-20];
+        let (values, vectors) = eig(2, 2, &a).unwrap();
+        for column in 0..2 {
+            for row in 0..2 {
+                let first = vectors[column].mul(Complex::new(a[row * 2], 0.0));
+                let second = vectors[2 + column].mul(Complex::new(a[row * 2 + 1], 0.0));
+                let rhs = values[column].mul(vectors[row * 2 + column]);
+                assert!(
+                    (first.re + second.re - rhs.re).hypot(first.im + second.im - rhs.im) < 1e-32
+                );
+            }
+        }
+        assert_eq!(
+            lstsq(2, 3, &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0], &[2.0, 3.0]).unwrap(),
+            vec![2.0, 3.0, 0.0]
+        );
+        let (u, s, vt) = svd(0, 3, &[]).unwrap();
+        assert!(u.is_empty() && s.is_empty() && vt.is_empty());
     }
 }

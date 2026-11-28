@@ -1,13 +1,14 @@
 //! Documents, their revisions, and the store a client keeps them in.
 //!
 //! A [`Document`] is a name (the client's URI, used only as an opaque key), a
-//! revision, the text, and a [`LineIndex`] kept in step with that text. Every
-//! edit goes through [`Document::apply`], which is the only way the index can
-//! fall out of date.
+//! revision, the text, and a [`LineIndex`] kept in step with that text.
+//! [`Document::replace`] and [`Document::apply`] update them together.
+//! [`Document::apply_batch`] commits an ordered group of changes atomically.
 
 use crate::position::LineIndex;
 use crate::position::Position;
 use crate::position::Range;
+use crate::types::TextEdit;
 
 /// One edit to a document.
 ///
@@ -65,7 +66,11 @@ impl std::fmt::Display for EditError {
     ) -> std::fmt::Result {
         match self {
             | Self::UnknownLine(line) => {
-                write!(f, "the edit names line {}, which does not exist", line + 1)
+                write!(
+                    f,
+                    "the edit names line {}, which does not exist",
+                    u64::from(*line).saturating_add(1)
+                )
             },
             | Self::InvalidPosition(position) => {
                 write!(
@@ -117,7 +122,7 @@ impl Document {
 
     /// The revision this text belongs to.
     #[must_use]
-    pub fn version(&self) -> i64 {
+    pub const fn version(&self) -> i64 {
         self.version
     }
 
@@ -129,19 +134,19 @@ impl Document {
 
     /// The length in bytes.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.text.len()
     }
 
     /// True when the document is empty.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.text.is_empty()
     }
 
     /// The line index, for callers that need more than one conversion.
     #[must_use]
-    pub fn index(&self) -> &LineIndex {
+    pub const fn index(&self) -> &LineIndex {
         &self.index
     }
 
@@ -188,6 +193,22 @@ impl Document {
         Range::new(Position::origin(), self.position(u32::MAX))
     }
 
+    /// A whole-document replacement when the formatter changes the text.
+    ///
+    /// Formatting is syntactic. It can be requested without loading imports
+    /// or type-checking the document. A parse error yields no edit.
+    #[must_use]
+    pub fn formatting(&self) -> Option<TextEdit> {
+        let formatted = aevia_fmt::format_source(self.text()).ok()?;
+        if formatted == self.text() {
+            return None;
+        }
+        Some(TextEdit {
+            range: self.full_range(),
+            new_text: formatted,
+        })
+    }
+
     /// Replaces the document's text and bumps the revision to `version`.
     pub fn replace(
         &mut self,
@@ -212,49 +233,57 @@ impl Document {
         change: &Change,
         version: i64,
     ) -> Result<(), EditError> {
-        match change.range {
-            | None => {
-                self.replace(change.text.clone(), version);
-                Ok(())
-            },
-            | Some(range) => {
-                if range.end < range.start {
-                    return Err(EditError::Reversed);
-                }
-                let start = self
-                    .index
-                    .offset(&self.text, range.start)
-                    .ok_or(EditError::UnknownLine(range.start.line))?;
-                let end = self
-                    .index
-                    .offset(&self.text, range.end)
-                    .ok_or(EditError::UnknownLine(range.end.line))?;
-                if self.index.position(&self.text, start) != range.start {
-                    return Err(EditError::InvalidPosition(range.start));
-                }
-                if self.index.position(&self.text, end) != range.end {
-                    return Err(EditError::InvalidPosition(range.end));
-                }
-                let start = usize::try_from(start.min(end)).unwrap_or(0);
-                let end = usize::try_from(end).unwrap_or(self.text.len()).max(start);
-                let mut text = String::with_capacity(self.text.len() + change.text.len());
-                text.push_str(&self.text[..start]);
-                text.push_str(&change.text);
-                text.push_str(&self.text[end..]);
-                self.replace(text, version);
-                Ok(())
-            },
+        let Some(range) = change.range else {
+            self.replace(change.text.clone(), version);
+            return Ok(());
+        };
+        if range.end < range.start {
+            return Err(EditError::Reversed);
         }
+        let lines = self.index.line_count();
+        for position in [range.start, range.end] {
+            if position.line >= lines {
+                return Err(EditError::UnknownLine(position.line));
+            }
+        }
+        let start = self.edit_offset(range.start)?;
+        let end = self.edit_offset(range.end)?;
+        self.text.replace_range(start..end, &change.text);
+        self.index = LineIndex::new(&self.text);
+        self.version = version;
+        Ok(())
+    }
+
+    fn edit_offset(
+        &self,
+        position: Position,
+    ) -> Result<usize, EditError> {
+        self.index
+            .exact_offset(&self.text, position)
+            .and_then(|offset| usize::try_from(offset).ok())
+            .ok_or(EditError::InvalidPosition(position))
     }
 
     /// Applies one revision's ordered changes atomically. Ranges are measured
     /// against the preceding change's result; any invalid edit rolls back text,
     /// line index and version for the entire batch.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first [`EditError`] if a change has an invalid range.
     pub fn apply_batch(
         &mut self,
         changes: &[Change],
         version: i64,
     ) -> Result<(), EditError> {
+        match changes {
+            | [] => {
+                self.version = version;
+                return Ok(());
+            },
+            | [change] => return self.apply(change, version),
+            | _ => {},
+        }
         let mut next = self.clone();
         for change in changes {
             next.apply(change, version)?;
@@ -329,13 +358,13 @@ impl DocumentStore {
 
     /// How many documents are open.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.documents.len()
     }
 
     /// True when nothing is open.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.documents.is_empty()
     }
 }
@@ -417,6 +446,58 @@ mod tests {
     }
 
     #[test]
+    fn empty_and_one_change_batches_match_direct_revision_and_error_rules() {
+        let original = "header\r😀z\r\nlast";
+        let mut doc = Document::new("aevia-test", 1, original);
+        doc.apply_batch(&[], 2).unwrap();
+        assert_eq!(doc.version(), 2);
+        assert_eq!(doc.text(), original);
+
+        let before = doc.full_range();
+        for (start, end, error) in [
+            (
+                Position::new(1, 3),
+                Position::new(1, 2),
+                EditError::Reversed,
+            ),
+            (
+                Position::new(4, 0),
+                Position::new(4, 1),
+                EditError::UnknownLine(4),
+            ),
+            (
+                Position::new(1, 1),
+                Position::new(1, 2),
+                EditError::InvalidPosition(Position::new(1, 1)),
+            ),
+        ] {
+            let change = Change::ranged(Range::new(start, end), "bad");
+            assert_eq!(doc.apply_batch(&[change], 3), Err(error));
+            assert_eq!(doc.text(), original);
+            assert_eq!(doc.full_range(), before);
+            assert_eq!(doc.version(), 2);
+        }
+
+        let change = Change::ranged(Range::new(Position::new(1, 2), Position::new(1, 3)), "✓");
+        let mut direct = doc.clone();
+        direct.apply(&change, 4).unwrap();
+        doc.apply_batch(&[change], 4).unwrap();
+        assert_eq!(doc.text(), "header\r😀✓\r\nlast");
+        assert_eq!(doc.text(), direct.text());
+        assert_eq!(doc.version(), direct.version());
+        assert_eq!(doc.full_range(), direct.full_range());
+        assert_eq!(
+            doc.offset(Position::new(2, 0)),
+            direct.offset(Position::new(2, 0))
+        );
+
+        doc.apply_batch(&[Change::full("new\nline")], 5).unwrap();
+        assert_eq!(doc.text(), "new\nline");
+        assert_eq!(doc.version(), 5);
+        assert_eq!(doc.line_text(1), Some("line"));
+    }
+
+    #[test]
     fn edits_require_exact_utf16_boundaries_and_columns() {
         let mut doc = Document::new("a.aev", 1, "😀x\n");
         for position in [Position::new(0, 1), Position::new(0, 8)] {
@@ -433,6 +514,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(doc.text(), "👍x\n");
+    }
+
+    #[test]
+    fn edits_across_mixed_line_endings_reindex_the_updated_text() {
+        let mut doc = Document::new("a.aev", 1, "a\r😀x\r\nb\nc");
+        let changes = [
+            Change::ranged(Range::new(Position::new(0, 1), Position::new(1, 2)), "\r"),
+            Change::ranged(
+                Range::new(Position::new(2, 0), Position::new(3, 0)),
+                "Ω\r\n",
+            ),
+        ];
+        doc.apply_batch(&changes, 2).unwrap();
+        assert_eq!(doc.text(), "a\rx\r\nΩ\r\nc");
+        assert_eq!(doc.line_text(2), Some("Ω"));
+        assert_eq!(doc.offset(Position::new(3, 0)), Some(9));
+        assert_eq!(doc.version(), 2);
     }
 
     #[test]

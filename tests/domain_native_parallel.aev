@@ -1,0 +1,102 @@
+## Exercises ordered, measured native callbacks and scoped opaque values.
+import Rssn_numerical_vector as Native
+
+let values = [1.0 m, 2.0 m, 3.0 m, 4.0 m, 5.0 m]
+
+fn indexed(i: Int): Float[Length] = at(values, i)
+fn slice(x: Float[Length]): Float[Time] = (x / 1.0 m) * 2.0 s
+fn mutate(i: Int, x: Float[Length]): Float[Length] = x + indexed(i)
+fn mutate_chunk(i: Int, row: Tensor<1, Float[Length]>): Tensor<1, Float[Length]> = map(fn (x: Float[Length]) => x + indexed(i), row)
+fn short_chunk(_i: Int, row: Tensor<1, Float[Length]>): Tensor<1, Float[Length]> = [at(row, 0)]
+
+fn length_vector(call: Result<Value, OpError>, expected: Tensor<1, Float[Length]>): Bool =
+    match call with
+    | Ok(result) -> match from_value<Tensor<1, Float[Length]>>(result) with
+        | Ok(actual) -> actual == expected
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "parallel indexed mirror restores order and length units" =
+    length_vector(Native.num_native_par_map_indexed([to_value(5), to_value(1), to_value(5)], [to_callback(indexed)]), values)
+
+test "parallel fixed reduction uses the measured indexed callback" =
+    match Native.num_native_par_sum_fixed([to_value(5), to_value(2), to_value(1), to_value(5)], [to_callback(indexed)]) with
+    | Ok(result) -> match from_value<Float[Length]>(result) with
+        | Ok(total) -> total == 15.0 m
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "parallel slice maps measured input to a different output dimension" =
+    match Native.num_native_par_map_slice([to_value(values), to_value(1), to_value(5)], [to_callback(slice)]) with
+    | Ok(result) -> match from_value<Tensor<1, Float[Time]>>(result) with
+        | Ok(actual) -> actual == [2.0 s, 4.0 s, 6.0 s, 8.0 s, 10.0 s]
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "parallel replacement retains global indices and leaves the source usable" =
+    length_vector(Native.num_native_par_for_each_mut([to_value(values), to_value(1), to_value(5)], [to_callback(mutate)]), [2.0 m, 4.0 m, 6.0 m, 8.0 m, 10.0 m]) && values == [1.0 m, 2.0 m, 3.0 m, 4.0 m, 5.0 m]
+
+test "parallel chunks use chunk indices and service the short tail" =
+    length_vector(Native.num_native_par_for_chunks_mut([to_value(values), to_value(2), to_value(1), to_value(3)], [to_callback(mutate_chunk)]), [2.0 m, 3.0 m, 5.0 m, 6.0 m, 8.0 m])
+
+test "callback budget exhaustion terminates parallel workers and allows another call" =
+    match Native.num_native_par_map_indexed([to_value(5), to_value(1), to_value(4)], [to_callback(indexed)]) with
+    | Ok(_) -> false
+    | Err(_) -> length_vector(Native.num_native_par_map_indexed([to_value(5), to_value(1), to_value(5)], [to_callback(indexed)]), values)
+
+test "parallel chunks reject a replacement of the wrong size" =
+    match Native.num_native_par_for_chunks_mut([to_value(values), to_value(2), to_value(1), to_value(3)], [to_callback(short_chunk)]) with
+    | Ok(_) -> false
+    | Err(_) -> true
+
+fn cdf(x: Float[Length]): Float = x / 1.0 m
+fn invalid_cdf(_x: Float[Length]): Float = 1.25
+type KSTest = { statistic: Float, p_value: Float, df: Option<Float> }
+let ks_args = [to_value([0.25 m, 0.5 m, 0.75 m]), to_value(3)]
+
+test "KS statistic compares measured observations against the host CDF" =
+    match Native.num_native_stats_ks_test_one_sample(ks_args, [to_callback(cdf)]) with
+    | Ok(result) -> match from_value<KSTest>(result) with
+        | Ok(r) -> approx_eq(r.statistic, 0.25, 1e-12) && r.p_value >= 0.0 && r.p_value <= 1.0 && r.df == None
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "KS rejects values that are outside the probability interval" =
+    match Native.num_native_stats_ks_test_one_sample(ks_args, [to_callback(invalid_cdf)]) with
+    | Err(_) -> true
+    | Ok(_) -> false
+
+fn statistic(sample: Tensor<1, Float[Length]>): Float[Time] = (at(sample, 0) / 1.0 m) * 2.0 s
+
+test "bootstrap confidence limits retain the callback result units" =
+    let args = [to_value([2.0 m, 2.0 m, 2.0 m, 2.0 m]), to_value(16), to_value(0.05), to_value(42), to_value(16)]
+    match Native.num_native_robust_bootstrap_ci(args, [to_callback(statistic)]) with
+    | Ok(result) -> match from_value<Tensor<1, Float[Time]>>(result) with
+        | Ok(actual) -> actual == [4.0 s, 4.0 s]
+        | Err(_) -> false
+    | Err(_) -> false
+
+fn time_polynomial(x: Float[Length]): Float[Time] = 2.0 s + (x / 1.0 m) * 3.0 s + (x / 1.0 m) ^ 2 * 1.0 s
+type Taylor = { coefficients: Tensor<1, Float[Time]>, coordinate_reference: Float[Length], center: Float[Length] }
+
+test "Taylor coefficients use the normalized coordinate and keep output units" =
+    let args = [to_value(0.0 m), to_value(1.0 m), to_value(2.0 m), to_value(1.0 s), to_value(3), to_value(3)]
+    match Native.num_native_sum_numeric_taylor_coefficients(args, [to_callback(time_polynomial)]) with
+    | Ok(result) -> match from_value<Taylor>(result) with
+        | Ok(r) -> r.coordinate_reference == 2.0 m && r.center == 0.0 m && approx_eq(at(r.coefficients, 0), 2.0 s, 1e-12 s) && approx_eq(at(r.coefficients, 1), 6.0 s, 1e-12 s) && approx_eq(at(r.coefficients, 2), 4.0 s, 1e-12 s)
+        | Err(_) -> false
+    | Err(_) -> false
+
+fn fixes_first(p: Tensor<1, Int>): Bool = at(p, 0) == 0
+fn prune_first(i: Int, j: Int): Bool = i != 0 || j == 0
+
+test "two subgroup callbacks keep the opaque group in its own session" =
+    match Rssn.dynamic("num_native_group_new", [to_value(3), to_value([[1, 0, 2], [1, 2, 0]])]) with
+    | Ok(group) -> match Native.num_native_group_subgroup([group, to_value(64)], [to_callback(fixes_first), to_callback(prune_first)]) with
+        | Ok(subgroup) -> match Rssn.dynamic("num_native_group_order", [subgroup]) with
+            | Ok(result) -> match from_value<Int>(result) with
+                | Ok(order) -> order == 2
+                | Err(_) -> false
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false

@@ -1,6 +1,6 @@
 ## The generated `Rssn_FiniteField` module: GF(p), GF(2^8) and polynomials over GF(p)
 ## (coefficients highest degree first).
-## Run with: cargo run -p aevia-cli -- test tests/domain_finite_fields.aev
+## Run with: bazel run //:aevia -- test tests/domain_finite_fields.aev
 import Rssn_FiniteField as F
 
 fn int_is(r: Result<Int, OpError>, expected: Int): Bool =

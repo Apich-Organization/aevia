@@ -1,0 +1,21 @@
+import Rssn_Contour as Contour
+
+import Rssn_numerical_callback as Numeric
+
+fn constant(_z: Complex[Length]): Complex[Time] = complex(3000.0 ms, 0.0 ms)
+
+test "checked contour integral reports a measured estimate and callback count" =
+    match Contour.bromwich(0.0 m, 2.0 m) with
+    | Ok(path) ->
+        match Numeric.num_contour_integrate_segment_checked_typed(path, 2.0 m, 3.0 s, 1e-9 m*s, 24, 900, constant) with
+        | Ok(result) -> result.converged && result.evaluations == 15 && approx_eq(im(result.value), 12.0 m*s, 1e-10 m*s)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "host callback exhaustion is a checked error" =
+    match Contour.bromwich(0.0 m, 2.0 m) with
+    | Ok(path) ->
+        match Numeric.num_contour_integrate_checked_typed(path, 2.0 m, 3.0 s, 1e-9 m*s, 24, 1, constant) with
+        | Ok(_) -> false
+        | Err(_) -> true
+    | Err(_) -> false

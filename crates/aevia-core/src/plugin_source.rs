@@ -21,6 +21,18 @@
 //! One plugin is registered per loaded module, named `aevia/<module>#n`, in
 //! the current thread's kernel session.
 
+#![deny(
+    missing_docs,
+    clippy::arithmetic_side_effects,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::nursery,
+    clippy::panic,
+    clippy::pedantic,
+    clippy::single_call_fn,
+    clippy::unwrap_used
+)]
+
 use crate::Interp;
 use crate::value::NumVal;
 use crate::value::Scope;
@@ -44,23 +56,28 @@ fn kernel_text(value: &Value) -> Result<String, String> {
     }
 }
 
-fn parameter(index: usize) -> String {
-    format!("aevia_arg{index}")
-}
-
 /// Traces one registration to its kernel text.
 fn trace(
     interp: &mut Interp,
     registration: &HostRegistration,
     function: Value,
 ) -> Result<String, String> {
+    // The kernel renders symbol names verbatim. Give rule symbols their `?`
+    // here so an argument cannot rewrite parts of another symbol or operator.
+    let prefix = match registration.kind {
+        | HostRegistrationKind::Op => "aevia_arg",
+        | HostRegistrationKind::Rule => "?aevia_arg",
+    };
+    let names: Vec<String> = (0..registration.params.len())
+        .map(|index| format!("{prefix}{index}"))
+        .collect();
     let args: Vec<Value> = registration
         .params
         .iter()
-        .enumerate()
-        .map(|(index, (_, dim))| {
+        .zip(&names)
+        .map(|((_, dim), name)| {
             Value::Num(NumVal::symbolic(
-                crate::sym::Term::Sym(parameter(index)),
+                crate::sym::Term::Sym(name.clone()),
                 dim.clone(),
             ))
         })
@@ -76,7 +93,6 @@ fn trace(
                 kind_name(registration.kind)
             )
         })?;
-    let names: Vec<String> = (0..registration.params.len()).map(parameter).collect();
     match registration.kind {
         | HostRegistrationKind::Op => {
             let body = kernel_text(&result)?;
@@ -100,16 +116,8 @@ fn trace(
             ) else {
                 return Err("a rule function returns the pair `(lhs, rhs)`".to_string());
             };
-            let mark = |text: String| {
-                let mut out = text;
-                // Longest names first: `aevia_arg10` before `aevia_arg1`.
-                for name in names.iter().rev() {
-                    out = out.replace(name.as_str(), &format!("?{name}"));
-                }
-                out
-            };
-            let lhs = mark(kernel_text(lhs)?);
-            let rhs = mark(kernel_text(rhs)?);
+            let lhs = kernel_text(lhs)?;
+            let rhs = kernel_text(rhs)?;
             Ok(format!("{}: {lhs} => {rhs}", registration.name))
         },
     }
@@ -143,8 +151,7 @@ impl Interp {
         let name = module
             .name
             .as_ref()
-            .map(|path| path.join("."))
-            .unwrap_or_default();
+            .map_or_else(String::new, |path| path.join("."));
         self.publish_registrations_in(&registrations, root, &name)
     }
 
@@ -169,6 +176,10 @@ impl Interp {
     /// 4. one plugin carries the definitions, signatures and rewrites.
     ///
     /// If the kernel refuses the plugin, the original bindings are restored.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "keep operator publication, rollback and rule publication in execution order"
+    )]
     pub fn publish_registrations_in(
         &mut self,
         registrations: &[HostRegistration],
@@ -183,7 +194,7 @@ impl Interp {
         let mut signatures = Vec::new();
         let mut rewrites = Vec::new();
         let mut published = Vec::new();
-        let mut replaced: Vec<(String, Value)> = Vec::new();
+        let mut replaced: Vec<(String, aevia_syntax::Span, Value)> = Vec::new();
         let fail =
             |diagnostics: &mut Diagnostics, registration: &HostRegistration, reason: String| {
                 diagnostics.push(Diagnostic::error(
@@ -196,6 +207,20 @@ impl Interp {
                     registration.span,
                 ));
             };
+        let Some(serial) = PLUGINS.with(|count| {
+            let next = count.get().checked_add(1)?;
+            count.set(next);
+            Some(next)
+        }) else {
+            for registration in registrations {
+                fail(
+                    &mut diagnostics,
+                    registration,
+                    "source plugin serials are exhausted".into(),
+                );
+            }
+            return diagnostics;
+        };
         let ops = registrations
             .iter()
             .filter(|registration| registration.kind == HostRegistrationKind::Op);
@@ -203,7 +228,11 @@ impl Interp {
             .iter()
             .filter(|registration| registration.kind == HostRegistrationKind::Rule);
         for registration in ops {
-            let Some(function) = scope.lookup(&registration.function) else {
+            let Some(function) = scope
+                .lookup_at(&registration.function, registration.span)
+                .ok()
+                .flatten()
+            else {
                 fail(
                     &mut diagnostics,
                     registration,
@@ -224,11 +253,8 @@ impl Interp {
                         result: aevia_rssn::registry::to_dim_expr(&registration.result),
                     });
                     let wrapper = operator_wrapper(registration, function.clone());
-                    scope
-                        .vars
-                        .borrow_mut()
-                        .insert(registration.function.clone(), wrapper);
-                    replaced.push((registration.function.clone(), function));
+                    scope.replace_source_at(&registration.function, registration.span, wrapper);
+                    replaced.push((registration.function.clone(), registration.span, function));
                     published.push(registration);
                 },
                 | Err(reason) => fail(&mut diagnostics, registration, reason),
@@ -237,11 +263,6 @@ impl Interp {
         // The operators go to the kernel before any rule is traced: a rule
         // about `softplus` builds the node `demo/softplus(..)`, which the
         // kernel must already know.
-        let serial = PLUGINS.with(|count| {
-            let next = count.get() + 1;
-            count.set(next);
-            next
-        });
         let name = if module.is_empty() {
             format!("aevia/main#{serial}")
         } else {
@@ -272,15 +293,19 @@ impl Interp {
         {
             // The kernel has no such operators: calls must keep running the
             // Aevia bodies rather than build nodes nobody can reduce.
-            for (function, original) in replaced {
-                scope.vars.borrow_mut().insert(function, original);
+            for (function, site, original) in replaced {
+                scope.replace_source_at(&function, site, original);
             }
             refuse(&mut diagnostics, &published, &reason);
             published.clear();
         }
         let mut rule_registrations = Vec::new();
         for registration in rules {
-            let Some(function) = scope.lookup(&registration.function) else {
+            let Some(function) = scope
+                .lookup_at(&registration.function, registration.span)
+                .ok()
+                .flatten()
+            else {
                 fail(
                     &mut diagnostics,
                     registration,
@@ -313,15 +338,21 @@ impl Interp {
 
 /// Whether an argument is symbolic: a term with free symbols. A closed term
 /// (`pi`, `sqrt(2)`) is a number for this purpose; the body evaluates it.
-fn is_symbolic(value: &Value) -> bool {
-    match value {
-        | Value::Num(num) => {
-            match &num.kind {
-                | crate::value::NumKind::Sym(term) => !term.free_symbols().is_empty(),
-                | _ => false,
-            }
-        },
-        | _ => false,
+#[expect(
+    clippy::single_call_fn,
+    reason = "distinguish free symbolic terms from closed exact numbers at dispatch"
+)]
+fn is_symbolic(value: &Value) -> Result<bool, crate::eval::EvalError> {
+    let Value::Num(num) = value else {
+        return Ok(false);
+    };
+    let crate::value::NumKind::Sym(term) = &num.kind else {
+        return Ok(false);
+    };
+    match term.as_ref() {
+        | crate::sym::Term::Num(_) => Ok(false),
+        | crate::sym::Term::Sym(_) => Ok(true),
+        | _ => Ok(!term.try_free_symbols()?.is_empty()),
     }
 }
 
@@ -335,6 +366,10 @@ fn is_symbolic(value: &Value) -> bool {
 ///   the checked signature gives for the arguments' dimensions. Kernel
 ///   requests on it — `diff`, `simplify`, `integrate`, numeric evaluation —
 ///   see the operator, its definition and every `@rule` about it.
+#[expect(
+    clippy::single_call_fn,
+    reason = "separate operator dispatch from plugin registration"
+)]
 fn operator_wrapper(
     registration: &HostRegistration,
     original: Value,
@@ -348,7 +383,12 @@ fn operator_wrapper(
     let result = registration.result.clone();
     Value::Native(Rc::new(crate::value::NativeFn(Box::new(
         move |interp: &mut Interp, args: Vec<Value>, span| {
-            if !args.iter().any(is_symbolic) {
+            let mut symbolic = false;
+            for arg in &args {
+                // Every term must have live handles before either branch can run.
+                symbolic |= is_symbolic(arg).map_err(|error| error.at(span))?;
+            }
+            if !symbolic {
                 return interp.apply(original.clone(), args, span);
             }
             let mut unifier = aevia_dim::DimUnifier::new();
@@ -362,7 +402,7 @@ fn operator_wrapper(
                         format!(
                             "argument {} of `{name}` has dimension {}, the operator expects \
                              {expected}",
-                            index + 1,
+                            index.saturating_add(1),
                             num.dim
                         ),
                     )
@@ -387,10 +427,17 @@ fn operator_wrapper(
 }
 
 /// `load_plugin(path)`: loads, checks and evaluates the module at `path`
-/// (with its imports) in a fresh interpreter on this thread, which publishes
-/// its registrations to this thread's kernel session. `Ok(n)` counts the
+/// (with its imports) in a fresh interpreter with the caller's capabilities.
+/// It publishes its registrations to this thread's kernel session. `Ok(n)` counts the
 /// published `@op`/`@rule` functions; `Err` carries the diagnostics.
-pub(crate) fn load_plugin(path: &std::path::Path) -> Value {
+#[expect(
+    clippy::single_call_fn,
+    reason = "keep the source-plugin load and result conversion together"
+)]
+pub fn load_plugin(
+    path: &std::path::Path,
+    capabilities: u8,
+) -> Value {
     let failure = |message: String| {
         crate::value::make_variant(
             aevia_types::adt::RESULT_ID,
@@ -414,6 +461,7 @@ pub(crate) fn load_plugin(path: &std::path::Path) -> Value {
         return failure(format!("`{}` produced no module", path.display()));
     };
     let mut plugin = Interp::new(&entry.checked).with_buffer();
+    plugin.capabilities = capabilities;
     let diagnostics = crate::driver::run_modules(&mut plugin, &program);
     if diagnostics.has_errors() {
         let messages: Vec<String> = diagnostics

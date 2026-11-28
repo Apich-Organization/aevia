@@ -1,0 +1,25 @@
+## Evaluate the Weierstrass derivative and invariants of an oblique period lattice.
+import Rssn_numerical_special as Special
+
+let omega1 = complex(1.0, 0.0)
+let omega2 = complex(0.2, 1.1)
+let point = complex(0.3, 0.4)
+let derivative = Special.num_weierstrass_p_prime_complex(point, omega1, omega2)
+let shifted = Special.num_weierstrass_p_prime_complex(point + omega1 + omega1, omega1, omega2)
+let invariants = Special.num_weierstrass_invariants_complex(omega1, omega2)
+
+test "the derivative agrees with an independent lattice sum" = approx_eq(
+    magnitude(derivative - complex(15.117919150272616, 6.08435938578747)), 0.0, 1e-11,
+)
+
+test "two half-periods translate the same value" = approx_eq(magnitude(shifted - derivative), 0.0, 1e-11)
+
+test "the named invariants agree with an independent lattice sum" = approx_eq(
+    magnitude(invariants.g2 - complex(8.703070400834047, 1.8560957692829751)), 0.0, 1e-11,
+) && approx_eq(
+    magnitude(invariants.g3 - complex(3.8201486950612416, -2.1683336270174154)), 0.0, 1e-11,
+)
+
+fn main(): IO Unit = do
+    println("Derivative at the chosen point: {derivative}")
+    println("Invariants: {invariants.g2}, {invariants.g3}")

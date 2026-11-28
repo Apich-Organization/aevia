@@ -80,7 +80,7 @@ impl ApiError {
             | "E_NOT_FOUND" => StatusCode::NOT_FOUND,
             | "E_CONFLICT" => StatusCode::CONFLICT,
             | "E_SIGNATURE" | "E_KEY" | "E_FORBIDDEN" => StatusCode::FORBIDDEN,
-            | "E_DB" | "E_IO" | "E_DOCS" => StatusCode::INTERNAL_SERVER_ERROR,
+            | "E_DB" | "E_IO" | "E_DOCS" | "E_INTEGRITY" => StatusCode::INTERNAL_SERVER_ERROR,
             | _ => StatusCode::BAD_REQUEST,
         };
         Self { status, error }
@@ -95,11 +95,14 @@ impl From<Error> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        if self.status.is_server_error() {
+        let message = if self.status.is_server_error() {
             tracing::error!(code = self.error.code, message = %self.error.message, "request failed");
-        }
+            "The registry could not complete the request."
+        } else {
+            &self.error.message
+        };
         let body = serde_json::json!({
-            "error": { "code": self.error.code, "message": self.error.message }
+            "error": { "code": self.error.code, "message": message }
         });
         (self.status, Json(body)).into_response()
     }
@@ -159,7 +162,7 @@ impl PageError {
 impl PageError {
     /// Renders this error in `lang`.
     #[must_use]
-    pub fn in_lang(
+    pub const fn in_lang(
         mut self,
         lang: Lang,
     ) -> Self {
@@ -182,14 +185,20 @@ impl From<Error> for PageError {
 
 impl IntoResponse for PageError {
     fn into_response(self) -> Response {
-        if self.status.is_server_error() {
+        let message = if self.status.is_server_error() {
             tracing::error!(code = %self.code, message = %self.message, "page failed");
-        }
+            match self.lang {
+                | Lang::En => "The registry could not complete the request.",
+                | Lang::Zh => "注册中心未能处理该请求。",
+            }
+        } else {
+            &self.message
+        };
         let html = aevia_registry_web::error_page(
             self.lang,
             self.status.as_u16(),
             &self.code,
-            &self.message,
+            message,
             None,
         );
         (self.status, Html(html)).into_response()

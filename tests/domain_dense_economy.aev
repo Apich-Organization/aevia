@@ -1,0 +1,14 @@
+import Rssn_Numeric as Dense
+
+test "economy QR keeps matrix units in the rectangular triangular factor" =
+    let matrix = [[3.0 m], [4.0 m]]
+    match Dense.qr_thin(matrix) with
+    | Ok(factors) ->
+        let first = at(at(factors.q, 0), 0) * at(at(factors.r, 0), 0)
+        shape(factors.q) == [2, 1] && shape(factors.r) == [1, 1] && approx_eq(first, 3.0 m, 1e-12 m)
+    | _ -> false
+
+test "a dense row solve divides RHS units by matrix units" =
+    match Dense.solve_linear_rows([[2.0 m, 0.0 m], [0.0 m, 4.0 m]], [6.0 s, 20.0 s]) with
+    | Ok(solution) -> approx_eq(at(solution, 0), 3.0 s/m, 1e-12 s/m) && approx_eq(at(solution, 1), 5.0 s/m, 1e-12 s/m)
+    | _ -> false

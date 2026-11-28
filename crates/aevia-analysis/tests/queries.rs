@@ -53,6 +53,72 @@ fn text_of<'a>(
 }
 
 #[test]
+fn completion_handles_byte_offsets_inside_utf8_characters() {
+    let source = "let text = \"😀\"\n";
+    let byte_inside = offset_of(source, "😀", 1).saturating_add(1);
+    with(source, |analysis| {
+        let completions = analysis.completion(byte_inside);
+        assert!(
+            completions
+                .iter()
+                .all(|item| item.kind != CompletionKind::Keyword)
+        );
+    });
+}
+
+#[test]
+fn completion_respects_lexical_scope_and_shadowing() {
+    let source = "let shadowed = true\n\
+fn sample(local_input: Int): Int =\n    let local_value = local_input + 1\n    let shadowed = local_value\n    shadowed\n\
+let outside = shadowed\n";
+    with(source, |analysis| {
+        let diagnostics = analysis.diagnostics();
+        assert!(
+            diagnostics.iter().all(|d| d.severity != Severity::Error),
+            "{diagnostics:?}"
+        );
+        let initializer = analysis.completion(offset_of(source, "local_value", 2));
+        for name in ["local_input", "local_value"] {
+            assert!(initializer.iter().any(|item| item.label == name), "{name}");
+        }
+        let outer = initializer
+            .iter()
+            .find(|item| item.label == "shadowed")
+            .expect("outer binding");
+        assert_eq!(outer.detail.as_deref(), Some("Bool"));
+        let body = analysis.completion(offset_of(source, "shadowed", 3));
+        let locals: Vec<_> = body
+            .iter()
+            .filter(|item| item.label == "shadowed")
+            .collect();
+        assert_eq!(locals.len(), 1);
+        assert_eq!(locals[0].detail.as_deref(), Some("Int"));
+        let outside = analysis.completion(offset_of(source, "let outside", 1));
+        assert!(
+            outside
+                .iter()
+                .all(|item| !matches!(item.label.as_str(), "local_input" | "local_value"))
+        );
+    });
+}
+
+#[test]
+fn a_slice_step_navigates_to_its_binding_and_renames_with_it() {
+    let source = "let stride = 2\nlet part = \"abcdef\"[::stride]\n";
+    with(source, |analysis| {
+        let declaration = offset_of(source, "stride", 1);
+        let use_site = offset_of(source, "stride", 2);
+        let definition = analysis.definition(use_site).expect("step definition");
+        assert_eq!(
+            definition.range,
+            analysis.document().range_of(declaration, declaration + 6)
+        );
+        let edits = analysis.rename(use_site, "skip").expect("step rename");
+        assert_eq!(edits.len(), 2, "{edits:#?}");
+    });
+}
+
+#[test]
 fn a_type_error_becomes_a_placed_diagnostic() {
     let source = "let x = 1 m + 1\n";
     with(source, |analysis| {

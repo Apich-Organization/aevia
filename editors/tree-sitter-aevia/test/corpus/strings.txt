@@ -1,0 +1,195 @@
+==================
+Ordinary string text, escape sequences and interpolation
+==================
+
+let label = "  ## text #- literal -# \0 \u{1F600} {1 + 2} tail"
+
+------------------
+
+(source_file
+  (keyword)
+  (identifier)
+  (operator)
+  (string
+    (string_content)
+    (escape_sequence)
+    (string_content)
+    (escape_sequence)
+    (string_content)
+    (interpolation
+      (number)
+      (operator)
+      (number))
+    (string_content)))
+
+==================
+Multiline string keeps comment markers and isolated quote runs
+==================
+
+let label = """
+  # text
+  usual "quote" and ""doubled""
+  "{1} \0
+  #- text -#
+  """
+let count = 2
+
+------------------
+
+(source_file
+  (keyword)
+  (identifier)
+  (operator)
+  (string
+    (string_content)
+    (interpolation
+      (number))
+    (string_content)
+    (escape_sequence)
+    (string_content))
+  (keyword)
+  (identifier)
+  (operator)
+  (number))
+
+==================
+Raw strings and nested interpolation delimiters
+==================
+
+let nested = "{ { first = { inner = 1 }, b = r"# raw {}" }.first.inner }"
+let protected = "{show(\"one\")}"
+let fields = "{(\{ a = 1 \}).a}"
+let raw = "{format(r\"{}\", [5])}"
+let message = "{ "nested {[\"ok\", 2.75]}" }"
+
+------------------
+
+(source_file
+  (keyword)
+  (identifier)
+  (operator)
+  (string
+    (interpolation
+      (interpolation_group
+        open: (bracket)
+        (identifier)
+        (operator)
+        (interpolation_group
+          open: (bracket)
+          (identifier)
+          (operator)
+          (number)
+          close: (bracket))
+        (punctuation)
+        (identifier)
+        (operator)
+        (raw_string)
+        close: (bracket))
+      (punctuation)
+      (identifier)
+      (punctuation)
+      (identifier)))
+  (keyword)
+  (identifier)
+  (operator)
+  (string
+    (interpolation
+      (identifier)
+      (bracket)
+      (string
+        (string_content))
+      (bracket)))
+  (keyword)
+  (identifier)
+  (operator)
+  (string
+    (interpolation
+      (bracket)
+      (interpolation_group
+        open: (bracket)
+        (identifier)
+        (operator)
+        (number)
+        close: (bracket))
+      (bracket)
+      (punctuation)
+      (identifier)))
+  (keyword)
+  (identifier)
+  (operator)
+  (string
+    (interpolation
+      (identifier)
+      (bracket)
+      (raw_string)
+      (punctuation)
+      (bracket)
+      (number)
+      (bracket)
+      (bracket)))
+  (keyword)
+  (identifier)
+  (operator)
+  (string
+    (interpolation
+      (string
+        (string_content)
+        (interpolation
+          (bracket)
+          (string
+            (string_content))
+          (punctuation)
+          (number)
+          (bracket))))))
+
+==================
+Only code inside interpolation consumes a real comment
+==================
+
+let label = "prefix #- literal -# {1 #- block #- nested -# -# + 2 # line
+} suffix"
+
+------------------
+
+(source_file
+  (keyword)
+  (identifier)
+  (operator)
+  (string
+    (string_content)
+    (interpolation
+      (number)
+      (block_comment)
+      (operator)
+      (number)
+      (comment))
+    (string_content)))
+
+==================
+Unclosed ordinary or raw strings recover before the next line
+==================
+
+let ordinary = "never closed
+let raw = r"never closed
+let after = 4
+
+------------------
+
+(source_file
+  (keyword)
+  (identifier)
+  (operator)
+  (string
+    (string_content)
+    (unterminated_string))
+  (keyword)
+  (identifier)
+  (operator)
+  (identifier)
+  (string
+    (string_content)
+    (unterminated_string))
+  (keyword)
+  (identifier)
+  (operator)
+  (number))

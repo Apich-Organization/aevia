@@ -1,0 +1,37 @@
+## Deterministic native streams and measured Markov chain diagnostics.
+import Rssn_Mcmc as Mcmc
+import Rssn_numerical_stats as Stats
+
+test "repeated seeds reproduce the stream and explicit release ends its lifetime" =
+    match (Mcmc.seeded(21), Mcmc.pcg32(21, 0)) with
+    | (Ok(left), Ok(right)) ->
+        (Mcmc.next_u32(left) == Mcmc.next_u32(right)
+            && Mcmc.normal(left) == Mcmc.normal(right)
+            && Mcmc.uniform(left) == Mcmc.uniform(right)
+            && Mcmc.release(left) == Ok(true) && Mcmc.release(right) == Ok(true))
+    | _ -> false
+
+test "split Rhat and autocorrelation accept measured chains" =
+    match (Mcmc.split_rhat([[0.0 m, 1.0 m, 0.0 m, 1.0 m], [0.0 m, 1.0 m, 0.0 m, 1.0 m]]),
+           Mcmc.autocorrelation([0.0 m, 1.0 m, 0.0 m, 1.0 m], 1)) with
+    | (Ok(rhat), Ok(acf)) -> approx_eq(rhat, sqrt(0.5), 1e-12) && acf[0] == 1.0 && acf[1] == -0.75
+    | _ -> false
+
+fn log_density(state: Tensor<1, Float>): Float = -0.5 * state[0] * state[0]
+fn gradient(state: Tensor<1, Float>): Tensor<1, Float> = [-state[0]]
+fn uniform_conditional(_coordinate: Int, _state: Tensor<1, Float>, u: Float): Float = u
+
+let config = { draws = 8, burn_in = 4, thin = 2, seed = 42 }
+
+test "typed Metropolis callbacks reproduce alias output, counters and draw shape" =
+    match (Stats.num_mcmc_metropolis_hastings_typed(log_density, [0.0], [0.6], config),
+           Stats.num_mcmc_random_walk_metropolis_typed(log_density, [0.0], [0.6], config)) with
+    | (Ok(left), Ok(right)) -> left.draws == right.draws && left.proposed == 20 && length(left.log_posterior) == 8
+    | _ -> false
+
+test "Hamiltonian and Gibbs typed callback routes keep the declared log samples" =
+    match (Stats.num_mcmc_hmc_typed(log_density, gradient, [0.0], 0.25, 5, config),
+           Stats.num_mcmc_gibbs_with_log_posterior_typed(uniform_conditional, log_density, [0.0], config)) with
+    | (Ok(hamiltonian), Ok(gibbs)) -> (hamiltonian.proposed == 20 && length(hamiltonian.log_posterior) == 8
+        && gibbs.accepted == 20 && length(gibbs.log_posterior) == 8)
+    | _ -> false

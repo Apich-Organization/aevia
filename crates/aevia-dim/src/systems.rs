@@ -25,6 +25,7 @@
 //! untouched: they are not in the span of the SI bases.
 
 use crate::Dim;
+use crate::SI_BASE_DIMENSIONS;
 use crate::Scale;
 use crate::dim::Atom;
 use num_bigint::BigInt;
@@ -33,19 +34,18 @@ use num_traits::One;
 use num_traits::ToPrimitive;
 use num_traits::Zero;
 
-/// The SI bases, in the order the decomposition uses.
-const BASES: [&str; 7] = [
-    "Length",
-    "Mass",
-    "Time",
-    "Current",
-    "Temperature",
-    "Amount",
-    "Luminosity",
-];
-
 /// One quantity a system sets to one.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct Unity {
     /// The constant's symbol (`hbar`).
     pub symbol: String,
@@ -58,7 +58,17 @@ pub struct Unity {
 }
 
 /// One generator of the representatives.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct Generator {
     /// What it measures (`Energy`).
     pub name: String,
@@ -69,7 +79,17 @@ pub struct Generator {
 }
 
 /// A unit system.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct UnitSystem {
     /// The name a module selects it by (`natural`).
     pub name: String,
@@ -93,7 +113,7 @@ pub struct Reduction {
 impl Reduction {
     /// Whether the system leaves the dimension unchanged.
     #[must_use]
-    pub fn is_identity(&self) -> bool {
+    pub const fn is_identity(&self) -> bool {
         self.factors.is_empty()
     }
 
@@ -107,7 +127,7 @@ impl Reduction {
     }
 }
 
-type Vector = [BigRational; 7];
+type Vector = [BigRational; SI_BASE_DIMENSIONS.len()];
 
 fn zero() -> Vector {
     std::array::from_fn(|_| BigRational::zero())
@@ -118,15 +138,15 @@ fn split(dim: &Dim) -> (Vector, Vec<(Atom, BigRational)>) {
     let mut si = zero();
     let mut rest = Vec::new();
     for (atom, exponent) in dim.factors() {
-        match &atom {
-            | Atom::Base(name) => {
-                if let Some(index) = BASES.iter().position(|base| *base == &**name) {
-                    si[index] += exponent;
-                } else {
-                    rest.push((atom.clone(), exponent.clone()));
-                }
-            },
-            | _ => rest.push((atom.clone(), exponent.clone())),
+        if let Atom::Base(name) = atom
+            && let Some((_, slot)) = SI_BASE_DIMENSIONS
+                .iter()
+                .zip(&mut si)
+                .find(|(base, _)| **base == &**name)
+        {
+            *slot = exponent.clone();
+        } else {
+            rest.push((atom.clone(), exponent.clone()));
         }
     }
     (si, rest)
@@ -139,47 +159,51 @@ fn vector_of(dim: &Dim) -> Option<Vector> {
 
 /// Solves `Σ xᵢ columnsᵢ = rhs` over ℚ; `None` when the columns are not a
 /// basis.
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "eliminates in exact rational arithmetic and selects nonzero pivots"
+)]
 fn solve(
     columns: &[Vector],
     rhs: &Vector,
 ) -> Option<Vec<BigRational>> {
-    let n = 7;
-    if columns.len() != n {
+    if columns.len() != rhs.len() {
         return None;
     }
-    let mut m: Vec<Vec<BigRational>> = (0..n)
-        .map(|row| {
-            let mut line: Vec<BigRational> =
-                columns.iter().map(|column| column[row].clone()).collect();
-            line.push(rhs[row].clone());
-            line
+    let mut rows: Vec<Vec<BigRational>> = rhs
+        .iter()
+        .enumerate()
+        .map(|(row, value)| {
+            columns
+                .iter()
+                .map(|column| column.get(row).cloned())
+                .chain(std::iter::once(Some(value.clone())))
+                .collect::<Option<_>>()
         })
-        .collect();
-    for col in 0..n {
-        let pivot = (col..n).find(|&row| !m[row][col].is_zero())?;
-        m.swap(col, pivot);
-        let lead = m[col][col].clone();
-        for value in &mut m[col] {
+        .collect::<Option<_>>()?;
+    for column in 0..columns.len() {
+        let pivot = rows
+            .iter()
+            .enumerate()
+            .skip(column)
+            .find_map(|(row, entries)| (!entries.get(column)?.is_zero()).then_some(row))?;
+        rows.swap(column, pivot);
+        let (before, rest) = rows.split_at_mut_checked(column)?;
+        let (pivot_row, after) = rest.split_first_mut()?;
+        let lead = pivot_row.get(column)?.clone();
+        for value in pivot_row.iter_mut().skip(column) {
             *value /= &lead;
         }
-        for row in 0..n {
-            if row != col && !m[row][col].is_zero() {
-                let factor = m[row][col].clone();
-                // `m[row]` is written while `m[col]` is read, so the rows cannot
-                // be iterated together.
-                #[allow(clippy::needless_range_loop)]
-                for k in col..=n {
-                    let delta = &factor * &m[col][k];
-                    m[row][k] -= delta;
+        for row in before.iter_mut().chain(after) {
+            let factor = row.get(column)?.clone();
+            if !factor.is_zero() {
+                for (value, pivot_value) in row.iter_mut().zip(pivot_row.iter()).skip(column) {
+                    *value -= &factor * pivot_value;
                 }
             }
         }
     }
-    Some(
-        m.into_iter()
-            .map(|mut row| row.pop().unwrap_or_else(BigRational::zero))
-            .collect(),
-    )
+    rows.into_iter().map(|mut row| row.pop()).collect()
 }
 
 impl UnitSystem {
@@ -198,15 +222,16 @@ impl UnitSystem {
         let Some(columns) = self.columns() else {
             return false;
         };
-        (0..7).all(|index| {
-            let mut target = zero();
-            target[index] = BigRational::one();
-            solve(&columns, &target).is_some()
-        })
+        // Rank depends only on the left-hand side. One elimination is enough.
+        solve(&columns, &zero()).is_some()
     }
 
     /// Decomposes `dim`; `None` only for an invalid system.
     #[must_use]
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "multiplies generator coefficients as exact rationals"
+    )]
     pub fn reduce(
         &self,
         dim: &Dim,
@@ -220,7 +245,7 @@ impl UnitSystem {
         }
         let columns = self.columns()?;
         let solution = solve(&columns, &si)?;
-        let (lambdas, mus) = solution.split_at(self.unity.len());
+        let (lambdas, mus) = solution.split_at_checked(self.unity.len())?;
         let mut factors: Vec<(Atom, BigRational)> = rest;
         for (generator, mu) in self.generators.iter().zip(mus) {
             if mu.is_zero() {
@@ -263,7 +288,7 @@ impl UnitSystem {
                 return None;
             }
             let power = BigRational::from_integer(lambda.numer().clone());
-            scale = scale.mul(&self.unity.get(*index)?.value.pow(&power)?);
+            scale = scale.checked_mul(&self.unity.get(*index)?.value.pow(&power)?)?;
         }
         Some(scale)
     }
@@ -306,16 +331,19 @@ impl UnitSystem {
     /// The display unit of a representative built from one generator to an
     /// integer power (`eV`, `eV^-2`), when there is one.
     #[must_use]
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "rational division occurs only in the nonzero-denominator branch"
+    )]
     pub fn display_of(
         &self,
         dim: &Dim,
     ) -> Option<(String, BigInt)> {
+        let d = vector_of(dim)?;
         for generator in &self.generators {
-            let (g, _) = split(&generator.dim);
-            let (d, rest) = split(dim);
-            if !rest.is_empty() {
-                return None;
-            }
+            let Some(g) = vector_of(&generator.dim) else {
+                continue;
+            };
             // `d = g^k` for a rational k shared by every component.
             let mut ratio: Option<BigRational> = None;
             let mut consistent = true;

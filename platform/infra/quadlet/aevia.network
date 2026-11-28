@@ -1,5 +1,5 @@
 [Unit]
-Description=Aevia private network (db + registry + caddy)
+Description=Aevia edge network (registry + Caddy)
 
 [Network]
 # Explicit name so the three units agree on it and `podman network inspect aevia`

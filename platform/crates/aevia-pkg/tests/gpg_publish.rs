@@ -9,12 +9,13 @@
 //!
 //! Every test **detects `gpg` and skips** when it is not installed: a machine
 //! without GnuPG cannot exercise the OpenPGP path, and failing there would
-//! report a missing tool as a broken client.
+//! report a missing tool as a broken client. When
+//! `AEVIA_REQUIRE_TEST_FIXTURES=1` is set, a missing fixture fails the test.
 //!
-//! The full publish test is `#[ignore]`d by default. It needs to generate a
-//! key, run `gpg` several times and serve three HTTP requests, which is slower
-//! and more environment-dependent than a unit test should be. Run it with
-//! `cargo test -p aevia-pkg -- --ignored`.
+//! The publish test generates a temporary key and serves the package API on
+//! loopback. It needs no live registry or persistent account.
+
+#![allow(clippy::expect_used, clippy::unwrap_used)] // Fixture setup fails the current test.
 
 use std::io::Read;
 use std::io::Write;
@@ -76,13 +77,17 @@ fn gpg_home(home: &Path) -> Option<String> {
     if let Some(posix) = posix_path(home) {
         candidates.push(posix);
     }
-    for candidate in candidates {
-        if generate_key(&candidate) {
-            return Some(candidate);
-        }
-    }
-    eprintln!("skipping: gpg could not create a key in any path spelling");
-    None
+    candidates
+        .into_iter()
+        .find(|candidate| generate_key(candidate))
+}
+
+fn skip_without_fixture(reason: &str) {
+    assert!(
+        std::env::var_os("AEVIA_REQUIRE_TEST_FIXTURES").is_none(),
+        "{reason}"
+    );
+    eprintln!("skipping: {reason}");
 }
 
 /// The fingerprint of the first secret key in `home`, read the way the client
@@ -158,7 +163,7 @@ fn write_package(root: &Path) {
     let _ = std::fs::create_dir_all(root.join("src"));
     let _ = std::fs::write(
         root.join("aevia.toml"),
-        "[package]\nname = \"units-extra\"\nversion = \"0.2.0\"\nentry = \"src/main.aev\"\n",
+        "[package]\nname = \"units-extra\"\nversion = \"0.2.0\"\nentry = \"src/main.aev\"\ndescription = \"Units extra test\"\nlicense = \"Apache-2.0\"\n",
     );
     let _ = std::fs::write(
         root.join("src/main.aev"),
@@ -174,16 +179,16 @@ fn binary() -> &'static str {
 #[test]
 fn key_list_reads_a_real_gpg_home() {
     if !gpg_available() {
-        eprintln!("skipping: gpg is not installed");
+        skip_without_fixture("gpg is not installed");
         return;
     }
     let Some(scratch) = Scratch::new("keylist") else {
-        eprintln!("skipping: no scratch directory");
+        skip_without_fixture("cannot create a scratch directory");
         return;
     };
     let home = scratch.join("gnupg");
     let Some(home) = gpg_home(&home) else {
-        eprintln!("skipping: gpg could not create a key");
+        skip_without_fixture("gpg could not create a key");
         return;
     };
 
@@ -211,19 +216,18 @@ fn key_list_reads_a_real_gpg_home() {
 }
 
 #[test]
-#[ignore = "needs gpg and a stub registry; run with --ignored"]
 fn a_signed_publish_reaches_the_registry() {
     if !gpg_available() {
-        eprintln!("skipping: gpg is not installed");
+        skip_without_fixture("gpg is not installed");
         return;
     }
     let Some(scratch) = Scratch::new("publish") else {
-        eprintln!("skipping: no scratch directory");
+        skip_without_fixture("cannot create a scratch directory");
         return;
     };
     let home = scratch.join("gnupg");
     let Some(home) = gpg_home(&home) else {
-        eprintln!("skipping: gpg could not create a key");
+        skip_without_fixture("gpg could not create a key");
         return;
     };
     let package = scratch.join("pkg");
@@ -232,7 +236,7 @@ fn a_signed_publish_reaches_the_registry() {
     // Two keys on one machine is the normal case (a gpg key and an ssh key),
     // and the client refuses to guess between them, so the test names one.
     let Some(fingerprint) = fingerprint(&home) else {
-        eprintln!("skipping: gpg lists no secret key");
+        skip_without_fixture("gpg lists no secret key");
         return;
     };
 
@@ -255,7 +259,11 @@ fn a_signed_publish_reaches_the_registry() {
         .output()
         .expect("the binary runs");
     let dry_stdout = String::from_utf8_lossy(&dry.stdout).to_string();
-    assert!(dry.status.success(), "{dry_stdout}");
+    assert!(
+        dry.status.success(),
+        "{dry_stdout}\n{}",
+        String::from_utf8_lossy(&dry.stderr)
+    );
     assert!(dry_stdout.contains("aevia-publish-v1"), "{dry_stdout}");
     assert!(dry_stdout.contains("dry run"), "{dry_stdout}");
     assert!(
@@ -412,7 +420,14 @@ fn respond(
         );
     }
     if path.ends_with("/publish") {
-        let checksum = json_string(body, "checksum").unwrap_or_default();
+        let checksum = json_string(body, "statement")
+            .and_then(|statement| {
+                statement
+                    .lines()
+                    .find_map(|line| line.strip_prefix("checksum: "))
+                    .map(str::to_owned)
+            })
+            .unwrap_or_default();
         return (
             "201 Created",
             format!(
@@ -423,7 +438,7 @@ fn respond(
             ),
         );
     }
-    if path.starts_with("/api/v1/keys/") {
+    if path.starts_with("/api/v1/keys?") {
         return (
             "200 OK",
             "{\"registered\":true,\"publisher\":{\"handle\":\"apich\",\"kind\":\"github\"}}"

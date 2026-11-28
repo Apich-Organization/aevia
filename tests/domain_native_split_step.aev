@@ -1,0 +1,85 @@
+## Exercises native split-step sampling, evolution and error reporting.
+import Rssn_numerical_vector as Native
+
+let solver = Rssn.dynamic("num_native_split_centered_normalized", [to_value([4, 4]), to_value([2.0, 2.0]), to_value(1.0)])
+
+fn amplitude(_x: Tensor<1, Float>): Complex = Native.num_analysis_complex_scalar_complex(0.5, 0.0)
+fn potential(_t: Float, _x: Tensor<1, Float>): Float = 2.0
+fn absorber(_x: Tensor<1, Float>): Float = 0.5
+fn wrong_absorber(_x: Tensor<1, Float>): Float = -0.5
+
+fn sample(wave: Value): Result<Value, OpError> =
+    Native.num_native_split_sample([wave, to_value(16)], [to_callback(amplitude)])
+
+fn use_sample(op: (Value, Value) -> Result<Value, OpError>): Result<Value, OpError> =
+    match solver with
+    | Ok(wave) -> match sample(wave) with
+        | Ok(psi) -> op(wave, psi)
+        | Err(error) -> Err(error)
+    | Err(error) -> Err(error)
+
+fn apply_norm(wave: Value, psi: Value): Result<Value, OpError> =
+    Rssn.dynamic("num_native_split_norm2", [wave, psi])
+
+fn scalar_close(call: Result<Value, OpError>, expected: Float): Bool =
+    match call with
+    | Ok(result) -> match from_value<Float>(result) with
+        | Ok(actual) -> approx_eq(actual, expected, 1e-12)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "split-step samples a complex callback on the originating grid" =
+    scalar_close(use_sample(apply_norm), 1.0)
+
+test "constant potential is the energy of a normalized zero mode" =
+    let energy = fn (wave: Value, psi: Value) => Native.num_native_split_energy([wave, psi, to_value(0.0), to_value(0.0), to_value(16)], [to_callback(potential)])
+    scalar_close(use_sample(energy), 2.0)
+
+test "constant potential is the chemical potential of a normalized zero mode" =
+    let chemical = fn (wave: Value, psi: Value) => Native.num_native_split_chemical_potential([wave, psi, to_value(0.0), to_value(0.0), to_value(16)], [to_callback(potential)])
+    scalar_close(use_sample(chemical), 2.0)
+
+fn final_norm(wave: Value, input: Result<Value, OpError>): Result<Value, OpError> =
+    match input with
+    | Ok(psi) -> apply_norm(wave, psi)
+    | Err(error) -> Err(error)
+
+test "constant potential split evolution conserves norm" =
+    let evolve = fn (wave: Value, psi: Value) => final_norm(wave, Native.num_native_split_evolve([wave, psi, to_value(0.0), to_value(0.0), to_value(0.1), to_value(2), to_value("Strang"), to_value(32)], [to_callback(potential)]))
+    scalar_close(use_sample(evolve), 1.0)
+
+test "bounded rotation preserves a two-dimensional constant mode norm" =
+    let rotate = fn (wave: Value, psi: Value) => final_norm(wave, Native.num_native_split_evolve_rotating([wave, psi, to_value(0.0), to_value(0.2), to_value(0.0), to_value(0.1), to_value(2), to_value("Strang"), to_value(32)], [to_callback(potential)]))
+    scalar_close(use_sample(rotate), 1.0)
+
+fn absorbing(callback: (Tensor<1, Float>) -> Float, budget: Int, wave: Value, psi: Value): Result<Value, OpError> =
+    Native.num_native_split_evolve_absorbing([wave, psi, to_value(0.0), to_value(0.0), to_value(0.1), to_value(2), to_value("Strang"), to_value(budget)], [to_callback(potential), to_callback(callback)])
+
+test "absorbing split evolution uses both interleaved callbacks" =
+    let evolve = fn (wave: Value, psi: Value) => final_norm(wave, absorbing(absorber, 48, wave, psi))
+    scalar_close(use_sample(evolve), exp(-0.2))
+
+test "a negative absorber fails without returning a partial wave" =
+    let evolve = fn (wave: Value, psi: Value) => absorbing(wrong_absorber, 48, wave, psi)
+    show(use_sample(evolve)) == "Err(E0806: out of domain: absorbing potential must be nonnegative)"
+
+type GroundState = { psi: Tensor<1, Complex>, energy: Float, chemical_potential: Float, steps: Int, converged: Bool }
+
+test "an exact zero mode converges through the ground-state callback" =
+    let ground = fn (wave: Value, psi: Value) => Native.num_native_split_ground_state([wave, psi, to_value(0.0), to_value(0.1), to_value(10), to_value(1e-12), to_value(64)], [to_callback(potential)])
+    match use_sample(ground) with
+    | Ok(result) -> match from_value<GroundState>(result) with
+        | Ok(r) -> r.converged && r.steps == 10 && shape(r.psi) == [16] && approx_eq(r.energy, 2.0, 1e-12) && approx_eq(r.chemical_potential, 2.0, 1e-12)
+        | Err(_) -> false
+    | Err(_) -> false
+
+fn dimensional_amplitude(_x: Tensor<1, Float[Length]>): Complex[Length^-1] = Native.num_analysis_complex_scalar_complex(0.5 m^-1, 0.0 m^-1)
+
+test "split-step also accepts a callback with physical units on a physical grid" =
+    match Rssn.dynamic("num_native_split_centered", [to_value([4, 4]), to_value([2.0 m, 2.0 m]), to_value(1e-34 kg), to_value(1.0 m), to_value(1.0 s)]) with
+    | Ok(wave) -> match Native.num_native_split_sample([wave, to_value(16)], [to_callback(dimensional_amplitude)]) with
+        | Ok(psi) -> match from_value<Tensor<1, Complex[Length^-1]>>(psi) with
+            | Ok(values) -> shape(values) == [16] && scalar_close(apply_norm(wave, psi), 1.0)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false

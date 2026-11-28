@@ -19,8 +19,9 @@
 //! * It cuts a signature at the first `=` outside brackets, so a body written
 //!   on the same line is dropped (correct) and a multi-line `class … where`
 //!   block loses its methods (a loss, and the compiler path does not have it).
-//! * It has no notion of attributes, string literals or `##` inside a string,
-//!   so those appear as ordinary text.
+//! * It recognises visibility markers on single-line attributes, including
+//!   `@hidden`, `@doc(hidden)`, and `@doc(hidden = true)`. It does not parse
+//!   multi-line attributes or track multi-line strings in declaration bodies.
 //!
 //! Because of all of that, pages built this way can differ from pages built
 //! with the compiler feature on. The crate's documentation says so, and the
@@ -31,15 +32,21 @@ use crate::Decl;
 use crate::Module;
 
 /// Scans one file for doc comments and declarations.
-pub(crate) fn scan(
+#[allow(
+    clippy::single_call_fn,
+    reason = "the fallback scanner implements the per-file documentation interface"
+)]
+pub fn scan(
     source: &str,
     file: &str,
     fallback_name: &str,
 ) -> Module {
     let mut path = None;
+    let mut doc = None;
     let mut decls = Vec::new();
     let mut pending: Vec<String> = Vec::new();
-    for line in source.lines() {
+    let mut hidden = false;
+    for line in source.split(['\r', '\n']) {
         if let Some(text) = line.strip_prefix("##") {
             pending.push(text.trim().to_string());
             continue;
@@ -52,26 +59,108 @@ pub(crate) fn scan(
         if let Some(declared) = module_decl(line) {
             if path.is_none() {
                 path = Some(declared);
+                if decls.is_empty() && !pending.is_empty() {
+                    doc = Some(pending.join("\n"));
+                }
             }
             pending.clear();
+            hidden = false;
             continue;
         }
-        if let Some(mut decl) = declaration(line) {
+        let mut statement = line;
+        while let Some((hide, rest)) = attribute(statement) {
+            hidden |= hide;
+            statement = rest;
+        }
+        if let Some(mut decl) = declaration(statement) {
             if !pending.is_empty() {
                 decl.doc = Some(pending.join("\n"));
             }
+            decl.doc_hidden = hidden;
             decls.push(decl);
             pending.clear();
+            hidden = false;
+        } else {
+            // The compiler consumes these declarations and their metadata,
+            // even though they do not contribute to the documentation.
+            let mut words = statement.split_whitespace();
+            let mut keyword = words.next();
+            if matches!(keyword, Some("pub" | "export")) {
+                keyword = words.next();
+            }
+            if !statement.starts_with(char::is_whitespace)
+                && matches!(keyword, Some("import" | "open" | "test"))
+            {
+                pending.clear();
+                hidden = false;
+            }
         }
     }
     Module {
         path: path.unwrap_or_else(|| fallback_name.to_string()),
         file: file.to_string(),
+        doc,
         decls,
     }
 }
 
+/// Consumes one single-line attribute and recognises a documentation marker.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the fallback can skip unrelated attribute arguments without reading their expressions"
+)]
+fn attribute(line: &str) -> Option<(bool, &str)> {
+    let rest = line.strip_prefix('@')?;
+    let end = rest
+        .find(|character: char| !character.is_alphanumeric() && character != '_')
+        .unwrap_or(rest.len());
+    let (name, tail) = rest.split_at(end);
+    let tail = tail.trim_start();
+    let mut hidden = name == "hidden";
+    let Some(args) = tail.strip_prefix('(') else {
+        return Some((hidden, tail));
+    };
+    let mut depth = 0usize;
+    let mut start = 0;
+    let mut quoted = false;
+    let mut escaped = false;
+    for (index, character) in args.char_indices() {
+        if quoted {
+            if character == '"' && !escaped {
+                quoted = false;
+            }
+            escaped = character == '\\' && !escaped;
+            continue;
+        }
+        match character {
+            | '"' => quoted = true,
+            | '(' | '[' | '{' => depth = depth.saturating_add(1),
+            | ',' | ')' if depth == 0 => {
+                let (prefix, suffix) = args.split_at(index);
+                if name == "doc" {
+                    let argument = prefix.get(start..).unwrap_or_default().trim();
+                    hidden |= argument == "hidden"
+                        || argument.split_once('=').is_some_and(|(key, value)| {
+                            key.trim() == "hidden" && value.trim() == "true"
+                        });
+                }
+                if let Some(rest) = suffix.strip_prefix(')') {
+                    return Some((hidden, rest.trim_start()));
+                }
+                start = index.saturating_add(1);
+            },
+            | ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            | _ => {},
+        }
+    }
+    None
+}
+
 /// The module path of a `module A.B` line.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the fallback scanner recognizes module headers separately from declarations"
+)]
 fn module_decl(line: &str) -> Option<String> {
     let rest = line.strip_prefix("module ")?;
     let name = rest.split_whitespace().next()?;
@@ -83,6 +172,10 @@ fn module_decl(line: &str) -> Option<String> {
 }
 
 /// One declaration, if the line starts with a declaration keyword.
+#[allow(
+    clippy::single_call_fn,
+    reason = "fallback declaration recognition is separate from comment and module tracking"
+)]
 fn declaration(line: &str) -> Option<Decl> {
     // An indented line is inside a body, not at the module's surface.
     if line.starts_with(char::is_whitespace) {
@@ -103,10 +196,15 @@ fn declaration(line: &str) -> Option<Decl> {
         signature: signature(rest),
         doc: None,
         private,
+        doc_hidden: false,
     })
 }
 
 /// Splits the keyword from the rest of a declaration line.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the fallback declaration keywords have a distinct lexical table"
+)]
 fn split_keyword(line: &str) -> Option<(&'static str, &str)> {
     const KEYWORDS: [(&str, &str); 9] = [
         ("let rec ", "let"),
@@ -128,6 +226,10 @@ fn split_keyword(line: &str) -> Option<(&'static str, &str)> {
 }
 
 /// The declared name, as far as a line scanner can tell.
+#[allow(
+    clippy::single_call_fn,
+    reason = "binding patterns and derive clauses have different name extraction rules"
+)]
 fn declaration_name(
     kind: &str,
     body: &str,
@@ -158,6 +260,10 @@ fn declaration_name(
 }
 
 /// The signature, cut where the body begins.
+#[allow(
+    clippy::single_call_fn,
+    reason = "signature extraction tracks nesting and quoted strings independently"
+)]
 fn signature(line: &str) -> String {
     let mut depth = 0i32;
     let mut in_string = false;
@@ -173,8 +279,8 @@ fn signature(line: &str) -> String {
         }
         match character {
             | '"' => in_string = true,
-            | '(' | '[' | '{' => depth += 1,
-            | ')' | ']' | '}' => depth -= 1,
+            | '(' | '[' | '{' => depth = depth.saturating_add(1),
+            | ')' | ']' | '}' => depth = depth.saturating_sub(1),
             | '=' if depth == 0
                 && !matches!(
                     previous,
@@ -188,7 +294,7 @@ fn signature(line: &str) -> String {
         }
         previous = character;
     }
-    line[..cut].trim_end().to_string()
+    line.get(..cut).unwrap_or(line).trim_end().to_string()
 }
 
 #[cfg(all(test, not(feature = "compiler")))]
@@ -222,5 +328,25 @@ mod tests {
     fn a_private_declaration_is_marked() {
         let module = scan("private fn hidden(): Int = 1\n", "a.aev", "A");
         assert!(module.decls[0].private);
+    }
+
+    #[test]
+    fn single_line_attributes_respect_quoted_text_and_reset_after_tests() {
+        let module = scan(
+            concat!(
+                "module A\r",
+                "@doc(section = \"text, hidden)\", hidden = true) fn first(): Int = 1\r",
+                "## This comment belongs to the test.\r",
+                "@hidden test \"example\" = true\r",
+                "@doc(section = \"text, hidden)\", hidden = false) fn second(): Int = 2\r",
+            ),
+            "src/A.aev",
+            "A",
+        );
+        assert_eq!(module.decls.len(), 2);
+        assert!(module.decls[0].doc_hidden);
+        assert_eq!(module.decls[1].name, "second");
+        assert!(!module.decls[1].doc_hidden);
+        assert_eq!(module.decls[1].doc, None);
     }
 }

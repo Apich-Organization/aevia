@@ -1,0 +1,568 @@
+load("@rssn//bazel:rules.bzl", "cargo_artifact", "scientific_run", "scientific_test")
+load("//bazel:rssn_suites.bzl", "RSSN_CONTRACT_PLAN", "RSSN_RELEASE_PLAN")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["Cargo.toml"])
+
+filegroup(
+    name = "sources",
+    srcs = glob(
+        [
+            ".cargo/**",
+            "Cargo.*",
+            "crates/**",
+            "editors/**",
+            "examples/**",
+            "platform/**",
+            "scripts/**",
+            "spec/**",
+            "tests/**",
+            "tools/**",
+            "*.md",
+            "*.html",
+            "*.toml",
+            "LICENSE",
+        ],
+        exclude = [
+            "**/.git/**",
+            "**/.gradle/**",
+            "**/.idea/**",
+            "**/__pycache__/**",
+            "**/node_modules/**",
+            "**/target/**",
+            "**/*.pyc",
+            "editors/jetbrains/build/**",
+            "editors/zed/extension.wasm",
+            "editors/zed/grammars/**",
+        ],
+    ),
+)
+
+config_setting(
+    name = "optimized",
+    values = {"compilation_mode": "opt"},
+)
+
+config_setting(
+    name = "llvm_overlay",
+    define_values = {"aevia_llvm_optimizer": "1"},
+)
+
+config_setting(
+    name = "bounded_rust_tests",
+    define_values = {"rssn_bounded_tests": "1"},
+)
+
+_RELEASE_ARGUMENTS = select({
+    ":optimized": ["--release"],
+    "//conditions:default": [],
+})
+
+_RELEASE_PASS = select({
+    ":llvm_overlay": "@rssn//:llvm_optimizer",
+    "//conditions:default": None,
+})
+
+_TASKS = ["//bazel:aevia_tasks.py"]
+
+config_setting(
+    name = "release_distribution",
+    define_values = {
+        "aevia_llvm_optimizer": "1",
+        "rssn_cpu_baseline": "distribution",
+        "rssn_codegen_units": "1",
+        "rssn_lto": "fat",
+    },
+    values = {"compilation_mode": "opt"},
+)
+
+_RELEASE_PREREQUISITES = select({
+    ":release_distribution": ["@rssn//:release_pass_gate"],
+    "//conditions:default": [],
+})
+
+[
+    cargo_artifact(
+        name = name,
+        aevia = ":sources",
+        arguments = _RELEASE_ARGUMENTS,
+        data = _TASKS + _RELEASE_PREREQUISITES,
+        directories = ["bin"],
+        outputs = ["bin"],
+        plugin = _RELEASE_PASS,
+        project = "aevia",
+        rssn = "@rssn//:sources" if name.startswith("toolchain") else None,
+        scope = "" if name.startswith("toolchain") else "platform",
+        workflow = name,
+    )
+    for name in [
+        "toolchain",
+        "toolchain_minimal",
+        "toolchain_profiling",
+        "platform_cli",
+        "platform_binaries",
+        "registry_server",
+    ]
+]
+
+scientific_run(
+    name = "package_release",
+    aevia = ":sources",
+    arguments = RSSN_RELEASE_PLAN,
+    data = _TASKS + [":toolchain"] + select({
+        "@platforms//os:linux": [":platform_binaries"],
+        "//conditions:default": [":platform_cli"],
+    }),
+    project = "aevia",
+    rssn = "@rssn//:sources",
+    scope = "release",
+    tags = ["manual"],
+    target_compatible_with = select({
+        ":release_distribution": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    workflow = "package-release",
+)
+
+[
+    scientific_run(
+        name = name,
+        aevia = ":sources",
+        arguments = RSSN_RELEASE_PLAN,
+        data = _TASKS,
+        project = "aevia",
+        scope = "release",
+        tags = ["manual"],
+        workflow = workflow,
+    )
+    for name, workflow in [
+        ("package_release_from_binaries", "package-release-from-binaries"),
+        ("release_smoke", "release-smoke"),
+    ]
+]
+
+scientific_run(
+    name = "aevia",
+    aevia = ":sources",
+    data = _TASKS + [":toolchain"],
+    project = "aevia",
+    rssn = "@rssn//:sources",
+    workflow = "cli",
+)
+
+scientific_test(
+    name = "release_inputs_test",
+    size = "small",
+    aevia = ":sources",
+    data = _TASKS,
+    project = "aevia",
+    scope = "release-inputs-test",
+    tags = ["local"],
+    workflow = "release-inputs-test",
+)
+
+[
+    scientific_test(
+        name = name,
+        size = "enormous",
+        timeout = "eternal",
+        aevia = ":sources",
+        arguments = arguments + _RELEASE_ARGUMENTS if workflow in [
+            "rust-tests",
+            "platform-test",
+        ] else arguments,
+        data = _TASKS + data,
+        plugin = _RELEASE_PASS if workflow in [
+            "rust-tests",
+            "platform-test",
+        ] else None,
+        project = "aevia",
+        rssn = "@rssn//:sources" if workflow in [
+            "rust-tests",
+            "clippy",
+            "fmt",
+            "rustdoc",
+            "profiler-clippy",
+            "editor-protocol",
+            "toolchain-test",
+            "contracts",
+            "rssn-api-audit",
+        ] else None,
+        scope = "platform" if workflow.startswith("platform-") else "editors" if workflow.startswith("editor-") or workflow == "editors" else "",
+        tags = ["local"] + tags,
+        workflow = workflow,
+    )
+    for name, workflow, data, arguments, tags in [
+        (
+            "clippy_test",
+            "clippy",
+            [],
+            [],
+            ["manual"],
+        ),
+        (
+            "platform_clippy_test",
+            "platform-clippy",
+            [],
+            [],
+            ["manual"],
+        ),
+        ("rust_tests", "rust-tests", [], [], []),
+        (
+            "rust_all_features_test",
+            "rust-tests",
+            [],
+            ["--all-features"] + select({
+                ":bounded_rust_tests": ["--batches=2"],
+                "//conditions:default": [],
+            }),
+            [
+                "manual",
+                "gpu",
+            ],
+        ),
+        (
+            "platform_test",
+            "platform-test",
+            [],
+            [],
+            [
+                "manual",
+                "external",
+                "no-cache",
+            ],
+        ),
+        ("platform_scripts_test", "platform-scripts", [], [], []),
+        (
+            "platform_unit_test",
+            "platform-unit",
+            [],
+            [],
+            ["manual"],
+        ),
+        (
+            "registry_image_test",
+            "registry-image-test",
+            [":registry_server"],
+            [],
+            [
+                "manual",
+                "external",
+            ],
+        ),
+        (
+            "playground_image_test",
+            "playground-image-test",
+            [":toolchain"],
+            [],
+            [
+                "manual",
+                "external",
+            ],
+        ),
+        (
+            "editor_config_test",
+            "editors",
+            [],
+            [],
+            [
+                "manual",
+                "external",
+            ],
+        ),
+        (
+            "editor_kate_test",
+            "editor-kate",
+            [],
+            [],
+            [
+                "manual",
+                "external",
+            ],
+        ),
+        (
+            "editor_zed_runnables_test",
+            "editor-zed-runnables",
+            [],
+            [],
+            [
+                "manual",
+                "external",
+            ],
+        ),
+        (
+            "editor_zed_wasm_test",
+            "editor-zed-wasm",
+            [],
+            [],
+            [
+                "manual",
+                "external",
+            ],
+        ),
+        (
+            "fmt_test",
+            "fmt",
+            [],
+            ["--check"],
+            ["manual"],
+        ),
+        (
+            "rustdoc_test",
+            "rustdoc",
+            [],
+            [],
+            ["manual"],
+        ),
+        (
+            "platform_rustdoc_test",
+            "platform-rustdoc",
+            [],
+            [],
+            ["manual"],
+        ),
+        (
+            "profiler_clippy_test",
+            "profiler-clippy",
+            [],
+            [],
+            ["manual"],
+        ),
+        (
+            "editor_protocol_test",
+            "editor-protocol",
+            [":toolchain"],
+            [],
+            [
+                "manual",
+                "external",
+            ],
+        ),
+        (
+            "editor_package_test",
+            "editor-packages",
+            [],
+            [],
+            [
+                "manual",
+                "external",
+            ],
+        ),
+        (
+            "editor_vscode_test",
+            "editor-vscode",
+            [],
+            [],
+            [
+                "manual",
+                "external",
+            ],
+        ),
+        (
+            "toolchain_test",
+            "toolchain-test",
+            [":toolchain"],
+            [],
+            [],
+        ),
+        (
+            "contracts_test",
+            "contracts",
+            [":toolchain"],
+            RSSN_CONTRACT_PLAN,
+            [],
+        ),
+        (
+            "rssn_api_audit_test",
+            "rssn-api-audit",
+            [],
+            [],
+            ["manual"],
+        ),
+    ]
+]
+
+[
+    scientific_run(
+        name = name,
+        aevia = ":sources",
+        data = _TASKS + data,
+        project = "aevia",
+        rssn = "@rssn//:sources" if workflow in [
+            "refresh-kernel",
+            "refresh-stdlib",
+            "refresh-stdlib-reference",
+        ] else None,
+        scope = "editors" if workflow == "editor-packages" else "spec" if workflow == "refresh-spec" else "",
+        tags = ["manual"],
+        workflow = workflow,
+    )
+    for name, workflow, data in [
+        ("refresh_kernel", "refresh-kernel", []),
+        ("refresh_stdlib", "refresh-stdlib", []),
+        ("refresh_stdlib_reference", "refresh-stdlib-reference", []),
+        ("refresh_spec", "refresh-spec", []),
+        ("editor_packages", "editor-packages", []),
+    ]
+]
+
+test_suite(
+    name = "test",
+    tests = [
+        ":contracts_test",
+        ":release_inputs_test",
+        ":rust_tests",
+        ":toolchain_test",
+    ],
+)
+
+test_suite(
+    name = "joint_test",
+    tests = [
+        ":test",
+        "@rssn//:test",
+    ],
+)
+
+test_suite(
+    name = "joint_all_features_test",
+    tags = ["manual"],
+    tests = [
+        ":rust_all_features_test",
+        "@rssn//:rust_all_features_test",
+    ],
+)
+
+scientific_run(
+    name = "rssn_api_audit",
+    aevia = ":sources",
+    data = _TASKS,
+    project = "aevia",
+    rssn = "@rssn//:sources",
+    tags = ["manual"],
+    workflow = "rssn-api-audit",
+)
+
+[
+    scientific_run(
+        name = name,
+        aevia = ":sources",
+        data = _TASKS + data,
+        project = "aevia",
+        rssn = "@rssn//:sources",
+        tags = ["manual"],
+        workflow = workflow,
+    )
+    for name, workflow, data in [
+        ("benchmark", "benchmark", []),
+        ("benchmark_ci", "benchmark-ci", []),
+        (
+            "profile",
+            "profile",
+            [":toolchain_profiling"],
+        ),
+    ]
+]
+
+scientific_run(
+    name = "fmt",
+    aevia = ":sources",
+    data = _TASKS,
+    project = "aevia",
+    rssn = "@rssn//:sources",
+    workflow = "fmt",
+)
+
+[
+    scientific_run(
+        name = name,
+        aevia = ":sources",
+        data = _TASKS + data,
+        project = "aevia",
+        scope = "platform",
+        tags = [
+            "external",
+            "manual",
+        ],
+        workflow = "registry-image",
+    )
+    for name, data in [
+        (
+            "registry_image",
+            [":registry_server"],
+        ),
+        ("registry_image_from_binary", []),
+    ]
+]
+
+[
+    scientific_run(
+        name = name,
+        aevia = ":sources",
+        data = _TASKS + data,
+        project = "aevia",
+        scope = "platform",
+        tags = [
+            "external",
+            "manual",
+        ],
+        workflow = "playground-image",
+    )
+    for name, data in [
+        (
+            "playground_image",
+            [":toolchain"],
+        ),
+        ("playground_image_from_binary", []),
+    ]
+]
+
+scientific_run(
+    name = "postgres_image",
+    aevia = ":sources",
+    data = _TASKS,
+    project = "aevia",
+    scope = "platform",
+    tags = [
+        "external",
+        "manual",
+    ],
+    workflow = "postgres-image",
+)
+
+scientific_run(
+    name = "platform_dev",
+    aevia = ":sources",
+    data = _TASKS,
+    project = "aevia",
+    scope = "platform",
+    workflow = "platform-dev",
+)
+
+scientific_run(
+    name = "check",
+    aevia = ":sources",
+    data = _TASKS,
+    project = "aevia",
+    rssn = "@rssn//:sources",
+    workflow = "check",
+)
+
+test_suite(
+    name = "integration_test",
+    tags = ["manual"],
+    tests = [
+        ":editor_config_test",
+        ":editor_kate_test",
+        ":editor_package_test",
+        ":editor_protocol_test",
+        ":editor_zed_runnables_test",
+        ":editor_zed_wasm_test",
+        ":joint_test",
+        ":platform_scripts_test",
+        ":platform_test",
+        ":rust_all_features_test",
+        "@rssn//:integration_test",
+    ],
+)

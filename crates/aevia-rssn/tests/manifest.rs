@@ -11,8 +11,37 @@ use aevia_rssn::codegen;
 use aevia_rssn::registry;
 use aevia_rssn::unit_table;
 
+#[test]
+fn operator_spellings_and_iteration_share_canonical_manifest_entries() {
+    let mut manifest = aevia_rssn::kernel::kernel().manifest();
+    // A host can supply an unsorted manifest. Name iteration stays sorted
+    // while lookup retains the registration order for competing spellings.
+    std::sync::Arc::make_mut(&mut manifest).ops.reverse();
+    let registry = aevia_rssn::Registry::from_manifest(&manifest);
+    let mut spellings = std::collections::BTreeMap::new();
+    for op in &manifest.ops {
+        for alias in &op.aliases {
+            spellings.entry(alias.as_str()).or_insert(op.name.as_str());
+        }
+        spellings.insert(&op.name, &op.name);
+    }
+    let entries: Vec<_> = registry.ops().collect();
+    assert_eq!(entries.len(), manifest.ops.len());
+    assert!(entries.windows(2).all(|pair| pair[0].name <= pair[1].name));
+    let canonical: std::collections::BTreeMap<_, _> = entries
+        .iter()
+        .map(|&entry| (entry.name.as_str(), entry))
+        .collect();
+    for (spelling, name) in spellings {
+        assert!(std::ptr::eq(
+            registry.op(spelling).unwrap(),
+            canonical[name]
+        ));
+    }
+}
+
 /// §5.3.3's common non-SI units that the kernel registry lacked until
-/// `rssn 3.0.0-rc.1`. They are asserted directly — not excused — because a
+/// `rssn 3.0.0-beta.1`. They are asserted directly — not excused — because a
 /// unit the design standard declares is part of the language surface: if one
 /// silently stopped resolving, that is a regression, not a manifest fact.
 const SPEC_NON_SI: [(&str, &str, &str); 7] = [

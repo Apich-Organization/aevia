@@ -11,6 +11,21 @@
 //! `sum` with and without an axis); the checker tries them in order and keeps
 //! the first that type-checks.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
 use crate::adt::Adt;
 use crate::adt::{
     self,
@@ -52,6 +67,7 @@ fn scheme(
         vars: (0..vars).collect(),
         dims: (0..dims).collect(),
         rows: (0..rows).collect(),
+        row_lacks: Vec::new(),
         nats: Vec::new(),
         constraints: Vec::new(),
         numeric: Vec::new(),
@@ -160,7 +176,7 @@ fn assert_fully_quantified(scheme: &Scheme) {
     );
 }
 
-fn var(id: u32) -> Type {
+const fn var(id: u32) -> Type {
     Type::Var(id)
 }
 
@@ -168,14 +184,14 @@ fn dim_var(id: u32) -> Dim {
     Dim::var(id)
 }
 
-fn scalar(
+const fn scalar(
     rep: Rep,
     dim: Dim,
 ) -> Type {
     Type::Scalar(rep, dim)
 }
 
-fn rep_var(id: u32) -> Rep {
+const fn rep_var(id: u32) -> Rep {
     Rep::Var(id)
 }
 
@@ -209,7 +225,7 @@ fn list(elem: Type) -> Type {
     tensor(1, elem)
 }
 
-fn unit_ty() -> Type {
+const fn unit_ty() -> Type {
     Type::Unit
 }
 
@@ -301,16 +317,12 @@ fn half() -> BigRational {
     BigRational::new(1.into(), 2.into())
 }
 
-fn third() -> BigRational {
-    BigRational::new(1.into(), 3.into())
-}
-
 fn two() -> BigRational {
     BigRational::from_integer(2.into())
 }
 
 /// `Ordering`, the result of `compare`/`total_compare` (§8.1.2).
-fn ordering() -> Type {
+const fn ordering() -> Type {
     Type::Adt(adt::ORDERING_ID, Vec::new())
 }
 
@@ -320,8 +332,7 @@ fn tuple(fields: Vec<Type>) -> Type {
         fields
             .into_iter()
             .enumerate()
-            .map(|(index, ty)| (index.to_string(), ty))
-            .collect::<Vec<_>>(),
+            .map(|(index, ty)| (index.to_string(), ty)),
     )
 }
 
@@ -355,6 +366,31 @@ pub fn task(result: Type) -> Type {
     )
 }
 
+/// Structural plotting options. Scale values retain their source nominal
+/// identity and are checked for the Linear/Log constructor at runtime.
+fn plot_opts(
+    xscale: Type,
+    yscale: Type,
+) -> Type {
+    let text = || Type::option(Type::string());
+    let limits = || {
+        Type::option(tuple(vec![
+            Type::float(Dim::one()),
+            Type::float(Dim::one()),
+        ]))
+    };
+    Type::record(vec![
+        ("label".to_string(), text()),
+        ("color".to_string(), text()),
+        ("xunit".to_string(), text()),
+        ("yunit".to_string(), text()),
+        ("xscale".to_string(), xscale),
+        ("yscale".to_string(), yscale),
+        ("xlim".to_string(), limits()),
+        ("ylim".to_string(), limits()),
+    ])
+}
+
 /// The opaque `Series` of §8.12.
 fn series() -> Type {
     Type::Adt(
@@ -386,32 +422,36 @@ fn measurement(dim: Dim) -> Type {
     ])
 }
 
-/// The highest rank at which the rank-generic tensor operations are typed.
+/// Upper rank for precomputed overloads of rank-generic tensor operations.
 ///
-/// Rank is not a first-class type parameter (§3.5), so an operation that the
-/// specification declares over `Tensor<n, τ>` gets one overload per rank; the
-/// checker picks the overload by the argument's rank. The runtime of every
-/// operation listed in [`rank_overloads`] is already rank-agnostic.
+/// Rank is not a first-class type parameter (§3.5). The checker selects a
+/// signature by the argument rank and can instantiate higher ranks on demand.
 const MAX_RANK: u32 = 4;
 
-/// The highest rank [`schemes`] enumerates. Ranks above it are not missing:
-/// the signatures of the rank-generic operations are templates over the rank
-/// (`rank_overloads_at`, `first_axis_at`, `fft_schemes_at`), and the checker
-/// instantiates them at the rank of the call's arguments through
+/// The highest rank enumerated by [`schemes`].
+///
+/// For higher argument ranks, the checker instantiates signatures through
 /// [`rank_schemes_for`].
 pub const STATIC_RANK: u32 = MAX_RANK;
 
-/// The overloads of the rank-generic operations at ranks 2 through
-/// [`MAX_RANK`] (rank 1, and rank 2 where it predates this table, are in
-/// [`base_schemes`]).
-fn rank_overloads(name: &str) -> Vec<Scheme> {
-    (2..=MAX_RANK)
-        .flat_map(|rank| rank_overloads_at(name, rank))
-        .collect()
+fn reshape_dyn_at(rank: u32) -> Scheme {
+    scheme(
+        1,
+        0,
+        0,
+        func(
+            vec![tensor(rank, var(0)), list(Type::int())],
+            Type::result(tensor(rank, var(0)), error_type("ShapeError")),
+        ),
+    )
 }
 
 /// The rank template of the element-wise tensor operations, instantiated at
 /// `rank`.
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeps signatures for each supported operator in one table"
+)]
 fn rank_overloads_at(
     name: &str,
     rank: u32,
@@ -421,6 +461,7 @@ fn rank_overloads_at(
     let mut out = Vec::new();
     {
         match name {
+            | "reshape_dyn" => out.push(reshape_dyn_at(rank)),
             | "sum" => {
                 out.push(scheme(1, 1, 0, func(vec![tensor(rank, elem())], elem())));
                 // The keepdims axis form of rank 2 is in the base table.
@@ -447,7 +488,7 @@ fn rank_overloads_at(
                     ),
                 ));
             },
-            | "mean" => {
+            | "mean" | "std" => {
                 out.push(scheme(
                     1,
                     1,
@@ -466,17 +507,6 @@ fn rank_overloads_at(
                     1,
                     0,
                     func(vec![tensor(rank, elem()), Type::bool()], result()),
-                ));
-            },
-            | "std" => {
-                out.push(scheme(
-                    1,
-                    1,
-                    0,
-                    func(
-                        vec![tensor(rank, elem())],
-                        scalar(rep_var(0).div_rep(), dim_var(0)),
-                    ),
                 ));
             },
             | "norm" => {
@@ -540,38 +570,14 @@ fn rank_overloads_at(
     out
 }
 
-/// The input types an FFT of the given rank accepts: complex as it is, real
-/// and integer promoted (§8.8). Each is paired with its scheme builder.
-fn fft_input_forms(rank: u32) -> [(Type, Type, u32); 3] {
-    [
-        (
-            tensor(rank, Type::complex(dim_var(0))),
-            tensor(rank, Type::complex(dim_var(0))),
-            1,
-        ),
-        (
-            tensor(rank, Type::float(dim_var(0))),
-            tensor(rank, Type::complex(dim_var(0))),
-            1,
-        ),
-        (
-            tensor(rank, Type::int()),
-            tensor(rank, Type::complex(one())),
-            0,
-        ),
-    ]
-}
-
-/// The §8.8 transform family. Each transform accepts complex, real or integer
-/// tensors; the dimension of the samples is the dimension of the spectrum
-/// (the frequency axes carry the inverse of the sample spacing only in
-/// `fftfreq`/`rfftfreq`, which take the spacing explicitly).
-fn fft_schemes(name: &str) -> Option<Vec<Scheme>> {
-    fft_schemes_at(name, &(1..=MAX_RANK).collect::<Vec<_>>())
-}
-
-/// [`fft_schemes`] instantiated at exactly the given ranks: the signature of
-/// every transform is a template over the rank.
+/// Instantiates the §8.8 transforms at the given ranks.
+///
+/// Each transform accepts complex, real or integer inputs. The spectrum
+/// retains the dimension of the samples.
+#[allow(
+    clippy::too_many_lines,
+    reason = "describes the complete transform family in one table"
+)]
 fn fft_schemes_at(
     name: &str,
     at: &[u32],
@@ -588,7 +594,24 @@ fn fft_schemes_at(
     let complex_family = |ranks: Vec<u32>, extra: Vec<Type>| {
         let mut found = Vec::new();
         for rank in ranks {
-            for (input, output, dims) in fft_input_forms(rank) {
+            let inputs = [
+                (
+                    tensor(rank, Type::complex(dim_var(0))),
+                    tensor(rank, Type::complex(dim_var(0))),
+                    1,
+                ),
+                (
+                    tensor(rank, Type::float(dim_var(0))),
+                    tensor(rank, Type::complex(dim_var(0))),
+                    1,
+                ),
+                (
+                    tensor(rank, Type::int()),
+                    tensor(rank, Type::complex(one())),
+                    0,
+                ),
+            ];
+            for (input, output, dims) in inputs {
                 let mut args = vec![input];
                 args.extend(extra.iter().cloned());
                 let vars = u32::from(extra.iter().any(|ty| matches!(ty, Type::Var(_))));
@@ -707,17 +730,6 @@ fn fft_schemes_at(
     Some(out)
 }
 
-/// The sequence operations at rank 2 and above (§8.1.5). A tensor of rank
-/// `n > 1` is a sequence of rank-`n-1` slices along its first axis, so
-/// `filter`, `any`, `all`, `find`, `first` and `last` see a *row*, and
-/// `reverse`, `take`, `drop` and `concat` act on the first axis and keep the
-/// rank. Rank 1 is in [`base_schemes`].
-fn first_axis_schemes(name: &str) -> Vec<Scheme> {
-    (2..=MAX_RANK)
-        .flat_map(|rank| first_axis_at(name, rank))
-        .collect()
-}
-
 /// The element a sequence of rank `rank` yields: the scalar of a vector, the
 /// rank-`n-1` slice of anything above (§8.1.5).
 fn sequence_item(
@@ -727,7 +739,7 @@ fn sequence_item(
     if rank <= 1 {
         elem
     } else {
-        tensor(rank - 1, elem)
+        tensor(rank.saturating_sub(1), elem)
     }
 }
 
@@ -820,11 +832,10 @@ fn zip_at(
     )]
 }
 
-/// The rank-template instantiations a call needs beyond [`schemes`], for the
-/// argument ranks `ranks` it was given. Only ranks above [`STATIC_RANK`] are
-/// produced (everything at or below it is already in [`schemes`]). This is
-/// how the rank-generic built-ins (`Tensor<n, a>` for every `n` in §8) work at
-/// any rank without a rank variable in the type language.
+/// Instantiates rank-generic schemes for argument ranks above [`STATIC_RANK`].
+///
+/// [`schemes`] supplies signatures at the precomputed ranks. Together they
+/// cover the rank-generic built-ins in §8.
 #[must_use]
 pub fn rank_schemes_for(
     name: &str,
@@ -861,12 +872,12 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
     if let Some(found) = sparse::sparse_schemes(name, None) {
         return Some(found);
     }
-    if let Some(found) = fft_schemes(name) {
+    if let Some(found) = fft_schemes_at(name, &(1..=MAX_RANK).collect::<Vec<_>>()) {
         return Some(found);
     }
     let mut found = base_schemes(name)?;
-    found.extend(rank_overloads(name));
-    found.extend(first_axis_schemes(name));
+    found.extend((2..=MAX_RANK).flat_map(|rank| rank_overloads_at(name, rank)));
+    found.extend((2..=MAX_RANK).flat_map(|rank| first_axis_at(name, rank)));
     if name == "zip" {
         for left in 1..=MAX_RANK {
             for right in 1..=MAX_RANK {
@@ -878,6 +889,11 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
     Some(found)
 }
 
+#[allow(
+    clippy::single_call_fn,
+    clippy::too_many_lines,
+    reason = "the signature table is separate from generated rank and sparse overloads"
+)]
 fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
     Some(match name {
         // ----- constants -------------------------------------------------
@@ -1001,13 +1017,17 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 0,
                 func(
                     vec![scalar(rep_var(0), dim_var(0))],
-                    scalar(rep_var(0), dim_var(0).pow(&third())),
+                    scalar(
+                        rep_var(0),
+                        dim_var(0).pow(&BigRational::new(1.into(), 3.into())),
+                    ),
                 ),
             )]
         },
         | "exp" | "ln" | "log" | "log2" | "log10" | "sin" | "cos" | "tan" | "asin" | "acos"
         | "atan" | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" | "gamma"
-        | "lgamma" | "erf" | "erfc" | "zeta" | "fresnel_s" | "fresnel_c" => {
+        | "lgamma" | "erf" | "erfc" | "zeta" | "fresnel_s" | "fresnel_c" | "bessel_j0"
+        | "bessel_j1" | "bessel_y0" | "bessel_y1" | "j1" | "y1" => {
             vec![scheme(
                 1,
                 0,
@@ -1029,7 +1049,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             )]
         },
-        | "hypot" => {
+        | "hypot" | "min" | "max" | "mod" | "rem" => {
             vec![scheme(
                 1,
                 1,
@@ -1043,7 +1063,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             )]
         },
-        | "abs" => {
+        | "abs" | "base" => {
             vec![scheme(
                 1,
                 1,
@@ -1060,20 +1080,6 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 1,
                 0,
                 func(vec![scalar(rep_var(0), dim_var(0))], Type::int()),
-            )]
-        },
-        | "min" | "max" => {
-            vec![scheme(
-                1,
-                1,
-                0,
-                func(
-                    vec![
-                        scalar(rep_var(0), dim_var(0)),
-                        scalar(rep_var(0), dim_var(0)),
-                    ],
-                    scalar(rep_var(0), dim_var(0)),
-                ),
             )]
         },
         | "clamp" => {
@@ -1126,25 +1132,14 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 func(vec![scalar(rep_var(0), dim_var(0))], Type::bool()),
             )]
         },
-        | "mod" | "rem" => {
-            vec![scheme(
-                1,
-                1,
-                0,
-                func(
-                    vec![
-                        scalar(rep_var(0), dim_var(0)),
-                        scalar(rep_var(0), dim_var(0)),
-                    ],
-                    scalar(rep_var(0), dim_var(0)),
-                ),
-            )]
-        },
-        | "div" | "quot" | "gcd" | "lcm" => {
+        | "div" | "quot" | "gcd" | "lcm" | "binomial" => {
             vec![Scheme::mono(func(
                 vec![Type::int(), Type::int()],
                 Type::int(),
             ))]
+        },
+        | "mod_pow" => {
+            vec![scheme(0, 0, 0, func(vec![Type::int(); 3], Type::int()))]
         },
         | "factorial" | "double_factorial" => {
             vec![Scheme::mono(func(vec![Type::int()], Type::int()))]
@@ -1222,17 +1217,6 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             ]
         },
-        | "base" => {
-            vec![scheme(
-                1,
-                1,
-                0,
-                func(
-                    vec![scalar(rep_var(0), dim_var(0))],
-                    scalar(rep_var(0), dim_var(0)),
-                ),
-            )]
-        },
         | "point" => {
             vec![scheme(
                 0,
@@ -1257,7 +1241,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                         scalar(rep_var(0), dim_var(0)),
                         Type::int(),
                     ],
-                    list(scalar(rep_var(0), dim_var(0))),
+                    list(Type::float(dim_var(0))),
                 ),
             )]
         },
@@ -1374,7 +1358,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             )]
         },
-        | "mean" => {
+        | "mean" | "std" => {
             vec![scheme(
                 1,
                 1,
@@ -1414,18 +1398,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             ]
         },
-        | "std" => {
-            vec![scheme(
-                1,
-                1,
-                0,
-                func(
-                    vec![tensor(1, scalar(rep_var(0), dim_var(0)))],
-                    scalar(rep_var(0).div_rep(), dim_var(0)),
-                ),
-            )]
-        },
-        | "min_all" | "max_all" => {
+        | "min_all" | "max_all" | "median" | "mode" => {
             vec![scheme(
                 1,
                 1,
@@ -1539,7 +1512,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             )]
         },
-        | "transpose" => {
+        | "transpose" | "tril" | "triu" => {
             vec![scheme(
                 1,
                 0,
@@ -1583,7 +1556,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             )]
         },
-        | "linsolve" => {
+        | "linsolve" | "lstsq" => {
             vec![scheme(
                 1,
                 2,
@@ -1665,7 +1638,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             ]
         },
-        | "map2" => {
+        | "map2" | "zip_with" => {
             vec![scheme(
                 3,
                 0,
@@ -1740,6 +1713,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 vars: vec![0, 1],
                 dims: Vec::new(),
                 rows: Vec::new(),
+                row_lacks: Vec::new(),
                 nats: Vec::new(),
                 constraints: vec![Constraint::new("Parallel", vec![var(0)])],
                 numeric: Vec::new(),
@@ -1765,6 +1739,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 vars: vec![0],
                 dims: Vec::new(),
                 rows: Vec::new(),
+                row_lacks: Vec::new(),
                 nats: Vec::new(),
                 constraints: vec![Constraint::new("Parallel", vec![var(0)])],
                 numeric: Vec::new(),
@@ -1816,21 +1791,6 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             )]
         },
-        | "zip_with" => {
-            vec![scheme(
-                3,
-                0,
-                0,
-                func(
-                    vec![
-                        func(vec![var(0), var(1)], var(2)),
-                        list(var(0)),
-                        list(var(1)),
-                    ],
-                    list(var(2)),
-                ),
-            )]
-        },
         | "enumerate" => {
             vec![scheme(
                 1,
@@ -1853,7 +1813,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 func(vec![Type::int(), list(var(0))], list(var(0))),
             )]
         },
-        | "reverse" => vec![scheme(1, 0, 0, func(vec![list(var(0))], list(var(0))))],
+        | "reverse" | "sort" => vec![scheme(1, 0, 0, func(vec![list(var(0))], list(var(0))))],
         // §8.1.5: `reverse_axis(t, k)` flips axis `k` of a tensor of any rank
         // (ranks above 1 are the rank template in `first_axis_at`).
         | "reverse_axis" | "sort_axis" => {
@@ -1876,7 +1836,6 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 func(vec![func(vec![var(0)], var(1)), list(var(0))], list(var(0))),
             )]
         },
-        | "sort" => vec![scheme(1, 0, 0, func(vec![list(var(0))], list(var(0))))],
         | "concat" => {
             vec![
                 Scheme::mono(func(vec![Type::string(), Type::string()], Type::string())),
@@ -2112,25 +2071,80 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
         },
 
         // ----- display and IO --------------------------------------------
-        | "show" | "repr" | "to_latex" | "to_typst" => {
+        | "show" | "repr" | "to_pretty" | "to_latex" | "to_typst" => {
             vec![scheme(1, 0, 0, func(vec![var(0)], Type::string()))]
         },
         | "print" | "println" | "eprintln" => {
             vec![scheme(1, 0, 0, func(vec![var(0)], io(unit_ty())))]
         },
-        | "read_file" => {
+        | "read_file" | "read_svg" => {
             vec![Scheme::mono(func(
                 vec![Type::string()],
                 io(Type::result(Type::string(), error_type("IOError"))),
             ))]
         },
-        | "write_file" => {
+        | "write_file" | "write_svg" => {
             vec![Scheme::mono(func(
                 vec![Type::string(), Type::string()],
                 io(Type::result(unit_ty(), error_type("IOError"))),
             ))]
         },
         | "read_line" => vec![Scheme::mono(func(vec![unit_ty()], io(Type::string())))],
+        | "input" => {
+            vec![Scheme::mono(func(vec![Type::string()], io(Type::string())))]
+        },
+        | "read_gif" => {
+            let frame_ty = Type::record(vec![
+                ("delay_cs".to_string(), Type::int()),
+                ("rgba".to_string(), list(Type::int())),
+            ]);
+            let gif_ty = Type::record(vec![
+                ("width".to_string(), Type::int()),
+                ("height".to_string(), Type::int()),
+                ("loop_count".to_string(), Type::int()),
+                ("frames".to_string(), list(frame_ty)),
+            ]);
+            vec![Scheme::mono(func(
+                vec![Type::string()],
+                io(Type::result(gif_ty, error_type("IOError"))),
+            ))]
+        },
+        | "write_gif" => {
+            let frame_ty = Type::record(vec![
+                ("delay_cs".to_string(), Type::int()),
+                ("rgba".to_string(), list(Type::int())),
+            ]);
+            let gif_ty = Type::record(vec![
+                ("width".to_string(), Type::int()),
+                ("height".to_string(), Type::int()),
+                ("loop_count".to_string(), Type::int()),
+                ("frames".to_string(), list(frame_ty)),
+            ]);
+            vec![Scheme::mono(func(
+                vec![Type::string(), gif_ty],
+                io(Type::result(unit_ty(), error_type("IOError"))),
+            ))]
+        },
+        | "plot_save_gif" => {
+            let plot_spec = Type::Adt(
+                adt::intern(Adt {
+                    name: "PlotSpec".to_string(),
+                    params: Vec::new(),
+                    ctors: Vec::new(),
+                }),
+                Vec::new(),
+            );
+            vec![
+                Scheme::mono(func(
+                    vec![Type::string(), list(plot_spec.clone()), Type::int()],
+                    io(Type::result(unit_ty(), error_type("IOError"))),
+                )),
+                Scheme::mono(func(
+                    vec![Type::string(), list(plot_spec)],
+                    io(Type::result(unit_ty(), error_type("IOError"))),
+                )),
+            ]
+        },
         // §13.5.2: loads an Aevia source file at run time and publishes its
         // `@op`/`@rule` functions to the kernel; the count of published
         // registrations, or the diagnostics as text.
@@ -2681,14 +2695,6 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             )]
         },
-        | "bessel_j0" | "bessel_j1" | "bessel_y0" | "bessel_y1" | "j1" | "y1" => {
-            vec![scheme(
-                1,
-                0,
-                0,
-                func(vec![scalar(rep_var(0), one())], scalar(rep_var(0), one())),
-            )]
-        },
         | "bessel_jn" | "bessel_yn" | "legendre_p" | "hermite_h" | "laguerre_l" | "chebyshev_t"
         | "chebyshev_u" => {
             vec![scheme(
@@ -2703,23 +2709,6 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
         },
 
         // ----- §8.4 decompositions and shape operations -------------------
-        | "lstsq" => {
-            vec![scheme(
-                1,
-                2,
-                0,
-                func(
-                    vec![
-                        tensor(2, scalar(rep_var(0), dim_var(0))),
-                        tensor(1, scalar(rep_var(0), dim_var(1))),
-                    ],
-                    Type::result(
-                        tensor(1, scalar(rep_var(0).div_rep(), dim_var(1).div(&dim_var(0)))),
-                        error_type("LinAlgError"),
-                    ),
-                ),
-            )]
-        },
         | "eig" => {
             vec![scheme(
                 1,
@@ -2803,14 +2792,6 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             )]
         },
-        | "tril" | "triu" => {
-            vec![scheme(
-                1,
-                0,
-                0,
-                func(vec![tensor(2, var(0))], tensor(2, var(0))),
-            )]
-        },
         // `reshape<shape>` names its target in a *shape* type argument, which
         // `Checker::shape_constructor` reads (§3.5.1). This scheme is the
         // fallback for a call without one: the runtime reports that it needs a
@@ -2829,17 +2810,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
         | "refine_shape" => {
             vec![scheme(1, 0, 0, func(vec![var(0)], Type::option(var(0))))]
         },
-        | "reshape_dyn" => {
-            vec![scheme(
-                1,
-                0,
-                0,
-                func(
-                    vec![tensor(2, var(0)), list(Type::int())],
-                    Type::result(tensor(2, var(0)), error_type("ShapeError")),
-                ),
-            )]
-        },
+        | "reshape_dyn" => vec![reshape_dyn_at(1)],
         // §3.5.5/§8.4: `set : (Tensor<n, τ>, Tensor<1,Int>, τ) -> Tensor<n, τ>`.
         | "set" => {
             vec![
@@ -3136,7 +3107,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             )]
         },
-        | "solve_system" => {
+        | "solve_system" | "least_squares" => {
             vec![scheme(
                 0,
                 2,
@@ -3181,37 +3152,8 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             )]
         },
-        | "least_squares" => {
-            vec![scheme(
-                0,
-                2,
-                0,
-                func(
-                    vec![
-                        func(
-                            vec![list(Type::real(dim_var(0)))],
-                            list(Type::real(dim_var(1))),
-                        ),
-                        list(Type::real(dim_var(0))),
-                    ],
-                    Type::result(list(Type::real(dim_var(0))), error_type("MathError")),
-                ),
-            )]
-        },
-
         // ----- §8.7 statistics --------------------------------------------
-        | "median" => {
-            vec![scheme(
-                1,
-                1,
-                0,
-                func(
-                    vec![tensor(1, scalar(rep_var(0), dim_var(0)))],
-                    scalar(rep_var(0), dim_var(0)),
-                ),
-            )]
-        },
-        | "quantile" => {
+        | "quantile" | "polyval" => {
             vec![scheme(
                 1,
                 1,
@@ -3222,6 +3164,20 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                         scalar(rep_var(0), one()),
                     ],
                     scalar(rep_var(0), dim_var(0)),
+                ),
+            )]
+        },
+        | "quantiles" => {
+            vec![scheme(
+                1,
+                1,
+                0,
+                func(
+                    vec![
+                        tensor(1, scalar(rep_var(0), dim_var(0))),
+                        tensor(1, scalar(rep_var(0), one())),
+                    ],
+                    tensor(1, scalar(rep_var(0).div_rep(), dim_var(0))),
                 ),
             )]
         },
@@ -3273,22 +3229,8 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                     vec![tensor(1, scalar(rep_var(0), dim_var(0))), Type::int()],
                     Type::record(vec![
                         ("counts".to_string(), tensor(1, Type::int())),
-                        (
-                            "edges".to_string(),
-                            tensor(1, scalar(rep_var(0), dim_var(0))),
-                        ),
+                        ("edges".to_string(), tensor(1, Type::float(dim_var(0)))),
                     ]),
-                ),
-            )]
-        },
-        | "mode" => {
-            vec![scheme(
-                1,
-                1,
-                0,
-                func(
-                    vec![tensor(1, scalar(rep_var(0), dim_var(0)))],
-                    scalar(rep_var(0), dim_var(0)),
                 ),
             )]
         },
@@ -3312,6 +3254,25 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 1,
                 0,
                 func(vec![var(0), Type::real(dim_var(0))], Type::real(one())),
+            )]
+        },
+        | "cdf_batch" => {
+            vec![scheme(
+                1,
+                1,
+                0,
+                func(
+                    vec![var(0), list(Type::real(dim_var(0)))],
+                    list(Type::real(one())),
+                ),
+            )]
+        },
+        | "dist_quantile" => {
+            vec![scheme(
+                1,
+                1,
+                0,
+                func(vec![var(0), Type::real(one())], Type::real(dim_var(0))),
             )]
         },
         | "sample" => {
@@ -3367,6 +3328,23 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             )]
         },
+        | "interp2Batch" => {
+            vec![scheme(
+                1,
+                3,
+                0,
+                func(
+                    vec![
+                        tensor(1, scalar(rep_var(0), dim_var(0))),
+                        tensor(1, scalar(rep_var(0), dim_var(1))),
+                        tensor(2, scalar(rep_var(0), dim_var(2))),
+                        tensor(1, scalar(rep_var(0), dim_var(0))),
+                        tensor(1, scalar(rep_var(0), dim_var(1))),
+                    ],
+                    tensor(1, Type::float(dim_var(2))),
+                ),
+            )]
+        },
         | "polyfit" | "chebyshev_fit" => {
             vec![scheme(
                 1,
@@ -3382,21 +3360,6 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             )]
         },
-        | "polyval" => {
-            vec![scheme(
-                1,
-                1,
-                0,
-                func(
-                    vec![
-                        tensor(1, scalar(rep_var(0), dim_var(0))),
-                        scalar(rep_var(0), one()),
-                    ],
-                    scalar(rep_var(0), dim_var(0)),
-                ),
-            )]
-        },
-
         // ----- §8.9 ODE ---------------------------------------------------
         // `RateOf<s>` is a built-in type function, so no HM scheme can state
         // these signatures exactly. The entries below keep the names in the
@@ -3464,7 +3427,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
         // the arity/type errors. `sde_order`'s argument is loose because the
         // `SdeMethod` constructors are not values (the runtime selects the
         // method by name, as for `OdeMethod`/`Norm`).
-        | "sdeint_diag" | "sdeint_general" => {
+        | "sdeint_diag" | "sdeint_general" | "odeint_order_with" => {
             vec![scheme(
                 2,
                 0,
@@ -3476,7 +3439,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
         // `DiffusionOf` type functions are typed by the checker
         // (`ode_ext_call`, `sde_call`); these loose schemes make the names
         // first-class.
-        | "ode_solve" | "ode_bvp" => {
+        | "ode_solve" | "ode_bvp" | "sde_ensemble_diag" | "sde_ensemble_general" => {
             vec![scheme(
                 2,
                 0,
@@ -3486,22 +3449,6 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
         },
         | "odeint_order" => {
             vec![scheme(2, 0, 0, func(vec![var(0), var(0), var(0)], var(1)))]
-        },
-        | "odeint_order_with" => {
-            vec![scheme(
-                2,
-                0,
-                0,
-                func(vec![var(0), var(0), var(0), var(0)], var(1)),
-            )]
-        },
-        | "sde_ensemble_diag" | "sde_ensemble_general" => {
-            vec![scheme(
-                2,
-                0,
-                0,
-                func(vec![var(0), var(0), var(0), var(0), var(0)], var(1)),
-            )]
         },
         // Continuous output and events on a numerical SDE path (§8.9.1). The
         // path is any record with the `SdePath` fields `t` and `y` (an open
@@ -3761,14 +3708,14 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
         // ----- §8.12 plotting ---------------------------------------------
         | "line_with" | "scatter_with" => {
             vec![scheme(
-                1,
+                3,
                 2,
                 0,
                 func(
                     vec![
                         tensor(1, scalar(rep_var(0), dim_var(0))),
                         tensor(1, scalar(rep_var(0), dim_var(1))),
-                        var(0),
+                        plot_opts(var(1), var(2)),
                     ],
                     series(),
                 ),
@@ -3791,7 +3738,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
         },
         | "errorbar_with" => {
             vec![scheme(
-                1,
+                3,
                 2,
                 0,
                 func(
@@ -3799,7 +3746,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                         tensor(1, scalar(rep_var(0), dim_var(0))),
                         tensor(1, scalar(rep_var(0), dim_var(1))),
                         tensor(1, scalar(rep_var(0), dim_var(1))),
-                        var(0),
+                        plot_opts(var(1), var(2)),
                     ],
                     series(),
                 ),
@@ -3818,14 +3765,14 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
         },
         | "hist_with" => {
             vec![scheme(
-                1,
+                3,
                 1,
                 0,
                 func(
                     vec![
                         tensor(1, scalar(rep_var(0), dim_var(0))),
                         Type::int(),
-                        var(0),
+                        plot_opts(var(1), var(2)),
                     ],
                     series(),
                 ),
@@ -3841,16 +3788,24 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
         },
         | "heatmap_with" => {
             vec![scheme(
-                1,
+                3,
                 1,
                 0,
                 func(
-                    vec![tensor(2, scalar(rep_var(0), dim_var(0))), var(0)],
+                    vec![
+                        tensor(2, scalar(rep_var(0), dim_var(0))),
+                        plot_opts(var(1), var(2)),
+                    ],
                     series(),
                 ),
             )]
         },
-        | "default_plot_opts" => vec![Scheme::mono(error_type("PlotOpts"))],
+        | "default_plot_opts" => {
+            vec![Scheme::mono(plot_opts(
+                error_type("AxisScale"),
+                error_type("AxisScale"),
+            ))]
+        },
 
         // ----- §8.13 testing ----------------------------------------------
         | "compile_fail" => vec![Scheme::mono(func(vec![Type::string()], Type::bool()))],
@@ -3878,12 +3833,17 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
 
         // ----- §8.15 complex ----------------------------------------------
         | "complex" => {
-            vec![Scheme::mono(func(
-                vec![Type::real(one()), Type::real(one())],
-                Type::complex(one()),
-            ))]
+            vec![scheme(
+                0,
+                1,
+                0,
+                func(
+                    vec![Type::real(dim_var(0)), Type::real(dim_var(0))],
+                    Type::complex(dim_var(0)),
+                ),
+            )]
         },
-        | "re" | "im" => {
+        | "re" | "im" | "magnitude" => {
             vec![scheme(
                 0,
                 1,
@@ -3897,14 +3857,6 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 1,
                 0,
                 func(vec![Type::complex(dim_var(0))], Type::complex(dim_var(0))),
-            )]
-        },
-        | "magnitude" => {
-            vec![scheme(
-                0,
-                1,
-                0,
-                func(vec![Type::complex(dim_var(0))], Type::real(dim_var(0))),
             )]
         },
         | "arg" => {
@@ -3951,12 +3903,6 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
         },
         | "is_prime" => vec![Scheme::mono(func(vec![Type::int()], Type::bool()))],
         | "primes" => vec![Scheme::mono(func(vec![Type::int()], list(Type::int())))],
-        | "binomial" => {
-            vec![Scheme::mono(func(
-                vec![Type::int(), Type::int()],
-                Type::int(),
-            ))]
-        },
         | "permutations" => vec![Scheme::mono(func(vec![Type::int()], Type::int()))],
         | "polygon_area" => {
             vec![scheme(
@@ -3966,6 +3912,20 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 func(
                     vec![tensor(2, Type::real(dim_var(0)))],
                     Type::real(dim_var(0).pow(&two())),
+                ),
+            )]
+        },
+        | "tetrahedron_volume" => {
+            vec![scheme(
+                0,
+                1,
+                0,
+                func(
+                    vec![Type::tensor(
+                        Shape::refined([Some(4), Some(3)]),
+                        Type::real(dim_var(0)),
+                    )],
+                    Type::real(dim_var(0).pow(&BigRational::from_integer(3.into()))),
                 ),
             )]
         },
@@ -3993,9 +3953,11 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
         },
 
         // ----- §8.18 device -----------------------------------------------
+        // Both `var(0)` (the element type) and `var(1)` (the device) must be
+        // quantified, or the device unifies with a stale variable.
         | "to_device" => {
             vec![scheme(
-                1,
+                2,
                 0,
                 0,
                 func(vec![tensor(2, var(0)), var(1)], io(tensor(2, var(0)))),
@@ -4129,6 +4091,7 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "quot",
     "gcd",
     "lcm",
+    "mod_pow",
     "factorial",
     "double_factorial",
     "to_float",
@@ -4216,6 +4179,7 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "map_err",
     "show",
     "repr",
+    "to_pretty",
     "to_latex",
     "to_typst",
     "print",
@@ -4224,6 +4188,12 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "read_file",
     "write_file",
     "read_line",
+    "input",
+    "read_svg",
+    "write_svg",
+    "read_gif",
+    "write_gif",
+    "plot_save_gif",
     "time_now",
     "random",
     "read_csv_dyn",
@@ -4365,6 +4335,7 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "least_squares",
     "median",
     "quantile",
+    "quantiles",
     "cov",
     "corr",
     "skewness",
@@ -4373,6 +4344,8 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "mode",
     "pdf",
     "cdf",
+    "cdf_batch",
+    "dist_quantile",
     "sample",
     "sample_n",
     "fft",
@@ -4410,6 +4383,7 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "interp1",
     "spline",
     "interp2",
+    "interp2Batch",
     "polyfit",
     "chebyshev_fit",
     "polyval",
@@ -4463,6 +4437,7 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "binomial",
     "permutations",
     "polygon_area",
+    "tetrahedron_volume",
     "distance",
     "simulate",
     "to_device",

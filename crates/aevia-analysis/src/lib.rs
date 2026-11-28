@@ -27,15 +27,19 @@
 //! edit can be loaded with an entry overlay, or [`SourceOverlays`] can supply
 //! every unsaved physical source in one snapshot. [`Analysis::from_program`]
 //! answers from a program a caller already has. [`AnalysisCache`] compares the
-//! exact source reads and import candidates observed by the loader, without
-//! walking unrelated package files or relying on timestamps.
+//! exact source reads and import candidates observed by the loader. Use
+//! [`AnalysisCache::analyze_program`] to share lazily built declaration,
+//! occurrence and position indexes, document outlines and semantic tokens
+//! between queries of a retained snapshot.
 //!
 //! [`Analysis::workspace_symbols`] returns declarations from every module of the
 //! loaded program, each with its own file and range — the analysis half of a
 //! workspace-wide symbol search. [`Analysis::references`], [`Analysis::rename`]
 //! and [`Analysis::prepare_rename`] share one canonical declaration identity
-//! across modules; [`Analysis::signature_help`] resolves the call under the
-//! cursor to its overloads and active argument, and [`Analysis::completion`]
+//! across modules. [`Analysis::document_highlights`] uses the same identity
+//! for occurrences in the current document. [`Analysis::signature_help`]
+//! resolves the call under the cursor to its overloads and active argument,
+//! and [`Analysis::completion`]
 //! narrows to a record's fields after `.` and to keywords where an expression
 //! can start.
 //!
@@ -67,15 +71,29 @@
 //!
 //! // Formatting is delegated, and is offered only when it changes something.
 //! let messy = Document::new("p.aev", 1, "let  x=1\n");
-//! assert!(Analysis::new(&messy).formatting().is_some());
+//! assert!(messy.formatting().is_some());
 //! ```
 
 #![forbid(unsafe_code)]
-#![allow(clippy::module_name_repetitions)]
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
 
 mod actions;
 pub mod analysis;
 pub mod cache;
+mod cursor_index;
 pub mod diagnostic;
 pub mod document;
 mod occurrence;
@@ -103,6 +121,7 @@ pub use position::Position;
 pub use position::Range;
 pub use types::CodeAction;
 pub use types::CodeActionKind;
+pub use types::CodeLens;
 pub use types::Completion;
 pub use types::CompletionKind;
 pub use types::FileEdit;

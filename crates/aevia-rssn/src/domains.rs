@@ -98,6 +98,8 @@ pub struct SigDef {
     pub op: String,
     /// Aevia function name (defaults to the sanitised operator name).
     pub name: String,
+    /// Explicit generic binders, in source declaration order.
+    pub generics: Vec<String>,
     /// Parameters: `(name, Aevia type)`.
     pub params: Vec<(String, String)>,
     /// The success type `T` of the declared `Result<T, OpError>`.
@@ -144,14 +146,15 @@ impl Overlay {
     /// Parse overlay text. Errors are collected in [`Overlay::errors`] so that
     /// one run reports every mistake.
     #[must_use]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Reports all overlay directives through one source line cursor"
+    )]
     pub fn parse(source: &str) -> Self {
         let mut overlay = Self::default();
-        let lines: Vec<&str> = source.lines().collect();
-        let mut index = 0;
-        while index < lines.len() {
-            let number = index + 1;
-            let line = lines[index].trim();
-            index += 1;
+        let mut lines = (1usize..).zip(source.lines()).peekable();
+        while let Some((number, line)) = lines.next() {
+            let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
@@ -202,7 +205,7 @@ impl Overlay {
                         | None => {
                             overlay.errors.push(format!(
                                 "line {number}: `mode` names unknown domain `{domain}`"
-                            ))
+                            ));
                         },
                     }
                 },
@@ -266,27 +269,27 @@ impl Overlay {
                 | "prelude" => {
                     let domain = rest.to_string();
                     let mut text = String::new();
-                    while index < lines.len() && lines[index].trim_start().starts_with('|') {
-                        let body = lines[index].trim_start()[1..]
-                            .strip_prefix(' ')
-                            .unwrap_or(&lines[index].trim_start()[1..]);
-                        text.push_str(body);
+                    while let Some(body) = lines
+                        .peek()
+                        .and_then(|(_, line)| line.trim_start().strip_prefix('|'))
+                    {
+                        text.push_str(body.strip_prefix(' ').unwrap_or(body));
                         text.push('\n');
-                        index += 1;
+                        lines.next();
                     }
                     match overlay.domains.iter_mut().find(|d| d.name == domain) {
                         | Some(found) => found.prelude.push_str(&text),
                         | None => {
                             overlay.errors.push(format!(
                                 "line {number}: `prelude` names unknown domain `{domain}`"
-                            ))
+                            ));
                         },
                     }
                 },
                 | other => {
                     overlay
                         .errors
-                        .push(format!("line {number}: unknown directive `{other}`"))
+                        .push(format!("line {number}: unknown directive `{other}`"));
                 },
             }
         }
@@ -302,14 +305,18 @@ fn split_bar(text: &str) -> (&str, &str) {
 }
 
 /// Split at top-level commas (angle, round and square brackets nest).
+#[allow(
+    clippy::single_call_fn,
+    reason = "Isolates top-level comma recognition from signature field validation"
+)]
 fn split_top(text: &str) -> Vec<String> {
     let mut parts = Vec::new();
     let mut depth = 0i32;
     let mut current = String::new();
     for ch in text.chars() {
         match ch {
-            | '<' | '(' | '[' | '{' => depth += 1,
-            | '>' | ')' | ']' | '}' => depth -= 1,
+            | '<' | '(' | '[' | '{' => depth = depth.saturating_add(1),
+            | '>' | ')' | ']' | '}' => depth = depth.saturating_sub(1),
             | _ => {},
         }
         if ch == ',' && depth == 0 {
@@ -325,47 +332,69 @@ fn split_top(text: &str) -> Vec<String> {
     parts
 }
 
-/// `op [as name](p: T, ...) -> Result<R, OpError>`
+/// `op [as name]<d, ...>(p: T, ...) -> Result<R, OpError>`
+#[allow(
+    clippy::single_call_fn,
+    reason = "Keeps nesting and diagnostic handling apart from the overlay line cursor"
+)]
 fn parse_sig(
     text: &str,
     line: usize,
 ) -> Result<SigDef, String> {
-    let open = text
-        .find('(')
+    let (head, tail) = text
+        .split_once('(')
         .ok_or_else(|| format!("line {line}: `sig` needs a parameter list"))?;
-    let head: Vec<&str> = text[..open].split_whitespace().collect();
+    let (head, generics) = if let Some((head, parameters)) = head.split_once('<') {
+        let invalid = || format!("line {line}: expected distinct generic parameters in `<d, ...>`");
+        let body = parameters.trim().strip_suffix('>').ok_or_else(invalid)?;
+        let mut names = Vec::new();
+        for name in body.split(',').map(str::trim) {
+            let mut chars = name.chars();
+            if !chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+                || !chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+                || names.iter().any(|previous| previous == name)
+            {
+                return Err(invalid());
+            }
+            names.push(name.to_string());
+        }
+        (head, names)
+    } else {
+        (head, Vec::new())
+    };
+    let head: Vec<&str> = head.split_whitespace().collect();
     let (op, name) = match head[..] {
         | [op] => (op.to_string(), crate::codegen::sanitise(op)),
         | [op, "as", name] => (op.to_string(), name.to_string()),
         | _ => return Err(format!("line {line}: expected `sig op [as name](...)`")),
     };
     // The parameter list ends at the matching parenthesis.
-    let mut depth = 0i32;
+    let mut depth = 0usize;
     let mut close = None;
-    for (offset, ch) in text[open..].char_indices() {
+    for (offset, ch) in tail.char_indices() {
         match ch {
-            | '(' => depth += 1,
+            | '(' => depth = depth.saturating_add(1),
             | ')' => {
-                depth -= 1;
                 if depth == 0 {
-                    close = Some(open + offset);
+                    close = tail.split_at_checked(offset);
                     break;
                 }
+                depth = depth.saturating_sub(1);
             },
             | _ => {},
         }
     }
-    let close = close.ok_or_else(|| format!("line {line}: unbalanced parameter list"))?;
+    let (body, after) = close.ok_or_else(|| format!("line {line}: unbalanced parameter list"))?;
     let mut params = Vec::new();
-    for part in split_top(&text[open + 1..close]) {
+    for part in split_top(body) {
         let (pname, pty) = part
             .split_once(':')
             .ok_or_else(|| format!("line {line}: parameter `{part}` needs `name: Type`"))?;
         params.push((pname.trim().to_string(), pty.trim().to_string()));
     }
-    let after = text[close + 1..].trim();
     let ret = after
-        .strip_prefix("->")
+        .strip_prefix(')')
+        .and_then(|rest| rest.trim().strip_prefix("->"))
         .map(str::trim)
         .ok_or_else(|| format!("line {line}: `sig` needs `-> Result<T, OpError>`"))?;
     let inner = ret
@@ -379,6 +408,7 @@ fn parse_sig(
     Ok(SigDef {
         op,
         name,
+        generics,
         params,
         ret: inner.trim().to_string(),
         line,
@@ -437,30 +467,28 @@ pub struct Placement<'a> {
     pub status: Status,
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "Keeps prefix, interior and suffix matching separate from rule precedence"
+)]
 fn glob_matches(
     glob: &str,
     name: &str,
 ) -> bool {
-    let parts: Vec<&str> = glob.split('*').collect();
-    if parts.len() == 1 {
+    let mut parts = glob.split('*');
+    let (Some(prefix), Some(suffix)) = (parts.next(), parts.next_back()) else {
         return glob == name;
-    }
-    let mut rest = name;
-    for (index, part) in parts.iter().enumerate() {
-        if index == 0 {
-            let Some(stripped) = rest.strip_prefix(part) else {
-                return false;
-            };
-            rest = stripped;
-        } else if index == parts.len() - 1 {
-            return rest.ends_with(part);
-        } else if let Some(position) = rest.find(part) {
-            rest = &rest[position + part.len()..];
-        } else {
+    };
+    let Some(mut rest) = name.strip_prefix(prefix) else {
+        return false;
+    };
+    for part in parts {
+        let Some((_, remaining)) = rest.split_once(part) else {
             return false;
-        }
+        };
+        rest = remaining;
     }
-    true
+    rest.ends_with(suffix)
 }
 
 /// Place every operator of the manifest.
@@ -469,37 +497,55 @@ pub fn classify<'a>(
     registry: &'a Registry,
     overlay: &'a Overlay,
 ) -> Vec<Placement<'a>> {
-    registry
-        .ops()
-        .map(|op| {
-            let domain = overlay
-                .families
-                .iter()
-                .find(|family| {
-                    family.rule_set == op.rule_set && glob_matches(&family.glob, &op.name)
-                })
-                .and_then(|family| overlay.domains.iter().find(|d| d.name == family.domain));
-            let status = if domain.is_none() {
-                Status::Unclassified
-            } else if let Some(reason) = overlay.excluded.get(&op.name) {
-                Status::Excluded(reason.clone())
-            } else if overlay.sigs.contains_key(&op.name) {
-                Status::Typed
-            } else if !overlay.accepted_dynamic.contains_key(&op.name)
-                && !witnessed_sigs(op).is_empty()
-            {
-                Status::Witnessed
-            } else {
-                Status::Dynamic(overlay.accepted_dynamic.get(&op.name).cloned())
-            };
-            Placement { op, domain, status }
-        })
-        .collect()
+    classify_placements(registry, overlay, None)
+}
+
+fn classify_placements<'a>(
+    registry: &'a Registry,
+    overlay: &'a Overlay,
+    only_domain: Option<&str>,
+) -> Vec<Placement<'a>> {
+    let capacity = if only_domain.is_none() {
+        registry.op_count()
+    } else {
+        0
+    };
+    let mut placements = Vec::with_capacity(capacity);
+    for op in registry.ops() {
+        let domain = overlay
+            .families
+            .iter()
+            .find(|family| family.rule_set == op.rule_set && glob_matches(&family.glob, &op.name))
+            .and_then(|family| overlay.domains.iter().find(|d| d.name == family.domain));
+        // The first matching family still wins. Skip the type and witness
+        // checks only after establishing that the operator is in another domain.
+        if only_domain.is_some_and(|name| domain.is_none_or(|d| d.name != name)) {
+            continue;
+        }
+        let status = if domain.is_none() {
+            Status::Unclassified
+        } else if let Some(reason) = overlay.excluded.get(&op.name) {
+            Status::Excluded(reason.clone())
+        } else if overlay.sigs.contains_key(&op.name) {
+            Status::Typed
+        } else if !overlay.accepted_dynamic.contains_key(&op.name) && !witnessed_sigs(op).is_empty()
+        {
+            Status::Witnessed
+        } else {
+            Status::Dynamic(overlay.accepted_dynamic.get(&op.name).cloned())
+        };
+        placements.push(Placement { op, domain, status });
+    }
+    placements
 }
 
 /// The coverage check. An empty result means the overlay and the manifest
 /// agree; each entry is one thing to fix, written so that it names the fix.
 #[must_use]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Lists independent overlay consistency checks in diagnostic order"
+)]
 pub fn problems(
     registry: &Registry,
     overlay: &Overlay,
@@ -554,7 +600,7 @@ pub fn problems(
                 ));
             },
             | Status::Typed => {
-                for sig in &overlay.sigs[&op.name] {
+                for sig in overlay.sigs.get(&op.name).into_iter().flatten() {
                     let (min, max) = op.arity;
                     let n = sig.params.len();
                     if n < min || max.is_some_and(|max| n > max) {
@@ -572,7 +618,7 @@ pub fn problems(
                         ));
                     }
                     for (_, ty) in &sig.params {
-                        check_type_known(ty, overlay, &mut out, sig.line);
+                        check_type_known(ty, &sig.generics, overlay, &mut out, sig.line);
                         if let Some(codec) = overlay.codecs.get(head(ty))
                             && codec.to_value.is_empty()
                         {
@@ -582,7 +628,7 @@ pub fn problems(
                             ));
                         }
                     }
-                    check_type_known(&sig.ret, overlay, &mut out, sig.line);
+                    check_type_known(&sig.ret, &sig.generics, overlay, &mut out, sig.line);
                 }
             },
             | _ => {},
@@ -608,9 +654,10 @@ pub fn problems(
     out
 }
 
-/// Types in a `sig` must be builtin, or declared by a prelude.
+/// Types in a `sig` must be builtin, generic, or declared by a prelude.
 fn check_type_known(
     ty: &str,
+    generics: &[String],
     overlay: &Overlay,
     out: &mut Vec<String>,
     line: usize,
@@ -622,6 +669,7 @@ fn check_type_known(
     let flush = |word: &mut String, out: &mut Vec<String>| {
         if word.chars().next().is_some_and(char::is_uppercase)
             && !BUILTIN.contains(&word.as_str())
+            && !generics.contains(word)
             && !overlay
                 .domains
                 .iter()
@@ -665,31 +713,35 @@ pub fn domain_source(
     registry: &Registry,
     module: &str,
 ) -> Option<String> {
+    let name = module.strip_prefix(MODULE_PREFIX)?;
     let overlay = overlay();
-    let domain = overlay
-        .domains
-        .iter()
-        .find(|d| module_name(&d.name) == module)?;
-    Some(render(registry, overlay, domain))
+    let domain = overlay.domains.iter().find(|d| d.name == name)?;
+    let placements = classify_placements(registry, overlay, Some(name));
+    Some(render(registry, overlay, domain, &placements))
 }
 
 /// Every domain module as `(file name, source)`.
 #[must_use]
 pub fn domain_files(registry: &Registry) -> Vec<(String, String)> {
     let overlay = overlay();
+    let placements = classify(registry, overlay);
     overlay
         .domains
         .iter()
         .map(|d| {
             (
                 format!("{}.aev", module_name(&d.name)),
-                render(registry, overlay, d),
+                render(registry, overlay, d, &placements),
             )
         })
         .collect()
 }
 
 /// How a value of Aevia type `ty` is put on the wire.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Keeps generated parameter encoding and result decoding independently readable"
+)]
 fn encode(
     overlay: &Overlay,
     ty: &str,
@@ -701,6 +753,10 @@ fn encode(
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "Keeps generated result decoding and parameter encoding independently readable"
+)]
 fn decode(
     overlay: &Overlay,
     ty: &str,
@@ -720,6 +776,7 @@ fn render(
     registry: &Registry,
     overlay: &Overlay,
     domain: &Domain,
+    placements: &[Placement<'_>],
 ) -> String {
     let mut out = String::new();
     let module = module_name(&domain.name);
@@ -748,14 +805,14 @@ fn render(
     // Names the prelude declares are reserved: a generated wrapper must not
     // silently shadow them.
     for line in domain.prelude.lines() {
-        if let Some(rest) = line.strip_prefix("fn ") {
-            if let Some(name) = rest.split(['(', '<']).next() {
-                used.insert(name.trim().to_string());
-            }
+        if let Some(rest) = line.strip_prefix("fn ")
+            && let Some(name) = rest.split(['(', '<']).next()
+        {
+            used.insert(name.trim().to_string());
         }
     }
-    for placement in classify(registry, overlay) {
-        if !placement.domain.is_some_and(|d| d.name == domain.name) {
+    for placement in placements {
+        if placement.domain.is_none_or(|d| d.name != domain.name) {
             continue;
         }
         let op = placement.op;
@@ -764,7 +821,7 @@ fn render(
                 let _ = writeln!(out, "## `{}` is not bound here: {reason}\n", op.name);
             },
             | Status::Typed => {
-                for sig in &overlay.sigs[&op.name] {
+                for sig in overlay.sigs.get(&op.name).into_iter().flatten() {
                     let name = unique(&mut used, &sig.name);
                     typed_wrapper(&mut out, overlay, op, sig, &name);
                 }
@@ -798,10 +855,11 @@ fn unique(
     base: &str,
 ) -> String {
     let mut name = base.to_string();
-    let mut suffix = 2;
-    while !used.insert(name.clone()) {
+    for suffix in 2.. {
+        if used.insert(name.clone()) {
+            break;
+        }
         name = format!("{base}_{suffix}");
-        suffix += 1;
     }
     name
 }
@@ -812,11 +870,25 @@ fn docs(
     tier: &str,
 ) {
     let _ = writeln!(out, "## `{}.{}` ({tier})", op.rule_set, op.name);
-    for line in op.doc.lines().take(6) {
+    for line in op.doc.lines() {
         let _ = writeln!(out, "## {}", line.trim_end());
+    }
+    if !op.examples.is_empty() {
+        let _ = writeln!(out, "## Examples:");
+        for ex in &op.examples {
+            if ex.note.is_empty() {
+                let _ = writeln!(out, "##   `{}` => `{}`", ex.input, ex.output);
+            } else {
+                let _ = writeln!(out, "##   `{}` => `{}` ({})", ex.input, ex.output, ex.note);
+            }
+        }
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "Renders the overlay-typed facade at one auditable template boundary"
+)]
 fn typed_wrapper(
     out: &mut String,
     overlay: &Overlay,
@@ -825,6 +897,11 @@ fn typed_wrapper(
     name: &str,
 ) {
     docs(out, op, "typed");
+    let generics = if sig.generics.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", sig.generics.join(", "))
+    };
     let params: Vec<String> = sig
         .params
         .iter()
@@ -837,7 +914,7 @@ fn typed_wrapper(
         .collect();
     let _ = writeln!(
         out,
-        "fn {name}({params}): Result<{ret}, OpError> =\n    match Rssn.dynamic(\"{op}\", [{args}]) with\n    | Ok(wire) -> {decoded}\n    | Err(failure) -> Err(failure)\n",
+        "fn {name}{generics}({params}): Result<{ret}, OpError> =\n    match Rssn.dynamic(\"{op}\", [{args}]) with\n    | Ok(wire) -> {decoded}\n    | Err(failure) -> Err(failure)\n",
         params = params.join(", "),
         ret = sig.ret,
         op = crate::codegen::escape(&op.name),
@@ -874,6 +951,8 @@ fn witnessed_type(ty: &crate::registry::SigType) -> Option<String> {
         | S::Real | S::Symbol | S::Dyn => "Real".to_string(),
         | S::Float => "Float".to_string(),
         | S::Bool => "Bool".to_string(),
+        | S::Str => "String".to_string(),
+        | S::Complex => "Complex".to_string(),
         | S::Opaque(_) => "Value".to_string(),
         | S::Tensor { rank, elem, .. } => {
             let rank = (*rank)?;
@@ -938,7 +1017,9 @@ pub fn witnessed_sigs(op: &OpEntry) -> Vec<WitnessedSig> {
     out
 }
 
-/// Parameter names for a witnessed wrapper. The kernel records no names, so
+/// Parameter names for a witnessed wrapper.
+///
+/// The kernel records no names, so
 /// they come from the Aevia type: `n` for an integer, `x` for a scalar, `xs`
 /// for a vector, `m` for a matrix, `t3` for a rank-3 tensor, `flag` for a
 /// boolean and `v` for a handle. A kind that occurs more than once is
@@ -950,6 +1031,8 @@ pub fn witnessed_param_names(types: &[String]) -> Vec<String> {
             | "Int" => "n".to_string(),
             | "Real" | "Float" => "x".to_string(),
             | "Bool" => "flag".to_string(),
+            | "String" => "s".to_string(),
+            | "Complex" => "z".to_string(),
             | "Value" => "v".to_string(),
             | _ => {
                 match ty
@@ -966,22 +1049,30 @@ pub fn witnessed_param_names(types: &[String]) -> Vec<String> {
         }
     };
     let bases: Vec<String> = types.iter().map(|t| base(t)).collect();
+    let mut totals = BTreeMap::<&str, usize>::new();
+    for base in &bases {
+        let total = totals.entry(base).or_default();
+        *total = total.saturating_add(1);
+    }
     let mut seen = std::collections::BTreeMap::<&str, usize>::new();
     bases
         .iter()
         .map(|b| {
-            let total = bases.iter().filter(|o| *o == b).count();
-            if total == 1 {
+            if totals.get(b.as_str()) == Some(&1) {
                 b.clone()
             } else {
                 let k = seen.entry(b.as_str()).or_insert(0);
-                *k += 1;
+                *k = k.saturating_add(1);
                 format!("{b}{k}")
             }
         })
         .collect()
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "Renders the witnessed facade separately from curated signatures"
+)]
 fn witnessed_wrapper(
     out: &mut String,
     op: &OpEntry,
@@ -1020,6 +1111,10 @@ fn witnessed_wrapper(
     );
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "Renders the value-list facade separately from typed signatures"
+)]
 fn dynamic_wrapper(
     out: &mut String,
     op: &OpEntry,
@@ -1074,29 +1169,32 @@ fn dynamic_wrapper(
 /// library, so the report can say which kernel operators already have a
 /// hand-written standard-library entry point.
 #[must_use]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Keeps the generated report sections and their ordering together"
+)]
 pub fn coverage_report(
     registry: &Registry,
     overlay: &Overlay,
     stdlib_names: &BTreeSet<String>,
 ) -> String {
     let catalog = crate::bindings::catalog(registry);
-    let mut flat_typed: BTreeSet<&str> = BTreeSet::new();
-    let mut flat_total: BTreeMap<&str, usize> = BTreeMap::new();
-    for row in &catalog {
-        *flat_total.entry(row.op.name.as_str()).or_default() += 1;
-        if matches!(row.coverage, crate::bindings::Coverage::Typed) {
-            flat_typed.insert(row.op.name.as_str());
-        }
-    }
+    let flat_typed: BTreeSet<&str> = catalog
+        .iter()
+        .filter(|row| matches!(row.coverage, crate::bindings::Coverage::Typed))
+        .map(|row| row.op.name.as_str())
+        .collect();
     let placements = classify(registry, overlay);
     let mut out = String::new();
+    // Optional JIT and GPU capabilities change the sealed manifest hash.
+    // This report compares the operator inventory and Aevia placements.
     let _ = writeln!(
         out,
         "# rssn operator coverage in Aevia\n\n\
-         Generated by `cargo test -p aevia-rssn --test domains` (set `AEVIA_BLESS=1` to rewrite);\n\
+         Generated by `bazel run //:refresh_kernel`;\n\
          do not edit. Source of truth: the Kernel Manifest and `crates/aevia-rssn/domains.overlay`.\n\n\
-         rssn {}, api {}, manifest `{}`.\n",
-        registry.version, registry.api_version, registry.manifest_hash
+         RSSN {}, kernel API {}.\n",
+        registry.version, registry.api_version
     );
     let total = placements.len();
     let count = |f: &dyn Fn(&Placement<'_>) -> bool| placements.iter().filter(|p| f(p)).count();
@@ -1208,8 +1306,9 @@ pub fn coverage_report(
                 p.status == Status::Typed && p.domain.is_some_and(|d| d.name == domain.name)
             })
             .map(|p| {
-                let sigs = &overlay.sigs[&p.op.name];
-                if sigs.len() > 1 {
+                if let Some(sigs) = overlay.sigs.get(&p.op.name)
+                    && sigs.len() > 1
+                {
                     let aliases: Vec<&str> = sigs.iter().map(|s| s.name.as_str()).collect();
                     format!("{} ({})", p.op.name, aliases.join(", "))
                 } else {
@@ -1254,7 +1353,6 @@ pub fn coverage_report(
             }
         );
     }
-    let _ = flat_total;
     out
 }
 
@@ -1286,5 +1384,114 @@ mod witnessed_names {
         unique.dedup();
         assert_eq!(unique.len(), got.len());
         assert!(names(&[]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod domain_rendering {
+    use super::*;
+
+    #[test]
+    fn explicit_dimension_parameters_render_as_a_generic_declaration() {
+        let overlay = Overlay::parse(
+            "sig invmod as cut_root<d, theta>(z: Complex[d], angle: Float[theta]) -> Result<Complex[d^(1/2)], OpError>",
+        );
+        assert!(overlay.errors.is_empty(), "{:?}", overlay.errors);
+        let [sig] = overlay.sigs.get("invmod").unwrap().as_slice() else {
+            panic!("expected one signature");
+        };
+        assert_eq!(sig.name, "cut_root");
+        assert_eq!(sig.generics, ["d", "theta"]);
+        let op = crate::registry::registry()
+            .ops()
+            .find(|operator| operator.name == "invmod")
+            .expect("can render the wrapper using an existing manifest entry");
+        let mut text = String::new();
+        typed_wrapper(&mut text, &overlay, op, sig, &sig.name);
+        assert!(text.contains(
+            "fn cut_root<d, theta>(z: Complex[d], angle: Float[theta]): Result<Complex[d^(1/2)], OpError>"
+        ));
+        assert!(text.contains("from_value<Complex[d^(1/2)]>(wire)"));
+    }
+
+    #[test]
+    fn malformed_generic_parameter_lists_have_overlay_diagnostics() {
+        for generics in ["<>", "<d,>", "<d, d>", "<1d>", "<d", "<d><e>"] {
+            let source =
+                format!("sig op as root{generics}(z: Complex[d]) -> Result<Complex[d], OpError>");
+            let overlay = Overlay::parse(&source);
+            assert_eq!(overlay.errors.len(), 1, "{generics}");
+            assert!(overlay.errors[0].contains("distinct generic parameters"));
+            assert!(overlay.sigs.is_empty());
+        }
+    }
+
+    #[test]
+    fn batch_and_individual_sources_match_in_declaration_order() {
+        let registry = crate::registry::registry();
+        let files = domain_files(registry);
+        let modules = module_names();
+        assert_eq!(files.len(), modules.len());
+        for (module, (file, source)) in modules.iter().zip(&files) {
+            assert_eq!(file, &format!("{module}.aev"));
+            assert_eq!(domain_source(registry, module).as_ref(), Some(source));
+        }
+        for name in ["NumberTheory", "Rssn_", "Rssn_number_theory"] {
+            assert!(domain_source(registry, name).is_none());
+        }
+    }
+
+    #[test]
+    fn first_matching_family_wins_even_if_its_domain_is_missing() {
+        let registry = crate::registry::registry();
+        let op = registry
+            .ops()
+            .find(|op| op.name == "invmod")
+            .expect("number theory operator");
+        let mut overlay = Overlay::parse(&format!(
+            "domain Wanted | test domain\nfamily Missing {}:{}\nfamily Wanted {}:*",
+            op.rule_set, op.name, op.rule_set,
+        ));
+        let is_invmod = |p: &Placement<'_>| std::ptr::eq(p.op, op);
+        assert!(
+            !classify_placements(registry, &overlay, Some("Wanted"))
+                .iter()
+                .any(is_invmod)
+        );
+        let placements = classify(registry, &overlay);
+        assert_eq!(
+            placements.iter().find(|p| is_invmod(p)).unwrap().status,
+            Status::Unclassified,
+        );
+        overlay.families.swap(0, 1);
+        assert!(
+            classify_placements(registry, &overlay, Some("Wanted"))
+                .iter()
+                .any(is_invmod)
+        );
+    }
+
+    #[test]
+    fn generation_uses_the_supplied_registry_snapshot() {
+        let registry = crate::registry::registry();
+        let source = domain_source(registry, "Rssn_NumberTheory").expect("default domain");
+        let mut manifest = crate::kernel::kernel().manifest().as_ref().clone();
+        let marker = "an alternate registry fixture for invmod";
+        let operator = manifest
+            .ops
+            .iter_mut()
+            .find(|op| op.name == "invmod")
+            .expect("number theory operator");
+        operator.doc = marker.to_owned();
+        let alternate = Registry::from_manifest(&manifest);
+        let changed = domain_source(&alternate, "Rssn_NumberTheory").expect("alternate domain");
+        assert!(!source.contains(marker));
+        assert!(changed.contains(marker));
+        assert!(
+            domain_files(&alternate)
+                .iter()
+                .any(|(file, text)| file == "Rssn_NumberTheory.aev" && text == &changed)
+        );
+        assert_eq!(domain_source(registry, "Rssn_NumberTheory"), Some(source));
     }
 }

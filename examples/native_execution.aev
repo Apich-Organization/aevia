@@ -1,0 +1,130 @@
+## Run: aevia test examples/native_execution.aev
+## Expressions run in normalized coordinates. Each positive reference below
+## declares the physical scale of one coordinate or result.
+open Units.SI
+import Rssn_numerical_vector as Native
+
+let no_names: Tensor<1, String> = []
+let no_values: Tensor<1, Value> = []
+
+let speed_program = unwrap_or(Rssn.dynamic("num_native_tape_lower", [to_value(["x/y"]), to_value(["x", "y"]), to_value(no_names), to_value([to_value(1.0 m), to_value(1.0 s)]), to_value(no_values), to_value([to_value(1.0 m / s)])]), to_value(0))
+
+let point = to_value([to_value(4.0 m), to_value(2.0 s)])
+
+test "native expression evaluation restores measured speed" =
+    match Rssn.dynamic("num_native_tape_eval", [speed_program, point, to_value(no_values)]) with
+    | Ok(value) ->
+        match from_value<Tensor<1, Value>>(value) with
+        | Ok(cells) ->
+            match from_value<Float[Length / Time]>(cells[0]) with
+            | Ok(speed) -> approx_eq(speed, 2.0 m / s, 1e-12 m / s)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "a prepared tape gathers one measured source column per row" =
+    let selector = unwrap_or(Rssn.dynamic("num_native_tape_column_gather", [to_value(2), to_value(2.0 m)]), to_value(0))
+    let sources = to_value([to_value([0.0, 1.0, 1.9]), to_value([2.0 m, 4.0 m, 6.0 m]), to_value([700.0 cm, 800.0 cm, 1000.0 cm])])
+    match Rssn.dynamic("num_native_tape_eval_columns", [selector, to_value(3), sources, to_value(no_values)]) with
+    | Ok(value) ->
+        match from_value<Tensor<1, Value>>(value) with
+        | Ok(outputs) ->
+            match from_value<Tensor<[3], Float[Length]>>(outputs[0]) with
+            | Ok(distances) -> distances == [2.0 m, 8.0 m, 10.0 m]
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "reverse differentiation retains each coordinate unit" =
+    match Rssn.dynamic("num_native_tape_gradient_reverse", [speed_program, to_value(0), point, to_value(no_values)]) with
+    | Ok(value) ->
+        match from_value<Tensor<1, Value>>(value) with
+        | Ok(cells) ->
+            match from_value<Float[Length / Time ^ 2]>(cells[1]) with
+            | Ok(derivative) -> approx_eq(derivative, -1.0 m / s / s, 1e-12 m / s / s)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+let cpu = unwrap_or(Rssn.dynamic("num_native_device_cpu", []), to_value(0))
+let kernel = unwrap_or(Rssn.dynamic("num_native_device_kernel_from_tape", [speed_program]), to_value(0))
+let columns = to_value([to_value([8.0 m, 12.0 m]), to_value([2.0 s, 3.0 s])])
+
+test "device batches retain different units for input columns" =
+    match Rssn.dynamic("num_native_device_map_physical", [cpu, kernel, columns, to_value(no_values)]) with
+    | Ok(value) ->
+        match from_value<Tensor<1, Value>>(value) with
+        | Ok(outputs) ->
+            match from_value<Tensor<1, Float[Length / Time]>>(outputs[0]) with
+            | Ok(speeds) -> speeds == [4.0 m / s, 4.0 m / s]
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+## Relativity uses geometrized mass G*M/c^2, spin J/(M*c), and charge lengths.
+## Coordinate and proper time are restored as seconds in physical frames.
+let relativity_frame = unwrap_or(Rssn.dynamic("num_native_relativity_frame", [to_value(1000.0 m)]), to_value(0))
+let metric = unwrap_or(Rssn.dynamic("num_native_relativity_schwarzschild", [relativity_frame, to_value(1477.0 m)]), to_value(0))
+
+test "Schwarzschild horizon has a physical length witness" =
+    match Rssn.dynamic("num_native_relativity_horizon", [metric]) with
+    | Ok(value) ->
+        match from_value<Option<Value>>(value) with
+        | Ok(Some(radius)) ->
+            match from_value<Float[Length]>(radius) with
+            | Ok(r) -> approx_eq(r, 2954.0 m, 1e-9 m)
+            | Err(_) -> false
+        | _ -> false
+    | Err(_) -> false
+
+test "analytic and traced Schwarzschild shadows retain ordered image-plane lengths" =
+    let mass = to_value(1000.0 m)
+    let spin = to_value(0.0 m)
+    let theta = to_value(1.2)
+    let samples = to_value(6)
+    let distant = to_value(1.0e7 m)
+    let analytic = Native.num_native_relativity_shadow_analytic([relativity_frame, mass, spin, theta, samples])
+    let traced = Native.num_native_relativity_trace_shadow([relativity_frame, mass, spin, theta, distant, samples])
+    match (analytic, traced) with
+    | (Ok(circle), Ok(rays)) ->
+        match (from_value<Tensor<[12, 2], Float[Length]>>(circle), from_value<Tensor<[6, 2], Float[Length]>>(rays)) with
+        | (Ok(points), Ok(angles)) ->
+            let analytic_x = approx_eq(points[0, 0], 5196.152422706632 m, 1.0e-8 m)
+            let analytic_y = approx_eq(points[0, 1], 0.0 m, 1.0e-8 m)
+            let traced_x = approx_eq(angles[0, 0], 4500.0 m, 1.0e-3 m)
+            let traced_y = approx_eq(angles[0, 1], 2598.076211353316 m, 1.0e-3 m)
+            analytic_x && analytic_y && traced_x && traced_y
+        | _ -> false
+    | _ -> false
+
+## Prograde circular orbit inside the Kerr stationary limit and outside its horizon.
+let equatorial_parameters = unwrap_or(Rssn.dynamic("num_native_geodesic_model_parameters", [
+    relativity_frame, to_value(1000.0 m), to_value(1900.0 m), to_value(0.0 m/s),
+    to_value(0.0), to_value(272026.5975851145 / (1.0 s)),
+    to_value(8.339102379953801e-7 s), to_value(2.605969493735563e-8 s)
+]), to_value(0))
+
+test "native timelike equatorial initialization restores measured angular momentum" =
+    match Rssn.dynamic("num_native_geodesic_model_equatorial_timelike", [equatorial_parameters, to_value(990.0 m), to_value(0.0 m), to_value(false)]) with
+    | Ok(geodesic) ->
+        match Rssn.dynamic("num_native_relativity_geodesic_state", [geodesic]) with
+        | Ok(value) ->
+            match from_value<{ time: Float[Time], radius: Float[Length], theta: Float, phi: Float, radial_momentum: Float, polar_momentum: Float[Length], energy_per_rest_mass: Float, angular_momentum_per_rest_mass: Float[Length], proper_time: Float[Time], constraint: Float }>(value) with
+            | Ok(state) -> approx_eq(state.energy_per_rest_mass, 0.7732351051322273, 1e-12) && approx_eq(state.angular_momentum_per_rest_mass, 1688.5113392202204 m, 1e-8 m)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "native sampled Kerr orbit retains the initial point and final physical radius" =
+    match Rssn.dynamic("num_native_geodesic_model_run_kerr_newman_geodesic_sampled", [equatorial_parameters, to_value(990.0 m), to_value(0.0 m), to_value(false), to_value(7), to_value(150)]) with
+    | Ok(value) ->
+        match from_value<Tensor<2, Float[Length]>>(value) with
+        | Ok(path) ->
+            let last = length(path) - 1
+            let x = path[last, 0]
+            let y = path[last, 1]
+            length(path) == 6 && approx_eq(path[0, 0], 1900.0 m, 1e-10 m) && approx_eq(sqrt(x*x + y*y), 1900.0 m, 1e-3 m)
+        | Err(_) -> false
+    | Err(_) -> false
+
+fn main(): IO Unit = println("RSSN native tapes, derivatives, devices and relativity preserve physical units")

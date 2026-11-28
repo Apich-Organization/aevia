@@ -1,0 +1,50 @@
+## Preserve the integer bits of a rounded dyadic at an RSSN call boundary.
+import Rssn_numerical_special as Special
+
+let half = 1329227995784915872975864654318272512
+
+let even = Special.num_mp_real_round(half, 0, 64, "nearest")
+
+let upper = Special.num_mp_real_round(half, 0, 64, "up")
+
+let tiny = Special.num_mp_real_sub(upper, even, 2, "nearest")
+
+let restored = Special.num_mp_real_add(even, tiny, 64, "nearest")
+
+let twice = Special.num_mp_real_mul(tiny, { mantissa = 1, exponent = 1, precision = 1 }, 2, "nearest")
+
+fn main(): IO Unit = do
+    println("Nearest-even mantissa: {even.mantissa}")
+    println("Upward mantissa: {upper.mantissa}")
+
+test "construction preserves bits past binary64" = even.mantissa == 9223372036854775808 && upper.mantissa == 9223372036854775809
+
+test "construction returns the binary exponent and requested precision" = even.exponent == 57 && even.precision == 64
+
+test "subtraction stays exact between adjacent dyadics" = tiny.mantissa == 2 && tiny.exponent == 56 && tiny.precision == 2
+
+test "adding the difference restores the upper dyadic" = Special.num_mp_real_compare(restored, upper) == 0
+
+test "comparison resolves adjacent dyadics" = Special.num_mp_real_compare(even, restored) == -1
+
+test "multiplication accepts a dyadic record literal" = twice.mantissa == 2 && twice.exponent == 57 && twice.precision == 2
+
+let zero = { mantissa = 0, exponent = 0, precision = 1 }
+let one = { mantissa = 1, exponent = 0, precision = 1 }
+let three = { mantissa = 3, exponent = 0, precision = 2 }
+
+let third_nearest = Special.num_mp_real_div(one, three, 4, "nearest")
+let third_down = Special.num_mp_real_div(one, three, 4, "down")
+let third_interval = Special.num_mp_ball_div(
+    { midpoint = one, radius = zero },
+    { midpoint = three, radius = zero },
+    4,
+)
+let lo = Special.num_mp_real_sub(third_interval.midpoint, third_interval.radius, 64, "down")
+let hi = Special.num_mp_real_add(third_interval.midpoint, third_interval.radius, 64, "up")
+let lo_product = Special.num_mp_real_mul(lo, three, 128, "up")
+let hi_product = Special.num_mp_real_mul(hi, three, 128, "down")
+
+test "division rounds one third once at four bits" = third_nearest.mantissa == 11 && third_nearest.exponent == -5 && third_nearest.precision == 4 && third_down.mantissa == 10
+
+test "the outward-rounded enclosure contains exact one third" = Special.num_mp_real_compare(lo_product, one) <= 0 && Special.num_mp_real_compare(hi_product, one) >= 0

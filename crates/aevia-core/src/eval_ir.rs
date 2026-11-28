@@ -13,12 +13,27 @@
 //! * a variable read is a vector index, not a `HashMap` chain;
 //! * every call site and every node carries a span, so a frame names its source.
 
+#![deny(
+    missing_docs,
+    clippy::arithmetic_side_effects,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::nursery,
+    clippy::panic,
+    clippy::pedantic,
+    clippy::single_call_fn,
+    clippy::unwrap_used
+)]
+
 use crate::eval::EvalError;
 use crate::eval::Frame;
 use crate::eval::Interp;
 use crate::eval::Scalar;
 use crate::eval::SliceValue;
 use crate::eval::plain_scalar_binary;
+use crate::eval::slice_integer;
+use crate::fxhash::FxBuild;
+use crate::fxhash::FxHashMap;
 use crate::value::Closure;
 use crate::value::ClosureBody;
 use crate::value::ClosureEnv;
@@ -42,14 +57,15 @@ use aevia_ir::Function;
 use aevia_ir::Pattern;
 use aevia_ir::Rhs;
 use aevia_ir::Slice;
+use aevia_ir::Slot;
 use aevia_ir::Stmt;
 use aevia_ir::StrPart;
 use aevia_ir::Tail;
 use aevia_syntax::Span;
 use aevia_syntax::ast::BinOp;
 use indexmap::IndexMap;
-use num_bigint::BigInt;
 use num_traits::ToPrimitive;
+use rssn::kernels::reuse::ScratchPool;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -99,6 +115,9 @@ pub fn eval_top(
     nslots: u32,
     scope: &Rc<Scope>,
 ) -> Result<Value, EvalError> {
+    let _backend = interp.rssn_source_access();
+    let _cancellation = interp.cancellation_scope();
+    interp.check_cancelled()?;
     let previous = interp.enter_scope(scope)?;
     let env = Rc::new(IrEnv {
         slots: RefCell::new(Vec::new()),
@@ -107,6 +126,7 @@ pub fn eval_top(
     let mut frame = vec![Value::Unit; usize::try_from(nslots).unwrap_or(0)];
     let result = eval_block(interp, block, &mut frame, &env).and_then(|flow| force(interp, flow));
     interp.restore_context(previous);
+    interp.check_cancelled()?;
     result
 }
 
@@ -116,6 +136,21 @@ pub fn eval_top(
 /// does not add one, which is the point. A tail loop that never terminates is
 /// caught by [`Interp::max_tail_calls`] instead, so "a legal program terminates,
 /// a runaway one is `E0805`" still holds.
+#[expect(
+    clippy::too_many_lines,
+    reason = "keep trampoline frame reuse, JIT and the budget in one control flow"
+)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "isolate the interpreter trampoline from general function application"
+)]
+#[cfg_attr(
+    not(feature = "jit"),
+    expect(
+        clippy::needless_pass_by_value,
+        reason = "the JIT trampoline owns its current proof"
+    )
+)]
 pub(crate) fn run_closure(
     interp: &mut Interp,
     closure: &Rc<Closure>,
@@ -123,6 +158,9 @@ pub(crate) fn run_closure(
     span: Span,
     instance: Option<Rc<crate::generics::FunctionProof>>,
 ) -> Result<Value, EvalError> {
+    let _backend = interp.rssn_source_access();
+    let _cancellation = interp.cancellation_scope();
+    interp.check_cancelled().map_err(|error| error.at(span))?;
     let (ClosureBody::Ir(first), ClosureEnv::Ir(first_env)) = (&closure.body, &closure.env) else {
         return Err(EvalError::new("E0809", "not an IR closure").at(span));
     };
@@ -158,15 +196,27 @@ pub(crate) fn run_closure(
     // a million allocations.
     let mut frame: Vec<Value> = interp.take_buffer(usize::try_from(function.nslots).unwrap_or(0));
     let outcome = 'run: loop {
+        if let Err(error) = interp.check_cancelled() {
+            break 'run Err(error.at(function.span));
+        }
         if let Some(scope) = &env.scope
             && let Err(error) = interp.enter_scope(scope)
         {
             break 'run Err(error);
         }
-        interp.bindings = bindings.clone();
+        interp.bindings.clone_from(&bindings);
         #[cfg(feature = "jit")]
-        let compiled_flow = {
-            let remaining = interp.max_tail_calls.saturating_sub(tail_calls);
+        let compiled_flow = if interp.cancellation.is_none()
+            && (function.jit
+                || (interp.jit_policy == crate::JitPolicy::Automatic
+                    && !interp.on_worker
+                    && !interp.folding_constant.get()
+                    && current_instance
+                        .as_ref()
+                        .is_some_and(|proof| proof.verified)
+                    && crate::jit::is_hot(&function)))
+        {
+            // A cancellable activation needs the interpreter's checkpoints.
             // Host calls can pass values that differ from a source signature.
             // Native specialization is permitted only by an authenticated,
             // fully concrete activation whose parameter/result kinds agree.
@@ -222,79 +272,79 @@ pub(crate) fn run_closure(
                     }
                     kind(result)
                 });
-            let literals = crate::jit::specialization(&function, |number, span| {
-                let number = match number {
-                    | aevia_syntax::ast::NumberLit::Int(value) => {
-                        interp.integer_literal(value, span)
-                    },
-                    | aevia_syntax::ast::NumberLit::Decimal(value) => {
-                        interp.float_literal(value, span)
-                    },
-                }
-                .ok()?;
-                match number {
-                    | crate::value::NumVal {
-                        kind: crate::value::NumKind::Float(value),
-                        dim,
-                        display: None,
-                    } if dim == aevia_dim::Dim::one() => Some(crate::jit::Lit::F(value.to_bits())),
-                    | crate::value::NumVal {
-                        kind: crate::value::NumKind::Int(value),
-                        dim,
-                        display: None,
-                    } if dim == aevia_dim::Dim::one() => {
-                        i64::try_from(&value).ok().map(crate::jit::Lit::I)
-                    },
-                    | _ => None,
-                }
+            let outcome = expected.and_then(|expected| {
+                // Only an eligible activation needs literals from the whole body.
+                let literals = crate::jit::specialization(&function, |number, span| {
+                    let number = match number {
+                        | aevia_syntax::ast::NumberLit::Int(value) => {
+                            interp.integer_literal(value, span)
+                        },
+                        | aevia_syntax::ast::NumberLit::Decimal(value) => {
+                            interp.float_literal(value, span)
+                        },
+                    }
+                    .ok()?;
+                    match number {
+                        | crate::value::NumVal {
+                            kind: crate::value::NumKind::Float(value),
+                            dim,
+                            display: None,
+                        } if dim == aevia_dim::Dim::one() => {
+                            Some(crate::jit::Lit::F(value.to_bits()))
+                        },
+                        | crate::value::NumVal {
+                            kind: crate::value::NumKind::Int(value),
+                            dim,
+                            display: None,
+                        } if dim == aevia_dim::Dim::one() => value.as_i64().map(crate::jit::Lit::I),
+                        | _ => None,
+                    }
+                })?;
+                let remaining = interp.max_tail_calls.saturating_sub(tail_calls);
+                crate::jit::run_with(&function, &args, remaining, &literals, expected, |ask| {
+                    let callee_span = match ask {
+                        | crate::jit::Ask::Builtin(name) => {
+                            // The global must reach the builtin: no
+                            // scope, global or class method shadows it.
+                            return env
+                                .scope
+                                .as_ref()
+                                .is_none_or(|scope| scope.lookup(name).is_none())
+                                && !interp.globals.contains_key(name)
+                                && !interp.method_classes.contains_key(name)
+                                && aevia_types::builtins::is_builtin(name);
+                        },
+                        | crate::jit::Ask::IsSelf(span) => span,
+                    };
+                    // Native code may loop only while this name still points to the
+                    // same canonical closure and the actual recursive source call
+                    // preserves every selected generic binding.
+                    let Ok(target) = eval_atom(
+                        interp,
+                        &Atom::Global(function.name.to_string()),
+                        &frame,
+                        &env,
+                        function.span,
+                    ) else {
+                        return false;
+                    };
+                    interp.self_specialization_matches(
+                        &current_closure,
+                        current_instance.as_ref(),
+                        &target,
+                        callee_span,
+                        &args,
+                    )
+                })
             });
-            let outcome = expected
-                .zip(literals.as_deref())
-                .and_then(|(expected, literals)| {
-                    crate::jit::run_with(&function, &args, remaining, literals, expected, |ask| {
-                        let callee_span = match ask {
-                            | crate::jit::Ask::Builtin(name) => {
-                                // The global must reach the builtin: no
-                                // scope, global or class method shadows it.
-                                return env
-                                    .scope
-                                    .as_ref()
-                                    .is_none_or(|scope| scope.lookup(name).is_none())
-                                    && !interp.globals.contains_key(name)
-                                    && !interp.method_classes.contains_key(name)
-                                    && aevia_types::builtins::is_builtin(name);
-                            },
-                            | crate::jit::Ask::IsSelf(span) => span,
-                        };
-                        // Native code may loop only while this name still points to the
-                        // same canonical closure and the actual recursive source call
-                        // preserves every selected generic binding.
-                        let Ok(target) = eval_atom(
-                            interp,
-                            &Atom::Global(function.name.to_string()),
-                            &mut frame,
-                            &env,
-                            function.span,
-                        ) else {
-                            return false;
-                        };
-                        interp.self_specialization_matches(
-                            &current_closure,
-                            current_instance.as_ref(),
-                            &target,
-                            callee_span,
-                            &args,
-                        )
-                    })
-                });
             match outcome {
                 | Some(crate::jit::Outcome::Value(value)) => Some(Flow::Value(value)),
                 | Some(crate::jit::Outcome::Tail { args, span, consumed }) => {
-                    tail_calls += consumed;
-                    if consumed > 0 {
-                        if let Some(current) = interp.frames.last_mut() {
-                            current.span = span;
-                        }
+                    tail_calls = tail_calls.saturating_add(consumed);
+                    if consumed > 0
+                        && let Some(current) = interp.frames.last_mut()
+                    {
+                        current.span = span;
                     }
                     Some(Flow::Tail {
                         closure: current_closure.clone(),
@@ -305,30 +355,31 @@ pub(crate) fn run_closure(
                 },
                 | None => None,
             }
+        } else {
+            None
         };
         #[cfg(not(feature = "jit"))]
         let compiled_flow: Option<Flow> = None;
-        let flow = match compiled_flow {
-            | Some(flow) => flow,
-            | None => {
-                let slots = usize::try_from(function.nslots).unwrap_or(0);
-                frame.clear();
-                frame.resize(slots, Value::Unit);
-                for (pattern, argument) in function.params.iter().zip(args.iter_mut()) {
-                    // Move plain arguments into the reused trampoline frame.
-                    if !bind_parameter(pattern, argument, &mut frame) {
-                        break 'run Err(EvalError::new(
-                            "E0308",
-                            format!("pattern does not match value {}", value::show(argument)),
-                        )
-                        .at(function.span));
-                    }
+        let flow = if let Some(flow) = compiled_flow {
+            flow
+        } else {
+            let slots = usize::try_from(function.nslots).unwrap_or(0);
+            frame.clear();
+            frame.resize(slots, Value::Unit);
+            for (pattern, argument) in function.params.iter().zip(args.iter_mut()) {
+                // Move plain arguments into the reused trampoline frame.
+                if !bind_parameter(pattern, argument, &mut frame) {
+                    break 'run Err(EvalError::new(
+                        "E0308",
+                        format!("pattern does not match value {}", value::show(argument)),
+                    )
+                    .at(function.span));
                 }
-                match eval_block_in(interp, &function.body, &mut frame, &env, true) {
-                    | Ok(flow) => flow,
-                    | Err(error) => break 'run Err(error),
-                }
-            },
+            }
+            match eval_block_in(interp, &function.body, &mut frame, &env, true) {
+                | Ok(flow) => flow,
+                | Err(error) => break 'run Err(error),
+            }
         };
         let (next, mut next_args, next_span, next_instance) = match flow {
             | Flow::Value(value) => break 'run Ok(value),
@@ -358,7 +409,7 @@ pub(crate) fn run_closure(
             )
             .with_stack(interp.frames.clone()));
         }
-        tail_calls += 1;
+        tail_calls = tail_calls.saturating_add(1);
         let (ClosureBody::Ir(next_function), ClosureEnv::Ir(next_env)) = (&next.body, &next.env)
         else {
             break 'run interp.apply_instantiated(
@@ -469,13 +520,17 @@ fn eval_block_in(
     env: &Rc<IrEnv>,
     exit: bool,
 ) -> Result<Flow, EvalError> {
+    interp.check_cancelled()?;
     for stmt in &block.stmts {
+        interp.check_cancelled()?;
         match stmt {
             | Stmt::Let(item) => {
                 let value = eval_rhs(interp, &item.rhs, frame, env, item.span)?;
                 let value = interp.attach_checked_type(value, item.span);
                 let value = interp.bind_source_function(value, item.span);
-                set(frame, item.slot, value);
+                set(frame, item.slot, value).ok_or_else(|| {
+                    EvalError::new("E0899", "internal: local slot is too large").at(item.span)
+                })?;
             },
             | Stmt::Bind { pattern, atom, span } => {
                 let value = eval_atom(interp, atom, frame, env, *span)?;
@@ -489,9 +544,14 @@ fn eval_block_in(
             },
         }
     }
+    interp.check_cancelled()?;
     eval_tail(interp, &block.tail, frame, env, exit)
 }
 
+#[expect(
+    clippy::single_call_fn,
+    reason = "keep tail-position control flow separate from statement evaluation"
+)]
 fn eval_tail(
     interp: &mut Interp,
     tail: &Tail,
@@ -501,13 +561,14 @@ fn eval_tail(
 ) -> Result<Flow, EvalError> {
     match tail {
         | Tail::Return { atom, span } => {
-            let value = match atom {
-                // The function is returning this slot's value and the frame
-                // dies with it: move it out rather than clone it.
-                | Atom::Local(slot) if exit && (*slot as usize) < frame.len() => {
-                    std::mem::replace(&mut frame[*slot as usize], Value::Unit)
-                },
-                | _ => eval_atom(interp, atom, frame, env, *span)?,
+            // A return can move its slot when this frame is about to die.
+            let value = if exit
+                && let Atom::Local(slot) = atom
+                && let Some(value) = frame.get_mut(*slot as usize)
+            {
+                std::mem::replace(value, Value::Unit)
+            } else {
+                eval_atom(interp, atom, frame, env, *span)?
             };
             let value = interp.attach_checked_type(value, *span);
             Ok(Flow::Value(interp.bind_source_function(value, *span)))
@@ -626,6 +687,10 @@ fn finish_source_call(
     }
 }
 
+#[expect(
+    clippy::single_call_fn,
+    reason = "bound the native stack size of normal calls"
+)]
 fn eval_normal_call(
     interp: &mut Interp,
     call: &Call,
@@ -641,6 +706,10 @@ fn eval_normal_call(
 }
 
 #[inline(never)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "bound the native stack size of explicitly typed calls"
+)]
 fn eval_typed_call(
     interp: &mut Interp,
     call: &Call,
@@ -658,6 +727,10 @@ fn eval_typed_call(
 }
 
 #[inline(never)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "bound the native stack size of dictionary dispatch"
+)]
 fn eval_dictionary_call(
     interp: &mut Interp,
     call: &Call,
@@ -709,9 +782,8 @@ fn eval_dictionary_call(
     }
 }
 
-/// Evaluates a call's arguments. `last_use` says the frame is dead once the
-/// arguments are read (a tail call leaving the function), so a slot passed
-/// once is moved into the argument list instead of cloned.
+/// Evaluates a call's arguments. When the frame is dead after the call,
+/// move each local into its last argument position instead of cloning it.
 fn eval_call_args(
     interp: &mut Interp,
     call: &Call,
@@ -719,28 +791,101 @@ fn eval_call_args(
     env: &Rc<IrEnv>,
     last_use: bool,
 ) -> Result<Vec<Value>, EvalError> {
+    // Wide calls can spend more time scanning suffixes than moving values.
+    if last_use && call.args.len() >= 64 {
+        return eval_wide_tail_args(interp, call, frame, env);
+    }
     let mut values = interp.take_buffer(call.args.len());
     for (index, atom) in call.args.iter().enumerate() {
         let span = call.arg_spans.get(index).copied().unwrap_or(call.span);
-        let value = match atom {
-            | Atom::Local(slot)
-                if last_use
-                    && (*slot as usize) < frame.len()
-                    && !call.args[index + 1..].contains(atom) =>
-            {
-                std::mem::replace(&mut frame[*slot as usize], Value::Unit)
-            },
-            | _ => eval_atom(interp, atom, frame, env, span)?,
+        let value = if last_use
+            && let Atom::Local(slot) = atom
+            && call
+                .args
+                .get(index.saturating_add(1)..)
+                .is_some_and(|rest| !rest.contains(atom))
+            && let Some(value) = frame.get_mut(*slot as usize)
+        {
+            std::mem::replace(value, Value::Unit)
+        } else {
+            eval_atom(interp, atom, frame, env, span)?
         };
         values.push(interp.attach_checked_type(value, span));
     }
     Ok(values)
 }
 
+#[expect(
+    clippy::single_call_fn,
+    reason = "keep the last-use index out of the ordinary call stack"
+)]
+#[inline(never)]
+fn eval_wide_tail_args(
+    interp: &mut Interp,
+    call: &Call,
+    frame: &mut [Value],
+    env: &Rc<IrEnv>,
+) -> Result<Vec<Value>, EvalError> {
+    let argc = call.args.len();
+    if frame.len() <= argc.saturating_mul(4) {
+        static LAST_USES: ScratchPool<usize> = ScratchPool::new(8, 64 * 1024);
+        let mut last = LAST_USES.checkout_for(frame.len());
+        last.resize(frame.len(), argc);
+        for (index, atom) in call.args.iter().enumerate() {
+            if let Atom::Local(slot) = atom
+                && let Some(position) = last.get_mut(*slot as usize)
+            {
+                *position = index;
+            }
+        }
+        return read_call_args(interp, call, frame, env, |index, slot| {
+            last.get(slot as usize) == Some(&index)
+        });
+    }
+
+    // A sparse call can refer to slots anywhere in a much larger frame.
+    let mut last = FxHashMap::with_capacity_and_hasher(argc, FxBuild::default());
+    for (index, atom) in call.args.iter().enumerate() {
+        if let Atom::Local(slot) = atom {
+            last.insert(*slot, index);
+        }
+    }
+    read_call_args(interp, call, frame, env, |index, slot| {
+        last.get(&slot) == Some(&index)
+    })
+}
+
+fn read_call_args(
+    interp: &mut Interp,
+    call: &Call,
+    frame: &mut [Value],
+    env: &Rc<IrEnv>,
+    is_last: impl Fn(usize, Slot) -> bool,
+) -> Result<Vec<Value>, EvalError> {
+    let mut values = interp.take_buffer(call.args.len());
+    for (index, atom) in call.args.iter().enumerate() {
+        let span = call.arg_spans.get(index).copied().unwrap_or(call.span);
+        let value = if let Atom::Local(slot) = atom
+            && is_last(index, *slot)
+            && let Some(value) = frame.get_mut(*slot as usize)
+        {
+            std::mem::replace(value, Value::Unit)
+        } else {
+            eval_atom(interp, atom, frame, env, span)?
+        };
+        values.push(interp.attach_checked_type(value, span));
+    }
+    Ok(values)
+}
+
+#[expect(
+    clippy::single_call_fn,
+    reason = "isolate argument reads for multi-element expressions"
+)]
 fn eval_atoms(
     interp: &mut Interp,
     atoms: &[Atom],
-    frame: &mut [Value],
+    frame: &[Value],
     env: &Rc<IrEnv>,
     span: Span,
 ) -> Result<Vec<Value>, EvalError> {
@@ -764,7 +909,7 @@ fn scalar_view<'a>(
                 | _ => None,
             }
         },
-        | Atom::Int(value) => Some(Scalar::Int(value)),
+        | Atom::Int(value) => Some(Scalar::of_int(value)),
         | Atom::Float(value) => Some(Scalar::Float(*value)),
         | _ => None,
     }
@@ -773,7 +918,7 @@ fn scalar_view<'a>(
 fn eval_atom(
     interp: &mut Interp,
     atom: &Atom,
-    frame: &mut [Value],
+    frame: &[Value],
     env: &Rc<IrEnv>,
     span: Span,
 ) -> Result<Value, EvalError> {
@@ -809,8 +954,11 @@ fn eval_atom(
                     .at(span)
                 })?
         },
-        | Atom::Global(name) => interp.lookup_global(name, env.scope.as_ref(), span)?,
-        | Atom::Int(value) => Value::Num(NumVal::int(value.clone())),
+        | Atom::Global(name) => {
+            let site = std::ptr::from_ref(atom) as usize;
+            interp.lookup_global_at(site, name, env.scope.as_ref(), span)?
+        },
+        | Atom::Int(value) => Value::Num(NumVal::int(value)),
         | Atom::Exact(value) => Value::Num(NumVal::exact(value.clone(), aevia_dim::Dim::one())),
         | Atom::Float(value) => Value::Num(NumVal::float(*value, aevia_dim::Dim::one())),
         | Atom::Complex { re, im } => {
@@ -830,12 +978,13 @@ fn set(
     frame: &mut Vec<Value>,
     slot: u32,
     value: Value,
-) {
+) -> Option<()> {
     let index = slot as usize;
     if index >= frame.len() {
-        frame.resize(index + 1, Value::Unit);
+        frame.resize(index.checked_add(1)?, Value::Unit);
     }
-    frame[index] = value;
+    *frame.get_mut(index)? = value;
+    Some(())
 }
 
 fn build_closure(
@@ -882,6 +1031,10 @@ fn build_closure(
 /// had a ~47 KB native frame in a debug build — every arm's temporaries get
 /// their own slots — and that frame is paid once per *nested source call*,
 /// so it, not memory, decided how deep a non-tail recursion could go.
+#[expect(
+    clippy::single_call_fn,
+    reason = "keep common recursive expressions in a small native stack frame"
+)]
 fn eval_rhs(
     interp: &mut Interp,
     rhs: &Rhs,
@@ -919,6 +1072,14 @@ fn eval_rhs(
 }
 
 #[inline(never)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "isolate larger IR variants from the hot evaluator frame"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "exhaustively dispatch the independent remainder of the IR expressions"
+)]
 fn eval_rhs_rest(
     interp: &mut Interp,
     rhs: &Rhs,
@@ -985,12 +1146,10 @@ fn eval_rhs_rest(
             if let (Some(index), Value::Closure(inner)) = (self_capture, &closure)
                 && let ClosureEnv::Ir(ir_env) = &inner.env
             {
-                let mut slots = ir_env.slots.borrow_mut();
-                let position = *index as usize;
-                if position >= slots.len() {
-                    slots.resize(position + 1, Value::Unit);
-                }
-                slots[position] = closure.clone();
+                set(&mut ir_env.slots.borrow_mut(), *index, closure.clone()).ok_or_else(|| {
+                    EvalError::new("E0899", "internal: recursive capture slot is too large")
+                        .at(span)
+                })?;
             }
             Ok(closure)
         },
@@ -1004,7 +1163,11 @@ fn eval_rhs_rest(
             name,
         } => {
             if let Some(qualified) = qualified
-                && interp.globals.contains_key(qualified)
+                && (env
+                    .scope
+                    .as_ref()
+                    .is_some_and(|scope| scope.lookup(qualified).is_some())
+                    || interp.globals.contains_key(qualified))
             {
                 return interp.lookup_global(qualified, env.scope.as_ref(), span);
             }
@@ -1048,14 +1211,9 @@ fn eval_rhs_rest(
         },
         | Rhs::RssnMember { name } => Ok(crate::rssn_module::member(name)),
         | Rhs::Record { base, fields } => {
-            let mut collected: IndexMap<String, Value> = IndexMap::new();
-            if let Some(base) = base {
+            let mut record = if let Some(base) = base {
                 match eval_atom(interp, base, frame, env, span)? {
-                    | Value::Record(record) => {
-                        for (name, value) in &record.fields {
-                            collected.insert(name.clone(), value.clone());
-                        }
-                    },
+                    | Value::Record(record) => record,
                     | other => {
                         return Err(EvalError::new(
                             "E0302",
@@ -1067,12 +1225,16 @@ fn eval_rhs_rest(
                         .at(span));
                     },
                 }
-            }
+            } else {
+                Rc::new(RecordValue {
+                    fields: IndexMap::with_capacity(fields.len()),
+                })
+            };
             for (name, atom) in fields {
                 let value = eval_atom(interp, atom, frame, env, span)?;
-                collected.insert(name.clone(), value);
+                Rc::make_mut(&mut record).fields.insert(name.clone(), value);
             }
-            Ok(Value::Record(Rc::new(RecordValue { fields: collected })))
+            Ok(Value::Record(record))
         },
         | Rhs::Construct {
             adt,
@@ -1106,61 +1268,26 @@ fn eval_rhs_rest(
                 );
             }
             let mut resolved = Vec::with_capacity(indices.len());
+            let mut selector =
+                |atom: &Atom| slice_integer(&eval_atom(interp, atom, frame, env, span)?, span);
             for index in indices {
-                match index {
-                    | Slice::Index(atom) => {
-                        resolved.push(SliceValue::Index(
-                            eval_atom(interp, atom, frame, env, span)?.as_f64(),
-                        ));
-                    },
+                let resolved_index = match index {
+                    | Slice::Index(atom) => SliceValue::Index(selector(atom)?),
                     | Slice::Range {
                         start,
                         end,
                         inclusive,
                         step,
                     } => {
-                        let start = match start {
-                            | Some(atom) => {
-                                Some(
-                                    eval_atom(interp, atom, frame, env, span)?
-                                        .as_f64()
-                                        .unwrap_or(0.0),
-                                )
-                            },
-                            | None => None,
-                        };
-                        let end = match end {
-                            | Some(atom) => {
-                                Some(
-                                    eval_atom(interp, atom, frame, env, span)?
-                                        .as_f64()
-                                        .unwrap_or(0.0),
-                                )
-                            },
-                            | None => None,
-                        };
-                        // A step that is not a number is `NaN` here, which the
-                        // slicer refuses: `0` would be a plausible-looking
-                        // step and `1` a plausible-looking default, and neither
-                        // is what the program said.
-                        let step = match step {
-                            | Some(atom) => {
-                                Some(
-                                    eval_atom(interp, atom, frame, env, span)?
-                                        .as_f64()
-                                        .unwrap_or(f64::NAN),
-                                )
-                            },
-                            | None => None,
-                        };
-                        resolved.push(SliceValue::Range {
-                            start,
-                            end,
+                        SliceValue::Range {
+                            start: start.as_ref().map(&mut selector).transpose()?,
+                            end: end.as_ref().map(&mut selector).transpose()?,
                             inclusive: *inclusive,
-                            step,
-                        });
+                            step: step.as_ref().map(&mut selector).transpose()?,
+                        }
                     },
-                }
+                };
+                resolved.push(resolved_index);
             }
             interp.index_resolved(base, &resolved, span)
         },
@@ -1183,8 +1310,8 @@ fn eval_rhs_rest(
             Ok(Value::string(out))
         },
         | Rhs::Try(atom) => {
-            let value = eval_atom(interp, atom, frame, env, span)?;
-            interp.try_value(value, span)
+            let mut value = eval_atom(interp, atom, frame, env, span)?;
+            interp.try_value(&mut value, span)
         },
         | Rhs::Factorial { value, double } => {
             let value = eval_atom(interp, value, frame, env, span)?;
@@ -1207,18 +1334,23 @@ fn eval_rhs_rest(
                     return Err(EvalError::new("E0302", "factorial expects an Int").at(span));
                 },
             };
-            Ok(Value::Num(NumVal::int(factorial(n, *double))))
+            let result = crate::eval::factorial(interp, n, *double, span)?;
+            Ok(Value::Num(NumVal::int(result)))
         },
-        | Rhs::Do(plan) => build_do(interp, plan, frame, env),
+        | Rhs::Do(plan) => Ok(build_do(interp, plan, frame, env)),
     }
 }
 
+#[expect(
+    clippy::single_call_fn,
+    reason = "construct the saved environment for deferred IO"
+)]
 fn build_do(
-    interp: &mut Interp,
+    interp: &Interp,
     plan: &Rc<DoPlan>,
-    frame: &mut [Value],
+    frame: &[Value],
     env: &Rc<IrEnv>,
-) -> Result<Value, EvalError> {
+) -> Value {
     let mut slots = Vec::with_capacity(plan.captures.len());
     for capture in &plan.captures {
         slots.push(match capture {
@@ -1236,15 +1368,20 @@ fn build_do(
     let scope = Scope::child_with_types(&parent, interp.bindings.clone());
     let env = Rc::new(IrEnv {
         slots: RefCell::new(slots),
-        scope: Some(scope),
+        scope: Some(Rc::clone(&scope)),
     });
-    Ok(Value::Io(Rc::new(IoAction::Do(crate::io_do::DoBlock::ir(
+    Value::Io(Rc::new(IoAction::Do(crate::io_do::DoBlock::ir(
         interp,
         plan.clone(),
         env,
-    )))))
+        scope,
+    ))))
 }
 
+#[expect(
+    clippy::single_call_fn,
+    reason = "use the same block evaluator from the IO cursor"
+)]
 pub(crate) fn eval_do_expression(
     interp: &mut Interp,
     block: &Block,
@@ -1270,24 +1407,6 @@ pub(crate) fn bind_do_pattern(
     }
 }
 
-fn factorial(
-    n: i64,
-    double: bool,
-) -> BigInt {
-    use num_traits::One;
-    let mut result = BigInt::one();
-    if n <= 0 {
-        return result;
-    }
-    let step = if double { 2 } else { 1 };
-    let mut current = n;
-    while current > 0 {
-        result *= BigInt::from(current);
-        current -= step;
-    }
-    result
-}
-
 /// Matches a pattern, writing its binders into the frame's slots.
 ///
 /// A failed arm may have written some slots; the next arm uses different slots,
@@ -1298,6 +1417,10 @@ fn factorial(
 /// `match_pattern` takes `&Value` and clones, which is right for a match arm
 /// (the scrutinee is still needed) and wasteful for a parameter, whose vector
 /// the caller has already given up.
+#[expect(
+    clippy::single_call_fn,
+    reason = "move plain arguments into the trampoline frame"
+)]
 fn bind_parameter(
     pattern: &Pattern,
     value: &mut Value,
@@ -1305,8 +1428,7 @@ fn bind_parameter(
 ) -> bool {
     match pattern {
         | Pattern::Bind { slot, inner: None } => {
-            set(frame, *slot, std::mem::replace(value, Value::Unit));
-            true
+            set(frame, *slot, std::mem::replace(value, Value::Unit)).is_some()
         },
         | other => match_pattern(other, value, frame),
     }
@@ -1321,8 +1443,10 @@ fn match_pattern(
         return false;
     };
     for binding in bindings {
-        if let crate::pattern::Binding::Slot(slot, value) = binding {
-            set(frame, slot, value);
+        if let crate::pattern::Binding::Slot(slot, value) = binding
+            && set(frame, slot, value).is_none()
+        {
+            return false;
         }
     }
     true

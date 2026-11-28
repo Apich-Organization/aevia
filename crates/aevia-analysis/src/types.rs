@@ -121,7 +121,7 @@ pub struct Symbol {
     /// The type or signature, when the checker recorded one.
     pub detail: Option<String>,
     /// Nested declarations.
-    pub children: Vec<Symbol>,
+    pub children: Vec<Self>,
 }
 
 /// One declaration in a workspace-wide symbol search.
@@ -238,6 +238,19 @@ pub struct CodeAction {
     pub kind: CodeActionKind,
     /// The edits that carry it out, in document order.
     pub edits: Vec<TextEdit>,
+}
+
+/// An inline action displayed above a declaration (e.g. `▶ Run` or `▶ Test`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CodeLens {
+    /// The declaration's range in the document.
+    pub range: Range,
+    /// The label shown to the user.
+    pub title: String,
+    /// The command identifier to execute.
+    pub command: String,
+    /// Arguments passed to the command.
+    pub arguments: Vec<String>,
 }
 
 /// What a highlighted token is.

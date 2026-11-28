@@ -1,0 +1,185 @@
+## Run: bazel run //:aevia -- test examples/native_linear_tensors.aev
+## Normalized samples and physical references stay separate in native tensor models.
+import Rssn_numerical_matrix as N
+
+let a = unwrap_or(N.num_linear_array_new([to_value([2, 2]), to_value([1.0, 2.0, 2.0, 4.0]), to_value(3.0 m)]), to_value(0))
+let train = unwrap_or(N.num_linear_tt_svd([a, to_value(1e-12), to_value(2)]), to_value(0))
+
+test "native train entries retain physical tensor units" =
+    match N.num_linear_train_entry([train, to_value([1, 1])]) with
+    | Ok(value) ->
+        match from_value<Float[Length]>(value) with
+        | Ok(entry) -> approx_eq(entry, 12.0 m, 1e-10 m)
+        | Err(_) -> false
+    | Err(_) -> false
+
+let wrong_units = unwrap_or(N.num_linear_array_new([to_value([2, 2]), to_value([1.0, 2.0, 2.0, 4.0]), to_value(3.0 s)]), to_value(0))
+let wrong_train = unwrap_or(N.num_linear_tt_svd([wrong_units, to_value(1e-12), to_value(2)]), to_value(0))
+
+test "native train addition rejects incompatible physical units" =
+    match N.num_linear_train_add([train, wrong_train]) with
+    | Ok(_) -> false
+    | Err(_) -> true
+
+let bsr = unwrap_or(N.num_linear_bsr_from_triplets([to_value(2), to_value(2), to_value(2), to_value(1), to_value([0, 0, 1]), to_value([0, 1, 1]), to_value([2.0, 3.0, 4.0]), to_value(2.0 s)]), to_value(0))
+let rhs = unwrap_or(N.num_linear_array_new([to_value([2, 3]), to_value([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]), to_value(3.0 m)]), to_value(0))
+let product = unwrap_or(N.num_linear_bsr_matmul_dense([bsr, rhs]), to_value(0))
+let packed_product = N.num_linear_array_data([product])
+
+test "randomized singular values carry the native matrix reference" =
+    let matrix = unwrap_or(N.num_linear_array_new([to_value([3, 2]), to_value([3.0, 0.0, 0.0, 2.0, 0.0, 0.0]), to_value(2.0 m)]), to_value(0))
+    match N.num_linear_randomized_svd([matrix, to_value(2), to_value(1), to_value(2), to_value(17)]) with
+    | Ok(value) ->
+        match from_value<{ u: Tensor<[3, 2], Float>, s: Tensor<[2], Float>, v: Tensor<[2, 2], Float>, singular_value_reference: Float[Length] }>(value) with
+        | Ok(svd) -> approx_eq(svd.s[0] * svd.singular_value_reference, 6.0 m, 1e-12 m) && approx_eq(svd.s[1] * svd.singular_value_reference, 4.0 m, 1e-12 m)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "geometric level transfers retain the field units and reference" =
+    let hierarchy_result = N.num_linear_geometric_new([to_value(1), to_value(3), to_value(0.0), to_value(4.0 s)])
+    let hierarchy_value = unwrap_or(hierarchy_result, to_value(0))
+    match from_value<Option<Value>>(hierarchy_value) with
+    | Ok(Some(hierarchy)) ->
+        let fine = unwrap_or(N.num_linear_array_new([to_value([3]), to_value([4.0, 8.0, 12.0]), to_value(2.0 m)]), to_value(0))
+        let coarse = unwrap_or(Rssn.dynamic("num_linear_geometric_restrict", [hierarchy, to_value(0), fine]), to_value(0))
+        let prolonged = unwrap_or(Rssn.dynamic("num_linear_geometric_prolong", [hierarchy, to_value(0), coarse]), to_value(0))
+        let size = unwrap_or(Rssn.dynamic("num_linear_geometric_level_size", [hierarchy, to_value(1)]), to_value(0))
+        let encoded = unwrap_or(N.num_linear_array_data([prolonged]), to_value(0))
+        match (from_value<Int>(size), from_value<{ shape: Tensor<[1], Int>, data: Tensor<[3], Float>, reference: Float[Length] }>(encoded)) with
+        | (Ok(points), Ok(grid)) -> points == 1 && grid.shape == [3] && grid.data == [4.0, 8.0, 4.0] && grid.reference == 2.0 m
+        | _ -> false
+    | _ -> false
+
+test "a tensor contraction preserves the uncontracted axes and multiplies references" =
+    match N.num_linear_tensordot([wrong_units, rhs, to_value([1]), to_value([0])]) with
+    | Ok(contracted) ->
+        match N.num_linear_array_data([contracted]) with
+        | Ok(value) ->
+            match from_value<{ shape: Tensor<[2], Int>, data: Tensor<[6], Float>, reference: Float[Length*Time] }>(value) with
+            | Ok(out) -> out.shape == [2, 3] && out.data == [9.0, 12.0, 15.0, 18.0, 24.0, 30.0] && out.reference == 9.0 m*s
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "block sparse multiplication preserves all RHS columns and the physical reference" =
+    match packed_product with
+    | Ok(value) ->
+        match from_value<{ shape: Tensor<1, Int>, data: Tensor<1, Float>, reference: Float[Length*Time] }>(value) with
+        | Ok(out) -> at(out.shape, 0) == 2 && at(out.shape, 1) == 3 && approx_eq(at(out.data, 0), 14.0, 1e-12) && approx_eq(at(out.data, 4), 20.0, 1e-12) && approx_eq(out.reference, 6.0 m*s, 1e-12 m*s)
+        | Err(_) -> false
+    | Err(_) -> false
+
+let diagonal = unwrap_or(N.num_linear_csr_new([to_value(2), to_value(2), to_value([0, 1]), to_value([0, 1]), to_value([1.0, 2.0]), to_value(2.0 s)]), to_value(0))
+let solved = N.num_linear_sparse_native_solve_auto_many([diagonal, rhs])
+
+test "AMG batch preconditioning keeps row order and quotient units" =
+    let controls = [diagonal, to_value("RugeStuben"), to_value(0.25), to_value(2), to_value(4), to_value(1), to_value("V"), to_value([[1.0, 1.0]])]
+    match N.num_linear_amg_general_build(controls) with
+    | Ok(amg) ->
+        let batch = unwrap_or(N.num_linear_array_new([to_value([2, 2]), to_value([2.0, 4.0, 8.0, -2.0]), to_value(6.0 m)]), to_value(0))
+        match N.num_linear_amg_general_precondition_many([amg, batch]) with
+        | Ok(result) ->
+            match N.num_linear_array_data([result]) with
+            | Ok(packed) ->
+                match from_value<{ shape: Tensor<1, Int>, data: Tensor<1, Float>, reference: Float[Length/Time] }>(packed) with
+                | Ok(out) ->
+                    let shape_ok = at(out.shape, 0) == 2 && at(out.shape, 1) == 2
+                    let first_row = approx_eq(at(out.data, 0), 2.0, 1e-12) && approx_eq(at(out.data, 1), 2.0, 1e-12)
+                    let second_row = approx_eq(at(out.data, 2), 8.0, 1e-12) && approx_eq(at(out.data, 3), -1.0, 1e-12)
+                    shape_ok && first_row && second_row && approx_eq(out.reference, 3.0 m/s, 1e-12 m/s)
+                | Err(_) -> false
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+fn prepared_schur_scalar(plan: Value, rhs: Value): Option<Float[Length/Time]> =
+    match N.num_linear_sylvester_plan_solve([plan, rhs]) with
+    | Ok(solution) ->
+        match N.num_linear_array_data([solution]) with
+        | Ok(packed) ->
+            match from_value<{ shape: Tensor<1, Int>, data: Tensor<1, Float>, reference: Float[Length/Time] }>(packed) with
+            | Ok(out) -> Some(at(out.data, 0) * out.reference)
+            | Err(_) -> None
+        | Err(_) -> None
+    | Err(_) -> None
+
+test "prepared Sylvester and Lyapunov plans reuse measured coefficients" =
+    let left = unwrap_or(N.num_linear_array_new([to_value([1, 1]), to_value([2.0]), to_value(2.0 s)]), to_value(0))
+    let right = unwrap_or(N.num_linear_array_new([to_value([1, 1]), to_value([1.0]), to_value(4.0 s)]), to_value(0))
+    let sylvester = unwrap_or(N.num_linear_sylvester_plan_new([left, right]), to_value(0))
+    let lyapunov = unwrap_or(N.num_linear_lyapunov_plan_new([left]), to_value(0))
+    let first = unwrap_or(N.num_linear_array_new([to_value([1, 1]), to_value([2.0]), to_value(6.0 m)]), to_value(0))
+    let second = unwrap_or(N.num_linear_array_new([to_value([1, 1]), to_value([-4.0]), to_value(6.0 m)]), to_value(0))
+    let x = unwrap_or(prepared_schur_scalar(sylvester, first), 0.0 m/s)
+    let y = unwrap_or(prepared_schur_scalar(sylvester, second), 0.0 m/s)
+    let z = unwrap_or(prepared_schur_scalar(lyapunov, first), 0.0 m/s)
+    approx_eq(x, 1.5 m/s, 1e-12 m/s) && approx_eq(y, -3.0 m/s, 1e-12 m/s) && approx_eq(z, 1.5 m/s, 1e-12 m/s)
+
+test "automatic sparse solve shares a factorization and keeps quotient units" =
+    match solved with
+    | Ok(value) ->
+        match from_value<{ solution: Value, algorithm: String }>(value) with
+        | Ok(result) ->
+            match N.num_linear_array_data([result.solution]) with
+            | Ok(packed) ->
+                match from_value<{ shape: Tensor<1, Int>, data: Tensor<1, Float>, reference: Float[Length/Time] }>(packed) with
+                | Ok(out) -> result.algorithm == "Cholesky" && at(out.shape, 1) == 3 && approx_eq(at(out.data, 4), 2.5, 1e-12) && approx_eq(out.reference, 1.5 m/s, 1e-12 m/s)
+                | Err(_) -> false
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "CSC transpose multiplication writes into an independently scaled destination" =
+    let matrix = unwrap_or(Rssn.dynamic("num_linear_csc_from_triplets", [to_value(2), to_value(3), to_value([0, 1, 0, 1]), to_value([0, 0, 2, 1]), to_value([2.0, 1.0, -1.0, 3.0]), to_value(2.0 m)]), to_value(0))
+    let input = unwrap_or(N.num_linear_array_new([to_value([2]), to_value([4.0, -2.0]), to_value(5.0 s)]), to_value(0))
+    let destination = unwrap_or(N.num_linear_array_new([to_value([3]), to_value([0.0, 0.0, 0.0]), to_value(4.0 m*s)]), to_value(0))
+    match Rssn.dynamic("num_linear_csc_transpose_matvec_into", [matrix, input, destination]) with
+    | Ok(_) ->
+        match N.num_linear_array_data([destination]) with
+        | Ok(value) ->
+            match from_value<{ shape: Tensor<1, Int>, data: Tensor<1, Float>, reference: Float[Length*Time] }>(value) with
+            | Ok(result) -> result.shape == [3] && result.data == [15.0, -15.0, -10.0] && result.reference == 4.0 m*s
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "CSC computes three norms with one physical matrix reference" =
+    let matrix = unwrap_or(Rssn.dynamic("num_linear_csc_from_triplets", [to_value(2), to_value(3), to_value([0, 0, 1]), to_value([0, 2, 2]), to_value([-3.0, 4.0, 12.0]), to_value(2.0 kg)]), to_value(0))
+    match Rssn.dynamic("num_linear_csc_norms", [matrix]) with
+    | Ok(value) ->
+        match from_value<{ frobenius: Float[Mass], l1: Float[Mass], linf: Float[Mass] }>(value) with
+        | Ok(result) -> approx_eq(result.frobenius, 26.0 kg, 1e-12 kg) && approx_eq(result.l1, 32.0 kg, 1e-12 kg) && approx_eq(result.linf, 24.0 kg, 1e-12 kg)
+        | Err(_) -> false
+    | Err(_) -> false
+test "Arnoldi keeps a tiny normalized projection and its operator reference" =
+    match Rssn.dynamic("num_linear_array_new", [to_value([2, 2]), to_value([1e-200, 0.0, 0.0, 2e-200]), to_value(2.0 s)]) with
+    | Ok(operator) ->
+        match Rssn.dynamic("num_linear_arnoldi", [operator, to_value([1e200, 1e200]), to_value(2)]) with
+        | Ok(value) ->
+            match from_value<{ basis: Tensor<2, Float>, hessenberg: Tensor<2, Float>, beta: Float, operator_reference: Float[Time] }>(value) with
+            | Ok(out) -> approx_eq(out.hessenberg[0, 0] / 1e-200, 1.5, 1e-14) && approx_eq(out.hessenberg[1, 0] / 1e-200, 0.5, 1e-14) && out.operator_reference == 2.0 s
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+let jacobi_rhs = unwrap_or(N.num_linear_array_new([to_value([2]), to_value([3.0, -8.0]), to_value(6.0 m)]), to_value(0))
+
+fn jacobi_solution(result: Value): Bool =
+    match from_value<{ solution: Tensor<[2], Float>, reference: Float[Length/Time], iterations: Int, residual: Float, converged: Bool, preconditioner: String }>(result) with
+    | Ok(out) ->
+        let first = approx_eq(out.solution[0] * out.reference, 9.0 m/s, 1e-12 m/s)
+        let second = approx_eq(out.solution[1] * out.reference, -12.0 m/s, 1e-12 m/s)
+        first && second && out.converged && out.iterations == 1 && out.preconditioner == "Jacobi" && out.residual < 1e-12
+    | Err(_) -> false
+
+test "native Jacobi CG keeps quotient units and convergence report" =
+    let controls = [diagonal, jacobi_rhs, to_value(1e-12), to_value(8), to_value("Jacobi"), to_value(0), to_value(0)]
+    match N.num_linear_sparse_native_cg_precond(controls) with
+    | Ok(record) -> jacobi_solution(record)
+    | Err(_) -> false
+
+test "native Jacobi GMRES keeps quotient units and convergence report" =
+    let controls = [diagonal, jacobi_rhs, to_value(1e-12), to_value(8), to_value("Jacobi"), to_value(0), to_value(0), to_value("Gmres"), to_value(2)]
+    match N.num_linear_sparse_native_krylov_precond(controls) with
+    | Ok(record) -> jacobi_solution(record)
+    | Err(_) -> false

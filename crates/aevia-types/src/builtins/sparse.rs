@@ -12,6 +12,21 @@
 //! rank). Element dimensions propagate as for dense tensors: a sum needs equal
 //! dimensions, a product multiplies them, `spsolve` divides them.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
 use super::Adt;
 use super::Scheme;
 use super::adt;
@@ -66,11 +81,13 @@ pub fn sparse_type(
 /// The format and the dense counterpart of a sparse type.
 #[must_use]
 pub fn sparse_parts(ty: &Type) -> Option<(&Type, &Type)> {
-    match ty {
-        | Type::Adt(id, args) if args.len() == 2 && *id == sparse_adt() => {
-            Some((&args[0], &args[1]))
-        },
-        | _ => None,
+    if let Type::Adt(id, args) = ty
+        && let [format, dense] = args.as_slice()
+        && *id == sparse_adt()
+    {
+        Some((format, dense))
+    } else {
+        None
     }
 }
 
@@ -85,7 +102,7 @@ const RANKS: std::ops::RangeInclusive<u32> = 1..=4;
 
 // Variable numbering inside these schemes (type and representation variables
 // share one id space): 0 is the representation, 1 and 2 are free formats.
-fn rep() -> crate::ty::Rep {
+const fn rep() -> crate::ty::Rep {
     rep_var(0)
 }
 
@@ -109,6 +126,10 @@ fn csr() -> Type {
 /// default `Csr` result format of the constructors, `from_dense<Coo>`), or
 /// `None` when the name is not one.
 #[must_use]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the sparse builtin table keeps the complete type schemes adjacent to their names"
+)]
 pub fn sparse_schemes(
     name: &str,
     format: Option<Type>,
@@ -278,98 +299,7 @@ pub fn sparse_schemes(
                 ),
             )]
         },
-        | "cg" => {
-            let float = |dim: u32| Type::float(dim_var(dim));
-            vec![scheme(
-                2,
-                2,
-                0,
-                func(
-                    vec![
-                        sp(var(1), 2, float(0)),
-                        tensor(1, float(1)),
-                        Type::float(one()),
-                        int(),
-                    ],
-                    Type::record(vec![
-                        (
-                            "x".to_string(),
-                            tensor(1, Type::float(dim_var(1).div(&dim_var(0)))),
-                        ),
-                        ("iterations".to_string(), int()),
-                        ("residual".to_string(), Type::float(one())),
-                        ("converged".to_string(), Type::bool()),
-                    ]),
-                ),
-            )]
-        },
-        // `cg_with(A, b, { tol, maxiter, precond })`: the `Precond` constructor
-        // is a standard-library variant, so its field is left to inference.
-        | "cg_with" => {
-            let float = |dim: u32| Type::float(dim_var(dim));
-            vec![scheme(
-                3,
-                2,
-                0,
-                func(
-                    vec![
-                        sp(var(1), 2, float(0)),
-                        tensor(1, float(1)),
-                        Type::record(vec![
-                            ("tol".to_string(), Type::float(one())),
-                            ("maxiter".to_string(), int()),
-                            ("precond".to_string(), var(2)),
-                        ]),
-                    ],
-                    Type::record(vec![
-                        (
-                            "x".to_string(),
-                            tensor(1, Type::float(dim_var(1).div(&dim_var(0)))),
-                        ),
-                        ("iterations".to_string(), int()),
-                        ("residual".to_string(), Type::float(one())),
-                        ("converged".to_string(), Type::bool()),
-                        ("precond".to_string(), Type::string()),
-                    ]),
-                ),
-            )]
-        },
-        // `gmres_with(A, b, { tol, maxiter, restart, precond })` and
-        // `bicgstab_with(A, b, { tol, maxiter, precond })`: Krylov solvers for
-        // general square matrices; the result has the shape of `cg_with`'s.
-        | "gmres_with" | "bicgstab_with" => {
-            let float = |dim: u32| Type::float(dim_var(dim));
-            let mut options = vec![
-                ("tol".to_string(), Type::float(one())),
-                ("maxiter".to_string(), int()),
-            ];
-            if name == "gmres_with" {
-                options.push(("restart".to_string(), int()));
-            }
-            options.push(("precond".to_string(), var(2)));
-            vec![scheme(
-                3,
-                2,
-                0,
-                func(
-                    vec![
-                        sp(var(1), 2, float(0)),
-                        tensor(1, float(1)),
-                        Type::record(options),
-                    ],
-                    Type::record(vec![
-                        (
-                            "x".to_string(),
-                            tensor(1, Type::float(dim_var(1).div(&dim_var(0)))),
-                        ),
-                        ("iterations".to_string(), int()),
-                        ("residual".to_string(), Type::float(one())),
-                        ("converged".to_string(), Type::bool()),
-                        ("precond".to_string(), Type::string()),
-                    ]),
-                ),
-            )]
-        },
+        | "cg" | "cg_with" | "gmres_with" | "bicgstab_with" => vec![krylov_scheme(name)],
         | "map_nonzero" => {
             RANKS
                 .map(|r| {
@@ -419,8 +349,49 @@ pub fn sparse_schemes(
     })
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "the iterative solvers share dimensional inputs and convergence fields"
+)]
+fn krylov_scheme(name: &str) -> Scheme {
+    let mut params = vec![
+        sp(var(1), 2, Type::float(dim_var(0))),
+        tensor(1, Type::float(dim_var(1))),
+    ];
+    let mut result = vec![
+        (
+            "x".to_string(),
+            tensor(1, Type::float(dim_var(1).div(&dim_var(0)))),
+        ),
+        ("iterations".to_string(), Type::int()),
+        ("residual".to_string(), Type::float(one())),
+        ("converged".to_string(), Type::bool()),
+    ];
+    let vars = if name == "cg" {
+        params.extend([Type::float(one()), Type::int()]);
+        2
+    } else {
+        let mut options = vec![
+            ("tol".to_string(), Type::float(one())),
+            ("maxiter".to_string(), Type::int()),
+        ];
+        if name == "gmres_with" {
+            options.push(("restart".to_string(), Type::int()));
+        }
+        options.push(("precond".to_string(), var(2)));
+        params.push(Type::record(options));
+        result.push(("precond".to_string(), Type::string()));
+        3
+    };
+    scheme(vars, 2, 0, func(params, Type::record(result)))
+}
+
 /// The sparse overloads appended to an existing name (`sum`, `matmul`).
 #[must_use]
+#[allow(
+    clippy::single_call_fn,
+    reason = "contributes sparse overloads without duplicating the existing dense schemes"
+)]
 pub fn sparse_overloads(name: &str) -> Vec<Scheme> {
     match name {
         // `sum(A)` is the element sum; `sum(A, axis)` keeps the axis, as the
@@ -480,5 +451,32 @@ pub fn sparse_overloads(name: &str) -> Vec<Scheme> {
             out
         },
         | _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_gmres_has_a_restart_option() {
+        for name in ["cg_with", "gmres_with", "bicgstab_with"] {
+            let schemes = sparse_schemes(name, None).expect("known sparse solver");
+            let [scheme] = schemes.as_slice() else {
+                panic!("{name} should have one scheme");
+            };
+            let Type::Fn(params, result) = &scheme.ty else {
+                panic!("{name} should be a function");
+            };
+            let [_, _, Type::Record(options)] = params.as_slice() else {
+                panic!("{name} should take an options record");
+            };
+            assert_eq!(options.field("restart").is_some(), name == "gmres_with");
+            assert!(options.field("precond").is_some());
+            let Type::Record(result) = result.as_ref() else {
+                panic!("{name} should return a result record");
+            };
+            assert!(result.field("precond").is_some());
+        }
     }
 }

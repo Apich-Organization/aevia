@@ -12,6 +12,10 @@
 //! formatter that quietly rewrites a file it does not understand is the one
 //! outcome that must not happen.
 //!
+//! Comments are kept, including comments inside string interpolations. The
+//! formatter preserves the spelling of interpolations that depend on source
+//! layout, nesting or comments. LF, CRLF and bare CR are supported.
+//!
 //! ```
 //! use aevia_fmt::format_source;
 //!
@@ -22,6 +26,20 @@
 //! ```
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
 
 pub mod comments;
 pub mod fingerprint;
@@ -87,21 +105,36 @@ impl std::fmt::Display for FormatError {
 ///
 /// [`FormatError`] when the file cannot be formatted faithfully.
 pub fn format_source(source: &str) -> Result<String, FormatError> {
-    let once = print_once(source)?;
+    let line_ending = if source.contains("\r\n") {
+        "\r\n"
+    } else if source.contains('\r') {
+        "\r"
+    } else {
+        "\n"
+    };
+    let original = parse(source)?;
+    let once = original.print(line_ending)?;
+    // Printing the same bytes also preserves the parsed tree and trivia.
+    if once == source {
+        return Ok(once);
+    }
+    let printed = parse(&once).map_err(|error| {
+        FormatError::new(
+            Failure::TreeChanged,
+            format!("the printed file does not parse again ({})", error.message),
+        )
+    })?;
+    verify(&original, &printed)?;
+
     // The idempotence check is part of the contract, so it is enforced here
-    // rather than trusted: a printer that oscillates is a printer that will
-    // fight every editor save.
-    let twice = print_once(&once)?;
+    // using the same parsed result as the structural check. If the second
+    // print is byte-identical, parsing it again cannot reveal a difference.
+    let twice = printed.print(line_ending)?;
     if twice != once {
         return Err(FormatError::new(
             Failure::NotIdempotent,
             "formatting the formatted file changes it again",
         ));
-    }
-    // A file written with CRLF stays CRLF: rewriting every line ending would
-    // bury the formatting change in a whole-file diff.
-    if source.contains("\r\n") {
-        return Ok(once.replace('\n', "\r\n"));
     }
     Ok(once)
 }
@@ -115,44 +148,70 @@ pub fn is_formatted(source: &str) -> Result<bool, FormatError> {
     Ok(format_source(source)? == source)
 }
 
-/// Parses, prints and verifies one pass.
-fn print_once(source: &str) -> Result<String, FormatError> {
-    let module = parse(source)?;
-    let before = comments::scan(source);
-    let text = print::Printer::new(before.clone())
-        .with_source(source)
-        .module(&module)
-        .map_err(|message| FormatError::new(Failure::Unprintable, message))?;
-    let after_module = parse(&text).map_err(|error| {
-        FormatError::new(
-            Failure::TreeChanged,
-            format!("the printed file does not parse again ({})", error.message),
-        )
-    })?;
-    let original = fingerprint::module(&module);
-    let printed = fingerprint::module(&after_module);
+struct ParsedSource<'a> {
+    source: &'a str,
+    module: Module,
+    comments: Vec<comments::Comment>,
+    preserved_strings: Vec<aevia_syntax::Span>,
+}
+
+impl ParsedSource<'_> {
+    fn print(
+        &self,
+        line_ending: &'static str,
+    ) -> Result<String, FormatError> {
+        print::Printer::new(self.comments.clone())
+            .with_source(self.source)
+            .with_source_layout(line_ending, self.preserved_strings.clone())
+            .module(&self.module)
+            .map_err(|message| FormatError::new(Failure::Unprintable, message))
+    }
+
+    fn preserved_text(&self) -> impl Iterator<Item = Option<&str>> {
+        self.preserved_strings.iter().map(|span| {
+            self.source
+                .get(usize::try_from(span.start).ok()?..usize::try_from(span.end).ok()?)
+        })
+    }
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps verification of emitted source separate from rendering"
+)]
+fn verify(
+    before: &ParsedSource<'_>,
+    after: &ParsedSource<'_>,
+) -> Result<(), FormatError> {
+    let original = fingerprint::module(&before.module);
+    let printed = fingerprint::module(&after.module);
     if original != printed {
         return Err(FormatError::new(
             Failure::TreeChanged,
             format!(
                 "{}: the printed file means something else ({})",
-                blame(&module, &after_module),
+                blame(&before.module, &after.module),
                 first_difference(&original, &printed)
             ),
         ));
     }
-    let after = comments::scan(&text);
-    if normalise(&before) != normalise(&after) {
+    if !comments_match(&before.comments, &after.comments) {
         return Err(FormatError::new(
             Failure::CommentLost,
             "a comment would not survive formatting",
         ));
     }
-    Ok(text)
+    if !before.preserved_text().eq(after.preserved_text()) {
+        return Err(FormatError::new(
+            Failure::Unprintable,
+            "the source spelling of a string interpolation would change",
+        ));
+    }
+    Ok(())
 }
 
 /// Parses one file, reporting the first diagnostic with its line.
-fn parse(source: &str) -> Result<Module, FormatError> {
+fn parse(source: &str) -> Result<ParsedSource<'_>, FormatError> {
     let lexed = lex(0, source).map_err(|diagnostics| {
         FormatError::new(
             Failure::Lex,
@@ -172,7 +231,33 @@ fn parse(source: &str) -> Result<Module, FormatError> {
             ),
         ));
     }
-    Ok(module)
+    let mut comments = comments::scan_lexed(source, &lexed.tokens);
+    // The parser consumes docs only before top-level declarations. Preserve
+    // unattached docs as trivia, including a file that consists only of docs.
+    let last_decl_start = module.decls.last().map(|decl| decl.span.start);
+    let attached = lexed
+        .docs
+        .partition_point(|doc| last_decl_start.is_some_and(|start| doc.span.end <= start));
+    let ordinary_count = comments.len();
+    comments.extend(lexed.docs.iter().skip(attached).filter_map(|doc| {
+        let start = usize::try_from(doc.span.start).ok()?;
+        let end = usize::try_from(doc.span.end).ok()?;
+        Some(comments::Comment {
+            start,
+            end,
+            text: source.get(start..end)?.trim_end().to_string(),
+            block: false,
+        })
+    }));
+    if comments.len() > ordinary_count {
+        comments.sort_unstable_by_key(|comment| comment.start);
+    }
+    Ok(ParsedSource {
+        source,
+        module,
+        comments,
+        preserved_strings: comments::protected_strings(source, &lexed.tokens),
+    })
 }
 
 fn describe(
@@ -186,25 +271,17 @@ fn describe(
     else {
         return "the file does not parse".to_string();
     };
-    format!(
-        "line {}: {}: {}",
-        line_of(source, first.span.start),
-        first.code,
-        first.message
-    )
-}
-
-fn line_of(
-    source: &str,
-    offset: u32,
-) -> usize {
-    let offset = usize::try_from(offset)
-        .unwrap_or(usize::MAX)
-        .min(source.len());
-    1 + source[..offset].matches('\n').count()
+    let offset = usize::try_from(first.span.start).unwrap_or(usize::MAX);
+    let prefix = source.get(..offset).unwrap_or(source);
+    let line = comments::physical_lines(prefix).count().max(1);
+    format!("line {line}: {}: {}", first.code, first.message)
 }
 
 /// The declaration whose printed form differs, for the failure message.
+#[allow(
+    clippy::single_call_fn,
+    reason = "isolates the declaration-level diagnostic from tree comparison"
+)]
 fn blame(
     original: &Module,
     printed: &Module,
@@ -224,36 +301,41 @@ fn blame(
     "the module header".to_string()
 }
 
-/// The comment texts, with trailing spaces normalised away per line.
-fn normalise(comments: &[comments::Comment]) -> Vec<String> {
-    comments
-        .iter()
-        .map(|comment| {
-            comment
-                .text
-                .lines()
-                .map(str::trim_end)
-                .collect::<Vec<_>>()
-                .join("\n")
+/// Compares comment texts after allowing for line endings and trailing space.
+#[allow(
+    clippy::single_call_fn,
+    reason = "compares comment trivia independently of the AST"
+)]
+fn comments_match(
+    before: &[comments::Comment],
+    after: &[comments::Comment],
+) -> bool {
+    before.len() == after.len()
+        && before.iter().zip(after).all(|(left, right)| {
+            left.block == right.block
+                && comments::physical_lines(&left.text)
+                    .map(str::trim_end)
+                    .eq(comments::physical_lines(&right.text).map(str::trim_end))
         })
-        .collect()
 }
 
 /// The first place two fingerprints differ, as a short excerpt.
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps the bounded fingerprint excerpt out of the formatting pass"
+)]
 fn first_difference(
     left: &str,
     right: &str,
 ) -> String {
-    let left: Vec<char> = left.chars().collect();
-    let right: Vec<char> = right.chars().collect();
     let at = left
-        .iter()
-        .zip(right.iter())
-        .position(|(a, b)| a != b)
-        .unwrap_or_else(|| left.len().min(right.len()));
+        .chars()
+        .zip(right.chars())
+        .take_while(|(a, b)| a == b)
+        .count();
     let from = at.saturating_sub(20);
-    let left: String = left[from..].iter().take(60).collect();
-    let right: String = right[from..].iter().take(60).collect();
+    let left: String = left.chars().skip(from).take(60).collect();
+    let right: String = right.chars().skip(from).take(60).collect();
     format!("`{left}` became `{right}`")
 }
 
@@ -312,6 +394,17 @@ mod tests {
         assert!(formatted.contains("# leading"));
         assert!(formatted.contains("# trailing"));
         assert!(formatted.contains("# last"));
+    }
+
+    #[test]
+    fn shebang_precedes_module_header() {
+        let source = "#!/usr/bin/env -S aevia run\nmodule Sample\nlet  x=1\n";
+        let expected = "#!/usr/bin/env -S aevia run\nmodule Sample\n\nlet x = 1\n";
+        assert_eq!(format_source(source).expect("formats"), expected);
+        assert_eq!(
+            format_source(&format!("\u{feff}{source}")).expect("formats with BOM"),
+            expected
+        );
     }
 
     #[test]

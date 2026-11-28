@@ -68,7 +68,7 @@ const KEYWORDS: &[&str] = &[
 const RESERVED_CTORS: &[&str] = &["None", "Some", "Ok", "Err", "True", "False", "Cpu", "Gpu"];
 
 fn camel(name: &str) -> String {
-    name.split(|c: char| c == '_' || c == '-' || c == ' ')
+    name.split(['_', '-', ' '])
         .filter(|part| !part.is_empty())
         .map(|part| {
             let mut chars = part.chars();
@@ -86,11 +86,16 @@ pub fn module_name(scenario: &str) -> String {
 }
 
 /// The choice types of a module: field name, type name, constructors.
-struct Choices(Vec<(String, String, Vec<(String, String)>)>);
+type Choice = (String, String, Vec<(String, String)>);
+struct Choices(Vec<Choice>);
 
 impl Choices {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "Allocates stable constructor names before the scenario template runs"
+    )]
     fn collect(schema: &ScenarioSchema) -> Self {
-        let mut out: Vec<(String, String, Vec<(String, String)>)> = Vec::new();
+        let mut out: Vec<Choice> = Vec::new();
         let mut seen: Vec<String> = Vec::new();
         let fields = schema.params.iter().chain(&schema.result);
         for field in fields {
@@ -126,7 +131,7 @@ impl Choices {
     fn get(
         &self,
         field: &str,
-    ) -> Option<&(String, String, Vec<(String, String)>)> {
+    ) -> Option<&Choice> {
         self.0.iter().find(|(f, ..)| f == field)
     }
 }
@@ -214,7 +219,7 @@ fn literal(
         | (FieldType::Tensor { rank, elem }, J::Array(items)) => {
             let inner = if *rank > 1 {
                 FieldType::Tensor {
-                    rank: rank - 1,
+                    rank: rank.saturating_sub(1),
                     elem: elem.clone(),
                 }
             } else {
@@ -256,19 +261,34 @@ fn nested(
     choices: &Choices,
 ) -> Option<String> {
     match dims {
-        | [] => literal(field, data.first()?, elem, choices),
+        | [] => {
+            let [value] = data else { return None };
+            literal(field, value, elem, choices)
+        },
         | [n, rest @ ..] => {
-            let stride: usize = rest.iter().product();
-            let mut parts = Vec::with_capacity(*n);
-            for k in 0..*n {
-                let chunk = data.get(k * stride..(k + 1) * stride)?;
+            let stride = rest
+                .iter()
+                .try_fold(1usize, |size, extent| size.checked_mul(*extent))?;
+            if n.checked_mul(stride)? != data.len() {
+                return None;
+            }
+            let mut parts = Vec::new();
+            parts.try_reserve_exact(*n).ok()?;
+            let mut remaining = data;
+            for _ in 0..*n {
+                let (chunk, tail) = remaining.split_at_checked(stride)?;
                 parts.push(nested(rest, chunk, elem, field, choices)?);
+                remaining = tail;
             }
             Some(format!("[{}]", parts.join(", ")))
         },
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "Keeps the float-token spelling rule separate from JSON shape matching"
+)]
 fn float_literal(x: f64) -> Option<String> {
     if !x.is_finite() {
         return None;
@@ -285,6 +305,10 @@ fn float_literal(x: f64) -> Option<String> {
 }
 
 /// Encodes field `name` of `p` for the kernel: choices become their string.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Keeps choice argument encoding separate from the scenario template"
+)]
 fn encoder(
     name: &str,
     ty: &FieldType,

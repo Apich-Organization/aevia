@@ -4,12 +4,30 @@
 //! framed, dimension binders are numbered by parameter position, and nominal
 //! edges use a sorted graph index. Recursive graphs therefore terminate without
 //! hashing an entire source file or retaining process-global `AdtId`s.
+
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
+
 use crate::ModulePath;
 use crate::Nat;
 use crate::Rep;
 use crate::Shape;
 use crate::Type;
 use crate::adt;
+use crate::keys::key_part;
+use crate::keys::row_fields;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -18,7 +36,18 @@ use std::sync::Arc;
 /// An immutable, canonical declaration schema. This is a local interface format,
 /// not a versioned registry or serialized `.aevi` protocol.
 #[derive(
-    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
 )]
 pub struct DeclarationSchemaKey(pub(crate) Arc<str>);
 
@@ -30,19 +59,16 @@ struct Encoder {
 impl Encoder {
     fn part(
         &mut self,
-        value: impl AsRef<str>,
+        value: &str,
     ) {
-        let value = value.as_ref();
-        self.text.push_str(&value.len().to_string());
-        self.text.push(':');
-        self.text.push_str(value);
+        key_part(&mut self.text, value);
     }
 
     fn number(
         &mut self,
-        value: impl ToString,
+        value: impl std::fmt::Display + Copy,
     ) {
-        self.part(value.to_string());
+        self.part(&value.to_string());
     }
 
     fn module(
@@ -78,20 +104,51 @@ impl Encoder {
         self.number(factors.len());
         for ((kind, name), power) in factors {
             self.number(kind);
-            self.part(name);
+            self.part(&name);
             self.number(power.numer());
             self.number(power.denom());
         }
         Some(())
     }
 
+    fn shape(
+        &mut self,
+        shape: &Shape,
+    ) -> Option<()> {
+        match shape {
+            | Shape::Rank(rank) => {
+                self.part("rank");
+                self.number(rank);
+            },
+            | Shape::Refined(items) if items.iter().all(Option::is_none) => {
+                self.part("rank");
+                self.number(items.len());
+            },
+            | Shape::Refined(items) => {
+                self.part("shape");
+                self.number(items.len());
+                for item in items {
+                    if let Some(n) = item {
+                        self.part("extent");
+                        self.nat(n)?;
+                    } else {
+                        self.part("unknown");
+                    }
+                }
+            },
+        }
+        Some(())
+    }
+
     fn rep(
         &mut self,
+        tag: &str,
         rep: Rep,
     ) -> Option<()> {
         if matches!(rep, Rep::Var(_)) {
             return None;
         }
+        self.part(tag);
         self.part(rep.name());
         Some(())
     }
@@ -131,8 +188,7 @@ impl Encoder {
     ) -> Option<()> {
         match ty {
             | Type::Scalar(rep, dim) => {
-                self.part("scalar");
-                self.rep(*rep)?;
+                self.rep("scalar", *rep)?;
                 self.dim(dim)?;
             },
             | Type::Bool => self.part("bool"),
@@ -147,34 +203,10 @@ impl Encoder {
                 self.part("unit-of");
                 self.dim(dim)?;
             },
-            | Type::Dyn(rep) => {
-                self.part("dyn");
-                self.rep(*rep)?;
-            },
+            | Type::Dyn(rep) => self.rep("dyn", *rep)?,
             | Type::Tensor { shape, elem } => {
                 self.part("tensor");
-                match shape {
-                    | Shape::Rank(rank) => {
-                        self.part("rank");
-                        self.number(rank);
-                    },
-                    | Shape::Refined(items) if items.iter().all(Option::is_none) => {
-                        self.part("rank");
-                        self.number(items.len());
-                    },
-                    | Shape::Refined(items) => {
-                        self.part("shape");
-                        self.number(items.len());
-                        for item in items {
-                            if let Some(n) = item {
-                                self.part("extent");
-                                self.nat(n)?;
-                            } else {
-                                self.part("unknown");
-                            }
-                        }
-                    },
-                }
+                self.shape(shape)?;
                 self.ty(elem)?;
             },
             | Type::Fn(args, result) => {
@@ -190,12 +222,12 @@ impl Encoder {
                     return None;
                 }
                 self.part("record");
-                let mut fields = row.fields();
-                fields.sort_by(|a, b| a.0.cmp(&b.0));
+                let mut fields: Vec<_> = row_fields(row).collect();
+                fields.sort_by(|a, b| a.0.cmp(b.0));
                 self.number(fields.len());
                 for (name, ty) in fields {
                     self.part(name);
-                    self.ty(&ty)?;
+                    self.ty(ty)?;
                 }
             },
             | Type::Adt(id, args) => {
@@ -218,8 +250,7 @@ impl Encoder {
                 self.part("tensor-intrinsic");
                 self.part(intrinsic.kind.name());
                 if let Some(rep) = intrinsic.element {
-                    self.part("element");
-                    self.rep(rep)?;
+                    self.rep("element", rep)?;
                 } else {
                     self.part("polymorphic");
                 }
@@ -272,17 +303,25 @@ fn edges(
             edges(result, out);
         },
         | Type::Record(row) => {
-            for (_, ty) in row.fields() {
-                edges(&ty, out);
+            for (_, ty) in row_fields(row) {
+                edges(ty, out);
             }
         },
         | Type::TypeRepIntrinsic(Some(inner)) | Type::FromValueIntrinsic(Some(inner)) => {
-            edges(inner, out)
+            edges(inner, out);
         },
         | _ => {},
     }
 }
-pub(crate) fn build(root: adt::AdtId) -> Option<DeclarationSchemaKey> {
+/// Builds an allocation-independent key for a complete declaration graph.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "canonicalize a full declaration graph"
+    )
+)]
+pub fn build(root: adt::AdtId) -> Option<DeclarationSchemaKey> {
     let mut pending = vec![root];
     let mut visited = HashSet::new();
     let mut nodes = BTreeMap::new();
@@ -290,28 +329,21 @@ pub(crate) fn build(root: adt::AdtId) -> Option<DeclarationSchemaKey> {
         if !visited.insert(id) {
             continue;
         }
-        let declaration = adt::get(id)?;
-        let module = adt::module_of(id);
-        if !module.is_prelude() && !adt::is_complete(id) {
-            return None;
-        }
-        // An intentionally mixed graph containing different revisions of one
-        // nominal declaration is conservatively unshareable.
-        if nodes
-            .insert(
-                (module.clone(), declaration.name.clone()),
-                (id, declaration.clone()),
-            )
-            .is_some()
-        {
-            return None;
-        }
+        let (declaration, module) = adt::schema_snapshot(id)?;
         if !module.is_prelude() {
             for ctor in &declaration.ctors {
                 for field in &ctor.fields {
                     edges(field, &mut pending);
                 }
             }
+        }
+        // A graph containing different revisions of one nominal declaration
+        // cannot share a schema key.
+        if nodes
+            .insert((module, declaration.name.clone()), (id, declaration))
+            .is_some()
+        {
+            return None;
         }
     }
     let mut encoder = Encoder {
@@ -328,7 +360,7 @@ pub(crate) fn build(root: adt::AdtId) -> Option<DeclarationSchemaKey> {
     encoder.number(nodes.len());
     for ((module, name), (id, declaration)) in nodes {
         encoder.module(&module);
-        encoder.part(name);
+        encoder.part(&name);
         if module.is_prelude() {
             encoder.part("host");
             continue;
@@ -342,16 +374,22 @@ pub(crate) fn build(root: adt::AdtId) -> Option<DeclarationSchemaKey> {
                 | adt::ParamKind::Type => encoder.part("type"),
                 | adt::ParamKind::Dim(id) => {
                     encoder.part("dimension");
-                    encoder.dimensions.insert(*id, u32::try_from(index).ok()?);
+                    if encoder
+                        .dimensions
+                        .insert(*id, u32::try_from(index).ok()?)
+                        .is_some()
+                    {
+                        return None;
+                    }
                 },
             }
         }
         encoder.number(declaration.ctors.len());
-        for ctor in declaration.ctors.iter().cloned() {
-            encoder.part(ctor.name);
+        for ctor in &declaration.ctors {
+            encoder.part(&ctor.name);
             encoder.number(ctor.fields.len());
-            for field in ctor.fields {
-                encoder.ty(&field)?;
+            for field in &ctor.fields {
+                encoder.ty(field)?;
             }
         }
     }

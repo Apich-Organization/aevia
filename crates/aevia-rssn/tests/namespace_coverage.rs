@@ -87,8 +87,22 @@ fn every_manifest_binding_is_in_the_right_namespace_with_the_right_target() {
                     .iter()
                     .map(|byte| format!("{byte:02x}"))
                     .collect();
+                let lazy_body = source
+                    .split_once(line)
+                    .unwrap()
+                    .1
+                    .lines()
+                    .take(4)
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 assert!(
-                    line.contains(&format!("Rssn.invoke(\"{}\", \"{}\",", row.op.name, hash)),
+                    line.contains(&format!("Rssn.invoke(\"{}\", \"{}\",", row.op.name, hash))
+                        || (line.contains("(): Result<")
+                            && line.ends_with(" =")
+                            && lazy_body.contains(&format!(
+                                "Rssn.call_key(\"{}\", \"{}\", []) with",
+                                row.op.name, hash
+                            ))),
                     "{path}: wrong pinned target for {}: {line}",
                     row.name
                 );

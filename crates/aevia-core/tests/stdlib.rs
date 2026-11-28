@@ -9,6 +9,7 @@
 
 use aevia_core::EvalError;
 use aevia_core::Interp;
+use aevia_core::Mode;
 use aevia_core::builtins::call_simple;
 use aevia_core::compile;
 use aevia_core::value::NumKind;
@@ -204,11 +205,11 @@ fn statistics_keep_exactness_and_report_shapes() {
         Some(NumKind::Float(_))
     ));
 
-    // The type-7 quantile of [0, 10] at 1/4 is exactly 5/2.
+    // Type-7 quantiles order the sample. For [10, 0] at 1/4 the result is 5/2.
     let quantile = call(
         "quantile",
         vec![
-            exact(vec![0, 10]),
+            exact(vec![10, 0]),
             Value::Num(aevia_core::value::NumVal::exact(
                 BigRational::new(BigInt::from(1), BigInt::from(4)),
                 aevia_dim::Dim::one(),
@@ -239,6 +240,130 @@ fn statistics_keep_exactness_and_report_shapes() {
 }
 
 #[test]
+fn batch_quantiles_keep_query_order_exactness_and_sample_units() {
+    let output = run_value(
+        "let xs: Tensor<1, Real[Length]> = [10 m, 0 m]\nlet output: Tensor<1, Real[Length]> = quantiles(xs, [3/4, 0, 1/4, 3/4, 1])\n",
+        "output",
+    );
+    let result = tensor_of(&output);
+    assert_eq!(result.shape, vec![5]);
+    let values = result.elements();
+    for (value, (numerator, denominator)) in
+        values
+            .iter()
+            .zip([(15, 2), (0, 1), (5, 2), (15, 2), (10, 1)])
+    {
+        let number = num(value);
+        assert_eq!(
+            number.to_rational(),
+            Some(BigRational::new(numerator.into(), denominator.into()))
+        );
+        assert!(!number.dim.is_one());
+        assert!(number.display.is_some());
+    }
+    assert!(matches!(
+        result.storage,
+        Storage::TypedExact(_, aevia_core::value::ExactRep::Real)
+    ));
+
+    let output = run_value(
+        "let xs: Tensor<1, Float[Length]> = [10.0 m, 0.0 m]\nlet qs: Tensor<1, Float> = [1.0, 0.0, 0.75]\nlet output: Tensor<1, Float[Length]> = quantiles(xs[::-1], qs[::-1])\n",
+        "output",
+    );
+    let result = tensor_of(&output);
+    assert!(
+        matches!(&result.storage, Storage::Dense(values) if values.as_slice() == [7.5, 0.0, 10.0])
+    );
+    assert!(!result.dim.is_one());
+    assert!(result.display.is_some());
+
+    let output = run_value(
+        "let output: Tensor<1, Real> = quantiles([10, 0], [1, 0])\n",
+        "output",
+    );
+    assert!(matches!(
+        tensor_of(&output).storage,
+        Storage::TypedExact(_, aevia_core::value::ExactRep::Real)
+    ));
+}
+
+#[test]
+fn batch_quantiles_validate_samples_and_queries() {
+    let singleton = call(
+        "quantiles",
+        vec![tensor(vec![1], vec![7.0]), tensor(vec![2], vec![1.0, 0.25])],
+    );
+    assert!(
+        matches!(&tensor_of(&singleton).storage, Storage::Dense(values) if values.as_slice() == [7.0, 7.0])
+    );
+
+    let sample = tensor(vec![2], vec![f64::MAX, -f64::MAX]);
+    let midpoint = call(
+        "quantiles",
+        vec![sample.clone(), tensor(vec![1], vec![0.5])],
+    );
+    assert_eq!(as_f64(&tensor_of(&midpoint).elements()[0]), 0.0);
+    let empty = call(
+        "quantiles",
+        vec![sample.clone(), tensor(vec![0], Vec::new())],
+    );
+    assert_eq!(tensor_of(&empty).shape, vec![0]);
+    assert!(matches!(&tensor_of(&empty).storage, Storage::Dense(values) if values.is_empty()));
+
+    for invalid in [-0.01, 1.01, f64::NAN] {
+        let error = call_error(
+            "quantiles",
+            vec![sample.clone(), tensor(vec![2], vec![0.5, invalid])],
+        );
+        assert_eq!(error.code, "E0806");
+    }
+    let empty_sample = call_error("quantiles", vec![exact(Vec::new()), exact(Vec::new())]);
+    assert_eq!(empty_sample.code, "E0802");
+    let nonfinite = call_error(
+        "quantiles",
+        vec![tensor(vec![1], vec![f64::INFINITY]), exact(Vec::new())],
+    );
+    assert_eq!(nonfinite.code, "E0806");
+    let matrix_queries = call_error(
+        "quantiles",
+        vec![sample.clone(), tensor(vec![1, 1], vec![0.5])],
+    );
+    assert_eq!(matrix_queries.code, "E0802");
+
+    let timed_query = run_value("let q = [0.5 s]\n", "q");
+    let error = call_error("quantiles", vec![sample, timed_query]);
+    assert_eq!(error.code, "E0401");
+    let wrong_units = compile("test.aev", "let bad = quantiles([0.0 m, 1.0 m], [0.5 s])\n");
+    assert!(
+        wrong_units
+            .diagnostics
+            .items
+            .iter()
+            .any(|diagnostic| diagnostic.code == "E0401")
+    );
+}
+
+#[test]
+fn float_statistics_keep_finite_results_across_extreme_scales() {
+    let large = f64::MAX;
+    let mean = call("mean", vec![tensor(vec![2], vec![large, large])]);
+    assert_eq!(as_f64(&mean), large);
+    let population = Value::Bool(true);
+    let deviation = call(
+        "std",
+        vec![tensor(vec![2], vec![large, -large]), population.clone()],
+    );
+    assert_eq!(as_f64(&deviation), large);
+    let error = call_error(
+        "var",
+        vec![tensor(vec![2], vec![large, -large]), population],
+    );
+    assert_eq!(error.code, "E0806");
+    let singleton_variance = call("var", vec![tensor(vec![1], vec![5.0])]);
+    assert_eq!(as_f64(&singleton_variance), 0.0);
+}
+
+#[test]
 fn a_histogram_reports_counts_and_edges() {
     let histogram = call(
         "histogram",
@@ -258,6 +383,18 @@ fn a_histogram_reports_counts_and_edges() {
     // Edges are [0, 2, 4]: 0 and 1 fall low, 2, 3 and 4 fall high.
     let counts: Vec<f64> = counts.elements().iter().map(as_f64).collect();
     assert_eq!(counts, vec![2.0, 3.0]);
+    for bins in [0, -1, i64::MAX] {
+        let invalid = call_error("histogram", vec![exact(vec![0, 1]), int(bins)]);
+        assert_eq!(invalid.code, "E0802");
+    }
+    let exact_input_edges = run_value(
+        "let h = histogram([1, 2, 3], 2)\nlet edges: Tensor<1, Float> = h.edges\n",
+        "edges",
+    );
+    assert!(matches!(
+        tensor_of(&exact_input_edges).storage,
+        Storage::Dense(_)
+    ));
 }
 
 #[test]
@@ -430,15 +567,19 @@ fn the_sparse_layout_round_trips_through_csr() {
 #[test]
 fn the_shape_operations_keep_the_element_count() {
     let matrix = tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let reshaped = call("reshape_dyn", vec![matrix, tensor(vec![2], vec![3.0, 2.0])]);
-    assert_eq!(tensor_of(&reshaped).shape, vec![3, 2]);
+    let reshaped = call("reshape_dyn", vec![matrix, exact(vec![3, 2])]);
+    let Value::Variant(result) = reshaped else {
+        panic!("reshape_dyn returns a Result");
+    };
+    assert_eq!(result.name, "Ok");
+    assert_eq!(tensor_of(&result.fields[0]).shape, vec![3, 2]);
     // A reshape that would drop elements answers with the `Err` its declared
     // `Result` promises, not with a diagnostic.
     let refused = call(
         "reshape_dyn",
         vec![
             tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
-            tensor(vec![1], vec![4.0]),
+            exact(vec![4]),
         ],
     );
     match refused {
@@ -450,17 +591,34 @@ fn the_shape_operations_keep_the_element_count() {
         "set",
         vec![
             tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]),
-            tensor(vec![2], vec![0.0, 1.0]),
+            exact(vec![0, -1]),
             float(9.0),
         ],
     );
     let values: Vec<f64> = tensor_of(&updated).elements().iter().map(as_f64).collect();
     assert_eq!(values, vec![1.0, 9.0, 3.0, 4.0]);
+    let malformed = tensor(vec![2], vec![5.0]);
+    assert_eq!(
+        call_error("set", vec![malformed, exact(vec![1]), float(9.0)]).code,
+        "E0802"
+    );
+    let noninteger = tensor(vec![1], vec![f64::NAN]);
+    let dense = tensor(vec![1], vec![5.0]);
+    assert_eq!(
+        call_error("set", vec![dense, noninteger, float(9.0)]).code,
+        "E0802"
+    );
     // `tril` zeroes the upper triangle and keeps the storage class.
     let lower = call("tril", vec![tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0])]);
     let values: Vec<f64> = tensor_of(&lower).elements().iter().map(as_f64).collect();
     assert_eq!(values, vec![1.0, 0.0, 3.0, 4.0]);
     assert!(matches!(tensor_of(&lower).storage, Storage::Dense(_)));
+}
+
+#[test]
+fn dense_constructors_reject_negative_and_nonintegral_extents() {
+    assert_eq!(call_error("zeros", vec![int(-1)]).code, "E0802");
+    assert_eq!(call_error("ones", vec![float(1.5)]).code, "E0302");
 }
 
 #[test]
@@ -523,6 +681,30 @@ fn the_fourier_transform_round_trips() {
 }
 
 #[test]
+fn real_fft_round_trips_when_an_untransformed_axis_is_empty() {
+    let input = tensor(vec![0, 3], Vec::new());
+    let spectrum = call("rfftn_axes", vec![input, exact(vec![-1])]);
+    assert_eq!(tensor_of(&spectrum).shape, [0, 2]);
+    let inverse = call(
+        "irfftn_axes",
+        vec![spectrum.clone(), exact(vec![-1]), int(3)],
+    );
+    assert_eq!(tensor_of(&inverse).shape, [0, 3]);
+    assert_eq!(
+        call_error("irfftn_axes", vec![spectrum, exact(Vec::new())]).code,
+        "E0802"
+    );
+    assert_eq!(
+        call_error("fftfreq", vec![int(-1), float(1.0)]).code,
+        "E0802"
+    );
+    assert_eq!(
+        call_error("fftfreq", vec![int(1), float(0.0)]).code,
+        "E0806"
+    );
+}
+
+#[test]
 fn the_transform_family_refuses_bad_axes_and_lengths() {
     let matrix = tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let vector = tensor(vec![4], vec![1.0, 2.0, 3.0, 4.0]);
@@ -536,6 +718,22 @@ fn the_transform_family_refuses_bad_axes_and_lengths() {
     );
     assert_eq!(
         call_error("fftn_axes", vec![matrix.clone(), exact(vec![0, 0])]).code,
+        "E0802"
+    );
+    assert_eq!(
+        call_error("fft_axis", vec![matrix.clone(), float(0.5)]).code,
+        "E0302"
+    );
+    assert_eq!(
+        call_error(
+            "fftn_axes",
+            vec![matrix.clone(), tensor(vec![1], vec![0.0])]
+        )
+        .code,
+        "E0302"
+    );
+    assert_eq!(
+        call_error("fftn_axes", vec![matrix.clone(), exact(vec![i64::MIN])]).code,
         "E0802"
     );
     assert_eq!(call_error("fft2", vec![vector.clone()]).code, "E0802");
@@ -801,6 +999,66 @@ fn the_table_layer_columns_selects_and_joins() {
 }
 
 #[test]
+fn table_join_preserves_duplicate_match_order_and_rejects_invalid_columns() {
+    let table = |side: &str, entries: &[(i64, i64)]| {
+        let rows = entries
+            .iter()
+            .map(|&(id, value)| record(vec![("id", int(id)), (side, int(value))]))
+            .collect();
+        let rows = aevia_core::eval::build_tensor(rows, vec![entries.len()], aevia_dim::Dim::one());
+        let Value::Variant(result) = call("to_table", vec![rows]) else {
+            panic!("expected a table result");
+        };
+        assert_eq!(result.name, "Ok");
+        result.fields[0].clone()
+    };
+    let left = table("left", &[(2, 10), (1, 20), (2, 30), (4, 40)]);
+    let right = table("right", &[(2, 100), (1, 200), (2, 300), (3, 400)]);
+    let Value::Record(joined) = call(
+        "join",
+        vec![left.clone(), right.clone(), Value::string("id")],
+    ) else {
+        panic!("expected a joined table");
+    };
+    let pairs: Vec<_> = tensor_of(&joined.fields["rows"])
+        .elements()
+        .iter()
+        .map(|row| {
+            let Value::Record(row) = row else {
+                panic!("expected a joined row");
+            };
+            (as_f64(&row.fields["left"]), as_f64(&row.fields["right"]))
+        })
+        .collect();
+    assert_eq!(
+        pairs,
+        [
+            (10.0, 100.0),
+            (10.0, 300.0),
+            (20.0, 200.0),
+            (30.0, 100.0),
+            (30.0, 300.0)
+        ]
+    );
+
+    let duplicate_names = aevia_core::eval::build_tensor(
+        vec![Value::string("id"), Value::string("id")],
+        vec![2],
+        aevia_dim::Dim::one(),
+    );
+    let duplicate_key = call("select", vec![right.clone(), duplicate_names]);
+    for (rhs, key) in [
+        (right, "absent"),
+        (left.clone(), "id"),
+        (duplicate_key, "id"),
+    ] {
+        let error = call_error("join", vec![left.clone(), rhs, Value::string(key)]);
+        assert_eq!(error.code, "E0903");
+        assert!(error.span.is_some());
+    }
+}
+
+#[test]
 fn complex_number_theory_and_geometry() {
     let z = call("complex", vec![float(3.0), float(4.0)]);
     assert!((as_f64(&call("magnitude", vec![z.clone()])) - 5.0).abs() < 1e-12);
@@ -835,6 +1093,105 @@ fn complex_number_theory_and_geometry() {
 }
 
 #[test]
+fn tetrahedron_volume_keeps_cubic_units_in_both_evaluators() {
+    let source = "
+open Units.SI
+import Math.Geometry { tetrahedron_volume }
+
+let vertices = [
+    [0.0 cm, 0.0 cm, 0.0 cm],
+    [100.0 cm, 0.0 cm, 0.0 cm],
+    [0.0 cm, 1.0 m, 0.0 cm],
+    [0.0 cm, 0.0 cm, 1.0 m],
+]
+let volume: Real[Length^3] = tetrahedron_volume(vertices)
+let reflected = tetrahedron_volume(vertices[:, ::-1])
+let flat = tetrahedron_volume([
+    [0.0 m, 0.0 m, 0.0 m],
+    [1.0 m, 0.0 m, 0.0 m],
+    [0.0 m, 1.0 m, 0.0 m],
+    [1.0 m, 1.0 m, 0.0 m],
+])
+let repeated = tetrahedron_volume([
+    [0.0 m, 0.0 m, 0.0 m],
+    [1.0 m, 0.0 m, 0.0 m],
+    [0.0 m, 1.0 m, 0.0 m],
+    [0.0 m, 0.0 m, 0.0 m],
+])
+";
+    let path = std::path::Path::new("tetrahedron-volume.aev");
+    let program = aevia_core::driver::load_with_source(path, source);
+    assert!(
+        !program.diagnostics.has_errors(),
+        "{:?}",
+        program.diagnostics.items
+    );
+    let entry = program.entry().expect("entry module");
+    let cubic = aevia_dim::Dim::base("Length").pow(&BigRational::from_integer(3.into()));
+    for mode in [Mode::Ast, Mode::Ir] {
+        let mut interp = Interp::new(&entry.checked).with_mode(mode);
+        let diagnostics = aevia_core::driver::run_modules(&mut interp, &program);
+        assert!(
+            !diagnostics.has_errors(),
+            "{mode:?}: {:?}",
+            diagnostics.items
+        );
+        for (name, expected) in [
+            ("volume", 1.0 / 6.0),
+            ("reflected", 1.0 / 6.0),
+            ("flat", 0.0),
+            ("repeated", 0.0),
+        ] {
+            let result = interp.eval_toplevel(name).expect("evaluated volume");
+            assert_eq!(num(&result).dim, cubic, "{mode:?}: {name}");
+            assert!(
+                (as_f64(&result) - expected).abs() < 1e-14,
+                "{mode:?}: {name}"
+            );
+        }
+    }
+    let wrong_units = source.replace("Real[Length^3]", "Real[Length^2]");
+    let invalid = aevia_core::driver::load_with_source(path, &wrong_units);
+    assert!(
+        invalid
+            .diagnostics
+            .items
+            .iter()
+            .any(|item| item.code == "E0401")
+    );
+}
+
+#[test]
+fn tetrahedron_volume_rejects_wrong_shapes_and_nonfinite_values() {
+    let wrong_shape =
+        "let bad = tetrahedron_volume([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])\n";
+    let checked = compile("tetrahedron-wrong-shape.aev", wrong_shape);
+    assert!(
+        checked
+            .diagnostics
+            .items
+            .iter()
+            .any(|item| item.code == "E0302" && item.message.contains("shape mismatch"))
+    );
+
+    for shape in [[0, 3], [3, 4], [5, 3]] {
+        let vertices = tensor(shape.to_vec(), vec![0.0; shape.iter().product()]);
+        let error = call_error("tetrahedron_volume", vec![vertices]);
+        assert_eq!(error.code, "E0802", "{shape:?}");
+    }
+    for coordinates in [
+        vec![f64::NAN; 12],
+        vec![f64::INFINITY; 12],
+        vec![
+            0.0, 0.0, 0.0, 1e200, 0.0, 0.0, 0.0, 1e200, 0.0, 0.0, 0.0, 1e200,
+        ],
+    ] {
+        let error = call_error("tetrahedron_volume", vec![tensor(vec![4, 3], coordinates)]);
+        assert_eq!(error.code, "E0806");
+    }
+}
+
+#[test]
 fn measurements_and_device_placement() {
     let measurement = call("measure", vec![float(9.8), float(0.1)]);
     assert!((as_f64(&call("value", vec![measurement.clone()])) - 9.8).abs() < 1e-12);
@@ -845,6 +1202,30 @@ fn measurements_and_device_placement() {
     // Placing a tensor on the CPU is the identity.
     let placed = call("to_device", vec![tensor(vec![2], vec![1.0, 2.0]), device]);
     assert!(matches!(placed, Value::Io(_)));
+}
+
+#[test]
+fn unsupported_device_placement_names_the_requested_capability() {
+    let matrix = tensor(vec![2], vec![1.0, 2.0]);
+    let Value::Variant(cpu) = call("device_of", vec![matrix.clone()]) else {
+        panic!("device_of must return a Device variant");
+    };
+    for (index, name, fields, capability) in [
+        (1, "Gpu", vec![int(0)], "core.gpu"),
+        (2, "Distributed", Vec::new(), "core.distributed"),
+    ] {
+        let device = aevia_core::value::make_variant(cpu.adt, index, name, fields);
+        for (operation, args) in [
+            ("to_device", vec![matrix.clone(), device.clone()]),
+            ("on", vec![device, Value::Unit]),
+        ] {
+            let error = call_error(operation, args);
+            assert_eq!(error.code, "E1001");
+            for expected in [operation, capability, name] {
+                assert!(error.message.contains(expected), "{error:?}");
+            }
+        }
+    }
 }
 
 #[test]

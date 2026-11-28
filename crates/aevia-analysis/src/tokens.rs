@@ -23,6 +23,7 @@ use crate::occurrence::{
 };
 use crate::types::SemanticToken;
 use crate::types::TokenKind;
+use aevia_syntax::Span;
 use aevia_syntax::token::TokenKind as SyntaxToken;
 use aevia_types::check::CheckedModule;
 use aevia_types::check::Export;
@@ -39,9 +40,18 @@ const PRIMITIVE_TYPES: [&str; 22] = [
     "Sparse", "Result", "Option", "Set", "Table", "RateOf", "Io", "Dyn", "Point", "Sym", "Nat",
 ];
 
+const INDEX_DICTIONARY_AT: usize = 32;
+
 /// Classifies every highlighted word in `document`.
 #[must_use]
-pub(crate) fn tokens(
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "build the standalone semantic-token stream behind the analysis query"
+    )
+)]
+pub fn tokens(
     document: &Document,
     file: aevia_syntax::FileId,
     occurrences: &[Occurrence],
@@ -49,10 +59,17 @@ pub(crate) fn tokens(
 ) -> Vec<SemanticToken> {
     let text = document.text();
     let mut spans: Vec<(u32, u32, TokenKind)> = Vec::new();
+    let dictionary_calls = (occurrences.len() >= INDEX_DICTIONARY_AT
+        && checked.dictionaries.len() >= INDEX_DICTIONARY_AT)
+        .then(|| {
+            checked
+                .dictionaries
+                .iter()
+                .map(|call| (call.span, call.method.as_str()))
+                .collect::<HashSet<_>>()
+        });
     for occurrence in occurrences {
-        let Some(kind) = classify(occurrence, checked) else {
-            continue;
-        };
+        let kind = classify(occurrence, checked, dictionary_calls.as_ref());
         let span = match &occurrence.role {
             | Role::Qualified(_) => occurrence.span,
             | Role::Name(name)
@@ -115,67 +132,80 @@ pub(crate) fn tokens(
 }
 
 /// The token kind for one occurrence, from the checker's records.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "classify resolved occurrences independently from ordered token emission"
+    )
+)]
 fn classify(
     occurrence: &Occurrence,
     checked: &CheckedModule,
-) -> Option<TokenKind> {
+    dictionary_calls: Option<&HashSet<(Span, &str)>>,
+) -> TokenKind {
     match &occurrence.role {
         | Role::Name(name) => {
             if let Some(export) = checked.exports.get(name) {
-                return Some(export_kind(export));
+                return export_kind(export);
             }
             // A class-method call: the interesting fact is which instance
             // implements it, which is what "operator provenance" means here.
             if let Some(call) = occurrence.call
-                && checked
-                    .dictionaries
-                    .iter()
-                    .any(|use_| use_.span == call && use_.method == *name)
+                && dictionary_calls.map_or_else(
+                    || {
+                        checked
+                            .dictionaries
+                            .iter()
+                            .any(|use_| use_.span == call && use_.method == *name)
+                    },
+                    |calls| calls.contains(&(call, name.as_str())),
+                )
             {
-                return Some(TokenKind::Operator);
+                return TokenKind::Operator;
             }
             // A binding the walk resolved is a local no matter what else
             // shares its spelling: the SI table has a unit called `d` (day)
             // and a function parameter may be named `d`.
             if occurrence.binding.is_some() {
-                return Some(TokenKind::Variable);
+                return TokenKind::Variable;
             }
             if checked.units.contains(name) {
-                return Some(TokenKind::Unit);
+                return TokenKind::Unit;
             }
             if checked.dims.lookup(name).is_some() {
-                return Some(TokenKind::Dimension);
+                return TokenKind::Dimension;
             }
             if aevia_types::builtins::schemes(name).is_some() {
-                return Some(TokenKind::Function);
+                return TokenKind::Function;
             }
-            Some(TokenKind::Variable)
+            TokenKind::Variable
         },
         // `Rssn.sin` is a pinned kernel operator: its whole dotted name is the
         // provenance the user is being shown.
         | Role::Qualified(path) => {
             if path.first().map(String::as_str) == Some("Rssn") {
-                Some(TokenKind::Operator)
+                TokenKind::Operator
             } else {
-                Some(TokenKind::Type)
+                TokenKind::Type
             }
         },
-        | Role::Constructor(_) => Some(TokenKind::Constructor),
-        | Role::Method { .. } => Some(TokenKind::Function),
+        | Role::Constructor(_) => TokenKind::Constructor,
+        | Role::Method { .. } => TokenKind::Function,
         | Role::TypeName(name) => {
             match checked.exports.get(name) {
-                | Some(export) => Some(export_kind(export)),
-                | None if checked.dims.lookup(name).is_some() => Some(TokenKind::Dimension),
-                | None if checked.units.contains(name) => Some(TokenKind::Unit),
-                | None => Some(TokenKind::Type),
+                | Some(export) => export_kind(export),
+                | None if checked.dims.lookup(name).is_some() => TokenKind::Dimension,
+                | None if checked.units.contains(name) => TokenKind::Unit,
+                | None => TokenKind::Type,
             }
         },
-        | Role::Unit(_) => Some(TokenKind::Unit),
+        | Role::Unit(_) => TokenKind::Unit,
     }
 }
 
 /// The token kind of an exported name.
-fn export_kind(export: &Export) -> TokenKind {
+const fn export_kind(export: &Export) -> TokenKind {
     match export {
         | Export::Value { arity, .. } if *arity > 0 => TokenKind::Function,
         | Export::Value { .. } => TokenKind::Variable,
@@ -183,5 +213,46 @@ fn export_kind(export: &Export) -> TokenKind {
         | Export::TypeCtor { .. } | Export::Type { .. } | Export::Alias { .. } => TokenKind::Type,
         | Export::Unit { .. } => TokenKind::Unit,
         | Export::Dimension { .. } => TokenKind::Dimension,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Analysis;
+    use std::fmt::Write as _;
+
+    #[test]
+    fn busy_token_stream_keeps_overload_qualification_and_local_shadowing() {
+        let mut source = "fn shadow(show: Int): Int = show\n".to_string();
+        for index in 0..INDEX_DICTIONARY_AT {
+            let value = if index % 2 == 0 { "1" } else { "1.0" };
+            writeln!(source, "let s{index} = show({value})").unwrap();
+        }
+        source.push_str("let unicode = { label = \"🌡\", ready = show(true) }\n");
+        source.push_str("let qualified = Rssn.sin(0.5)\n");
+        let document = Document::new("indexed_tokens.aev", 1, &source);
+        let analysis = Analysis::new(&document);
+        assert!(analysis.checked().dictionaries.len() >= INDEX_DICTIONARY_AT);
+
+        let tokens = analysis.semantic_tokens();
+        let mut previous_end = 0;
+        let mut shows = Vec::new();
+        let mut qualified = Vec::new();
+        for token in tokens {
+            let start = document.offset(token.range.start).unwrap();
+            let end = document.offset(token.range.end).unwrap();
+            assert!(start < end && start >= previous_end);
+            previous_end = end;
+            match &source[start as usize..end as usize] {
+                | "show" => shows.push(token.kind),
+                | "Rssn.sin" => qualified.push(token.kind),
+                | _ => {},
+            }
+        }
+        assert_eq!(shows.len(), INDEX_DICTIONARY_AT + 3);
+        assert_eq!(shows[..2], [TokenKind::Variable, TokenKind::Variable]);
+        assert!(shows[2..].iter().all(|kind| *kind == TokenKind::Operator));
+        assert_eq!(qualified, [TokenKind::Operator]);
     }
 }

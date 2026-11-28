@@ -51,8 +51,14 @@ pub async fn search(
     };
     let page = query.page.unwrap_or(1).max(1);
     let per_page = 20;
-    let (items, total) =
-        repo::list_packages(&state.pool, &search, &sort, per_page, (page - 1) * per_page).await?;
+    let (items, total) = repo::list_packages(
+        &state.pool,
+        &search,
+        &sort,
+        per_page,
+        page.saturating_sub(1).saturating_mul(per_page),
+    )
+    .await?;
     let items = items
         .iter()
         .filter_map(|item| {

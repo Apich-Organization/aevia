@@ -1,0 +1,54 @@
+# `Math.Combinatorics`
+
+Source: `stdlib/Math/Combinatorics.aev`
+
+The `Math/Combinatorics` module of §8.20.
+
+## `let binomial`
+
+```aevia
+let binomial = binomial
+```
+
+binomial(n, k) is the number of ways to choose k items from n, as an exact Int.
+
+**Signature:** `binomial : (Int, Int) -> Int`
+
+**Kernel signature** (derived):
+- `binomial : (Real, Real) -> Real`
+- `binomial : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+- `binomial : (Int, Int) -> Int`
+
+**Dimensions:** the result is dimensionless
+
+It is 0 when k > n.
+
+**Examples:**
+```text
+binomial(5, 2)
+```
+
+*Source: Aevia standard library guide.*
+## `let permutations`
+
+```aevia
+let permutations = permutations
+```
+
+permutations(n) is the number of orderings of n distinct items, n!.
+
+**Signature:** `permutations : Int -> Int`
+
+**Kernel signature** (derived):
+- `permutations : (Real, Real) -> Real`
+- `permutations : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+- `permutations : (Int, Int) -> Int`
+
+**Dimensions:** the result is dimensionless
+
+**Examples:**
+```text
+permutations(4)
+```
+
+*Source: Aevia standard library guide.*

@@ -1,0 +1,30 @@
+## Follow the full-grid eigenvector through the measured native call.
+import Rssn_numerical_vector as Native
+
+type Spectrum = {
+    energies: Tensor<1, Float[Mass*Length^2/Time^2]>,
+    discrete_eigenvectors: Tensor<2, Float>,
+    coordinate_reference: Float[Length]
+}
+
+fn zero2(_x: Float[Length], _y: Float[Length]): Float[Mass*Length^2/Time^2] = 0.0 J
+fn zero3(_x: Float[Length], _y: Float[Length], _z: Float[Length]): Float[Mass*Length^2/Time^2] = 0.0 J
+
+fn decoupled_box(result: Result<Value, OpError>, points: Int, center: Int, expected_ground: Float): Bool =
+    match result with
+    | Err(_) -> false
+    | Ok(raw) -> match from_value<Spectrum>(raw) with
+        | Err(_) -> false
+        | Ok(r) ->
+            let unit_energy = (1.054571817e-34 J*s)^2 / (9.109e-31 kg * (1e-9 m)^2)
+            let ground = r.energies[center] / unit_energy
+            let boundary = r.energies[center + 1] / unit_energy
+            shape(r.energies) == [points] && shape(r.discrete_eigenvectors) == [points, points] && approx_eq(ground, expected_ground, 1e-11) && approx_eq(boundary, 1e12, 1e-3) && abs(r.discrete_eigenvectors[center, center]) == 1.0 && r.discrete_eigenvectors[center + 1, center] == 0.0 && r.discrete_eigenvectors[center, center + 1] == 0.0 && r.coordinate_reference == 1e-9 m
+
+test "2D measured box retains the grid with zero boundary support in the ground mode" =
+    let args = [to_value([[0.0 m, 1e-9 m], [0.0 m, 1e-9 m]]), to_value([3, 3]), to_value(9.109e-31 kg), to_value(1e-9 m), to_value(9)]
+    decoupled_box(Native.num_native_classical_solve_2d_schrodinger(args, [to_callback(zero2)]), 9, 4, 8.0)
+
+test "3D measured box retains the grid with zero boundary support in the ground mode" =
+    let args = [to_value([[0.0 m, 1e-9 m], [0.0 m, 1e-9 m], [0.0 m, 1e-9 m]]), to_value([3, 3, 3]), to_value(9.109e-31 kg), to_value(1e-9 m), to_value(27)]
+    decoupled_box(Native.num_native_classical_solve_3d_schrodinger(args, [to_callback(zero3)]), 27, 13, 12.0)

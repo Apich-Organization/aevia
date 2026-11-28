@@ -1,0 +1,26 @@
+let gcd = "num_number_theory_gcd_u128"
+let gcd_key = "a8c6fca9609129043bf98801b54353fa"
+let gcd_wrong_hash = "a9c6fca9609129043bf98801b54353fa"
+let pde = "num_pde_fvm_upwind_adaptive_event"
+let pde_key = "4a522b1f5ba234418b4120b8b3663f62"
+let pde_wrong_hash = "4b522b1f5ba234418b4120b8b3663f62"
+
+let control = { t0 = 0.0 s, t1 = 0.2 s, rtol = 0.000001, atol = 0.000000001 m, h0 = 0.2 s, h_min = 0.000000001 s, h_max = 0.2 s, max_steps = 100000, max_rejections = 1000, max_step_calls = 1000000, max_evaluations = 1000000 }
+let state = [1.0 m, 1.0 m, 1.0 m, 1.0 m]
+let args = [to_value(1.0 m), to_value(state), to_value(true), to_value(control), to_value(1)]
+
+fn flux(u: Float[Length]): Float[Length^2/Time] = u * 1.0 m/s
+fn speed(_u: Float[Length]): Float[Length/Time] = 1.0 m/s
+fn good(t: Float[Time], _u: Tensor<1, Float[Length]>): Float = (t - 0.1 s) / 1.0 s
+fn wrong_dim(t: Float[Time], _u: Tensor<1, Float[Length]>): Float[Time] = t - 0.1 s
+fn wrong_rank(t: Float[Time], _u: Tensor<2, Float[Length]>): Float = (t - 0.1 s) / 1.0 s
+fn wrong_return(t: Float[Time], _u: Tensor<1, Float[Length]>): Bool = t > 0.1 s
+
+let bad_type = Rssn.call_key(gcd, gcd_key, [to_value(12), to_value(true)])
+let bad_arity = Rssn.call_key(gcd, gcd_key, [to_value(12)])
+let stale_key = Rssn.call_key(gcd, gcd_wrong_hash, [to_value(12), to_value(18)])
+let missing_name = Rssn.call_key("missing_gcd", gcd_key, [to_value(12), to_value(18)])
+let bad_result_dimension = Rssn.call_ho_key(pde, pde_key, args, [to_callback(flux), to_callback(speed), to_callback(wrong_dim)])
+let bad_parameter_rank = Rssn.call_ho_key(pde, pde_key, args, [to_callback(flux), to_callback(speed), to_callback(wrong_rank)])
+let bad_result_kind = Rssn.call_ho_key(pde, pde_key, args, [to_callback(flux), to_callback(speed), to_callback(wrong_return)])
+let stale_callback_key = Rssn.call_ho_key(pde, pde_wrong_hash, args, [to_callback(flux), to_callback(speed), to_callback(good)])

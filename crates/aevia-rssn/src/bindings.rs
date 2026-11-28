@@ -1,4 +1,6 @@
-//! Manifest-driven binding inventory.  The catalog deliberately separates an
+//! Manifest-driven binding inventory.
+//!
+//! The catalog deliberately separates an
 //! exact source signature from a dynamic route and from an unavailable bridge.
 //! Consumers must not interpret a derived kernel signature as an exact API.
 
@@ -10,6 +12,7 @@ use rssn::kernel::signature::Exp;
 use rssn::kernel::signature::NatExpr;
 use rssn::kernel::signature::TypeExpr;
 use std::collections::BTreeSet;
+use std::sync::OnceLock;
 
 /// How much of an overload can be expressed and called from Aevia.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,7 +41,9 @@ pub struct Binding<'a> {
 }
 
 /// Build a complete, deterministic catalog directly from the live manifest.
+///
 /// Every operator contributes at least one row, including unsigned operators.
+/// Rows for an operator are contiguous and in overload order.
 #[must_use]
 pub fn catalog(registry: &Registry) -> Vec<Binding<'_>> {
     let mut used = BTreeSet::new();
@@ -50,14 +55,16 @@ pub fn catalog(registry: &Registry) -> Vec<Binding<'_>> {
             let base = crate::codegen::binding_base_name(
                 &op.name,
                 index,
-                overload
-                    .is_some_and(|i| op.raw[i].params.is_empty() && op.raw[i].variadic.is_none()),
+                op.raw
+                    .get(index)
+                    .is_some_and(|sig| sig.params.is_empty() && sig.variadic.is_none()),
             );
             let mut name = base.clone();
-            let mut suffix = 2;
-            while !used.insert(name.clone()) {
+            for suffix in 2.. {
+                if used.insert(name.clone()) {
+                    break;
+                }
                 name = format!("{base}_{suffix}");
-                suffix += 1;
             }
             result.push(Binding {
                 op,
@@ -95,24 +102,17 @@ pub fn catalog(registry: &Registry) -> Vec<Binding<'_>> {
     // Allocate typed aliases only after all established names, so adding an
     // exact facade cannot displace an existing dynamic binding.
     for row in &mut result {
-        if typed_callback_eligible(row) {
+        if let Some(key) = typed_callback_key(row) {
             let base = format!("{}_typed", row.name);
             let mut name = base.clone();
             if used.contains(&name) {
-                let key = row
-                    .op
-                    .key(row.overload.expect("typed callback overload"))
-                    .expect("typed callback key");
-                let hash: String = key
-                    .signature_hash
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect();
+                let hash = crate::registry::hex(&key.signature_hash);
                 name = format!("{base}_{hash}");
-                let mut suffix = 2;
-                while used.contains(&name) {
+                for suffix in 2.. {
+                    if !used.contains(&name) {
+                        break;
+                    }
                     name = format!("{base}_{hash}_{suffix}");
-                    suffix += 1;
                 }
             }
             used.insert(name.clone());
@@ -122,30 +122,36 @@ pub fn catalog(registry: &Registry) -> Vec<Binding<'_>> {
     result
 }
 
-fn typed_callback_eligible(row: &Binding<'_>) -> bool {
+/// Returns the process-wide binding catalog for the bundled kernel registry.
+#[must_use]
+pub fn live_catalog() -> &'static [Binding<'static>] {
+    static CATALOG: OnceLock<Vec<Binding<'static>>> = OnceLock::new();
+    CATALOG.get_or_init(|| catalog(crate::registry()))
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "Audits facade eligibility separately from generated name allocation"
+)]
+fn typed_callback_key<'op>(row: &Binding<'op>) -> Option<&'op crate::OpKey> {
     let Coverage::Dynamic(reasons) = &row.coverage else {
-        return false;
+        return None;
     };
-    if !row.op.higher_order
-        || !row.op.source.is_exact()
-        || row.op.signatures.len() != 1
-        || row.overload != Some(0)
-        || row.op.key(0).is_none()
-    {
-        return false;
+    if !row.op.higher_order || !row.op.source.is_exact() || row.overload != Some(0) {
+        return None;
     }
-    let signature = &row.op.signatures[0];
-    let raw = &row.op.raw[0];
+    let [signature] = row.op.signatures.as_slice() else {
+        return None;
+    };
+    let raw = row.op.raw.first()?;
+    let key = row.op.key(0)?;
     if !callback_nats_anchored(raw) {
-        return false;
+        return None;
     }
-    if !raw
-        .params
-        .iter()
-        .all(|ty| callback_raw_source_schema(ty, true))
+    if !raw.params.iter().all(ordinary_callback_raw_source_schema)
         || !callback_raw_source_schema(&raw.ret, false)
     {
-        return false;
+        return None;
     }
     if !callback_source_schema_supported(&signature.ret)
         || signature.params.iter().any(|ty| {
@@ -154,19 +160,26 @@ fn typed_callback_eligible(row: &Binding<'_>) -> bool {
                     !args.iter().all(callback_source_schema_supported)
                         || !callback_source_schema_supported(ret)
                 },
-                | other => !callback_source_schema_supported(other),
+                | other => !ordinary_callback_source_schema(other),
             }
         })
     {
-        return false;
+        return None;
     }
     // Only the two callback-specific dynamic reasons are admissible. Any
     // other reason identifies a fact the source signature cannot prove.
     reasons.iter().all(|reason| reason == "higher-order calls use the checked value-list callback ABI"
         || reason == "callbacks use the checked value-list callback ABI; typed generic wrappers require reification"
-        || reason == "tensor extents are not fully concrete in the source facade")
+        || reason == "tensor extents are not fully concrete in the source facade"
+        || reason == "host opaque type has no source facade spelling")
+        .then_some(key)
 }
 
+#[allow(
+    clippy::single_call_fn,
+    clippy::too_many_lines,
+    reason = "Produces one diagnostic classification for the complete dynamic ABI policy"
+)]
 fn classify(
     registry: &Registry,
     op: &OpEntry,
@@ -204,8 +217,14 @@ fn classify(
         });
     }
     if let Some(index) = index {
-        let signature = &op.raw[index];
-        let mirrored = &op.signatures[index];
+        let (Some(signature), Some(mirrored)) = (op.raw.get(index), op.signatures.get(index))
+        else {
+            if !unavailable.is_empty() {
+                return Coverage::Unavailable(unavailable.into_iter().collect());
+            }
+            dynamic.insert("manifest overload has no matching source signature".to_owned());
+            return Coverage::Dynamic(dynamic.into_iter().collect());
+        };
         let mut input_dims = BTreeSet::new();
         for param in &mirrored.params {
             collect_dim_vars(param, &mut input_dims);
@@ -240,7 +259,7 @@ fn classify(
                     .any(|ty| matches!(ty, crate::registry::SigType::Func(..)))
             {
                 unavailable.insert(
-                    "higher-order signature has no supported trailing callback".to_string(),
+                    "higher-order signature has no supported top-level callback".to_string(),
                 );
             }
             unavailable.remove(
@@ -278,8 +297,7 @@ fn classify(
                     || !callback_raw_parameters_supported(&signature.params)
                 {
                     unavailable.insert(
-                        "callback bridge requires supported recursive trailing callback schemas"
-                            .to_string(),
+                        "callback bridge requires supported recursive callback schemas".to_string(),
                     );
                 }
                 if !op.higher_order {
@@ -307,6 +325,10 @@ fn classify(
 
 // Symbolic extents must be declared Nat variables and recoverable from an
 // ordinary input shape before callback construction or result validation.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Validates the relation between parameter and result extents"
+)]
 fn callback_nats_anchored(signature: &rssn::kernel::signature::Signature) -> bool {
     fn collect<'a>(
         ty: &'a TypeExpr,
@@ -327,6 +349,11 @@ fn callback_nats_anchored(signature: &rssn::kernel::signature::Signature) -> boo
             | TypeExpr::Record(fields) => {
                 for (_, value) in fields {
                     collect(value, out);
+                }
+            },
+            | TypeExpr::Variant(cases) => {
+                if let Some(payload) = crate::registry::option_payload(cases) {
+                    collect(payload, out);
                 }
             },
             | TypeExpr::Function(args, ret) => {
@@ -374,6 +401,7 @@ fn callback_raw_source_schema(
         }
     }
     match ty {
+        | TypeExpr::Opaque(name) if name == crate::registry::NATIVE_AD_VAR_KIND => true,
         | TypeExpr::Int
         | TypeExpr::Real
         | TypeExpr::Float
@@ -391,7 +419,7 @@ fn callback_raw_source_schema(
             shape,
             elem,
         } => {
-            usize::try_from(*rank).ok().is_some_and(|rank| {
+            usize::try_from(*rank).is_ok_and(|rank| {
                 shape.as_ref().is_none_or(|shape| {
                     shape.len() == rank
                         && shape.iter().all(|extent| {
@@ -407,6 +435,10 @@ fn callback_raw_source_schema(
                 .iter()
                 .all(|(name, ty)| names.insert(name) && callback_raw_source_schema(ty, false))
         },
+        | TypeExpr::Variant(cases) => {
+            crate::registry::option_payload(cases)
+                .is_some_and(|payload| callback_raw_source_schema(payload, false))
+        },
         | TypeExpr::Function(args, ret) if allow_function => {
             args.iter()
                 .all(|arg| callback_raw_source_schema(arg, false))
@@ -416,11 +448,83 @@ fn callback_raw_source_schema(
     }
 }
 
+// Ordinary operator arguments can carry authenticated native handles as
+// Value/Dyn carriers. Actual function parameter/result schemas stay governed by
+// callback_raw_source_schema and its sealed NativeAdVar exception.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Keeps ordinary argument and higher-order callback rules separate"
+)]
+fn ordinary_callback_raw_source_schema(ty: &TypeExpr) -> bool {
+    if matches!(ty, TypeExpr::Function(..)) {
+        return callback_raw_source_schema(ty, true);
+    }
+    ordinary_callback_raw_value_schema(ty)
+}
+fn ordinary_callback_raw_value_schema(ty: &TypeExpr) -> bool {
+    match ty {
+        | TypeExpr::Opaque(kind) if crate::registry::native_object_kind(kind) => true,
+        | TypeExpr::Tensor { rank, shape, elem } => {
+            let shape_only = TypeExpr::Tensor {
+                rank: rank.clone(),
+                shape: shape.clone(),
+                elem: Box::new(TypeExpr::Bool),
+            };
+            callback_raw_source_schema(&shape_only, false)
+                && ordinary_callback_raw_value_schema(elem)
+        },
+        | TypeExpr::Record(fields) => {
+            let mut names = BTreeSet::new();
+            fields
+                .iter()
+                .all(|(name, ty)| names.insert(name) && ordinary_callback_raw_value_schema(ty))
+        },
+        | TypeExpr::Variant(cases) => {
+            crate::registry::option_payload(cases).is_some_and(ordinary_callback_raw_value_schema)
+        },
+        | TypeExpr::Function(..) => false,
+        | other => callback_raw_source_schema(other, false),
+    }
+}
+fn ordinary_callback_source_schema(ty: &crate::registry::SigType) -> bool {
+    use crate::registry::SigType as S;
+    match ty {
+        | S::Opaque(kind) if crate::registry::native_object_kind(kind) => true,
+        | S::Tensor {
+            rank: Some(rank),
+            shape,
+            elem,
+        } => {
+            shape.as_ref().is_none_or(|shape| shape.len() == *rank)
+                && ordinary_callback_source_schema(elem)
+        },
+        | S::Record(fields) => {
+            // Reuse the source field-spelling/duplicate checks independently
+            // of the field payloads; no numeric or nominal fact is fabricated.
+            let field_names = S::Record(
+                fields
+                    .iter()
+                    .map(|(name, _)| (name.clone(), S::Bool))
+                    .collect(),
+            );
+            callback_source_schema_supported(&field_names)
+                && fields
+                    .iter()
+                    .all(|(_, ty)| ordinary_callback_source_schema(ty))
+        },
+        | S::Variant(cases) => {
+            crate::registry::option_payload(cases).is_some_and(ordinary_callback_source_schema)
+        },
+        | other => callback_source_schema_supported(other),
+    }
+}
+
 // Only schemas the callback bridge and from_value can both authenticate,
 // with record field spellings that can be emitted as source declarations.
 fn callback_source_schema_supported(ty: &crate::registry::SigType) -> bool {
     use crate::registry::SigType as S;
     match ty {
+        | S::Opaque(name) if name == crate::registry::NATIVE_AD_VAR_KIND => true,
         | S::Int | S::Real | S::Float | S::Complex | S::Bool | S::Str => true,
         | S::Dim(inner, _) => matches!(inner.as_ref(), S::Int | S::Real | S::Float | S::Complex),
         | S::Tensor {
@@ -430,6 +534,9 @@ fn callback_source_schema_supported(ty: &crate::registry::SigType) -> bool {
         } => {
             shape.as_ref().is_none_or(|extents| extents.len() == *rank)
                 && callback_source_schema_supported(elem)
+        },
+        | S::Variant(cases) => {
+            crate::registry::option_payload(cases).is_some_and(callback_source_schema_supported)
         },
         | S::Record(fields) => {
             let mut names = BTreeSet::new();
@@ -450,10 +557,15 @@ fn callback_source_schema_supported(ty: &crate::registry::SigType) -> bool {
 
 // Callback declarations describe an operator's accepted family; runtime
 // callbacks still carry a separately authenticated, fully concrete schema.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Checks the complete set of mirrored callback parameters"
+)]
 fn callback_parameters_supported(params: &[crate::registry::SigType]) -> bool {
     use crate::registry::SigType as S;
     fn schema(ty: &S) -> bool {
         match ty {
+            | S::Opaque(kind) if kind == crate::registry::NATIVE_AD_VAR_KIND => true,
             | S::Int | S::Real | S::Float | S::Complex | S::Bool | S::Str => true,
             | S::Dim(inner, _) => {
                 matches!(inner.as_ref(), S::Int | S::Real | S::Float | S::Complex)
@@ -469,20 +581,17 @@ fn callback_parameters_supported(params: &[crate::registry::SigType]) -> bool {
                     .iter()
                     .all(|(name, ty)| names.insert(name) && schema(ty))
             },
+            | S::Variant(cases) => crate::registry::option_payload(cases).is_some_and(schema),
             | _ => false,
         }
     }
     let mut seen_callback = false;
     for param in params {
-        match param {
-            | S::Func(args, ret) => {
-                seen_callback = true;
-                if !args.iter().all(schema) || !schema(ret) {
-                    return false;
-                }
-            },
-            | _ if seen_callback => return false,
-            | _ => {},
+        if let S::Func(args, ret) = param {
+            seen_callback = true;
+            if !args.iter().all(schema) || !schema(ret) {
+                return false;
+            }
         }
     }
     seen_callback
@@ -491,6 +600,10 @@ fn callback_parameters_supported(params: &[crate::registry::SigType]) -> bool {
 // Preserve facts that the mirrored shape cannot express, especially Any,
 // malformed extents and unknown ranks; only named operator variables are
 // existential. This check runs before choosing the generic dynamic facade.
+#[allow(
+    clippy::single_call_fn,
+    reason = "Checks raw callbacks before any lossy type mirroring"
+)]
 fn callback_raw_parameters_supported(params: &[TypeExpr]) -> bool {
     fn dim(d: &DimExpr) -> bool {
         match d {
@@ -503,6 +616,7 @@ fn callback_raw_parameters_supported(params: &[TypeExpr]) -> bool {
     }
     fn schema(ty: &TypeExpr) -> bool {
         match ty {
+            | TypeExpr::Opaque(kind) if kind == crate::registry::NATIVE_AD_VAR_KIND => true,
             | TypeExpr::Int
             | TypeExpr::Real
             | TypeExpr::Float
@@ -520,7 +634,7 @@ fn callback_raw_parameters_supported(params: &[TypeExpr]) -> bool {
                 shape,
                 elem,
             } => {
-                usize::try_from(*rank).ok().is_some_and(|rank| {
+                usize::try_from(*rank).is_ok_and(|rank| {
                     shape.as_ref().is_none_or(|shape| {
                         shape.len() == rank
                             && shape.iter().all(|extent| {
@@ -539,20 +653,19 @@ fn callback_raw_parameters_supported(params: &[TypeExpr]) -> bool {
                     .iter()
                     .all(|(name, ty)| names.insert(name) && schema(ty))
             },
+            | TypeExpr::Variant(cases) => {
+                crate::registry::option_payload(cases).is_some_and(schema)
+            },
             | _ => false,
         }
     }
     let mut seen_callback = false;
     for param in params {
-        match param {
-            | TypeExpr::Function(args, ret) => {
-                seen_callback = true;
-                if !args.iter().all(schema) || !schema(ret) {
-                    return false;
-                }
-            },
-            | _ if seen_callback => return false,
-            | _ => {},
+        if let TypeExpr::Function(args, ret) = param {
+            seen_callback = true;
+            if !args.iter().all(schema) || !schema(ret) {
+                return false;
+            }
         }
     }
     seen_callback
@@ -673,7 +786,9 @@ fn inspect_type(
             }
         },
         | TypeExpr::Variant(variants) => {
-            dynamic.insert("variant type has no source facade spelling".into());
+            if crate::registry::option_payload(variants).is_none() {
+                dynamic.insert("variant type has no source facade spelling".into());
+            }
             for (_, types) in variants {
                 for ty in types {
                     inspect_type(ty, dynamic, unavailable);
@@ -696,6 +811,7 @@ fn inspect_type(
         | TypeExpr::Device => {
             unavailable.insert("device values cannot cross the kernel ABI".into());
         },
+        | TypeExpr::Opaque(name) if name == crate::registry::NATIVE_AD_VAR_KIND => {},
         | TypeExpr::Opaque(_) => {
             dynamic.insert("host opaque type has no source facade spelling".into());
         },
@@ -717,10 +833,30 @@ mod callback_strategy_tests {
     use super::callback_parameters_supported;
     use crate::registry::SigType as S;
     #[test]
-    fn callback_facades_match_recursive_transport_and_trailing_order() {
-        let scalar = S::Func(vec![S::Int, S::Bool], Box::new(S::Real));
-        assert!(callback_parameters_supported(&[S::Float, scalar.clone()]));
-        assert!(!callback_parameters_supported(&[scalar, S::Float]));
+    fn callback_facades_accept_leading_interleaved_and_trailing_callbacks() {
+        use super::callback_raw_parameters_supported;
+        use rssn::kernel::signature::TypeExpr as T;
+
+        let mirrored = S::Func(vec![S::Int, S::Bool], Box::new(S::Real));
+        let raw = T::Function(vec![T::Int, T::Bool], Box::new(T::Real));
+        assert!(callback_parameters_supported(&[mirrored.clone(), S::Float]));
+        assert!(callback_parameters_supported(&[S::Float, mirrored.clone()]));
+        assert!(callback_parameters_supported(&[
+            mirrored.clone(),
+            S::Float,
+            mirrored
+        ]));
+        assert!(callback_raw_parameters_supported(&[raw.clone(), T::Float]));
+        assert!(callback_raw_parameters_supported(&[T::Float, raw.clone()]));
+        assert!(callback_raw_parameters_supported(&[
+            raw.clone(),
+            T::Float,
+            raw
+        ]));
+    }
+
+    #[test]
+    fn mirrored_callback_schema_rejects_unknown_and_malformed_promises() {
         let tensor = S::Tensor {
             rank: Some(1),
             shape: Some(vec![2]),
@@ -751,8 +887,62 @@ mod callback_strategy_tests {
             vec![S::Func(vec![], Box::new(S::Float))],
             Box::new(record)
         )]));
+        assert!(!callback_parameters_supported(&[
+            S::Func(vec![S::Float], Box::new(S::Bool)),
+            S::Int,
+            S::Func(vec![S::Var("T".into())], Box::new(S::Float))
+        ]));
         assert!(!callback_parameters_supported(&[S::Float]));
     }
+    #[test]
+    fn callback_transport_accepts_only_the_sealed_native_ad_opaque_kind() {
+        use rssn::kernel::signature::TypeExpr;
+        for kind in [
+            crate::registry::NATIVE_AD_VAR_KIND,
+            "user/NativeAdVar",
+            "rssn/native/ad/tape/v1",
+        ] {
+            let accepted = kind == crate::registry::NATIVE_AD_VAR_KIND;
+            let opaque = S::Opaque(kind.into());
+            assert_eq!(
+                callback_parameters_supported(&[S::Func(vec![opaque.clone()], Box::new(opaque))]),
+                accepted
+            );
+            let opaque = TypeExpr::Opaque(kind.into());
+            assert_eq!(
+                super::callback_raw_parameters_supported(&[TypeExpr::Function(
+                    vec![opaque.clone()],
+                    Box::new(opaque)
+                )]),
+                accepted
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_native_arguments_do_not_relax_the_callback_value_schema() {
+        use rssn::kernel::signature::TypeExpr;
+        let kind = "rssn/native/analysis/jacobian/v1";
+        let native = TypeExpr::Opaque(kind.into());
+        assert!(super::ordinary_callback_raw_source_schema(&native));
+        assert!(super::ordinary_callback_source_schema(&S::Opaque(
+            kind.into()
+        )));
+        assert!(!super::callback_raw_source_schema(&native, false));
+        assert!(!super::callback_source_schema_supported(&S::Opaque(
+            kind.into()
+        )));
+        let visitor = TypeExpr::Function(vec![native.clone()], Box::new(TypeExpr::Bool));
+        assert!(!super::ordinary_callback_raw_source_schema(&visitor));
+        let visitor = TypeExpr::Function(vec![TypeExpr::Float], Box::new(TypeExpr::Bool));
+        assert!(super::ordinary_callback_raw_source_schema(&visitor));
+        let nested = TypeExpr::Record(vec![("f".into(), visitor)]);
+        assert!(!super::ordinary_callback_raw_source_schema(&nested));
+        assert!(!super::ordinary_callback_raw_source_schema(
+            &TypeExpr::Opaque("User/State".into())
+        ));
+    }
+
     #[test]
     fn typed_callback_source_rejects_erased_raw_promises() {
         use super::callback_raw_source_schema as supported;
@@ -851,7 +1041,12 @@ mod callback_strategy_tests {
             shape: Some(vec![NatExpr::Lit(1), NatExpr::Lit(2)]),
             elem: Box::new(T::Float)
         })]));
-        assert!(!supports(&[callback(T::Float), T::Var("T".into())]));
+        assert!(supports(&[callback(T::Float), T::Var("T".into())]));
+        assert!(!supports(&[
+            callback(T::Float),
+            T::Int,
+            callback(T::Var("T".into()))
+        ]));
     }
     #[test]
     fn generic_dynamic_fallback_cannot_bypass_callback_guard() {

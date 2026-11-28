@@ -1,9 +1,22 @@
 //! Thread-affine, scoped transport for host callbacks. No interpreter or
 //! closure pointer is sent to another thread; handles contain only tokens.
+
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
 use crate::eval::Interp;
 use crate::value::CallbackValue;
-use crate::value::KernelValue;
-use crate::value::Value;
 use aevia_rssn::KernelError;
 use aevia_rssn::Sig;
 use aevia_rssn::Val;
@@ -77,13 +90,8 @@ impl BridgeCallback for Handle {
         }
         let mut converted = Vec::with_capacity(args.len());
         for ((payload, witness), expected) in args.iter().zip(witnesses).zip(parameters) {
-            let opaque = Value::KernelValue(Rc::new(KernelValue {
-                payload: payload.clone(),
-                witness: witness.clone(),
-                host_witness: None,
-            }));
             converted.push(
-                crate::rssn_module::from_kernel_value(&opaque, expected)
+                crate::rssn_module::decode_checked_payload(payload, witness, None, expected)
                     .map_err(|reason| KernelError::new("E1003", reason))?,
             );
         }
@@ -97,17 +105,16 @@ impl BridgeCallback for Handle {
         let payload = crate::kernel::to_val(&result_value)
             .map_err(|error| KernelError::new(error.code, error.message))?;
         let witness = crate::rssn_module::host_dimension_witness(&result_value);
-        let opaque = Value::KernelValue(Rc::new(KernelValue {
-            payload: payload.clone(),
-            witness: witness.clone(),
-            host_witness: None,
-        }));
-        crate::rssn_module::validate_kernel_value(&opaque, result)
+        crate::rssn_module::validate_payload(&payload, &witness, None, result)
             .map_err(|reason| KernelError::new("E1003", reason))?;
         Ok((payload, witness))
     }
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "validate and convert the callback type before moving the interpreter"
+)]
 fn signature(callback: &CallbackValue) -> Result<Sig, KernelError> {
     let Type::Fn(parameters, result) = &callback.schema else {
         return Err(KernelError::capability("core.callback.signature"));
@@ -133,9 +140,13 @@ fn supported_schema(ty: &Type) -> bool {
         return false;
     }
     match ty {
+        | ty if aevia_types::adt::is_native_ad_var_type(ty) => true,
         | Type::Scalar(Rep::Int | Rep::Real | Rep::Float | Rep::Complex, dim) => dim.is_concrete(),
         | Type::Bool | Type::Str => true,
         | Type::Tensor { elem, .. } => supported_schema(elem),
+        | Type::Adt(id, args) if *id == aevia_types::adt::OPTION_ID => {
+            matches!(args.as_slice(), [payload] if supported_schema(payload))
+        },
         | Type::Record(row) => {
             row.tail_var().is_none()
                 && row
@@ -152,7 +163,11 @@ fn supported_schema(ty: &Type) -> bool {
 /// Move the interpreter into a thread-local scope for the duration of a
 /// synchronous kernel call. The old interpreter is restored on success,
 /// error, or unwind; callback handles cannot outlive their scope.
-pub(crate) fn with_scoped<T>(
+#[allow(
+    clippy::single_call_fn,
+    reason = "the single kernel bridge owns the interpreter transfer and unwind handling"
+)]
+pub fn with_scoped<T>(
     interp: &mut Interp,
     callbacks: Vec<Rc<CallbackValue>>,
     run: impl FnOnce(&[Arc<dyn BridgeCallback>]) -> T,
@@ -188,12 +203,15 @@ pub(crate) fn with_scoped<T>(
     SCOPES.with(|scopes| {
         scopes.borrow_mut().remove(&token);
     });
-    let restored = scope
-        .borrow_mut()
-        .interp
-        .take()
-        .expect("callback scope owns interpreter");
-    *interp = restored;
+    let restored = scope.borrow_mut().interp.take();
+    if let Some(restored) = restored {
+        *interp = restored;
+    } else if result.is_ok() {
+        return Err(KernelError::new(
+            "E1001",
+            "callback interpreter is unavailable",
+        ));
+    }
     match result {
         | Ok(result) => Ok(result),
         | Err(panic) => resume_unwind(panic),
@@ -204,6 +222,7 @@ pub(crate) fn with_scoped<T>(
 mod tests {
     use super::*;
     use crate::value::NativeFn;
+    use crate::value::Value;
     use aevia_dim::Dim;
     fn callback(
         f: impl Fn(&mut Interp, Vec<Value>, Span) -> Result<Value, crate::eval::EvalError> + 'static
@@ -258,6 +277,61 @@ mod tests {
         })
         .unwrap();
     }
+
+    #[test]
+    fn packet_validation_preserves_argument_and_callback_order() {
+        use std::cell::Cell;
+
+        let length = Dim::base("Length");
+        let time = Dim::base("Time");
+        let calls = Rc::new(Cell::new(0_u32));
+        let wrong_result = Rc::new(Cell::new(false));
+        let seen = Rc::clone(&calls);
+        let poison = Rc::clone(&wrong_result);
+        let callback = Rc::new(CallbackValue {
+            function: Value::Native(Rc::new(NativeFn(Box::new(move |_, args, _| {
+                seen.set(seen.get().saturating_add(1));
+                if poison.get() {
+                    return Ok(Value::string("failed output validation"));
+                }
+                Ok(Value::float(
+                    args[0].as_f64().unwrap() - args[1].as_f64().unwrap(),
+                ))
+            })))),
+            schema: Type::Fn(
+                vec![Type::float(length.clone()), Type::float(time.clone())],
+                Box::new(Type::float(Dim::one())),
+            ),
+        });
+        let mut interp = Interp::new(&aevia_types::CheckedModule::default());
+        let float = |value| Val::Num(aevia_rssn::Num::Float(value));
+        let args = [float(7.0), float(2.0)];
+        let good = [
+            DimensionWitness::Scalar(length.clone()),
+            DimensionWitness::Scalar(time),
+        ];
+        let wrong = [
+            DimensionWitness::Scalar(length.clone()),
+            DimensionWitness::Scalar(length),
+        ];
+        with_scoped(&mut interp, vec![callback], |handles| {
+            let handle = &handles[0];
+            assert_eq!(handle.call(&args, &wrong).unwrap_err().code, "E1003");
+            assert_eq!(calls.get(), 0);
+
+            wrong_result.set(true);
+            assert_eq!(handle.call(&args, &good).unwrap_err().code, "E1003");
+            assert_eq!(calls.get(), 1);
+
+            wrong_result.set(false);
+            let (result, evidence) = handle.call(&args, &good).unwrap();
+            assert_eq!(result, float(5.0));
+            assert_eq!(evidence, DimensionWitness::Scalar(Dim::one()));
+            assert_eq!(calls.get(), 2);
+        })
+        .unwrap();
+    }
+
     #[test]
     fn nested_scopes_work_and_panics_restore_interpreter() {
         let mut interp = Interp::new(&aevia_types::CheckedModule::default());
@@ -636,5 +710,54 @@ mod tests {
             })
             .unwrap();
         }
+    }
+    #[test]
+    fn native_ad_handles_are_a_sealed_callback_primitive() {
+        use aevia_types::adt;
+        let native = adt::native_ad_var_type();
+        assert!(supported_schema(&native));
+        let source = adt::allocate_in(
+            aevia_types::keys::ModulePath::new(["User"]),
+            "NativeAdVar",
+            Vec::new(),
+        );
+        assert!(!supported_schema(&Type::Adt(source, Vec::new())));
+        let mut interp = Interp::new(&aevia_types::CheckedModule::default());
+        let function = Value::Native(Rc::new(NativeFn(Box::new(|_, values, _| {
+            Ok(values[0].clone())
+        }))));
+        let callback = Rc::new(CallbackValue {
+            function,
+            schema: Type::func(vec![native.clone()], native),
+        });
+        with_scoped(&mut interp, vec![callback], |handles| {
+            let payload = Val::Opaque {
+                kind: aevia_rssn::registry::NATIVE_AD_VAR_KIND.into(),
+                bytes: vec![1; 16],
+            };
+            let (returned, _) = handles[0]
+                .call(std::slice::from_ref(&payload), &[DimensionWitness::Unknown])
+                .unwrap();
+            assert_eq!(returned, payload);
+            let forged = Val::Opaque {
+                kind: "User/NativeAdVar".into(),
+                bytes: vec![1; 16],
+            };
+            assert!(
+                handles[0]
+                    .call(&[forged], &[DimensionWitness::Unknown])
+                    .is_err()
+            );
+            let truncated = Val::Opaque {
+                kind: aevia_rssn::registry::NATIVE_AD_VAR_KIND.into(),
+                bytes: Vec::new(),
+            };
+            assert!(
+                handles[0]
+                    .call(&[truncated], &[DimensionWitness::Unknown])
+                    .is_err()
+            );
+        })
+        .unwrap();
     }
 }

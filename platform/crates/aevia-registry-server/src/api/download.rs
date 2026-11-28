@@ -5,12 +5,17 @@
 //! wants to verify a download needs nothing else: no token, no second request
 //! to a different host.
 
+use axum::body::Bytes;
 use axum::extract::Path;
 use axum::extract::State;
+use axum::http::HeaderMap;
+use axum::http::Method;
 use axum::http::StatusCode;
 use axum::http::header;
 use axum::response::IntoResponse;
 use axum::response::Response;
+use sqlx::postgres::PgRow;
+use tokio::sync::OwnedSemaphorePermit;
 
 use aevia_registry_core::PackageId;
 use aevia_registry_db::repo;
@@ -18,6 +23,14 @@ use aevia_registry_db::repo;
 use crate::api::ApiError;
 use crate::api::ApiResult;
 use crate::state::AppState;
+
+#[derive(sqlx::FromRow)]
+struct ArchiveVersion {
+    id: i64,
+    version: String,
+    checksum: String,
+    fingerprint: String,
+}
 
 /// `GET /api/v1/download/{owner}/{name}/{version}`
 ///
@@ -28,63 +41,107 @@ use crate::state::AppState;
 pub async fn archive(
     State(state): State<AppState>,
     Path((owner, name, version)): Path<(String, String, String)>,
+    method: Method,
+    headers: HeaderMap,
 ) -> ApiResult<Response> {
-    let (id, row) = resolve(&state, &owner, &name, &version).await?;
-    let bytes = state.storage.read(&id, &row.version)?;
-    // The catalogue's checksum is what the index, the signature and the lock
-    // files of every consumer name. Serving bytes that hash to something else
-    // would hand a client an archive its own verification must reject; saying
-    // so here turns silent storage corruption into an operator-visible error.
-    let actual = aevia_registry_core::tarball::checksum(&bytes);
-    if !actual.eq_ignore_ascii_case(&row.checksum) {
-        return Err(ApiError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "E_INTEGRITY",
-            format!(
-                "the stored archive of {id} {} hashes to {actual}, but the catalogue (and the \
-                 signature) say {}; storage and catalogue have diverged",
-                row.version, row.checksum
-            ),
-        ));
+    const CACHE: &str = "public, max-age=31536000, immutable";
+
+    let (id, row): (_, ArchiveVersion) = resolve(
+        &state,
+        &owner,
+        &name,
+        &version,
+        "SELECT id, version, checksum, fingerprint FROM versions WHERE package_id = $1 AND version = $2",
+    )
+    .await?;
+    let ArchiveVersion {
+        id: version_id,
+        version,
+        checksum,
+        fingerprint,
+    } = row;
+    let etag = format!("\"{checksum}\"");
+    if headers.get_all(header::IF_NONE_MATCH).iter().any(|header| {
+        header.to_str().is_ok_and(|value| {
+            value.split(',').map(str::trim).any(|candidate| {
+                candidate == "*" || candidate.strip_prefix("W/").unwrap_or(candidate) == etag
+            })
+        })
+    }) {
+        return Ok((
+            StatusCode::NOT_MODIFIED,
+            [
+                (header::ETAG, etag),
+                (header::CACHE_CONTROL, CACHE.to_string()),
+            ],
+        )
+            .into_response());
     }
-    // Counting is best-effort: a download that succeeded must not fail because
-    // the counter could not be bumped.
-    let pool = state.pool.clone();
-    let version_id = row.id;
-    tokio::spawn(async move {
-        if let Err(error) = repo::increment_downloads(&pool, version_id).await {
-            tracing::warn!(%error, "cannot count a download");
-        }
-    });
+    let slot = state
+        .download_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "E_DOWNLOAD_BUSY",
+                "The registry is serving other archives. Try again shortly.",
+            )
+        })?;
+    let storage = state.storage.clone();
+    let disposition = format!("attachment; filename=\"{}-{version}.tar.gz\"", id.name());
+    let download = method == Method::GET;
+    let (bytes, size, checksum) =
+        tokio::task::spawn_blocking(move || -> aevia_registry_core::Result<_> {
+            let (body, size) = if download {
+                let bytes = storage.read(&id, &version, &checksum)?;
+                let size = bytes.len() as u64;
+                (Bytes::from_owner(ArchiveBody { bytes, _slot: slot }), size)
+            } else {
+                (
+                    Bytes::new(),
+                    storage.verified_size(&id, &version, &checksum)?,
+                )
+            };
+            Ok((body, size, checksum))
+        })
+        .await
+        .map_err(|error| ApiError::internal(format!("the archive read task failed: {error}")))??;
+    if download {
+        state.download_counts.record(version_id);
+    }
     Ok((
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, "application/gzip".to_string()),
-            (
-                header::CONTENT_DISPOSITION,
-                format!(
-                    "attachment; filename=\"{}-{}.tar.gz\"",
-                    id.name(),
-                    row.version
-                ),
-            ),
-            (header::ETAG, format!("\"{}\"", row.checksum)),
-            (
-                header::CACHE_CONTROL,
-                "public, max-age=31536000, immutable".to_string(),
-            ),
+            (header::CONTENT_LENGTH, size.to_string()),
+            (header::CONTENT_DISPOSITION, disposition),
+            (header::ETAG, etag),
+            (header::CACHE_CONTROL, CACHE.to_string()),
             (
                 header::HeaderName::from_static("x-aevia-checksum"),
-                row.checksum.clone(),
+                checksum,
             ),
             (
                 header::HeaderName::from_static("x-aevia-signature-fingerprint"),
-                row.fingerprint.clone(),
+                fingerprint,
             ),
         ],
         bytes,
     )
         .into_response())
+}
+
+struct ArchiveBody {
+    bytes: Vec<u8>,
+    // Also limits memory held by an archive still being sent to a slow client.
+    _slot: OwnedSemaphorePermit,
+}
+
+impl AsRef<[u8]> for ArchiveBody {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes
+    }
 }
 
 /// `GET /api/v1/download/{owner}/{name}/{version}/signature`
@@ -102,23 +159,31 @@ pub async fn signature(
     State(state): State<AppState>,
     Path((owner, name, version)): Path<(String, String, String)>,
 ) -> ApiResult<Response> {
-    let (_, row) = resolve(&state, &owner, &name, &version).await?;
+    let (_, (mut statement, signature)): (_, (String, String)) = resolve(
+        &state,
+        &owner,
+        &name,
+        &version,
+        "SELECT statement, signature FROM versions WHERE package_id = $1 AND version = $2",
+    )
+    .await?;
+    // The statement's existing newline is part of what the signature covers.
+    statement.push_str(&signature);
     Ok((
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-        // No separator: the statement already ends with a newline, and those
-        // exact bytes are what the signature covers.
-        format!("{}{}", row.statement, row.signature),
+        statement,
     )
         .into_response())
 }
 
-async fn resolve(
+async fn resolve<T: for<'row> sqlx::FromRow<'row, PgRow> + Send + Unpin>(
     state: &AppState,
     owner: &str,
     name: &str,
     version: &str,
-) -> ApiResult<(PackageId, aevia_registry_db::models::Version)> {
+    query: &str,
+) -> ApiResult<(PackageId, T)> {
     let requested = PackageId::new(owner, name).map_err(ApiError::from_core)?;
     let Some((package, owner_row)) =
         repo::package_by_handle(&state.pool, requested.owner(), &requested.name_key()).await?
@@ -128,7 +193,13 @@ async fn resolve(
         )));
     };
     let id = PackageId::new(&owner_row.handle, &package.name).map_err(ApiError::from_core)?;
-    let Some(row) = repo::version(&state.pool, package.id, version).await? else {
+    let Some(row) = sqlx::query_as(query)
+        .bind(package.id)
+        .bind(version)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|error| aevia_registry_db::sql_error("cannot read the version", error))?
+    else {
         return Err(ApiError::not_found(format!(
             "{requested} has no version {version}."
         )));

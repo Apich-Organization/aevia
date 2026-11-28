@@ -3,7 +3,7 @@
 //! This is the counterpart to `cargo publish`, with one structural difference:
 //! **there are no API tokens**. Every authenticated action is a detached
 //! signature over a short, server-issued statement, made with the publisher's
-//! own OpenPGP or SSH key. The private key never leaves the machine, nothing
+//! own `OpenPGP` or SSH key. The private key never leaves the machine, nothing
 //! long-lived is stored, and a captured signature is worthless within five
 //! minutes because the statement it covers names one archive and carries a
 //! single-use nonce.
@@ -26,6 +26,18 @@
 //! command line" from "try again".
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unreachable
+    )
+)]
 
 mod api;
 mod auth;
@@ -78,7 +90,8 @@ pub struct App {
     about = "Publish, fetch and verify signed Aevia packages",
     long_about = "Publish, fetch and verify signed Aevia packages.\n\n\
                   There are no API tokens: every authenticated action is a signature made \
-                  with your own OpenPGP or SSH key.",
+                  with your own OpenPGP (GPG) or SSH (`ssh-ed25519`) key. OpenPGP keys \
+                  (especially backed by a hardware key) are preferred and recommended.",
     disable_help_subcommand = true
 )]
 struct Cli {
@@ -130,6 +143,9 @@ enum Command {
 
     /// Pack the package here, sign it and upload it.
     Publish {
+        /// The namespace to publish under. Defaults to your personal handle.
+        #[arg(long, value_name = "HANDLE")]
+        owner: Option<String>,
         /// The fingerprint of the key to sign with.
         #[arg(long, value_name = "FINGERPRINT")]
         key: Option<String>,
@@ -260,6 +276,10 @@ async fn main() -> ExitCode {
 }
 
 /// Builds the context and dispatches one command.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the asynchronous command dispatcher is separate from process exit-code handling"
+)]
 async fn run(cli: Cli) -> Result<(), CliError> {
     let home = config::home()?;
     let (config, warning) = query::load_config(&home);
@@ -296,6 +316,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             }
         },
         | Command::Publish {
+            owner,
             key,
             description,
             license,
@@ -305,6 +326,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             allow_dirty,
         } => {
             let options = publish::Options {
+                owner: owner.as_deref(),
                 key: key.as_deref(),
                 description: description.as_deref(),
                 license: license.as_deref(),
@@ -354,6 +376,10 @@ async fn run(cli: Cli) -> Result<(), CliError> {
 /// directly; tracing is for the questions only a bug report raises — which
 /// request went where — and is therefore silent unless `AEVIA_PKG_LOG` (or
 /// `--quiet`, which turns it off) says otherwise.
+#[allow(
+    clippy::single_call_fn,
+    reason = "tracing configuration keeps diagnostics separate from command output"
+)]
 fn init_tracing(quiet: bool) {
     let filter = if quiet {
         "off".to_string()
@@ -443,10 +469,18 @@ mod tests {
             "--keyword",
             "math",
             "--dry-run",
+            "--owner",
+            "laboratory",
         ])
         .expect("parses");
         match cli.command {
-            | Command::Publish { keyword, dry_run, .. } => {
+            | Command::Publish {
+                owner,
+                keyword,
+                dry_run,
+                ..
+            } => {
+                assert_eq!(owner.as_deref(), Some("laboratory"));
                 assert_eq!(keyword, ["linear", "math"]);
                 assert!(dry_run);
             },

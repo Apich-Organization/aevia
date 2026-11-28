@@ -16,13 +16,28 @@
 //! asking the checker, and it is deliberately not a second type checker — it
 //! tracks names and spans, nothing else.
 
+use crate::cursor_index::CursorIndex;
 use aevia_syntax::Span;
-use aevia_syntax::ast::*;
+use aevia_syntax::ast::BlockStmt;
+use aevia_syntax::ast::Decl;
+use aevia_syntax::ast::DeclKind;
+use aevia_syntax::ast::DoStmt;
+use aevia_syntax::ast::Expr;
+use aevia_syntax::ast::ExprKind;
+use aevia_syntax::ast::Module;
+use aevia_syntax::ast::Pat;
+use aevia_syntax::ast::PatKind;
+use aevia_syntax::ast::SliceAst;
+use aevia_syntax::ast::StrPiece;
+use aevia_syntax::ast::Ty;
+use aevia_syntax::ast::TyKind;
+use aevia_syntax::ast::TypeBody;
 use aevia_syntax::token::TokenKind;
+use std::cell::OnceCell;
 
 /// The role a name plays at its span.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Role {
+pub enum Role {
     /// A bare name: a reference or a binding site.
     Name(String),
     /// A dotted name such as `Units.SI.km`.
@@ -43,7 +58,7 @@ pub(crate) enum Role {
 
 /// One name written in the module.
 #[derive(Clone, Debug)]
-pub(crate) struct Occurrence {
+pub struct Occurrence {
     /// Index of the persistent lexical environment visible at this token.
     scope: Option<usize>,
     /// Where the name is.
@@ -71,11 +86,24 @@ struct Binding {
     parent: Option<usize>,
     name: String,
     span: Span,
+    local: bool,
+    function: bool,
+}
+
+/// A lexical environment applies throughout this inclusive byte range.
+#[derive(Clone, Copy, Debug)]
+struct ScopeRange {
+    start: u32,
+    end: u32,
+    head: Option<usize>,
 }
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Occurrences {
+pub struct Occurrences {
     items: Vec<Occurrence>,
     bindings: Vec<Binding>,
+    scope_ranges: Vec<ScopeRange>,
+    names_by_cursor: OnceCell<CursorIndex<usize>>,
+    scopes_by_cursor: OnceCell<CursorIndex<usize>>,
 }
 impl std::ops::Deref for Occurrences {
     type Target = [Occurrence];
@@ -93,6 +121,49 @@ impl<'a> IntoIterator for &'a Occurrences {
     }
 }
 impl Occurrences {
+    /// The innermost occurrence containing `offset`, including its right edge.
+    pub(crate) fn at(
+        &self,
+        offset: u32,
+    ) -> Option<&Occurrence> {
+        let index = self.names_by_cursor.get_or_init(|| {
+            CursorIndex::new(
+                self.items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, occurrence)| (occurrence.span.start, occurrence.span.end, index)),
+            )
+        });
+        self.items.get(index.at(offset)?)
+    }
+
+    /// Visible local bindings in nearest-to-farthest order.
+    pub(crate) fn local_bindings(
+        &self,
+        offset: u32,
+    ) -> impl Iterator<Item = (&str, Span, bool)> {
+        let index = self.scopes_by_cursor.get_or_init(|| {
+            CursorIndex::new(
+                self.scope_ranges
+                    .iter()
+                    .enumerate()
+                    .map(|(index, scope)| (scope.start, scope.end, index)),
+            )
+        });
+        let mut head = index
+            .at(offset)
+            .and_then(|index| self.scope_ranges.get(index))
+            .and_then(|scope| scope.head);
+        std::iter::from_fn(move || {
+            let binding = self.bindings.get(head?)?;
+            if !binding.local {
+                return None;
+            }
+            head = binding.parent;
+            Some((binding.name.as_str(), binding.span, binding.function))
+        })
+    }
+
     pub(crate) fn lookup(
         &self,
         occurrence: &Occurrence,
@@ -123,7 +194,14 @@ fn lookup_binding(
 /// enclosing scope and `let x = x` must resolve the right-hand `x` to the
 /// outer binding.
 #[must_use]
-pub(crate) fn collect(
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "the shared query cache is the only caller of the lexical walk"
+    )
+)]
+pub fn collect(
     module: &Module,
     text: &str,
 ) -> Occurrences {
@@ -132,33 +210,25 @@ pub(crate) fn collect(
         text,
         scopes: vec![None],
         bindings: Vec::new(),
+        scope_ranges: Vec::new(),
     };
-    for (index, decl) in module.decls.iter().enumerate() {
-        collector.decl(decl, index);
+    for decl in &module.decls {
+        collector.decl(decl);
     }
     Occurrences {
         items: collector.out,
         bindings: collector.bindings,
+        scope_ranges: collector.scope_ranges,
+        names_by_cursor: OnceCell::new(),
+        scopes_by_cursor: OnceCell::new(),
     }
-}
-
-/// The innermost occurrence containing `offset`.
-#[must_use]
-pub(crate) fn at(
-    occurrences: &[Occurrence],
-    offset: u32,
-) -> Option<&Occurrence> {
-    occurrences
-        .iter()
-        .filter(|occurrence| occurrence.span.start <= offset && offset <= occurrence.span.end)
-        .min_by_key(|occurrence| occurrence.span.end.saturating_sub(occurrence.span.start))
 }
 
 /// The first identifier token named `name` inside `within`. Declaration
 /// attributes are excluded: their arguments may contain the same spelling as
 /// the declaration, and changing those strings is not a symbol rename.
 #[must_use]
-pub(crate) fn name_span(
+pub fn name_span(
     text: &str,
     within: Span,
     name: &str,
@@ -169,7 +239,7 @@ pub(crate) fn name_span(
 /// Find an actual identifier token, never a substring in a string or comment.
 /// Qualified references use the last token; declarations use the first token
 /// after their attribute prefix. Token spans already retain the file offset.
-pub(crate) fn identifier_span(
+pub fn identifier_span(
     text: &str,
     within: Span,
     name: &str,
@@ -190,14 +260,15 @@ pub(crate) fn identifier_span(
             )
         })
         .is_some_and(|token| token.kind == TokenKind::Punct(P::At));
-    let mut from = 0;
-    if has_attributes {
+    let from = if has_attributes {
         let mut depth = 0usize;
-        from = tokens.iter().position(|token| {
+        tokens.iter().position(|token| {
             match token.kind {
-                | TokenKind::Punct(P::LParen | P::LBracket | P::LBrace) => depth += 1,
+                | TokenKind::Punct(P::LParen | P::LBracket | P::LBrace) => {
+                    depth = depth.saturating_add(1);
+                },
                 | TokenKind::Punct(P::RParen | P::RBracket | P::RBrace) => {
-                    depth = depth.saturating_sub(1)
+                    depth = depth.saturating_sub(1);
                 },
                 | TokenKind::Keyword(
                     K::Fn
@@ -214,9 +285,11 @@ pub(crate) fn identifier_span(
                 | _ => {},
             }
             false
-        })?;
-    }
-    let mut candidates = tokens[from..].iter().filter_map(|token| {
+        })?
+    } else {
+        0
+    };
+    let mut candidates = tokens.get(from..)?.iter().filter_map(|token| {
         match &token.kind {
             | TokenKind::Ident(actual) | TokenKind::UpperIdent(actual) if actual == name => {
                 Some(token.span)
@@ -236,15 +309,17 @@ pub(crate) fn identifier_span(
 /// Aevia's module paths are upper-case (`Units.SI.km`), and the parser only
 /// joins upper-case segments into a [`ExprKind::QName`]; the trailing member of
 /// `Rssn.eig` is a lower-case field of an upper-case root.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "traverse nested dotted-name receivers recursively"
+    )
+)]
 fn qualified_root(expr: &Expr) -> Option<Vec<String>> {
     match &expr.kind {
         | ExprKind::QName(path) => Some(path.clone()),
-        | ExprKind::Var(name)
-            if name
-                .chars()
-                .next()
-                .is_some_and(|first| first.is_uppercase()) =>
-        {
+        | ExprKind::Var(name) if name.chars().next().is_some_and(char::is_uppercase) => {
             Some(vec![name.clone()])
         },
         | _ => None,
@@ -257,6 +332,7 @@ struct Collector<'a> {
     /// The bindings in scope, innermost last.
     scopes: Vec<Option<usize>>,
     bindings: Vec<Binding>,
+    scope_ranges: Vec<ScopeRange>,
 }
 
 impl Collector<'_> {
@@ -283,7 +359,7 @@ impl Collector<'_> {
         role: Role,
     ) {
         let span = name_span(self.text, within, name);
-        self.bind(name, span);
+        self.bind(name, span, false);
         self.record(span, role);
     }
 
@@ -339,13 +415,17 @@ impl Collector<'_> {
         &mut self,
         name: &str,
         span: Span,
+        function: bool,
     ) {
+        let local = self.scopes.len() > 1;
         if let Some(scope) = self.scopes.last_mut() {
             let index = self.bindings.len();
             self.bindings.push(Binding {
                 parent: *scope,
                 name: name.to_string(),
                 span,
+                local,
+                function,
             });
             *scope = Some(index);
         }
@@ -394,12 +474,59 @@ impl Collector<'_> {
         self.scopes.pop();
     }
 
+    fn scope_range(
+        &mut self,
+        start: u32,
+        end: u32,
+    ) {
+        if start <= end {
+            self.scope_ranges.push(ScopeRange {
+                start,
+                end,
+                head: self.scopes.last().copied().flatten(),
+            });
+        }
+    }
+
+    fn scope_end(
+        &self,
+        body: &Expr,
+    ) -> u32 {
+        let end = body.span.end;
+        if matches!(body.kind, ExprKind::Block { .. } | ExprKind::Do { .. })
+            && let Ok(offset) = usize::try_from(end)
+            && offset < self.text.len()
+            && let Some(prefix) = self.text.get(..offset)
+        {
+            // The parser's zero-width dedent can be at the next sibling's
+            // first token. A scope must end before entering that sibling.
+            return u32::try_from(prefix.trim_end().len()).unwrap_or(end);
+        }
+        end
+    }
+
+    fn body(
+        &mut self,
+        body: &Expr,
+    ) {
+        let start = usize::try_from(body.span.start)
+            .ok()
+            .and_then(|offset| self.text.get(..offset))
+            .map(|prefix| {
+                prefix
+                    .trim_end_matches(|ch: char| ch.is_whitespace() && !matches!(ch, '\r' | '\n'))
+                    .len()
+            })
+            .and_then(|start| u32::try_from(start).ok())
+            .unwrap_or(body.span.start);
+        self.scope_range(start, self.scope_end(body));
+        self.expr(body, None);
+    }
+
     fn decl(
         &mut self,
         decl: &Decl,
-        index: usize,
     ) {
-        let _ = index;
         match &decl.kind {
             | DeclKind::Import { .. } => {},
             | DeclKind::Dimension { name, value } => {
@@ -435,8 +562,8 @@ impl Collector<'_> {
             } => {
                 self.declare(decl.span, name, Role::TypeName(name.clone()));
                 let _ = params;
-                for (_, ty) in methods {
-                    self.ty(ty);
+                for method in methods {
+                    self.ty(&method.ty);
                 }
             },
             | DeclKind::Instance { class, ty, methods } => {
@@ -460,7 +587,7 @@ impl Collector<'_> {
                     if let Some(ret) = &method.ret {
                         self.ty(ret);
                     }
-                    self.expr(&method.body, None);
+                    self.body(&method.body);
                     self.leave();
                 }
             },
@@ -472,7 +599,9 @@ impl Collector<'_> {
                 ret,
                 body,
             } => {
-                self.declare(decl.span, name, Role::Name(name.clone()));
+                let span = name_span(self.text, decl.span, name);
+                self.bind(name, span, true);
+                self.record(span, Role::Name(name.clone()));
                 let _ = params;
                 self.enter();
                 for arg in args {
@@ -484,7 +613,7 @@ impl Collector<'_> {
                 if let Some(ret) = ret {
                     self.ty(ret);
                 }
-                self.expr(body, None);
+                self.body(body);
                 self.leave();
             },
             | DeclKind::Let {
@@ -500,14 +629,25 @@ impl Collector<'_> {
         }
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::too_many_lines,
+            reason = "visit every expression kind while tracking lexical scope"
+        )
+    )]
     fn expr(
         &mut self,
         expr: &Expr,
         call: Option<Span>,
     ) {
         match &expr.kind {
-            | ExprKind::UnitLit | ExprKind::Error | ExprKind::Bool(_) => {},
-            | ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Placeholder => {},
+            | ExprKind::UnitLit
+            | ExprKind::Error
+            | ExprKind::Bool(_)
+            | ExprKind::Int(_)
+            | ExprKind::Float(_)
+            | ExprKind::Placeholder => {},
             | ExprKind::Quantity { .. } => self.quantity_units(expr.span),
             | ExprKind::Var(name) => self.use_name(expr.span, name, call),
             | ExprKind::QName(path) => self.push(expr.span, Role::Qualified(path.clone()), call),
@@ -546,7 +686,7 @@ impl Collector<'_> {
                 if let Some(ret) = ret {
                     self.ty(ret);
                 }
-                self.expr(body, None);
+                self.body(body);
                 self.leave();
             },
             | ExprKind::If {
@@ -564,9 +704,9 @@ impl Collector<'_> {
                     self.enter();
                     self.pat(&arm.pattern);
                     if let Some(guard) = &arm.guard {
-                        self.expr(guard, None);
+                        self.body(guard);
                     }
-                    self.expr(&arm.body, None);
+                    self.body(&arm.body);
                     self.leave();
                 }
             },
@@ -582,23 +722,32 @@ impl Collector<'_> {
                 self.expr(value, None);
                 self.enter();
                 self.pat(pattern);
-                self.expr(body, None);
+                self.body(body);
                 self.leave();
             },
             | ExprKind::Block { stmts, tail } => {
                 self.enter();
+                let scope_end = self.scope_end(expr);
                 for stmt in stmts {
                     match stmt {
                         | BlockStmt::Let {
-                            pattern, ty, value, ..
+                            pattern,
+                            ty,
+                            value,
+                            span,
+                            ..
                         } => {
                             if let Some(ty) = ty {
                                 self.ty(ty);
                             }
                             self.expr(value, None);
                             self.pat(pattern);
+                            self.scope_range(span.end.saturating_add(1), scope_end);
                         },
-                        | BlockStmt::Fn(decl) => self.decl(decl, 0),
+                        | BlockStmt::Fn(decl) => {
+                            self.decl(decl);
+                            self.scope_range(decl.span.end.saturating_add(1), scope_end);
+                        },
                     }
                 }
                 if let Some(tail) = tail {
@@ -608,20 +757,27 @@ impl Collector<'_> {
             },
             | ExprKind::Do { stmts } => {
                 self.enter();
+                let scope_end = self.scope_end(expr);
                 for stmt in stmts {
                     match stmt {
                         | DoStmt::Let {
-                            pattern, ty, value, ..
+                            pattern,
+                            ty,
+                            value,
+                            span,
+                            ..
                         } => {
                             if let Some(ty) = ty {
                                 self.ty(ty);
                             }
                             self.expr(value, None);
                             self.pat(pattern);
+                            self.scope_range(span.end.saturating_add(1), scope_end);
                         },
-                        | DoStmt::Bind { pattern, value, .. } => {
+                        | DoStmt::Bind { pattern, value, span } => {
                             self.expr(value, None);
                             self.pat(pattern);
+                            self.scope_range(span.end.saturating_add(1), scope_end);
                         },
                         | DoStmt::Expr(expr) => self.expr(expr, None),
                     }
@@ -657,12 +813,9 @@ impl Collector<'_> {
                 for index in indices {
                     match index {
                         | SliceAst::Index(expr) => self.expr(expr, None),
-                        | SliceAst::Range { start, end, .. } => {
-                            if let Some(start) = start {
-                                self.expr(start, None);
-                            }
-                            if let Some(end) = end {
-                                self.expr(end, None);
+                        | SliceAst::Range { start, end, step, .. } => {
+                            for bound in [start, end, step].into_iter().flatten() {
+                                self.expr(bound, None);
                             }
                         },
                     }
@@ -673,7 +826,7 @@ impl Collector<'_> {
                 self.ty(ty);
             },
             | ExprKind::Try(inner) | ExprKind::Factorial { expr: inner, .. } => {
-                self.expr(inner, None)
+                self.expr(inner, None);
             },
         }
     }
@@ -683,9 +836,9 @@ impl Collector<'_> {
         pat: &Pat,
     ) {
         match &pat.kind {
-            | PatKind::Wildcard | PatKind::Error => {},
+            | PatKind::Wildcard | PatKind::Error | PatKind::Lit(_) => {},
             | PatKind::Var(name) => {
-                self.bind(name, pat.span);
+                self.bind(name, pat.span, false);
                 self.record(pat.span, Role::Name(name.clone()));
             },
             | PatKind::Ctor { name, args } => {
@@ -701,20 +854,14 @@ impl Collector<'_> {
                     }
                 }
             },
-            | PatKind::Tuple(items) => {
+            | PatKind::Tuple(items) | PatKind::Tensor { items, .. } => {
                 for item in items {
                     self.pat(item);
                 }
             },
-            | PatKind::Tensor { items, .. } => {
-                for item in items {
-                    self.pat(item);
-                }
-            },
-            | PatKind::Lit(_) => {},
             | PatKind::As { pattern, name } => {
                 self.pat(pattern);
-                self.bind(name, pat.span);
+                self.bind(name, pat.span, false);
                 self.record(pat.span, Role::Name(name.clone()));
             },
             | PatKind::Annot { pattern, ty } => {
@@ -734,7 +881,7 @@ impl Collector<'_> {
             | TyKind::Prop
             | TyKind::Str
             | TyKind::Unit
-            | TyKind::Var(_) => {},
+            | TyKind::Var(_)
             | TyKind::Real(_)
             | TyKind::Float(_)
             | TyKind::Complex(_)
@@ -893,7 +1040,7 @@ mod tests {
         let source = "let f = fn (x: Int) => x + 1\n";
         let found = occurrences(source);
         let offset = u32::try_from(source.rfind('x').expect("x")).expect("offset");
-        let at = at(&found, offset).expect("an occurrence");
+        let at = found.at(offset).expect("an occurrence");
         assert_eq!(at.role, Role::Name("x".to_string()));
         assert_eq!(at.span.start, offset);
     }

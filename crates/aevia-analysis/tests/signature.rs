@@ -142,6 +142,29 @@ fn signature_help_is_none_outside_the_parentheses() {
 }
 
 #[test]
+fn signature_help_uses_real_delimiters_in_complete_and_unfinished_calls() {
+    let prefix = "fn choose(label: String, count: Int): Int = count\n";
+    for (call, marker) in [
+        (r#"let answer = choose(")", 2)"#, Some("2")),
+        (r#"let answer = choose("(", 2)"#, Some("2")),
+        (r#"let answer = choose("x", "#, None),
+    ] {
+        let source = format!("{prefix}{call}\n");
+        let offset = marker.map_or_else(
+            || u32::try_from(prefix.len() + call.len()).expect("offset"),
+            |marker| offset_of(&source, marker),
+        );
+        let document = Document::new("p.aev", 1, &source);
+        let analysis = Analysis::new(&document);
+        let help = analysis
+            .signature_help(offset)
+            .expect("signature at the cursor");
+        assert_eq!(help.signatures[0].label, "choose: (String, Int) -> Int");
+        assert_eq!(help.active_parameter, 1, "{help:#?}");
+    }
+}
+
+#[test]
 fn signature_help_follows_the_innermost_call() {
     let source = "fn f(x: Int): Int = x\nfn g(x: Int, y: Int): Int = x\n\nlet a = g(f(1), 2)\n";
     let document = Document::new("p.aev", 1, source);

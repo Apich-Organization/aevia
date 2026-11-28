@@ -24,7 +24,7 @@ use axum::routing::post;
 use chrono::Utc;
 
 use aevia_registry_core::signature::SignerKey;
-use aevia_registry_core::signature::verify_detached;
+use aevia_registry_core::signature::verify_current;
 use aevia_registry_core::statement::Statement;
 use aevia_registry_db::models::Publisher;
 use aevia_registry_db::repo;
@@ -100,7 +100,17 @@ pub(crate) async fn authorise(
             ),
         ));
     };
-    verify_detached(key, signature, statement_text.as_bytes()).map_err(ApiError::from_core)?;
+    let certificate = SignerKey {
+        kind: key.kind,
+        armored: bound.public_key,
+    };
+    verify_current(
+        &certificate,
+        signature,
+        statement_text.as_bytes(),
+        Utc::now().timestamp(),
+    )
+    .map_err(ApiError::from_core)?;
     let Some(publisher) = repo::publisher(&state.pool, bound.publisher_id).await? else {
         return Err(ApiError::forbidden(
             "E_KEY",
@@ -120,6 +130,10 @@ pub(crate) async fn authorise(
 /// # Errors
 ///
 /// `E_DB` when the counts cannot be read.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the HTTP endpoint owns the catalog response schema"
+)]
 pub(crate) async fn stats(
     State(state): State<AppState>
 ) -> ApiResult<Json<aevia_registry_core::vm::SiteStats>> {

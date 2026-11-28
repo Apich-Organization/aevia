@@ -104,24 +104,55 @@ fn a_malformed_data_file_is_e0903() {
 #[test]
 fn an_unsupported_extension_is_e0904() {
     let mut interp = interpreter();
-    let action = interp
-        .call_named("read_csv", vec![Value::string("data.npy")], Span::default())
-        .expect("read_csv builds a Result value");
-    let text = err_text(&action);
-    assert!(
-        text.starts_with("E0904:"),
-        "an unsupported extension is E0904, found {text}"
-    );
+    for (reader, path) in [
+        ("read_csv", "data.npy"),
+        ("read_csv_dyn", "data.npy"),
+        ("read_json", "data.csv"),
+    ] {
+        let action = interp
+            .call_named(reader, vec![Value::string(path)], Span::default())
+            .expect("the reader builds an IO action");
+        let text = err_text(&run_action(&mut interp, action));
+        assert!(text.starts_with("E0904:"), "found {text}");
+    }
+}
 
-    let action = interp
-        .call_named(
-            "read_json",
-            vec![Value::string("data.csv")],
-            Span::default(),
-        )
-        .expect("read_json builds a Result value");
-    let text = err_text(&action);
-    assert!(text.starts_with("E0904:"), "found {text}");
+#[test]
+fn tsv_readers_return_numeric_columns_from_tab_delimited_files() {
+    let path = std::env::temp_dir().join(format!("aevia-tsv-{}.tsv", std::process::id()));
+    std::fs::write(&path, "label\tlength [m]\r\na,b\t2\r\n").expect("write TSV");
+    let mut interp = interpreter();
+    for reader in ["read_csv", "read_csv_dyn"] {
+        let action = interp
+            .call_named(
+                reader,
+                vec![Value::string(path.to_string_lossy().into_owned())],
+                Span::default(),
+            )
+            .expect("the reader builds an IO action");
+        let Value::Variant(result) = run_action(&mut interp, action) else {
+            panic!("expected a Result");
+        };
+        assert_eq!(result.name, "Ok", "{result:?}");
+        let table = result.fields.first().expect("the table payload").clone();
+        let column = interp
+            .call_named(
+                "column",
+                vec![table, Value::string("length")],
+                Span::default(),
+            )
+            .expect("look up the length column");
+        let Value::Variant(column) = column else {
+            panic!("expected a Result");
+        };
+        assert_eq!(column.name, "Ok", "{column:?}");
+        let Some(Value::Tensor(values)) = column.fields.first() else {
+            panic!("expected a tensor column");
+        };
+        assert_eq!(values.shape, [1]);
+        assert_eq!(values.dense(), Some([2.0].as_slice()));
+    }
+    std::fs::remove_file(path).expect("remove TSV fixture");
 }
 
 /// A failed plot write is `E0905` (`plot rendering failed`).

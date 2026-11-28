@@ -1,0 +1,37 @@
+import Rssn_numerical_callback as Numeric
+
+let position = complex(1.0 m, 2.0 m)
+
+fn calibrated(z: Complex[Length]): Complex[Time] = complex(2.0 s/m, -1.0 s/m) * z
+
+fn conjugated(z: Complex[Length]): Complex[Length] = complex(re(z), -im(z))
+
+fn polar_position(radius: Float[Length], angle: Float): Complex[Length] =
+    complex(to_real(radius * cos(angle)), to_real(radius * sin(angle)))
+
+fn identity(z: Complex[Length]): Complex[Length] = z
+
+test "Wirtinger stencil restores derivative dimensions in four calls" =
+    match Numeric.num_complex_wirtinger_dz_checked_typed(position, 12.5 cm, 7.0 s, 4, calibrated) with
+    | Ok(result) -> approx_eq(re(result), 2.0 s/m, 1e-11 s/m) && approx_eq(im(result), -1.0 s/m, 1e-11 s/m)
+    | Err(_) -> false
+
+test "holomorphic and antiholomorphic stencils differ" =
+    let good = Numeric.num_conformal_numeric_checked_typed(position, 0.125 m, 4.0 m, 7.0 s, 1e-10, 4, calibrated)
+    let bad = Numeric.num_complex_cauchy_riemann_checked_typed(position, 0.125 m, 4.0 m, 7.0 m, 1e-10, 4, conjugated)
+    good == Ok(true) && bad == Ok(false)
+
+test "a complex step avoids cancellation and needs one callback" =
+    match Numeric.num_complex_step_derivative_checked_typed(1.0 m, 1e-120 m, 7.0 m, 1, identity) with
+    | Ok(result) -> approx_eq(result, 1.0, 1e-12)
+    | Err(_) -> false
+
+test "polar residual accepts separate radial and angular steps" =
+    match Numeric.num_complex_cauchy_riemann_polar_checked_typed(2.0 m, 0.8, 0.03125 m, 1e-4, 7.0 m, 4, polar_position) with
+    | Ok(result) -> approx_eq(result.radial, 0.0 m, 1e-8 m) && approx_eq(result.angular, 0.0 m, 1e-8 m)
+    | Err(_) -> false
+
+test "small callback budgets are returned as errors" =
+    match Numeric.num_complex_wirtinger_dz_checked_typed(position, 0.125 m, 7.0 s, 3, calibrated) with
+    | Ok(_) -> false
+    | Err(_) -> true

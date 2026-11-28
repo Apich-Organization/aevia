@@ -1,0 +1,204 @@
+# Rust source path	Reason this entry point belongs to the Rust host API.
+crate::sim::spin_models::Potts<D>::heat_bath_sweep_with	Accepts caller-owned work storage. The Aevia Potts heat-bath and update operators reuse the workspace retained with their model handle.
+crate::kernels::amg_general::AmgGeneral::vcycle_with_workspace	Uses caller-owned working storage and an initial iterate. Aevia's general V-cycle returns an owned array and leases the reusable workspace internally.
+crate::kernels::contractions::contract_rectangular_append	Appends generic scalar cells into caller-owned storage. Aevia exposes an owned result for its compiled scalar contraction.
+crate::kernels::contractions::contract_rectangular_for_each	Streams generic scalar cells into a host consumer callback. Aevia exposes the compiled scalar contraction as a retained tensor.
+crate::kernels::finite_field::Gf256Multiplier::new	Returns a caller-owned byte lookup table. Aevia selects the coefficient in each batch scale or multiply-add call and reuses the table internally.
+crate::kernels::tensor_train::TensorTrain::inner_with_workspace	Contracts with caller-owned scratch. Aevia's tensor-train inner product shares the numerical work pool.
+crate::kernels::tensor::tensordot_views	Borrows caller-owned ndarray views, including strided layouts. Aevia's measured tensor contraction calls the same implementation through its owning array handles.
+crate::kernels::newton_cg::NewtonCgWorkspace::minimize	Reuses caller-owned solver buffers for Rust callbacks. Aevia offers the same workspace with a session-owned compiled tape.
+crate::kernels::ode_geom::GaussLegendreWorkspace::step	Reuses caller-owned stage vectors for a Rust ODE callback. Aevia evaluates the same Gauss–Legendre steps through the measured geometric ODE solvers.
+crate::kernels::indefinite_sum::indefinite_sum	Applies a default budget for a Rust callback. The existing Aevia operator uses the same recurrence with the caller's explicit budget.
+crate::kernels::indefinite_sum::indefinite_product	Applies a default budget for a Rust callback. The existing Aevia operator uses the same recurrence with the caller's explicit budget.
+crate::kernels::robust::bootstrap_basic_ci	Accepts an arbitrary thread-safe Rust statistic. Aevia exposes the same seeded basic interval for built-in named statistics in Rssn_Numeric.
+crate::kernels::robust::bootstrap_ci_parallel	Accepts a thread-safe Rust statistic that may be evaluated concurrently. Aevia parallelizes named order statistics and evaluates language callbacks through the checked serial bootstrap adapter.
+crate::kernels::par::for_blocks_2d_mut	Borrows disjoint row strips in a caller-owned generic buffer and gives each mutable slice to a thread-safe Rust closure.
+crate::kernels::par::for_blocks_3d_mut	Borrows disjoint planes in a caller-owned generic volume and gives each mutable slice to a thread-safe Rust closure.
+crate::kernels::par::try_for_chunks_mut	Mutates caller-owned generic chunks with a concurrent Rust closure and returns the caller-selected error type from the lowest failing chunk.
+crate::kernels::reuse::PlanCache<K,V>::get_or_insert_with	Shares immutable Rust plans and accepts a caller-owned builder closure.
+crate::kernels::reuse::PlanCache<K,V>::new	Sets the retention limit for a caller-owned Rust plan cache.
+crate::kernels::reuse::ScratchPool<T>::checkout	Returns a Rust lease that borrows the owning scratch pool.
+crate::kernels::reuse::ScratchPool<T>::checkout_for	Selects a Rust scratch lease by minimum allocation capacity.
+crate::kernels::reuse::ScratchPool<T>::new	Configures a Rust allocation pool for a caller-selected element type.
+crate::kernels::reuse::f64_scratch	Returns a Rust lease for temporary floating-point storage.
+crate::kernels::reuse::fft_plan	Returns a shared RustFFT trait object keyed by transform length and direction.
+crate::kernels::reuse::fft_scratch	Returns a Rust lease for temporary complex FFT storage.
+crate::kernels::reuse::fft_scratch_for	Selects a Rust lease for complex FFT scratch by capacity.
+crate::kernels::reuse::global_pool	Returns the process-wide Rust pool which owns shared plans and reusable storage.
+crate::kernels::reuse::ComputeReusePool::new	Constructs a Rust resource pool whose caches and leases share a lifecycle.
+crate::kernels::reuse::ComputeReusePool::registry	Borrows the named-plan registry from its owning Rust pool.
+crate::kernels::reuse::ComputeReusePool::named_plan_cache	Selects a registry cache by the Rust key and value types and returns a shared handle.
+crate::kernels::reuse::ComputeReusePool::scratch_bytes	Leases a byte buffer tied to the pool for decoder and kernel work storage.
+crate::kernels::reuse::ComputeReusePool::scratch_complex64	Leases complex storage for an in-place kernel; returned transform results own their data.
+crate::kernels::reuse::ComputeReusePool::scratch_f32	Leases single-precision work storage tied to the owning Rust pool.
+crate::kernels::reuse::ComputeReusePool::scratch_f64	Leases double-precision work storage tied to the owning Rust pool.
+crate::kernels::reuse::ComputeReusePool::scratch_i64	Leases signed-integer work storage tied to the owning Rust pool.
+crate::kernels::reuse::ComputeReusePool::scratch_usize	Leases machine-index storage for permutations and kernel work arrays.
+crate::kernels::reuse::ComputeReusePool::fft_plan	Returns a shared RustFFT trait object for private or concurrent plan reuse.
+crate::kernels::reuse::ComputeReusePool::real_fft_twiddles	Returns the shared twiddle slice used internally by the packed real FFT.
+crate::kernels::reuse::ComputeReusePool::unit_roots	Returns cached roots of unity by shared reference for FFT and contour sampling kernels.
+crate::kernels::reuse::ComputeReusePool::sparse_ordering_plan	Retains a shared fill-reducing plan keyed by the caller's raw sparse topology.
+crate::kernels::reuse::ComputeReusePool::get_or_build_sparse_ordering	Lets a Rust caller supply the closure that constructs a fill-reducing permutation for a sparse pattern.
+crate::kernels::reuse::ComputeReusePool::get_or_init_quadrature	Lets a Rust caller seed a named quadrature cache with its own rule builder.
+crate::kernels::reuse::ComputeReusePool::clenshaw_curtis_rule	Returns a shared node and weight table for repeated Clenshaw–Curtis integration.
+crate::kernels::reuse::ComputeReusePool::gauss_kronrod_rule	Returns the retained Gauss–Kronrod work table for the numerical integration kernels.
+crate::kernels::reuse::ComputeReusePool::gauss_legendre_rule	Returns the retained Gauss–Legendre work table for the numerical integration kernels.
+crate::kernels::reuse::ComputeReusePool::chebyshev_lobatto_nodes	Returns shared interpolation nodes for repeated kernel assembly.
+crate::kernels::reuse::ComputeReusePool::chebyshev_nodes	Returns the shared Chebyshev node cache entry; callers acquire owned numerical results from the interpolation operators.
+crate::kernels::reuse::ComputeReusePool::binomial_row	Returns a shared Pascal-row cache entry for combinatorial kernels.
+crate::kernels::reuse::ComputeReusePool::factorial_table	Returns shared floating-point factorial work values; the exact factorial operator uses its own result representation.
+crate::kernels::reuse::ComputeReusePool::harmonic_table	Returns shared harmonic work values used in numerical special functions.
+crate::kernels::reuse::ComputeReusePool::log_factorial_table	Returns the shared log-factorial work table for numerical kernels.
+crate::kernels::reuse::ComputeReusePool::prime_sieve_cache	Returns a cache-owned sieve vector with its Rust allocation lifetime tracked by Arc.
+crate::kernels::reuse::ComputeReusePool::stirling_second_table	Returns a shared floating-point triangular work table alongside the exact combinatorial operators.
+crate::kernels::reuse::ComputeReusePool::clear_all	Drops idle resources from a Rust host pool while existing plan handles and leases remain live.
+crate::kernels::reuse::ComputeReusePool::reset_stats	Resets reuse counters on the caller's Rust resource pool.
+crate::kernels::reuse::ComputeReusePool::stats	Reports process-local allocation and plan-cache telemetry to the Rust host.
+crate::kernels::reuse::ComputeReusePool::trim_idle	Releases idle memory from the owning Rust pool.
+crate::kernels::reuse::ComputeReusePool::trim_to_budget	Adjusts idle Rust memory retention to an aggregate byte budget.
+crate::kernels::reuse::PlanCache<K,V>::new_lru	Creates a generic Rust LRU cache for a host-selected plan type.
+crate::kernels::reuse::PlanCache<K,V>::capacity	Reports the entry limit of a caller-owned Rust plan cache.
+crate::kernels::reuse::PlanCache<K,V>::clear	Drops retained plan entries without invalidating existing Rust handles.
+crate::kernels::reuse::PlanCache<K,V>::contains	Inspects a caller-owned cache using its Rust key type.
+crate::kernels::reuse::PlanCache<K,V>::get	Looks up a plan and returns its shared Rust Arc handle.
+crate::kernels::reuse::PlanCache<K,V>::is_empty	Checks whether the caller's Rust plan cache currently contains entries.
+crate::kernels::reuse::PlanCache<K,V>::len	Reports the retained entry count for a caller-owned Rust cache.
+crate::kernels::reuse::PlanCache<K,V>::reset_stats	Resets counters on a caller-owned Rust plan cache.
+crate::kernels::reuse::PlanCache<K,V>::stats	Reports usage counters for a caller-owned Rust plan cache.
+crate::kernels::reuse::PlanCache<K,V>::trim_idle	Drops only plans whose Rust handles have no external owners.
+crate::kernels::reuse::PlanCache<K,V>::try_get_or_insert_with	Initializes a cache entry with a caller-owned, fallible Rust closure and error type.
+crate::kernels::reuse::PlanRegistry::new	Constructs a heterogeneous Rust registry for per-type named caches.
+crate::kernels::reuse::PlanRegistry::cache	Retrieves a named cache with caller-selected Rust key and value types.
+crate::kernels::reuse::PlanRegistry::cache_count	Counts the number of distinct named caches managed by this Rust registry.
+crate::kernels::reuse::PlanRegistry::clear	Clears the entries in all caches managed by the owning Rust registry.
+crate::kernels::reuse::PlanRegistry::get_or_insert_with	Selects a typed cache and initializes an entry using a caller-owned Rust closure.
+crate::kernels::reuse::PlanRegistry::is_empty	Checks whether the Rust registry retains any cached entries.
+crate::kernels::reuse::PlanRegistry::len	Counts cached entries across the Rust registry's named caches.
+crate::kernels::reuse::PlanRegistry::reset_stats	Resets the counters of the Rust registry's managed caches.
+crate::kernels::reuse::PlanRegistry::stats	Summarizes retained entries and lookup counters across the Rust registry.
+crate::kernels::reuse::PlanRegistry::trim_idle	Drops idle values from the Rust registry without invalidating borrowed plan state.
+crate::kernels::reuse::ScratchPool<T>::clear	Discards idle buffers without invalidating live Rust leases.
+crate::kernels::reuse::ScratchPool<T>::is_empty	Checks whether the Rust scratch pool retains any idle buffers.
+crate::kernels::reuse::ScratchPool<T>::len	Counts idle buffers belonging to a Rust scratch pool.
+crate::kernels::reuse::ScratchPool<T>::max_buffer_bytes	Reports the per-buffer retention limit configured by the Rust owner.
+crate::kernels::reuse::ScratchPool<T>::max_idle	Reports the idle buffer count limit configured by the Rust owner.
+crate::kernels::reuse::ScratchPool<T>::reset_stats	Resets allocation counters on a caller-owned Rust scratch pool.
+crate::kernels::reuse::ScratchPool<T>::retained_bytes	Reports host memory held in idle buffers of a Rust scratch pool.
+crate::kernels::reuse::ScratchPool<T>::stats	Reports hits, allocations and evictions of the Rust scratch pool.
+crate::kernels::reuse::ScratchPool<T>::trim_idle	Evicts all idle buffers from the Rust pool and updates its eviction counter.
+crate::kernels::reuse::ScratchPool<T>::trim_to_bytes	Evicts idle buffers to fit a byte limit set by the Rust host.
+crate::kernels::fft::transform_in_place	Mutates caller-owned complex samples. Aevia's FFT and inverse FFT builtins use the same plan and return owned tensors.
+crate::kernels::fft::fft_axes_in_place	Mutates caller-owned complex tensor data. Aevia's axis FFT builtins transform a leased buffer and return an owned tensor.
+crate::kernels::fft::shift_axes_in_place	Reorders caller-owned slices of any Send element type. Aevia's FFT shift builtins return an owned tensor and apply this routine to its storage.
+crate::kernels::fft::rfft2	Supplies matrix extents and both axes to the real FFT kernel. Aevia's real FFT takes the tensor shape and explicit axes.
+crate::kernels::fft::rfftn	Selects every axis for the real FFT. Aevia exposes the same computation through its real FFT with all axes selected.
+crate::kernels::fft::irfft2	Supplies matrix extents and both axes to the inverse real FFT. Aevia's inverse real FFT keeps the output shape on its result tensor.
+crate::kernels::fft::irfftn	Selects every axis and returns only the inverse real FFT data buffer. Aevia's axis form preserves its shape independently.
+crate::kernels::fft::fftshift_nd	Clones a Rust slice and shifts every axis. Aevia's tensor FFT shift accepts the selected axes and preserves the shape.
+crate::kernels::fft::ifftshift_nd	Clones a Rust slice and undoes the shift along every axis. Aevia's inverse FFT shift also supports an explicit subset of axes.
+crate::kernels::simd::add_into_f64	Writes the sum of the common slice prefix into caller-owned real storage. Aevia tensor addition validates the entire shape and returns an owned result.
+crate::kernels::simd::sub_into_f64	Writes the difference of common slice prefixes to caller-owned real storage. Aevia tensor subtraction checks its argument shapes.
+crate::kernels::simd::hadamard_mul_into_f64	Writes common-prefix element products to a caller-owned slice. The tensor facade carries the shape and element dimensions of the product.
+crate::kernels::simd::scale_f64	Multiplies a borrowed real buffer in place; the language facade constructs its scaled result tensor.
+crate::kernels::simd::axpy_f64	Accumulates into borrowed destination storage, a Rust workspace primitive for solvers and transforms.
+crate::kernels::simd::axpby_f64	Overwrites borrowed destination storage with a linear combination over the common buffer prefix.
+crate::kernels::simd::complex_mul_into	Writes complex element products into caller-owned storage. The typed tensor facade returns an owned result with validated shape.
+crate::kernels::simd::complex_mul_conj_into	Writes a conjugate product into caller-owned storage for spectral and correlation work arrays.
+crate::kernels::simd::complex_mul_in_place	Overwrites a borrowed complex workspace with elementwise products.
+crate::kernels::simd::complex_scale_in_place	Scales a borrowed complex workspace, including FFT normalization buffers.
+crate::kernels::simd::complex_norm2_sq	Reduces squared complex magnitudes directly for Rust kernels with prevalidated scales.
+crate::kernels::simd::complex_dot_conj	Reduces conjugate products over a raw common slice prefix, with length and dimension validation owned by the enclosing kernel.
+crate::kernels::simd::dot_f64	Reduces products over the common prefix of raw Rust slices. The vector dot product separately validates lengths and units.
+crate::kernels::simd::norm2_sq_f64	Computes raw squares for kernels that select their own scaling. The Euclidean norm preserves finite results across the representable exponent range.
+crate::kernels::simd::l1_norm_f64	Implements the raw absolute-sum reduction used by the checked L1 norm facade.
+crate::kernels::simd::linf_norm_f64	Implements the raw maximum-magnitude reduction used by the checked infinity norm facade.
+crate::kernels::simd::min_max_f64	Returns both extrema of the same raw work slice for a kernel's internal scaling and validation.
+crate::kernels::simd::centered_stats_f64	Fuses centered slice reductions for statistics kernels, whose checked entry points choose the final estimator.
+crate::kernels::simd::sum_f64	Reduces a raw real slice used by numerical kernels. Language reductions preserve the input's representation and physical dimension.
+crate::kernels::wavelets::FrftPlan::new	Constructs a caller-owned spectral basis for repeated fractional Fourier transforms.
+crate::kernels::wavelets::FrftPlan::matrix	Reuses a caller-owned spectral basis to construct a fractional Fourier matrix. The numerical manifest also offers a one-shot matrix operator.
+crate::kernels::wavelets::FrftPlan::transform	Applies a caller-owned spectral basis to a complex signal. The numerical manifest also offers a one-shot transform operator.
+crate::kernels::OdeStepMode::adaptive	Constructs a Rust solver-control enum. Aevia numerical solver calls take explicit tolerances and limits.
+crate::kernels::OdeStepMode::fixed	Constructs a Rust solver-control enum. Aevia solver calls take explicit step controls.
+crate::kernels::OdeStepMode::to_ode_options	Converts one Rust solver-control type to another after selecting a time interval and state length.
+crate::kernels::dense::Lu::solve_into	Writes into a caller-owned mutable output buffer. Aevia's LU solve returns an owned result.
+crate::kernels::descriptive::mean	Used by Aevia's typed mean builtin, which applies the empty-tensor and representation rules.
+crate::kernels::descriptive::std_dev	Used by Aevia's typed std builtin, which preserves the sample dimension and exact roots when available.
+crate::kernels::descriptive::var	Used by Aevia's typed var builtin, which squares the sample dimension and preserves exact variance.
+crate::kernels::lowrank::lobpcg_generalized	Takes independent Rust output-slice callbacks for stiffness, mass, and optional preconditioning.
+crate::kernels::ode::OdeStepMode::adaptive	Re-exported Rust solver-control enum constructor.
+crate::kernels::ode::OdeStepMode::fixed	Re-exported Rust solver-control enum constructor.
+crate::kernels::ode::OdeStepMode::to_ode_options	Re-exported conversion between Rust solver-control types.
+crate::kernels::ode::solve_ode	Rust method dispatcher taking an in-place rate callback and typed solver controls. Aevia exposes method-specific calls with checked callbacks.
+crate::kernels::ode::solve_ode_events	Rust method dispatcher taking borrowed event callbacks together with an in-place rate callback.
+crate::kernels::ode_adaptive::dae_index1_adaptive	Rust semi-explicit DAE callback interface using host values and adaptive controls. Aevia exposes a dimensional index-one DAE adapter.
+crate::kernels::ode_adaptive::dae_index1_with	Chooses fixed or adaptive DAE control using Rust-native rate and constraint callbacks.
+crate::kernels::ode_adaptive::dde_rk4_adaptive	Rust delay callback uses borrowed state/history data. Aevia uses a checked history function.
+crate::kernels::ode_adaptive::dde_rk4_with	Chooses fixed or adaptive delay integration in the Rust callback API.
+crate::kernels::ode_adaptive::dopri5_fixed	Fixed-step entry point for an in-place Rust rate callback and fixed-step options.
+crate::kernels::ode_adaptive::leapfrog_adaptive	Rust leapfrog callback writes derivatives into caller-provided slices.
+crate::kernels::ode_adaptive::leapfrog_with	Chooses fixed or adaptive leapfrog for the Rust output-slice callback.
+crate::kernels::ode_adaptive::rosenbrock23_fixed	Fixed-step entry point accepting a Rust rate and Jacobian callback.
+crate::kernels::ode_adaptive::rosenbrock23_fixed_events	Fixed-step entry point accepting a borrowed Rust event list, rate and Jacobian.
+crate::kernels::ode_adaptive::yoshida4_adaptive	Fourth-order geometric composition in the Rust acceleration callback API.
+crate::kernels::ode_adaptive::yoshida4_with	Chooses fixed or adaptive Yoshida integration for the Rust acceleration callback.
+crate::kernels::ode_ext::etdrk4_adaptive	Rust callback interface accepting its native exponential-integration control and matrix representation.
+crate::kernels::ode_ext::etdrk4_diag_adaptive	Rust callback interface with a borrowed diagonal linear operator and numerical controls.
+crate::kernels::ode_ext::etdrk4_diag_with	Chooses fixed or adaptive ETDRK4 for the Rust diagonal callback interface.
+crate::kernels::ode_ext::etdrk4_with	Chooses fixed or adaptive ETDRK4 for the Rust matrix callback interface.
+crate::kernels::ode_ext::exprb32_fixed	Fixed-step Rust exponential Rosenbrock interface with native rate/Jacobian callbacks.
+crate::kernels::ode_ext::exprb32_with	Chooses fixed or adaptive exponential Rosenbrock for the Rust callback interface.
+crate::kernels::ode_ext::imex_rk_adaptive	Rust IMEX callback interface accepting its native tableau and adaptive controls.
+crate::kernels::ode_ext::imex_rk_step_mode	Chooses fixed or adaptive steps for native Rust IMEX callbacks.
+crate::kernels::ode_ext::symplectic_split_adaptive	Rust adaptive splitting interface accepting a native acceleration closure and method.
+crate::kernels::ode_ext::symplectic_split_with	Chooses fixed or adaptive symplectic splitting for the native Rust acceleration closure.
+crate::kernels::ode_geom::solve_dae_index1_fixed	Fixed-step semi-explicit DAE using Rust-native callbacks and state arrays.
+crate::kernels::ode_geom::solve_dae_index1_with	Rust method selection over the fixed and adaptive DAE callback interfaces.
+crate::kernels::ode_geom::solve_dde_fixed	Fixed-step delay integration using a Rust-native history callback.
+crate::kernels::ode_geom::solve_dde_with	Rust method selection over the fixed and adaptive delay callback interfaces.
+crate::kernels::ode_geom::solve_geometric	Rust dispatcher over geometric methods with borrowed callback data and step-mode enum.
+crate::kernels::ode_sdirk::sdirk3_fd_events	Rust SDIRK with finite-difference Jacobian and borrowed event callbacks.
+crate::kernels::ode_sdirk::sdirk3_fd_fixed_events	Rust fixed-step SDIRK with finite-difference Jacobian and borrowed event callbacks.
+crate::kernels::ode_stiff::bdf_fixed	Rust fixed-step BDF using an in-place rate callback.
+crate::kernels::ode_stiff::bdf_fixed_events	Rust fixed-step BDF using an in-place rate callback and borrowed event list.
+crate::kernels::ode_stiff::radau5_fixed_events	Rust fixed-step Radau using native rate/Jacobian callbacks and borrowed events.
+crate::kernels::solve_ode	Re-exported Rust dispatcher for typed controls and an in-place rate callback.
+crate::kernels::solve_ode_events	Re-exported Rust dispatcher for typed controls, an in-place rate callback and borrowed events.
+crate::kernels::error_correction::ReedSolomonEncoder::encode_into	Writes the codeword into caller-owned Rust storage. Aevia can reuse the same prepared feedback table through num_native_rs_encoder_encode, which returns an owned byte tensor.
+crate::kernels::matrix::Matrix<T>::transpose_into	Writes into a mutable caller-owned matrix whose shape is the transpose of the input. Aevia's num_matrix_float_transpose and num_matrix_real_transpose return owned matrices.
+crate::backend::Backend::compile_native	Implements a Rust executor hook over graph nodes for native arena compilation. Portable callers use num_backend_compile with a declared executor and bounded value arguments.
+crate::backend::Backend::native_program_budget	Declares the memory and instruction reservation of a Rust executor before the native object arena compiles it.
+crate::backend::Backend::selector	Implements a Rust executor identity hook. Portable callers use num_backend_current_name or num_backend_name to query the selected executor.
+crate::backend::Backend::uses_gpu	Identifies whether a Rust executor must run under the host GPU capability. The host checks it before allowing the source to select or compile with that executor.
+crate::backend::gpu_allowed	Checks the embedding thread’s effective GPU grant. Portable callers discover the devices available to them through num_backend_available.
+crate::backend::restrict_to_source	Installs a thread-local GPU ceiling for a source call on behalf of the embedding host. The returned Rust guard restores the enclosing authority on drop.
+crate::backend::Backend::retained_bytes	Lets the Rust backend report the memory it retains separately from individual compiled programs. Native objects use the bound when reserving storage for detached callbacks.
+crate::backend::Compiled::retained_bytes	Lets a Rust backend report the memory held by an individual compiled program. Detached acoustic callbacks use this bound as part of their native storage budget.
+crate::kernels::random::Categorical::heap_bytes	Reports Rust allocation capacity for the retained alias table. Aevia charges the table against the session storage budget and reports total retained bytes through num_native_usage.
+crate::sim::fem_triangles::PreparedTriangles::retained_bytes	Reports Rust allocation capacity for the prepared P1/P2 geometry. Aevia charges that capacity internally and reports the session total through num_native_usage.
+crate::sim::physics_bem::PreparedLaplaceBem3d::retained_bytes	Reports Rust allocation capacity for the retained dense factors and collocation operator. Aevia charges that capacity internally and reports the session total through num_native_usage.
+crate::sim::fmm::PreparedFmm2d::retained_bytes	Reports Rust allocation capacity for prepared FMM geometry and interactions. Aevia charges that capacity internally and reports the session total through num_native_usage.
+crate::sim::physics_cfd::compute_laplacian_into	Writes into caller-owned Rust storage. Aevia returns an owned measured grid through num_grid_legacy_compute_laplacian.
+crate::sim::physics_fea::BeamElement2D::global_stiffness_entries	Returns fixed-size Rust matrix storage. Aevia exposes the same coefficient calculation through num_grid_beam_global_stiffness_matrix with the beam's reference frame.
+crate::sim::integrators::symplectic_step_with_workspace	Updates borrowed Rust position, momentum and acceleration storage using a Rust callback. Aevia returns owned measured states through its Verlet and Yoshida operators.
+crate::sim::dg::DgAdvection1dPlan::step_into	Writes into caller-owned Rust nodal storage using a shared scratch lease. Aevia returns the same step as an owned measured vector through num_dg_advection_step_prepared1d.
+crate::kernels::vector::hadamard_mul_into	Writes the elementwise product into caller-owned Rust storage. num_vector_hadamard_mul calls the same kernel and returns an owned tensor.
+crate::kernels::vector::scale_in_place	Updates caller-owned Rust storage. num_scalar_mul uses the same SIMD scale kernel and returns an owned tensor.
+crate::kernels::vector::vec_add_into	Writes into caller-owned Rust storage. num_vector_add uses this kernel and returns an owned tensor.
+crate::kernels::vector::vec_sub_into	Writes into caller-owned Rust storage. num_vector_sub uses this kernel and returns an owned tensor.
+crate::kernels::vector::normalize_into	Writes the unit vector into caller-owned Rust storage. Aevia's num_normalize uses the same scaled normalization and returns an owned tensor.
+crate::sim::integrators::solve_symplectic	Rust symplectic dispatcher taking the simulator's mutable derivative callback.
+crate::sim::nbody::direct_field_into	Writes the direct N-body field into caller-owned storage. Aevia's dimension-specific direct-field operators return owned tensors.
+crate::sim::ns_mac::NsSolver::divergence_into	Writes a MAC divergence field into caller-owned storage. Aevia can request the owned divergence field or its measured scalar summary.
+crate::sim::pde_api::adaptive::solve_pde	Generic Rust controller over a supplied stepper and CFL callback. Aevia exposes checked PDE family adapters.
+crate::sim::pde_api::solve_pde	Re-exported generic Rust controller over a supplied stepper and CFL callback.
+crate::sim::spectral::PeriodicHelmholtzPlan::size	Reports the size of a caller-owned prepared symbol. Aevia can read the same point count through the Fourier grid size operator.
+crate::sim::spectral::PeriodicHelmholtzPlan::solve	Uses a caller-owned prepared symbol on one borrowed forcing. The Fourier Helmholtz operator reuses the same cached symbol for scalar solves.
+crate::sim::spectral::SpectralGrid::helmholtz_plan	Returns a Rust Arc over a prepared shifted symbol. The Fourier Helmholtz operators prepare or reuse that symbol internally.
+crate::kernels::special::multinomial	The Rust convenience wrapper preserves its panic contract for a malformed partition. The native value ABI delegates to checked_multinomial and surfaces a domain error.
+crate::kernels::signal::filtfilt	Preserves the unchecked Rust convenience contract. The numerical value ABI uses checked_filtfilt for the same filter with explicit domain errors.
+crate::kernels::finite_field::batch_inverse_into	Writes into the Rust caller's reusable vector. The value ABI uses the same algorithm through num_finite_field_batch_inverse_mod and returns an owned tensor.
+crate::kernels::mp::ball::Ball::map_monotone	Calls a Rust function that promises correct directed rounding and monotonicity on the interval. The typed multiprecision façade provides certified named interval operations and an explicit Lipschitz widening primitive.
+crate::kernels::mp::funcs::map	Calls a Rust function that promises outward point enclosures and monotonicity on the interval. Certified named interval operations share the same endpoint implementation.
+crate::kernels::cad::read_step_file	Reads the host filesystem. Aevia reads through its capability-checked read_file effect, then Rssn_Cad.read_step_text imports supported planar STEP solids into measured mesh handles. Language bindings supply the text via host file I/O.
+crate::kernels::cad::step::read_step_file	Reads the host filesystem. Aevia reads through its capability-checked read_file effect, then Rssn_Cad.read_step_text imports supported planar STEP solids into measured mesh handles. Language bindings supply the text via host file I/O.

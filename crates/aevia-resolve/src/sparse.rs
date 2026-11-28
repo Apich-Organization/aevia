@@ -99,20 +99,20 @@ pub struct SparseRecord {
 // A strict, minimal JSON reader.
 
 #[derive(Debug, Clone, PartialEq)]
-enum Json {
+enum Json<'source> {
     Null,
     Bool(bool),
-    Number(f64),
+    Number(&'source str),
     String(String),
-    Array(Vec<Json>),
-    Object(Vec<(String, Json)>),
+    Array(Vec<Self>),
+    Object(Vec<(String, Self)>),
 }
 
-impl Json {
+impl Json<'_> {
     fn get(
         &self,
         key: &str,
-    ) -> Option<&Json> {
+    ) -> Option<&Self> {
         match self {
             | Self::Object(fields) => {
                 fields
@@ -140,14 +140,14 @@ struct Reader<'a> {
 
 const MAX_DEPTH: usize = 32;
 
-impl Reader<'_> {
+impl<'source> Reader<'source> {
     fn skip_space(&mut self) {
         while self
             .bytes
             .get(self.position)
             .is_some_and(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
         {
-            self.position += 1;
+            self.position = self.position.saturating_add(1);
         }
     }
 
@@ -160,7 +160,7 @@ impl Reader<'_> {
         byte: u8,
     ) -> Result<(), String> {
         if self.peek() == Some(byte) {
-            self.position += 1;
+            self.position = self.position.saturating_add(1);
             Ok(())
         } else {
             Err(format!(
@@ -174,7 +174,7 @@ impl Reader<'_> {
     fn value(
         &mut self,
         depth: usize,
-    ) -> Result<Json, String> {
+    ) -> Result<Json<'source>, String> {
         if depth > MAX_DEPTH {
             return Err("nested too deeply".to_string());
         }
@@ -201,29 +201,70 @@ impl Reader<'_> {
     fn literal(
         &mut self,
         word: &str,
-        value: Json,
-    ) -> Result<Json, String> {
-        if self.bytes[self.position..].starts_with(word.as_bytes()) {
-            self.position += word.len();
+        value: Json<'source>,
+    ) -> Result<Json<'source>, String> {
+        if self
+            .bytes
+            .get(self.position..)
+            .is_some_and(|tail| tail.starts_with(word.as_bytes()))
+        {
+            self.position = self.position.saturating_add(word.len());
             Ok(value)
         } else {
             Err(format!("unexpected token at offset {}", self.position))
         }
     }
 
-    fn number(&mut self) -> Result<Json, String> {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "JSON numbers have a separate lexical grammar"
+    )]
+    fn number(&mut self) -> Result<Json<'source>, String> {
         let start = self.position;
-        while self
-            .peek()
-            .is_some_and(|byte| matches!(byte, b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9'))
-        {
-            self.position += 1;
+        if self.peek() == Some(b'-') {
+            self.position = self.position.saturating_add(1);
         }
-        let text = std::str::from_utf8(&self.bytes[start..self.position])
-            .map_err(|_| "invalid number".to_string())?;
-        text.parse::<f64>()
+        match self.peek() {
+            | Some(b'0') => self.position = self.position.saturating_add(1),
+            | Some(b'1'..=b'9') => {
+                self.digits();
+            },
+            | _ => return Err(format!("invalid number at offset {start}")),
+        }
+        if self.peek() == Some(b'.') {
+            self.position = self.position.saturating_add(1);
+            if !self.digits() {
+                return Err(format!(
+                    "missing fraction digits at offset {}",
+                    self.position
+                ));
+            }
+        }
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            self.position = self.position.saturating_add(1);
+            if matches!(self.peek(), Some(b'+' | b'-')) {
+                self.position = self.position.saturating_add(1);
+            }
+            if !self.digits() {
+                return Err(format!(
+                    "missing exponent digits at offset {}",
+                    self.position
+                ));
+            }
+        }
+        self.bytes
+            .get(start..self.position)
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
             .map(Json::Number)
-            .map_err(|_| format!("`{text}` is not a number"))
+            .ok_or_else(|| format!("invalid number at offset {start}"))
+    }
+
+    fn digits(&mut self) -> bool {
+        let start = self.position;
+        while matches!(self.peek(), Some(b'0'..=b'9')) {
+            self.position = self.position.saturating_add(1);
+        }
+        self.position > start
     }
 
     fn string(&mut self) -> Result<String, String> {
@@ -233,14 +274,14 @@ impl Reader<'_> {
             let Some(byte) = self.peek() else {
                 return Err("unterminated string".to_string());
             };
-            self.position += 1;
+            self.position = self.position.saturating_add(1);
             match byte {
                 | b'"' => break,
                 | b'\\' => {
                     let Some(escape) = self.peek() else {
                         return Err("unterminated escape".to_string());
                     };
-                    self.position += 1;
+                    self.position = self.position.saturating_add(1);
                     match escape {
                         | b'"' => out.push(b'"'),
                         | b'\\' => out.push(b'\\'),
@@ -254,13 +295,18 @@ impl Reader<'_> {
                             let first = self.hex4()?;
                             let code = if (0xD800..0xDC00).contains(&first) {
                                 // A high surrogate must be followed by a low one.
-                                if self.bytes[self.position..].starts_with(b"\\u") {
-                                    self.position += 2;
+                                if self
+                                    .bytes
+                                    .get(self.position..)
+                                    .is_some_and(|tail| tail.starts_with(b"\\u"))
+                                {
+                                    self.position = self.position.saturating_add(2);
                                     let second = self.hex4()?;
                                     if !(0xDC00..0xE000).contains(&second) {
                                         return Err("invalid surrogate pair".to_string());
                                     }
-                                    0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00)
+                                    0x1_0000_u32
+                                        .saturating_add(((first & 0x3ff) << 10) | (second & 0x3ff))
                                 } else {
                                     return Err("lone surrogate".to_string());
                                 }
@@ -287,7 +333,7 @@ impl Reader<'_> {
     }
 
     fn hex4(&mut self) -> Result<u32, String> {
-        let end = self.position + 4;
+        let end = self.position.saturating_add(4);
         let slice = self
             .bytes
             .get(self.position..end)
@@ -301,21 +347,21 @@ impl Reader<'_> {
     fn array(
         &mut self,
         depth: usize,
-    ) -> Result<Json, String> {
+    ) -> Result<Json<'source>, String> {
         self.expect(b'[')?;
         let mut items = Vec::new();
         self.skip_space();
         if self.peek() == Some(b']') {
-            self.position += 1;
+            self.position = self.position.saturating_add(1);
             return Ok(Json::Array(items));
         }
         loop {
-            items.push(self.value(depth + 1)?);
+            items.push(self.value(depth.saturating_add(1))?);
             self.skip_space();
             match self.peek() {
-                | Some(b',') => self.position += 1,
+                | Some(b',') => self.position = self.position.saturating_add(1),
                 | Some(b']') => {
-                    self.position += 1;
+                    self.position = self.position.saturating_add(1);
                     return Ok(Json::Array(items));
                 },
                 | _ => return Err(format!("expected `,` or `]` at offset {}", self.position)),
@@ -326,12 +372,12 @@ impl Reader<'_> {
     fn object(
         &mut self,
         depth: usize,
-    ) -> Result<Json, String> {
+    ) -> Result<Json<'source>, String> {
         self.expect(b'{')?;
         let mut fields = Vec::new();
         self.skip_space();
         if self.peek() == Some(b'}') {
-            self.position += 1;
+            self.position = self.position.saturating_add(1);
             return Ok(Json::Object(fields));
         }
         loop {
@@ -339,13 +385,13 @@ impl Reader<'_> {
             let key = self.string()?;
             self.skip_space();
             self.expect(b':')?;
-            let value = self.value(depth + 1)?;
+            let value = self.value(depth.saturating_add(1))?;
             fields.push((key, value));
             self.skip_space();
             match self.peek() {
-                | Some(b',') => self.position += 1,
+                | Some(b',') => self.position = self.position.saturating_add(1),
                 | Some(b'}') => {
-                    self.position += 1;
+                    self.position = self.position.saturating_add(1);
                     return Ok(Json::Object(fields));
                 },
                 | _ => return Err(format!("expected `,` or `}}` at offset {}", self.position)),
@@ -354,7 +400,11 @@ impl Reader<'_> {
     }
 }
 
-fn parse_json(line: &str) -> Result<Json, String> {
+#[allow(
+    clippy::single_call_fn,
+    reason = "frame validation and record fields are independent"
+)]
+fn parse_json(line: &str) -> Result<Json<'_>, String> {
     let mut reader = Reader {
         bytes: line.as_bytes(),
         position: 0,
@@ -390,7 +440,7 @@ fn record_from(
             message,
         }
     };
-    let json = parse_json(line).map_err(&fail)?;
+    let json = parse_json(line).map_err(fail)?;
     if !matches!(json, Json::Object(_)) {
         return Err(fail("a record is a JSON object".to_string()));
     }
@@ -434,9 +484,7 @@ fn record_from(
     }
     let yanked = matches!(json.get("yanked"), Some(Json::Bool(true)));
     let size = match json.get("size") {
-        | Some(Json::Number(number)) if *number >= 0.0 && number.fract() == 0.0 => {
-            Some(*number as u64)
-        },
+        | Some(Json::Number(number)) => unsigned_integer(number),
         | _ => None,
     };
     let signature = json.get("signature").and_then(|signature| {
@@ -457,32 +505,63 @@ fn record_from(
     })
 }
 
-/// Parses a whole index file. A later record for the same version replaces an
-/// earlier one (a yank rewrites only the flag of the record it applies to, but
-/// a client must not break if a mirror appends instead). Blank lines are
-/// skipped. The result is sorted by version.
+/// Interprets an already validated JSON number as an exact byte count.
+#[allow(
+    clippy::single_call_fn,
+    reason = "byte counts need exact conversion independently of JSON tokenization"
+)]
+fn unsigned_integer(source: &str) -> Option<u64> {
+    if let Ok(value) = source.parse() {
+        return Some(value);
+    }
+    let (number, negative) = source
+        .strip_prefix('-')
+        .map_or((source, false), |n| (n, true));
+    let (significand, exponent) = number.split_once(['e', 'E']).unwrap_or((number, "0"));
+    let (whole, fraction) = significand.split_once('.').unwrap_or((significand, ""));
+    let digits = format!("{whole}{fraction}");
+    let digits = digits.trim_start_matches('0');
+    if digits.is_empty() {
+        return Some(0);
+    }
+    if negative {
+        return None;
+    }
+    let places = exponent
+        .parse::<i64>()
+        .ok()?
+        .checked_sub(i64::try_from(fraction.len()).ok()?)?;
+    if let Ok(power) = u32::try_from(places) {
+        return digits
+            .parse::<u64>()
+            .ok()?
+            .checked_mul(10_u64.checked_pow(power)?);
+    }
+    let end = digits
+        .len()
+        .checked_sub(usize::try_from(places.unsigned_abs()).ok()?)?;
+    let (whole, fraction) = digits.split_at_checked(end)?;
+    fraction.bytes().all(|byte| byte == b'0').then_some(())?;
+    whole.parse().ok()
+}
+
+/// Parses an index file in ascending version order.
+///
+/// For a repeated version, the last record wins. Blank lines are skipped.
 ///
 /// # Errors
 ///
 /// The first malformed line.
 pub fn parse_text(text: &str) -> Result<Vec<SparseRecord>, SparseError> {
-    let mut records: Vec<SparseRecord> = Vec::new();
+    let mut records = BTreeMap::new();
     for (position, line) in text.lines().enumerate() {
         let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let record = record_from(line, position + 1)?;
-        match records
-            .iter_mut()
-            .find(|held| held.version == record.version)
-        {
-            | Some(held) => *held = record,
-            | None => records.push(record),
+        if !line.is_empty() {
+            let record = record_from(line, position.saturating_add(1))?;
+            records.insert(record.version.clone(), record);
         }
     }
-    records.sort_by(|left, right| left.version.cmp(&right.version));
-    Ok(records)
+    Ok(records.into_values().collect())
 }
 
 /// Many packages' index records, answering the resolver.
@@ -513,26 +592,30 @@ impl SparseIndex {
         Ok(())
     }
 
-    /// Adds (or replaces) one package's parsed records.
+    /// Adds (or replaces) one package's parsed records. Records with the same
+    /// version keep their input order.
     pub fn insert_records(
         &mut self,
         package: &str,
-        records: Vec<SparseRecord>,
+        mut records: Vec<SparseRecord>,
     ) {
+        records.sort_by(|left, right| left.version.cmp(&right.version));
         self.packages.insert(package.to_ascii_lowercase(), records);
     }
 
-    /// The record of one version.
+    /// The record of one exact version, including its build metadata. For
+    /// duplicate records supplied by [`Self::insert_records`], returns the first.
     #[must_use]
     pub fn record(
         &self,
         package: &str,
         version: &Version,
     ) -> Option<&SparseRecord> {
-        self.packages
-            .get(&package.to_ascii_lowercase())?
-            .iter()
-            .find(|record| &record.version == version)
+        let records = self.records(package)?;
+        let first = records.partition_point(|record| &record.version < version);
+        records
+            .get(first)
+            .filter(|record| &record.version == version)
     }
 
     /// All records of a package, ascending.
@@ -541,9 +624,12 @@ impl SparseIndex {
         &self,
         package: &str,
     ) -> Option<&[SparseRecord]> {
-        self.packages
-            .get(&package.to_ascii_lowercase())
-            .map(Vec::as_slice)
+        let records = if package.bytes().any(|byte| byte.is_ascii_uppercase()) {
+            self.packages.get(&package.to_ascii_lowercase())
+        } else {
+            self.packages.get(package)
+        };
+        records.map(Vec::as_slice)
     }
 
     /// The package keys held, sorted.
@@ -558,8 +644,7 @@ impl Index for SparseIndex {
         package: &str,
     ) -> Result<Vec<Summary>, IndexError> {
         let records = self
-            .packages
-            .get(&package.to_ascii_lowercase())
+            .records(package)
             .ok_or_else(|| IndexError::missing(package))?;
         Ok(records
             .iter()
@@ -662,6 +747,30 @@ mod tests {
     }
 
     #[test]
+    fn artifact_sizes_are_exact_and_json_numbers_are_strict() {
+        for (number, expected) in [
+            ("9007199254740993", Some(9_007_199_254_740_993)),
+            ("18446744073709551615", Some(u64::MAX)),
+            ("184467440737095516150e-1", Some(u64::MAX)),
+            ("18446744073709551616", None),
+            ("1e999", None),
+            ("1.3e2", Some(130)),
+            ("1.3e-2", None),
+        ] {
+            let line = format!(r#"{{"name":"o/a","vers":"1.0.0","cksum":"x","size":{number}}}"#);
+            assert_eq!(
+                parse_line(&line).expect("valid JSON").size,
+                expected,
+                "{number}"
+            );
+        }
+        for number in ["01", "1.", "-.1", "5e", "1e+"] {
+            let line = format!(r#"{{"name":"o/a","vers":"1.0.0","cksum":"x","size":{number}}}"#);
+            assert!(parse_line(&line).is_err(), "invalid JSON number: {number}");
+        }
+    }
+
+    #[test]
     fn json_nesting_is_bounded() {
         let deep = format!("{}1{}", "[".repeat(100), "]".repeat(100));
         assert!(parse_json(&deep).is_err());
@@ -676,6 +785,62 @@ mod tests {
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].version, Version::new(1, 0, 0));
         assert!(records[1].yanked);
+    }
+
+    #[test]
+    fn parsed_catalogue_keeps_the_first_exact_record_for_a_locked_build() {
+        let record = |version, checksum, yanked| {
+            parse_line(&format!(
+                r#"{{"name":"o/a","vers":"{version}","cksum":"{checksum}","yanked":{yanked}}}"#
+            ))
+            .expect("valid record")
+        };
+        let locked = Version::parse("1.0.0+ci").expect("lock version");
+        let mut index = SparseIndex::new();
+        index.insert_records(
+            "O/A",
+            vec![
+                record("1.0.0+next", "sha256:next", false),
+                record("1.0.0+ci", "sha256:locked", true),
+                record("1.0.0-rc.1", "sha256:prerelease", false),
+                record("1.0.0+ci", "sha256:duplicate", false),
+                record("1.0.0", "sha256:release", false),
+            ],
+        );
+        let versions: Vec<_> = index
+            .records("o/a")
+            .expect("catalogue")
+            .iter()
+            .map(|record| record.version.to_string())
+            .collect();
+        assert_eq!(
+            versions,
+            ["1.0.0-rc.1", "1.0.0", "1.0.0+ci", "1.0.0+ci", "1.0.0+next"]
+        );
+        assert!(
+            index
+                .record("o/a", &Version::parse("1.0.0+missing").unwrap())
+                .is_none()
+        );
+
+        let roots = [Root {
+            id: "app".into(),
+            dependencies: vec![Dependency::new("o/a", VersionReq::parse("^1").unwrap())],
+        }];
+        let mut options = Options::default();
+        options
+            .locked
+            .entry("o/a".into())
+            .or_default()
+            .insert(locked.clone());
+        let resolution = resolve(&roots, &index, &options).expect("yanked build stays locked");
+        let selected = &resolution.packages[0].version;
+        assert_eq!(selected, &locked);
+        let metadata = index
+            .record("O/a", selected)
+            .expect("metadata for the exact build");
+        assert_eq!(metadata.checksum, "sha256:locked");
+        assert!(metadata.yanked);
     }
 
     #[test]

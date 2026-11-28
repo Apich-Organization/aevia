@@ -1,0 +1,193 @@
+{
+  "name": "aevia",
+  "displayName": "Aevia",
+  "description": "Edit, run, test, and debug Aevia programs and use the interactive Aevia REPL.",
+  "version": "0.1.0",
+  "publisher": "apich",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "https://github.com/Apich-Organization/aevia" },
+  "engines": { "vscode": "^1.82.0" },
+  "categories": ["Programming Languages", "Formatters", "Linters"],
+  "keywords": ["aevia", "units", "dimensions", "scientific computing"],
+  "main": "./extension.js",
+  "extensionKind": ["workspace"],
+  "activationEvents": ["onDebugResolve:aevia", "onDebugInitialConfigurations"],
+  "capabilities": {
+    "untrustedWorkspaces": { "supported": false },
+    "virtualWorkspaces": { "supported": false }
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "aevia",
+        "aliases": ["Aevia", "aevia"],
+        "extensions": [".aev"],
+        "firstLine": "^#!.*\\baevia\\b",
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      { "language": "aevia", "scopeName": "source.aevia", "path": "./syntaxes/aevia.tmLanguage.json" }
+    ],
+    "semanticTokenTypes": [
+      { "id": "dimension", "superType": "type", "description": "A physical dimension (L, T, M, ...)." },
+      { "id": "unit", "superType": "type", "description": "A unit of measure." }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "aevia",
+        "scopes": {
+          "dimension": ["entity.name.type.dimension.aevia", "storage.type.aevia"],
+          "unit": ["constant.other.unit.aevia"],
+          "operator": ["keyword.operator.aevia"]
+        }
+      }
+    ],
+    "configuration": {
+      "title": "Aevia",
+      "properties": {
+        "aevia.server.path": {
+          "type": "string",
+          "scope": "machine",
+          "default": "",
+          "markdownDescription": "Path to the `aevia-lsp` executable. Empty: look for `aevia-lsp` on `PATH`, then fall back to `aevia lsp`."
+        },
+        "aevia.server.args": {
+          "type": "array",
+          "scope": "machine",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra arguments passed to the server (the transport is always stdio)."
+        },
+        "aevia.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Trace the communication between VS Code and the language server."
+        },
+        "aevia.cli.path": {
+          "type": "string",
+          "scope": "machine",
+          "default": "",
+          "markdownDescription": "Path to the `aevia` CLI used for running, testing, debugging, and the REPL. Leave empty to find it on `PATH` or beside the language server."
+        }
+      }
+    },
+    "commands": [
+      { "command": "aevia.runCurrentFile", "title": "Aevia: Run Current File", "icon": "$(play)" },
+      { "command": "aevia.testCurrentFile", "title": "Aevia: Test Current File", "icon": "$(beaker)" },
+      { "command": "aevia.debugFile", "title": "Aevia: Debug Current File", "icon": "$(debug-alt)" },
+      { "command": "aevia.openRepl", "title": "Aevia: Open REPL", "icon": "$(terminal)" },
+      { "command": "aevia.restartServer", "title": "Aevia: Restart Language Server" },
+      { "command": "aevia.showServerLog", "title": "Aevia: Show Language Server Log" }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "aevia.runCurrentFile",
+          "when": "editorLangId == aevia",
+          "group": "navigation"
+        },
+        {
+          "command": "aevia.testCurrentFile",
+          "when": "editorLangId == aevia",
+          "group": "navigation"
+        },
+        {
+          "command": "aevia.debugFile",
+          "when": "editorLangId == aevia",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "aevia.runCurrentFile",
+          "when": "editorLangId == aevia",
+          "group": "1_modification"
+        },
+        {
+          "command": "aevia.testCurrentFile",
+          "when": "editorLangId == aevia",
+          "group": "1_modification"
+        },
+        {
+          "command": "aevia.openRepl",
+          "when": "editorLangId == aevia",
+          "group": "1_modification"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "aevia.runCurrentFile",
+        "key": "ctrl+alt+r",
+        "mac": "cmd+alt+r",
+        "when": "editorLangId == aevia"
+      },
+      {
+        "command": "aevia.testCurrentFile",
+        "key": "ctrl+alt+t",
+        "mac": "cmd+alt+t",
+        "when": "editorLangId == aevia"
+      }
+    ],
+    "breakpoints": [{ "language": "aevia" }],
+    "debuggers": [
+      {
+        "type": "aevia",
+        "label": "Aevia",
+        "languages": ["aevia"],
+        "configurationAttributes": {
+          "launch": {
+            "required": ["program"],
+            "properties": {
+              "program": { "type": "string", "description": "Path to the Aevia source that defines main." },
+              "cwd": { "type": "string", "description": "Program working directory. Defaults to the package or source directory." },
+              "args": { "type": "array", "items": { "type": "string" }, "description": "Arguments supplied to the Aevia program." },
+              "stdin": { "type": "array", "items": { "type": "string" }, "description": "Input lines for IO.read_line and IO.input." },
+              "stopOnEntry": { "type": "boolean", "default": false, "description": "Pause at the first executed Aevia expression." }
+            }
+          }
+        },
+        "initialConfigurations": [
+          { "type": "aevia", "request": "launch", "name": "Debug Aevia File", "program": "${file}", "args": [] }
+        ]
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "aevia",
+        "required": ["subcommand", "file"],
+        "properties": {
+          "subcommand": { "type": "string", "enum": ["run", "test"], "description": "Aevia CLI operation." },
+          "file": { "type": "string", "description": "Path to the program or test file." },
+          "filter": { "type": "string", "description": "Exact source test name." }
+        }
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "aevia",
+        "owner": "aevia-task",
+        "source": "aevia",
+        "fileLocation": "absolute",
+        "pattern": [
+          { "regexp": "^(error|warning|info)\\[([^\\]]+)\\]: (.+)$", "severity": 1, "code": 2, "message": 3 },
+          { "regexp": "^\\s+--> (.+):(\\d+):(\\d+)$", "file": 1, "line": 2, "column": 3 }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "package": "vsce package",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "vscode-languageclient": "9.0.1"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "3.2.1",
+    "vscode-oniguruma": "1.7.0",
+    "vscode-textmate": "9.0.0"
+  }
+}

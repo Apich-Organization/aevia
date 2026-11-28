@@ -3,6 +3,21 @@
 //! This never infers a nominal identity from a kernel tag or from a variable
 //! annotation. Only checked constructors and checked tensor creation can mint
 //! the corresponding private evidence.
+
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unwrap_used
+    )
+)]
 use crate::value::HostWitness;
 use crate::value::HostWitnessNode;
 use crate::value::NumKind;
@@ -10,11 +25,13 @@ use crate::value::Storage;
 use crate::value::TensorData;
 use crate::value::Value;
 use aevia_types::Rep;
+use aevia_types::Row;
 use aevia_types::Type;
 use aevia_types::adt;
 use std::collections::HashMap;
 
-pub(crate) fn concrete(ty: &Type) -> bool {
+/// Whether a schema has no unresolved parameters or intrinsic markers.
+pub fn concrete(ty: &Type) -> bool {
     !matches!(
         ty,
         Type::Error
@@ -28,7 +45,11 @@ pub(crate) fn concrete(ty: &Type) -> bool {
 }
 
 /// Instantiate the immutable registered constructor's field templates.
-pub(crate) fn constructor_fields(
+#[allow(
+    clippy::single_call_fn,
+    reason = "takes a registry snapshot and substitutes checked constructor field types"
+)]
+pub fn constructor_fields(
     adt_id: adt::AdtId,
     index: usize,
     args: &[Type],
@@ -62,7 +83,7 @@ pub(crate) fn constructor_fields(
 /// Check a value against concrete source evidence and retain recursive origin.
 /// `new_constructor` is true only for the result of an authenticated source
 /// constructor call; it never applies to arbitrary values read from a scope.
-pub(crate) fn capture(
+pub fn capture(
     value: &Value,
     schema: &Type,
     new_constructor: bool,
@@ -71,16 +92,19 @@ pub(crate) fn capture(
         return None;
     }
     let node = match (value, schema) {
+        | (Value::KernelError(_), ty) if *ty == aevia_types::builtins::op_error_type() => {
+            // The opaque payload has an exact runtime type. The wire encoder
+            // still controls whether an error can cross the kernel boundary.
+            HostWitnessNode::Scalar
+        },
+        | (Value::KernelValue(v), ty)
+            if aevia_types::adt::is_native_ad_var_type(ty)
+                && crate::value::is_native_ad_var_payload(&v.payload) =>
+        {
+            HostWitnessNode::Scalar
+        },
         | (Value::Num(number), Type::Scalar(rep, dim)) => {
-            let matches = matches!(
-                (&number.kind, rep),
-                (NumKind::Int(_), Rep::Int | Rep::Real)
-                    | (NumKind::Exact(_), Rep::Real)
-                    | (NumKind::Float(_), Rep::Float)
-                    | (NumKind::Complex(..), Rep::Complex)
-                    | (NumKind::Sym(_), Rep::Real)
-            );
-            if !matches || &number.dim != dim {
+            if &number.dim != dim || !scalar_rep_matches(&number.kind, *rep) {
                 return None;
             }
             HostWitnessNode::Scalar
@@ -162,7 +186,7 @@ pub(crate) fn capture(
 /// runtime itself contributes: the schema is concrete, and the value is the
 /// checked constructor of that type. A deep [`capture`] here made building a
 /// list quadratic.
-pub(crate) fn checked_constructor_result(
+pub fn checked_constructor_result(
     value: &Value,
     schema: &Type,
 ) -> bool {
@@ -174,7 +198,7 @@ pub(crate) fn checked_constructor_result(
 
 /// Verify tensor contents before minting element-schema evidence. The caller
 /// may declare an empty boxed schema only at authenticated construction.
-pub(crate) fn tensor_witnesses(
+pub fn tensor_witnesses(
     tensor: &TensorData,
     shape: &aevia_types::Shape,
     elem: &Type,
@@ -182,11 +206,7 @@ pub(crate) fn tensor_witnesses(
 ) -> Option<Vec<HostWitness>> {
     if !concrete(elem)
         || tensor.shape.len() != shape.rank() as usize
-        || tensor
-            .shape
-            .iter()
-            .try_fold(1usize, |a, b| a.checked_mul(*b))
-            != Some(tensor.storage.len())
+        || tensor.checked_element_count() != Some(tensor.storage.len())
     {
         return None;
     }
@@ -209,11 +229,29 @@ pub(crate) fn tensor_witnesses(
     {
         return None;
     }
-    // Homogeneous primitive elements need no per-element origin objects: the
-    // payload and the independently stored dimension witness validate them.
+    // Homogeneous primitive elements need no per-element origin objects. For
+    // contiguous primitive buffers their storage and dimension are sufficient.
+    match (&tensor.storage, elem) {
+        | (_, Type::Scalar(Rep::Float, _)) if tensor.dense().is_some() => return Some(Vec::new()),
+        | (Storage::Bool(_), Type::Bool)
+        | (
+            Storage::Exact(_) | Storage::TypedExact(_, crate::value::ExactRep::Real),
+            Type::Scalar(Rep::Real, _),
+        ) => return Some(Vec::new()),
+        | (
+            Storage::TypedExact(values, crate::value::ExactRep::Int),
+            Type::Scalar(Rep::Int | Rep::Real, _),
+        ) => {
+            return values
+                .iter()
+                .all(num_rational::Ratio::is_integer)
+                .then(Vec::new);
+        },
+        | _ => {},
+    }
     if is_leaf_schema(elem) {
-        for i in 0..tensor.storage.len() {
-            if !leaf_matches(&tensor.get_flat(i)?, elem) {
+        for index in 0..tensor.storage.len() {
+            if !leaf_matches(&tensor.get_flat(index)?, elem) {
                 return None;
             }
         }
@@ -226,25 +264,22 @@ pub(crate) fn tensor_witnesses(
     Some(items)
 }
 
-pub(crate) fn is_leaf_schema(ty: &Type) -> bool {
+/// Whether primitive tensor data can be validated without origin objects.
+pub const fn is_leaf_schema(ty: &Type) -> bool {
     matches!(ty, Type::Scalar(..) | Type::Bool | Type::Str | Type::Unit)
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "validates boxed or strided primitive elements without minting witness objects"
+)]
 fn leaf_matches(
     value: &Value,
     ty: &Type,
 ) -> bool {
     match (value, ty) {
         | (Value::Num(number), Type::Scalar(rep, dim)) => {
-            &number.dim == dim
-                && matches!(
-                    (&number.kind, rep),
-                    (NumKind::Int(_), Rep::Int | Rep::Real)
-                        | (NumKind::Exact(_), Rep::Real)
-                        | (NumKind::Float(_), Rep::Float)
-                        | (NumKind::Complex(..), Rep::Complex)
-                        | (NumKind::Sym(_), Rep::Real)
-                )
+            &number.dim == dim && scalar_rep_matches(&number.kind, *rep)
         },
         | (Value::Bool(_), Type::Bool) | (Value::Str(_), Type::Str) | (Value::Unit, Type::Unit) => {
             true
@@ -253,6 +288,23 @@ fn leaf_matches(
     }
 }
 
+const fn scalar_rep_matches(
+    kind: &NumKind,
+    rep: Rep,
+) -> bool {
+    matches!(
+        (kind, rep),
+        (NumKind::Int(_), Rep::Int | Rep::Real)
+            | (NumKind::Exact(_) | NumKind::Sym(_), Rep::Real)
+            | (NumKind::Float(_), Rep::Float)
+            | (NumKind::Complex(..), Rep::Complex)
+    )
+}
+
+#[allow(
+    clippy::single_call_fn,
+    reason = "empty storage must carry enough schema evidence in its own right"
+)]
 fn empty_tensor_has_schema(
     tensor: &TensorData,
     elem: &Type,
@@ -265,12 +317,8 @@ fn empty_tensor_has_schema(
         return true;
     }
     match (tensor.storage.backing(), elem) {
-        | (Storage::Dense(_) | Storage::View(_), Type::Scalar(Rep::Float, dim)) => {
-            &tensor.dim == dim
-        },
-        | (Storage::TypedExact(_, crate::value::ExactRep::Int), Type::Scalar(Rep::Int, dim)) => {
-            &tensor.dim == dim
-        },
+        | (Storage::Dense(_) | Storage::View(_), Type::Scalar(Rep::Float, dim))
+        | (Storage::TypedExact(_, crate::value::ExactRep::Int), Type::Scalar(Rep::Int, dim))
         | (
             Storage::TypedExact(_, crate::value::ExactRep::Real) | Storage::Exact(_),
             Type::Scalar(Rep::Real, dim),
@@ -282,13 +330,10 @@ fn empty_tensor_has_schema(
 
 /// Compare exact schema identity, including nested nominal arguments. No
 /// numeric promotion or rank widening is permitted inside nominal type args.
-pub(crate) fn strict_schema_equal(
+pub fn strict_schema_equal(
     a: &Type,
     b: &Type,
 ) -> bool {
-    if a == b {
-        return true;
-    }
     match (a, b) {
         | (Type::Adt(a, xs), Type::Adt(b, ys)) => {
             adt::same_type(*a, *b)
@@ -298,53 +343,17 @@ pub(crate) fn strict_schema_equal(
         | (Type::Tensor { shape: a, elem: x }, Type::Tensor { shape: b, elem: y }) => {
             a == b && strict_schema_equal(x, y)
         },
-        | (Type::Record(a), Type::Record(b)) => {
-            let mut count_a = 0usize;
-            let mut cursor = a;
-            loop {
-                match cursor {
-                    | aevia_types::Row::Empty => break,
-                    | aevia_types::Row::Var(_) => return false,
-                    | aevia_types::Row::Extend { label, ty, tail } => {
-                        if !b
-                            .field(label)
-                            .is_some_and(|other| strict_schema_equal(ty, other))
-                        {
-                            return false;
-                        }
-                        count_a += 1;
-                        cursor = tail;
-                    },
-                }
-            }
-            let mut count_b = 0usize;
-            let mut cursor = b;
-            loop {
-                match cursor {
-                    | aevia_types::Row::Empty => break,
-                    | aevia_types::Row::Var(_) => return false,
-                    | aevia_types::Row::Extend { tail, .. } => {
-                        count_b += 1;
-                        cursor = tail;
-                    },
-                }
-            }
-            count_a == count_b
-        },
-        | _ => false,
+        | (Type::Record(a), Type::Record(b)) => closed_record_matches(a, b, strict_schema_equal),
+        | _ => a == b,
     }
 }
 
 /// Whether a verified source schema can satisfy an expected conversion schema.
 /// Runtime tensor extents are checked separately against the payload.
-pub(crate) fn schema_compatible(
+pub fn schema_compatible(
     source: &Type,
     expected: &Type,
 ) -> bool {
-    use aevia_types::Row;
-    if source == expected {
-        return true;
-    }
     match (source, expected) {
         | (Type::Scalar(Rep::Int, a), Type::Scalar(Rep::Real, b)) => a == b,
         | (Type::Tensor { shape: a, elem: x }, Type::Tensor { shape: b, elem: y }) => {
@@ -355,42 +364,40 @@ pub(crate) fn schema_compatible(
                 && xs.len() == ys.len()
                 && xs.iter().zip(ys).all(|(a, b)| strict_schema_equal(a, b))
         },
-        | (Type::Record(a), Type::Record(b)) => {
-            fn count(row: &Row) -> Option<usize> {
-                match row {
-                    | Row::Empty => Some(0),
-                    | Row::Var(_) => None,
-                    | Row::Extend { tail, .. } => Some(1 + count(tail)?),
-                }
-            }
-            if count(a).is_none() || count(a) != count(b) {
-                return false;
-            }
-            let mut cursor = a;
-            loop {
-                match cursor {
-                    | Row::Empty => return true,
-                    | Row::Var(_) => return false,
-                    | Row::Extend { label, ty, tail } => {
-                        if !b
-                            .field(label)
-                            .is_some_and(|expected| schema_compatible(ty, expected))
-                        {
-                            return false;
-                        }
-                        cursor = tail;
-                    },
-                }
-            }
-        },
-        | _ => false,
+        | (Type::Record(a), Type::Record(b)) => closed_record_matches(a, b, schema_compatible),
+        | _ => source == expected,
     }
+}
+
+/// Compare closed row labels and field types independently of declaration order.
+fn closed_record_matches(
+    mut left: &Row,
+    mut right: &Row,
+    field_matches: fn(&Type, &Type) -> bool,
+) -> bool {
+    let mut fields = HashMap::<&str, &Type>::new();
+    while let Row::Extend { label, ty, tail } = right {
+        if fields.insert(label, ty).is_some() {
+            return false;
+        }
+        right = tail;
+    }
+    while let Row::Extend { label, ty, tail } = left {
+        if !fields
+            .remove(label.as_str())
+            .is_some_and(|expected| field_matches(ty, expected))
+        {
+            return false;
+        }
+        left = tail;
+    }
+    matches!((left, right), (Row::Empty, Row::Empty)) && fields.is_empty()
 }
 
 /// Preserve an element schema only across an operation that preserves every
 /// element. Both the source and the produced tensor are revalidated, because
 /// host code may have changed public tensor fields after construction.
-pub(crate) fn preserve_tensor_schema(
+pub fn preserve_tensor_schema(
     mut output: Value,
     source: &TensorData,
 ) -> Value {
@@ -423,8 +430,11 @@ pub(crate) fn preserve_tensor_schema(
 
 /// Recover only schema facts already carried by a runtime value itself. This
 /// is safe for plain host/HOF apply because it does not consult a call span.
-pub(crate) fn runtime_schema(value: &Value) -> Option<Type> {
+pub fn runtime_schema(value: &Value) -> Option<Type> {
     match value {
+        | Value::KernelValue(v) if crate::value::is_native_ad_var_payload(&v.payload) => {
+            Some(aevia_types::adt::native_ad_var_type())
+        },
         | Value::Num(number) => {
             let rep = match &number.kind {
                 | NumKind::Int(_) => Rep::Int,
@@ -454,5 +464,30 @@ pub(crate) fn runtime_schema(value: &Value) -> Option<Type> {
             Some(Type::Record(aevia_types::Row::closed(fields)))
         },
         | _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closed_schema_compares_labels_without_accepting_duplicates() {
+        let row = |names: &[&str]| {
+            Type::Record(names.iter().rev().fold(Row::Empty, |tail, name| {
+                Row::Extend {
+                    label: (*name).to_owned(),
+                    ty: Box::new(Type::int()),
+                    tail: Box::new(tail),
+                }
+            }))
+        };
+        let one = row(&["left", "right"]);
+        let reordered = row(&["right", "left"]);
+        let duplicate = row(&["left", "left"]);
+        assert!(strict_schema_equal(&one, &reordered));
+        assert!(schema_compatible(&one, &reordered));
+        assert!(!strict_schema_equal(&duplicate, &one));
+        assert!(!schema_compatible(&duplicate, &duplicate));
     }
 }

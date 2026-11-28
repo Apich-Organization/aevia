@@ -8,8 +8,10 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = []
+default = ["jit", "gpu-wgpu", "npy"]
 jit = ["aevia-rssn/jit"]
+gpu-wgpu = ["aevia-rssn/gpu-wgpu"]
+npy = ["aevia-rssn/npy"]
 
 [dependencies]
 aevia-dim.workspace = true
@@ -19,12 +21,14 @@ aevia-ir.workspace = true
 aevia-resolve.workspace = true
 aevia-rssn.workspace = true
 aevia-std = { path = "../aevia-std" }
+rssn = { path = "../../../rssn", default-features = false }
 num-bigint.workspace = true
+num-integer.workspace = true
 num-rational.workspace = true
 num-traits.workspace = true
 indexmap.workspace = true
 serde.workspace = true
-bincode.workspace = true
+bincode-next.workspace = true
 unicode-segmentation.workspace = true
 # Worker pool for parallel evaluation (§9.7); already in the build through faer.
 rayon = "1"
@@ -33,9 +37,5 @@ rayon = "1"
 name = "interp"
 harness = false
 
-[lints.rust]
-# No production code may use `unsafe`. `deny` (not `forbid`) is what lets the
-# allocation gate test install a counting `#[global_allocator]`, whose impl is
-# necessarily `unsafe`; that file is the only place allowed to opt back in, and
-# it forwards every operation to `System` with a SAFETY comment.
-unsafe_code = "deny"
+[lints]
+workspace = true

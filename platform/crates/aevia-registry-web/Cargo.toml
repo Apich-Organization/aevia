@@ -11,5 +11,5 @@ repository.workspace = true
 aevia-registry-core.workspace = true
 leptos.workspace = true
 
-[lints.rust]
-unsafe_code = "forbid"
+[lints]
+workspace = true

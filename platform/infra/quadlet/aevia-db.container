@@ -1,21 +1,19 @@
 [Unit]
 Description=Aevia PostgreSQL 18
-Requires=aevia-db.volume aevia.network
-After=aevia-db.volume aevia.network
 
 [Container]
 ContainerName=aevia-db
 Image=localhost/aevia/postgres:18-trixie
-Network=aevia.network
+Network=aevia-storage.network
+NetworkAlias=db
 
 # :U hands the volume to the container's postgres uid (999) on first start. A
 # rootless named volume is created owned by the mapped root user, which the
 # unprivileged postgres process cannot write to.
 Volume=aevia-db.volume:/var/lib/postgresql/data:U
 
-# POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB / DATABASE_URL / AEVIA_* all
-# live here. chmod 600. See infra/.env.example for the full list.
-EnvironmentFile=%h/.config/aevia/aevia.env
+# Store only POSTGRES_USER, POSTGRES_PASSWORD and POSTGRES_DB here.
+EnvironmentFile=%h/.config/aevia/db.env
 Environment=PGDATA=/var/lib/postgresql/data
 
 # No PublishPort: the database is reachable only from the aevia network, by

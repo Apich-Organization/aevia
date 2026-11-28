@@ -1,0 +1,28 @@
+import Rssn_ParallelQuadrature as Quad
+
+fn handle(operation: String, args: Tensor<1, Value>): Value =
+    unwrap_or(Rssn.dynamic(operation, args), to_value(0))
+
+fn integrand(budget: Int): Value =
+    let input = handle("num_backend_reference", [to_value(1.0 m)])
+    let output = handle("num_backend_reference", [to_value(1.0 N)])
+    handle("num_backend_compile_current", [to_value("x*x"), to_value(["x"]), to_value([input]), output, to_value(budget)])
+
+test "both fixed quadratures combine the bounds and integrand units" =
+    let program = integrand(4096)
+    match (Quad.gauss_legendre(0.0 m, 2.0 m, 64, 1.0 N, program), Quad.clenshaw_curtis(2.0 m, 0.0 m, 63, 1.0 N, program)) with
+    | (Ok(forward), Ok(reverse)) -> approx_eq(forward, 8.0 J / 3.0, 1e-12 J) && approx_eq(reverse, -8.0 J / 3.0, 1e-12 J)
+    | _ -> false
+
+test "quadrature checks units, order and the compiled work limit" =
+    let full = integrand(4096)
+    let bounded = integrand(8)
+    (is_err(Quad.gauss_legendre(0.0 m, 2.0 m, 4097, 1.0 N, full)) &&
+        is_err(Quad.clenshaw_curtis(0.0 m, 2.0 m, 64, 1.0 s, full)) &&
+        is_err(Quad.gauss_legendre(0.0 m, 2.0 m, 64, 1.0 N, bounded)) &&
+        Quad.gauss_legendre(2.0 m, 2.0 m, 64, 1.0 N, bounded) == Ok(0.0 J))
+
+test "compensated sum retains the small term and dimension" =
+    match Quad.sum_compensated([1e16 m, 1.0 m, -1e16 m], 3, 1) with
+    | Ok(value) -> value == 1.0 m && is_err(Quad.sum_compensated([1.0 m], 0, 1))
+    | Err(_) -> false

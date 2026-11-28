@@ -1,10 +1,9 @@
 //! Allocation gate for the interpreter's hot paths (round-2 performance work).
 //!
-//! A custom global allocator counts `GlobalAlloc::alloc` calls; the measured
-//! workload is run warm (compilation and module loading are outside the
-//! measurement) and the count is divided by the number of elements/steps. The
-//! assertions are the *deterministic* part of the performance work: wall clock
-//! is noisy on a shared machine, an allocation count is not.
+//! A custom global allocator counts allocation and reallocation requests and
+//! their requested sizes. Compilation, module loading and warm-up take place
+//! outside the measurement. The budgets use counts for call overhead and
+//! bytes for reductions where a single request could copy the whole input.
 //!
 //! One test function only: the counter is process-global, so the measurements
 //! must not run concurrently with each other.
@@ -17,6 +16,7 @@
 #![allow(unsafe_code)]
 
 use aevia_core::Interp;
+use aevia_core::JitPolicy;
 use aevia_core::Mode;
 use aevia_core::compile;
 use aevia_core::value::NumVal;
@@ -31,15 +31,18 @@ use std::sync::atomic::Ordering;
 struct Counting;
 
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+static REQUESTED_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 // SAFETY: every method forwards to `System`, which is a valid allocator; the
-// only addition is a relaxed atomic increment.
+// only additions record requests and sizes with relaxed atomics.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(
         &self,
         layout: Layout,
     ) -> *mut u8 {
         ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        REQUESTED_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+        // SAFETY: The caller supplies the layout required by GlobalAlloc.
         unsafe { System.alloc(layout) }
     }
 
@@ -48,6 +51,7 @@ unsafe impl GlobalAlloc for Counting {
         pointer: *mut u8,
         layout: Layout,
     ) {
+        // SAFETY: The caller supplies a live allocation with its original layout.
         unsafe { System.dealloc(pointer, layout) }
     }
 
@@ -58,6 +62,8 @@ unsafe impl GlobalAlloc for Counting {
         new_size: usize,
     ) -> *mut u8 {
         ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        REQUESTED_BYTES.fetch_add(new_size, Ordering::Relaxed);
+        // SAFETY: The caller provides the allocation, old layout and valid new size.
         unsafe { System.realloc(pointer, layout, new_size) }
     }
 }
@@ -65,12 +71,27 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static ALLOCATOR: Counting = Counting;
 
-/// Runs `body` and returns how many allocations it made.
-fn allocations<T>(body: impl FnOnce() -> T) -> (usize, T) {
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+struct AllocationTotals {
+    calls: usize,
+    bytes: usize,
+}
+
+fn allocation_totals<T>(body: impl FnOnce() -> T) -> (AllocationTotals, T) {
+    let calls = ALLOCATIONS.load(Ordering::Relaxed);
+    let bytes = REQUESTED_BYTES.load(Ordering::Relaxed);
     let value = body();
-    let after = ALLOCATIONS.load(Ordering::Relaxed);
-    (after - before, value)
+    (
+        AllocationTotals {
+            calls: ALLOCATIONS.load(Ordering::Relaxed).wrapping_sub(calls),
+            bytes: REQUESTED_BYTES.load(Ordering::Relaxed).wrapping_sub(bytes),
+        },
+        value,
+    )
+}
+
+fn allocations<T>(body: impl FnOnce() -> T) -> (usize, T) {
+    let (totals, value) = allocation_totals(body);
+    (totals.calls, value)
 }
 
 fn interpreter(source: &str) -> Interp {
@@ -105,8 +126,7 @@ fn interpreter(source: &str) -> Interp {
 const TAIL: &str = r#"fn count(n: Int, acc: Int): Int =
     if n == 0 then acc else count(n - 1, acc + 1)
 
-fn main(): IO Unit = do
-    println(count(1000, 0))
+fn run_count(n: Int): Int = count(n, 0)
 "#;
 
 const HOT: &str = r#"let xs = zeros(2000)
@@ -124,20 +144,35 @@ fn main_program(interp: &mut Interp) {
 /// regression is visible as a number rather than as a slow test.
 #[test]
 fn the_hot_paths_allocate_within_their_budget() {
-    // --- tail loop: a trampoline step should not allocate per step ----------
-    let mut tail = interpreter(TAIL);
-    main_program(&mut tail); // warm up
-    let (tail_allocations, _) = allocations(|| main_program(&mut tail));
-    let tail_per_step = tail_allocations as f64 / 1_000.0;
-    eprintln!("allocations: tail loop {tail_allocations} total, {tail_per_step:.3}/step");
-    // One `Vec<Value>` per tail call (the evaluated argument list) is the only
-    // remaining per-step allocation; the frame buffer itself is reused. The
-    // gate pins that: a regression that clones frames or names per step shows up
-    // immediately.
-    assert!(
-        tail_per_step < 1.05,
-        "a tail step allocates only its argument list (was {tail_per_step:.3})"
-    );
+    // The trampoline reuses its frame and argument buffers. Warm the automatic
+    // policy beyond the compilation threshold so the native compiler's one-time
+    // work stays outside the steady-state allocation measurement.
+    for (policy, label, warmup_runs) in [
+        (JitPolicy::Annotated, "interpreted", 1),
+        #[cfg(feature = "jit")]
+        (JitPolicy::Automatic, "automatic JIT", 3),
+    ] {
+        let mut tail = interpreter(TAIL);
+        tail.jit_policy = policy;
+        let function = tail.eval_toplevel("run_count").expect("run_count exists");
+        let mut run_count = || {
+            tail.apply(function.clone(), vec![Value::int(1_000)], Span::default())
+                .expect("tail loop runs")
+        };
+        for _ in 0..warmup_runs {
+            assert_eq!(run_count().as_f64(), Some(1_000.0));
+        }
+        let (tail_allocations, result) = allocations(run_count);
+        assert_eq!(result.as_f64(), Some(1_000.0));
+        let tail_per_step = tail_allocations as f64 / 1_000.0;
+        eprintln!(
+            "allocations: {label} tail loop {tail_allocations} total, {tail_per_step:.3}/step"
+        );
+        assert!(
+            tail_per_step < 1.05,
+            "the {label} tail loop exceeded its argument allocation budget ({tail_per_step:.3}/step)"
+        );
+    }
 
     // --- map: a closure call per element ------------------------------------
     let mut hot = interpreter(HOT);
@@ -210,53 +245,60 @@ fn the_hot_paths_allocate_within_their_budget() {
         "a dense sum is O(1) allocations, found {sum_allocations}"
     );
 
-    // --- dense axis reduction: allocations scale with the output, not input --
-    //
-    // 512×512 summed along axis 0 produces 512 outputs; the fast path walks the
-    // buffer with no `Value` per input element, so the count is O(output).
-    let grid_source = "let grid = zeros_of<Tensor<[512, 512], Float>>()\n";
-    let mut grid_interp = interpreter(grid_source);
-    let grid = grid_interp.eval_toplevel("grid").expect("grid");
-    grid_interp
-        .call_named("sum", vec![grid.clone(), Value::int(0)], Span::default())
-        .expect("warm-up axis sum");
-    let (axis_allocations, reduced) = allocations(|| {
-        grid_interp
-            .call_named("sum", vec![grid, Value::int(0)], Span::default())
-            .expect("axis sum")
-    });
-    let Value::Tensor(reduced) = &reduced else {
-        panic!("axis sum answers a tensor");
-    };
-    assert_eq!(reduced.shape, vec![1, 512]);
-    eprintln!(
-        "allocations: dense sum(axis=0) {axis_allocations} for 512 outputs over 262144 elements"
-    );
-    assert!(
-        axis_allocations < 256,
-        "the dense axis path allocates per output, not per element (found {axis_allocations})"
-    );
-
-    // The old axis path (still the one a non-`f64` class takes) boxes a `Value`
-    // per input element: measure it on the same 512×512 data as the "before".
-    let boxed = Value::Tensor(std::rc::Rc::new(aevia_core::value::TensorData::new(
-        vec![512, 512],
-        aevia_core::value::Storage::Boxed((0..512 * 512).map(|_| Value::float(0.5)).collect()),
+    // --- dense axis reduction: allocate in proportion to the output --------
+    const SIDE: usize = 512;
+    const ELEMENTS: usize = SIDE * SIDE;
+    const OUTPUT_BYTES: usize = SIDE * size_of::<f64>();
+    let mut grid_interp = interpreter("let grid = zeros_of<Tensor<[512, 512], Float>>()\n");
+    let dense = Value::Tensor(std::rc::Rc::new(aevia_core::value::TensorData::new(
+        vec![SIDE, SIDE],
+        aevia_core::value::Storage::Dense(std::rc::Rc::new(vec![0.5; ELEMENTS])),
         aevia_dim::Dim::one(),
         None,
     )));
-    let (boxed_allocations, _) = allocations(|| {
+    // Construct boxed storage explicitly to bypass automatic Float packing.
+    let boxed = Value::Tensor(std::rc::Rc::new(aevia_core::value::TensorData::new(
+        vec![SIDE, SIDE],
+        aevia_core::value::Storage::Boxed((0..ELEMENTS).map(|_| Value::float(0.5)).collect()),
+        aevia_dim::Dim::one(),
+        None,
+    )));
+    let mut sum_axis = |input| {
         grid_interp
-            .call_named("sum", vec![boxed, Value::int(0)], Span::default())
-            .expect("boxed axis sum")
-    });
+            .call_named("sum", vec![input, Value::int(0)], Span::default())
+            .expect("axis sum")
+    };
+    sum_axis(dense.clone());
+    sum_axis(boxed.clone());
+    let (dense_totals, dense_result) = allocation_totals(|| sum_axis(dense));
+    let (boxed_totals, boxed_result) = allocation_totals(|| sum_axis(boxed));
+    for result in [dense_result, boxed_result] {
+        let Value::Tensor(tensor) = result else {
+            panic!("axis sum answers a tensor");
+        };
+        assert_eq!(tensor.shape, vec![1, SIDE]);
+        let elements = tensor.elements();
+        assert_eq!(elements.len(), SIDE);
+        assert!(
+            elements.iter().all(|value| value.as_f64() == Some(256.0)),
+            "axis sum must add 512 copies of 0.5 in each column"
+        );
+    }
     eprintln!(
-        "allocations: boxed sum(axis=0) {boxed_allocations} for 262144 elements (before-proxy)"
+        "allocations: sum(axis=0) dense {} calls/{} bytes and boxed {} calls/{} bytes for {SIDE} outputs over {ELEMENTS} elements",
+        dense_totals.calls, dense_totals.bytes, boxed_totals.calls, boxed_totals.bytes
+    );
+    // A single materialization of the entire input would pass a call-count
+    // budget. The output-size byte budget also catches that regression.
+    assert!(
+        dense_totals.bytes <= 4 * OUTPUT_BYTES,
+        "dense axis reduction must allocate in proportion to its {OUTPUT_BYTES}-byte output (requested {} bytes)",
+        dense_totals.bytes
     );
     assert!(
-        axis_allocations * 1_000 < boxed_allocations,
-        "the dense path must be orders of magnitude below per-element boxing: \
-         {axis_allocations} vs {boxed_allocations}"
+        dense_totals.calls < 32,
+        "dense axis reduction must use a few allocation requests (found {})",
+        dense_totals.calls
     );
 
     // --- dense whole-tensor min/max: one scan, no per-element boxing --------

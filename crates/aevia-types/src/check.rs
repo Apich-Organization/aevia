@@ -11,15 +11,32 @@
 //! it records which names are values, constructors, types or units, and their
 //! types after defaulting.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        missing_docs,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::nursery,
+        clippy::panic,
+        clippy::pedantic,
+        clippy::single_call_fn,
+        clippy::unreachable,
+        clippy::unwrap_used
+    )
+)]
+
 use crate::CallableId;
 use crate::CallableProjection;
 use crate::adt::Adt;
-use crate::adt::Ctor;
 use crate::adt::{
     self,
 };
 use crate::builtins::dynamic_value_type;
-use crate::builtins::op_error_type;
 use crate::builtins::{
     self,
 };
@@ -57,21 +74,64 @@ use aevia_syntax::Diagnostic;
 use aevia_syntax::Diagnostics;
 use aevia_syntax::FileId;
 use aevia_syntax::Span;
-use aevia_syntax::ast::*;
+use aevia_syntax::ast::BinOp;
+use aevia_syntax::ast::BlockStmt;
+use aevia_syntax::ast::ClassMethod;
+use aevia_syntax::ast::Decl;
+use aevia_syntax::ast::DeclKind;
+use aevia_syntax::ast::DimAst;
+use aevia_syntax::ast::DoStmt;
+use aevia_syntax::ast::Expr;
+use aevia_syntax::ast::ExprKind;
+use aevia_syntax::ast::Kind;
+use aevia_syntax::ast::MatchArm;
+use aevia_syntax::ast::Module;
+use aevia_syntax::ast::NatAst;
+use aevia_syntax::ast::NumberLit;
+use aevia_syntax::ast::Param;
+use aevia_syntax::ast::Pat;
+use aevia_syntax::ast::PatKind;
+use aevia_syntax::ast::PatLit;
+use aevia_syntax::ast::ShapeAst;
+use aevia_syntax::ast::ShapeItem;
+use aevia_syntax::ast::StrPiece;
+use aevia_syntax::ast::Ty;
+use aevia_syntax::ast::TyKind;
+use aevia_syntax::ast::TypeParam;
+use aevia_syntax::ast::UnOp;
 use indexmap::IndexMap;
+#[cfg(test)]
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::One;
 use num_traits::Signed;
-use num_traits::ToPrimitive;
 use num_traits::Zero;
+use std::cell::OnceCell;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+mod declarations;
+mod dispatch;
+mod dynamics;
+mod records;
 mod sparse;
+mod suggest;
+mod type_expr;
+
+pub use suggest::closest_name;
+pub use suggest::closest_unit;
+
+use declarations::AliasDef;
+use dispatch::is_rssn_root;
+use dispatch::opaque_type;
+use dispatch::qualified_name;
+use dispatch::rssn_member_name;
+use dispatch::rssn_op_name;
+use dispatch::value_list_type;
 
 /// What a name exported by a module denotes.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, bincode_next::Fingerprint)]
 pub enum Export {
     /// A function or value binding.
     Value {
@@ -129,12 +189,141 @@ pub enum Export {
     },
 }
 
+impl bincode_next::Encode for Export {
+    fn encode<E: bincode_next::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode_next::error::EncodeError> {
+        match self {
+            | Self::Value { scheme, decl, arity } => {
+                0u8.encode(encoder)?;
+                scheme.encode(encoder)?;
+                decl.encode(encoder)?;
+                arity.encode(encoder)
+            },
+            | Self::Ctor { adt, index, scheme } => {
+                1u8.encode(encoder)?;
+                crate::persist::encode_adt_id(*adt)
+                    .map_err(bincode_next::error::EncodeError::OtherString)?
+                    .encode(encoder)?;
+                index.encode(encoder)?;
+                scheme.encode(encoder)
+            },
+            | Self::TypeCtor { adt, index, scheme } => {
+                2u8.encode(encoder)?;
+                crate::persist::encode_adt_id(*adt)
+                    .map_err(bincode_next::error::EncodeError::OtherString)?
+                    .encode(encoder)?;
+                index.encode(encoder)?;
+                scheme.encode(encoder)
+            },
+            | Self::Type { adt } => {
+                3u8.encode(encoder)?;
+                crate::persist::encode_adt_id(*adt)
+                    .map_err(bincode_next::error::EncodeError::OtherString)?
+                    .encode(encoder)
+            },
+            | Self::Alias { params } => {
+                4u8.encode(encoder)?;
+                params.encode(encoder)
+            },
+            | Self::Unit { def } => {
+                5u8.encode(encoder)?;
+                def.encode(encoder)
+            },
+            | Self::Dimension { dim, is_base } => {
+                6u8.encode(encoder)?;
+                dim.encode(encoder)?;
+                is_base.encode(encoder)
+            },
+        }
+    }
+}
+
+impl<Context> bincode_next::Decode<Context> for Export {
+    fn decode<D: bincode_next::de::Decoder<Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        match u8::decode(decoder)? {
+            | 0 => {
+                Ok(Self::Value {
+                    scheme: Scheme::decode(decoder)?,
+                    decl: usize::decode(decoder)?,
+                    arity: usize::decode(decoder)?,
+                })
+            },
+            | 1 => {
+                let adt = crate::persist::decode_adt_id(u32::decode(decoder)?)
+                    .map_err(bincode_next::error::DecodeError::OtherString)?;
+                Ok(Self::Ctor {
+                    adt,
+                    index: usize::decode(decoder)?,
+                    scheme: Scheme::decode(decoder)?,
+                })
+            },
+            | 2 => {
+                let adt = crate::persist::decode_adt_id(u32::decode(decoder)?)
+                    .map_err(bincode_next::error::DecodeError::OtherString)?;
+                Ok(Self::TypeCtor {
+                    adt,
+                    index: usize::decode(decoder)?,
+                    scheme: Scheme::decode(decoder)?,
+                })
+            },
+            | 3 => {
+                let adt = crate::persist::decode_adt_id(u32::decode(decoder)?)
+                    .map_err(bincode_next::error::DecodeError::OtherString)?;
+                Ok(Self::Type { adt })
+            },
+            | 4 => {
+                Ok(Self::Alias {
+                    params: usize::decode(decoder)?,
+                })
+            },
+            | 5 => {
+                Ok(Self::Unit {
+                    def: UnitDef::decode(decoder)?,
+                })
+            },
+            | 6 => {
+                Ok(Self::Dimension {
+                    dim: Dim::decode(decoder)?,
+                    is_base: bool::decode(decoder)?,
+                })
+            },
+            | tag => {
+                Err(bincode_next::error::DecodeError::UnexpectedVariant {
+                    type_name: "Export",
+                    allowed: &bincode_next::error::AllowedEnumVariants::Range { min: 0, max: 6 },
+                    found: u32::from(tag),
+                })
+            },
+        }
+    }
+}
+
+impl<'de, Context> bincode_next::BorrowDecode<'de, Context> for Export {
+    fn borrow_decode<D: bincode_next::de::BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        bincode_next::Decode::decode(decoder)
+    }
+}
+
 /// One statically resolved `Rssn.<op>` call.
 ///
 /// The checker picks the overload; the runtime must execute this key and never
 /// resolve again, or a program would run a different overload than it was
 /// typed against.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct RssnCall {
     /// Where the call is written.
     pub span: Span,
@@ -147,7 +336,17 @@ pub struct RssnCall {
 }
 
 /// What a class-method call site should execute (round-2 decision 1c).
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum DictTarget {
     /// The exact instance the checker proved, identified symbolically.
     Instance(InstanceKey),
@@ -169,7 +368,18 @@ pub enum DictTarget {
 }
 
 /// A builtin operation the runtime already implements structurally.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum BuiltinDispatch {
     /// The structural `Show` printer (records, `Dyn`, unit values, …).
     ShowStructural,
@@ -182,7 +392,15 @@ pub enum BuiltinDispatch {
 ///
 /// `aevia-core` must dispatch `method` on `head` to the body of the instance
 /// this record names (`target`), instead of to a global of the same name.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct DictionaryUse {
     /// Where the call is written.
     pub span: Span,
@@ -197,7 +415,15 @@ pub struct DictionaryUse {
 }
 
 /// A method used as a value, resolved at its defining source reference.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct ClassMethodRef {
     /// Full nominal class identity, independent of its visible spelling.
     pub class: ClassKey,
@@ -206,16 +432,33 @@ pub struct ClassMethodRef {
 }
 
 /// One explicitly ordered generic binder on a source function.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum GenericBinder {
+    /// A generic value type.
     Type(Type),
+    /// The scalar representation of a generic number.
     Representation(Rep),
+    /// A physical dimension.
     Dimension(Dim),
+    /// A natural number used in a tensor shape.
     Natural(Nat),
+    /// An extensible record row.
     Row(Row),
 }
 
 impl GenericBinder {
+    /// Encodes this binder as a type for the common type-evidence interface.
+    #[must_use]
     pub fn as_type(&self) -> Type {
         match self {
             | Self::Type(ty) => ty.clone(),
@@ -228,6 +471,8 @@ impl GenericBinder {
         }
     }
 
+    /// Applies the instantiation bindings of a checked call.
+    #[must_use]
     pub fn substituted(
         &self,
         bindings: &crate::TypeSubstitution,
@@ -241,6 +486,8 @@ impl GenericBinder {
         }
     }
 
+    /// Resolves this binder against the current inference state.
+    #[must_use]
     pub fn resolved(
         &self,
         infer: &Infer,
@@ -256,7 +503,19 @@ impl GenericBinder {
 }
 
 /// The lexical boundary exited by a source `?` operation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum TryBoundary {
     /// A real source function/lambda (never an implementation thunk).
     Function(Span),
@@ -264,21 +523,42 @@ pub enum TryBoundary {
     Do(Span),
 }
 /// The checked destination and result container of one source `?`.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct TryTarget {
+    /// The lexical destination of an early return.
     pub boundary: TryBoundary,
+    /// The `Option` or `Result` type required by that destination.
     pub result: Type,
 }
 
 /// The checked signature that belongs to the actual source function body.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct FunctionEvidence {
     /// Source return boundary, retained independently of callable identity.
     pub site: Span,
     /// Stable declaration syntax plus its resolved creation contract.
     pub identity: CallableId,
+    /// The checked type scheme for instantiating the function.
     pub scheme: Scheme,
+    /// Explicit binders in declaration order.
     pub binders: Vec<GenericBinder>,
+    /// Types whose concrete representation is needed by the body.
     pub reifications: Vec<Type>,
     /// Creation-site numeric constraints that must hold for a concrete activation.
     pub numeric_literals: Vec<(Span, LiteralKind, Type)>,
@@ -286,13 +566,17 @@ pub struct FunctionEvidence {
 
 /// Reduces `vector` against an echelon `basis` of exponent vectors; `None`
 /// when it is a rational combination of the basis (so not independent).
+#[allow(
+    clippy::arithmetic_side_effects,
+    clippy::single_call_fn,
+    reason = "dimension basis reduction uses exact rationals with a checked nonzero pivot"
+)]
 fn reduce_against(
     basis: &[(Vec<(u32, BigRational)>, String)],
     mut vector: Vec<(u32, BigRational)>,
 ) -> Option<Vec<(u32, BigRational)>> {
-    use num_traits::Zero;
     for (row, _) in basis {
-        let Some((pivot, pivot_value)) = row.first() else {
+        let Some((pivot, pivot_value)) = row.first().filter(|(_, value)| !value.is_zero()) else {
             continue;
         };
         let Some(own) = vector
@@ -324,11 +608,6 @@ fn quantify_binders(
     binders: &[GenericBinder],
     infer: &Infer,
 ) {
-    let mut variables = crate::TypeSubstitution::default();
-    let mut fresh = Infer::new();
-    for binder in binders {
-        variables.freshen(&binder.as_type(), &mut fresh);
-    }
     fn append(
         target: &mut Vec<u32>,
         keys: impl Iterator<Item = u32>,
@@ -342,6 +621,11 @@ fn quantify_binders(
             }
         }
     }
+    let mut variables = crate::TypeSubstitution::default();
+    let mut fresh = Infer::new();
+    for binder in binders {
+        variables.register_variables(&binder.as_type(), &mut fresh);
+    }
     append(
         &mut scheme.vars,
         variables
@@ -353,16 +637,17 @@ fn quantify_binders(
     append(&mut scheme.dims, variables.dimensions.keys().copied());
     append(&mut scheme.rows, variables.rows.keys().copied());
     append(&mut scheme.nats, variables.naturals.keys().copied());
+    infer.attach_row_lacks(scheme);
     infer.attach_numeric_scheme(scheme);
 }
 
 fn inferred_binders(scheme: &Scheme) -> Vec<GenericBinder> {
     let mut variables = crate::TypeSubstitution::default();
-    variables.freshen(&scheme.ty, &mut Infer::new());
+    variables.register_variables(&scheme.ty, &mut Infer::new());
     let mut inputs = crate::TypeSubstitution::default();
     if let Type::Fn(args, _) = &scheme.ty {
         for arg in args {
-            inputs.freshen(arg, &mut Infer::new());
+            inputs.register_variables(arg, &mut Infer::new());
         }
     }
     let computed: HashSet<u32> = scheme
@@ -377,7 +662,7 @@ fn inferred_binders(scheme: &Scheme) -> Vec<GenericBinder> {
                     | crate::RepRelation::Divide {
                         result: Rep::Var(id), ..
                     },
-                ) => Some(*id),
+                )
                 | crate::NumericConstraint::DefaultLiteral {
                     ty: Type::Scalar(Rep::Var(id), _),
                     ..
@@ -421,6 +706,10 @@ fn inferred_binders(scheme: &Scheme) -> Vec<GenericBinder> {
         .collect()
 }
 
+#[allow(
+    clippy::single_call_fn,
+    reason = "constructor binders recover nominal parameter kinds in their declared order"
+)]
 fn constructor_binders(scheme: &Scheme) -> Vec<GenericBinder> {
     let result = match &scheme.ty {
         | Type::Fn(_, result) => result.as_ref(),
@@ -445,7 +734,15 @@ fn constructor_binders(scheme: &Scheme) -> Vec<GenericBinder> {
 }
 
 /// One class exported with a module's interface (§7.1.3/§7.4).
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct ClassExport {
     /// The symbolic identity.
     pub key: ClassKey,
@@ -456,7 +753,15 @@ pub struct ClassExport {
 }
 
 /// One instance exported with a module's interface.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct InstanceExport {
     /// The symbolic identity: module + class key + canonical head.
     pub key: InstanceKey,
@@ -472,7 +777,18 @@ pub struct InstanceExport {
 
 /// The kind of one parameter of a generic declaration (§2: the annotation may
 /// be omitted and the kind then inferred from the body).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum AliasParamKind {
     /// A type parameter (`type Pair<a, b>`).
     Type,
@@ -489,7 +805,15 @@ pub enum AliasParamKind {
 /// `Export::Alias` carries only the arity today; an importer cannot expand an
 /// alias without the body, which is why `type Vec2` was `E0301` from another
 /// module (§7.4). This is the definition the interface carries.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct AliasExport {
     /// The number of parameters.
     pub params: usize,
@@ -522,8 +846,98 @@ pub struct ModuleInterface {
     pub callable_exports: IndexMap<String, CallableProjection>,
 }
 
+impl bincode_next::Encode for ModuleInterface {
+    fn encode<E: bincode_next::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode_next::error::EncodeError> {
+        self.name.encode(encoder)?;
+        crate::persist::encode_index_map(&self.exports, encoder)?;
+        crate::persist::encode_index_map(&self.classes, encoder)?;
+        self.instances.encode(encoder)?;
+        crate::persist::encode_index_map(&self.aliases, encoder)?;
+        crate::persist::encode_index_map(&self.function_headers, encoder)?;
+        crate::persist::encode_index_map(&self.callable_exports, encoder)
+    }
+}
+
+impl<Context> bincode_next::Decode<Context> for ModuleInterface {
+    fn decode<D: bincode_next::de::Decoder<Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        Ok(Self {
+            name: ModulePath::decode(decoder)?,
+            exports: crate::persist::decode_index_map(decoder)?,
+            classes: crate::persist::decode_index_map(decoder)?,
+            instances: Vec::<InstanceExport>::decode(decoder)?,
+            aliases: crate::persist::decode_index_map(decoder)?,
+            function_headers: crate::persist::decode_index_map(decoder)?,
+            callable_exports: crate::persist::decode_index_map(decoder)?,
+        })
+    }
+}
+
+impl<'de, Context> bincode_next::BorrowDecode<'de, Context> for ModuleInterface {
+    fn borrow_decode<D: bincode_next::de::BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        bincode_next::Decode::decode(decoder)
+    }
+}
+
+impl<C: bincode_next::config::Config> bincode_next::Fingerprint<C> for ModuleInterface {
+    const SCHEMA_HASH: u64 = {
+        let h = crate::persist::mix_hash(
+            C::CONFIG_HASH,
+            b"ModuleInterface:name",
+            <ModulePath as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        );
+        let h = crate::persist::mix_hash(
+            h,
+            b"ModuleInterface:exports",
+            crate::persist::index_map_schema_hash::<C, String, Export>(),
+        );
+        let h = crate::persist::mix_hash(
+            h,
+            b"ModuleInterface:classes",
+            crate::persist::index_map_schema_hash::<C, ClassKey, ClassExport>(),
+        );
+        let h = crate::persist::mix_hash(
+            h,
+            b"ModuleInterface:instances",
+            <Vec<InstanceExport> as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        );
+        let h = crate::persist::mix_hash(
+            h,
+            b"ModuleInterface:aliases",
+            crate::persist::index_map_schema_hash::<C, String, AliasExport>(),
+        );
+        let h = crate::persist::mix_hash(
+            h,
+            b"ModuleInterface:function_headers",
+            crate::persist::index_map_schema_hash::<C, String, Vec<GenericBinder>>(),
+        );
+        crate::persist::mix_hash(
+            h,
+            b"ModuleInterface:callable_exports",
+            crate::persist::index_map_schema_hash::<C, String, CallableProjection>(),
+        )
+    };
+}
+
 /// The two type-directed `Dyn` primitives of §3.11/§4.9.4.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum DynPrimitive {
     /// `dyn(x)`: the static dimension `d` is materialised into the value.
     Dyn,
@@ -541,7 +955,15 @@ pub enum DynPrimitive {
 /// materialisation is redundant but harmless); for `check` it is the answer the
 /// runtime must compare against — without it `check` cannot fail and `E0412`
 /// is unreachable.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct DynCall {
     /// Where the call is written.
     pub span: Span,
@@ -552,7 +974,17 @@ pub struct DynCall {
 }
 
 /// The stability marker of a declaration (§13.8.1).
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum Stability {
     /// Stable within a major version.
     Stable,
@@ -563,7 +995,18 @@ pub enum Stability {
 }
 
 /// Which host extension a [`HostRegistration`] is (§13.5.2).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum HostRegistrationKind {
     /// `@op("name")`: an Aevia function exposed as an RSSN operator.
     Op,
@@ -575,7 +1018,15 @@ pub enum HostRegistrationKind {
 ///
 /// The checker proves the declaration and names the operator; publishing it to
 /// the kernel is a runtime/bridge step (the Aevia function is a host callback).
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct HostRegistration {
     /// Where the attribute is written.
     pub span: Span,
@@ -614,9 +1065,11 @@ pub struct CheckedModule {
     /// Function signatures by declaration/lambda site, retaining body variables.
     #[serde(with = "crate::persist::sorted_map")]
     pub functions: HashMap<Span, FunctionEvidence>,
+    /// Explicit generic binders for visible function headers.
     pub function_headers: IndexMap<String, Vec<GenericBinder>>,
     /// Exact source origins and binder projections for visible callable names.
     pub callable_exports: IndexMap<String, CallableProjection>,
+    /// Explicit generic arguments associated with a source reference.
     #[serde(with = "crate::persist::sorted_map")]
     pub generic_refs: HashMap<Span, Vec<GenericBinder>>,
     /// Source-authenticated selections in the actual declaration's order.
@@ -720,6 +1173,198 @@ pub struct CheckedModule {
     pub errors: usize,
 }
 
+impl bincode_next::Encode for CheckedModule {
+    fn encode<E: bincode_next::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode_next::error::EncodeError> {
+        self.name.encode(encoder)?;
+        self.identity.encode(encoder)?;
+        self.constructors.len().encode(encoder)?;
+        for (key, (adt, index)) in &self.constructors {
+            key.encode(encoder)?;
+            crate::persist::encode_adt_id(*adt)
+                .map_err(bincode_next::error::EncodeError::OtherString)?
+                .encode(encoder)?;
+            index.encode(encoder)?;
+        }
+        self.constructor_refs.len().encode(encoder)?;
+        let mut refs: Vec<_> = self.constructor_refs.iter().collect();
+        refs.sort_by(|a, b| a.0.cmp(b.0));
+        for (span, (adt, index)) in refs {
+            span.encode(encoder)?;
+            crate::persist::encode_adt_id(*adt)
+                .map_err(bincode_next::error::EncodeError::OtherString)?
+                .encode(encoder)?;
+            index.encode(encoder)?;
+        }
+        self.functions.encode(encoder)?;
+        crate::persist::encode_index_map(&self.function_headers, encoder)?;
+        crate::persist::encode_index_map(&self.callable_exports, encoder)?;
+        self.generic_refs.encode(encoder)?;
+        self.callable_refs.encode(encoder)?;
+        self.try_targets.encode(encoder)?;
+        self.anonymous_file.encode(encoder)?;
+        crate::persist::encode_index_map(&self.exports, encoder)?;
+        crate::persist::default_units::encode_bincode(&self.units, encoder)?;
+        crate::persist::default_dims::encode_bincode(&self.dims, encoder)?;
+        self.tests.encode(encoder)?;
+        self.rssn_calls.encode(encoder)?;
+        self.dyn_calls.encode(encoder)?;
+        self.system_calls.encode(encoder)?;
+        crate::persist::encode_index_map(&self.stability, encoder)?;
+        self.registrations.encode(encoder)?;
+        self.dictionaries.encode(encoder)?;
+        crate::persist::encode_index_map(&self.classes, encoder)?;
+        crate::persist::encode_index_map(&self.local_classes, encoder)?;
+        self.instance_sites.encode(encoder)?;
+        self.method_refs.encode(encoder)?;
+        self.instances.encode(encoder)?;
+        crate::persist::encode_index_map(&self.alias_defs, encoder)?;
+        crate::persist::encode_index_map(&self.aliases, encoder)?;
+        self.literal_reps.encode(encoder)?;
+        self.constant_regions.encode(encoder)?;
+        self.unit_system.encode(encoder)?;
+        self.expr_types.encode(encoder)?;
+        self.errors.encode(encoder)
+    }
+}
+
+impl<Context> bincode_next::Decode<Context> for CheckedModule {
+    fn decode<D: bincode_next::de::Decoder<Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        let name = Option::<Vec<String>>::decode(decoder)?;
+        let identity = Option::<ModulePath>::decode(decoder)?;
+        let ctors_len = usize::decode(decoder)?;
+        let mut constructors = IndexMap::with_capacity(ctors_len.min(1024));
+        for _ in 0..ctors_len {
+            let key = String::decode(decoder)?;
+            let adt = crate::persist::decode_adt_id(u32::decode(decoder)?)
+                .map_err(bincode_next::error::DecodeError::OtherString)?;
+            let index = usize::decode(decoder)?;
+            if constructors.insert(key, (adt, index)).is_some() {
+                return Err(bincode_next::error::DecodeError::Other(
+                    "duplicate key in cached constructors",
+                ));
+            }
+        }
+        let refs_len = usize::decode(decoder)?;
+        let mut constructor_refs = HashMap::with_capacity(refs_len.min(1024));
+        for _ in 0..refs_len {
+            let span = Span::decode(decoder)?;
+            let adt = crate::persist::decode_adt_id(u32::decode(decoder)?)
+                .map_err(bincode_next::error::DecodeError::OtherString)?;
+            let index = usize::decode(decoder)?;
+            if constructor_refs.insert(span, (adt, index)).is_some() {
+                return Err(bincode_next::error::DecodeError::Other(
+                    "duplicate span in cached constructor references",
+                ));
+            }
+        }
+        Ok(Self {
+            name,
+            identity,
+            constructors,
+            constructor_refs,
+            functions: HashMap::decode(decoder)?,
+            function_headers: crate::persist::decode_index_map(decoder)?,
+            callable_exports: crate::persist::decode_index_map(decoder)?,
+            generic_refs: HashMap::decode(decoder)?,
+            callable_refs: HashMap::decode(decoder)?,
+            try_targets: HashMap::decode(decoder)?,
+            anonymous_file: FileId::decode(decoder)?,
+            exports: crate::persist::decode_index_map(decoder)?,
+            units: crate::persist::default_units::decode_bincode(decoder)?,
+            dims: crate::persist::default_dims::decode_bincode(decoder)?,
+            tests: Vec::decode(decoder)?,
+            rssn_calls: Vec::decode(decoder)?,
+            dyn_calls: Vec::decode(decoder)?,
+            system_calls: HashMap::decode(decoder)?,
+            stability: crate::persist::decode_index_map(decoder)?,
+            registrations: Vec::decode(decoder)?,
+            dictionaries: Vec::decode(decoder)?,
+            classes: crate::persist::decode_index_map(decoder)?,
+            local_classes: crate::persist::decode_index_map(decoder)?,
+            instance_sites: HashMap::decode(decoder)?,
+            method_refs: HashMap::decode(decoder)?,
+            instances: Vec::decode(decoder)?,
+            alias_defs: crate::persist::decode_index_map(decoder)?,
+            aliases: crate::persist::decode_index_map(decoder)?,
+            literal_reps: HashMap::decode(decoder)?,
+            constant_regions: HashMap::decode(decoder)?,
+            unit_system: Option::decode(decoder)?,
+            expr_types: HashMap::decode(decoder)?,
+            errors: usize::decode(decoder)?,
+        })
+    }
+}
+
+impl<'de, Context> bincode_next::BorrowDecode<'de, Context> for CheckedModule {
+    fn borrow_decode<D: bincode_next::de::BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        bincode_next::Decode::decode(decoder)
+    }
+}
+
+impl<C: bincode_next::config::Config> bincode_next::Fingerprint<C> for CheckedModule {
+    const SCHEMA_HASH: u64 = {
+        let mut hash = C::CONFIG_HASH;
+        macro_rules! field {
+            ($name:ident, $ty:ty) => {
+                hash = crate::persist::mix_hash(
+                    hash,
+                    concat!("CheckedModule:", stringify!($name)).as_bytes(),
+                    <$ty as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+                );
+            };
+            ($name:ident, $key:ty => $value:ty) => {
+                hash = crate::persist::mix_hash(
+                    hash,
+                    concat!("CheckedModule:", stringify!($name)).as_bytes(),
+                    crate::persist::index_map_schema_hash::<C, $key, $value>(),
+                );
+            };
+        }
+        // Match the fields and wire types in native encoding order.
+        field!(name, Option<Vec<String>>);
+        field!(identity, Option<ModulePath>);
+        field!(constructors, String => (u32, usize));
+        field!(constructor_refs, HashMap<Span, (u32, usize)>);
+        field!(functions, HashMap<Span, FunctionEvidence>);
+        field!(function_headers, String => Vec<GenericBinder>);
+        field!(callable_exports, String => CallableProjection);
+        field!(generic_refs, HashMap<Span, Vec<GenericBinder>>);
+        field!(callable_refs, HashMap<Span, CallableProjection>);
+        field!(try_targets, HashMap<Span, TryTarget>);
+        field!(anonymous_file, FileId);
+        field!(exports, String => Export);
+        field!(units, Option<UnitTable>);
+        field!(dims, Option<DimEnv>);
+        field!(tests, Vec<String>);
+        field!(rssn_calls, Vec<RssnCall>);
+        field!(dyn_calls, Vec<DynCall>);
+        field!(system_calls, HashMap<Span, (String, Dim)>);
+        field!(stability, String => Stability);
+        field!(registrations, Vec<HostRegistration>);
+        field!(dictionaries, Vec<DictionaryUse>);
+        field!(classes, ClassKey => ClassExport);
+        field!(local_classes, ClassKey => ClassExport);
+        field!(instance_sites, HashMap<Span, InstanceExport>);
+        field!(method_refs, HashMap<Span, ClassMethodRef>);
+        field!(instances, Vec<InstanceExport>);
+        field!(alias_defs, String => AliasExport);
+        field!(aliases, String => Type);
+        field!(literal_reps, HashMap<Span, Rep>);
+        field!(constant_regions, HashMap<Span, Rep>);
+        field!(unit_system, Option<String>);
+        field!(expr_types, HashMap<Span, Type>);
+        field!(errors, usize);
+        hash
+    };
+}
+
 impl CheckedModule {
     /// The complete interface of §7.1.3/§7.4: names **and** the classes,
     /// instances and alias definitions an importer needs.
@@ -760,7 +1405,18 @@ impl CheckedModule {
 /// host-extension attributes need the plugin ABI. The set is a plain list of
 /// names so `aevia-types` stays independent of the manifest's shape; a caller
 /// fills it from the kernel's own table ([`CheckOptions::default`] does).
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct Capabilities {
     names: std::collections::BTreeSet<String>,
 }
@@ -833,10 +1489,22 @@ impl Capabilities {
 }
 
 /// Options for one check.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct CheckOptions {
     /// The backend capabilities to check against (§13.8.2).
     pub capabilities: Capabilities,
+    /// When true, `Result`/`Option` exhaustiveness and `?` unwrap checks are
+    /// relaxed to warnings (`W0204`, `W0205`, `W0206`). Set by the `@relax_result`
+    /// attribute; the CLI `--relax-result` flag is separate and only silences `W0202`.
+    pub relax_result: bool,
 }
 
 impl Default for CheckOptions {
@@ -847,6 +1515,7 @@ impl Default for CheckOptions {
         // `@jit` on the build they are actually linked against.
         Self {
             capabilities: Capabilities::from_names(aevia_rssn::registry().capabilities.names()),
+            relax_result: false,
         }
     }
 }
@@ -877,6 +1546,7 @@ pub type Import = (String, IndexMap<String, Export>);
 /// `imports` holds one entry per `import`/`open` declaration that resolved. A
 /// qualified import contributes `prefix.name`; an `open` contributes the bare
 /// name as well, which is why the caller decides the prefix.
+#[must_use]
 pub fn check_module_with_imports(
     file: FileId,
     module: &Module,
@@ -892,6 +1562,7 @@ pub fn check_module_with_imports(
 /// interfaces add the classes, instances and alias definitions a module needs
 /// to be reused. `check_module_with_imports` delegates here with no
 /// interfaces, so a driver that has not adopted the interface keeps working.
+#[must_use]
 pub fn check_module_with_interfaces(
     file: FileId,
     module: &Module,
@@ -904,15 +1575,21 @@ pub fn check_module_with_interfaces(
 
 /// The visible binding of one direct imported interface. Nominal identities
 /// remain on its types and keys; `prefix` is only a source lookup name.
-#[derive(Debug, serde::Serialize)]
+#[derive(
+    Debug, serde::Serialize, bincode_next::Encode, bincode_next::Decode, bincode_next::Fingerprint,
+)]
 pub struct InterfaceBinding {
+    /// The identity of the imported interface.
     pub module: ModulePath,
+    /// The visible lookup prefix selected by the importer.
     pub prefix: String,
+    /// A selective import list, or `None` for all available names.
     pub names: Option<Vec<String>>,
 }
 
 /// Checks a module under a loader-supplied nominal source identity. A package
 /// alias changes visible names without changing ADT, class or instance keys.
+#[must_use]
 pub fn check_module_with_identity(
     file: FileId,
     module: &Module,
@@ -922,25 +1599,80 @@ pub fn check_module_with_identity(
     identity: Option<ModulePath>,
     bindings: &[InterfaceBinding],
 ) -> CheckResult {
+    check_with_import_sources(
+        file,
+        module,
+        &ImportSources {
+            exports: imports,
+            interfaces,
+            ..ImportSources::default()
+        },
+        options,
+        identity,
+        bindings,
+    )
+}
+
+/// Checks a module using the loader's resolved nominal identity for each re-export.
+///
+/// Each key in `reexport_origins` is the span of the complete import declaration.
+/// Entries omitted by the loader contribute no re-exports.
+#[must_use]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "loader-provided re-export origins supplement the existing checker inputs"
+)]
+pub fn check_module_with_resolved_imports(
+    file: FileId,
+    module: &Module,
+    imports: &[Import],
+    interfaces: &[ModuleInterface],
+    options: &CheckOptions,
+    identity: Option<ModulePath>,
+    bindings: &[InterfaceBinding],
+    reexport_origins: &BTreeMap<Span, ModulePath>,
+) -> CheckResult {
+    check_with_import_sources(
+        file,
+        module,
+        &ImportSources {
+            exports: imports,
+            interfaces,
+            reexport_origins: Some(reexport_origins),
+            ..ImportSources::default()
+        },
+        options,
+        identity,
+        bindings,
+    )
+}
+
+fn check_with_import_sources(
+    file: FileId,
+    module: &Module,
+    sources: &ImportSources<'_>,
+    options: &CheckOptions,
+    identity: Option<ModulePath>,
+    bindings: &[InterfaceBinding],
+) -> CheckResult {
     let mut checker = Checker::new(file, options.clone());
     checker.checked.identity = identity;
-    checker.add_imports(imports);
-    for interface in interfaces {
-        let explicit_bindings = !bindings.is_empty();
-        let direct = bindings
-            .iter()
-            .any(|binding| binding.module == interface.name);
+    let explicit_bindings = !bindings.is_empty();
+    checker.add_imports(
+        sources.exports,
+        !explicit_bindings && !sources.interfaces.is_empty(),
+    );
+    let direct_modules: HashSet<_> = bindings.iter().map(|binding| &binding.module).collect();
+    for interface in sources.interfaces {
+        let direct = direct_modules.contains(&interface.name);
         checker.merge_interface(interface, !explicit_bindings, !explicit_bindings || direct);
     }
     for binding in bindings {
-        if let Some(interface) = interfaces
-            .iter()
-            .find(|interface| interface.name == binding.module)
-        {
+        if let Some(interface) = sources.by_identity(&binding.module) {
             checker.bind_interface(interface, binding);
         }
     }
-    checker.run(module);
+    checker.run(module, sources);
     checker.checked.aliases = checker
         .aliases
         .iter()
@@ -1025,53 +1757,54 @@ fn import_dimension_display(
     mapped
 }
 
+fn hide_forwarded_names(
+    pattern: &Pat,
+    names: &mut HashMap<String, usize>,
+) {
+    let mut pending = vec![pattern];
+    while let Some(pattern) = pending.pop() {
+        match &pattern.kind {
+            | PatKind::Var(name) => {
+                names.remove(name);
+            },
+            | PatKind::Ctor { args, .. } | PatKind::Tuple(args) => pending.extend(args),
+            | PatKind::Record(fields) => {
+                for (name, pattern) in fields {
+                    if let Some(pattern) = pattern {
+                        pending.push(pattern);
+                    } else {
+                        names.remove(name);
+                    }
+                }
+            },
+            | PatKind::Tensor { items, rest } => {
+                pending.extend(items);
+                if let Some(name) = rest {
+                    names.remove(name);
+                }
+            },
+            | PatKind::As { pattern, name } => {
+                names.remove(name);
+                pending.push(pattern);
+            },
+            | PatKind::Annot { pattern, .. } => pending.push(pattern),
+            | _ => {},
+        }
+    }
+}
+
 // Prove identity forwarding from lexical binding structure, never a function
 // name or Fn signature. Unsupported computations deliberately have no summary.
 fn forwarded_parameter(
     args: &[Param],
     body: &Expr,
 ) -> Option<usize> {
-    fn hide(
-        pattern: &Pat,
-        names: &mut HashMap<String, usize>,
-    ) {
-        let mut pending = vec![pattern];
-        while let Some(pattern) = pending.pop() {
-            match &pattern.kind {
-                | PatKind::Var(name) => {
-                    names.remove(name);
-                },
-                | PatKind::Ctor { args, .. } | PatKind::Tuple(args) => pending.extend(args),
-                | PatKind::Record(fields) => {
-                    for (name, pattern) in fields {
-                        if let Some(pattern) = pattern {
-                            pending.push(pattern);
-                        } else {
-                            names.remove(name);
-                        }
-                    }
-                },
-                | PatKind::Tensor { items, rest } => {
-                    pending.extend(items);
-                    if let Some(name) = rest {
-                        names.remove(name);
-                    }
-                },
-                | PatKind::As { pattern, name } => {
-                    names.remove(name);
-                    pending.push(pattern);
-                },
-                | PatKind::Annot { pattern, .. } => pending.push(pattern),
-                | _ => {},
-            }
-        }
-    }
     fn bind(
         pattern: &Pat,
         value: Option<usize>,
         names: &mut HashMap<String, usize>,
     ) {
-        hide(pattern, names);
+        hide_forwarded_names(pattern, names);
         if let (PatKind::Var(name), Some(index)) = (&pattern.kind, value) {
             names.insert(name.clone(), index);
         }
@@ -1084,16 +1817,17 @@ fn forwarded_parameter(
         if depth > 128 {
             return None;
         }
+        let child_depth = depth.saturating_add(1);
         match &expr.kind {
             | ExprKind::Var(name) => names.get(name).copied(),
-            | ExprKind::Annot { expr, .. } => walk(expr, names, depth + 1),
+            | ExprKind::Annot { expr, .. } => walk(expr, names, child_depth),
             | ExprKind::LetIn {
                 pattern, value, body, ..
             } => {
-                let value = walk(value, names, depth + 1);
+                let value = walk(value, names, child_depth);
                 let mut inner = names.clone();
                 bind(pattern, value, &mut inner);
-                walk(body, &inner, depth + 1)
+                walk(body, &inner, child_depth)
             },
             | ExprKind::Block { stmts, tail } => {
                 let mut inner = names.clone();
@@ -1105,7 +1839,7 @@ fn forwarded_parameter(
                             let value = if *rec {
                                 None
                             } else {
-                                walk(value, &inner, depth + 1)
+                                walk(value, &inner, child_depth)
                             };
                             bind(pattern, value, &mut inner);
                         },
@@ -1116,22 +1850,22 @@ fn forwarded_parameter(
                         },
                     }
                 }
-                walk(tail.as_deref()?, &inner, depth + 1)
+                walk(tail.as_deref()?, &inner, child_depth)
             },
             | ExprKind::If {
                 then_branch,
                 else_branch,
                 ..
             } => {
-                let first = walk(then_branch, names, depth + 1)?;
-                (walk(else_branch, names, depth + 1) == Some(first)).then_some(first)
+                let first = walk(then_branch, names, child_depth)?;
+                (walk(else_branch, names, child_depth) == Some(first)).then_some(first)
             },
             | ExprKind::Match { arms, .. } => {
                 let mut result = None;
                 for arm in arms {
                     let mut inner = names.clone();
-                    hide(&arm.pattern, &mut inner);
-                    let current = walk(&arm.body, &inner, depth + 1)?;
+                    hide_forwarded_names(&arm.pattern, &mut inner);
+                    let current = walk(&arm.body, &inner, child_depth)?;
                     if result.is_some_and(|previous| previous != current) {
                         return None;
                     }
@@ -1161,24 +1895,107 @@ fn forwarded_parameter(
 /// This is the entry point a consumer that owns the manifest registry should
 /// use: it can pass the capabilities of the exact backend it will run on,
 /// instead of the ones the compiler was linked against.
+#[must_use]
 pub fn check_module_with_options(
     file: FileId,
     module: &Module,
     imports: &[Import],
     options: &CheckOptions,
 ) -> CheckResult {
-    let mut checker = Checker::new(file, options.clone());
-    checker.add_imports(imports);
-    checker.run(module);
-    checker.checked.aliases = checker
-        .aliases
-        .iter()
-        .map(|(name, def)| (name.clone(), def.ty.clone()))
-        .collect();
-    CheckResult {
-        diagnostics: checker.diagnostics,
-        module: checker.checked,
+    check_module_with_identity(file, module, imports, &[], options, None, &[])
+}
+
+/// Incoming exports and interfaces are borrowed throughout the declaration
+/// pass. Build each index only when its kind of lookup is required.
+#[derive(Default)]
+struct ImportSources<'a> {
+    exports: &'a [Import],
+    interfaces: &'a [ModuleInterface],
+    reexport_origins: Option<&'a BTreeMap<Span, ModulePath>>,
+    by_identity: OnceCell<HashMap<&'a ModulePath, &'a ModuleInterface>>,
+    by_spelling: OnceCell<HashMap<String, &'a ModuleInterface>>,
+}
+
+impl<'a> ImportSources<'a> {
+    fn by_identity(
+        &self,
+        module: &ModulePath,
+    ) -> Option<&'a ModuleInterface> {
+        self.by_identity
+            .get_or_init(|| {
+                let mut by_identity = HashMap::with_capacity(self.interfaces.len());
+                for interface in self.interfaces {
+                    by_identity.entry(&interface.name).or_insert(interface);
+                }
+                by_identity
+            })
+            .get(module)
+            .copied()
     }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "building the lookup is deferred until the first re-export"
+    )]
+    fn by_spelling(
+        &self,
+        dotted: &str,
+    ) -> Option<&'a ModuleInterface> {
+        if self.interfaces.is_empty() {
+            return None;
+        }
+        self.by_spelling
+            .get_or_init(|| {
+                let mut by_spelling = HashMap::with_capacity(self.interfaces.len());
+                for interface in self.interfaces {
+                    by_spelling
+                        .entry(interface.name.dotted())
+                        .or_insert(interface);
+                }
+                by_spelling
+            })
+            .get(dotted)
+            .copied()
+    }
+}
+
+fn import_key(
+    prefix: &str,
+    name: &str,
+) -> String {
+    if prefix.is_empty() {
+        name.to_string()
+    } else {
+        format!("{prefix}.{name}")
+    }
+}
+
+/// A selective import probes its named entries directly and retains interface
+/// order for alias instantiation and diagnostics.
+fn import_entries<'a, T>(
+    entries: &'a IndexMap<String, T>,
+    names: Option<&[String]>,
+) -> impl Iterator<Item = (&'a String, &'a T)> {
+    let indices = names.map(|names| {
+        let mut indices: Vec<_> = names
+            .iter()
+            .filter_map(|name| entries.get_index_of(name))
+            .collect();
+        indices.sort_unstable();
+        indices.dedup();
+        indices
+    });
+    let all_count = if indices.is_none() {
+        entries.len()
+    } else {
+        0
+    };
+    entries.iter().take(all_count).chain(
+        indices
+            .into_iter()
+            .flatten()
+            .filter_map(move |index| entries.get_index(index)),
+    )
 }
 
 /// The `<...>` binders of one top-level function, captured in pass B so a type
@@ -1190,6 +2007,28 @@ struct FnGenerics {
     nats: Vec<(String, Nat)>,
     rows: Vec<(String, Row)>,
     binders: Vec<GenericBinder>,
+}
+
+/// An imported binding retained while a local declaration reserves its name.
+#[derive(Clone)]
+struct InheritedValue {
+    scheme: Scheme,
+    headers: Option<Vec<GenericBinder>>,
+    callable: Option<CallableProjection>,
+}
+
+struct ModuleSignatures {
+    pending: Vec<(String, Span)>,
+    lets: HashMap<Span, Type>,
+    functions: HashMap<Span, (Type, FnGenerics, CallableProjection)>,
+}
+
+#[derive(Default)]
+struct LexicalQuantifiers {
+    types: HashSet<u32>,
+    dims: HashSet<u32>,
+    rows: HashSet<u32>,
+    nats: HashSet<u32>,
 }
 
 /// The names a declaration body uses in each kind position (§2 kind inference).
@@ -1207,8 +2046,12 @@ impl ParamUsage {
         ty: &Ty,
     ) {
         match &ty.kind {
-            | TyKind::Real(dim) | TyKind::Float(dim) | TyKind::Complex(dim) => self.scan_dim(dim),
-            | TyKind::Point(dim) | TyKind::UnitOf(dim) => self.scan_dim(dim),
+            | TyKind::Real(dim)
+            | TyKind::Float(dim)
+            | TyKind::Complex(dim)
+            | TyKind::Point(dim)
+            | TyKind::UnitOf(dim)
+            | TyKind::DimArg(dim) => self.scan_dim(dim),
             | TyKind::Tensor { shape, elem } | TyKind::Sparse { shape, elem, .. } => {
                 self.scan_shape(shape);
                 self.scan(elem);
@@ -1220,7 +2063,6 @@ impl ParamUsage {
             },
             | TyKind::ShapeArg(shape) => self.scan_shape(shape),
             | TyKind::NatArg(nat) => self.scan_nat(nat),
-            | TyKind::DimArg(dim) => self.scan_dim(dim),
             | TyKind::SymFun(domain, codomain) => {
                 self.scan_dim(domain);
                 self.scan_dim(codomain);
@@ -1329,13 +2171,6 @@ impl ParamUsage {
     }
 }
 
-fn tail_row_id(row: &Row) -> Option<u32> {
-    match row {
-        | Row::Var(id) => Some(*id),
-        | _ => None,
-    }
-}
-
 /// A bare written name inside a type argument (`L`, `n`, `a`), if any.
 ///
 /// A lowercase name is parsed as a type *variable* (`TyKind::Var`), an
@@ -1355,6 +2190,10 @@ struct LiteralClass {
     atomic: bool,
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "scoped pattern, dimension and diagnostic modes are independent checker state"
+)]
 struct Checker {
     file: FileId,
     /// The module path, used to qualify nominal keys (§A decision 4).
@@ -1370,6 +2209,12 @@ struct Checker {
     /// Classes declared `private` in this module (§7.1.3): usable locally,
     /// absent from the exported interface.
     private_classes: HashSet<String>,
+    /// Class methods declared `private`: `(class_name, method_name)`.
+    private_class_methods: HashSet<(String, String)>,
+    /// Instance methods declared `private`: `(instance_key, method_name)`.
+    private_instance_methods: HashSet<(InstanceKey, String)>,
+    /// Whether relaxed `Result`/`Option` mode is active.
+    relax_result: bool,
     instance_declarations: HashMap<Span, InstanceKey>,
     method_bindings: HashMap<String, ClassMethodRef>,
     constructor_bindings: HashMap<String, (adt::AdtId, usize)>,
@@ -1406,7 +2251,7 @@ struct Checker {
     /// The export-name sets of the prefix-less `import`/`open` statements of
     /// this module. Used to tell which interface is the source of an
     /// unqualified name when the flat import table has no module identity.
-    unqualified_import_names: Vec<HashSet<String>>,
+    unqualified_import_names: Vec<Vec<String>>,
     /// Every name imported unqualified (§7.2.1/§7.2.2).
     requested_unqualified: HashSet<String>,
     /// The type a top-level `let` was given in pass B, so pass C checks
@@ -1474,26 +2319,16 @@ struct Checker {
     do_returns: Vec<(usize, Span, Type)>,
 }
 
-#[derive(Clone)]
-struct AliasDef {
-    ty: Type,
-    /// Number of type parameters, carried so the interface can re-declare it.
-    params: usize,
-    /// The kind of each parameter (§2 kind annotations/inference).
-    kinds: Vec<AliasParamKind>,
-    /// Placeholder variable ids, one per parameter (only the matching kind is
-    /// meaningful): dimension ids for `Dim`, nat ids for `Nat`, row ids for
-    /// `Row`; type parameters use `Type::Param(index)` in `ty` instead.
-    dim_vars: Vec<u32>,
-    nat_vars: Vec<u32>,
-    row_vars: Vec<u32>,
-}
-
 impl Checker {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "all checker entry points share one construction of the checker state"
+    )]
     fn new(
         file: FileId,
         options: CheckOptions,
     ) -> Self {
+        let relax_result = options.relax_result;
         let mut checker = Self {
             file,
             module_path: ModulePath::new([format!("<file{file}>")]),
@@ -1502,6 +2337,9 @@ impl Checker {
             stability: IndexMap::new(),
             registrations: Vec::new(),
             private_classes: HashSet::new(),
+            private_class_methods: HashSet::new(),
+            private_instance_methods: HashSet::new(),
+            relax_result,
             instance_declarations: HashMap::new(),
             method_bindings: HashMap::new(),
             constructor_bindings: HashMap::new(),
@@ -1568,28 +2406,25 @@ impl Checker {
     ///
     /// Opening the same module twice is idempotent (§7.2.1), so an identical
     /// scheme is not a clash.
-    fn note_opened(
+    fn note_opened<'a>(
         &mut self,
-        opened: &mut Vec<(String, Type)>,
+        opened: &mut HashMap<&'a str, &'a Type>,
         prefix: &str,
-        key: &str,
-        scheme: &Scheme,
+        name: &'a str,
+        scheme: &'a Scheme,
     ) {
         if !prefix.is_empty() {
             return;
         }
-        if let Some((_, previous)) = opened.iter().find(|(name, _)| name == key) {
-            if previous != &scheme.ty {
-                self.error_help(
-                    "E0603",
-                    format!("`{key}` is opened by two modules"),
-                    Span::default(),
-                    "qualify the name, or import the modules without `open`",
-                );
-            }
-            return;
+        let previous = opened.entry(name).or_insert(&scheme.ty);
+        if *previous != &scheme.ty {
+            self.error_help(
+                "E0603",
+                format!("`{name}` is opened by two modules"),
+                Span::default(),
+                "qualify the name, or import the modules without `open`",
+            );
         }
-        opened.push((key.to_string(), scheme.ty.clone()));
     }
 
     /// Puts imported names in scope.
@@ -1599,12 +2434,13 @@ impl Checker {
     fn add_imports(
         &mut self,
         imports: &[Import],
+        infer_legacy_open_sources: bool,
     ) {
         // Names an earlier import in this call already brought in, with the
         // type it gave them: a second, different one is ambiguous (§7.2.2).
-        let mut opened: Vec<(String, Type)> = Vec::new();
+        let mut opened = HashMap::new();
         for (prefix, exports) in imports {
-            if prefix.is_empty() {
+            if prefix.is_empty() && infer_legacy_open_sources {
                 self.unqualified_import_names
                     .push(exports.keys().cloned().collect());
                 self.requested_unqualified.extend(exports.keys().cloned());
@@ -1616,20 +2452,12 @@ impl Checker {
                     && dim.factors().count() == 1
                     && power.is_one()
                 {
-                    let display = if prefix.is_empty() {
-                        name.clone()
-                    } else {
-                        format!("{prefix}.{name}")
-                    };
+                    let display = import_key(prefix, name);
                     dimension_names.entry(base.clone()).or_insert(display);
                 }
             }
             for (name, export) in exports {
-                let key = if prefix.is_empty() {
-                    name.clone()
-                } else {
-                    format!("{prefix}.{name}")
-                };
+                let key = import_key(prefix, name);
                 self.method_bindings.remove(&key);
                 self.constructor_bindings.remove(&key);
                 if let Export::Ctor { adt, index, .. } | Export::TypeCtor { adt, index, .. } =
@@ -1640,14 +2468,14 @@ impl Checker {
                 }
                 match export {
                     | Export::Value { scheme, .. } | Export::Ctor { scheme, .. } => {
-                        self.note_opened(&mut opened, prefix, &key, scheme);
+                        self.note_opened(&mut opened, prefix, name, scheme);
                         self.globals.insert(
                             key.clone(),
                             import_dimension_display(scheme, &dimension_names),
                         );
                     },
                     | Export::TypeCtor { adt, scheme, .. } => {
-                        self.note_opened(&mut opened, prefix, &key, scheme);
+                        self.note_opened(&mut opened, prefix, name, scheme);
                         self.globals.insert(
                             key.clone(),
                             import_dimension_display(scheme, &dimension_names),
@@ -1666,7 +2494,7 @@ impl Checker {
                                 let _ = self.units.insert(definition.clone());
                             }
                         } else if self.units.lookup(&key).is_none() {
-                            definition.name = key.clone();
+                            definition.name.clone_from(&key);
                             definition.aliases.clear();
                             let _ = self.units.insert(definition);
                         }
@@ -1689,6 +2517,168 @@ impl Checker {
         }
     }
 
+    /// Re-exports bindings, types, classes, and units from an `export import` or
+    /// `export open` declaration (§7.1).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "selective reexports validate and forward every supported namespace in one pass"
+    )]
+    fn reexport_import(
+        &mut self,
+        sources: &ImportSources<'_>,
+        path: &[String],
+        alias: Option<&str>,
+        names: Option<&[String]>,
+        open: bool,
+        span: Span,
+    ) {
+        let dotted = sources.reexport_origins.is_none().then(|| path.join("."));
+        let interface = sources.reexport_origins.map_or_else(
+            || dotted.as_deref().and_then(|path| sources.by_spelling(path)),
+            |origins| {
+                origins
+                    .get(&span)
+                    .and_then(|origin| sources.by_identity(origin))
+            },
+        );
+        if let Some(interface) = interface {
+            match names {
+                | Some(selected) => {
+                    for name in selected {
+                        if let Some(export) = interface.exports.get(name) {
+                            self.checked.exports.insert(name.clone(), export.clone());
+                            if let Export::Type { adt } | Export::TypeCtor { adt, .. } = export {
+                                for (ctor_name, ctor_export) in &interface.exports {
+                                    if matches!(
+                                        ctor_export,
+                                        Export::Ctor { adt: id, .. }
+                                            | Export::TypeCtor { adt: id, .. }
+                                            if id == adt && ctor_name != name
+                                    ) {
+                                        self.checked
+                                            .exports
+                                            .insert(ctor_name.clone(), ctor_export.clone());
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(alias_def) = interface.aliases.get(name) {
+                            self.checked
+                                .alias_defs
+                                .insert(name.clone(), alias_def.clone());
+                        }
+                        if let Some(headers) = interface.function_headers.get(name) {
+                            self.checked
+                                .function_headers
+                                .insert(name.clone(), headers.clone());
+                        }
+                        if let Some(callable) = interface.callable_exports.get(name) {
+                            self.checked
+                                .callable_exports
+                                .insert(name.clone(), callable.clone());
+                        }
+                        for (class_key, class_export) in &interface.classes {
+                            if class_key.name == *name {
+                                self.checked
+                                    .classes
+                                    .insert(class_key.clone(), class_export.clone());
+                            }
+                        }
+                    }
+                },
+                | None => {
+                    for (name, export) in &interface.exports {
+                        self.checked.exports.insert(name.clone(), export.clone());
+                    }
+                    for (name, alias_def) in &interface.aliases {
+                        self.checked
+                            .alias_defs
+                            .insert(name.clone(), alias_def.clone());
+                    }
+                    for (name, headers) in &interface.function_headers {
+                        self.checked
+                            .function_headers
+                            .insert(name.clone(), headers.clone());
+                    }
+                    for (name, callable) in &interface.callable_exports {
+                        self.checked
+                            .callable_exports
+                            .insert(name.clone(), callable.clone());
+                    }
+                    for (class_key, class_export) in &interface.classes {
+                        self.checked
+                            .classes
+                            .insert(class_key.clone(), class_export.clone());
+                    }
+                },
+            }
+            return;
+        }
+        let Some(dotted) = dotted.as_deref() else {
+            return;
+        };
+        let expected_prefix = if open || names.is_some() {
+            ""
+        } else {
+            alias.unwrap_or(dotted)
+        };
+        for (prefix, exports) in sources.exports {
+            if prefix != expected_prefix {
+                continue;
+            }
+            match names {
+                | Some(selected) => {
+                    for name in selected {
+                        if let Some(export) = exports.get(name) {
+                            self.checked.exports.insert(name.clone(), export.clone());
+                            if let Export::Type { adt } | Export::TypeCtor { adt, .. } = export {
+                                for (ctor_name, ctor_export) in exports {
+                                    if matches!(
+                                        ctor_export,
+                                        Export::Ctor { adt: id, .. }
+                                            | Export::TypeCtor { adt: id, .. }
+                                            if id == adt && ctor_name != name
+                                    ) {
+                                        self.checked
+                                            .exports
+                                            .insert(ctor_name.clone(), ctor_export.clone());
+                                    }
+                                }
+                            }
+                            if matches!(export, Export::Alias { .. })
+                                && let Some(alias_def) = self.aliases.get(name)
+                            {
+                                let canonical = Self::canonical_alias_export(alias_def);
+                                self.checked.alias_defs.insert(name.clone(), canonical);
+                            }
+                        }
+                        if let Some(class_def) = self.classes.class(name) {
+                            self.checked.classes.insert(
+                                class_def.key.clone(),
+                                ClassExport {
+                                    key: class_def.key.clone(),
+                                    params: class_def.params,
+                                    methods: class_def.methods.clone(),
+                                },
+                            );
+                        }
+                    }
+                },
+                | None => {
+                    for (name, export) in exports {
+                        self.checked.exports.insert(name.clone(), export.clone());
+                        if matches!(export, Export::Alias { .. })
+                            && let Some(alias_def) = self.aliases.get(name)
+                        {
+                            let canonical = Self::canonical_alias_export(alias_def);
+                            self.checked.alias_defs.insert(name.clone(), canonical);
+                        }
+                    }
+                },
+            }
+        }
+    }
+
     /// Merges an imported module's classes, instances and alias definitions
     /// into this checker, before any body is checked (§7.1.3/§7.4).
     ///
@@ -1696,21 +2686,26 @@ impl Checker {
     /// declared) but participate in the global coherence check, so an overlap
     /// is `E0311` naming both modules. Classes are registered with their
     /// symbolic key; their methods become callable globals.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "interface identities and checked evidence must be registered before imported names become visible"
+    )]
     fn merge_interface(
         &mut self,
         interface: &ModuleInterface,
         visible_names: bool,
         publish_methods: bool,
     ) {
-        let module = interface.name.clone();
+        let module = &interface.name;
+        let prefix = if visible_names && !module.is_prelude() {
+            module.dotted()
+        } else {
+            String::new()
+        };
         // Qualified alias definitions: a source reference `A.Vec2` expands.
         if visible_names {
             for (name, alias) in &interface.aliases {
-                let qualified = if module.is_prelude() {
-                    name.clone()
-                } else {
-                    format!("{}.{}", module.dotted(), name)
-                };
+                let qualified = import_key(&prefix, name);
                 let def = self.imported_alias_def(alias);
                 self.aliases.entry(qualified).or_insert(def);
             }
@@ -1744,7 +2739,7 @@ impl Checker {
                 }
             })
             .collect();
-        if let Err(error) = self.classes.merge_imported(&module, &classes, &instances) {
+        if let Err(error) = self.classes.merge_imported(module, &classes, &instances) {
             let message = match error {
                 | InstanceError::Overlapping { incoming, existing } => {
                     format!("imported instance `{incoming}` overlaps `{existing}`")
@@ -1787,11 +2782,7 @@ impl Checker {
             return;
         }
         for (name, projection) in &interface.callable_exports {
-            let qualified = if module.is_prelude() {
-                name.clone()
-            } else {
-                format!("{}.{}", module.dotted(), name)
-            };
+            let qualified = import_key(&prefix, name);
             self.global_callables
                 .entry(qualified)
                 .or_insert_with(|| projection.clone());
@@ -1802,11 +2793,7 @@ impl Checker {
             }
         }
         for (name, headers) in &interface.function_headers {
-            let qualified = if module.is_prelude() {
-                name.clone()
-            } else {
-                format!("{}.{}", module.dotted(), name)
-            };
+            let qualified = import_key(&prefix, name);
             self.generic_bindings
                 .entry(qualified)
                 .or_insert_with(|| headers.clone());
@@ -1822,11 +2809,7 @@ impl Checker {
         // interface is the only source of an alias *body* and of an ADT
         // identity, so this is where imported type names become visible.
         for (name, export) in &interface.exports {
-            let qualified = if module.is_prelude() {
-                name.clone()
-            } else {
-                format!("{}.{}", module.dotted(), name)
-            };
+            let qualified = import_key(&prefix, name);
             if !self.globals.contains_key(&qualified)
                 && let Export::Ctor { adt, index, .. } | Export::TypeCtor { adt, index, .. } =
                     export
@@ -1922,56 +2905,24 @@ impl Checker {
         interface: &ModuleInterface,
         binding: &InterfaceBinding,
     ) {
-        for (name, projection) in &interface.callable_exports {
-            if binding
-                .names
-                .as_ref()
-                .is_some_and(|names| !names.contains(name))
-            {
-                continue;
-            }
-            let key = if binding.prefix.is_empty() {
-                name.clone()
-            } else {
-                format!("{}.{name}", binding.prefix)
-            };
+        let selected_names = binding.names.as_deref();
+        for (name, projection) in import_entries(&interface.callable_exports, selected_names) {
+            let key = import_key(&binding.prefix, name);
             self.global_callables.insert(key, projection.clone());
         }
-        for (name, headers) in &interface.function_headers {
-            if binding
-                .names
-                .as_ref()
-                .is_some_and(|names| !names.contains(name))
-            {
-                continue;
-            }
-            let key = if binding.prefix.is_empty() {
-                name.clone()
-            } else {
-                format!("{}.{name}", binding.prefix)
-            };
+        for (name, headers) in import_entries(&interface.function_headers, selected_names) {
+            let key = import_key(&binding.prefix, name);
             self.generic_bindings.insert(key, headers.clone());
         }
-        for (name, alias) in &interface.aliases {
-            if binding
-                .names
-                .as_ref()
-                .is_some_and(|names| !names.contains(name))
-            {
-                continue;
-            }
-            let key = if binding.prefix.is_empty() {
-                name.clone()
-            } else {
-                format!("{}.{name}", binding.prefix)
-            };
+        for (name, alias) in import_entries(&interface.aliases, selected_names) {
+            let key = import_key(&binding.prefix, name);
             let def = self.imported_alias_def(alias);
             self.aliases.insert(key, def);
         }
         // Selecting a type imports its public constructors as specified by
         // §7.1. The same expansion is used by the runtime import binding.
-        if let Some(names) = &binding.names {
-            let selected: Vec<_> = names
+        if let Some(names) = selected_names {
+            let selected: HashSet<_> = names
                 .iter()
                 .filter_map(|name| {
                     match interface.exports.get(name) {
@@ -1980,6 +2931,9 @@ impl Checker {
                     }
                 })
                 .collect();
+            if selected.is_empty() {
+                return;
+            }
             for (name, export) in &interface.exports {
                 match export {
                     | Export::Ctor {
@@ -2041,6 +2995,10 @@ impl Checker {
     /// runtime (§13.5.2), and a malformed argument is `E0210` (appendix B).
     /// `@stable`/`@experimental`/`@deprecated` are recorded so a consumer (the
     /// language server) can report them, and a use of a deprecated name warns.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "attribute names, site restrictions and diagnostics are defined together"
+    )]
     fn check_attributes(
         &mut self,
         module: &Module,
@@ -2278,8 +3236,9 @@ impl Checker {
     fn run(
         &mut self,
         module: &Module,
+        imports: &ImportSources<'_>,
     ) {
-        self.checked.name = module.name.clone();
+        self.checked.name.clone_from(&module.name);
         self.checked.anonymous_file = self.file;
         self.module_path = self.checked.module_path();
         self.check_attributes(module);
@@ -2309,18 +3268,63 @@ impl Checker {
             }
         }
 
+        self.declare_module_types(module, imports);
+        let inherited_values = self.inherited_initializers(module);
+        let signatures = self.seed_module_signatures(module);
+        let schemes = self.check_module_bodies(module, &signatures, &inherited_values);
+        self.finalize_top_level_bindings(&signatures.pending, schemes);
+        self.report_unused_bindings(module);
+        self.finalize_module_constraints();
+        let lexical = self.lexical_quantifiers();
+        self.default_function_evidence(&lexical);
+        self.publish_expression_evidence(&lexical);
+        self.publish_callable_evidence(&signatures.pending);
+        self.publish_module_interface(module);
+        self.finalize_registrations(module);
+        self.checked.errors = self.diagnostics.error_count();
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "type declarations have their own ordered first module pass"
+    )]
+    fn declare_module_types(
+        &mut self,
+        module: &Module,
+        imports: &ImportSources<'_>,
+    ) {
         // Pass A: types, dimensions and units.
         //
         // Units are collected before anything else resolves a unit literal, so
         // a declaration may be written after its first use (§7.1.2).
         for decl in &module.decls {
+            let saved_relax = self.relax_result;
+            if decl.has_attribute("relax_result") {
+                self.relax_result = true;
+            }
             match &decl.kind {
+                | DeclKind::Import {
+                    path,
+                    alias,
+                    names,
+                    open,
+                    export: true,
+                } => {
+                    self.reexport_import(
+                        imports,
+                        path,
+                        alias.as_deref(),
+                        names.as_deref(),
+                        *open,
+                        decl.span,
+                    );
+                },
                 | DeclKind::Dimension { name, value } => {
                     self.declare_dimension(name, value.as_ref(), decl.span, decl.private);
                 },
                 | DeclKind::Unit { .. } => self.declare_unit(decl),
                 | DeclKind::Type { name, params, body } => {
-                    self.declare_type(name, params, body, decl.private);
+                    self.declare_type(name, params, body, decl.span, decl.private);
                 },
                 | DeclKind::Class {
                     name,
@@ -2329,12 +3333,59 @@ impl Checker {
                 } => self.declare_class(name, params, methods, decl.span, decl.private),
                 | _ => {},
             }
+            self.relax_result = saved_relax;
         }
+    }
 
+    #[allow(
+        clippy::single_call_fn,
+        reason = "initializers must capture inherited bindings before reservations change the name tables"
+    )]
+    fn inherited_initializers(
+        &self,
+        module: &Module,
+    ) -> HashMap<String, InheritedValue> {
+        // Keep imported values available inside a first nonrecursive
+        // initializer that shadows them. Everywhere else forward references
+        // must select the new local reservation and its own evidence.
+        module
+            .decls
+            .iter()
+            .filter_map(|decl| {
+                if let DeclKind::Let { pattern, .. } = &decl.kind
+                    && let PatKind::Var(name) = &pattern.kind
+                    && let Some(scheme) = self.globals.get(name)
+                {
+                    Some((
+                        name.clone(),
+                        InheritedValue {
+                            scheme: scheme.clone(),
+                            headers: self.generic_bindings.get(name).cloned(),
+                            callable: self.global_callables.get(name).cloned(),
+                        },
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "forward reservations share one inference level before any body is checked"
+    )]
+    fn seed_module_signatures(
+        &mut self,
+        module: &Module,
+    ) -> ModuleSignatures {
         // Pass B: signatures at level 1, so they can be generalised at level 0.
         self.infer.enter_level();
         let mut pending: Vec<(String, Span)> = Vec::new();
-        let mut seen_fns: HashSet<String> = HashSet::new();
+        let mut seeded_values: HashSet<String> = HashSet::new();
+        let mut let_signatures: HashMap<Span, Type> = HashMap::new();
+        let mut function_signatures: HashMap<Span, (Type, FnGenerics, CallableProjection)> =
+            HashMap::new();
         for (index, decl) in module.decls.iter().enumerate() {
             match &decl.kind {
                 | DeclKind::Fn {
@@ -2345,44 +3396,39 @@ impl Checker {
                     body,
                     ..
                 } => {
-                    if !seen_fns.insert(name.clone()) {
-                        self.error_help(
-                            "E0316",
-                            format!("`{name}` is defined more than once"),
-                            decl.span,
-                            "rename one of the two functions",
-                        );
-                    }
-                    self.callable_ids.insert(
+                    let identity = CallableId::new(
+                        &self.module_path,
                         decl.span,
-                        CallableId::new(
-                            &self.module_path,
-                            decl.span,
-                            &aevia_syntax::fingerprint::declaration(decl),
-                        ),
+                        &aevia_syntax::fingerprint::declaration(decl),
                     );
+                    self.callable_ids.insert(decl.span, identity.clone());
                     let (ty, generics) = self.fn_signature(params, args, ret.as_ref());
-                    self.global_callables.insert(
-                        name.clone(),
-                        CallableProjection {
-                            origin: self
-                                .callable_ids
-                                .get(&decl.span)
-                                .expect("seeded callable identity")
-                                .clone(),
-                            arguments: generics.binders.clone(),
-                            selected: false,
-                            forwarded_parameter: forwarded_parameter(args, body),
-                        },
+                    let projection = CallableProjection {
+                        origin: identity,
+                        arguments: generics.binders.clone(),
+                        selected: false,
+                        forwarded_parameter: forwarded_parameter(args, body),
+                    };
+                    function_signatures.insert(
+                        decl.span,
+                        (ty.clone(), generics.clone(), projection.clone()),
                     );
-                    self.generic_bindings
-                        .insert(name.clone(), generics.binders.clone());
+                    let scheme = Scheme::mono(ty.clone());
+                    // Forward references see the first declaration. Later
+                    // declarations with this name become visible in pass C,
+                    // each with their own signature and callable identity.
+                    if seeded_values.insert(name.clone()) {
+                        self.global_callables.insert(name.clone(), projection);
+                        self.generic_bindings
+                            .insert(name.clone(), generics.binders.clone());
+                        self.globals.insert(name.clone(), scheme.clone());
+                    }
                     self.fn_generics.insert(name.clone(), generics);
-                    self.fn_signatures.insert(name.clone(), ty.clone());
-                    let scheme = Scheme::mono(ty);
-                    self.globals.insert(name.clone(), scheme.clone());
+                    self.fn_signatures.insert(name.clone(), ty);
                     // §7.1.3: `private` keeps a name out of the interface.
-                    if !decl.private {
+                    if decl.private {
+                        self.checked.exports.shift_remove(name);
+                    } else {
                         self.checked.exports.insert(
                             name.clone(),
                             Export::Value {
@@ -2404,10 +3450,19 @@ impl Checker {
                         | Some(ty) => self.convert_type(ty),
                         | None => self.infer.fresh_type(),
                     };
-                    self.top_lets.insert(name.clone(), value_ty.clone());
+                    let_signatures.insert(decl.span, value_ty.clone());
+                    self.top_lets
+                        .entry(name.clone())
+                        .or_insert_with(|| value_ty.clone());
                     let scheme = Scheme::mono(value_ty);
-                    self.globals.insert(name.clone(), scheme.clone());
-                    if !decl.private {
+                    if seeded_values.insert(name.clone()) {
+                        self.globals.insert(name.clone(), scheme.clone());
+                        self.generic_bindings.remove(name);
+                        self.global_callables.remove(name);
+                    }
+                    if decl.private {
+                        self.checked.exports.shift_remove(name);
+                    } else {
                         self.checked.exports.insert(
                             name.clone(),
                             Export::Value {
@@ -2423,18 +3478,76 @@ impl Checker {
             }
         }
 
-        // Pass C: bodies.
+        ModuleSignatures {
+            pending,
+            lets: let_signatures,
+            functions: function_signatures,
+        }
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "bodies consume the reservations in source order and preserve preceding lexical bindings"
+    )]
+    fn check_module_bodies(
+        &mut self,
+        module: &Module,
+        signatures: &ModuleSignatures,
+        inherited_values: &HashMap<String, InheritedValue>,
+    ) -> HashMap<Span, Scheme> {
+        // Pass C: bodies. A repeated name shadows its earlier declaration,
+        // rather than unifying their types. Preserve the preceding environment
+        // while checking a non-recursive rebinding's initializer.
+        let mut initialized_values = HashSet::new();
+        let mut binding_schemes: HashMap<Span, Scheme> = HashMap::new();
         for decl in &module.decls {
+            let saved_relax = self.relax_result;
+            if decl.has_attribute("relax_result") {
+                self.relax_result = true;
+            }
             match &decl.kind {
                 | DeclKind::Fn { name, args, body, .. } => {
-                    self.check_fn_body(name, args, body, decl.span)
+                    if let Some((signature, generics, projection)) =
+                        signatures.functions.get(&decl.span).cloned()
+                    {
+                        self.fn_signatures.insert(name.clone(), signature.clone());
+                        self.fn_generics.insert(name.clone(), generics.clone());
+                        self.generic_bindings.insert(name.clone(), generics.binders);
+                        self.global_callables.insert(name.clone(), projection);
+                        self.globals.insert(name.clone(), Scheme::mono(signature));
+                    }
+                    self.check_fn_body(name, args, body, decl.span);
+                    initialized_values.insert(name.clone());
                 },
                 | DeclKind::Let {
                     pattern,
                     ty,
                     value,
                     rec,
-                } => self.check_top_let_body(pattern, ty.as_ref(), value, *rec, decl.span),
+                } => {
+                    let shadowing = if let PatKind::Var(name) = &pattern.kind {
+                        if let Some(signature) = signatures.lets.get(&decl.span) {
+                            self.top_lets.insert(name.clone(), signature.clone());
+                        }
+                        !initialized_values.insert(name.clone())
+                    } else {
+                        false
+                    };
+                    self.check_top_let_body(
+                        pattern,
+                        ty.as_ref(),
+                        value,
+                        *rec,
+                        decl.span,
+                        shadowing,
+                        if let (false, PatKind::Var(name)) = (shadowing, &pattern.kind) {
+                            inherited_values.get(name).cloned()
+                        } else {
+                            None
+                        },
+                    );
+                    collect_pattern_bindings(pattern, &mut initialized_values);
+                },
                 | DeclKind::Test { name, body } => {
                     let ty = self.synth(body);
                     self.expect_bool(&ty, body.span);
@@ -2443,6 +3556,13 @@ impl Checker {
                 | DeclKind::Instance { .. } => self.check_instance(decl),
                 | DeclKind::Derive { .. } => self.check_derive(decl),
                 | _ => {},
+            }
+            self.relax_result = saved_relax;
+            if matches!(decl.kind, DeclKind::Fn { .. } | DeclKind::Let { .. })
+                && let Some(name) = declaration_name(decl)
+                && let Some(scheme) = self.globals.get(&name)
+            {
+                binding_schemes.insert(decl.span, scheme.clone());
             }
             // §3.10.2 rule 6 / §3.5.1: a type-level equation that still has
             // several unknowns after the declaration cannot be expressed in its
@@ -2472,80 +3592,77 @@ impl Checker {
             }
         }
 
+        binding_schemes
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "each top-level scheme is generalized before its unresolved types are defaulted"
+    )]
+    fn finalize_top_level_bindings(
+        &mut self,
+        pending: &[(String, Span)],
+        mut binding_schemes: HashMap<Span, Scheme>,
+    ) {
         // Pass D: generalise every top-level binding, then default what is
         // left. Defaulting *after* generalisation is what keeps `<d>`
         // polymorphic functions polymorphic (§3.10.2).
         self.infer.leave_level();
-        for (name, _) in &pending {
-            let Some(scheme) = self.globals.get(name).cloned() else {
-                continue;
-            };
-            let generalised = self.generalize_scheme(&scheme);
-            self.globals.insert(name.clone(), generalised.clone());
-            if let Some(Export::Value { scheme, .. }) = self.checked.exports.get_mut(name) {
-                *scheme = generalised;
+        let latest_bindings: HashMap<String, Span> = pending
+            .iter()
+            .map(|(name, site)| (name.clone(), *site))
+            .collect();
+        // Keep every declaration's own scheme: the current name table only
+        // retains the last shadowing declaration and cannot finalize old code.
+        for (_, site) in pending {
+            if let Some(scheme) = binding_schemes.get(site).cloned() {
+                let generalized = self.generalize_scheme(&scheme);
+                binding_schemes.insert(*site, generalized);
             }
         }
-        // A constraint whose type is one of this binding's quantified
-        // variables belongs to the binding's scheme (§3.2.5): that is how
-        // `fn f(x) = show(x)` becomes `Show a => a -> String`.
-        for (name, _) in &pending {
-            let Some(scheme) = self.globals.get(name).cloned() else {
-                continue;
-            };
-            if scheme.vars.is_empty() {
-                continue;
-            }
-            let mut attached: Vec<Constraint> = Vec::new();
-            self.deferred_constraints.retain(|(class, ty, _)| {
-                let resolved = self.infer.resolve(ty);
-                if mentions_any(&resolved, &scheme.vars) {
-                    attached.push(Constraint::new(class.clone(), vec![resolved]));
-                    false
-                } else {
-                    true
-                }
-            });
-            if attached.is_empty() {
-                continue;
-            }
-            let mut combined = scheme.constraints.clone();
-            for constraint in attached {
-                if !combined.contains(&constraint) {
-                    combined.push(constraint);
-                }
-            }
-            let constrained = scheme.constrained(combined);
-            self.globals.insert(name.clone(), constrained.clone());
-            if let Some(Export::Value { scheme, .. }) = self.checked.exports.get_mut(name) {
-                *scheme = constrained;
+        for (_, site) in pending {
+            if let Some(scheme) = binding_schemes.get_mut(site) {
+                self.attach_deferred_scheme_constraints(scheme);
             }
         }
-        for (name, span) in &pending {
-            let Some(scheme) = self.globals.get(name).cloned() else {
+        for (name, site) in pending {
+            let Some(scheme) = binding_schemes.get(site) else {
                 continue;
             };
-            let (defaulted, warnings) = self.infer.default_scheme(&scheme);
+            let (defaulted, warnings) = self.infer.default_scheme(scheme);
             for _ in warnings {
                 self.warn(
                     "W0301",
                     format!("the dimension of `{name}` is unresolved; it defaults to 1"),
-                    *span,
+                    *site,
                 );
             }
-            self.globals.insert(name.clone(), defaulted.clone());
-            if let Some(Export::Value { scheme, .. }) = self.checked.exports.get_mut(name) {
-                *scheme = defaulted;
+            if let Some(function) = self.checked.functions.get_mut(site) {
+                function.scheme = defaulted.clone();
+            }
+            if latest_bindings.get(name) == Some(site) {
+                self.globals.insert(name.clone(), defaulted.clone());
+                if let Some(Export::Value { scheme, .. }) = self.checked.exports.get_mut(name) {
+                    *scheme = defaulted;
+                }
             }
         }
         // A constraint that only ever appeared in a discarded expression still
         // has a literal type to default: `show(1)` is `Show Int`.
-        for index in 0..self.deferred_constraints.len() {
-            let ty = self.deferred_constraints[index].1.clone();
-            let (defaulted, _) = self.infer.default_type(&ty);
-            self.deferred_constraints[index].1 = defaulted;
+        for (_, ty, _) in &mut self.deferred_constraints {
+            let (defaulted, _) = self.infer.default_type(ty);
+            *ty = defaulted;
         }
+    }
 
+    #[allow(
+        clippy::single_call_fn,
+        reason = "unused-name diagnostics depend on complete module references"
+    )]
+    fn report_unused_bindings(
+        &mut self,
+        module: &Module,
+    ) {
         // §B.12: a symbol nobody reads is dead weight.
         for decl in &module.decls {
             if let DeclKind::Let { pattern, value, .. } = &decl.kind {
@@ -2555,7 +3672,10 @@ impl Checker {
                 if self.referenced.contains(name) || decl.private {
                     continue;
                 }
-                if is_symbol_factory(value) {
+                if matches!(&value.kind, ExprKind::Call { callee, .. }
+                    if matches!(&callee.kind, ExprKind::Var(name)
+                        if matches!(name.as_str(), "symbol" | "symfun")))
+                {
                     self.warn(
                         "W0303",
                         format!("the symbol `{name}` is never used"),
@@ -2596,7 +3716,13 @@ impl Checker {
                 );
             }
         }
+    }
 
+    #[allow(
+        clippy::single_call_fn,
+        reason = "known constraints and runtime dimensions are resolved before callable evidence is frozen"
+    )]
+    fn finalize_module_constraints(&mut self) {
         // Every constraint whose type became known is solved; the rest is
         // `E0310` (§3.8.2 rule 3).
         self.flush_deferred_constraints();
@@ -2664,44 +3790,36 @@ impl Checker {
         // (`show(1)`). Pin the key once the head is concrete; a quantified head
         // keeps its witness candidate list.
         for dictionary in &mut dictionaries {
-            dictionary.target =
-                self.dict_target(&dictionary.class, &dictionary.method, &dictionary.head);
+            dictionary.target = self.dict_target(&dictionary.class, &dictionary.head);
         }
         self.checked.dictionaries = dictionaries;
-        // Finalize each actual body independently of the module's current
-        // name binding: a later declaration may shadow that name. Protect
-        // generalizable lexical free variables as well as the function's own
-        // binders, so a nested closure never defaults its parent's parameters.
-        let lexical_types: HashSet<u32> = self
-            .checked
-            .functions
-            .values()
-            .flat_map(|function| function.scheme.vars.iter().copied())
-            .collect();
-        let lexical_dims: HashSet<u32> = self
-            .checked
-            .functions
-            .values()
-            .flat_map(|function| function.scheme.dims.iter().copied())
-            .collect();
-        let lexical_rows: HashSet<u32> = self
-            .checked
-            .functions
-            .values()
-            .flat_map(|function| function.scheme.rows.iter().copied())
-            .collect();
-        let lexical_nats: HashSet<u32> = self
-            .checked
-            .functions
-            .values()
-            .flat_map(|function| function.scheme.nats.iter().copied())
-            .collect();
-        // Call instances outside a definition have no activation dictionary.
-        // Default their transported literal domains too (including clauses
-        // whose original literal lives in another compilation unit).
-        if let Err(error) = self.infer.default_unprotected_numeric(&lexical_types) {
-            self.report_unify(error, Span::new(self.file, 0, 0));
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "both expression and function finalization use the same pre-defaulting quantifiers"
+    )]
+    fn lexical_quantifiers(&self) -> LexicalQuantifiers {
+        // These are collected before any of the function schemes are defaulted.
+        // Lexically free variables keep their parent's quantification.
+        let mut lexical = LexicalQuantifiers::default();
+        for function in self.checked.functions.values() {
+            lexical.types.extend(function.scheme.vars.iter().copied());
+            lexical.dims.extend(function.scheme.dims.iter().copied());
+            lexical.rows.extend(function.scheme.rows.iter().copied());
+            lexical.nats.extend(function.scheme.nats.iter().copied());
         }
+        lexical
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "function defaulting must preserve its own and enclosing lexical quantifiers"
+    )]
+    fn default_function_evidence(
+        &mut self,
+        lexical: &LexicalQuantifiers,
+    ) {
         fn protect_lexical(
             target: &mut Vec<u32>,
             relevant: impl Iterator<Item = u32>,
@@ -2712,6 +3830,12 @@ impl Checker {
                     target.push(id);
                 }
             }
+        }
+        // Call instances outside a definition have no activation dictionary.
+        // Default their transported literal domains too (including clauses
+        // whose original literal lives in another compilation unit).
+        if let Err(error) = self.infer.default_unprotected_numeric(&lexical.types) {
+            self.report_unify(error, Span::new(self.file, 0, 0));
         }
         for function in self.checked.functions.values_mut() {
             let protected = self.infer.generalize(&function.scheme.ty);
@@ -2733,10 +3857,10 @@ impl Checker {
             // unchanged on the actual FunctionEvidence.
             let mut relevant = crate::TypeSubstitution::default();
             let mut names = Infer::new();
-            relevant.freshen(&function.scheme.ty, &mut names);
+            relevant.register_variables(&function.scheme.ty, &mut names);
             for constraint in &function.scheme.constraints {
                 for ty in &constraint.args {
-                    relevant.freshen(ty, &mut names);
+                    relevant.register_variables(ty, &mut names);
                 }
             }
             protect_lexical(
@@ -2746,29 +3870,40 @@ impl Checker {
                     .keys()
                     .chain(relevant.representations.keys())
                     .copied(),
-                &lexical_types,
+                &lexical.types,
             );
             protect_lexical(
                 &mut defaulting.dims,
                 relevant.dimensions.keys().copied(),
-                &lexical_dims,
+                &lexical.dims,
             );
             protect_lexical(
                 &mut defaulting.rows,
                 relevant.rows.keys().copied(),
-                &lexical_rows,
+                &lexical.rows,
             );
             protect_lexical(
                 &mut defaulting.nats,
                 relevant.naturals.keys().copied(),
-                &lexical_nats,
+                &lexical.nats,
             );
             let (defaulted, _) = self.infer.default_scheme(&defaulting);
             function.scheme.ty = defaulted.ty;
             function.scheme.constraints = defaulted.constraints;
+            function.scheme.row_lacks = defaulted.row_lacks;
             function.scheme.numeric = defaulted.numeric;
             function.scheme.materializations = defaulted.materializations;
         }
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "expression and literal evidence is published from the final inferred state"
+    )]
+    fn publish_expression_evidence(
+        &mut self,
+        lexical: &LexicalQuantifiers,
+    ) {
         // The per-expression table is resolved *last*, after every unification
         // and every defaulting step: an entry recorded while checking holds
         // unification variables, and this is the only point at which their
@@ -2777,6 +3912,60 @@ impl Checker {
         let recorded: HashMap<Span, Type> =
             std::mem::take(&mut self.expr_types).into_iter().collect();
         self.expression_indices.clear();
+        self.infer.compress_type_aliases();
+        self.default_unbound_literals(&recorded, lexical);
+        let resolved_expr_types: HashMap<Span, Type> = recorded
+            .into_iter()
+            .map(|(span, ty)| (span, self.infer.resolve(&ty)))
+            .collect();
+        // §3.10/§6.3.2: a literal's representation is the one the static type
+        // chose. Export it so the runtime can materialise the literal at that
+        // representation instead of its default one — without this a value the
+        // checker typed `Float` can hold an exact `Real` at run time.
+        for span in std::mem::take(&mut self.literal_spans) {
+            if let Some(ty) = resolved_expr_types
+                .get(&span)
+                .filter(|ty| crate::class::has_variables(ty))
+            {
+                if let Some((Some(owner), kind)) = self.literal_owners.get(&span)
+                    && let Some(function) = self.checked.functions.get_mut(owner)
+                {
+                    function.numeric_literals.push((span, *kind, ty.clone()));
+                }
+                if let Type::Scalar(rep, _) = ty {
+                    self.checked.literal_reps.insert(span, *rep);
+                }
+                continue;
+            }
+            if let Some(Type::Scalar(rep, _)) = resolved_expr_types.get(&span)
+                && let Some(rep) = self.infer.literal_representation(*rep)
+            {
+                self.checked.literal_reps.insert(span, rep);
+            }
+        }
+        // §3.10.4: a closed literal arithmetic tree is a constant expression.
+        // Its value is computed exactly and materialised once in the tree's
+        // static representation, so only inexact representations need the
+        // table; an exact one already evaluates exactly leaf by leaf.
+        for span in std::mem::take(&mut self.constant_region_roots) {
+            if let Some(Type::Scalar(rep, _)) = resolved_expr_types.get(&span)
+                && !matches!(rep, Rep::Int | Rep::Real)
+            {
+                self.checked.constant_regions.insert(span, *rep);
+            }
+        }
+        self.checked.expr_types = resolved_expr_types;
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "literal reading decisions must precede publishing resolved expression evidence"
+    )]
+    fn default_unbound_literals(
+        &mut self,
+        recorded: &HashMap<Span, Type>,
+        lexical: &LexicalQuantifiers,
+    ) {
         // A body's internal literal variable is not a universal parameter.
         // Resolve its normal literal reading before freezing expression types;
         // only actual lexical quantifiers need activation-time materialization.
@@ -2786,15 +3975,15 @@ impl Checker {
                 continue;
             };
             let mut free = crate::TypeSubstitution::default();
-            free.freshen(&ty, &mut Infer::new());
+            free.register_variables(&ty, &mut Infer::new());
             let generic = free
                 .types
                 .keys()
                 .chain(free.representations.keys())
-                .any(|id| lexical_types.contains(id))
-                || free.dimensions.keys().any(|id| lexical_dims.contains(id))
-                || free.rows.keys().any(|id| lexical_rows.contains(id))
-                || free.naturals.keys().any(|id| lexical_nats.contains(id));
+                .any(|id| lexical.types.contains(id))
+                || free.dimensions.keys().any(|id| lexical.dims.contains(id))
+                || free.rows.keys().any(|id| lexical.rows.contains(id))
+                || free.naturals.keys().any(|id| lexical.nats.contains(id));
             let owner = self.literal_owners.get(span).and_then(|(owner, _)| *owner);
             if generic && owner.is_some() {
                 continue;
@@ -2839,47 +4028,16 @@ impl Checker {
         for (error, span) in literal_default_errors {
             self.report_unify(error, span);
         }
-        let resolved_expr_types: HashMap<Span, Type> = recorded
-            .into_iter()
-            .map(|(span, ty)| (span, self.infer.resolve(&ty)))
-            .collect();
-        // §3.10/§6.3.2: a literal's representation is the one the static type
-        // chose. Export it so the runtime can materialise the literal at that
-        // representation instead of its default one — without this a value the
-        // checker typed `Float` can hold an exact `Real` at run time.
-        for span in std::mem::take(&mut self.literal_spans) {
-            if let Some(ty) = resolved_expr_types
-                .get(&span)
-                .filter(|ty| crate::class::has_variables(ty))
-            {
-                if let Some((Some(owner), kind)) = self.literal_owners.get(&span)
-                    && let Some(function) = self.checked.functions.get_mut(owner)
-                {
-                    function.numeric_literals.push((span, *kind, ty.clone()));
-                }
-                if let Type::Scalar(rep, _) = ty {
-                    self.checked.literal_reps.insert(span, *rep);
-                }
-                continue;
-            }
-            if let Some(Type::Scalar(rep, _)) = resolved_expr_types.get(&span)
-                && let Some(rep) = self.infer.literal_representation(*rep)
-            {
-                self.checked.literal_reps.insert(span, rep);
-            }
-        }
-        // §3.10.4: a closed literal arithmetic tree is a constant expression.
-        // Its value is computed exactly and materialised once in the tree's
-        // static representation, so only inexact representations need the
-        // table; an exact one already evaluates exactly leaf by leaf.
-        for span in std::mem::take(&mut self.constant_region_roots) {
-            if let Some(Type::Scalar(rep, _)) = resolved_expr_types.get(&span)
-                && !matches!(rep, Rep::Int | Rep::Real)
-            {
-                self.checked.constant_regions.insert(span, *rep);
-            }
-        }
-        self.checked.expr_types = resolved_expr_types;
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "closed callable contracts and exported generic headers share resolved inference evidence"
+    )]
+    fn publish_callable_evidence(
+        &mut self,
+        pending: &[(String, Span)],
+    ) {
         for function in self.checked.functions.values_mut() {
             function.scheme = self.infer.resolve_scheme(&function.scheme);
             for constraint in &mut function.scheme.constraints {
@@ -2901,7 +4059,7 @@ impl Checker {
                 .map(|ty| self.infer.resolve(ty))
                 .collect();
         }
-        for (name, _) in &pending {
+        for (name, _) in pending {
             if let Some(scheme) = self.globals.get(name).cloned() {
                 let normalized = self.infer.resolve_scheme(&scheme);
                 self.globals.insert(name.clone(), normalized.clone());
@@ -2966,6 +4124,16 @@ impl Checker {
                 );
             }
         }
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "the interface publishes only this module’s local public types and class evidence"
+    )]
+    fn publish_module_interface(
+        &mut self,
+        module: &Module,
+    ) {
         // §7.1.3/§7.4, round-2 decision 1b: classes, instances and alias
         // definitions travel with the interface. Only what *this* module
         // declares is exported — a prelude instance or an imported one is not
@@ -2980,7 +4148,23 @@ impl Checker {
                 .local_classes
                 .insert(class.key.clone(), exported.clone());
             if !self.private_classes.contains(&class.key.name) {
-                self.checked.classes.insert(class.key.clone(), exported);
+                let public_methods = exported
+                    .methods
+                    .into_iter()
+                    .filter(|(method_name, _)| {
+                        !self
+                            .private_class_methods
+                            .contains(&(class.key.name.clone(), method_name.clone()))
+                    })
+                    .collect();
+                self.checked.classes.insert(
+                    class.key.clone(),
+                    ClassExport {
+                        key: exported.key,
+                        params: exported.params,
+                        methods: public_methods,
+                    },
+                );
             }
         }
         for instance in self.classes.instances_declared_in(&self.module_path) {
@@ -2996,25 +4180,73 @@ impl Checker {
                 }
             }
             if !self.private_classes.contains(&instance.class) {
-                self.checked.instances.push(exported);
+                let public_methods = exported
+                    .methods
+                    .into_iter()
+                    .filter(|(method_name, _)| {
+                        !self
+                            .private_instance_methods
+                            .contains(&(instance.key.clone(), method_name.clone()))
+                            && !self
+                                .private_class_methods
+                                .contains(&(instance.class.clone(), method_name.clone()))
+                    })
+                    .collect();
+                self.checked.instances.push(InstanceExport {
+                    key: exported.key,
+                    head: exported.head,
+                    methods: public_methods,
+                    derived: exported.derived,
+                });
             }
         }
         // Alias bodies are already resolved templates: public aliases may
         // refer to private helpers without exporting those helper names.
-        for (name, alias) in &self.aliases {
-            if matches!(self.checked.exports.get(name), Some(Export::Alias { .. })) {
+        // A re-export already has its source alias body. An unrelated opened
+        // alias with the same spelling must not overwrite that evidence.
+        for decl in &module.decls {
+            if let DeclKind::Type {
+                name,
+                body: aevia_syntax::ast::TypeBody::Alias(_),
+                ..
+            } = &decl.kind
+                && !decl.private
+                && matches!(self.checked.exports.get(name), Some(Export::Alias { .. }))
+                && let Some(alias) = self.aliases.get(name)
+            {
                 self.checked
                     .alias_defs
-                    .insert(name.clone(), self.canonical_alias_export(alias));
+                    .insert(name.clone(), Self::canonical_alias_export(alias));
             }
         }
         // §13.8.1: stability markers travel with the interface, so the editor
         // can show them and a consumer can avoid a deprecated name.
         self.checked.stability = self.stability.clone();
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "host registrations retain their attributed declaration even after source-name shadowing"
+    )]
+    fn finalize_registrations(
+        &mut self,
+        module: &Module,
+    ) {
         let mut registrations = self.registrations.clone();
         for registration in &mut registrations {
-            if let Some(scheme) = self.globals.get(&registration.function)
-                && let Type::Fn(params, result) = self.infer.resolve(&scheme.ty)
+            // An operator's contract belongs to its attributed declaration,
+            // even when a later declaration reuses the source-visible name.
+            let function = module
+                .decls
+                .iter()
+                .find(|decl| {
+                    decl.attrs
+                        .iter()
+                        .any(|attribute| attribute.span == registration.span)
+                })
+                .and_then(|decl| self.checked.functions.get(&decl.span));
+            if let Some(function) = function
+                && let Type::Fn(params, result) = self.infer.resolve(&function.scheme.ty)
             {
                 for ((_, dim), ty) in registration.params.iter_mut().zip(params.iter()) {
                     if let Type::Scalar(_, found) = self.infer.resolve(ty) {
@@ -3027,7 +4259,6 @@ impl Checker {
             }
         }
         self.checked.registrations = registrations;
-        self.checked.errors = self.diagnostics.error_count();
     }
 
     /// Records the type of the expression or binder at `span`.
@@ -3119,10 +4350,33 @@ impl Checker {
         sites
     }
 
+    /// Move requirements on quantified variables into their binding before a
+    /// later declaration instantiates it or shadows its source-visible name.
+    fn attach_deferred_scheme_constraints(
+        &mut self,
+        scheme: &mut Scheme,
+    ) {
+        if scheme.vars.is_empty() {
+            return;
+        }
+        self.deferred_constraints.retain(|(class, ty, _)| {
+            let resolved = self.infer.resolve(ty);
+            if mentions_any(&resolved, &scheme.vars) {
+                let constraint = Constraint::new(class.clone(), vec![resolved]);
+                if !scheme.constraints.contains(&constraint) {
+                    scheme.constraints.push(constraint);
+                }
+                false
+            } else {
+                true
+            }
+        });
+    }
+
     /// Generalises a scheme, keeping the class constraints of the declaration
     /// it came from.
     fn generalize_scheme(
-        &mut self,
+        &self,
         scheme: &Scheme,
     ) -> Scheme {
         let mut generalised = self
@@ -3140,876 +4394,22 @@ impl Checker {
                 }
             }
         }
-        generalised.materializations = scheme.materializations.clone();
+        generalised.row_lacks.clone_from(&scheme.row_lacks);
+        generalised
+            .materializations
+            .clone_from(&scheme.materializations);
+        self.infer.attach_row_lacks(&mut generalised);
         self.infer.attach_numeric_scheme(&mut generalised);
         generalised
     }
 
     // ----- declarations --------------------------------------------------
 
-    fn declare_dimension(
-        &mut self,
-        name: &str,
-        value: Option<&DimAst>,
-        span: Span,
-        private: bool,
-    ) {
-        let (dim, is_base) = match value {
-            | Some(ast) => {
-                let dim = self.convert_dim(ast, span);
-                self.dims.define_alias(name, dim.clone());
-                (dim, false)
-            },
-            | None => {
-                if !self
-                    .dims
-                    .define_nominal_base(name, &self.module_path.identity_key())
-                {
-                    self.error(
-                        "E0316",
-                        format!("dimension `{name}` is already defined"),
-                        span,
-                    );
-                    return;
-                }
-                (
-                    self.dims.lookup(name).expect("just declared dimension"),
-                    true,
-                )
-            },
-        };
-        if !private {
-            self.checked
-                .exports
-                .insert(name.to_string(), Export::Dimension { dim, is_base });
-        }
-    }
-
-    fn declare_unit(
-        &mut self,
-        decl: &Decl,
-    ) {
-        let DeclKind::Unit {
-            name,
-            dim,
-            scale,
-            base,
-            offset,
-            prefixable,
-        } = &decl.kind
-        else {
-            return;
-        };
-        // §5.11.4: a unit is a definition in SI, wherever it is declared; a
-        // module with a unit system sees it through the system like any other
-        // unit, and an SI importer sees the unit it wrote.
-        let si_dimensions = std::mem::replace(&mut self.si_dimensions, true);
-        let dimension = self.convert_dim(dim, decl.span);
-        self.si_dimensions = si_dimensions;
-        let mut scale_value = scale.clone();
-        if let Some(base) = base {
-            match self.units.resolve_si(base) {
-                | Ok(resolved) => scale_value = scale_value.mul(&resolved.scale),
-                | Err(error) => {
-                    self.unit_error(error, decl.span);
-                    return;
-                },
-            }
-        }
-        let offset_value = match offset {
-            | Some((offset_scale, offset_unit)) => {
-                let mut value = offset_scale.clone();
-                if let Some(unit) = offset_unit {
-                    match self.units.resolve_si(unit) {
-                        | Ok(resolved) => {
-                            // §5.1.1: the offset must measure the same
-                            // dimension as the unit it is attached to.
-                            if resolved.dim.is_concrete()
-                                && dimension.is_concrete()
-                                && resolved.dim != dimension
-                            {
-                                let offset_dim = self.dims.format(&resolved.dim);
-                                let unit_dim = self.dims.format(&dimension);
-                                self.error_help(
-                                    "E0504",
-                                    format!(
-                                        "the offset measures {offset_dim} but the unit measures {unit_dim}"
-                                    ),
-                                    decl.span,
-                                    "an affine offset must have the unit's own dimension",
-                                );
-                                return;
-                            }
-                            value = value.mul(&resolved.scale);
-                        },
-                        | Err(error) => {
-                            self.unit_error(error, decl.span);
-                            return;
-                        },
-                    }
-                }
-                Some(value)
-            },
-            | None => None,
-        };
-        let def = UnitDef {
-            name: name.clone(),
-            aliases: Vec::new(),
-            dim: dimension.clone(),
-            scale: scale_value,
-            offset: offset_value.clone(),
-            prefixable: *prefixable,
-            affine: offset_value.is_some(),
-            display: name.clone(),
-            category: "user".to_string(),
-        };
-        if let Err(error) = self.units.insert(def.clone()) {
-            self.unit_error(error, decl.span);
-            return;
-        }
-        let local = self.units.reduce_dim(&dimension);
-        self.globals
-            .insert(name.clone(), Scheme::mono(Type::UnitOf(local)));
-        if !decl.private {
-            self.checked
-                .exports
-                .insert(name.clone(), Export::Unit { def });
-        }
-    }
-
-    /// The names a declaration body uses in each kind position, for the
-    /// §2 "kind may be omitted and inferred from the use" rule.
-    /// The declared parameter kinds of a generic alias or variant type, when it
-    /// is already in scope. Used to propagate a kind through a nested
-    /// application (`type Opts<d> = | Fixed(FixedOpts<d>) | …`).
-    fn declared_param_kinds(
-        &self,
-        name: &str,
-    ) -> Option<Vec<AliasParamKind>> {
-        if let Some(alias) = self.aliases.get(name) {
-            return Some(alias.kinds.clone());
-        }
-        self.adts.get(name).map(|id| {
-            adt::param_kinds_of(*id)
-                .into_iter()
-                .map(|kind| {
-                    match kind {
-                        | adt::ParamKind::Type => AliasParamKind::Type,
-                        | adt::ParamKind::Dim(_) => AliasParamKind::Dim,
-                    }
-                })
-                .collect()
-        })
-    }
-
-    /// Propagates a written argument's kind from the callee's declaration into
-    /// the usage sets, so an unannotated parameter used only as a *dimension
-    /// argument* (`FixedOpts<d>`) is inferred as a dimension.
-    fn scan_kind_args(
-        &self,
-        ty: &Ty,
-        usage: &mut ParamUsage,
-    ) {
-        match &ty.kind {
-            | TyKind::Named { path, args } => {
-                let kinds = self.declared_param_kinds(&path.join("."));
-                for (index, arg) in args.iter().enumerate() {
-                    let declared = kinds.as_ref().and_then(|kinds| kinds.get(index)).copied();
-                    match declared {
-                        | Some(AliasParamKind::Dim) => {
-                            match bare_type_name(arg) {
-                                | Some(name) => {
-                                    usage.dims.insert(name.clone());
-                                },
-                                | None => self.scan_kind_args(arg, usage),
-                            }
-                        },
-                        | Some(AliasParamKind::Nat) => {
-                            match bare_type_name(arg) {
-                                | Some(name) => {
-                                    usage.nats.insert(name.clone());
-                                },
-                                | None => self.scan_kind_args(arg, usage),
-                            }
-                        },
-                        | Some(AliasParamKind::Row) => {
-                            match bare_type_name(arg) {
-                                | Some(name) => {
-                                    usage.rows.insert(name.clone());
-                                },
-                                | None => self.scan_kind_args(arg, usage),
-                            }
-                        },
-                        | Some(AliasParamKind::Type) | None => self.scan_kind_args(arg, usage),
-                    }
-                }
-            },
-            | TyKind::Tensor { elem, .. }
-            | TyKind::Sparse { elem, .. }
-            | TyKind::Matrix { elem, .. }
-            | TyKind::Option(elem)
-            | TyKind::Set(elem)
-            | TyKind::Table(elem)
-            | TyKind::RateOf(elem)
-            | TyKind::DiffusionOf(elem)
-            | TyKind::Io(elem) => self.scan_kind_args(elem, usage),
-            | TyKind::Result(ok, error) => {
-                self.scan_kind_args(ok, usage);
-                self.scan_kind_args(error, usage);
-            },
-            | TyKind::Fn(params, ret) => {
-                for param in params {
-                    self.scan_kind_args(param, usage);
-                }
-                self.scan_kind_args(ret, usage);
-            },
-            | TyKind::Record { fields, .. } => {
-                for (_, field) in fields {
-                    self.scan_kind_args(field, usage);
-                }
-            },
-            | TyKind::Tuple(items) | TyKind::Row(items) => {
-                for item in items {
-                    self.scan_kind_args(item, usage);
-                }
-            },
-            | TyKind::Forall(_, body) => self.scan_kind_args(body, usage),
-            | _ => {},
-        }
-    }
-
-    fn declaration_param_kinds(
-        &mut self,
-        params: &[TypeParam],
-        body: &TypeBody,
-    ) -> (Vec<AliasParamKind>, Vec<(usize, AliasParamKind)>) {
-        let mut usage = ParamUsage::default();
-        match body {
-            | TypeBody::Alias(ty) => usage.scan(ty),
-            | TypeBody::Variants(ctors) => {
-                for ctor in ctors {
-                    for field in &ctor.args {
-                        usage.scan(field);
-                    }
-                }
-            },
-            | TypeBody::Abstract => {},
-        }
-        // A name used only as a *dimension argument* of an already-declared
-        // generic type (`FixedOpts<d>`) is a dimension too, even though the
-        // written argument looks like a type.
-        match body {
-            | TypeBody::Alias(ty) => self.scan_kind_args(ty, &mut usage),
-            | TypeBody::Variants(ctors) => {
-                for ctor in ctors {
-                    for field in &ctor.args {
-                        self.scan_kind_args(field, &mut usage);
-                    }
-                }
-            },
-            | TypeBody::Abstract => {},
-        }
-        let mut kinds = Vec::with_capacity(params.len());
-        let mut extra: Vec<(usize, AliasParamKind)> = Vec::new();
-        for (index, param) in params.iter().enumerate() {
-            let name = &param.name;
-            let explicit = match param.kind {
-                | Some(Kind::Type) => Some(AliasParamKind::Type),
-                | Some(Kind::Dim) => Some(AliasParamKind::Dim),
-                | Some(Kind::Nat) => Some(AliasParamKind::Nat),
-                | Some(Kind::Row) => Some(AliasParamKind::Row),
-                | Some(other) => {
-                    self.error_help(
-                        "E0317",
-                        format!(
-                            "the parameter `{name}` has a kind that a type declaration does not support: {other:?}"
-                        ),
-                        Span::new(self.file, 0, 0),
-                        "use `Type`, `Dim`, `Nat` or `Row`, or omit the kind so it is inferred from the body",
-                    );
-                    Some(AliasParamKind::Type)
-                },
-                | None => None,
-            };
-            let dim_use = usage.dims.contains(name);
-            let nat_use = usage.nats.contains(name);
-            let row_use = usage.rows.contains(name);
-            let candidates: Vec<AliasParamKind> = [
-                (row_use, AliasParamKind::Row),
-                (dim_use, AliasParamKind::Dim),
-                (nat_use, AliasParamKind::Nat),
-            ]
-            .into_iter()
-            .filter_map(|(used, kind)| used.then_some(kind))
-            .collect();
-            if explicit.is_none() && candidates.len() > 1 {
-                self.error_help(
-                    "E0317",
-                    format!("cannot infer the kind of `{name}`: the body uses it in incompatible positions"),
-                    Span::new(self.file, 0, 0),
-                    "annotate it, for example `type Foo<d: Dim>`",
-                );
-                // Give the non-primary readings a placeholder too, so the
-                // declaration does not cascade into bogus E0407/E0304 errors.
-                for kind in candidates.iter().skip(1) {
-                    extra.push((index, *kind));
-                }
-            }
-            kinds.push(
-                explicit
-                    .or_else(|| candidates.first().copied())
-                    .unwrap_or(AliasParamKind::Type),
-            );
-        }
-        (kinds, extra)
-    }
-
-    /// Allocates the placeholder of every parameter of the declaration being
-    /// checked and pushes it into the matching conversion environment.
-    ///
-    /// Returns the dimension/nat/row placeholder ids (type parameters use
-    /// `Type::Param(position)` and need no id).
-    fn allocate_declaration_params(
-        &mut self,
-        params: &[TypeParam],
-        kinds: &[AliasParamKind],
-        extra: &[(usize, AliasParamKind)],
-    ) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
-        let mut dim_vars = vec![0; params.len()];
-        let mut nat_vars = vec![0; params.len()];
-        let mut row_vars = vec![0; params.len()];
-        for (index, (param, kind)) in params.iter().zip(kinds.iter()).enumerate() {
-            match kind {
-                | AliasParamKind::Type => {
-                    self.type_params.push((
-                        param.name.clone(),
-                        Type::Param(u32::try_from(index).unwrap_or(0)),
-                    ));
-                },
-                | AliasParamKind::Dim => {
-                    let dim = self.infer.fresh_dim();
-                    dim_vars[index] = dim.vars().first().copied().unwrap_or(0);
-                    self.dim_params.push((param.name.clone(), dim));
-                },
-                | AliasParamKind::Nat => {
-                    let nat = self.infer.fresh_nat();
-                    nat_vars[index] = nat.vars().first().copied().unwrap_or(0);
-                    self.nat_params.push((param.name.clone(), nat));
-                },
-                | AliasParamKind::Row => {
-                    let row = self.infer.fresh_row();
-                    row_vars[index] = tail_row_id(&row).unwrap_or(0);
-                    self.row_params.push((param.name.clone(), row));
-                },
-            }
-        }
-        // A parameter whose kind could not be inferred (E0317 was reported)
-        // gets a placeholder for every reading, so the rest of the body still
-        // resolves and only the kind error is reported.
-        for (index, kind) in extra {
-            let Some(param) = params.get(*index) else {
-                continue;
-            };
-            match kind {
-                | AliasParamKind::Type => {
-                    self.type_params.push((
-                        param.name.clone(),
-                        Type::Param(u32::try_from(*index).unwrap_or(0)),
-                    ));
-                },
-                | AliasParamKind::Dim => {
-                    let dim = self.infer.fresh_dim();
-                    dim_vars[*index] = dim.vars().first().copied().unwrap_or(0);
-                    self.dim_params.push((param.name.clone(), dim));
-                },
-                | AliasParamKind::Nat => {
-                    let nat = self.infer.fresh_nat();
-                    nat_vars[*index] = nat.vars().first().copied().unwrap_or(0);
-                    self.nat_params.push((param.name.clone(), nat));
-                },
-                | AliasParamKind::Row => {
-                    let row = self.infer.fresh_row();
-                    row_vars[*index] = tail_row_id(&row).unwrap_or(0);
-                    self.row_params.push((param.name.clone(), row));
-                },
-            }
-        }
-        (dim_vars, nat_vars, row_vars)
-    }
-
-    /// The interface form of an alias body: placeholders become canonical ids
-    /// derived from the parameter position, so an interface never carries
-    /// another process's inference ids.
-    fn canonical_alias_export(
-        &self,
-        def: &AliasDef,
-    ) -> AliasExport {
-        let mut dims = std::collections::HashMap::new();
-        let mut nats = std::collections::HashMap::new();
-        let mut rows = std::collections::HashMap::new();
-        for (index, kind) in def.kinds.iter().enumerate() {
-            let canonical = u32::try_from(index).unwrap_or(0);
-            match kind {
-                | AliasParamKind::Dim => {
-                    dims.insert(def.dim_vars[index], Dim::var(canonical));
-                },
-                | AliasParamKind::Nat => {
-                    nats.insert(def.nat_vars[index], Nat::Var(canonical));
-                },
-                | AliasParamKind::Row => {
-                    rows.insert(def.row_vars[index], Row::Var(canonical));
-                },
-                | AliasParamKind::Type => {},
-            }
-        }
-        let types = vec![None; def.params];
-        AliasExport {
-            params: def.params,
-            body: def.ty.substitute_kinded(&types, &dims, &nats, &rows),
-            kinds: def.kinds.clone(),
-        }
-    }
-
-    /// Rebuilds an imported alias with this checker's own fresh placeholders.
-    fn imported_alias_def(
-        &mut self,
-        alias: &AliasExport,
-    ) -> AliasDef {
-        let mut dims = std::collections::HashMap::new();
-        let mut nats = std::collections::HashMap::new();
-        let mut rows = std::collections::HashMap::new();
-        let mut dim_vars = vec![0; alias.params];
-        let mut nat_vars = vec![0; alias.params];
-        let mut row_vars = vec![0; alias.params];
-        for (index, kind) in alias.kinds.iter().enumerate() {
-            let canonical = u32::try_from(index).unwrap_or(0);
-            match kind {
-                | AliasParamKind::Dim => {
-                    let dim = self.infer.fresh_dim();
-                    dim_vars[index] = dim.vars().first().copied().unwrap_or(0);
-                    dims.insert(canonical, dim);
-                },
-                | AliasParamKind::Nat => {
-                    let nat = self.infer.fresh_nat();
-                    nat_vars[index] = nat.vars().first().copied().unwrap_or(0);
-                    nats.insert(canonical, nat);
-                },
-                | AliasParamKind::Row => {
-                    let row = self.infer.fresh_row();
-                    row_vars[index] = tail_row_id(&row).unwrap_or(0);
-                    rows.insert(canonical, row);
-                },
-                | AliasParamKind::Type => {},
-            }
-        }
-        let types = vec![None; alias.params];
-        AliasDef {
-            ty: alias.body.substitute_kinded(&types, &dims, &nats, &rows),
-            params: alias.params,
-            kinds: alias.kinds.clone(),
-            dim_vars,
-            nat_vars,
-            row_vars,
-        }
-    }
-
-    /// Expands a use of a generic alias (§2 kind-aware parameters).
-    ///
-    /// A type-kinded argument is converted as a type, a dimension-kinded one as
-    /// a dimension, a nat-kinded one as a type-level `Nat` and a row-kinded one
-    /// as a record row. The alias body stores placeholders, so the expansion is
-    /// a substitution rather than a re-conversion.
-    fn instantiate_alias(
-        &mut self,
-        alias: &AliasDef,
-        args: &[Ty],
-        span: Span,
-    ) -> Type {
-        if args.len() > alias.params {
-            self.error(
-                "E0315",
-                format!(
-                    "the alias takes {} type argument(s), found {}",
-                    alias.params,
-                    args.len()
-                ),
-                span,
-            );
-        }
-        let mut types: Vec<Option<Type>> = vec![None; alias.params];
-        let mut dims = std::collections::HashMap::new();
-        let mut nats = std::collections::HashMap::new();
-        let mut rows = std::collections::HashMap::new();
-        for (index, kind) in alias.kinds.iter().enumerate() {
-            let Some(arg) = args.get(index) else {
-                // A missing argument stays a fresh variable of its kind, the
-                // way an unapplied generic alias behaves.
-                match kind {
-                    | AliasParamKind::Type => {},
-                    | AliasParamKind::Dim => {
-                        let dim = self.infer.fresh_dim();
-                        dims.insert(alias.dim_vars[index], dim);
-                    },
-                    | AliasParamKind::Nat => {
-                        let nat = self.infer.fresh_nat();
-                        nats.insert(alias.nat_vars[index], nat);
-                    },
-                    | AliasParamKind::Row => {
-                        let row = self.infer.fresh_row();
-                        rows.insert(alias.row_vars[index], row);
-                    },
-                }
-                continue;
-            };
-            match kind {
-                | AliasParamKind::Type => types[index] = Some(self.convert_type(arg)),
-                | AliasParamKind::Dim => {
-                    let dim = self.convert_type_as_dim(arg);
-                    dims.insert(alias.dim_vars[index], dim);
-                },
-                | AliasParamKind::Nat => {
-                    let nat = self.convert_type_as_nat(arg);
-                    nats.insert(alias.nat_vars[index], nat);
-                },
-                | AliasParamKind::Row => {
-                    let row = self.convert_type_as_row(arg);
-                    rows.insert(alias.row_vars[index], row);
-                },
-            }
-        }
-        alias.ty.substitute_kinded(&types, &dims, &nats, &rows)
-    }
-
-    /// Converts a type argument written for a dimension-kinded parameter.
-    fn convert_type_as_dim(
-        &mut self,
-        ty: &Ty,
-    ) -> Dim {
-        let name = match &ty.kind {
-            | TyKind::Named { path, args } if args.is_empty() => Some(path.join(".")),
-            | TyKind::Var(name) => Some(name.clone()),
-            | _ => None,
-        };
-        if let Some(name) = name {
-            if let Some((_, dim)) = self
-                .dim_params
-                .iter()
-                .rev()
-                .find(|(param, _)| *param == name)
-            {
-                return dim.clone();
-            }
-            if let Some(dim) = self.dims.lookup(&name) {
-                return dim;
-            }
-            if self.implicit_params {
-                return self.infer.fresh_dim();
-            }
-            self.error_help(
-                "E0407",
-                format!("unknown dimension `{name}` in a type argument"),
-                ty.span,
-                "the parameter is dimension-kinded; pass a dimension such as `L`",
-            );
-            return Dim::one();
-        }
-        match &ty.kind {
-            | TyKind::DimArg(dim) => self.convert_dim(dim, ty.span),
-            | _ => {
-                self.error_help(
-                    "E0407",
-                    "this type argument must be a dimension",
-                    ty.span,
-                    "declare the parameter as `<d: Dim>` or pass a dimension such as `L`",
-                );
-                Dim::one()
-            },
-        }
-    }
-
-    /// Converts a type argument written for a natural-number-kinded parameter.
-    fn convert_type_as_nat(
-        &mut self,
-        ty: &Ty,
-    ) -> Nat {
-        match bare_type_name(ty) {
-            | Some(name) => {
-                if let Some((_, nat)) = self
-                    .nat_params
-                    .iter()
-                    .rev()
-                    .find(|(param, _)| param == name)
-                {
-                    return nat.clone();
-                }
-                self.error_help(
-                    "E0304",
-                    format!("cannot infer the shape extent `{name}`"),
-                    ty.span,
-                    "the parameter is a type-level natural; pass a number such as `3`",
-                );
-                Nat::Lit(0)
-            },
-            | None => {
-                match &ty.kind {
-                    | TyKind::NatArg(nat) => self.convert_nat(nat, ty.span),
-                    | _ => {
-                        self.error_help(
-                            "E0304",
-                            "this type argument must be a type-level natural number",
-                            ty.span,
-                            "declare the parameter as `<n: Nat>` or pass a number such as `3`",
-                        );
-                        Nat::Lit(0)
-                    },
-                }
-            },
-        }
-    }
-
-    /// Converts a type argument written for a row-kinded parameter.
-    fn convert_type_as_row(
-        &mut self,
-        ty: &Ty,
-    ) -> Row {
-        let converted = self.convert_type(ty);
-        match self.infer.resolve(&converted) {
-            | Type::Record(row) => row,
-            | other => {
-                self.error_help(
-                    "E0302",
-                    format!("a row argument must be a record type, found {other}"),
-                    ty.span,
-                    "declare the parameter as `<r: Row>` and pass a record such as `{ x: Int }`",
-                );
-                Row::Empty
-            },
-        }
-    }
-
-    fn declare_type(
-        &mut self,
-        name: &str,
-        params: &[TypeParam],
-        body: &TypeBody,
-        private: bool,
-    ) {
-        let saved_types = std::mem::take(&mut self.type_params);
-        let saved_dims = std::mem::take(&mut self.dim_params);
-        let saved_nats = std::mem::take(&mut self.nat_params);
-        let saved_rows = std::mem::take(&mut self.row_params);
-        let (kinds, extra_kinds) = self.declaration_param_kinds(params, body);
-        let (dim_vars, nat_vars, row_vars) =
-            self.allocate_declaration_params(params, &kinds, &extra_kinds);
-        if self.adts.contains_key(name) || self.aliases.contains_key(name) {
-            self.error(
-                "E0316",
-                format!("type `{name}` is already defined in this module"),
-                Span::new(self.file, 0, 0),
-            );
-        }
-        match body {
-            | TypeBody::Alias(ty) => {
-                // An alias is transparent, so referring to itself is an
-                // infinite type, not a recursive one (§3.6.4).
-                let saved = self.declaring_alias.replace(name.to_string());
-                let converted = self.convert_type(ty);
-                self.declaring_alias = saved;
-                self.aliases.insert(
-                    name.to_string(),
-                    AliasDef {
-                        ty: converted,
-                        params: params.len(),
-                        kinds,
-                        dim_vars,
-                        nat_vars,
-                        row_vars,
-                    },
-                );
-                if !private {
-                    self.checked
-                        .exports
-                        .insert(name.to_string(), Export::Alias { params: params.len() });
-                }
-            },
-            | TypeBody::Variants(ctors) => {
-                // Allocate the id *before* converting the fields, so a field
-                // that mentions the type being declared resolves (§3.6.4).
-                // The defining module is recorded with it, so the symbolic key
-                // `(module, name)` is the identity the interface carries.
-                let id = adt::allocate_in(
-                    self.module_path.clone(),
-                    name,
-                    params.iter().map(|p| p.name.clone()).collect(),
-                );
-                // §2/§8.9.1: a variant type may be parameterised by a
-                // dimension (`type SdeOpts<T> = | Fixed(SdeFixedOpts<T>) | …`).
-                // A dimension argument is encoded as `UnitOf(d)`, so the ADT's
-                // argument vector stays a vector of types; constructor schemes
-                // quantify the dimension.
-                let mut adt_kinds = Vec::with_capacity(params.len());
-                for (index, kind) in kinds.iter().enumerate() {
-                    match kind {
-                        | AliasParamKind::Type => adt_kinds.push(adt::ParamKind::Type),
-                        | AliasParamKind::Dim => {
-                            adt_kinds.push(adt::ParamKind::Dim(dim_vars[index]));
-                        },
-                        | AliasParamKind::Nat | AliasParamKind::Row => {
-                            self.error_help(
-                                "E0317",
-                                format!(
-                                    "the variant type `{name}` cannot take a {} parameter",
-                                    if matches!(kind, AliasParamKind::Nat) {
-                                        "natural-number"
-                                    } else {
-                                        "row"
-                                    }
-                                ),
-                                Span::new(self.file, 0, 0),
-                                "a variant type may be parameterised by types and dimensions; use a record alias for a row/nat parameter",
-                            );
-                            adt_kinds.push(adt::ParamKind::Type);
-                        },
-                    }
-                }
-                adt::set_param_kinds(id, adt_kinds);
-                self.adts.insert(name.to_string(), id);
-                self.local_adts.insert(id);
-                let mut converted = Vec::new();
-                for ctor in ctors {
-                    let fields: Vec<Type> = ctor
-                        .args
-                        .iter()
-                        .map(|field| self.convert_type(field))
-                        .collect();
-                    for (field_ty, written) in fields.iter().zip(ctor.args.iter()) {
-                        self.check_positivity(id, field_ty, true, written.span);
-                    }
-                    converted.push(Ctor {
-                        name: ctor.name.clone(),
-                        fields,
-                    });
-                }
-                adt::set_ctors(id, converted);
-                if !private {
-                    self.checked
-                        .exports
-                        .insert(name.to_string(), Export::Type { adt: id });
-                }
-                if let Some(registered) = adt::get(id) {
-                    for (index, ctor) in registered.ctors.iter().enumerate() {
-                        let scheme = ctor_scheme(id, index);
-                        self.checked
-                            .constructors
-                            .insert(ctor.name.clone(), (id, index));
-                        self.constructor_bindings
-                            .insert(ctor.name.clone(), (id, index));
-                        self.globals.insert(ctor.name.clone(), scheme.clone());
-                        if private {
-                            continue;
-                        }
-                        // `type P2 = | P2(...)` names the type and the
-                        // constructor the same; keep both, or one of the two
-                        // meanings disappears for importers.
-                        let export = if ctor.name == *name {
-                            Export::TypeCtor {
-                                adt: id,
-                                index,
-                                scheme,
-                            }
-                        } else {
-                            Export::Ctor {
-                                adt: id,
-                                index,
-                                scheme,
-                            }
-                        };
-                        self.checked.exports.insert(ctor.name.clone(), export);
-                    }
-                }
-            },
-            | TypeBody::Abstract => {
-                for kind in &kinds {
-                    if !matches!(kind, AliasParamKind::Type) {
-                        self.error_help(
-                            "E0317",
-                            format!("the abstract type `{name}` can only take type parameters"),
-                            Span::new(self.file, 0, 0),
-                            "an opaque runtime type is parameterised by types, not by dimensions or rows",
-                        );
-                        break;
-                    }
-                }
-                let id = adt::allocate_in(
-                    self.module_path.clone(),
-                    name,
-                    params.iter().map(|p| p.name.clone()).collect(),
-                );
-                adt::set_param_kinds(id, vec![adt::ParamKind::Type; params.len()]);
-                adt::set_ctors(id, Vec::new());
-                self.adts.insert(name.to_string(), id);
-                self.local_adts.insert(id);
-                if !private {
-                    self.checked
-                        .exports
-                        .insert(name.to_string(), Export::Type { adt: id });
-                }
-            },
-        }
-        self.type_params = saved_types;
-        self.dim_params = saved_dims;
-        self.nat_params = saved_nats;
-        self.row_params = saved_rows;
-    }
-
-    /// Rejects a recursive occurrence on the left of an arrow (§3.6.4).
-    ///
-    /// `type Bad = Bad -> Int` has no well-founded value: checking it is
-    /// `E0312`. `type Tree<a> = | Node(Tree<a>, a, Tree<a>)` is positive and
-    /// therefore legal.
-    fn check_positivity(
-        &mut self,
-        id: adt::AdtId,
-        ty: &Type,
-        positive: bool,
-        span: Span,
-    ) {
-        match ty {
-            | Type::Adt(other, args) => {
-                if *other == id && !positive {
-                    self.error_help(
-                        "E0312",
-                        "non-positive recursive type",
-                        span,
-                        "the type may only appear to the right of an arrow",
-                    );
-                }
-                for arg in args {
-                    self.check_positivity(id, arg, positive, span);
-                }
-            },
-            | Type::Tensor { elem, .. } => self.check_positivity(id, elem, positive, span),
-            | Type::Fn(params, ret) => {
-                for param in params {
-                    self.check_positivity(id, param, false, span);
-                }
-                self.check_positivity(id, ret, positive, span);
-            },
-            | Type::Record(row) => {
-                for (_, field) in row.fields() {
-                    self.check_positivity(id, &field, positive, span);
-                }
-            },
-            | Type::Io(inner) => self.check_positivity(id, inner, positive, span),
-            | _ => {},
-        }
-    }
-
     fn declare_class(
         &mut self,
         name: &str,
         params: &[TypeParam],
-        methods: &[(String, Ty)],
+        methods: &[ClassMethod],
         span: Span,
         private: bool,
     ) {
@@ -4043,16 +4443,20 @@ impl Checker {
             ));
         }
         let mut converted = Vec::new();
-        for (method, ty) in methods {
-            let method_ty = self.convert_type(ty);
-            converted.push((method.clone(), method_ty.clone()));
+        for method in methods {
+            let method_ty = self.convert_type(&method.ty);
+            converted.push((method.name.clone(), method_ty.clone()));
+            if method.private {
+                self.private_class_methods
+                    .insert((name.to_string(), method.name.clone()));
+            }
             let scheme = crate::class::method_scheme(name, params.len().max(1), method_ty);
-            self.globals.insert(method.clone(), scheme);
+            self.globals.insert(method.name.clone(), scheme);
             self.method_bindings.insert(
-                method.clone(),
+                method.name.clone(),
                 ClassMethodRef {
                     class: ClassKey::new(self.module_path.clone(), name),
-                    method: method.clone(),
+                    method: method.name.clone(),
                 },
             );
         }
@@ -4092,6 +4496,10 @@ impl Checker {
     /// how the old checker let one instance shadow `show` for the whole module.
     /// Each method gets a mangled global, and the call site records which
     /// instance the checker proved.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "instance validation checks methods and equations before admitting the resulting dictionary"
+    )]
     fn check_instance(
         &mut self,
         decl: &Decl,
@@ -4192,14 +4600,13 @@ impl Checker {
                 self.bind_pattern(&param.pattern, &ty);
                 params.push(ty);
             }
-            self.callable_ids.insert(
+            let identity = CallableId::new(
+                &self.module_path,
                 instance_method.span,
-                CallableId::new(
-                    &self.module_path,
-                    instance_method.span,
-                    &aevia_syntax::fingerprint::method(instance_method),
-                ),
+                &aevia_syntax::fingerprint::method(instance_method),
             );
+            self.callable_ids
+                .insert(instance_method.span, identity.clone());
             self.function_inputs
                 .insert(instance_method.span, params.clone());
             self.function_stack.push(instance_method.span);
@@ -4220,11 +4627,7 @@ impl Checker {
                 instance_method.span,
                 FunctionEvidence {
                     site: instance_method.span,
-                    identity: self
-                        .callable_ids
-                        .get(&instance_method.span)
-                        .expect("seeded callable identity")
-                        .clone(),
+                    identity,
                     numeric_literals: Vec::new(),
                     scheme,
                     binders: Vec::new(),
@@ -4265,6 +4668,12 @@ impl Checker {
             class_is_local,
         ) {
             Ok(key) => {
+                for instance_method in methods {
+                    if instance_method.private {
+                        self.private_instance_methods
+                            .insert((key.clone(), instance_method.name.clone()));
+                    }
+                }
                 self.instance_declarations.insert(decl.span, key.clone());
                 // The body is reachable under a name no program can write, so
                 // it cannot shadow the class method. The name is derived from
@@ -4440,7 +4849,7 @@ impl Checker {
                         format!("no class `{class}` is in scope"),
                         decl.span,
                         "declare it with `class ... where`, or import the module that does",
-                    )
+                    );
                 },
                 | Err(DeriveError::UnsupportedClass(unsupported)) => {
                     self.error_help(
@@ -4448,7 +4857,7 @@ impl Checker {
                         format!("`derive` cannot instantiate `{unsupported}`"),
                         decl.span,
                         "`derive` is closed to Eq, Ord, TotalOrd, Show and Hash (§3.8.5)",
-                    )
+                    );
                 },
                 | Err(DeriveError::Field { class: failed, field }) => self.error_help(
                     "E0317",
@@ -4466,7 +4875,7 @@ impl Checker {
                         ),
                         decl.span,
                         "functions have no Eq/Ord/Show/Hash instance",
-                    )
+                    );
                 },
                 | Err(DeriveError::Overlapping(key)) => {
                     self.error_help(
@@ -4474,7 +4883,7 @@ impl Checker {
                         format!("an instance `{key}` already exists"),
                         decl.span,
                         "remove the derive or the hand-written instance",
-                    )
+                    );
                 },
                 | Err(DeriveError::Orphan) => {
                     self.error_help(
@@ -4482,7 +4891,7 @@ impl Checker {
                         "orphan instance: `derive` can only instantiate a class for a local type",
                         decl.span,
                         "derive in the module that declares the type",
-                    )
+                    );
                 },
             }
         }
@@ -4502,7 +4911,7 @@ impl Checker {
             | Resolution::Found { .. } => {},
             | Resolution::Deferred => {
                 self.deferred_constraints
-                    .push((constraint.class.clone(), resolved, span))
+                    .push((constraint.class.clone(), resolved, span));
             },
             | Resolution::Missing if is_structural_show(&constraint.class, &resolved) => {
                 // §3.8.4/round-2 decision 1e: `Show` is a *guarantee* for the
@@ -4620,7 +5029,7 @@ impl Checker {
             },
             | Resolution::Deferred => {
                 self.deferred_constraints
-                    .push((class.to_string(), resolved, span))
+                    .push((class.to_string(), resolved, span));
             },
             | Resolution::Found { .. } => {},
         }
@@ -4651,13 +5060,13 @@ impl Checker {
         let mut free = crate::TypeSubstitution::default();
         let mut names = Infer::new();
         for (_, ty) in &self.type_params {
-            free.freshen(&self.infer.resolve(ty), &mut names);
+            free.register_variables(&self.infer.resolve(ty), &mut names);
         }
         for (_, dim) in &self.dim_params {
-            free.freshen(&Type::UnitOf(self.infer.resolve_dim(dim)), &mut names);
+            free.register_variables(&Type::UnitOf(self.infer.resolve_dim(dim)), &mut names);
         }
         for (_, nat) in &self.nat_params {
-            free.freshen(
+            free.register_variables(
                 &Type::tensor(
                     Shape::Refined(vec![Some(self.infer.resolve_nat(nat))]),
                     Type::Unit,
@@ -4666,12 +5075,12 @@ impl Checker {
             );
         }
         for (_, row) in &self.row_params {
-            free.freshen(&Type::Record(self.infer.resolve_row(row)), &mut names);
+            free.register_variables(&Type::Record(self.infer.resolve_row(row)), &mut names);
         }
         for site in &self.function_stack {
             if let Some(inputs) = self.function_inputs.get(site) {
                 for ty in inputs {
-                    free.freshen(&self.infer.resolve(ty), &mut names);
+                    free.register_variables(&self.infer.resolve(ty), &mut names);
                 }
             }
         }
@@ -4681,6 +5090,10 @@ impl Checker {
     /// Commit a body's private literal readings before its scheme is
     /// published. A candidate may not silently specialize an input or an
     /// enclosing universal parameter; such literals stay dependent instead.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "connected numeric trial inference keeps all argument, result and protected domains in scope"
+    )]
     fn commit_function_literals(
         &mut self,
         site: Span,
@@ -4702,7 +5115,7 @@ impl Checker {
                 continue;
             };
             let mut free = crate::TypeSubstitution::default();
-            free.freshen(&ty, &mut Infer::new());
+            free.register_variables(&ty, &mut Infer::new());
             if free.types.keys().any(|id| protected.types.contains_key(id))
                 || free
                     .representations
@@ -4716,7 +5129,7 @@ impl Checker {
             let mut connected = crate::TypeSubstitution::default();
             for constraint in &contract.numeric {
                 for ty in constraint.types() {
-                    connected.freshen(&ty, &mut Infer::new());
+                    connected.register_variables(&ty, &mut Infer::new());
                 }
             }
             let mut inputs: Vec<_> = connected
@@ -4763,10 +5176,10 @@ impl Checker {
                 // made otherwise independent declarations quadratic.
                 let mut trial = Infer::new();
                 let mut projection = crate::TypeSubstitution::default();
-                projection.freshen(&ty, &mut trial);
+                projection.register_variables(&ty, &mut trial);
                 for clause in &contract.numeric {
                     for ty in clause.types() {
-                        projection.freshen(&ty, &mut trial);
+                        projection.register_variables(&ty, &mut trial);
                     }
                 }
                 let valid = contract.numeric.iter().all(|clause| {
@@ -4839,7 +5252,6 @@ impl Checker {
         // Callable values transport schemes; eagerly stored numeric data
         // transport a single representation. Recurse only through data.
         match &ty {
-            | Type::Fn(..) => {},
             | Type::Tensor { elem, .. } | Type::Io(elem) => self.weaken_data_argument(elem),
             | Type::Record(row) => {
                 for (_, field) in row.fields() {
@@ -4861,6 +5273,10 @@ impl Checker {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "source-order binders and inferred parameter and return types must share one signature scope"
+    )]
     fn fn_signature(
         &mut self,
         params: &[TypeParam],
@@ -5022,6 +5438,10 @@ impl Checker {
         let Type::Fn(params, ret) = signature else {
             return;
         };
+        let Some(identity) = self.callable_ids.get(&site).cloned() else {
+            self.error("E0304", "missing callable identity for function", site);
+            return;
+        };
         self.scopes.push(HashMap::new());
         for (arg, param) in args.iter().zip(params.iter()) {
             self.bind_pattern(&arg.pattern, param);
@@ -5089,6 +5509,7 @@ impl Checker {
             binders = inferred_binders(&generalised);
         }
         quantify_binders(&mut generalised, &binders, &self.infer);
+        self.attach_deferred_scheme_constraints(&mut generalised);
         let forwarded = self
             .global_callables
             .get(name)
@@ -5096,11 +5517,7 @@ impl Checker {
         self.global_callables.insert(
             name.to_string(),
             CallableProjection {
-                origin: self
-                    .callable_ids
-                    .get(&site)
-                    .expect("seeded callable identity")
-                    .clone(),
+                origin: identity.clone(),
                 arguments: binders.clone(),
                 selected: false,
                 forwarded_parameter: forwarded,
@@ -5113,11 +5530,7 @@ impl Checker {
             site,
             FunctionEvidence {
                 site,
-                identity: self
-                    .callable_ids
-                    .get(&site)
-                    .expect("seeded callable identity")
-                    .clone(),
+                identity,
                 numeric_literals: Vec::new(),
                 scheme: generalised.clone(),
                 binders,
@@ -5238,6 +5651,8 @@ impl Checker {
         value: &Expr,
         rec: bool,
         span: Span,
+        shadowing: bool,
+        inherited: Option<InheritedValue>,
     ) {
         let PatKind::Var(name) = &pattern.kind else {
             self.check_let_body(pattern, annotation, value, rec, span);
@@ -5259,7 +5674,36 @@ impl Checker {
         };
         self.note_type(pattern.span, &target);
         if rec {
+            self.globals
+                .insert(name.clone(), Scheme::mono(target.clone()));
+            self.generic_bindings.remove(name);
+            self.global_callables.remove(name);
             self.check(value, &target);
+        } else if shadowing {
+            self.check(value, &target);
+        } else if let Some(inherited) = inherited {
+            self.globals.insert(name.clone(), inherited.scheme);
+            if let Some(headers) = inherited.headers {
+                self.generic_bindings.insert(name.clone(), headers);
+            } else {
+                self.generic_bindings.remove(name);
+            }
+            if let Some(callable) = inherited.callable {
+                self.global_callables.insert(name.clone(), callable);
+            } else {
+                self.global_callables.remove(name);
+            }
+            // Imported constructors/methods also need their nominal reference
+            // evidence. Hide the local reservation only for this initializer.
+            let local_let = self.top_lets.remove(name);
+            let local_function = self.fn_signatures.remove(name);
+            self.check(value, &target);
+            if let Some(signature) = local_let {
+                self.top_lets.insert(name.clone(), signature);
+            }
+            if let Some(signature) = local_function {
+                self.fn_signatures.insert(name.clone(), signature);
+            }
         } else {
             let saved = self.globals.remove(name);
             self.check(value, &target);
@@ -5285,6 +5729,9 @@ impl Checker {
             self.generic_bindings.remove(name);
             self.global_callables.remove(name);
         }
+        self.attach_deferred_scheme_constraints(&mut scheme);
+        self.fn_signatures.remove(name);
+        self.fn_generics.remove(name);
         self.globals.insert(name.clone(), scheme.clone());
         if let Some(Export::Value {
             scheme: export_scheme,
@@ -5342,6 +5789,14 @@ impl Checker {
             }
         } else {
             self.bind_pattern(pattern, &scheme.ty);
+            let mut names = HashSet::new();
+            collect_pattern_bindings(pattern, &mut names);
+            for name in names {
+                self.fn_signatures.remove(&name);
+                self.fn_generics.remove(&name);
+                self.global_callables.remove(&name);
+                self.generic_bindings.remove(&name);
+            }
         }
     }
 
@@ -5383,12 +5838,22 @@ impl Checker {
                 self.local_callables
                     .remove(&(self.scopes.len(), name.clone()));
             }
-            self.scopes
-                .last_mut()
-                .expect("a local binding has a scope")
-                .insert(name.clone(), scheme);
+            self.define_local(name, scheme, span);
         } else {
             self.bind_pattern(pattern, &scheme.ty);
+        }
+    }
+
+    fn define_local(
+        &mut self,
+        name: &str,
+        scheme: Scheme,
+        span: Span,
+    ) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.insert(name.to_owned(), scheme);
+        } else {
+            self.error("E0304", "missing lexical scope for local binding", span);
         }
     }
 
@@ -5423,14 +5888,21 @@ impl Checker {
         if matches!(expr.kind, ExprKind::Lambda { .. })
             || matches!(&expr.kind, ExprKind::Call { args, .. } if args.iter().any(|arg| matches!(arg.kind, ExprKind::Placeholder)))
         {
-            self.callable_ids.entry(expr.span).or_insert_with(|| {
-                CallableId::new(
-                    &self.module_path,
-                    expr.span,
-                    &aevia_syntax::fingerprint::expression(expr),
-                )
-            });
+            self.expression_callable_id(expr);
         }
+    }
+
+    fn expression_callable_id(
+        &mut self,
+        expr: &Expr,
+    ) -> &CallableId {
+        self.callable_ids.entry(expr.span).or_insert_with(|| {
+            CallableId::new(
+                &self.module_path,
+                expr.span,
+                &aevia_syntax::fingerprint::expression(expr),
+            )
+        })
     }
 
     fn carry_callable(
@@ -5500,19 +5972,21 @@ impl Checker {
                 }
             }
         } else if let Some(function) = self.checked.functions.get(&expr.span) {
-            let arguments = if function.binders.is_empty() {
-                inferred_binders(&function.scheme)
-            } else {
-                function.binders.clone()
-            };
             self.checked
                 .callable_refs
                 .entry(expr.span)
-                .or_insert(CallableProjection {
-                    origin: function.identity.clone(),
-                    arguments,
-                    selected: false,
-                    forwarded_parameter: None,
+                .or_insert_with(|| {
+                    let arguments = if function.binders.is_empty() {
+                        inferred_binders(&function.scheme)
+                    } else {
+                        function.binders.clone()
+                    };
+                    CallableProjection {
+                        origin: function.identity.clone(),
+                        arguments,
+                        selected: false,
+                        forwarded_parameter: None,
+                    }
                 });
         }
     }
@@ -5555,7 +6029,11 @@ impl Checker {
                     operand,
                 } => {
                     if ready {
-                        let class = self.literal_classes[&operand.span];
+                        let class = self
+                            .literal_classes
+                            .get(&operand.span)
+                            .copied()
+                            .unwrap_or_default();
                         self.literal_classes.insert(expr.span, class);
                     } else {
                         pending.push((expr, true));
@@ -5568,8 +6046,16 @@ impl Checker {
                     right,
                 } => {
                     if ready {
-                        let left = self.literal_classes[&left.span];
-                        let right = self.literal_classes[&right.span];
+                        let left = self
+                            .literal_classes
+                            .get(&left.span)
+                            .copied()
+                            .unwrap_or_default();
+                        let right = self
+                            .literal_classes
+                            .get(&right.span)
+                            .copied()
+                            .unwrap_or_default();
                         self.literal_classes.insert(
                             expr.span,
                             LiteralClass {
@@ -5597,7 +6083,10 @@ impl Checker {
                 },
             }
         }
-        self.literal_classes[&root.span]
+        self.literal_classes
+            .get(&root.span)
+            .copied()
+            .unwrap_or_default()
     }
 
     /// A closed homogeneous literal component may use one reading variable:
@@ -5615,7 +6104,7 @@ impl Checker {
         // a right-hand arithmetic subtree starts an independent context.
         let mut contexts: Vec<Vec<(LiteralKind, Rep)>> = vec![Vec::new()];
         let mut pending = vec![(root, false, 0usize)];
-        let mut types = HashMap::<Span, Type>::new();
+        let mut types = Vec::new();
         while let Some((expr, ready, context)) = pending.pop() {
             if !ready {
                 let class = self.literal_class(expr);
@@ -5625,7 +6114,7 @@ impl Checker {
                     && let Some(kind) = class.homogeneous
                 {
                     let ty = self.synth_literal_region(expr, Some(kind));
-                    types.insert(expr.span, ty);
+                    types.push(ty);
                     continue;
                 }
                 match &expr.kind {
@@ -5636,8 +6125,9 @@ impl Checker {
                     },
                     | ExprKind::Binary { left, right, .. } => {
                         let right_context = if kind.is_none() && !self.literal_class(right).atomic {
+                            let right_context = contexts.len();
                             contexts.push(Vec::new());
-                            contexts.len() - 1
+                            right_context
                         } else {
                             context
                         };
@@ -5650,31 +6140,26 @@ impl Checker {
                 }
             }
             let ty = match &expr.kind {
-                | ExprKind::Unary { op, operand } => {
-                    self.unary_type(*op, &types[&operand.span], expr.span)
+                | ExprKind::Unary { op, .. } => {
+                    self.unary_type(*op, &types.pop().unwrap_or(Type::Error), expr.span)
                 },
                 | ExprKind::Binary { op, left, right } => {
-                    self.binary_type(
-                        *op,
-                        &types[&left.span],
-                        &types[&right.span],
-                        left,
-                        right,
-                        expr.span,
-                    )
+                    let right_ty = types.pop().unwrap_or(Type::Error);
+                    let left_ty = types.pop().unwrap_or(Type::Error);
+                    self.binary_type(*op, &left_ty, &right_ty, left, right, expr.span)
                 },
                 | _ => {
                     if kind.is_none()
                         && let Some(leaf_kind) = self.literal_class(expr).homogeneous
+                        && let Some(readings) = contexts.get_mut(context)
                     {
-                        let rep = if let Some((_, rep)) = contexts[context]
-                            .iter()
-                            .find(|(kind, _)| *kind == leaf_kind)
+                        let rep = if let Some((_, rep)) =
+                            readings.iter().find(|(kind, _)| *kind == leaf_kind)
                         {
                             *rep
                         } else {
                             let rep = self.infer.fresh_rep();
-                            contexts[context].push((leaf_kind, rep));
+                            readings.push((leaf_kind, rep));
                             rep
                         };
                         self.literal_region = Some((leaf_kind, rep));
@@ -5687,7 +6172,7 @@ impl Checker {
                 },
             };
             self.note_type(expr.span, &ty);
-            types.insert(expr.span, ty);
+            types.push(ty);
         }
         self.literal_region = previous;
         if !self.literal_class(root).atomic
@@ -5695,7 +6180,7 @@ impl Checker {
         {
             self.infer.finish_literal_expression(rep);
         }
-        types.remove(&root.span).unwrap_or(Type::Error)
+        types.pop().unwrap_or(Type::Error)
     }
 
     fn synth_inner(
@@ -5708,40 +6193,8 @@ impl Checker {
             | ExprKind::Error => self.infer.fresh_type(),
             | ExprKind::UnitLit => Type::Unit,
             | ExprKind::Bool(_) => Type::Bool,
-            | ExprKind::Int(_) => {
-                self.record_literal(expr.span, LiteralKind::Int);
-                let reading = self
-                    .literal_context
-                    .filter(|rep| LiteralKind::Int.accepts_rep(*rep))
-                    .or_else(|| {
-                        self.literal_region
-                            .filter(|(kind, _)| *kind == LiteralKind::Int)
-                            .map(|(_, rep)| rep)
-                    });
-                let ty = reading.map_or_else(
-                    || self.infer.fresh_type(),
-                    |rep| Type::Scalar(rep, Dim::one()),
-                );
-                self.infer.mark_literal(&ty, LiteralKind::Int);
-                ty
-            },
-            | ExprKind::Float(_) => {
-                self.record_literal(expr.span, LiteralKind::Decimal);
-                let reading = self
-                    .literal_context
-                    .filter(|rep| LiteralKind::Decimal.accepts_rep(*rep))
-                    .or_else(|| {
-                        self.literal_region
-                            .filter(|(kind, _)| *kind == LiteralKind::Decimal)
-                            .map(|(_, rep)| rep)
-                    });
-                let ty = reading.map_or_else(
-                    || self.infer.fresh_type(),
-                    |rep| Type::Scalar(rep, Dim::one()),
-                );
-                self.infer.mark_literal(&ty, LiteralKind::Decimal);
-                ty
-            },
+            | ExprKind::Int(_) => self.synth_number_literal(LiteralKind::Int, expr.span),
+            | ExprKind::Float(_) => self.synth_number_literal(LiteralKind::Decimal, expr.span),
             | ExprKind::Str(pieces) => {
                 for piece in pieces {
                     if let StrPiece::Expr(inner) = piece {
@@ -5765,8 +6218,10 @@ impl Checker {
             | ExprKind::QName(path) => {
                 // `Rssn.Version` and friends are kernel members, not names in
                 // scope; the manifest decides what exists.
-                if path.len() == 2 && path[0] == "Rssn" {
-                    return self.rssn_member(&path[1], expr.span);
+                if let [module, member] = path.as_slice()
+                    && module == "Rssn"
+                {
+                    return self.rssn_member(member, expr.span);
                 }
                 self.lookup_value(&path.join("."), expr.span)
             },
@@ -5777,60 +6232,7 @@ impl Checker {
             | ExprKind::Call { callee, args } => self.synth_call(callee, args, expr.span),
             | ExprKind::TypeApp { callee, args } => self.synth_type_app(callee, args, expr.span),
             | ExprKind::Lambda { params, ret, body } => {
-                self.infer.enter_level();
-                self.scopes.push(HashMap::new());
-                let mut arg_types = Vec::new();
-                for param in params {
-                    let ty = match &param.ty {
-                        | Some(ty) => self.convert_type(ty),
-                        | None => self.infer.fresh_type(),
-                    };
-                    self.bind_pattern(&param.pattern, &ty);
-                    arg_types.push(ty);
-                }
-                let ret_ty = match ret {
-                    | Some(ty) => self.convert_type(ty),
-                    | None => self.infer.fresh_type(),
-                };
-                let saved_return = self.return_type.replace(ret_ty.clone());
-                self.function_inputs.insert(expr.span, arg_types.clone());
-                self.function_stack.push(expr.span);
-                self.check(body, &ret_ty);
-                self.commit_function_literals(expr.span);
-                self.function_stack.pop();
-                self.return_type = saved_return;
-                self.scopes.pop();
-                self.infer.leave_level();
-                let ty = Type::func(arg_types.clone(), ret_ty);
-                let mut scheme = self.infer.generalize(&ty);
-                scheme.materializations = self.function_materializations(expr.span);
-                self.infer.attach_numeric_scheme(&mut scheme);
-                self.infer.quantify_numeric_inputs(
-                    &mut scheme,
-                    &arg_types,
-                    self.infer.current_level(),
-                );
-                self.infer
-                    .quantify_numeric_existentials(&mut scheme, self.infer.current_level());
-                self.checked.functions.insert(
-                    expr.span,
-                    FunctionEvidence {
-                        site: expr.span,
-                        identity: self
-                            .callable_ids
-                            .get(&expr.span)
-                            .expect("seeded callable identity")
-                            .clone(),
-                        numeric_literals: Vec::new(),
-                        scheme,
-                        binders: Vec::new(),
-                        reifications: self
-                            .function_reifications
-                            .remove(&expr.span)
-                            .unwrap_or_default(),
-                    },
-                );
-                ty
+                self.synth_lambda(expr, params, ret.as_ref(), body)
             },
             | ExprKind::If {
                 cond,
@@ -5844,114 +6246,19 @@ impl Checker {
                 self.check(else_branch, &branch);
                 branch
             },
-            | ExprKind::Match { scrutinee, arms } => {
-                let subject = self.synth(scrutinee);
-                let result = self.infer.fresh_type();
-                // §6.6 usefulness: a *guarded* arm never contributes coverage,
-                // so only unguarded arms enter the exhaustiveness matrix.
-                let mut unguarded: Vec<Pat> = Vec::new();
-                for arm in arms {
-                    self.scopes.push(HashMap::new());
-                    let outer = std::mem::replace(&mut self.refutable_pattern, true);
-                    self.bind_pattern(&arm.pattern, &subject);
-                    self.refutable_pattern = outer;
-                    // An arm is unreachable when the unguarded arms before it
-                    // already cover every value it could match.
-                    let subject_resolved = self.infer.resolve(&subject);
-                    if self.pattern_is_unreachable(&arm.pattern, &unguarded, &subject_resolved) {
-                        self.warn(
-                            "W0201",
-                            "this match arm is redundant: an earlier arm covers it",
-                            arm.span,
-                        );
-                    }
-                    if arm.guard.is_none() {
-                        unguarded.push(arm.pattern.clone());
-                    }
-                    if let Some(guard) = &arm.guard {
-                        let guard_ty = self.synth(guard);
-                        self.expect_bool(&guard_ty, guard.span);
-                    }
-                    self.check(&arm.body, &result);
-                    self.scopes.pop();
-                }
-                let subject_resolved = self.infer.resolve(&subject);
-                self.check_exhaustive(&subject_resolved, &unguarded, expr.span);
-                result
-            },
+            | ExprKind::Match { scrutinee, arms } => self.synth_match(scrutinee, arms, expr.span),
             | ExprKind::LetIn {
                 pattern,
                 ty,
                 value,
                 body,
-            } => {
-                self.infer.enter_level();
-                let value_ty = match ty {
-                    | Some(ty) => {
-                        let ty = self.convert_type(ty);
-                        self.check(value, &ty);
-                        ty
-                    },
-                    | None => self.synth(value),
-                };
-                self.infer.leave_level();
-                if let PatKind::Var(name) = &pattern.kind {
-                    self.warn_if_shadowing(name, pattern.span);
-                }
-                self.scopes.push(HashMap::new());
-                self.bind_local(pattern, &value_ty, expr.span, value.span);
-                let body_ty = self.synth(body);
-                self.scopes.pop();
-                body_ty
-            },
+            } => self.synth_let_in(pattern, ty.as_ref(), value, body, expr.span),
             | ExprKind::Block { stmts, tail } => {
-                self.scopes.push(HashMap::new());
-                self.check_block_statements(stmts);
-                let tail_ty = match tail {
-                    | Some(tail) => self.synth(tail),
-                    | None => {
-                        self.error_help(
-                            "E0201",
-                            "block has no final expression",
-                            expr.span,
-                            "add a value after the `let` statements",
-                        );
-                        Type::Unit
-                    },
-                };
-                self.scopes.pop();
-                tail_ty
+                self.synth_block(stmts, tail.as_deref(), expr.span)
             },
             | ExprKind::Do { stmts } => self.synth_do(stmts, expr.span),
             | ExprKind::Record { base, fields } => self.synth_record(base.as_deref(), fields),
-            | ExprKind::Field { base, name } => {
-                if is_rssn_root(base) {
-                    return self.rssn_member(name, expr.span);
-                }
-                // `A.B.f` parses as a field access on a qualified name; the
-                // imported module puts `A.B.f` in scope as one key.
-                if let Some(qualified) = qualified_name(base, name) {
-                    if self.globals.contains_key(&qualified) {
-                        return self.lookup_value(&qualified, expr.span);
-                    }
-                    // The module exists but does not export that name: say so
-                    // rather than calling the whole path unbound.
-                    if let Some(prefix) = qualified.rsplit_once('.').map(|(prefix, _)| prefix) {
-                        let marker = format!("{prefix}.");
-                        if self.globals.keys().any(|key| key.starts_with(&marker)) {
-                            self.error_help(
-                                "E0301",
-                                format!("module `{prefix}` has no exported name `{name}`"),
-                                expr.span,
-                                "a `private` declaration is not part of the interface (§7.1.3)",
-                            );
-                            return Type::Error;
-                        }
-                    }
-                }
-                let base_ty = self.synth(base);
-                self.field_type(&base_ty, name, expr.span)
-            },
+            | ExprKind::Field { base, name } => self.synth_field(base, name, expr.span),
             | ExprKind::Tuple(items) => {
                 let types: Vec<Type> = items.iter().map(|item| self.synth(item)).collect();
                 Type::record(
@@ -5979,6 +6286,241 @@ impl Checker {
                 Type::int()
             },
         }
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "lambda synthesis closes the lexical scope before publishing callable evidence"
+    )]
+    fn synth_lambda(
+        &mut self,
+        expr: &Expr,
+        params: &[Param],
+        ret: Option<&Ty>,
+        body: &Expr,
+    ) -> Type {
+        self.infer.enter_level();
+        self.scopes.push(HashMap::new());
+        let mut arg_types = Vec::new();
+        for param in params {
+            let ty = match &param.ty {
+                | Some(ty) => self.convert_type(ty),
+                | None => self.infer.fresh_type(),
+            };
+            self.bind_pattern(&param.pattern, &ty);
+            arg_types.push(ty);
+        }
+        let ret_ty = match ret {
+            | Some(ty) => self.convert_type(ty),
+            | None => self.infer.fresh_type(),
+        };
+        let saved_return = self.return_type.replace(ret_ty.clone());
+        self.function_inputs.insert(expr.span, arg_types.clone());
+        self.function_stack.push(expr.span);
+        self.check(body, &ret_ty);
+        self.commit_function_literals(expr.span);
+        self.function_stack.pop();
+        self.return_type = saved_return;
+        self.scopes.pop();
+        self.infer.leave_level();
+        let ty = Type::func(arg_types.clone(), ret_ty);
+        self.publish_lambda_evidence(expr, &arg_types, &ty);
+        ty
+    }
+
+    fn publish_lambda_evidence(
+        &mut self,
+        expr: &Expr,
+        params: &[Type],
+        ty: &Type,
+    ) {
+        let mut scheme = self.infer.generalize(ty);
+        scheme.materializations = self.function_materializations(expr.span);
+        self.infer.attach_numeric_scheme(&mut scheme);
+        self.infer
+            .quantify_numeric_inputs(&mut scheme, params, self.infer.current_level());
+        self.infer
+            .quantify_numeric_existentials(&mut scheme, self.infer.current_level());
+        let identity = self.expression_callable_id(expr).clone();
+        self.checked.functions.insert(
+            expr.span,
+            FunctionEvidence {
+                site: expr.span,
+                identity,
+                numeric_literals: Vec::new(),
+                scheme,
+                binders: Vec::new(),
+                reifications: self
+                    .function_reifications
+                    .remove(&expr.span)
+                    .unwrap_or_default(),
+            },
+        );
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "match-arm scope, usefulness and coverage form one ordered analysis"
+    )]
+    fn synth_match(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+        span: Span,
+    ) -> Type {
+        let subject = self.synth(scrutinee);
+        let result = self.infer.fresh_type();
+        // §6.6 usefulness: a *guarded* arm never contributes coverage,
+        // so only unguarded arms enter the exhaustiveness matrix.
+        let mut unguarded: Vec<Pat> = Vec::new();
+        for arm in arms {
+            self.scopes.push(HashMap::new());
+            let outer = std::mem::replace(&mut self.refutable_pattern, true);
+            self.bind_pattern(&arm.pattern, &subject);
+            self.refutable_pattern = outer;
+            // An arm is unreachable when the unguarded arms before it
+            // already cover every value it could match.
+            let subject_resolved = self.infer.resolve(&subject);
+            if self.pattern_is_unreachable(&arm.pattern, &unguarded, &subject_resolved) {
+                self.warn(
+                    "W0201",
+                    "this match arm is redundant: an earlier arm covers it",
+                    arm.span,
+                );
+            }
+            if arm.guard.is_none() {
+                unguarded.push(arm.pattern.clone());
+            }
+            if let Some(guard) = &arm.guard {
+                let guard_ty = self.synth(guard);
+                self.expect_bool(&guard_ty, guard.span);
+            }
+            self.check(&arm.body, &result);
+            self.scopes.pop();
+        }
+        let subject_resolved = self.infer.resolve(&subject);
+        self.check_exhaustive(&subject_resolved, &unguarded, span);
+        result
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "nonrecursive let expressions generalize the initializer before opening the binding scope"
+    )]
+    fn synth_let_in(
+        &mut self,
+        pattern: &Pat,
+        ty: Option<&Ty>,
+        value: &Expr,
+        body: &Expr,
+        span: Span,
+    ) -> Type {
+        self.infer.enter_level();
+        let value_ty = match ty {
+            | Some(ty) => {
+                let ty = self.convert_type(ty);
+                self.check(value, &ty);
+                ty
+            },
+            | None => self.synth(value),
+        };
+        self.infer.leave_level();
+        if let PatKind::Var(name) = &pattern.kind {
+            self.warn_if_shadowing(name, pattern.span);
+        }
+        self.scopes.push(HashMap::new());
+        self.bind_local(pattern, &value_ty, span, value.span);
+        let body_ty = self.synth(body);
+        self.scopes.pop();
+        body_ty
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "block synthesis restores lexical scope after checking its tail"
+    )]
+    fn synth_block(
+        &mut self,
+        stmts: &[BlockStmt],
+        tail: Option<&Expr>,
+        span: Span,
+    ) -> Type {
+        self.scopes.push(HashMap::new());
+        self.check_block_statements(stmts);
+        let tail_ty = match tail {
+            | Some(tail) => self.synth(tail),
+            | None => {
+                self.error_help(
+                    "E0201",
+                    "block has no final expression",
+                    span,
+                    "add a value after the `let` statements",
+                );
+                Type::Unit
+            },
+        };
+        self.scopes.pop();
+        tail_ty
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "qualified exports and structural record fields share one resolution boundary"
+    )]
+    fn synth_field(
+        &mut self,
+        base: &Expr,
+        name: &str,
+        span: Span,
+    ) -> Type {
+        if is_rssn_root(base) {
+            return self.rssn_member(name, span);
+        }
+        // `A.B.f` parses as a field access on a qualified name; the
+        // imported module puts `A.B.f` in scope as one key.
+        if let Some(qualified) = qualified_name(base, name) {
+            if self.globals.contains_key(&qualified) {
+                return self.lookup_value(&qualified, span);
+            }
+            // The module exists but does not export that name: say so
+            // rather than calling the whole path unbound.
+            if let Some(prefix) = qualified.rsplit_once('.').map(|(prefix, _)| prefix) {
+                let marker = format!("{prefix}.");
+                if self.globals.keys().any(|key| key.starts_with(&marker)) {
+                    self.error_help(
+                        "E0301",
+                        format!("module `{prefix}` has no exported name `{name}`"),
+                        span,
+                        "a `private` declaration is not part of the interface (§7.1.3)",
+                    );
+                    return Type::Error;
+                }
+            }
+        }
+        let base_ty = self.synth(base);
+        self.field_type(&base_ty, name, span)
+    }
+
+    fn synth_number_literal(
+        &mut self,
+        kind: LiteralKind,
+        span: Span,
+    ) -> Type {
+        self.record_literal(span, kind);
+        let reading = self
+            .literal_context
+            .filter(|rep| kind.accepts_rep(*rep))
+            .or_else(|| {
+                self.literal_region
+                    .filter(|(region, _)| *region == kind)
+                    .map(|(_, rep)| rep)
+            });
+        let ty = reading.map_or_else(
+            || self.infer.fresh_type(),
+            |rep| Type::Scalar(rep, Dim::one()),
+        );
+        self.infer.mark_literal(&ty, kind);
+        ty
     }
 
     fn check(
@@ -6015,10 +6557,7 @@ impl Checker {
                     self.infer.enter_level();
                     let target = self.infer.fresh_type();
                     if let (PatKind::Var(name), true) = (&pattern.kind, *rec) {
-                        self.scopes
-                            .last_mut()
-                            .expect("scope")
-                            .insert(name.clone(), Scheme::mono(target.clone()));
+                        self.define_local(name, Scheme::mono(target.clone()), *span);
                     }
                     let value_ty = match ty {
                         | Some(annotation) => {
@@ -6035,112 +6574,120 @@ impl Checker {
                         },
                     };
                     self.infer.leave_level();
+                    if self.relax_result
+                        && matches!(pattern.kind, PatKind::Wildcard)
+                        && matches!(
+                            self.infer.resolve(&value_ty),
+                            Type::Adt(id, _) if id == adt::RESULT_ID
+                        )
+                    {
+                        self.warn("W0204", "discarded `Result` value", value.span);
+                    }
                     self.bind_local(pattern, &value_ty, *span, value.span);
                 },
-                | BlockStmt::Fn(decl) => {
-                    if let DeclKind::Fn {
-                        name,
-                        params,
-                        args,
-                        ret,
-                        body,
-                        ..
-                    } = &decl.kind
-                    {
-                        self.infer.enter_level();
-                        self.callable_ids.insert(
-                            decl.span,
-                            CallableId::new(
-                                &self.module_path,
-                                decl.span,
-                                &aevia_syntax::fingerprint::declaration(decl),
-                            ),
-                        );
-                        let (ty, generics) = self.fn_signature(params, args, ret.as_ref());
-                        self.local_headers
-                            .insert((self.scopes.len(), name.clone()), generics.binders.clone());
-                        let projection = CallableProjection {
-                            origin: self
-                                .callable_ids
-                                .get(&decl.span)
-                                .expect("seeded callable identity")
-                                .clone(),
-                            arguments: generics.binders.clone(),
-                            selected: false,
-                            forwarded_parameter: forwarded_parameter(args, body),
-                        };
-                        self.local_callables
-                            .insert((self.scopes.len(), name.clone()), projection.clone());
-                        let saved_callable = self.global_callables.insert(name.clone(), projection);
-                        let saved_generics = self.fn_generics.insert(name.clone(), generics);
-                        let saved_signature = self.fn_signatures.insert(name.clone(), ty.clone());
-                        let saved_global = self.globals.get(name).cloned();
-                        let saved_header = self.generic_bindings.get(name).cloned();
-                        self.scopes
-                            .last_mut()
-                            .expect("scope")
-                            .insert(name.clone(), Scheme::mono(ty));
-                        self.check_fn_body(name, args, body, decl.span);
-                        let scheme = self
-                            .globals
-                            .get(name)
-                            .cloned()
-                            .unwrap_or_else(|| Scheme::mono(Type::Error));
-                        let headers = self.generic_bindings.get(name).cloned().unwrap_or_default();
-                        if let Some(projection) = self.global_callables.get(name).cloned() {
-                            self.local_callables
-                                .insert((self.scopes.len(), name.clone()), projection);
-                        }
-                        match saved_callable {
-                            | Some(value) => {
-                                self.global_callables.insert(name.clone(), value);
-                            },
-                            | None => {
-                                self.global_callables.remove(name);
-                            },
-                        }
-                        self.infer.leave_level();
-                        self.scopes
-                            .last_mut()
-                            .expect("scope")
-                            .insert(name.clone(), scheme);
-                        self.local_headers
-                            .insert((self.scopes.len(), name.clone()), headers);
-                        match saved_generics {
-                            | Some(value) => {
-                                self.fn_generics.insert(name.clone(), value);
-                            },
-                            | None => {
-                                self.fn_generics.remove(name);
-                            },
-                        }
-                        match saved_signature {
-                            | Some(value) => {
-                                self.fn_signatures.insert(name.clone(), value);
-                            },
-                            | None => {
-                                self.fn_signatures.remove(name);
-                            },
-                        }
-                        match saved_global {
-                            | Some(value) => {
-                                self.globals.insert(name.clone(), value);
-                            },
-                            | None => {
-                                self.globals.remove(name);
-                            },
-                        }
-                        match saved_header {
-                            | Some(value) => {
-                                self.generic_bindings.insert(name.clone(), value);
-                            },
-                            | None => {
-                                self.generic_bindings.remove(name);
-                            },
-                        }
-                    }
-                },
+                | BlockStmt::Fn(decl) => self.check_local_function(decl),
             }
+        }
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "a local function checks under its own signature and restores the ambient declaration tables"
+    )]
+    fn check_local_function(
+        &mut self,
+        decl: &Decl,
+    ) {
+        let DeclKind::Fn {
+            name,
+            params,
+            args,
+            ret,
+            body,
+            ..
+        } = &decl.kind
+        else {
+            return;
+        };
+
+        self.infer.enter_level();
+        let identity = CallableId::new(
+            &self.module_path,
+            decl.span,
+            &aevia_syntax::fingerprint::declaration(decl),
+        );
+        self.callable_ids.insert(decl.span, identity.clone());
+        let (ty, generics) = self.fn_signature(params, args, ret.as_ref());
+        self.local_headers
+            .insert((self.scopes.len(), name.clone()), generics.binders.clone());
+        let projection = CallableProjection {
+            origin: identity,
+            arguments: generics.binders.clone(),
+            selected: false,
+            forwarded_parameter: forwarded_parameter(args, body),
+        };
+        self.local_callables
+            .insert((self.scopes.len(), name.clone()), projection.clone());
+        let saved_callable = self.global_callables.insert(name.clone(), projection);
+        let saved_generics = self.fn_generics.insert(name.clone(), generics);
+        let saved_signature = self.fn_signatures.insert(name.clone(), ty.clone());
+        let saved_global = self.globals.get(name).cloned();
+        let saved_header = self.generic_bindings.get(name).cloned();
+        self.define_local(name, Scheme::mono(ty), decl.span);
+        self.check_fn_body(name, args, body, decl.span);
+        let scheme = self
+            .globals
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| Scheme::mono(Type::Error));
+        let headers = self.generic_bindings.get(name).cloned().unwrap_or_default();
+        if let Some(projection) = self.global_callables.get(name).cloned() {
+            self.local_callables
+                .insert((self.scopes.len(), name.clone()), projection);
+        }
+        match saved_callable {
+            | Some(value) => {
+                self.global_callables.insert(name.clone(), value);
+            },
+            | None => {
+                self.global_callables.remove(name);
+            },
+        }
+        self.infer.leave_level();
+        self.define_local(name, scheme, decl.span);
+        self.local_headers
+            .insert((self.scopes.len(), name.clone()), headers);
+        match saved_generics {
+            | Some(value) => {
+                self.fn_generics.insert(name.clone(), value);
+            },
+            | None => {
+                self.fn_generics.remove(name);
+            },
+        }
+        match saved_signature {
+            | Some(value) => {
+                self.fn_signatures.insert(name.clone(), value);
+            },
+            | None => {
+                self.fn_signatures.remove(name);
+            },
+        }
+        match saved_global {
+            | Some(value) => {
+                self.globals.insert(name.clone(), value);
+            },
+            | None => {
+                self.globals.remove(name);
+            },
+        }
+        match saved_header {
+            | Some(value) => {
+                self.generic_bindings.insert(name.clone(), value);
+            },
+            | None => {
+                self.generic_bindings.remove(name);
+            },
         }
     }
 
@@ -6191,7 +6738,7 @@ impl Checker {
                 if let Some(annotation) = ret {
                     let annotated = self.convert_type(annotation);
                     if let Err(error) = self.infer.unify(&annotated, expected_ret) {
-                        self.report_unify(error, annotation_span(annotation));
+                        self.report_unify(error, annotation.span);
                     }
                 }
                 let saved_return = self.return_type.replace((**expected_ret).clone());
@@ -6204,34 +6751,7 @@ impl Checker {
                 self.return_type = saved_return;
                 self.scopes.pop();
                 self.infer.leave_level();
-                let mut scheme = self.infer.generalize(&resolved_expected);
-                scheme.materializations = self.function_materializations(expr.span);
-                self.infer.attach_numeric_scheme(&mut scheme);
-                self.infer.quantify_numeric_inputs(
-                    &mut scheme,
-                    expected_params,
-                    self.infer.current_level(),
-                );
-                self.infer
-                    .quantify_numeric_existentials(&mut scheme, self.infer.current_level());
-                self.checked.functions.insert(
-                    expr.span,
-                    FunctionEvidence {
-                        site: expr.span,
-                        identity: self
-                            .callable_ids
-                            .get(&expr.span)
-                            .expect("seeded callable identity")
-                            .clone(),
-                        numeric_literals: Vec::new(),
-                        scheme,
-                        binders: Vec::new(),
-                        reifications: self
-                            .function_reifications
-                            .remove(&expr.span)
-                            .unwrap_or_default(),
-                    },
-                );
+                self.publish_lambda_evidence(expr, expected_params, &resolved_expected);
                 return;
             },
             | (
@@ -6263,6 +6783,18 @@ impl Checker {
             },
             | _ => {},
         }
+        self.check_synthesized_expression(expr, expected);
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "the fallback compares an already synthesized value using directional annotation rules"
+    )]
+    fn check_synthesized_expression(
+        &mut self,
+        expr: &Expr,
+        expected: &Type,
+    ) {
         let actual = self.synth(expr);
         let expected_resolved = self.infer.resolve(expected);
         if matches!(
@@ -6321,25 +6853,16 @@ impl Checker {
         actual: &Type,
         expected: &Type,
     ) -> Option<String> {
-        let actual = self.infer.resolve(actual);
-        let expected = self.infer.resolve(expected);
-        let (
-            Type::Tensor {
-                shape: Shape::Rank(actual_rank),
-                ..
-            },
-            Type::Tensor {
-                shape: Shape::Refined(items),
-                ..
-            },
-        ) = (&actual, &expected)
-        else {
+        let Some(Shape::Refined(items)) = self.infer.outer_tensor_shape(expected) else {
+            return None;
+        };
+        let Some(Shape::Rank(actual_rank)) = self.infer.outer_tensor_shape(actual) else {
             return None;
         };
         let known_extent = items
             .iter()
             .any(|item| item.as_ref().and_then(Nat::as_const).is_some());
-        if known_extent && usize::try_from(*actual_rank).unwrap_or(usize::MAX) == items.len() {
+        if known_extent && usize::try_from(actual_rank).unwrap_or(usize::MAX) == items.len() {
             Some("a rank-only tensor cannot satisfy a refined annotation".to_string())
         } else {
             None
@@ -6452,7 +6975,7 @@ impl Checker {
         if value_dim != uncertainty_dim {
             return None;
         }
-        Some((self.infer.resolve_rep(value_rep), value_dim.clone()))
+        Some((self.infer.resolve_rep(value_rep), value_dim))
     }
 
     /// The `Measurement<d>` record type itself.
@@ -6613,6 +7136,10 @@ impl Checker {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "each operator selects its representation and dimension laws before class dispatch"
+    )]
     fn binary_type(
         &mut self,
         op: BinOp,
@@ -6760,6 +7287,10 @@ impl Checker {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "additive rules distinguish scalar, affine point, tensor and symbolic operand pairs"
+    )]
     fn add_type(
         &mut self,
         op: BinOp,
@@ -6917,7 +7448,12 @@ impl Checker {
                         "E0302",
                         format!("`+` is not defined for {left} and {right}"),
                         span,
-                        "strings are joined with `concat(a, b)` or interpolation `\"{a}{b}\"`",
+                        concat!(
+                            "strings are joined with `concat(a, b)` or interpolation `\"",
+                            "{a}",
+                            "{b}",
+                            "\"`"
+                        ),
                     );
                 } else {
                     self.error(
@@ -7302,6 +7838,10 @@ impl Checker {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "power combines exponent shape, representation and exact dimension rules in one inference branch"
+    )]
     fn pow_type(
         &mut self,
         base: &Type,
@@ -7515,6 +8055,22 @@ impl Checker {
             .any(|scope| scope.contains_key(name))
     }
 
+    /// A source callable imported from another module is a genuine binding,
+    /// while a primitive re-export (for example `let odeint = odeint`) still
+    /// needs its type-function dispatcher rather than its deliberately loose
+    /// HM facade. Callable provenance distinguishes these cases.
+    fn shadows_builtin(
+        &self,
+        name: &str,
+    ) -> bool {
+        self.is_locally_defined(name)
+            || self.global_callables.contains_key(name)
+            || self
+                .globals
+                .get(name)
+                .is_some_and(|scheme| !matches!(scheme.ty, Type::Fn(..) | Type::UnitOf(_)))
+    }
+
     fn synth_call(
         &mut self,
         callee: &Expr,
@@ -7522,18 +8078,15 @@ impl Checker {
         span: Span,
     ) -> Type {
         let ty = self.synth_call_inner(callee, args, span);
-        if !args
-            .iter()
-            .any(|arg| matches!(arg.kind, ExprKind::Placeholder))
+        if let Some(materializations) = self.call_materializations.get(&callee.span)
+            && !materializations.is_empty()
+            && !args
+                .iter()
+                .any(|arg| matches!(arg.kind, ExprKind::Placeholder))
         {
-            let materializations = self
-                .call_materializations
-                .get(&callee.span)
-                .cloned()
-                .unwrap_or_default();
             let protected = self.lexical_numeric_variables();
             for ty in materializations {
-                self.infer.weaken_materialized(&ty, &protected);
+                self.infer.weaken_materialized(ty, &protected);
             }
         }
         ty
@@ -7554,13 +8107,13 @@ impl Checker {
         // `Rssn.<op>(...)`: resolve the overload *here* and pin it, so the
         // runtime cannot execute a different one.
         if let Some(op) = rssn_op_name(callee) {
-            return self.rssn_call(&op, args, span);
+            return self.rssn_call(op, args, span);
         }
         // `Rssn.invoke` names an operator by *string*, so its result type is
         // not known statically. Typing it as a fresh variable would be
         // `∀a. a` — every call site could claim a different type. It returns
         // the dynamic value type instead, which the caller must `check`.
-        if is_rssn_member(callee, "invoke") {
+        if rssn_member_name(callee) == Some("invoke") {
             let expected = [Type::Str, Type::Str, value_list_type()];
             for (arg, ty) in args.iter().zip(expected.iter()) {
                 self.check(arg, ty);
@@ -7577,9 +8130,9 @@ impl Checker {
             // one manifest overload by its pinned `OpKey` digest, so the call
             // has that overload's declared result type. Anything else keeps
             // the dynamic value type and lets the runtime report E1005.
-            if args.len() == expected.len()
+            if let [operation, digest, _] = args
                 && let (Some(op_name), Some(hash)) =
-                    (string_constant(&args[0]), string_constant(&args[1]))
+                    (string_constant(operation), string_constant(digest))
                 && let Some(ty) =
                     crate::rssn_resolve::invoke_result(&op_name, &hash, &mut self.infer)
             {
@@ -7596,541 +8149,658 @@ impl Checker {
         {
             return self.class_method_call(name, &scheme, args, span);
         }
-        // `zeros<Float>(3, 4)`: the type argument fixes the element type.
-        if let ExprKind::TypeApp {
-            callee: inner,
-            args: type_args,
-        } = &callee.kind
-        {
-            if let ExprKind::Var(name) = &inner.kind {
-                // §3.5.1: `reshape<[3, 2]>(a)`, `zeros_of<[3, 4]>()` and
-                // `ones_of<[3, 4]>()` name their target in a *shape* type
-                // argument, so the result has the refined shape.
-                if matches!(
+        match &callee.kind {
+            | ExprKind::TypeApp {
+                callee: inner,
+                args: type_args,
+            } => self.synth_explicit_call(inner, type_args, args, span, callee.span),
+            | ExprKind::Var(name) => self.synth_named_call(name, callee, args, span),
+            | _ => self.synth_general_call(callee, args, span),
+        }
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "explicit type arguments resolve before dispatch and publish the instantiated callee type"
+    )]
+    fn synth_explicit_call(
+        &mut self,
+        inner: &Expr,
+        type_args: &[Ty],
+        args: &[Expr],
+        span: Span,
+        callee_span: Span,
+    ) -> Type {
+        if let ExprKind::Var(name) = &inner.kind {
+            if !self.shadows_builtin(name) {
+                let shape_constructor = matches!(
                     name.as_str(),
                     "reshape" | "zeros_of" | "ones_of" | "refine_shape"
-                ) {
-                    return self.shape_constructor(name, type_args, args, span);
+                );
+                // Shape constructors accept one shape argument. The
+                // explicit forms of `check` and `from_system` accept one
+                // dimension, while `dyn` and `to_system` infer theirs.
+                if shape_constructor || matches!(name.as_str(), "check" | "from_system") {
+                    let [argument] = type_args else {
+                        self.error(
+                            "E0315",
+                            format!(
+                                "`{name}` takes exactly one type argument, found {}",
+                                type_args.len()
+                            ),
+                            span,
+                        );
+                        return Type::Error;
+                    };
+                    if shape_constructor {
+                        return self.shape_constructor(name, argument, args, span);
+                    }
+                    if name == "check" {
+                        return self.check_call(args, Some(argument), span);
+                    }
+                    return self.system_call(false, args, Some(argument), span);
                 }
-                // §4.9.4: `check<d>(x)` names the dimension to materialise. A
-                // `dyn` takes no type argument: its `d` comes from the argument.
-                if name == "check" {
-                    return self.check_call(args, type_args.first(), span);
-                }
-                if name == "from_system" && !self.is_locally_defined(name) {
-                    return self.system_call(false, args, type_args.first(), span);
-                }
-                if builtins::takes_format_argument(name) && !self.is_locally_defined(name) {
-                    return self.sparse_format_call(name, type_args, args, span);
-                }
-            }
-            let inner_ty = self.synth(inner);
-            if let Type::TensorIntrinsic(intrinsic) = self.infer.resolve(&inner_ty) {
-                return self.tensor_constructor(intrinsic, type_args, args, span);
-            }
-            if let Type::FromValueIntrinsic(specialization) = self.infer.resolve(&inner_ty) {
-                if specialization.is_some() || type_args.len() != 1 {
+                if matches!(name.as_str(), "dyn" | "to_system") {
                     self.error(
                         "E0315",
-                        "`from_value` requires one type argument when specialized",
+                        format!("`{name}` does not accept type arguments"),
                         span,
                     );
                     return Type::Error;
                 }
-                let Some(ty) = self.reify_type_argument(&type_args[0]) else {
-                    return Type::Error;
-                };
-                return self.from_value_call(Some(ty), args, span);
             }
-            if let Type::TypeRepIntrinsic(specialization) = self.infer.resolve(&inner_ty) {
-                if specialization.is_some() || type_args.len() != 1 {
-                    self.error(
-                        "E0315",
-                        "`type_rep` requires exactly one type argument",
-                        span,
-                    );
-                    return Type::Error;
-                }
-                if self.reify_type_argument(&type_args[0]).is_none() {
-                    return Type::Error;
-                }
-                return self.type_rep_call(args, span);
+            if builtins::takes_format_argument(name) && !self.shadows_builtin(name) {
+                return self.sparse_format_call(name, type_args, args, span);
             }
-            // User functions must apply their ordered binders here as well as
-            // in a standalone `f<T>` expression. Otherwise calls silently
-            // ignore explicit arguments and omit their runtime evidence.
-            let applied = self.apply_type_arguments(inner, type_args, callee.span, inner_ty);
-            self.note_type(callee.span, &applied);
-            if let Type::ReadNpyIntrinsic(rank) = self.infer.resolve(&applied) {
-                return self.read_npy_call(rank, args, span);
-            }
-            return self.call_with_type(applied, args, span);
         }
-        if let ExprKind::Var(name) = &callee.kind {
-            // Resolve a lexical binding before falling back to an ambient intrinsic.
-            let bound = self
-                .scopes
-                .iter()
-                .rev()
-                .find_map(|scope| scope.get(name))
-                .or_else(|| self.globals.get(name))
-                .map(|scheme| self.infer.resolve(&scheme.ty));
-            if let Some(Type::FromValueIntrinsic(specialization)) = &bound {
-                self.synth(callee);
-                return self.from_value_call(specialization.as_deref().cloned(), args, span);
+        let inner_ty = self.synth(inner);
+        let resolved = self.infer.resolve(&inner_ty);
+        if let Type::TensorIntrinsic(intrinsic) = resolved {
+            return self.tensor_constructor(intrinsic, type_args, args, span);
+        }
+        if let Type::FromValueIntrinsic(specialization) = resolved {
+            let ([argument], None) = (type_args, specialization) else {
+                self.error(
+                    "E0315",
+                    "`from_value` requires one type argument when specialized",
+                    span,
+                );
+                return Type::Error;
+            };
+            let Some(ty) = self.reify_type_argument(argument) else {
+                return Type::Error;
+            };
+            return self.from_value_call(Some(ty), args, span);
+        }
+        if let Type::TypeRepIntrinsic(specialization) = resolved {
+            let ([argument], None) = (type_args, specialization) else {
+                self.error(
+                    "E0315",
+                    "`type_rep` requires exactly one type argument",
+                    span,
+                );
+                return Type::Error;
+            };
+            if self.reify_type_argument(argument).is_none() {
+                return Type::Error;
             }
-            if bound.is_none() && name == "from_value" {
-                self.synth(callee);
-                return self.from_value_call(None, args, span);
+            return self.type_rep_call(args, span);
+        }
+        // User functions must apply their ordered binders here as well as
+        // in a standalone `f<T>` expression. Otherwise calls silently
+        // ignore explicit arguments and omit their runtime evidence.
+        let applied = self.apply_type_arguments(inner, type_args, callee_span, inner_ty);
+        self.note_type(callee_span, &applied);
+        if let Type::ReadNpyIntrinsic(rank) = self.infer.resolve(&applied) {
+            return self.read_npy_call(rank, args, span);
+        }
+        self.call_with_type(applied, args, span)
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "named calls have a distinct shadowing and built-in dispatch order"
+    )]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "shadowing, unit aliases, special typing and the ordinary overload fallback use declaration precedence"
+    )]
+    fn synth_named_call(
+        &mut self,
+        name: &str,
+        callee: &Expr,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
+        if let Some(ty) = self.lexical_intrinsic_call(name, callee, args, span) {
+            return ty;
+        }
+        // Locals and imported source functions shadow a builtin. Bare
+        // primitive re-exports retain their type-function dispatcher
+        // (§8.9), which their loose HM facade cannot express.
+        let shadowed = self.shadows_builtin(name);
+        if shadowed {
+            let callee_ty = self.synth(callee);
+            return self.call_with_type(callee_ty, args, span);
+        }
+        // A prelude unit is also a value (`min` is a minute, `dyn` is the
+        // dyne), but in *call* position the builtin function of that name
+        // wins for the ordinary data functions. The checker's
+        // type-directed primitives are excluded: they need their own
+        // special typing below (`dyn`, `check`, `rank`, …), not the generic
+        // builtin scheme.
+        let has_special_typing = matches!(
+            name,
+            "dyn"
+                | "check"
+                | "odeint"
+                | "odeint_with"
+                | "solve_ivp"
+                | "sdeint_diag"
+                | "sdeint_general"
+                | "sde_ensemble_diag"
+                | "sde_ensemble_general"
+                | "ode_solve"
+                | "ode_bvp"
+                | "odeint_order"
+                | "odeint_order_with"
+                | "par_map"
+                | "rank"
+                | "shape"
+                | "write_npy"
+                | "min_all"
+                | "max_all"
+                | "transpose"
+        );
+        if !has_special_typing
+            && let Some(scheme) = self.globals.get(name)
+            && matches!(scheme.ty, Type::UnitOf(_))
+            && let Some(candidates) = builtins::schemes(name)
+        {
+            match candidates.as_slice() {
+                | [] => {},
+                | [candidate] => {
+                    let ty = self.infer.instantiate(candidate);
+                    return self.call_with_type(ty, args, span);
+                },
+                | _ => return self.overloaded_call(name, &candidates, args, span),
             }
-            if matches!(&bound, Some(Type::ToCallbackIntrinsic))
-                || (bound.is_none() && name == "to_callback")
-            {
-                self.synth(callee);
-                return self.to_callback_call(args, span);
-            }
-            if let Some(Type::TypeRepIntrinsic(specialization)) = &bound {
-                self.synth(callee);
-                if specialization.is_none() {
-                    self.error(
-                        "E0315",
-                        "`type_rep` requires an explicit type argument",
-                        span,
+        }
+        // §8.9: the ODE entry points are typed through the built-in type
+        // function `RateOf<s>`, which unification cannot express.
+        if matches!(name, "odeint" | "odeint_with" | "solve_ivp") {
+            return self.ode_call(name, args, span);
+        }
+        // §8.9.1: the SDE entry points use two built-in type functions —
+        // `RateOf` for the drift and `DiffusionOf` for the diffusion.
+        if matches!(
+            name,
+            "sdeint_diag" | "sdeint_general" | "sde_ensemble_diag" | "sde_ensemble_general"
+        ) {
+            return self.sde_call(name, args, span);
+        }
+        if matches!(
+            name,
+            "ode_solve" | "ode_bvp" | "odeint_order" | "odeint_order_with"
+        ) {
+            return self.ode_ext_call(name, args, span);
+        }
+        // §3.11 / §4.9.4: the type-directed `Dyn` primitives.
+        if name == "dyn" {
+            return self.dyn_call(args, span);
+        }
+        if name == "check" {
+            return self.check_call(args, None, span);
+        }
+        if matches!(name, "to_system" | "from_system") && !self.shadows_builtin(name) {
+            return self.system_call(name == "to_system", args, None, span);
+        }
+        if matches!(name, "sparse_coo" | "contract") {
+            return self.sparse_special_call(name, args, span);
+        }
+        if matches!(name, "min_all" | "max_all") {
+            return self.tensor_reduce_call(name, args, span);
+        }
+        if matches!(name, "rank" | "shape") {
+            return self.tensor_metadata_call(name, args, span);
+        }
+        if name == "transpose" {
+            return self.transpose_call(args, span);
+        }
+        // §6.10: explicit parallelism needs `Parallel a` (§3.8.4).
+        if name == "par_map" {
+            return self.par_map_call(args, span);
+        }
+        if is_transcendental(name)
+            && let Some(arg) = args.first()
+        {
+            let ty = self.synth(arg);
+            if let Type::Scalar(rep, dim) = self.infer.resolve(&ty) {
+                // An unresolved dimension is *committed* to 1: `exp(t)`
+                // in an unannotated lambda is dimensionless until
+                // something else says otherwise. A concrete dimension
+                // other than 1 is the error §3.4.4 describes.
+                let resolved = self.infer.resolve_dim(&dim);
+                if !resolved.is_one()
+                    && (resolved.is_concrete()
+                        || self.infer.unify_dim(&resolved, &Dim::one()).is_err())
+                {
+                    let formatted = self.dims.format(&resolved);
+                    self.error_help(
+                        "E0403",
+                        format!("`{name}` requires a dimensionless argument, found {formatted}"),
+                        arg.span,
+                        "divide by a unit first, for example `x / 1 m`",
                     );
                     return Type::Error;
                 }
-                return self.type_rep_call(args, span);
+                return Type::Scalar(rep, Dim::one());
             }
-            if bound.is_none() && name == "type_rep" {
+        }
+        if builtins::is_special(name) && !matches!(name, "zeros" | "ones" | "fill") {
+            return self.special_call(name, args, span);
+        }
+        // §5.4.1: an affine unit displays a `Point`, never a temperature
+        // difference — `value_in(°C, 10 K)` is `E0510`, not a conversion.
+        if matches!(name, "value_in" | "to")
+            && let Some(ty) = self.unit_display_call(name, args, span)
+        {
+            return ty;
+        }
+        // §4.11: `det`/`prod` of a dimensioned tensor cannot be expressed
+        // statically — the exponent is the runtime order.
+        if matches!(name, "det" | "prod") {
+            let saved = self.infer.clone();
+            let before = self.diagnostics.items.len();
+            let types_before = self.expr_types.len();
+            if let Some(arg) = args.first() {
+                let ty = self.synth(arg);
+                if let Type::Tensor { elem, .. } = self.infer.resolve(&ty)
+                    && let Type::Scalar(_, dim) = self.infer.resolve(&elem)
+                {
+                    let resolved = self.infer.resolve_dim(&dim);
+                    if !resolved.is_one() && resolved.is_concrete() {
+                        let formatted = self.dims.format(&resolved);
+                        self.error_help(
+                            "E0410",
+                            format!("`{name}` of a {formatted} tensor needs a runtime dimension"),
+                            arg.span,
+                            "divide by a unit first, or use `det_unit`",
+                        );
+                        return Type::Error;
+                    }
+                }
+            }
+            self.infer.restore(&saved);
+            self.diagnostics.items.truncate(before);
+            // The probe was speculative: its substitutions were thrown
+            // away, so the types it recorded would name variables nobody
+            // can resolve. Drop them with the substitutions.
+            self.truncate_expr_types(types_before);
+        }
+        // §8.1.9: building a set orders its elements, so the element
+        // type needs a total order, exactly as `sort` does.
+        if name == "set_of"
+            && let Some(arg) = args.first()
+        {
+            let ty = self.synth(arg);
+            let elem = match self.infer.resolve(&ty) {
+                | Type::Tensor { elem, .. } => Some(*elem),
+                | _ => None,
+            };
+            if let Some(elem) = elem {
+                self.require_instance("TotalOrd", &elem, span);
+                return Type::Adt(adt::set_id(), vec![self.infer.resolve(&elem)]);
+            }
+            return Type::Adt(adt::set_id(), vec![self.infer.fresh_type()]);
+        }
+        // §3.8.4: `sort` needs a total order.
+        // The ordering family shares that rule: `sort_axis` and `argsort`
+        // order the elements, `sort_by_key` the keys the function gives.
+        // At rank >= 2 the sequence is the first-axis rows, and a row is
+        // ordered lexicographically by its elements.
+        let ordered_arity = match name {
+            | "sort" | "argsort" => Some(1),
+            | "sort_axis" => Some(2),
+            | _ => None,
+        };
+        if let Some(arity) = ordered_arity
+            && args.len() == arity
+            && let Some(argument) = args.first()
+        {
+            let ty = self.synth(argument);
+            if let Type::Tensor { elem, .. } = self.infer.resolve(&ty) {
+                self.require_instance("TotalOrd", &elem, span);
+            }
+            if let Some(axis) = args.get(1) {
+                let axis_ty = self.synth(axis);
+                if let Err(error) = self.infer.unify(&axis_ty, &Type::int()) {
+                    self.report_unify(error, axis.span);
+                }
+            }
+            return if name == "argsort" {
+                Type::tensor(Shape::Rank(1), Type::int())
+            } else {
+                ty
+            };
+        }
+        if name == "sort_by_key"
+            && let [key_function, values] = args
+        {
+            let ty = self.synth(values);
+            if let Type::Tensor { shape, elem } = self.infer.resolve(&ty) {
+                let rank = shape.rank();
+                let item = if rank <= 1 {
+                    *elem
+                } else {
+                    Type::tensor(Shape::Rank(rank.saturating_sub(1)), *elem)
+                };
+                let key = self.infer.fresh_type();
+                self.check(key_function, &Type::func(vec![item], key.clone()));
+                self.require_instance("TotalOrd", &key, span);
+                return ty;
+            }
+        }
+        if let Some(candidates) = builtins::schemes(name) {
+            // A call no overload can take by arity may be to a user
+            // function that an import binds under the built-in's name
+            // (`first(p, q)`); it then goes the ordinary way.
+            let arity_fits = candidates
+                .iter()
+                .any(|c| matches!(&c.ty, Type::Fn(params, _) if params.len() == args.len()));
+            if candidates.len() > 1 && (arity_fits || !self.globals.contains_key(name)) {
+                return self.overloaded_call(name, &candidates, args, span);
+            }
+            // A single-scheme builtin whose name is also a prelude unit (`cg` is
+            // both the conjugate-gradient solver and the centigram): in call
+            // position the function wins, as it does for `min`.
+            if self.units.lookup(name).is_some()
+                && let Some(candidate) = candidates.first()
+                && matches!(
+                    self.globals.get(name).map(|scheme| &scheme.ty),
+                    Some(Type::UnitOf(_)) | None
+                )
+            {
+                let ty = self.infer.instantiate(candidate);
+                return self.call_with_type(ty, args, span);
+            }
+        }
+        self.synth_general_call(callee, args, span)
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "lexical aliases publish the same intrinsic call evidence as builtin names"
+    )]
+    fn lexical_intrinsic_call(
+        &mut self,
+        name: &str,
+        callee: &Expr,
+        args: &[Expr],
+        span: Span,
+    ) -> Option<Type> {
+        // Resolve a lexical binding before falling back to an ambient intrinsic.
+        let bound = self
+            .scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name))
+            .or_else(|| self.globals.get(name))
+            .map(|scheme| self.infer.resolve(&scheme.ty));
+        if let Some(Type::FromValueIntrinsic(specialization)) = &bound {
+            self.synth(callee);
+            return Some(self.from_value_call(specialization.as_deref().cloned(), args, span));
+        }
+        if bound.is_none() && name == "from_value" {
+            self.synth(callee);
+            return Some(self.from_value_call(None, args, span));
+        }
+        if matches!(&bound, Some(Type::ToCallbackIntrinsic))
+            || (bound.is_none() && name == "to_callback")
+        {
+            self.synth(callee);
+            return Some(self.to_callback_call(args, span));
+        }
+        if let Some(Type::TypeRepIntrinsic(specialization)) = &bound {
+            self.synth(callee);
+            if specialization.is_none() {
                 self.error(
                     "E0315",
                     "`type_rep` requires an explicit type argument",
                     span,
                 );
-                return Type::Error;
+                return Some(Type::Error);
             }
-            let intrinsic = match bound {
-                | Some(Type::TensorIntrinsic(intrinsic)) => Some(intrinsic),
-                | Some(_) => None,
-                | None => {
-                    crate::ty::TensorIntrinsic::from_name(name)
-                        .map(|kind| crate::ty::TensorIntrinsicType { kind, element: None })
+            return Some(self.type_rep_call(args, span));
+        }
+        if bound.is_none() && name == "type_rep" {
+            self.error(
+                "E0315",
+                "`type_rep` requires an explicit type argument",
+                span,
+            );
+            return Some(Type::Error);
+        }
+        let intrinsic = match bound {
+            | Some(Type::TensorIntrinsic(intrinsic)) => Some(intrinsic),
+            | Some(_) => None,
+            | None => {
+                crate::ty::TensorIntrinsic::from_name(name)
+                    .map(|kind| crate::ty::TensorIntrinsicType { kind, element: None })
+            },
+        };
+        if let Some(intrinsic) = intrinsic {
+            self.synth(callee);
+            return Some(self.tensor_constructor(intrinsic, &[], args, span));
+        }
+        None
+    }
+
+    // §8.1: `min_all`/`max_all` reduce a whole tensor of any rank to
+    // its scalar element (`min`/`max` stay the binary scalar
+    // functions). A scheme cannot quantify the shape's rank, so the
+    // element/dimension relationship is enforced here instead of by a
+    // rank-1-only scheme.
+    #[allow(
+        clippy::single_call_fn,
+        reason = "whole-tensor reductions preserve the element representation and dimension"
+    )]
+    fn tensor_reduce_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
+        let [argument] = args else {
+            self.error(
+                "E0315",
+                format!("`{name}` takes 1 argument, found {}", args.len()),
+                span,
+            );
+            for arg in args {
+                self.synth(arg);
+            }
+            return Type::Error;
+        };
+        let arg_ty = self.synth(argument);
+        match self.infer.resolve(&arg_ty) {
+            | Type::Tensor { elem, .. } => {
+                // A tensor literal's element can still be a literal
+                // type variable; commit it to a scalar first.
+                let elem = self.force_scalar(&elem);
+                match self.infer.resolve(&elem) {
+                    | Type::Scalar(rep, dim) => Type::Scalar(rep, dim),
+                    | other => {
+                        self.error_help(
+                            "E0302",
+                            format!(
+                                "`{name}` reduces a tensor of scalars, found elements of type {other}"
+                            ),
+                            argument.span,
+                            "reduce a `Tensor<n, Scalar<ρ, d>>`; it returns its element type",
+                        );
+                        Type::Error
+                    },
+                }
+            },
+            | other => {
+                self.error_help(
+                    "E0302",
+                    format!("`{name}` expects a tensor, found {other}"),
+                    argument.span,
+                    "`min_all`/`max_all` reduce a whole tensor of any rank",
+                );
+                Type::Error
+            },
+        }
+    }
+
+    // §8.1/§8.4: `rank` and `shape` require a tensor; the scheme used
+    // to take a fresh type variable, so `rank(3)` type-checked.
+    #[allow(
+        clippy::single_call_fn,
+        reason = "rank and shape share dense and sparse tensor inspection"
+    )]
+    fn tensor_metadata_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
+        let [argument] = args else {
+            self.error(
+                "E0315",
+                format!("`{name}` takes 1 argument, found {}", args.len()),
+                span,
+            );
+            for arg in args {
+                self.synth(arg);
+            }
+            return Type::Error;
+        };
+        let arg_ty = self.synth(argument);
+        let arg_ty = match builtins::sparse_parts(&self.infer.resolve(&arg_ty)) {
+            | Some((_, dense)) => dense.clone(),
+            | None => arg_ty,
+        };
+        match self.infer.resolve(&arg_ty) {
+            | Type::Tensor { shape, .. } => {
+                if name == "rank" {
+                    Type::int()
+                } else {
+                    // `shape : Tensor<n, τ> -> Tensor<1, Int>`; the
+                    // length is the rank, which is known.
+                    Type::tensor(
+                        Shape::Refined(vec![Some(Nat::lit(
+                            usize::try_from(shape.rank()).unwrap_or(0),
+                        ))]),
+                        Type::int(),
+                    )
+                }
+            },
+            | other => {
+                self.error_help(
+                    "E0302",
+                    format!("`{name}` expects a tensor, found {other}"),
+                    argument.span,
+                    "`rank`/`shape` describe a `Tensor<n, τ>` value",
+                );
+                Type::Error
+            },
+        }
+    }
+
+    // §8.4: `transpose` swaps the two extents of a rank-2 tensor; the
+    // refined shape is preserved (`[m, n]` → `[n, m]`), and anything
+    // that is not a rank-2 tensor is an error here rather than a
+    // runtime surprise.
+    #[allow(
+        clippy::single_call_fn,
+        reason = "tensor transposition preserves extent evidence and sparse layout"
+    )]
+    fn transpose_call(
+        &mut self,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
+        let [argument] = args else {
+            self.error(
+                "E0315",
+                format!("`transpose` takes 1 argument, found {}", args.len()),
+                span,
+            );
+            for arg in args {
+                self.synth(arg);
+            }
+            return Type::Error;
+        };
+        let arg_ty = self.synth(argument);
+        let arg_resolved = self.infer.resolve(&arg_ty);
+        if let Some((format, dense)) = builtins::sparse_parts(&arg_resolved) {
+            let format = format.clone();
+            return match dense {
+                | Type::Tensor { shape, elem } if shape.rank() == 2 => {
+                    let swapped = match shape {
+                        | Shape::Refined(items) => {
+                            if let [rows, cols] = items.as_slice() {
+                                Shape::Refined(vec![cols.clone(), rows.clone()])
+                            } else {
+                                Shape::Rank(2)
+                            }
+                        },
+                        | _ => Shape::Rank(2),
+                    };
+                    builtins::sparse_type(
+                        format,
+                        Type::Tensor {
+                            shape: swapped,
+                            elem: elem.clone(),
+                        },
+                    )
+                },
+                | other => {
+                    self.error_help(
+                        "E0302",
+                        format!("`transpose` expects a rank-2 sparse matrix, found {other}"),
+                        argument.span,
+                        "only a matrix can be transposed",
+                    );
+                    Type::Error
                 },
             };
-            if let Some(intrinsic) = intrinsic {
-                self.synth(callee);
-                return self.tensor_constructor(intrinsic, &[], args, span);
-            }
-            // A *local* declaration shadows a built-in entry point (so
-            // `let odeint = …` wins); an import does not — the module tree
-            // re-exports `odeint`, `sdeint_diag`, … with their loose HM
-            // schemes, while the type-function typing lives here (§8.9).
-            let shadowed = self.is_locally_defined(name);
-            if shadowed {
-                let callee_ty = self.synth(callee);
-                return self.call_with_type(callee_ty, args, span);
-            }
-            // A prelude unit is also a value (`min` is a minute, `dyn` is the
-            // dyne), but in *call* position the builtin function of that name
-            // wins for the ordinary data functions. The checker's
-            // type-directed primitives are excluded: they need their own
-            // special typing below (`dyn`, `check`, `rank`, …), not the generic
-            // builtin scheme.
-            let has_special_typing = matches!(
-                name.as_str(),
-                "dyn"
-                    | "check"
-                    | "odeint"
-                    | "odeint_with"
-                    | "solve_ivp"
-                    | "sdeint_diag"
-                    | "sdeint_general"
-                    | "sde_ensemble_diag"
-                    | "sde_ensemble_general"
-                    | "ode_solve"
-                    | "ode_bvp"
-                    | "odeint_order"
-                    | "odeint_order_with"
-                    | "par_map"
-                    | "rank"
-                    | "shape"
-                    | "write_npy"
-                    | "min_all"
-                    | "max_all"
-                    | "transpose"
-            );
-            if !has_special_typing
-                && let Some(scheme) = self.globals.get(name)
-                && matches!(scheme.ty, Type::UnitOf(_))
-                && let Some(candidates) = builtins::schemes(name)
-            {
-                if candidates.len() > 1 {
-                    return self.overloaded_call(name, &candidates, args, span);
-                }
-                let ty = self.infer.instantiate(&candidates[0]);
-                return self.call_with_type(ty, args, span);
-            }
-            // §8.9: the ODE entry points are typed through the built-in type
-            // function `RateOf<s>`, which unification cannot express.
-            if matches!(name.as_str(), "odeint" | "odeint_with" | "solve_ivp") {
-                return self.ode_call(name, args, span);
-            }
-            // §8.9.1: the SDE entry points use two built-in type functions —
-            // `RateOf` for the drift and `DiffusionOf` for the diffusion.
-            if matches!(
-                name.as_str(),
-                "sdeint_diag" | "sdeint_general" | "sde_ensemble_diag" | "sde_ensemble_general"
-            ) {
-                return self.sde_call(name, args, span);
-            }
-            if matches!(
-                name.as_str(),
-                "ode_solve" | "ode_bvp" | "odeint_order" | "odeint_order_with"
-            ) {
-                return self.ode_ext_call(name, args, span);
-            }
-            // §3.11 / §4.9.4: the type-directed `Dyn` primitives.
-            if name == "dyn" {
-                return self.dyn_call(args, span);
-            }
-            if name == "check" {
-                return self.check_call(args, None, span);
-            }
-            if matches!(name.as_str(), "to_system" | "from_system")
-                && !self.is_locally_defined(name)
-            {
-                return self.system_call(name == "to_system", args, None, span);
-            }
-            // §8.1: `min_all`/`max_all` reduce a whole tensor of any rank to
-            // its scalar element (`min`/`max` stay the binary scalar
-            // functions). A scheme cannot quantify the shape's rank, so the
-            // element/dimension relationship is enforced here instead of by a
-            // rank-1-only scheme.
-            if matches!(name.as_str(), "sparse_coo" | "contract") {
-                return self.sparse_special_call(name, args, span);
-            }
-            if matches!(name.as_str(), "min_all" | "max_all") {
-                if args.len() != 1 {
-                    self.error(
-                        "E0315",
-                        format!("`{name}` takes 1 argument, found {}", args.len()),
-                        span,
-                    );
-                    for arg in args {
-                        self.synth(arg);
-                    }
-                    return Type::Error;
-                }
-                let arg_ty = self.synth(&args[0]);
-                return match self.infer.resolve(&arg_ty) {
-                    | Type::Tensor { elem, .. } => {
-                        // A tensor literal's element can still be a literal
-                        // type variable; commit it to a scalar first.
-                        let elem = self.force_scalar(&elem);
-                        match self.infer.resolve(&elem) {
-                            | Type::Scalar(rep, dim) => Type::Scalar(rep, dim),
-                            | other => {
-                                self.error_help(
-                                    "E0302",
-                                    format!(
-                                        "`{name}` reduces a tensor of scalars, found elements of type {other}"
-                                    ),
-                                    args[0].span,
-                                    "reduce a `Tensor<n, Scalar<ρ, d>>`; it returns its element type",
-                                );
-                                Type::Error
-                            },
-                        }
-                    },
-                    | other => {
-                        self.error_help(
-                            "E0302",
-                            format!("`{name}` expects a tensor, found {other}"),
-                            args[0].span,
-                            "`min_all`/`max_all` reduce a whole tensor of any rank",
-                        );
-                        Type::Error
-                    },
-                };
-            }
-            // §8.1/§8.4: `rank` and `shape` require a tensor; the scheme used
-            // to take a fresh type variable, so `rank(3)` type-checked.
-            if matches!(name.as_str(), "rank" | "shape") {
-                if args.len() != 1 {
-                    self.error(
-                        "E0315",
-                        format!("`{name}` takes 1 argument, found {}", args.len()),
-                        span,
-                    );
-                    for arg in args {
-                        self.synth(arg);
-                    }
-                    return Type::Error;
-                }
-                let arg_ty = self.synth(&args[0]);
-                let arg_ty = match builtins::sparse_parts(&self.infer.resolve(&arg_ty)) {
-                    | Some((_, dense)) => dense.clone(),
-                    | None => arg_ty,
-                };
-                return match self.infer.resolve(&arg_ty) {
-                    | Type::Tensor { shape, .. } => {
-                        if name == "rank" {
-                            Type::int()
-                        } else {
-                            // `shape : Tensor<n, τ> -> Tensor<1, Int>`; the
-                            // length is the rank, which is known.
-                            Type::tensor(
-                                Shape::Refined(vec![Some(Nat::lit(
-                                    usize::try_from(shape.rank()).unwrap_or(0),
-                                ))]),
-                                Type::int(),
-                            )
-                        }
-                    },
-                    | other => {
-                        self.error_help(
-                            "E0302",
-                            format!("`{name}` expects a tensor, found {other}"),
-                            args[0].span,
-                            "`rank`/`shape` describe a `Tensor<n, τ>` value",
-                        );
-                        Type::Error
-                    },
-                };
-            }
-            // §8.4: `transpose` swaps the two extents of a rank-2 tensor; the
-            // refined shape is preserved (`[m, n]` → `[n, m]`), and anything
-            // that is not a rank-2 tensor is an error here rather than a
-            // runtime surprise.
-            if name == "transpose" {
-                if args.len() != 1 {
-                    self.error(
-                        "E0315",
-                        format!("`transpose` takes 1 argument, found {}", args.len()),
-                        span,
-                    );
-                    for arg in args {
-                        self.synth(arg);
-                    }
-                    return Type::Error;
-                }
-                let arg_ty = self.synth(&args[0]);
-                let arg_resolved = self.infer.resolve(&arg_ty);
-                if let Some((format, dense)) = builtins::sparse_parts(&arg_resolved) {
-                    let format = format.clone();
-                    return match dense {
-                        | Type::Tensor { shape, elem } if shape.rank() == 2 => {
-                            let swapped = match shape {
-                                | Shape::Refined(items) if items.len() == 2 => {
-                                    Shape::Refined(vec![items[1].clone(), items[0].clone()])
-                                },
-                                | _ => Shape::Rank(2),
-                            };
-                            builtins::sparse_type(
-                                format,
-                                Type::Tensor {
-                                    shape: swapped,
-                                    elem: elem.clone(),
-                                },
-                            )
-                        },
-                        | other => {
-                            self.error_help(
-                                "E0302",
-                                format!(
-                                    "`transpose` expects a rank-2 sparse matrix, found {other}"
-                                ),
-                                args[0].span,
-                                "only a matrix can be transposed",
-                            );
-                            Type::Error
-                        },
-                    };
-                }
-                return match self.infer.resolve(&arg_ty) {
-                    | Type::Tensor { shape, elem } if shape.rank() >= 2 => {
-                        // §8.4: `transpose` reverses the axis order, so a
-                        // refined shape is reversed whole (`[m, n]` → `[n, m]`,
-                        // `[a, b, c]` → `[c, b, a]`).
-                        let rank = shape.rank();
-                        let swapped = match &shape {
-                            | Shape::Refined(items) if items.len() as u32 == rank => {
-                                Shape::Refined(items.iter().rev().cloned().collect())
-                            },
-                            | _ => Shape::Rank(rank),
-                        };
-                        Type::Tensor { shape: swapped, elem }
-                    },
-                    | other => {
-                        self.error_help(
-                            "E0302",
-                            format!("`transpose` expects a tensor of rank 2 or more, found {other}"),
-                            args[0].span,
-                            "transpose a matrix (`Tensor<2, τ>`) or any higher-rank tensor, which reverses its axes; a vector is its own transpose",
-                        );
-                        Type::Error
-                    },
-                };
-            }
-            // §6.10: explicit parallelism needs `Parallel a` (§3.8.4).
-            if name == "par_map" {
-                return self.par_map_call(args, span);
-            }
-            if is_transcendental(name)
-                && let Some(arg) = args.first()
-            {
-                let ty = self.synth(arg);
-                if let Type::Scalar(rep, dim) = self.infer.resolve(&ty) {
-                    // An unresolved dimension is *committed* to 1: `exp(t)`
-                    // in an unannotated lambda is dimensionless until
-                    // something else says otherwise. A concrete dimension
-                    // other than 1 is the error §3.4.4 describes.
-                    let resolved = self.infer.resolve_dim(&dim);
-                    if !resolved.is_one()
-                        && (resolved.is_concrete()
-                            || self.infer.unify_dim(&resolved, &Dim::one()).is_err())
-                    {
-                        let formatted = self.dims.format(&resolved);
-                        self.error_help(
-                            "E0403",
-                            format!(
-                                "`{name}` requires a dimensionless argument, found {formatted}"
-                            ),
-                            arg.span,
-                            "divide by a unit first, for example `x / 1 m`",
-                        );
-                        return Type::Error;
-                    }
-                    return Type::Scalar(rep, Dim::one());
-                }
-            }
-            if builtins::is_special(name) && !matches!(name.as_str(), "zeros" | "ones" | "fill") {
-                return self.special_call(name, args, span);
-            }
-            // §5.4.1: an affine unit displays a `Point`, never a temperature
-            // difference — `value_in(°C, 10 K)` is `E0510`, not a conversion.
-            if matches!(name.as_str(), "value_in" | "to")
-                && let Some(ty) = self.unit_display_call(name, args, span)
-            {
-                return ty;
-            }
-            // §4.11: `det`/`prod` of a dimensioned tensor cannot be expressed
-            // statically — the exponent is the runtime order.
-            if matches!(name.as_str(), "det" | "prod") {
-                let saved = self.infer.clone();
-                let before = self.diagnostics.items.len();
-                let types_before = self.expr_types.len();
-                if let Some(arg) = args.first() {
-                    let ty = self.synth(arg);
-                    if let Type::Tensor { elem, .. } = self.infer.resolve(&ty)
-                        && let Type::Scalar(_, dim) = self.infer.resolve(&elem)
-                    {
-                        let resolved = self.infer.resolve_dim(&dim);
-                        if !resolved.is_one() && resolved.is_concrete() {
-                            let formatted = self.dims.format(&resolved);
-                            self.error_help(
-                                "E0410",
-                                format!(
-                                    "`{name}` of a {formatted} tensor needs a runtime dimension"
-                                ),
-                                arg.span,
-                                "divide by a unit first, or use `det_unit`",
-                            );
-                            return Type::Error;
-                        }
-                    }
-                }
-                self.infer.restore(&saved);
-                self.diagnostics.items.truncate(before);
-                // The probe was speculative: its substitutions were thrown
-                // away, so the types it recorded would name variables nobody
-                // can resolve. Drop them with the substitutions.
-                self.truncate_expr_types(types_before);
-            }
-            // §8.1.9: building a set orders its elements, so the element
-            // type needs a total order, exactly as `sort` does.
-            if name == "set_of"
-                && let Some(arg) = args.first()
-            {
-                let ty = self.synth(arg);
-                let elem = match self.infer.resolve(&ty) {
-                    | Type::Tensor { elem, .. } => Some(*elem),
-                    | _ => None,
-                };
-                if let Some(elem) = elem {
-                    self.require_instance("TotalOrd", &elem, span);
-                    return Type::Adt(adt::set_id(), vec![self.infer.resolve(&elem)]);
-                }
-                return Type::Adt(adt::set_id(), vec![self.infer.fresh_type()]);
-            }
-            // §3.8.4: `sort` needs a total order.
-            // The ordering family shares that rule: `sort_axis` and `argsort`
-            // order the elements, `sort_by_key` the keys the function gives.
-            // At rank >= 2 the sequence is the first-axis rows, and a row is
-            // ordered lexicographically by its elements.
-            let ordered_arity = match name.as_str() {
-                | "sort" | "argsort" => Some(1),
-                | "sort_axis" => Some(2),
-                | _ => None,
-            };
-            if let Some(arity) = ordered_arity
-                && args.len() == arity
-            {
-                let ty = self.synth(&args[0]);
-                if let Type::Tensor { elem, .. } = self.infer.resolve(&ty) {
-                    self.require_instance("TotalOrd", &elem, span);
-                }
-                if let Some(axis) = args.get(1) {
-                    let axis_ty = self.synth(axis);
-                    if let Err(error) = self.infer.unify(&axis_ty, &Type::int()) {
-                        self.report_unify(error, axis.span);
-                    }
-                }
-                return if name.as_str() == "argsort" {
-                    Type::tensor(Shape::Rank(1), Type::int())
-                } else {
-                    ty
-                };
-            }
-            if name == "sort_by_key" && args.len() == 2 {
-                let ty = self.synth(&args[1]);
-                if let Type::Tensor { shape, elem } = self.infer.resolve(&ty) {
-                    let rank = shape.rank();
-                    let item = if rank <= 1 {
-                        *elem
-                    } else {
-                        Type::tensor(Shape::Rank(rank - 1), *elem)
-                    };
-                    let key = self.infer.fresh_type();
-                    self.check(&args[0], &Type::func(vec![item], key.clone()));
-                    self.require_instance("TotalOrd", &key, span);
-                    return ty;
-                }
-            }
-            if let Some(candidates) = builtins::schemes(name) {
-                // A call no overload can take by arity may be to a user
-                // function that an import binds under the built-in's name
-                // (`first(p, q)`); it then goes the ordinary way.
-                let arity_fits = candidates
-                    .iter()
-                    .any(|c| matches!(&c.ty, Type::Fn(params, _) if params.len() == args.len()));
-                if candidates.len() > 1 && (arity_fits || !self.globals.contains_key(name)) {
-                    return self.overloaded_call(name, &candidates, args, span);
-                }
-                // A single-scheme builtin whose name is also a prelude unit (`cg` is
-                // both the conjugate-gradient solver and the centigram): in call
-                // position the function wins, as it does for `min`.
-                if self.units.lookup(name).is_some()
-                    && matches!(
-                        self.globals.get(name).map(|scheme| &scheme.ty),
-                        Some(Type::UnitOf(_)) | None
-                    )
-                {
-                    let ty = self.infer.instantiate(&candidates[0]);
-                    return self.call_with_type(ty, args, span);
-                }
-            }
         }
+        match self.infer.resolve(&arg_ty) {
+            | Type::Tensor { shape, elem } if shape.rank() >= 2 => {
+                // §8.4: `transpose` reverses the axis order, so a
+                // refined shape is reversed whole (`[m, n]` → `[n, m]`,
+                // `[a, b, c]` → `[c, b, a]`).
+                let rank = shape.rank();
+                let swapped = match &shape {
+                    | Shape::Refined(items) if u32::try_from(items.len()) == Ok(rank) => {
+                        Shape::Refined(items.iter().rev().cloned().collect())
+                    },
+                    | _ => Shape::Rank(rank),
+                };
+                Type::Tensor { shape: swapped, elem }
+            },
+            | other => {
+                self.error_help(
+                    "E0302",
+                    format!("`transpose` expects a tensor of rank 2 or more, found {other}"),
+                    argument.span,
+                    "transpose a matrix (`Tensor<2, τ>`) or any higher-rank tensor, which reverses its axes; a vector is its own transpose",
+                );
+                Type::Error
+            },
+        }
+    }
+
+    fn synth_general_call(
+        &mut self,
+        callee: &Expr,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
         let callee_ty = self.synth(callee);
         match self.infer.resolve(&callee_ty) {
             | Type::TensorIntrinsic(intrinsic) => {
@@ -8198,7 +8868,9 @@ impl Checker {
                 if (*id == adt::RESULT_ID || *id == adt::OPTION_ID) && !args.is_empty() =>
             {
                 let mut values = args.clone();
-                values[0] = self.div_rep_in_type(&args[0]);
+                if let Some(first) = values.first_mut() {
+                    *first = self.div_rep_in_type(first);
+                }
                 Type::Adt(*id, values)
             },
             | other => other.clone(),
@@ -8211,7 +8883,10 @@ impl Checker {
         args: &[Expr],
         span: Span,
     ) -> Type {
-        let callee_ty = self.infer.resolve(&callee_ty);
+        let callee_ty = match callee_ty {
+            | Type::ReadNpyIntrinsic(_) | Type::WriteNpyIntrinsic => callee_ty,
+            | other => self.infer.resolve(&other),
+        };
         match callee_ty {
             | Type::ReadNpyIntrinsic(rank) => self.read_npy_call(rank, args, span),
             | Type::WriteNpyIntrinsic => self.write_npy_call(args, span),
@@ -8220,9 +8895,9 @@ impl Checker {
                 // with the unit argument or without it, so `random()`,
                 // `time_now()` and `read_line()` type-check (`()` is one
                 // value; §2.3.6's call syntax has no separate zero-arg form).
-                if params.len() == 1
+                if let [param] = params.as_slice()
                     && args.is_empty()
-                    && matches!(self.infer.resolve(&params[0]), Type::Unit)
+                    && matches!(self.infer.resolve(param), Type::Unit)
                 {
                     return *ret;
                 }
@@ -8283,7 +8958,10 @@ impl Checker {
         args: &[Expr],
         span: Span,
     ) -> Type {
-        let mut params = Vec::new();
+        let Some(identity) = self.callable_ids.get(&span).cloned() else {
+            self.error("E0304", "missing callable identity for function", span);
+            return Type::Error;
+        };
         let mut call_args = Vec::new();
         let mut scope = HashMap::new();
         let mut param_types = Vec::new();
@@ -8293,11 +8971,6 @@ impl Checker {
                 let ty = self.infer.fresh_type();
                 scope.insert(name.clone(), Scheme::mono(ty.clone()));
                 param_types.push(ty);
-                params.push(Param {
-                    pattern: Pat::new(PatKind::Var(name.clone()), arg.span),
-                    ty: None,
-                    span: arg.span,
-                });
                 call_args.push(Expr::new(ExprKind::Var(name), arg.span));
             } else {
                 call_args.push(arg.clone());
@@ -8314,17 +8987,12 @@ impl Checker {
         self.function_stack.pop();
         self.return_type = saved_return;
         self.scopes.pop();
-        let _ = params;
         let ty = Type::func(param_types, body_ty);
         self.checked.functions.insert(
             span,
             FunctionEvidence {
                 site: span,
-                identity: self
-                    .callable_ids
-                    .get(&span)
-                    .expect("seeded callable identity")
-                    .clone(),
+                identity,
                 numeric_literals: Vec::new(),
                 scheme: self.infer.generalize(&ty),
                 binders: Vec::new(),
@@ -8371,13 +9039,13 @@ impl Checker {
         let mut allowed = crate::TypeSubstitution::default();
         let mut infer = Infer::new();
         for (_, ty) in &self.type_params {
-            allowed.freshen(&self.infer.resolve(ty), &mut infer);
+            allowed.register_variables(&self.infer.resolve(ty), &mut infer);
         }
         for (_, dim) in &self.dim_params {
-            allowed.freshen(&Type::UnitOf(self.infer.resolve_dim(dim)), &mut infer);
+            allowed.register_variables(&Type::UnitOf(self.infer.resolve_dim(dim)), &mut infer);
         }
         for (_, nat) in &self.nat_params {
-            allowed.freshen(
+            allowed.register_variables(
                 &Type::tensor(
                     Shape::Refined(vec![Some(self.infer.resolve_nat(nat))]),
                     Type::Unit,
@@ -8386,10 +9054,10 @@ impl Checker {
             );
         }
         for (_, row) in &self.row_params {
-            allowed.freshen(&Type::Record(self.infer.resolve_row(row)), &mut infer);
+            allowed.register_variables(&Type::Record(self.infer.resolve_row(row)), &mut infer);
         }
         let mut used = crate::TypeSubstitution::default();
-        used.freshen(ty, &mut infer);
+        used.register_variables(ty, &mut infer);
         used.types.keys().all(|id| allowed.types.contains_key(id))
             && used
                 .representations
@@ -8412,7 +9080,7 @@ impl Checker {
         args: &[Expr],
         span: Span,
     ) -> Type {
-        if args.len() != 1 {
+        let [argument_expr] = args else {
             self.error(
                 "E0315",
                 format!("`to_callback` takes one function, found {}", args.len()),
@@ -8422,11 +9090,15 @@ impl Checker {
                 self.synth(arg);
             }
             return Type::Error;
-        }
-        let argument = self.synth(&args[0]);
+        };
+        let argument = self.synth(argument_expr);
         let function = self.infer.resolve(&argument);
         if !matches!(function, Type::Fn(..)) {
-            self.error("E0302", "`to_callback` requires a function", args[0].span);
+            self.error(
+                "E0302",
+                "`to_callback` requires a function",
+                argument_expr.span,
+            );
             return Type::Error;
         }
         opaque_type("Callback")
@@ -8437,7 +9109,7 @@ impl Checker {
         args: &[Expr],
         span: Span,
     ) -> Type {
-        if args.len() != 2 {
+        let [path, tensor] = args else {
             self.error(
                 "E0315",
                 format!("`write_npy` takes two arguments, found {}", args.len()),
@@ -8447,19 +9119,19 @@ impl Checker {
                 self.synth(arg);
             }
             return Type::Error;
-        }
-        self.check(&args[0], &Type::Str);
-        let value = self.synth(&args[1]);
+        };
+        self.check(path, &Type::Str);
+        let value = self.synth(tensor);
         let Type::Tensor { elem, .. } = self.infer.resolve(&value) else {
             self.error(
                 "E0302",
                 format!("`write_npy` needs a Float tensor, found {value}"),
-                args[1].span,
+                tensor.span,
             );
             return Type::Error;
         };
         if let Err(error) = self.infer.unify(&elem, &Type::float(Dim::one())) {
-            self.report_unify(error, args[1].span);
+            self.report_unify(error, tensor.span);
             return Type::Error;
         }
         Type::Io(Box::new(Type::result(
@@ -8474,7 +9146,7 @@ impl Checker {
         args: &[Expr],
         span: Span,
     ) -> Type {
-        if args.len() != 1 {
+        let [path] = args else {
             self.error(
                 "E0315",
                 format!("`read_npy` takes one path argument, found {}", args.len()),
@@ -8484,8 +9156,8 @@ impl Checker {
                 self.synth(arg);
             }
             return Type::Error;
-        }
-        self.check(&args[0], &Type::Str);
+        };
+        self.check(path, &Type::Str);
         let Some(rank) = rank else {
             self.error_help(
                 "E0314",
@@ -8508,7 +9180,7 @@ impl Checker {
         args: &[Expr],
         span: Span,
     ) -> Type {
-        if args.len() != 1 {
+        let [argument] = args else {
             self.error(
                 "E0315",
                 format!(
@@ -8521,8 +9193,8 @@ impl Checker {
                 self.synth(arg);
             }
             return Type::Error;
-        }
-        self.check(&args[0], &dynamic_value_type());
+        };
+        self.check(argument, &dynamic_value_type());
         let ty = specialization.unwrap_or_else(|| self.infer.fresh_type());
         Type::result(ty, crate::builtins::op_error_type())
     }
@@ -8572,31 +9244,26 @@ impl Checker {
             );
             return Type::Error;
         }
-        if name == "fill" && args.is_empty() {
-            self.error("E0315", "`fill` needs a value", span);
-            return Type::Error;
-        }
-        let elem = if name == "fill" {
-            let value = self.synth(&args[0]);
+        let (elem, dimensions) = if name == "fill" {
+            let [argument, dimensions @ ..] = args else {
+                self.error("E0315", "`fill` needs a value", span);
+                return Type::Error;
+            };
+            let value = self.synth(argument);
             let scalar = Type::Scalar(self.infer.fresh_rep(), self.infer.fresh_dim());
             if let Err(error) = self.infer.unify(&value, &scalar) {
-                self.report_unify(error, args[0].span);
+                self.report_unify(error, argument.span);
             }
-            value
+            (value, dimensions)
         } else if let Some(rep) = intrinsic.element {
-            Type::Scalar(rep, Dim::one())
+            (Type::Scalar(rep, Dim::one()), args)
         } else if let Some(ty) = type_args.first() {
             let Some(rep) = self.tensor_element_rep(name, ty) else {
                 return Type::Error;
             };
-            Type::Scalar(rep, Dim::one())
+            (Type::Scalar(rep, Dim::one()), args)
         } else {
-            Type::float(Dim::one())
-        };
-        let dimensions = if name == "fill" {
-            &args[1..]
-        } else {
-            args
+            (Type::float(Dim::one()), args)
         };
         for arg in dimensions {
             self.check(arg, &Type::int());
@@ -8640,148 +9307,21 @@ impl Checker {
     fn shape_constructor(
         &mut self,
         name: &str,
-        type_args: &[Ty],
+        type_arg: &Ty,
         args: &[Expr],
         span: Span,
     ) -> Type {
-        let target = type_args
-            .first()
-            .and_then(|ty| self.shape_type_argument(ty));
+        let target = self.shape_type_argument(type_arg);
         // `refine_shape<[3, 2]>(a) : Option<Tensor<[3, 2], τ>>` (§3.5.1): the
         // run-time check that turns a rank-only (or differently refined) tensor
         // into a refined one. The branch that matches `Some(b)` knows `b`'s
         // extents statically; the `None` branch is the "any other shape" case.
         if name == "refine_shape" {
-            if args.len() != 1 {
-                self.error(
-                    "E0315",
-                    format!("`refine_shape` takes 1 argument, found {}", args.len()),
-                    span,
-                );
-                for arg in args {
-                    self.synth(arg);
-                }
-                return Type::Error;
-            }
-            let arg_ty = self.synth(&args[0]);
-            let (source_shape, elem) = match self.infer.resolve(&arg_ty) {
-                | Type::Tensor { shape, elem } => (shape, (*elem).clone()),
-                | other => {
-                    self.error_help(
-                        "E0302",
-                        format!("`refine_shape` expects a tensor, found {other}"),
-                        args[0].span,
-                        "refine a `Tensor<n, τ>`",
-                    );
-                    return Type::Error;
-                },
-            };
-            let Some(target) = target else {
-                self.error_help(
-                    "E0315",
-                    "`refine_shape` needs its target shape as a type argument",
-                    span,
-                    "write `refine_shape<[3, 2]>(a)`",
-                );
-                return Type::Error;
-            };
-            if usize::try_from(source_shape.rank()).unwrap_or(usize::MAX) != target.len() {
-                self.error_help(
-                    "E0302",
-                    format!(
-                        "cannot refine a rank-{} tensor to a shape of rank {}",
-                        source_shape.rank(),
-                        target.len()
-                    ),
-                    span,
-                    "`refine_shape` checks extents, never the rank",
-                );
-                return Type::Error;
-            }
-            // The check runs at run time, where a type-level variable has no
-            // value: only literal (or `?`) extents can be tested.
-            for extent in target.iter().flatten() {
-                if self.infer.resolve_nat(extent).as_const().is_none() {
-                    self.error_help(
-                        "E0304",
-                        format!(
-                            "`refine_shape` tests extents at run time, but `{}` has no run-time value",
-                            self.infer.render_nat(extent)
-                        ),
-                        span,
-                        "name literal extents, for example `refine_shape<[3, ?]>(a)`",
-                    );
-                    return Type::Error;
-                }
-            }
-            let target = self.infer.resolve_shape(&Shape::Refined(target));
-            return Type::option(Type::tensor(target, elem));
+            return self.refine_shape_call(target, args, span);
         }
         if name == "reshape" {
-            if args.len() != 1 {
-                self.error(
-                    "E0315",
-                    format!("`reshape` takes 1 argument, found {}", args.len()),
-                    span,
-                );
-                for arg in args {
-                    self.synth(arg);
-                }
-                return Type::Error;
-            }
-            let arg_ty = self.synth(&args[0]);
-            let (source_shape, elem) = match self.infer.resolve(&arg_ty) {
-                | Type::Tensor { shape, elem } => (shape, (*elem).clone()),
-                | other => {
-                    self.error_help(
-                        "E0302",
-                        format!("`reshape` expects a tensor, found {other}"),
-                        args[0].span,
-                        "reshape a `Tensor<n, τ>`",
-                    );
-                    return Type::Error;
-                },
-            };
-            let Some(target) = target else {
-                // No shape argument: the runtime reports that it needs one.
-                return Type::result(arg_ty, builtins::shape_error_type());
-            };
-            // §3.5.1: the element count is preserved. When both shapes are
-            // known (or only differ by Nat variables) the count is a
-            // type-level equation, so `reshape<[2 * n]>(a)` with `a:
-            // Tensor<[n], Float>` solves `n = 2n` ⇒ `n = 0`; a determined
-            // mismatch is `E0802`. A product of two variable extents is not
-            // linear and is `E0304`.
-            let source_items = match &source_shape {
-                | Shape::Refined(items) => Some(items.clone()),
-                | Shape::Rank(_) => None,
-            };
-            if let Some(source_items) = source_items
-                && let (Some(source_product), Some(target_product)) = (
-                    self.shape_product(&source_items),
-                    self.shape_product(&target),
-                )
-                && let Err(error) = self.infer.unify_nat(&source_product, &target_product)
-            {
-                match error {
-                    | crate::infer::UnifyError::NatMismatch { .. } => {
-                        let source_count = self.infer.resolve_nat(&source_product);
-                        let target_count = self.infer.resolve_nat(&target_product);
-                        self.error_help(
-                            "E0802",
-                            format!("cannot reshape {source_count} element(s) into {target_count}"),
-                            span,
-                            "the element count must be preserved",
-                        );
-                    },
-                    | other => self.report_unify(other, span),
-                }
-                return Type::Error;
-            }
-            let target = self.infer.resolve_shape(&Shape::Refined(target));
-            return Type::result(Type::tensor(target, elem), builtins::shape_error_type());
+            return self.reshape_call(target, args, span);
         }
-        // `zeros_of<[3, 4]>()` / `ones_of<[3, 4]>()`.
         if !args.is_empty() {
             self.error(
                 "E0315",
@@ -8822,13 +9362,163 @@ impl Checker {
     ///
     /// `reshape<[3, 2]>` and the spelled-out `reshape<Tensor<[3, 2], Float>>`
     /// (the spelling the runtime tests use) both reach here; `?` is `None`.
+    #[allow(
+        clippy::single_call_fn,
+        reason = "rank-preserving runtime extent tests keep their own static preconditions"
+    )]
+    fn refine_shape_call(
+        &mut self,
+        target: Option<Vec<Option<Nat>>>,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
+        let [argument] = args else {
+            self.error(
+                "E0315",
+                format!("`refine_shape` takes 1 argument, found {}", args.len()),
+                span,
+            );
+            for arg in args {
+                self.synth(arg);
+            }
+            return Type::Error;
+        };
+        let arg_ty = self.synth(argument);
+        let (source_shape, elem) = match self.infer.resolve(&arg_ty) {
+            | Type::Tensor { shape, elem } => (shape, (*elem).clone()),
+            | other => {
+                self.error_help(
+                    "E0302",
+                    format!("`refine_shape` expects a tensor, found {other}"),
+                    argument.span,
+                    "refine a `Tensor<n, τ>`",
+                );
+                return Type::Error;
+            },
+        };
+        let Some(target) = target else {
+            self.error_help(
+                "E0315",
+                "`refine_shape` needs its target shape as a type argument",
+                span,
+                "write `refine_shape<[3, 2]>(a)`",
+            );
+            return Type::Error;
+        };
+        if usize::try_from(source_shape.rank()).unwrap_or(usize::MAX) != target.len() {
+            self.error_help(
+                "E0302",
+                format!(
+                    "cannot refine a rank-{} tensor to a shape of rank {}",
+                    source_shape.rank(),
+                    target.len()
+                ),
+                span,
+                "`refine_shape` checks extents, never the rank",
+            );
+            return Type::Error;
+        }
+        // The check runs at run time, where a type-level variable has no
+        // value: only literal (or `?`) extents can be tested.
+        for extent in target.iter().flatten() {
+            if self.infer.resolve_nat(extent).as_const().is_none() {
+                self.error_help(
+                    "E0304",
+                    format!(
+                        "`refine_shape` tests extents at run time, but `{}` has no run-time value",
+                        self.infer.render_nat(extent)
+                    ),
+                    span,
+                    "name literal extents, for example `refine_shape<[3, ?]>(a)`",
+                );
+                return Type::Error;
+            }
+        }
+        let target = self.infer.resolve_shape(&Shape::Refined(target));
+        Type::option(Type::tensor(target, elem))
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "reshape checks element-count equations and preserves its result error type"
+    )]
+    fn reshape_call(
+        &mut self,
+        target: Option<Vec<Option<Nat>>>,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
+        let [argument] = args else {
+            self.error(
+                "E0315",
+                format!("`reshape` takes 1 argument, found {}", args.len()),
+                span,
+            );
+            for arg in args {
+                self.synth(arg);
+            }
+            return Type::Error;
+        };
+        let arg_ty = self.synth(argument);
+        let (source_shape, elem) = match self.infer.resolve(&arg_ty) {
+            | Type::Tensor { shape, elem } => (shape, (*elem).clone()),
+            | other => {
+                self.error_help(
+                    "E0302",
+                    format!("`reshape` expects a tensor, found {other}"),
+                    argument.span,
+                    "reshape a `Tensor<n, τ>`",
+                );
+                return Type::Error;
+            },
+        };
+        let Some(target) = target else {
+            // No shape argument: the runtime reports that it needs one.
+            return Type::result(arg_ty, builtins::shape_error_type());
+        };
+        // §3.5.1: the element count is preserved. When both shapes are
+        // known (or only differ by Nat variables) the count is a
+        // type-level equation, so `reshape<[2 * n]>(a)` with `a:
+        // Tensor<[n], Float>` solves `n = 2n` ⇒ `n = 0`; a determined
+        // mismatch is `E0802`. A product of two variable extents is not
+        // linear and is `E0304`.
+        let source_items = match &source_shape {
+            | Shape::Refined(items) => Some(items.clone()),
+            | Shape::Rank(_) => None,
+        };
+        if let Some(source_items) = source_items
+            && let (Some(source_product), Some(target_product)) = (
+                self.shape_product(&source_items),
+                self.shape_product(&target),
+            )
+            && let Err(error) = self.infer.unify_nat(&source_product, &target_product)
+        {
+            match error {
+                | crate::infer::UnifyError::NatMismatch { .. } => {
+                    let source_count = self.infer.resolve_nat(&source_product);
+                    let target_count = self.infer.resolve_nat(&target_product);
+                    self.error_help(
+                        "E0802",
+                        format!("cannot reshape {source_count} element(s) into {target_count}"),
+                        span,
+                        "the element count must be preserved",
+                    );
+                },
+                | other => self.report_unify(other, span),
+            }
+            return Type::Error;
+        }
+        let target = self.infer.resolve_shape(&Shape::Refined(target));
+        Type::result(Type::tensor(target, elem), builtins::shape_error_type())
+    }
+
     fn shape_type_argument(
         &mut self,
         ty: &Ty,
     ) -> Option<Vec<Option<Nat>>> {
         match &ty.kind {
             | TyKind::ShapeArg(shape) | TyKind::Tensor { shape, .. } => {
-                match self.convert_shape(shape) {
+                match self.convert_shape(shape, ty.span)? {
                     | Shape::Refined(items) => Some(items),
                     | Shape::Rank(_) => None,
                 }
@@ -8845,463 +9535,6 @@ impl Checker {
         }
     }
 
-    /// Types an ODE entry point through the `RateOf` type function (§8.9).
-    ///
-    /// `odeint : ((Float[T], s) -> RateOf<s>) × s × Tensor<1, Float[T]> ->
-    /// Tensor<1, s>`; `odeint_with` adds `OdeOpts<s>` and answers with
-    /// `{ t: Tensor<1, Float[T]>, y: Tensor<1, s> }`, and `solve_ivp` takes the
-    /// interval `(Float[T], Float[T])` instead of a time series.
-    ///
-    /// `RateOf` recurses through tensors and records and divides a scalar's
-    /// dimension by `T`, so the right-hand side is *not* typed as returning the
-    /// state type: a state `Float[L]` returns `Float[L/T]`.
-    fn ode_call(
-        &mut self,
-        name: &str,
-        args: &[Expr],
-        span: Span,
-    ) -> Type {
-        let expected = if name == "odeint" { 3 } else { 4 };
-        if args.len() != expected {
-            self.error(
-                "E0315",
-                format!("`{name}` takes {expected} arguments, found {}", args.len()),
-                span,
-            );
-            for arg in args {
-                self.synth(arg);
-            }
-            return Type::Error;
-        }
-        let time = Dim::base("Time");
-        // The right-hand side: `(Float[T], s) -> RateOf<s>`.
-        let rhs_ty = self.synth(&args[0]);
-        let state = match self.infer.resolve(&rhs_ty) {
-            | Type::Fn(params, ret) if params.len() == 2 => {
-                if let Err(error) = self.infer.unify(&params[0], &Type::float(time.clone())) {
-                    self.report_unify(error, args[0].span);
-                }
-                let state = self.infer.resolve(&params[1]);
-                let rate = self.rate_of(&state, span);
-                if !rate.is_error()
-                    && let Err(error) = self.infer.unify(&ret, &rate)
-                {
-                    self.report_unify(error, args[0].span);
-                }
-                state
-            },
-            | other => {
-                self.error_help(
-                    "E0302",
-                    format!(
-                        "the right-hand side of `{name}` must be a function `(Float[T], s) -> RateOf<s>`, found {other}"
-                    ),
-                    args[0].span,
-                    "write `fn rhs(_t: Float[T], s: State): Rate = …`",
-                );
-                for arg in &args[1..] {
-                    self.synth(arg);
-                }
-                return Type::Error;
-            },
-        };
-        self.check(&args[1], &state);
-        let time_series = Type::tensor(Shape::Rank(1), Type::float(time.clone()));
-        match name {
-            | "odeint" | "odeint_with" => self.check(&args[2], &time_series),
-            // `solve_ivp` takes an interval, `(Float[T], Float[T])`.
-            | _ => {
-                let interval = Type::record(vec![
-                    ("0".to_string(), Type::float(time.clone())),
-                    ("1".to_string(), Type::float(time.clone())),
-                ]);
-                self.check(&args[2], &interval);
-            },
-        }
-        if name != "odeint" {
-            // `OdeOpts<s>`: the options record is checked field-wise by its
-            // literal; its `events` field mentions `s`, so a closed record type
-            // would need the whole shape. It is synthesised and left to the
-            // record literal's own checking.
-            self.synth(&args[3]);
-        }
-        match name {
-            | "odeint" => Type::tensor(Shape::Rank(1), state),
-            | _ => {
-                Type::record(vec![
-                    ("t".to_string(), time_series),
-                    ("y".to_string(), Type::tensor(Shape::Rank(1), state)),
-                ])
-            },
-        }
-    }
-
-    /// The solution record of `ode_solve` / `ode_bvp` (§8.9).
-    fn ode_solution_type(
-        state: &Type,
-        time: &Dim,
-    ) -> Type {
-        let hit = Type::record(vec![
-            ("index".to_string(), Type::int()),
-            ("t".to_string(), Type::float(time.clone())),
-            ("y".to_string(), state.clone()),
-        ]);
-        Type::record(vec![
-            (
-                "t".to_string(),
-                Type::tensor(Shape::Rank(1), Type::float(time.clone())),
-            ),
-            ("y".to_string(), Type::tensor(Shape::Rank(1), state.clone())),
-            (
-                "at".to_string(),
-                Type::func(vec![Type::float(time.clone())], state.clone()),
-            ),
-            ("events".to_string(), Type::tensor(Shape::Rank(1), hit)),
-            ("nfev".to_string(), Type::int()),
-            ("rejected".to_string(), Type::int()),
-            ("method".to_string(), Type::string()),
-        ])
-    }
-
-    /// The event record of `ode_solve` and `sde_events`:
-    /// `{ g: (Float[T], s) -> Float[1], terminal: Bool, direction: Int }`.
-    fn event_record_type(
-        state: &Type,
-        time: &Dim,
-    ) -> Type {
-        Type::record(vec![
-            (
-                "g".to_string(),
-                Type::func(
-                    vec![Type::float(time.clone()), state.clone()],
-                    Type::float(Dim::one()),
-                ),
-            ),
-            ("terminal".to_string(), Type::bool()),
-            ("direction".to_string(), Type::int()),
-        ])
-    }
-
-    /// §8.9: `ode_solve`, `ode_bvp`, `odeint_order`, `odeint_order_with`.
-    ///
-    /// The right-hand side of an order-`n` equation takes `n + 1` arguments
-    /// `(t, y, y', …, y⁽ⁿ⁻¹⁾)` and answers `y⁽ⁿ⁾`; the type of the `k`-th
-    /// derivative is `RateOf` applied `k` times to the state type, so the
-    /// dimension of every derivative is tracked (`y : Float[L]` makes `y'`
-    /// `Float[L/T]` and `y''` `Float[L/T^2]`).
-    fn ode_ext_call(
-        &mut self,
-        name: &str,
-        args: &[Expr],
-        span: Span,
-    ) -> Type {
-        let expected = match name {
-            | "ode_solve" | "ode_bvp" => 5,
-            | "odeint_order" => 3,
-            | _ => 4,
-        };
-        if args.len() != expected {
-            self.error(
-                "E0315",
-                format!("`{name}` takes {expected} arguments, found {}", args.len()),
-                span,
-            );
-            for arg in args {
-                self.synth(arg);
-            }
-            return Type::Error;
-        }
-        let time = Dim::base("Time");
-        let higher = name.starts_with("odeint_order");
-        let rhs_ty = self.synth(&args[0]);
-        let (state, order) = match self.infer.resolve(&rhs_ty) {
-            | Type::Fn(params, ret) if params.len() >= 2 && (higher || params.len() == 2) => {
-                if let Err(error) = self.infer.unify(&params[0], &Type::float(time.clone())) {
-                    self.report_unify(error, args[0].span);
-                }
-                let state = self.infer.resolve(&params[1]);
-                let order = params.len() - 1;
-                let mut derivative = state.clone();
-                for parameter in &params[2..] {
-                    derivative = self.rate_of(&derivative, span);
-                    if derivative.is_error() {
-                        break;
-                    }
-                    if let Err(error) = self.infer.unify(parameter, &derivative) {
-                        self.report_unify(error, args[0].span);
-                    }
-                }
-                if !derivative.is_error() {
-                    let top = self.rate_of(&derivative, span);
-                    if !top.is_error()
-                        && let Err(error) = self.infer.unify(&ret, &top)
-                    {
-                        self.report_unify(error, args[0].span);
-                    }
-                }
-                (state, order)
-            },
-            | other => {
-                let shape = if higher {
-                    "(Float[T], y, y', …, y⁽ⁿ⁻¹⁾) -> y⁽ⁿ⁾"
-                } else {
-                    "(Float[T], s) -> RateOf<s>"
-                };
-                self.error_help(
-                    "E0302",
-                    format!(
-                        "the right-hand side of `{name}` must be a function `{shape}`, found {other}"
-                    ),
-                    args[0].span,
-                    "write `fn rhs(_t: Float[T], s: State): Rate = …`",
-                );
-                for arg in &args[1..] {
-                    self.synth(arg);
-                }
-                return Type::Error;
-            },
-        };
-        let time_series = Type::tensor(Shape::Rank(1), Type::float(time.clone()));
-        let interval = Type::record(vec![
-            ("0".to_string(), Type::float(time.clone())),
-            ("1".to_string(), Type::float(time.clone())),
-        ]);
-        match name {
-            | "ode_solve" => {
-                self.check(&args[1], &state);
-                self.check(&args[2], &interval);
-                self.synth(&args[3]);
-                let events = Type::tensor(Shape::Rank(1), Self::event_record_type(&state, &time));
-                self.check(&args[4], &events);
-                Self::ode_solution_type(&state, &time)
-            },
-            | "ode_bvp" => {
-                self.check(&args[1], &state);
-                self.check(&args[2], &interval);
-                // `bc(y(t0), y(t1))` answers one residual per state component;
-                // the residuals may carry any one dimension.
-                let residual_dim = self.infer.fresh_dim();
-                let boundary = Type::func(
-                    vec![state.clone(), state.clone()],
-                    Type::tensor(Shape::Rank(1), Type::float(residual_dim)),
-                );
-                self.check(&args[3], &boundary);
-                self.synth(&args[4]);
-                Self::ode_solution_type(&state, &time)
-            },
-            | _ => {
-                // The initial value of every derivative, as a tuple.
-                let mut fields = Vec::with_capacity(order);
-                let mut derivative = state.clone();
-                for index in 0..order {
-                    if index > 0 {
-                        derivative = self.rate_of(&derivative, span);
-                    }
-                    fields.push((index.to_string(), derivative.clone()));
-                }
-                let initial = Type::record(fields.clone());
-                self.check(&args[1], &initial);
-                self.check(&args[2], &time_series);
-                if args.len() == 4 {
-                    self.synth(&args[3]);
-                }
-                Type::record(vec![
-                    ("t".to_string(), time_series),
-                    ("y".to_string(), Type::tensor(Shape::Rank(1), state)),
-                    ("d".to_string(), Type::tensor(Shape::Rank(1), initial)),
-                ])
-            },
-        }
-    }
-
-    /// §8.9.1: the SDE entry points.
-    ///
-    /// `sdeint_diag : (((Float[T], s) -> RateOf<s>), ((Float[T], s) ->
-    /// DiffusionOf<s>), s, SdePolicy) -> Result<SdePath<s>, SdeError>`.
-    /// The drift reuses [`Self::rate_of`]; the diffusion uses
-    /// [`Self::diffusion_of`]. `sdeint_general` integrates scalar or rank-1
-    /// states and its diffusion returns a rank-2 tensor whose elements are
-    /// `DiffusionOf<element>` — the noise column count is a runtime check
-    /// because it depends on the value, not the type.
-    fn sde_call(
-        &mut self,
-        full_name: &str,
-        args: &[Expr],
-        span: Span,
-    ) -> Type {
-        // `sde_ensemble_diag(drift, diffusion, y0, opts, n)` is `sdeint_diag`
-        // run `n` times with member seeds: same typing, one more argument,
-        // and a tensor of results.
-        let ensemble = full_name.starts_with("sde_ensemble_");
-        let name = if ensemble {
-            if full_name.ends_with("general") {
-                "sdeint_general"
-            } else {
-                "sdeint_diag"
-            }
-        } else {
-            full_name
-        };
-        if ensemble && args.len() != 5 {
-            self.error(
-                "E0315",
-                format!("`{full_name}` takes 5 arguments, found {}", args.len()),
-                span,
-            );
-            for arg in args {
-                self.synth(arg);
-            }
-            return Type::Error;
-        }
-        let args = if ensemble {
-            self.check(&args[4], &Type::int());
-            &args[..4]
-        } else {
-            args
-        };
-        let result = self.sde_call_single(name, args, span);
-        if ensemble && !result.is_error() {
-            Type::tensor(Shape::Rank(1), result)
-        } else {
-            result
-        }
-    }
-
-    fn sde_call_single(
-        &mut self,
-        name: &str,
-        args: &[Expr],
-        span: Span,
-    ) -> Type {
-        if args.len() != 4 {
-            self.error(
-                "E0315",
-                format!("`{name}` takes 4 arguments, found {}", args.len()),
-                span,
-            );
-            for arg in args {
-                self.synth(arg);
-            }
-            return Type::Error;
-        }
-        let time = Dim::base("Time");
-        // 1. Drift: `(Float[T], s) -> RateOf<s>`; the state `s` comes from it.
-        let drift_ty = self.synth(&args[0]);
-        let state = match self.infer.resolve(&drift_ty) {
-            | Type::Fn(params, ret) if params.len() == 2 => {
-                if let Err(error) = self.infer.unify(&params[0], &Type::float(time.clone())) {
-                    self.report_unify(error, args[0].span);
-                }
-                let state = self.infer.resolve(&params[1]);
-                let rate = self.rate_of(&state, span);
-                if !rate.is_error()
-                    && let Err(error) = self.infer.unify(&ret, &rate)
-                {
-                    self.report_unify(error, args[0].span);
-                }
-                state
-            },
-            | other => {
-                self.error_help(
-                    "E0302",
-                    format!(
-                        "the drift of `{name}` must be a function `(Float[T], s) -> RateOf<s>`, found {other}"
-                    ),
-                    args[0].span,
-                    "write `fn drift(_t: Float[T], s: State): RateOf<State> = …`",
-                );
-                for arg in &args[1..] {
-                    self.synth(arg);
-                }
-                return Type::Error;
-            },
-        };
-        // 2. Diffusion. Diagonal noise: `(Float[T], s) -> DiffusionOf<s>`.
-        //    General noise: a rank-2 tensor of `DiffusionOf<element>`.
-        let expected_diffusion = if name == "sdeint_diag" {
-            self.diffusion_of(&state, span)
-        } else {
-            let mut record_diffusion = None;
-            let elem = match self.infer.resolve(&state) {
-                | Type::Scalar(_, _) => state.clone(),
-                | Type::Tensor { shape, elem } if shape.rank() == 1 => (*elem).clone(),
-                // A record state: the diffusion is a record of the same shape whose
-                // fields carry a trailing noise axis (`GeneralDiffusionOf<s>`).
-                | Type::Record(_) => {
-                    record_diffusion = Some(self.general_diffusion_of(&state, span));
-                    state.clone()
-                },
-                | other => {
-                    self.error_help(
-                        "E0302",
-                        format!(
-                            "`sdeint_general` needs a scalar, rank-1 or record state, found {other}"
-                        ),
-                        span,
-                        "pass a `Float`, a `Tensor<1, Float>` or a closed record of them as the state",
-                    );
-                    for arg in &args[1..] {
-                        self.synth(arg);
-                    }
-                    return Type::Error;
-                },
-            };
-            if let Some(record) = record_diffusion {
-                record
-            } else if elem.is_error() {
-                Type::Error
-            } else {
-                Type::tensor(Shape::Rank(2), self.diffusion_of(&elem, span))
-            }
-        };
-        let diffusion_ty = self.synth(&args[1]);
-        match self.infer.resolve(&diffusion_ty) {
-            | Type::Fn(params, ret) if params.len() == 2 => {
-                if let Err(error) = self.infer.unify(&params[0], &Type::float(time.clone())) {
-                    self.report_unify(error, args[1].span);
-                }
-                if let Err(error) = self.infer.unify(&params[1], &state) {
-                    self.report_unify(error, args[1].span);
-                }
-                if !expected_diffusion.is_error()
-                    && let Err(error) = self.infer.unify(&ret, &expected_diffusion)
-                {
-                    self.report_unify(error, args[1].span);
-                }
-            },
-            | other => {
-                self.error_help(
-                    "E0302",
-                    format!(
-                        "the diffusion of `{name}` must be a function `(Float[T], s) -> DiffusionOf<s>`, found {other}"
-                    ),
-                    args[1].span,
-                    "write `fn noise(_t: Float[T], s: State): DiffusionOf<State> = …`",
-                );
-            },
-        }
-        // 3. Initial state and 4. policy record (the record literal checks its
-        // own field types; the policy schema is closed in the standard library).
-        self.check(&args[2], &state);
-        self.synth(&args[3]);
-        let sde_error = builtin_type("SdeError").unwrap_or(Type::Error);
-        let method = builtin_type("SdeMethod").unwrap_or(Type::Error);
-        let path = Type::record(vec![
-            (
-                "t".to_string(),
-                Type::tensor(Shape::Rank(1), Type::float(time)),
-            ),
-            ("y".to_string(), Type::tensor(Shape::Rank(1), state)),
-            ("steps".to_string(), Type::int()),
-            ("rejected".to_string(), Type::int()),
-            ("nfev".to_string(), Type::int()),
-            ("seed".to_string(), Type::int()),
-            ("noise".to_string(), Type::int()),
-            ("method".to_string(), method),
-        ]);
-        Type::result(path, sde_error)
-    }
-
     /// §6.10: `par_map(f, xs)` — the result order is the input order, and the
     /// element type must have a `Parallel` instance (§3.8.4: only `Int`,
     /// `Float` and tensors of them; symbolic `Real` is not parallel).
@@ -9310,7 +9543,7 @@ impl Checker {
         args: &[Expr],
         span: Span,
     ) -> Type {
-        if args.len() != 2 {
+        let [function, input] = args else {
             self.error(
                 "E0315",
                 format!("`par_map` takes 2 arguments, found {}", args.len()),
@@ -9320,16 +9553,16 @@ impl Checker {
                 self.synth(arg);
             }
             return Type::Error;
-        }
-        let f_ty = self.synth(&args[0]);
-        let xs_ty = self.synth(&args[1]);
+        };
+        let f_ty = self.synth(function);
+        let xs_ty = self.synth(input);
         let element = match self.infer.resolve(&xs_ty) {
             | Type::Tensor { elem, .. } => (*elem).clone(),
             | other => {
                 self.error_help(
                     "E0302",
                     format!("`par_map` expects a tensor, found {other}"),
-                    args[1].span,
+                    input.span,
                     "build a tensor first, or use `map` on other containers",
                 );
                 return Type::Error;
@@ -9341,7 +9574,7 @@ impl Checker {
             .infer
             .unify(&f_ty, &Type::func(vec![element], result.clone()))
         {
-            self.report_unify(error, args[0].span);
+            self.report_unify(error, function.span);
             return Type::Error;
         }
         Type::tensor(Shape::Rank(1), result)
@@ -9359,7 +9592,7 @@ impl Checker {
         args: &[Expr],
         span: Span,
     ) -> Type {
-        if args.len() != 1 {
+        let [argument] = args else {
             self.error(
                 "E0315",
                 format!("`dyn` takes 1 argument, found {}", args.len()),
@@ -9369,15 +9602,15 @@ impl Checker {
                 self.synth(arg);
             }
             return Type::Error;
-        }
-        let arg_ty = self.synth(&args[0]);
+        };
+        let arg_ty = self.synth(argument);
         let scalar = self.force_scalar(&arg_ty);
         let Type::Scalar(rep, dim) = self.infer.resolve(&scalar) else {
             let resolved = self.infer.resolve(&scalar);
             self.error_help(
                 "E0302",
                 format!("`dyn` expects a scalar, found {resolved}"),
-                args[0].span,
+                argument.span,
                 "wrap a `Scalar<ρ,d>`; a tensor's elements are extracted with `map`",
             );
             return Type::Error;
@@ -9387,7 +9620,7 @@ impl Checker {
             self.error_help(
                 "E0304",
                 "the dimension of `dyn`'s argument must be concrete",
-                args[0].span,
+                argument.span,
                 "generic code passes it at run time: `dyn_with(x, dim)`",
             );
             return Type::Error;
@@ -9408,7 +9641,7 @@ impl Checker {
         type_arg: Option<&Ty>,
         span: Span,
     ) -> Type {
-        if args.len() != 1 {
+        let [argument] = args else {
             self.error(
                 "E0315",
                 format!("`check` takes 1 argument, found {}", args.len()),
@@ -9418,15 +9651,15 @@ impl Checker {
                 self.synth(arg);
             }
             return Type::Error;
-        }
-        let arg_ty = self.synth(&args[0]);
+        };
+        let arg_ty = self.synth(argument);
         let rep = match self.infer.resolve(&arg_ty) {
             | Type::Dyn(rep) => self.infer.resolve_rep(rep),
             | other => {
                 self.error_help(
                     "E0302",
                     format!("`check` expects a `Dyn<ρ>`, found {other}"),
-                    args[0].span,
+                    argument.span,
                     "`dyn(x)` wraps a scalar; `check` is the only way back (§4.9.4)",
                 );
                 return Type::Error;
@@ -9456,6 +9689,10 @@ impl Checker {
     /// reduction forgets it (`L` and `T` are both `Energy^-1`). `D` is read in
     /// SI even inside a module with a unit system. The runtime needs the
     /// system and the SI dimension, recorded in `system_calls`.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "forward and inverse system conversion share concrete quantity and dimension validation"
+    )]
     fn system_call(
         &mut self,
         to: bool,
@@ -9468,7 +9705,7 @@ impl Checker {
         } else {
             "from_system"
         };
-        if args.len() != 2 {
+        let [system_expr, value_expr] = args else {
             self.error(
                 "E0315",
                 format!(
@@ -9481,35 +9718,35 @@ impl Checker {
                 self.synth(arg);
             }
             return Type::Error;
-        }
-        self.check(&args[0], &Type::string());
-        let Some(system_name) = string_constant(&args[0]) else {
+        };
+        self.check(system_expr, &Type::string());
+        let Some(system_name) = string_constant(system_expr) else {
             self.error_help(
                 "E0302",
                 format!("`{name}` needs the unit system as a string literal"),
-                args[0].span,
+                system_expr.span,
                 "write the name, for example `\"natural\"`",
             );
-            self.synth(&args[1]);
+            self.synth(value_expr);
             return Type::Error;
         };
         let Some(system) = aevia_rssn::registry::registry().unit_system(&system_name) else {
             self.error(
                 "E0512",
                 format!("unknown unit system `{system_name}`"),
-                args[0].span,
+                system_expr.span,
             );
-            self.synth(&args[1]);
+            self.synth(value_expr);
             return Type::Error;
         };
-        let value = self.synth(&args[1]);
+        let value = self.synth(value_expr);
         let value = self.force_scalar(&value);
         let Type::Scalar(rep, dim) = self.infer.resolve(&value) else {
             if !matches!(self.infer.resolve(&value), Type::Error) {
                 self.error(
                     "E0302",
                     format!("`{name}` converts a scalar quantity"),
-                    args[1].span,
+                    value_expr.span,
                 );
             }
             return Type::Error;
@@ -9524,7 +9761,7 @@ impl Checker {
                         "`to_system` needs the argument's dimension to be known here, found {}",
                         self.dims.format(&dim)
                     ),
-                    args[1].span,
+                    value_expr.span,
                     "annotate the value's dimension",
                 );
                 return Type::Error;
@@ -9550,9 +9787,9 @@ impl Checker {
             let reduced = system.reduce_dim(&target);
             if let Err(error) = self
                 .infer
-                .unify(&Type::Scalar(rep, dim.clone()), &Type::Scalar(rep, reduced))
+                .unify(&Type::Scalar(rep, dim), &Type::Scalar(rep, reduced))
             {
-                self.report_unify(error, args[1].span);
+                self.report_unify(error, value_expr.span);
             }
             target
         };
@@ -9674,6 +9911,10 @@ impl Checker {
     /// Overload resolution over `candidates`. `probe` lets a failed call to a
     /// rank-generic built-in retry with the signature template instantiated
     /// at the (above [`builtins::STATIC_RANK`]) rank of its arguments.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "candidate trials and restoration share the same argument and inference checkpoints"
+    )]
     fn overloaded_call_over(
         &mut self,
         name: &str,
@@ -9725,8 +9966,11 @@ impl Checker {
                     }
                     let before = self.diagnostics.items.len();
                     self.check(arg, param);
-                    if self.diagnostics.items[before..]
+                    if self
+                        .diagnostics
+                        .items
                         .iter()
+                        .skip(before)
                         .any(|item| item.severity == aevia_syntax::Severity::Error)
                     {
                         speculative_failure.get_or_insert(candidate);
@@ -9815,13 +10059,13 @@ impl Checker {
                 Type::tensor(Shape::Rank(rank), Type::float(Dim::one()))
             },
             | "fill" => {
-                if args.is_empty() {
+                let [argument, dimensions @ ..] = args else {
                     self.error("E0315", "`fill` needs a value", span);
                     return Type::Error;
-                }
-                let elem = self.synth(&args[0]);
-                let rank = u32::try_from(args.len().saturating_sub(1)).unwrap_or(0);
-                for arg in &args[1..] {
+                };
+                let elem = self.synth(argument);
+                let rank = u32::try_from(dimensions.len()).unwrap_or(0);
+                for arg in dimensions {
                     let ty = self.synth(arg);
                     let _ = self.infer.unify(&ty, &Type::int());
                 }
@@ -9873,7 +10117,8 @@ impl Checker {
         if let Some(materializations) = self.call_materializations.get(&callee.span).cloned() {
             self.call_materializations.insert(span, materializations);
         }
-        if matches!(self.infer.resolve(&ty), Type::Fn(..) | Type::Adt(..))
+        let resolved = self.infer.resolve(&ty);
+        if matches!(resolved, Type::Fn(..) | Type::Adt(..))
             && self.checked.generic_refs.contains_key(&callee.span)
         {
             if let Some(headers) = self
@@ -9928,497 +10173,94 @@ impl Checker {
             }
             return self.infer.resolve(&ty);
         }
-        if matches!(self.infer.resolve(&ty), Type::WriteNpyIntrinsic) {
+        self.apply_intrinsic_type_arguments(ty, resolved, args, span)
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "intrinsic type arguments are interpreted separately from inferred callable binders"
+    )]
+    fn apply_intrinsic_type_arguments(
+        &mut self,
+        ty: Type,
+        resolved: Type,
+        args: &[Ty],
+        span: Span,
+    ) -> Type {
+        if matches!(resolved, Type::WriteNpyIntrinsic) {
             self.error("E0315", "`write_npy` does not accept type arguments", span);
             return Type::Error;
         }
-        if let Type::ReadNpyIntrinsic(specialization) = self.infer.resolve(&ty) {
-            if specialization.is_some() || args.len() != 1 {
+        if let Type::ReadNpyIntrinsic(specialization) = resolved {
+            let ([argument], None) = (args, specialization) else {
                 self.error(
                     "E0315",
                     "`read_npy` requires exactly one rank argument",
                     span,
                 );
                 return Type::Error;
-            }
-            let nat = self.convert_type_as_nat(&args[0]);
+            };
+            let nat = self.convert_type_as_nat(argument);
             let Some(rank) = nat.as_const().and_then(|n| u32::try_from(n).ok()) else {
                 self.error_help(
                     "E0304",
                     "`read_npy` needs a concrete representable rank",
-                    args[0].span,
+                    argument.span,
                     "supply a literal rank such as `read_npy<2>`",
                 );
                 return Type::Error;
             };
-            self.note_type(args[0].span, &Type::tensor(Shape::Rank(rank), Type::Unit));
+            self.note_type(argument.span, &Type::tensor(Shape::Rank(rank), Type::Unit));
             return Type::ReadNpyIntrinsic(Some(rank));
         }
-        if let Type::FromValueIntrinsic(specialization) = self.infer.resolve(&ty) {
-            if specialization.is_some() || args.len() != 1 {
+        if let Type::FromValueIntrinsic(specialization) = resolved {
+            let ([argument], None) = (args, specialization) else {
                 self.error(
                     "E0315",
                     "`from_value` requires one type argument when specialized",
                     span,
                 );
                 return Type::Error;
-            }
+            };
             return self
-                .reify_type_argument(&args[0])
+                .reify_type_argument(argument)
                 .map_or(Type::Error, |ty| {
                     Type::FromValueIntrinsic(Some(Box::new(ty)))
                 });
         }
-        if let Type::TypeRepIntrinsic(specialization) = self.infer.resolve(&ty) {
-            if specialization.is_some() || args.len() != 1 {
+        if let Type::TypeRepIntrinsic(specialization) = resolved {
+            let ([argument], None) = (args, specialization) else {
                 self.error(
                     "E0315",
                     "`type_rep` requires exactly one type argument",
                     span,
                 );
                 return Type::Error;
-            }
+            };
             return self
-                .reify_type_argument(&args[0])
+                .reify_type_argument(argument)
                 .map_or(Type::Error, |ty| Type::TypeRepIntrinsic(Some(Box::new(ty))));
         }
-        let Type::TensorIntrinsic(mut intrinsic) = self.infer.resolve(&ty) else {
+        let Type::TensorIntrinsic(mut intrinsic) = resolved else {
             return ty;
         };
-        if args.len() != 1
-            || intrinsic.kind == crate::ty::TensorIntrinsic::Fill
-            || intrinsic.element.is_some()
-        {
+        let ([argument], false, None) = (
+            args,
+            intrinsic.kind == crate::ty::TensorIntrinsic::Fill,
+            intrinsic.element,
+        ) else {
             self.error(
                 "E0315",
                 "this tensor constructor cannot take those type arguments",
                 span,
             );
             return Type::Error;
-        }
-        let Some(rep) = self.tensor_element_rep(intrinsic.kind.name(), &args[0]) else {
+        };
+        let Some(rep) = self.tensor_element_rep(intrinsic.kind.name(), argument) else {
             return Type::Error;
         };
         intrinsic.element = Some(rep);
         Type::TensorIntrinsic(intrinsic)
-    }
-
-    fn synth_record(
-        &mut self,
-        base: Option<&Expr>,
-        fields: &[(String, Expr)],
-    ) -> Type {
-        // §3.6.1/§2: two fields with the same name in one literal is `E0208`,
-        // not a silent last-write-wins.
-        let mut seen: HashSet<&str> = HashSet::new();
-        for (name, _) in fields {
-            if !seen.insert(name.as_str()) {
-                self.error_help(
-                    "E0208",
-                    format!("duplicate field `{name}`"),
-                    Span::new(self.file, 0, 0),
-                    "delete one of the two fields",
-                );
-            }
-        }
-        let mut row = match base {
-            | Some(base) => {
-                let base_ty = self.synth(base);
-                match self.infer.resolve(&base_ty) {
-                    // The base row — including its open tail — is the result
-                    // row, so `{ p with z = … }` keeps `p`'s unknown fields.
-                    | Type::Record(row) => row,
-                    | other => {
-                        self.error(
-                            "E0302",
-                            format!("record update expects a record, found {other}"),
-                            base.span,
-                        );
-                        Row::Empty
-                    },
-                }
-            },
-            | None => Row::Empty,
-        };
-        for (name, value) in fields {
-            let ty = self.synth(value);
-            if base.is_some() {
-                // §3.6.2: adding a field requires `row(p) lacks z`.
-                if row.field(name).is_none()
-                    && let Some(tail) = row.tail_var()
-                    && let Err(error) = self.infer.require_lacks(tail, name)
-                {
-                    self.report_unify(error, value.span);
-                }
-                row = row.update(name, ty);
-            } else {
-                row = Row::Extend {
-                    label: name.clone(),
-                    ty: Box::new(ty),
-                    tail: Box::new(row),
-                };
-            }
-        }
-        Type::Record(if base.is_some() {
-            row
-        } else {
-            Row::closed(row.fields())
-        })
-    }
-
-    fn field_type(
-        &mut self,
-        base: &Type,
-        name: &str,
-        span: Span,
-    ) -> Type {
-        let base = self.infer.resolve(base);
-        if matches!(base, Type::Var(_)) {
-            // An unannotated parameter used as `p.x` is an open record with at
-            // least that field (§3.6.1).
-            let field = self.infer.fresh_type();
-            let tail = self.infer.fresh_row();
-            let record = Type::Record(Row::Extend {
-                label: name.to_string(),
-                ty: Box::new(field.clone()),
-                tail: Box::new(tail),
-            });
-            let _ = self.infer.unify(&base, &record);
-            return field;
-        }
-        match self.infer.resolve(&base) {
-            | Type::Record(row) => {
-                match row.field(name) {
-                    | Some(ty) => ty.clone(),
-                    | None => {
-                        match row.tail_var() {
-                            | Some(tail) => {
-                                // The row is still open: absorb the field (§3.6.1).
-                                let field = self.infer.fresh_type();
-                                let _ = self.infer.extend_row(tail, name, field.clone());
-                                field
-                            },
-                            | None => {
-                                let fields = row.fields();
-                                let close = closest_name(
-                                    name,
-                                    fields.iter().map(|(field, _)| field.as_str()),
-                                )
-                                .map(str::to_string);
-                                let message =
-                                    format!("the record {{ {row} }} has no field `{name}`");
-                                match close {
-                                    | Some(close) => {
-                                        self.error_help(
-                                            "E0306",
-                                            message,
-                                            span,
-                                            &format!("did you mean `{close}`?"),
-                                        )
-                                    },
-                                    | None if !fields.is_empty() => {
-                                        let names: Vec<&str> = fields
-                                            .iter()
-                                            .map(|(field, _)| field.as_str())
-                                            .collect();
-                                        self.error_help(
-                                            "E0306",
-                                            message,
-                                            span,
-                                            &format!("the fields are {}", names.join(", ")),
-                                        )
-                                    },
-                                    | None => self.error("E0306", message, span),
-                                }
-                                Type::Error
-                            },
-                        }
-                    },
-                }
-            },
-            | other => {
-                self.error(
-                    "E0302",
-                    format!("field access expects a record, found {other}"),
-                    span,
-                );
-                Type::Error
-            },
-        }
-    }
-
-    fn synth_tensor(
-        &mut self,
-        items: &[Expr],
-        span: Span,
-    ) -> Type {
-        if items.is_empty() {
-            self.error_help(
-                "E0314",
-                "the element type of an empty tensor cannot be inferred",
-                span,
-                "annotate it, for example `let e: Tensor<1, Float> = []`",
-            );
-            return Type::Error;
-        }
-        let mut elem: Option<Type> = None;
-        for item in items {
-            let ty = self.synth(item);
-            match &elem {
-                | None => elem = Some(ty),
-                | Some(existing) => {
-                    let existing_resolved = self.infer.resolve(existing);
-                    let this_resolved = self.infer.resolve(&ty);
-                    if let Err(error) = self.infer.unify(existing, &ty) {
-                        // §3.5.2: same-level sub-sequences must have equal
-                        // length, and that has its own code (E0203) instead of
-                        // a generic mismatch — `[[1.0, 2.0], [3.0]]` is ragged.
-                        if shapes_are_ragged(&existing_resolved, &this_resolved) {
-                            self.error(
-                                "E0203",
-                                "ragged tensor literal: every row must have the same length",
-                                item.span,
-                            );
-                        } else {
-                            self.report_unify(error, item.span);
-                        }
-                    }
-                },
-            }
-        }
-        let elem = elem.unwrap_or(Type::Error);
-        let resolved = self.infer.resolve(&elem);
-        match resolved {
-            | Type::Tensor {
-                shape: inner,
-                elem: inner_elem,
-            } => {
-                let mut shape = vec![Some(Nat::lit(items.len()))];
-                shape.extend(shape_items(&inner));
-                Type::Tensor {
-                    shape: Shape::Refined(shape),
-                    elem: inner_elem,
-                }
-            },
-            | other => {
-                Type::Tensor {
-                    shape: Shape::Refined(vec![Some(Nat::lit(items.len()))]),
-                    elem: Box::new(other),
-                }
-            },
-        }
-    }
-
-    fn synth_index(
-        &mut self,
-        base: &Expr,
-        indices: &[SliceAst],
-        span: Span,
-    ) -> Type {
-        let base_ty = self.synth(base);
-        let mut resolved = self.infer.resolve(&base_ty);
-        if matches!(resolved, Type::Var(_)) {
-            let elem = self.infer.fresh_type();
-            let tensor = Type::tensor(Shape::Rank(1), elem);
-            let _ = self.infer.unify(&resolved, &tensor);
-            resolved = self.infer.resolve(&tensor);
-        }
-        // §8.1.4: a string is indexed by grapheme cluster. `s[i]` is the
-        // cluster at `i` and `s[i..j]` (or `s[i:j]`) a substring; both are
-        // `String`, and a string has exactly one axis.
-        if matches!(resolved, Type::Str) {
-            if indices.len() != 1 {
-                self.error(
-                    "E0302",
-                    format!("a string has one axis, found {} indices", indices.len()),
-                    span,
-                );
-                return Type::Error;
-            }
-            let parts: Vec<&Expr> = match &indices[0] {
-                | SliceAst::Index(expr) => vec![expr],
-                | SliceAst::Range { start, end, step, .. } => {
-                    [start, end, step].into_iter().flatten().collect()
-                },
-            };
-            for part in parts {
-                let ty = self.synth(part);
-                if let Err(error) = self.infer.unify(&ty, &Type::int()) {
-                    self.report_unify(error, part.span);
-                }
-            }
-            return Type::Str;
-        }
-        if let Some((format, dense)) = builtins::sparse_parts(&resolved) {
-            let (format, dense) = (format.clone(), dense.clone());
-            return self.sparse_index(&format, &dense, indices, span);
-        }
-        let Type::Tensor { shape, elem } = resolved else {
-            self.error(
-                "E0302",
-                format!("indexing expects a tensor or a string, found {resolved}"),
-                span,
-            );
-            return Type::Error;
-        };
-        let mut sliced = false;
-        let mut consumed: Vec<usize> = Vec::new();
-        // Sliced axes keep their rank but get a new extent when the range and
-        // step are literals and the source extent is known; otherwise the
-        // extent becomes unknown (`?`) rather than keeping a stale value.
-        let mut slice_extents: Vec<(usize, Option<Nat>)> = Vec::new();
-        for (position, index) in indices.iter().enumerate() {
-            match index {
-                | SliceAst::Index(expr) => {
-                    // §3.5.4: the index is an `Int`. A `String` index used to
-                    // be silently accepted because the error was discarded.
-                    let ty = self.synth(expr);
-                    if let Err(error) = self.infer.unify(&ty, &Type::int()) {
-                        self.report_unify(error, expr.span);
-                    }
-                    // A literal index into a refined shape is checked here;
-                    // a dynamic one is checked at run time (§3.5.4).
-                    if let Some(value) = literal_index(expr)
-                        && let Shape::Refined(items) = &shape
-                        && let Some(Some(extent)) = items.get(position)
-                    {
-                        // §3.5.1: an extent that is still a Nat
-                        // variable cannot be bounds-checked here; the
-                        // runtime check covers it.
-                        let extent_nat = self.infer.resolve_nat(extent);
-                        if let Some(extent) = extent_nat.as_const() {
-                            let extent = i64::try_from(extent).unwrap_or(i64::MAX);
-                            if value < -extent || value >= extent {
-                                self.error_help(
-                                            "E0802",
-                                            format!(
-                                                "index {value} is out of bounds for a dimension of extent {extent}"
-                                            ),
-                                            expr.span,
-                                            "a literal index is checked at compile time",
-                                        );
-                            }
-                        }
-                    }
-                    consumed.push(position);
-                },
-                | SliceAst::Range { start, end, step, .. } => {
-                    sliced = true;
-                    for part in [start, end].into_iter().flatten() {
-                        let ty = self.synth(part);
-                        if let Err(error) = self.infer.unify(&ty, &Type::int()) {
-                            self.report_unify(error, part.span);
-                        }
-                    }
-                    // §6.6.4: the step is an `Int`, not a `Float` and not a
-                    // quantity — a step is a number of positions, so it has no
-                    // dimension and no fractional part. A known zero is
-                    // rejected here; a computed one is `E0802` at run time.
-                    if let Some(step) = step {
-                        let ty = self.synth(step);
-                        if self.infer.unify(&ty, &Type::int()).is_err() {
-                            self.error(
-                                "E0302",
-                                "a slice step must be an Int".to_string(),
-                                step.span,
-                            );
-                        } else if literal_index(step) == Some(0) {
-                            self.error_help(
-                                "E0802",
-                                "a slice step of zero never advances".to_string(),
-                                step.span,
-                                "omit the step to walk by one",
-                            );
-                        }
-                    }
-                    // §3.5.3: a literal range gives a statically known extent
-                    // when the source extent is known; anything else (negative
-                    // indices, non-unit steps, dynamic bounds) leaves it `?`.
-                    let source_extent = match &shape {
-                        | Shape::Refined(items) => items.get(position).cloned().flatten(),
-                        | Shape::Rank(_) => None,
-                    };
-                    let extent = self.literal_slice_extent(
-                        source_extent.as_ref(),
-                        start.as_ref(),
-                        end.as_ref(),
-                        step.as_ref(),
-                    );
-                    slice_extents.push((position, extent));
-                },
-            }
-        }
-        let rank = shape.rank();
-        let removed = u32::try_from(consumed.len()).unwrap_or(0);
-        let result_rank = if sliced {
-            rank.saturating_sub(removed).max(1)
-        } else {
-            rank.saturating_sub(removed)
-        };
-        if result_rank == 0 {
-            return *elem;
-        }
-        // The refinement survives indexing: `[3]` indexed by `0` is a scalar,
-        // and `[3, 4]` indexed by `i` is `[4]`.
-        let result_shape = match &shape {
-            | Shape::Refined(items) => {
-                let mut kept = items.clone();
-                for position in consumed.iter().rev() {
-                    if *position < kept.len() {
-                        kept.remove(*position);
-                    }
-                }
-                // Sliced axes keep their rank; the extent is recomputed when
-                // literal, and becomes `?` when it cannot be known.
-                for (position, extent) in &slice_extents {
-                    if *position < kept.len() {
-                        kept[*position] = extent.clone();
-                    }
-                }
-                Shape::Refined(kept)
-            },
-            | Shape::Rank(_) => Shape::Rank(result_rank),
-        };
-        Type::Tensor {
-            shape: result_shape,
-            elem,
-        }
-    }
-
-    /// The extent a literal slice produces, when it is statically known
-    /// (§3.5.3). Deliberately conservative: only a non-negative, ascending,
-    /// unit-step range over a known extent is computed; everything else is `?`.
-    fn literal_slice_extent(
-        &self,
-        source_extent: Option<&Nat>,
-        start: Option<&Expr>,
-        end: Option<&Expr>,
-        step: Option<&Expr>,
-    ) -> Option<Nat> {
-        let extent = self
-            .infer
-            .resolve_nat(source_extent?)
-            .as_const()
-            .and_then(|value| i64::try_from(value).ok())?;
-        let step = match step {
-            | None => 1,
-            | Some(step) => literal_index(step)?,
-        };
-        if step != 1 {
-            return None;
-        }
-        let start = match start {
-            | None => 0,
-            | Some(start) => literal_index(start)?,
-        };
-        let end = match end {
-            | None => extent,
-            | Some(end) => literal_index(end)?,
-        };
-        if start < 0 || end < 0 || end > extent || end < start {
-            return None;
-        }
-        Some(Nat::Lit(usize::try_from(end - start).unwrap_or(0)))
     }
 
     fn synth_try(
@@ -10428,12 +10270,16 @@ impl Checker {
     ) -> Type {
         let inner_ty = self.synth(inner);
         let inner_ty = self.infer.resolve(&inner_ty);
-        let result_arity = match &inner_ty {
-            | Type::Adt(id, args) if *id == adt::RESULT_ID && args.len() == 2 => Some(2),
-            | Type::Adt(id, args) if *id == adt::OPTION_ID && !args.is_empty() => Some(1),
+        let Some((container, value, error)) = (match &inner_ty {
+            | Type::Adt(id, args) => {
+                match (*id, args.as_slice()) {
+                    | (adt::RESULT_ID, [value, error]) => Some((*id, value, Some(error))),
+                    | (adt::OPTION_ID, [value, ..]) => Some((*id, value, None)),
+                    | _ => None,
+                }
+            },
             | _ => None,
-        };
-        let Some(arity) = result_arity else {
+        }) else {
             self.error("E0702", "`?` requires a `Result` or `Option` value", span);
             return Type::Error;
         };
@@ -10449,6 +10295,14 @@ impl Checker {
                     .map(|(site, ty)| (TryBoundary::Function(*site), ty.clone()))
             });
         let Some((boundary, target)) = destination else {
+            if self.relax_result {
+                self.warn(
+                    "W0205",
+                    "implicit Result/Option unwrap in relaxed mode",
+                    span,
+                );
+                return value.clone();
+            }
             self.error(
                 "E0702",
                 "`?` requires an enclosing function or IO do boundary",
@@ -10456,19 +10310,20 @@ impl Checker {
             );
             return Type::Error;
         };
-        let Type::Adt(container, input_args) = &inner_ty else {
-            unreachable!()
-        };
-        let success = self.infer.fresh_type();
-        let output_args = if arity == 2 {
-            vec![success, input_args[1].clone()]
-        } else {
-            vec![success]
-        };
-        let output = Type::Adt(*container, output_args);
+        let mut output_args = vec![self.infer.fresh_type()];
+        output_args.extend(error.cloned());
+        let output = Type::Adt(container, output_args);
         // An inferred return is constrained immediately. Error conversion is
         // never fabricated: concrete error types must agree as well.
         if let Err(error) = self.infer.unify(&target, &output) {
+            if self.relax_result {
+                self.warn(
+                    "W0205",
+                    "implicit Result/Option unwrap in relaxed mode",
+                    span,
+                );
+                return value.clone();
+            }
             self.error_help(
                 "E0702",
                 format!("`?` does not match its enclosing return container: {error}"),
@@ -10484,12 +10339,13 @@ impl Checker {
                 result: target,
             },
         );
-        match inner_ty {
-            | Type::Adt(_, args) => args[0].clone(),
-            | other => other,
-        }
+        value.clone()
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "a do block owns one scope for ordered bindings, early return and its result type"
+    )]
     fn synth_do(
         &mut self,
         stmts: &[DoStmt],
@@ -10501,7 +10357,7 @@ impl Checker {
         self.scopes.push(HashMap::new());
         let mut last_ty = Type::Unit;
         for (position, stmt) in stmts.iter().enumerate() {
-            let is_last = position + 1 == stmts.len();
+            let is_last = position == stmts.len().saturating_sub(1);
             match stmt {
                 | DoStmt::Let {
                     pattern, ty, value, ..
@@ -10514,6 +10370,15 @@ impl Checker {
                         },
                         | None => self.synth(value),
                     };
+                    if self.relax_result
+                        && matches!(pattern.kind, PatKind::Wildcard)
+                        && matches!(
+                            self.infer.resolve(&value_ty),
+                            Type::Adt(id, _) if id == adt::RESULT_ID
+                        )
+                    {
+                        self.warn("W0204", "discarded `Result` value", value.span);
+                    }
                     self.bind_pattern(pattern, &value_ty);
                     last_ty = Type::Unit;
                 },
@@ -10530,6 +10395,15 @@ impl Checker {
                             Type::Error
                         },
                     };
+                    if self.relax_result
+                        && matches!(pattern.kind, PatKind::Wildcard)
+                        && matches!(
+                            self.infer.resolve(&inner),
+                            Type::Adt(id, _) if id == adt::RESULT_ID
+                        )
+                    {
+                        self.warn("W0204", "discarded `Result` value", value.span);
+                    }
                     self.bind_pattern(pattern, &inner);
                     last_ty = Type::Unit;
                 },
@@ -10539,11 +10413,21 @@ impl Checker {
                         | Type::Io(inner) => {
                             // The last statement's result is the block's.
                             if !inner.is_unit() && !is_last {
-                                self.warn(
-                                    "W0202",
-                                    "this IO action's result is discarded",
-                                    expr.span,
-                                );
+                                let inner_resolved = self.infer.resolve(&inner);
+                                if self.relax_result
+                                    && matches!(
+                                        inner_resolved,
+                                        Type::Adt(id, _) if id == adt::RESULT_ID
+                                    )
+                                {
+                                    self.warn("W0204", "discarded `Result` value", expr.span);
+                                } else {
+                                    self.warn(
+                                        "W0202",
+                                        "this IO action's result is discarded",
+                                        expr.span,
+                                    );
+                                }
                             }
                             last_ty = *inner;
                         },
@@ -10647,6 +10531,10 @@ impl Checker {
     }
 
     /// The field patterns a constructor pattern leaves for its arguments.
+    #[allow(
+        clippy::single_call_fn,
+        reason = "coverage specializes all constructor argument columns as one operation"
+    )]
     fn specialise_ctor(
         patterns: &[Pat],
         name: &str,
@@ -10679,6 +10567,10 @@ impl Checker {
     }
 
     /// The patterns a record/tuple pattern leaves for one field.
+    #[allow(
+        clippy::single_call_fn,
+        reason = "record and tuple coverage project the corresponding pattern column"
+    )]
     fn specialise_field(
         patterns: &[Pat],
         label: &str,
@@ -10698,7 +10590,7 @@ impl Checker {
                             .find(|(name, _)| name == label)
                             .and_then(|(_, value)| value.clone())
                             .unwrap_or_else(Self::wildcard_pattern),
-                    )
+                    );
                 },
                 | PatKind::Tuple(items) => {
                     column.push(
@@ -10706,7 +10598,7 @@ impl Checker {
                             .get(index)
                             .cloned()
                             .unwrap_or_else(Self::wildcard_pattern),
-                    )
+                    );
                 },
                 | _ => {},
             }
@@ -10770,6 +10662,7 @@ impl Checker {
         if depth > 8 {
             return "_".to_string();
         }
+        let child_depth = depth.saturating_add(1);
         let resolved = self.infer.resolve(ty);
         match &resolved {
             | Type::Adt(id, args) => {
@@ -10786,10 +10679,20 @@ impl Checker {
                         columns.iter().zip(ctor.fields.iter()).enumerate()
                     {
                         let field_ty = field_ty.substitute_params(args);
-                        if !self.patterns_cover(column, &field_ty, depth + 1) {
-                            let inner = self.missing_pattern(column, &field_ty, depth + 1);
-                            let mut args_out = vec!["_".to_string(); ctor.fields.len()];
-                            args_out[index] = inner;
+                        if !self.patterns_cover(column, &field_ty, child_depth) {
+                            let inner = self.missing_pattern(column, &field_ty, child_depth);
+                            let args_out: Vec<_> = ctor
+                                .fields
+                                .iter()
+                                .enumerate()
+                                .map(|(position, _)| {
+                                    if position == index {
+                                        inner.as_str()
+                                    } else {
+                                        "_"
+                                    }
+                                })
+                                .collect();
                             return format!("{}({})", ctor.name, args_out.join(", "));
                         }
                     }
@@ -10819,8 +10722,8 @@ impl Checker {
                 let fields = row.fields();
                 for (index, (label, field_ty)) in fields.iter().enumerate() {
                     let column = Self::specialise_field(patterns, label, index);
-                    if !self.patterns_cover(&column, field_ty, depth + 1) {
-                        let inner = self.missing_pattern(&column, field_ty, depth + 1);
+                    if !self.patterns_cover(&column, field_ty, child_depth) {
+                        let inner = self.missing_pattern(&column, field_ty, child_depth);
                         return format!("{{ {label} = {inner} }}");
                     }
                 }
@@ -10840,12 +10743,25 @@ impl Checker {
             return;
         }
         let missing = self.missing_pattern(unguarded, subject, 0);
-        self.error_help(
-            "E0309",
-            format!("non-exhaustive match: missing {missing}"),
-            span,
-            "add the missing arm or a `_` arm",
+        let resolved_subject = self.infer.resolve(subject);
+        let is_result_or_option = matches!(
+            resolved_subject,
+            Type::Adt(id, _) if id == adt::RESULT_ID || id == adt::OPTION_ID
         );
+        if self.relax_result && is_result_or_option {
+            self.warn(
+                "W0206",
+                format!("non-exhaustive match: missing {missing}"),
+                span,
+            );
+        } else {
+            self.error_help(
+                "E0309",
+                format!("non-exhaustive match: missing {missing}"),
+                span,
+                "add the missing arm or a `_` arm",
+            );
+        }
     }
 
     // ----- patterns ------------------------------------------------------
@@ -10940,6 +10856,10 @@ impl Checker {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "pattern forms share the scrutinee type, refutability context and recursive binding rules"
+    )]
     fn bind_pattern_inner(
         &mut self,
         pattern: &Pat,
@@ -10947,8 +10867,7 @@ impl Checker {
     ) {
         match &pattern.kind {
             // A parser recovery node: the syntax error was already reported.
-            | PatKind::Error => {},
-            | PatKind::Wildcard => {},
+            | PatKind::Error | PatKind::Wildcard => {},
             | PatKind::Var(name) => {
                 self.local_headers
                     .remove(&(self.scopes.len(), name.clone()));
@@ -10973,75 +10892,7 @@ impl Checker {
                 }
             },
             | PatKind::Ctor { name, args } => {
-                if matches!(self.infer.resolve(ty), Type::Var(_))
-                    && let Some((id, index)) = self.constructor_bindings.get(name).copied()
-                {
-                    let constructor = self.infer.instantiate(&ctor_scheme(id, index));
-                    let result = match constructor {
-                        | Type::Fn(_, result) => *result,
-                        | value => value,
-                    };
-                    if let Err(error) = self.infer.unify(ty, &result) {
-                        self.report_unify(error, pattern.span);
-                    }
-                }
-                let resolved = self.infer.resolve(ty);
-                let (adt_id, adt_args) = match &resolved {
-                    | Type::Adt(id, args) => (*id, args.clone()),
-                    | _ => {
-                        self.error(
-                            "E0308",
-                            format!("pattern `{name}` does not match {resolved}"),
-                            pattern.span,
-                        );
-                        return;
-                    },
-                };
-                let Some(registered) = adt::get(adt_id) else {
-                    return;
-                };
-                let Some(index) = registered.ctors.iter().position(|ctor| ctor.name == *name)
-                else {
-                    self.error(
-                        "E0307",
-                        format!("`{}` has no constructor `{name}`", registered.name),
-                        pattern.span,
-                    );
-                    return;
-                };
-                if adt::module_of(adt_id) != self.module_path
-                    && !self
-                        .constructor_bindings
-                        .values()
-                        .any(|(id, ctor)| adt::same_type(*id, adt_id) && *ctor == index)
-                {
-                    self.error(
-                        "E0307",
-                        format!("constructor `{name}` is not visible in this module"),
-                        pattern.span,
-                    );
-                    return;
-                }
-                self.checked
-                    .constructor_refs
-                    .insert(pattern.span, (adt_id, index));
-                let ctor = &registered.ctors[index];
-                if ctor.fields.len() != args.len() {
-                    self.error(
-                        "E0307",
-                        format!(
-                            "constructor `{name}` takes {} argument(s), found {}",
-                            ctor.fields.len(),
-                            args.len()
-                        ),
-                        pattern.span,
-                    );
-                    return;
-                }
-                for (sub, field) in args.iter().zip(ctor.fields.iter()) {
-                    let field_ty = instantiate_pattern_field(adt_id, field, &adt_args);
-                    self.bind_pattern_inner(sub, &field_ty);
-                }
+                self.bind_constructor_pattern(name, args, ty, pattern.span);
             },
             | PatKind::Record(fields) => {
                 let resolved = self.infer.resolve(ty);
@@ -11184,665 +11035,86 @@ impl Checker {
         }
     }
 
-    // ----- types ---------------------------------------------------------
-
-    fn convert_type(
+    #[allow(
+        clippy::single_call_fn,
+        reason = "constructor patterns authenticate scope and instantiate their field schemas together"
+    )]
+    fn bind_constructor_pattern(
         &mut self,
-        ty: &Ty,
-    ) -> Type {
-        let params = self.type_params.clone();
-        self.convert_type_with_params(ty, &params)
-    }
-
-    fn convert_type_with_params(
-        &mut self,
-        ty: &Ty,
-        params: &[(String, Type)],
-    ) -> Type {
-        match &ty.kind {
-            | TyKind::Int => Type::int(),
-            | TyKind::Bool => Type::Bool,
-            | TyKind::Prop => Type::Prop,
-            | TyKind::Str => Type::string(),
-            | TyKind::Unit => Type::Unit,
-            | TyKind::Real(dim) => Type::real(self.convert_dim(dim, ty.span)),
-            | TyKind::Float(dim) => Type::float(self.convert_dim(dim, ty.span)),
-            | TyKind::Complex(dim) => Type::complex(self.convert_dim(dim, ty.span)),
-            | TyKind::Point(dim) => Type::Point(self.convert_dim(dim, ty.span)),
-            | TyKind::UnitOf(dim) => Type::UnitOf(self.convert_dim(dim, ty.span)),
-            | TyKind::Tensor { shape, elem } => {
-                Type::Tensor {
-                    shape: self.convert_shape(shape),
-                    elem: Box::new(self.convert_type_with_params(elem, params)),
-                }
-            },
-            // `Matrix<n, m, τ>` is a rank-2 tensor with a static shape.
-            | TyKind::Matrix { rows, cols, elem } => {
-                Type::Tensor {
-                    shape: Shape::Refined(vec![
-                        Some(self.convert_nat(rows, ty.span)),
-                        Some(self.convert_nat(cols, ty.span)),
-                    ]),
-                    elem: Box::new(self.convert_type_with_params(elem, params)),
-                }
-            },
-            // `Sparse<fmt, shape, τ>` is its own type (§13.9.5): it carries the
-            // format and the dense counterpart (same shape and element), and it
-            // does not unify with `Tensor<shape, τ>`.
-            | TyKind::Sparse { format, shape, elem } => {
-                let dense = Type::Tensor {
-                    shape: self.convert_shape(shape),
-                    elem: Box::new(self.convert_type_with_params(elem, params)),
-                };
-                let canonical = match format.to_ascii_lowercase().as_str() {
-                    | "csr" => "Csr",
-                    | "csc" => "Csc",
-                    | "coo" => "Coo",
-                    | "block" => "Block",
-                    | "bcsr" => "Bcsr",
-                    | _ => "",
-                };
-                match builtins::format_type(canonical) {
-                    | Some(marker) => builtins::sparse_type(marker, dense),
-                    | None => {
-                        self.error_help(
-                            "E0310",
-                            format!("`{format}` is not a sparse format"),
-                            ty.span,
-                            "the formats are Csr, Csc, Coo, Block and Bcsr",
-                        );
-                        Type::Error
-                    },
-                }
-            },
-            // A row sum is the union of its summands' fields.
-            | TyKind::Row(items) => {
-                let mut merged: Vec<(String, Type)> = Vec::new();
-                for item in items {
-                    let converted = self.convert_type_with_params(item, params);
-                    match converted {
-                        | Type::Record(row) => merged.extend(row.fields()),
-                        | other => return other,
-                    }
-                }
-                Type::record(merged)
-            },
-            // A dimension argument is carried as `Real[d]`, the encoding this
-            // checker already uses for a dimension in argument position.
-            | TyKind::DimArg(dim) => Type::real(self.convert_dim(dim, ty.span)),
-            // A natural number or a shape is a value-level argument: it only
-            // appears where a shape is expected, so it contributes no type.
-            | TyKind::NatArg(_) | TyKind::ShapeArg(_) => Type::int(),
-            | TyKind::Option(inner) => Type::option(self.convert_type_with_params(inner, params)),
-            | TyKind::Result(ok, err) => {
-                Type::result(
-                    self.convert_type_with_params(ok, params),
-                    self.convert_type_with_params(err, params),
-                )
-            },
-            | TyKind::Set(inner) => {
-                let inner = self.convert_type_with_params(inner, params);
-                // §3.8.4: `Set<a>` needs `TotalOrd a`; `Set<Float>` is not
-                // legal because `Float` has no total order (NaN).
-                self.require_instance("TotalOrd", &inner, ty.span);
-                Type::Adt(adt::set_id(), vec![inner])
-            },
-            | TyKind::Table(inner) => {
-                Type::Adt(
-                    adt::intern(Adt {
-                        name: "Table".to_string(),
-                        params: vec!["r".to_string()],
-                        ctors: Vec::new(),
-                    }),
-                    vec![self.convert_type_with_params(inner, params)],
-                )
-            },
-            | TyKind::Dyn(rep) => {
-                Type::Dyn(match rep.as_str() {
-                    | "Int" => Rep::Int,
-                    | "Float" => Rep::Float,
-                    | "Complex" => Rep::Complex,
-                    | _ => Rep::Real,
-                })
-            },
-            | TyKind::RateOf(inner) => {
-                let inner = self.convert_type_with_params(inner, params);
-                self.rate_of(&inner, ty.span)
-            },
-            | TyKind::DiffusionOf(inner) => {
-                let inner = self.convert_type_with_params(inner, params);
-                self.diffusion_of(&inner, ty.span)
-            },
-            | TyKind::SymFun(domain, codomain) => {
-                let domain = self.convert_dim(domain, ty.span);
-                let codomain = self.convert_dim(codomain, ty.span);
-                Type::func(vec![Type::real(domain)], Type::real(codomain))
-            },
-            | TyKind::Io(inner) => Type::io(self.convert_type_with_params(inner, params)),
-            | TyKind::Fn(args, ret) => {
-                Type::func(
-                    args.iter()
-                        .map(|arg| self.convert_type_with_params(arg, params))
-                        .collect(),
-                    self.convert_type_with_params(ret, params),
-                )
-            },
-            | TyKind::Record { fields, rest } => {
-                let mut collected: Vec<(String, Type)> = fields
-                    .iter()
-                    .map(|(name, ty)| (name.clone(), self.convert_type_with_params(ty, params)))
-                    .collect();
-                if let Some(rest_name) = rest {
-                    // An open row: the fields are known and the tail is either
-                    // a declared row parameter (`type With<r> = { x: Int | r }`)
-                    // or a fresh variable that absorbs whatever the caller
-                    // passes.
-                    collected.sort_by(|a, b| a.0.cmp(&b.0));
-                    let mut row = match self
-                        .row_params
-                        .iter()
-                        .rev()
-                        .find(|(param, _)| param == rest_name)
-                    {
-                        | Some((_, row)) => row.clone(),
-                        | None => self.infer.fresh_row(),
-                    };
-                    for (name, ty) in collected.into_iter().rev() {
-                        row = Row::Extend {
-                            label: name,
-                            ty: Box::new(ty),
-                            tail: Box::new(row),
-                        };
-                    }
-                    Type::Record(row)
-                } else {
-                    Type::record(collected)
-                }
-            },
-            | TyKind::Tuple(items) => {
-                Type::record(
-                    items
-                        .iter()
-                        .enumerate()
-                        .map(|(index, ty)| {
-                            (index.to_string(), self.convert_type_with_params(ty, params))
-                        })
-                        .collect::<Vec<_>>(),
-                )
-            },
-            | TyKind::Named { path, args } => {
-                let name = path.join(".");
-                if args.is_empty()
-                    && let Some((_, parameter)) = params
-                        .iter()
-                        .rev()
-                        .find(|(parameter, _)| parameter == &name)
-                {
-                    return parameter.clone();
-                }
-                if self.declaring_alias.as_deref() == Some(name.as_str()) {
-                    self.error_help(
-                        "E0312",
-                        "non-positive recursive type",
-                        ty.span,
-                        "a type alias cannot refer to itself; declare a variant type instead",
-                    );
-                    return Type::Error;
-                }
-                if let Some(alias) = self.aliases.get(&name).cloned() {
-                    return self.instantiate_alias(&alias, args, ty.span);
-                }
-                if let Some(id) = self.adts.get(&name).copied() {
-                    // §2/§8.9.1: an ADT parameter may be dimension-kinded; a
-                    // dimension argument is encoded as `UnitOf(d)`, so the
-                    // argument vector stays a vector of types.
-                    let kinds = adt::param_kinds_of(id);
-                    if args.len() > kinds.len() {
-                        self.error(
-                            "E0315",
-                            format!(
-                                "`{name}` takes {} type argument(s), found {}",
-                                kinds.len(),
-                                args.len()
-                            ),
-                            ty.span,
-                        );
-                    }
-                    let mut converted = Vec::with_capacity(kinds.len());
-                    for (index, kind) in kinds.iter().enumerate() {
-                        match kind {
-                            | adt::ParamKind::Type => {
-                                let value = match args.get(index) {
-                                    | Some(arg) => self.convert_type_with_params(arg, params),
-                                    | None => self.infer.fresh_type(),
-                                };
-                                converted.push(value);
-                            },
-                            | adt::ParamKind::Dim(_) => {
-                                let dim = match args.get(index) {
-                                    | Some(arg) => self.convert_type_as_dim(arg),
-                                    | None => self.infer.fresh_dim(),
-                                };
-                                converted.push(Type::UnitOf(dim));
-                            },
-                        }
-                    }
-                    return Type::Adt(id, converted);
-                }
-                if let Some(builtin) = builtin_type(&name) {
-                    return builtin;
-                }
-                self.error("E0301", format!("unknown type `{name}`"), ty.span);
-                Type::Error
-            },
-            | TyKind::Var(name) => {
-                if let Some((_, ty)) = params.iter().rev().find(|(param, _)| param == name) {
-                    return ty.clone();
-                }
-                if self.implicit_params {
-                    // The parameter snapshot predates this traversal. Reuse a
-                    // variable first seen in an earlier part of the same head.
-                    if let Some((_, ty)) = self
-                        .type_params
-                        .iter()
-                        .rev()
-                        .find(|(param, _)| param == name)
-                    {
-                        return ty.clone();
-                    }
-                    // §3.8.1: a variable in an instance head is implicitly
-                    // universally quantified.
-                    let fresh = self.infer.fresh_type();
-                    self.type_params.push((name.clone(), fresh.clone()));
-                    return fresh;
-                }
-                self.error("E0301", format!("unknown type variable `{name}`"), ty.span);
-                Type::Error
-            },
-            | TyKind::Forall(_, body) => self.convert_type_with_params(body, params),
-        }
-    }
-
-    /// §8.9: `RateOf<s>` is a built-in type function — the derivative of a
-    /// state has its dimension divided by `T`, recursively through tensors and
-    /// records.
-    ///
-    /// A state field that cannot be flattened into the numeric kernel
-    /// (`Int`, `Bool`, a function, a variant) is `E0302`: the ODE runtime
-    /// flattens `Float` scalars and tensors into `Vec<f64>`, so anything else
-    /// has no representation on that path. An open record row cannot be
-    /// flattened either.
-    fn rate_of(
-        &mut self,
+        name: &str,
+        args: &[Pat],
         ty: &Type,
         span: Span,
-    ) -> Type {
+    ) {
+        if matches!(self.infer.resolve(ty), Type::Var(_))
+            && let Some((id, index)) = self.constructor_bindings.get(name).copied()
+        {
+            let constructor = self.infer.instantiate(&ctor_scheme(id, index));
+            let result = match constructor {
+                | Type::Fn(_, result) => *result,
+                | value => value,
+            };
+            if let Err(error) = self.infer.unify(ty, &result) {
+                self.report_unify(error, span);
+            }
+        }
         let resolved = self.infer.resolve(ty);
-        match resolved {
-            | Type::Scalar(rep, dim) => {
-                let rep = self.infer.resolve_rep(rep);
-                let is_int = rep == Rep::Int
-                    || matches!(self.infer.rep_literal_kind(rep), Some(LiteralKind::Int));
-                if is_int {
-                    self.error_help(
-                        "E0302",
-                        "an ODE state cannot contain an `Int` field",
-                        span,
-                        "make the state field a `Float` (the solver works on `f64`)",
-                    );
-                    return Type::Error;
-                }
-                Type::Scalar(rep, dim.div(&Dim::base("Time")))
-            },
-            | Type::Tensor { shape, elem } => {
-                let elem = self.rate_of(&elem, span);
-                Type::Tensor {
-                    shape: shape.clone(),
-                    elem: Box::new(elem),
-                }
-            },
-            | Type::Record(row) => {
-                if row.tail_var().is_some() {
-                    self.error_help(
-                        "E0302",
-                        "an ODE state cannot be an open record",
-                        span,
-                        "write the state as a closed record type",
-                    );
-                    return Type::Error;
-                }
-                let fields = row
-                    .fields()
-                    .into_iter()
-                    .map(|(name, ty)| (name, self.rate_of(&ty, span)))
-                    .collect::<Vec<_>>();
-                Type::Record(Row::closed(fields))
-            },
-            | Type::Var(_) => {
-                // An unannotated parameter of the right-hand side: commit it to
-                // a scalar and use its literal kind.
-                let scalar = self.force_scalar(&resolved);
-                if matches!(self.infer.resolve(&scalar), Type::Error) {
-                    Type::Error
-                } else {
-                    self.rate_of(&scalar, span)
-                }
-            },
-            | other => {
-                self.error_help(
-                    "E0302",
-                    format!("an ODE state cannot contain a value of type {other}"),
+        let (adt_id, adt_args) = match &resolved {
+            | Type::Adt(id, args) => (*id, args.clone()),
+            | _ => {
+                self.error(
+                    "E0308",
+                    format!("pattern `{name}` does not match {resolved}"),
                     span,
-                    "an `odeint` state is `Float` scalars, tensors and closed records of them",
                 );
-                Type::Error
+                return;
             },
+        };
+        let Some(registered) = adt::get(adt_id) else {
+            return;
+        };
+        let Some((index, ctor)) = registered
+            .ctors
+            .iter()
+            .enumerate()
+            .find(|(_, ctor)| ctor.name == *name)
+        else {
+            self.error(
+                "E0307",
+                format!("`{}` has no constructor `{name}`", registered.name),
+                span,
+            );
+            return;
+        };
+        if adt::module_of(adt_id) != self.module_path
+            && !self
+                .constructor_bindings
+                .values()
+                .any(|(id, ctor)| adt::same_type(*id, adt_id) && *ctor == index)
+        {
+            self.error(
+                "E0307",
+                format!("constructor `{name}` is not visible in this module"),
+                span,
+            );
+            return;
         }
-    }
-
-    /// §8.9.1: `DiffusionOf<s>` is the built-in type function for the diffusion
-    /// of an SDE: a scalar's dimension is divided by `T^(1/2)` (the Brownian
-    /// scaling `dW ~ √dt`), recursively through tensors and closed records.
-    ///
-    /// ```text
-    /// DiffusionOf<Scalar<ρ,d>>        = Scalar<ρ, d / T^(1/2)>
-    /// DiffusionOf<Tensor<n, τ>>       = Tensor<n, DiffusionOf<τ>>
-    /// DiffusionOf<{ l1: τ1, … }>      = { l1: DiffusionOf<τ1>, … }
-    /// ```
-    ///
-    /// `Int`/`Bool`/function fields and open rows are `E0302`, exactly as for
-    /// `RateOf`: the SDE path flattens the state into `Vec<f64>`.
-    fn diffusion_of(
-        &mut self,
-        ty: &Type,
-        span: Span,
-    ) -> Type {
-        let resolved = self.infer.resolve(ty);
-        match resolved {
-            | Type::Scalar(rep, dim) => {
-                let rep = self.infer.resolve_rep(rep);
-                let is_int = rep == Rep::Int
-                    || matches!(self.infer.rep_literal_kind(rep), Some(LiteralKind::Int));
-                if is_int {
-                    self.error_help(
-                        "E0302",
-                        "an SDE state cannot contain an `Int` field",
-                        span,
-                        "make the state field a `Float` (the integrator works on `f64`)",
-                    );
-                    return Type::Error;
-                }
-                let half = num_rational::BigRational::new(1.into(), 2.into());
-                let sqrt_time = Dim::base("Time").pow(&half);
-                // `dW ~ √dt`, so the diffusion's dimension is the state's
-                // *divided* by `T^(1/2)` (Brownian scaling).
-                Type::Scalar(rep, dim.div(&sqrt_time))
-            },
-            | Type::Tensor { shape, elem } => {
-                let elem = self.diffusion_of(&elem, span);
-                Type::Tensor {
-                    shape: shape.clone(),
-                    elem: Box::new(elem),
-                }
-            },
-            | Type::Record(row) => {
-                if row.tail_var().is_some() {
-                    self.error_help(
-                        "E0302",
-                        "an SDE state cannot be an open record",
-                        span,
-                        "write the state as a closed record type",
-                    );
-                    return Type::Error;
-                }
-                let fields = row
-                    .fields()
-                    .into_iter()
-                    .map(|(name, ty)| (name, self.diffusion_of(&ty, span)))
-                    .collect::<Vec<_>>();
-                Type::Record(Row::closed(fields))
-            },
-            | Type::Var(_) => {
-                let scalar = self.force_scalar(&resolved);
-                if matches!(self.infer.resolve(&scalar), Type::Error) {
-                    Type::Error
-                } else {
-                    self.diffusion_of(&scalar, span)
-                }
-            },
-            | other => {
-                self.error_help(
-                    "E0302",
-                    format!("an SDE state cannot contain a value of type {other}"),
-                    span,
-                    "an SDE state is `Float` scalars, tensors and closed records of them",
-                );
-                Type::Error
-            },
+        self.checked.constructor_refs.insert(span, (adt_id, index));
+        if ctor.fields.len() != args.len() {
+            self.error(
+                "E0307",
+                format!(
+                    "constructor `{name}` takes {} argument(s), found {}",
+                    ctor.fields.len(),
+                    args.len()
+                ),
+                span,
+            );
+            return;
         }
-    }
-
-    /// §8.9.1: the diffusion of `sdeint_general` for a state `s` with `m` noise
-    /// channels (the channel count is a run-time check, like the matrix width of
-    /// a rank-1 state): `GeneralDiffusionOf<s>` is `DiffusionOf<s>` with a
-    /// trailing noise axis on every leaf.
-    ///
-    /// ```text
-    /// GeneralDiffusionOf<Scalar<ρ,d>>   = Tensor<1, Scalar<ρ, d / T^(1/2)>>
-    /// GeneralDiffusionOf<Tensor<n, τ>>  = Tensor<n + 1, DiffusionOf<τ>>
-    /// GeneralDiffusionOf<{ l: τ, … }>   = { l: GeneralDiffusionOf<τ>, … }
-    /// ```
-    ///
-    /// Flattening it field by field, row-major, is the kernel's `n x m` diffusion
-    /// matrix (a scalar field is one row of `m` coefficients).
-    fn general_diffusion_of(
-        &mut self,
-        ty: &Type,
-        span: Span,
-    ) -> Type {
-        let resolved = self.infer.resolve(ty);
-        match resolved {
-            | Type::Scalar(..) => {
-                let leaf = self.diffusion_of(&resolved, span);
-                if leaf.is_error() {
-                    Type::Error
-                } else {
-                    Type::tensor(Shape::Rank(1), leaf)
-                }
-            },
-            | Type::Tensor { shape, elem } => {
-                let leaf = self.diffusion_of(&elem, span);
-                if leaf.is_error() {
-                    return Type::Error;
-                }
-                let shape = match shape {
-                    | Shape::Rank(rank) => Shape::Rank(rank + 1),
-                    | Shape::Refined(mut items) => {
-                        items.push(None);
-                        Shape::Refined(items)
-                    },
-                };
-                Type::Tensor {
-                    shape,
-                    elem: Box::new(leaf),
-                }
-            },
-            | Type::Record(row) => {
-                if row.tail_var().is_some() {
-                    self.error_help(
-                        "E0302",
-                        "an SDE state cannot be an open record",
-                        span,
-                        "write the state as a closed record type",
-                    );
-                    return Type::Error;
-                }
-                let fields = row
-                    .fields()
-                    .into_iter()
-                    .map(|(name, ty)| (name, self.general_diffusion_of(&ty, span)))
-                    .collect::<Vec<_>>();
-                Type::Record(Row::closed(fields))
-            },
-            | Type::Var(_) => {
-                let scalar = self.force_scalar(&resolved);
-                if matches!(self.infer.resolve(&scalar), Type::Error) {
-                    Type::Error
-                } else {
-                    self.general_diffusion_of(&scalar, span)
-                }
-            },
-            // `Int`/`Bool`/function fields: the same `E0302` as `DiffusionOf`.
-            | other => self.diffusion_of(&other, span),
-        }
-    }
-
-    fn convert_shape(
-        &mut self,
-        shape: &ShapeAst,
-    ) -> Shape {
-        match shape {
-            | ShapeAst::Rank(nat) => {
-                let converted = self.convert_nat(nat, Span::new(self.file, 0, 0));
-                match converted.as_const() {
-                    | Some(rank) => Shape::Rank(u32::try_from(rank).unwrap_or(0)),
-                    | None => {
-                        // §3.5.4: indexing needs a known rank, so a rank that
-                        // is still a variable is `E0304` (write a concrete
-                        // rank). Refined extents may stay variables.
-                        self.error_help(
-                            "E0304",
-                            "the rank of a tensor must be a concrete natural number",
-                            Span::new(self.file, 0, 0),
-                            "write a concrete rank, for example `Tensor<1, Float>`, or use a refined shape `Tensor<[n], Float>`",
-                        );
-                        Shape::Rank(0)
-                    },
-                }
-            },
-            | ShapeAst::Refined(items) => {
-                Shape::Refined(
-                    items
-                        .iter()
-                        .map(|item| {
-                            match item {
-                                | ShapeItem::Known(nat) => {
-                                    Some(self.convert_nat(nat, Span::new(self.file, 0, 0)))
-                                },
-                                | ShapeItem::Unknown => None,
-                            }
-                        })
-                        .collect(),
-                )
-            },
-        }
-    }
-
-    /// Converts a type-level natural number (§3.5.1).
-    ///
-    /// A variable resolves through the enclosing declaration's `<n: Nat>` (or
-    /// an unkinded parameter, which gets a Nat reading too). An unknown name is
-    /// `E0304`: unlike an unkinded type parameter, an undeclared Nat variable
-    /// has no binder to quantify over. Inside an instance head the name is an
-    /// implicit parameter, like a dimension there.
-    fn convert_nat(
-        &mut self,
-        nat: &NatAst,
-        span: Span,
-    ) -> Nat {
-        match nat {
-            | NatAst::Lit(value) => Nat::Lit(*value),
-            | NatAst::Var(name) => {
-                if let Some((_, nat)) = self
-                    .nat_params
-                    .iter()
-                    .rev()
-                    .find(|(param, _)| param == name)
-                {
-                    return nat.clone();
-                }
-                if self.implicit_params {
-                    return self.infer.fresh_nat();
-                }
-                self.error_help(
-                    "E0304",
-                    format!("cannot infer the shape extent `{name}`"),
-                    span,
-                    "declare it, for example `fn f<n>(xs: Tensor<[n], Float>)`; only literals, `+` and `*` by a literal are supported in a shape",
-                );
-                Nat::Lit(0)
-            },
-            | NatAst::Add(left, right) => {
-                let left = self.convert_nat(left, span);
-                let right = self.convert_nat(right, span);
-                match (left.as_const(), right.as_const()) {
-                    | (Some(left), Some(right)) => Nat::Lit(left.saturating_add(right)),
-                    | _ => Nat::Add(Box::new(left), Box::new(right)),
-                }
-            },
-            | NatAst::Mul(left, right) => {
-                let left = self.convert_nat(left, span);
-                let right = self.convert_nat(right, span);
-                match (left.as_const(), right.as_const()) {
-                    | (Some(left), Some(right)) => Nat::Lit(left.saturating_mul(right)),
-                    | _ => Nat::Mul(Box::new(left), Box::new(right)),
-                }
-            },
-        }
-    }
-
-    fn convert_dim(
-        &mut self,
-        dim: &DimAst,
-        span: Span,
-    ) -> Dim {
-        match dim {
-            | DimAst::One => Dim::one(),
-            | DimAst::Name(name) => {
-                if let Some((_, dim)) = self
-                    .dim_params
-                    .iter()
-                    .rev()
-                    .find(|(param, _)| param == name)
-                {
-                    return dim.clone();
-                }
-                match self.dims.lookup(name) {
-                    // §5.11.2: a dimension written in a module with a unit
-                    // system denotes its representative (`L` is `Energy^-1`
-                    // in natural units). The reduction is a homomorphism, so
-                    // reducing each named factor reduces the whole product.
-                    | Some(dim) if !self.si_dimensions => self.units.reduce_dim(&dim),
-                    | Some(dim) => dim,
-                    | None => {
-                        if self.implicit_params {
-                            // §3.8.1: `instance Show for Real[d]` quantifies
-                            // `d` implicitly.
-                            let fresh = self.infer.fresh_dim();
-                            self.dim_params.push((name.clone(), fresh.clone()));
-                            return fresh;
-                        }
-                        let help = self.unknown_dimension_help(name);
-                        let mut diagnostic =
-                            Diagnostic::error("E0407", format!("unknown dimension `{name}`"), span);
-                        if let Some(help) = help {
-                            diagnostic = diagnostic.with_help(help);
-                        }
-                        self.diagnostics.push(diagnostic);
-                        Dim::one()
-                    },
-                }
-            },
-            | DimAst::Mul(left, right) => {
-                self.convert_dim(left, span)
-                    .mul(&self.convert_dim(right, span))
-            },
-            | DimAst::Div(left, right) => {
-                self.convert_dim(left, span)
-                    .div(&self.convert_dim(right, span))
-            },
-            | DimAst::Pow(base, exponent) => self.convert_dim(base, span).pow(exponent),
-            | DimAst::Paren(inner) => self.convert_dim(inner, span),
+        for (sub, field) in args.iter().zip(ctor.fields.iter()) {
+            let field_ty = instantiate_pattern_field(adt_id, field, &adt_args);
+            self.bind_pattern_inner(sub, &field_ty);
         }
     }
 
@@ -11864,15 +11136,13 @@ impl Checker {
                 // §B.12: this local is read, so `W0101` stays quiet for it.
                 self.used_locals.insert(name.to_string());
                 let scheme = scheme.clone();
+                let scope_key = (index.saturating_add(1), name.to_owned());
                 let headers = self
                     .local_headers
-                    .get(&(index + 1, name.to_string()))
+                    .get(&scope_key)
                     .cloned()
                     .unwrap_or_else(|| inferred_binders(&scheme));
-                let origin = self
-                    .local_callables
-                    .get(&(index + 1, name.to_string()))
-                    .cloned();
+                let origin = self.local_callables.get(&scope_key).cloned();
                 return self.instantiate_with_headers(&scheme, &headers, origin.as_ref(), span);
             }
         }
@@ -11919,8 +11189,10 @@ impl Checker {
                 element: None,
             });
         }
-        if let Some(candidates) = builtins::schemes(name) {
-            return self.infer.instantiate(&candidates[0]);
+        if let Some(candidates) = builtins::schemes(name)
+            && let Some(candidate) = candidates.first()
+        {
+            return self.infer.instantiate(candidate);
         }
         if let Some((adt, index, _)) = adt::find_prelude_ctor(name) {
             let scheme = ctor_scheme(adt, index);
@@ -12130,21 +11402,16 @@ impl Checker {
         let left = self.dims.format(&mismatch.left);
         let right = self.dims.format(&mismatch.right);
         let difference = self.dims.format(&mismatch.difference);
-        self.diagnostics.push(
-            Diagnostic::error("E0401", "dimension mismatch", span)
-                .with_primary_label(format!("expected {right}, found {left}"))
-                .with_label(left_span, format!("this is {left}"))
-                .with_label(right_span, format!("this is {right}"))
-                .with_note(format!("difference: {difference}")),
-        );
+        let mut diagnostic = Diagnostic::error("E0401", "dimension mismatch", span)
+            .with_primary_label(format!("expected {right}, found {left}"))
+            .with_label(left_span, format!("this is {left}"))
+            .with_label(right_span, format!("this is {right}"))
+            .with_note(format!("difference: {difference}"));
         if mismatch.right.is_one() {
-            self.diagnostics
-                .items
-                .last_mut()
-                .expect("diagnostic was just pushed")
-                .helps
-                .push("a bare number has no unit; write `2 m` if you meant a length".to_string());
+            diagnostic = diagnostic
+                .with_help("a bare number has no unit; write `2 m` if you meant a length");
         }
+        self.diagnostics.push(diagnostic);
     }
 
     fn unit_error(
@@ -12153,8 +11420,8 @@ impl Checker {
         span: Span,
     ) {
         let mut diagnostic = Diagnostic::error(error.code(), error.to_string(), span);
-        if let UnitError::Unknown(name) = &error
-            && let Some(close) = self.close_unit(name)
+        if let UnitError::Unknown(name) = error
+            && let Some(close) = self.close_unit(&name)
         {
             diagnostic = diagnostic.with_help(format!("did you mean `{close}`?"));
         }
@@ -12253,6 +11520,10 @@ impl Checker {
 }
 
 /// The name of a unit when an expression is a bare unit value.
+#[allow(
+    clippy::single_call_fn,
+    reason = "unit recognition needs the written name without synthesizing its expression"
+)]
 fn unit_name_of(expr: &Expr) -> Option<String> {
     match &expr.kind {
         | ExprKind::Var(name) => Some(name.clone()),
@@ -12289,19 +11560,6 @@ fn mentions_any(
     }
 }
 
-/// Whether an expression calls `symbol` or `symfun`.
-fn is_symbol_factory(expr: &Expr) -> bool {
-    match &expr.kind {
-        | ExprKind::Call { callee, .. } => {
-            match &callee.kind {
-                | ExprKind::Var(name) => matches!(name.as_str(), "symbol" | "symfun"),
-                | _ => false,
-            }
-        },
-        | _ => false,
-    }
-}
-
 /// Whether `class ty` is satisfied by the builtin structural fallback.
 ///
 /// §3.8.4 lists `Show` for records, `Tensor`, `Point`, `Solutions`, the scalar
@@ -12318,18 +11576,6 @@ fn is_structural_show(
 /// Whether an expression is the bare literal `0` (§4.7).
 fn is_bare_zero(expr: &Expr) -> bool {
     matches!(&expr.kind, ExprKind::Int(value) if value.is_zero())
-}
-
-/// The value of a literal index, when it is one (§3.5.4).
-fn literal_index(expr: &Expr) -> Option<i64> {
-    match &expr.kind {
-        | ExprKind::Int(value) => value.to_i64(),
-        | ExprKind::Unary {
-            op: UnOp::Neg,
-            operand,
-        } => literal_index(operand).map(|value| -value),
-        | _ => None,
-    }
 }
 
 /// Whether a type mentions a function anywhere.
@@ -12353,6 +11599,10 @@ fn contains_function(ty: &Type) -> bool {
 /// A literal has a finite set of representations; the default is preferred
 /// when it is high enough, otherwise the first accepted reading above the
 /// bound.
+#[allow(
+    clippy::single_call_fn,
+    reason = "literal promotion prefers its default within the finite representation order"
+)]
 fn literal_reading_above(
     kind: LiteralKind,
     concrete: Rep,
@@ -12367,21 +11617,23 @@ fn literal_reading_above(
         .find(|candidate| kind.accepts_rep(*candidate))
 }
 
-fn annotation_span(ty: &Ty) -> Span {
-    ty.span
-}
-
-fn literal_exponent(expr: &Expr) -> Option<BigRational> {
-    match &expr.kind {
-        | ExprKind::Int(value) => {
-            value
-                .to_i64()
-                .map(|value| BigRational::from_integer(BigInt::from(value)))
-        },
-        | ExprKind::Unary {
-            op: UnOp::Neg,
-            operand,
-        } => literal_exponent(operand).map(|value| -value),
+#[allow(
+    clippy::arithmetic_side_effects,
+    clippy::single_call_fn,
+    reason = "syntactic dimension exponents use exact rationals and reject zero divisors"
+)]
+fn literal_exponent(mut expr: &Expr) -> Option<BigRational> {
+    let mut negative = false;
+    while let ExprKind::Unary {
+        op: UnOp::Neg,
+        operand,
+    } = &expr.kind
+    {
+        negative = !negative;
+        expr = operand;
+    }
+    let value = match &expr.kind {
+        | ExprKind::Int(value) => BigRational::from_integer(value.clone()),
         | ExprKind::Binary {
             op: BinOp::Div,
             left,
@@ -12389,15 +11641,14 @@ fn literal_exponent(expr: &Expr) -> Option<BigRational> {
         } => {
             match (&left.kind, &right.kind) {
                 | (ExprKind::Int(a), ExprKind::Int(b)) if !b.is_zero() => {
-                    let a = BigRational::from_integer(a.clone());
-                    let b = BigRational::from_integer(b.clone());
-                    Some(a / b)
+                    BigRational::new(a.clone(), b.clone())
                 },
-                | _ => None,
+                | _ => return None,
             }
         },
-        | _ => None,
-    }
+        | _ => return None,
+    };
+    Some(if negative { -value } else { value })
 }
 
 fn ctor_scheme(
@@ -12447,6 +11698,7 @@ fn ctor_scheme(
         vars,
         dims,
         rows: Vec::new(),
+        row_lacks: Vec::new(),
         nats: Vec::new(),
         constraints: Vec::new(),
         numeric: Vec::new(),
@@ -12457,14 +11709,6 @@ fn ctor_scheme(
 
 #[must_use]
 fn builtin_type(name: &str) -> Option<Type> {
-    // ABI names must resolve to the shared prelude types, rather than fresh
-    // abstract declarations in each generated kernel facade.
-    if name == "Value" {
-        return Some(dynamic_value_type());
-    }
-    if name == "Symbol" {
-        return Some(Type::Dyn(Rep::Real));
-    }
     const OPAQUE: [&str; 20] = [
         "EvalError",
         "MathError",
@@ -12490,6 +11734,17 @@ fn builtin_type(name: &str) -> Option<Type> {
         "SdeError",
         "SdeMethod",
     ];
+    // ABI names must resolve to the shared prelude types, rather than fresh
+    // abstract declarations in each generated kernel facade.
+    if name == "Value" {
+        return Some(dynamic_value_type());
+    }
+    if name == "Symbol" {
+        return Some(Type::Dyn(Rep::Real));
+    }
+    if name == "NativeAdVar" {
+        return Some(adt::native_ad_var_type());
+    }
     if OPAQUE.contains(&name) {
         let id = adt::intern(Adt {
             name: name.to_string(),
@@ -12501,34 +11756,41 @@ fn builtin_type(name: &str) -> Option<Type> {
     None
 }
 
-/// Whether two element types are both tensors of the same rank but with a
-/// different known extent — the `E0203` ragged-literal case (§3.5.2).
-fn shapes_are_ragged(
-    left: &Type,
-    right: &Type,
-) -> bool {
-    let (
-        Type::Tensor {
-            shape: Shape::Refined(a),
-            ..
-        },
-        Type::Tensor {
-            shape: Shape::Refined(b),
-            ..
-        },
-    ) = (left, right)
-    else {
-        return false;
-    };
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter().zip(b.iter()).any(|(left, right)| {
-        match (left, right) {
-            | (Some(left), Some(right)) => left != right,
-            | _ => false,
+/// Names introduced by a pattern, including destructured top-level bindings.
+fn collect_pattern_bindings(
+    pattern: &Pat,
+    names: &mut HashSet<String>,
+) {
+    let mut pending = vec![pattern];
+    while let Some(pattern) = pending.pop() {
+        match &pattern.kind {
+            | PatKind::Var(name) => {
+                names.insert(name.clone());
+            },
+            | PatKind::Ctor { args, .. } | PatKind::Tuple(args) => pending.extend(args),
+            | PatKind::Record(fields) => {
+                for (name, pattern) in fields {
+                    if let Some(pattern) = pattern {
+                        pending.push(pattern);
+                    } else {
+                        names.insert(name.clone());
+                    }
+                }
+            },
+            | PatKind::Tensor { items, rest } => {
+                pending.extend(items);
+                if let Some(name) = rest {
+                    names.insert(name.clone());
+                }
+            },
+            | PatKind::As { pattern, name } => {
+                names.insert(name.clone());
+                pending.push(pattern);
+            },
+            | PatKind::Annot { pattern, .. } => pending.push(pattern),
+            | _ => {},
         }
-    })
+    }
 }
 
 /// The name a declaration introduces, when it introduces one.
@@ -12561,14 +11823,15 @@ fn is_attribute_constant(expr: &Expr) -> bool {
         | ExprKind::Float(_)
         | ExprKind::Bool(_)
         | ExprKind::UnitLit
-        | ExprKind::Quantity { .. } => true,
+        | ExprKind::Quantity { .. }
+        | ExprKind::Var(_)
+        | ExprKind::QName(_) => true,
         // A string is constant only without interpolation.
         | ExprKind::Str(pieces) => {
             pieces
                 .iter()
                 .all(|piece| matches!(piece, StrPiece::Text(_)))
         },
-        | ExprKind::Var(_) | ExprKind::QName(_) => true,
         // A constructor applied to constants (`Gpu(0)`, §13.9.4) is a
         // constant: constructors are capitalised, functions are not.
         | ExprKind::Call { callee, args } => {
@@ -12581,8 +11844,9 @@ fn is_attribute_constant(expr: &Expr) -> bool {
         | ExprKind::Binary { left, right, .. } => {
             is_attribute_constant(left) && is_attribute_constant(right)
         },
-        | ExprKind::Tuple(items) => items.iter().all(is_attribute_constant),
-        | ExprKind::Tensor(items) => items.iter().all(is_attribute_constant),
+        | ExprKind::Tuple(items) | ExprKind::Tensor(items) => {
+            items.iter().all(is_attribute_constant)
+        },
         | ExprKind::Record { base: None, fields } => {
             fields.iter().all(|(_, value)| is_attribute_constant(value))
         },
@@ -12610,6 +11874,10 @@ fn string_constant(expr: &Expr) -> Option<String> {
 ///
 /// Their type is `∀a. C a => σ`, which is what makes `show(f)` and `f == f`
 /// errors: a function has no `Show`/`Eq` instance.
+#[allow(
+    clippy::single_call_fn,
+    reason = "the prelude class-method registry defines fixed signature relationships"
+)]
 fn prelude_class_methods() -> Vec<(&'static str, &'static str, Type)> {
     let var = Type::Var(0);
     let ordering = Type::Adt(adt::ORDERING_ID, Vec::new());
@@ -12636,6 +11904,10 @@ fn prelude_class_methods() -> Vec<(&'static str, &'static str, Type)> {
 }
 
 /// Functions of §3.4.4 that only accept dimensionless arguments.
+#[allow(
+    clippy::single_call_fn,
+    reason = "dimensionless transcendental names form a closed built-in family"
+)]
 fn is_transcendental(name: &str) -> bool {
     matches!(
         name,
@@ -12664,527 +11936,164 @@ fn is_transcendental(name: &str) -> bool {
     )
 }
 
-/// The flat key a qualified field access names, when the base is a path or an
-/// import alias.
-fn qualified_name(
-    base: &Expr,
-    field: &str,
-) -> Option<String> {
-    match &base.kind {
-        | ExprKind::QName(path) => Some(format!("{}.{field}", path.join("."))),
-        | ExprKind::Var(name) if name.chars().next().is_some_and(char::is_uppercase) => {
-            Some(format!("{name}.{field}"))
-        },
-        | _ => None,
-    }
-}
-
-/// Whether an expression is `Rssn.<member>`.
-fn is_rssn_member(
-    expr: &Expr,
-    member: &str,
-) -> bool {
-    match &expr.kind {
-        | ExprKind::Field { base, name } => name == member && is_rssn_root(base),
-        | ExprKind::QName(path) => path.len() == 2 && path[0] == "Rssn" && path[1] == member,
-        | _ => false,
-    }
-}
-
-/// The operator name when an expression names `Rssn.<op>`.
-///
-/// The manifest's non-operator members (`Rssn.call`, `Rssn.Version`, …) are
-/// excluded: they have a fixed type and are not resolved against overloads.
-fn rssn_op_name(expr: &Expr) -> Option<String> {
-    const MEMBERS: [&str; 16] = [
-        "Version",
-        "ManifestHash",
-        "Capabilities",
-        "Units",
-        "Constants",
-        "ValueKinds",
-        "call",
-        "dynamic",
-        "call_key",
-        "invoke",
-        "resolve_overload",
-        "typed",
-        "call_ho",
-        "call_ho_key",
-        "register",
-        "register_plugin",
-    ];
-    let name = match &expr.kind {
-        | ExprKind::Field { base, name } if is_rssn_root(base) => name.clone(),
-        | ExprKind::QName(path) if path.len() == 2 && path[0] == "Rssn" => path[1].clone(),
-        | _ => return None,
-    };
-    if MEMBERS.contains(&name.as_str()) || name == "overloads" {
-        return None;
-    }
-    Some(name)
-}
-
-/// Whether an expression names the `Rssn` module itself.
-fn is_rssn_root(expr: &Expr) -> bool {
-    match &expr.kind {
-        | ExprKind::Var(name) => name == "Rssn",
-        | ExprKind::QName(path) => path.len() == 1 && path[0] == "Rssn",
-        | _ => false,
-    }
-}
-
-/// `Tensor<1, Value>`: the argument list of a dynamic call.
-fn value_list_type() -> Type {
-    Type::tensor(Shape::Rank(1), dynamic_value_type())
-}
-
-/// An opaque host type of the dynamic ABI (`TypeRep`, `Plugin`, …).
-///
-/// It is interned by name, so this and `builtin_type`'s `OPAQUE` table resolve
-/// to the same `AdtId` and a source annotation such as `fn f(p: Plugin)` names
-/// the type the checker's signatures use.
-fn opaque_type(name: &str) -> Type {
-    let id = adt::intern(Adt {
-        name: name.to_string(),
-        params: Vec::new(),
-        ctors: Vec::new(),
-    });
-    Type::Adt(id, Vec::new())
-}
-
-/// Maps a manifest signature type to the checker's type.
-fn rssn_type(
-    sig: &aevia_rssn::SigType,
-    infer: &mut Infer,
+pub(crate) fn instantiate_pattern_field(
+    id: adt::AdtId,
+    field: &Type,
+    arguments: &[Type],
 ) -> Type {
-    use aevia_rssn::SigType as S;
-    match sig {
-        | S::Int => Type::int(),
-        | S::Real => Type::real(Dim::one()),
-        | S::Float => Type::float(Dim::one()),
-        | S::Complex => Type::complex(Dim::one()),
-        | S::Bool => Type::Bool,
-        | S::Str => Type::Str,
-        | S::Symbol => Type::Dyn(Rep::Real),
-        | S::Unit(dim) => Type::UnitOf(dim.clone()),
-        | S::Point(dim) => Type::Point(dim.clone()),
-        | S::Dim(inner, dim) => {
-            match **inner {
-                | S::Int => Type::Scalar(Rep::Int, dim.clone()),
-                | S::Float => Type::Scalar(Rep::Float, dim.clone()),
-                | S::Complex => Type::Scalar(Rep::Complex, dim.clone()),
-                | _ => Type::Scalar(Rep::Real, dim.clone()),
-            }
-        },
-        | S::Tensor { rank, shape, elem } => {
-            if shape
-                .as_ref()
-                .is_some_and(|shape| rank.is_some_and(|rank| rank != shape.len()))
-            {
-                return Type::Error;
-            }
-            let shape = shape.as_ref().map_or_else(
-                || Shape::Rank(rank.map_or(1, |rank| u32::try_from(rank).unwrap_or(1))),
-                |shape| Shape::refined(shape.iter().copied().map(Some)),
-            );
-            Type::tensor(shape, rssn_type(elem, infer))
-        },
-        // A kernel sparse value is an Aevia `Sparse<F, shape, τ>` of the same
-        // rank. The format is a runtime property of the kernel value, so it
-        // stays an unsolved variable (§13.9.5).
-        | S::Sparse { rank, elem } => {
-            let shape = Shape::Rank(rank.map_or(1, |rank| u32::try_from(rank).unwrap_or(1)));
-            let format = infer.fresh_type();
-            builtins::sparse_type(format, Type::tensor(shape, rssn_type(elem, infer)))
-        },
-        | S::Record(fields) => {
-            Type::record(
-                fields
-                    .iter()
-                    .map(|(name, ty)| (name.clone(), rssn_type(ty, infer))),
-            )
-        },
-        | S::Func(params, ret) => {
-            Type::Fn(
-                params.iter().map(|param| rssn_type(param, infer)).collect(),
-                Box::new(rssn_type(ret, infer)),
-            )
-        },
-        | S::Table | S::Device | S::Opaque(_) | S::Var(_) | S::Variant(_) => dynamic_value_type(),
-        | S::Dyn | S::Never => Type::Dyn(Rep::Real),
+    let mut types = Vec::new();
+    let mut dims = HashMap::new();
+    for (kind, argument) in adt::param_kinds_of(id).iter().zip(arguments) {
+        match (kind, argument) {
+            | (adt::ParamKind::Type, value) => types.push(Some(value.clone())),
+            | (adt::ParamKind::Dim(id), Type::UnitOf(dim)) => {
+                types.push(None);
+                dims.insert(*id, dim.clone());
+            },
+            | _ => types.push(None),
+        }
     }
+    field.substitute_kinded(&types, &dims, &HashMap::new(), &HashMap::new())
 }
 
-impl Checker {
-    /// Types `Rssn.<name>` in *value* position.
-    ///
-    /// An overloaded name is not a first-class value: unless every
-    /// overload has the same type, using it without a call is `E0303`.
-    fn rssn_member(
-        &mut self,
-        name: &str,
-        span: Span,
-    ) -> Type {
-        match name {
-            | "Version" | "ManifestHash" => return Type::Str,
-            | "Capabilities" | "Units" | "Constants" | "ValueKinds" => {
-                return Type::tensor(Shape::Rank(1), Type::Str);
-            },
-            | "call" | "dynamic" => {
-                return Type::Fn(
-                    vec![Type::Str, value_list_type()],
-                    Box::new(Type::Adt(
-                        adt::RESULT_ID,
-                        vec![dynamic_value_type(), op_error_type()],
-                    )),
-                );
-            },
-            | "call_key" => {
-                return Type::Fn(
-                    vec![Type::Str, Type::Str, value_list_type()],
-                    Box::new(Type::Adt(
-                        adt::RESULT_ID,
-                        vec![dynamic_value_type(), op_error_type()],
-                    )),
-                );
-            },
-            | "invoke" => {
-                // As a value `invoke` is a dynamic call: its result type is
-                // only known per call site, never once for the module.
-                return Type::Fn(
-                    vec![Type::Str, Type::Str, value_list_type()],
-                    Box::new(dynamic_value_type()),
-                );
-            },
-            | "resolve_overload" => {
-                return Type::Fn(
-                    vec![Type::Str, value_list_type()],
-                    Box::new(Type::Adt(adt::RESULT_ID, vec![Type::Str, op_error_type()])),
-                );
-            },
-            | "overloads" => {
-                return Type::Fn(
-                    vec![Type::Str],
-                    Box::new(Type::tensor(Shape::Rank(1), Type::Str)),
-                );
-            },
-            // §8.19: the host-extension entry points. Their arguments and
-            // results are opaque host values (`TypeRep`, `Callback`, `Plugin`),
-            // so the honest static type names those types and leaves the rest
-            // to the runtime, which returns `Err(OpError)` when the capability
-            // is missing.
-            | "typed" => {
-                return Type::Fn(
-                    vec![Type::Str, value_list_type(), opaque_type("TypeRep")],
-                    Box::new(Type::Adt(
-                        adt::RESULT_ID,
-                        vec![dynamic_value_type(), op_error_type()],
-                    )),
-                );
-            },
-            | "call_ho_key" => {
-                return Type::func(
-                    vec![
-                        Type::Str,
-                        Type::Str,
-                        value_list_type(),
-                        Type::tensor(Shape::Rank(1), opaque_type("Callback")),
-                    ],
-                    Type::Adt(adt::RESULT_ID, vec![dynamic_value_type(), op_error_type()]),
-                );
-            },
-            | "call_ho" => {
-                return Type::Fn(
-                    vec![
-                        Type::Str,
-                        value_list_type(),
-                        Type::tensor(Shape::Rank(1), opaque_type("Callback")),
-                    ],
-                    Box::new(Type::Adt(
-                        adt::RESULT_ID,
-                        vec![dynamic_value_type(), op_error_type()],
-                    )),
-                );
-            },
-            | "register" | "register_plugin" => {
-                return Type::Fn(
-                    vec![opaque_type("Plugin")],
-                    Box::new(Type::Adt(
-                        adt::RESULT_ID,
-                        vec![opaque_type("PluginId"), opaque_type("PluginError")],
-                    )),
-                );
-            },
-            | _ => {},
-        }
-        let Some(entry) = aevia_rssn::registry().op(name) else {
-            self.error_help(
-                "E0301",
-                format!("rssn has no operator `{name}`"),
-                span,
-                "run `aevia rssn --audit` for the operators this build provides",
-            );
-            return Type::Error;
-        };
-        if entry.signatures.is_empty() {
-            return Type::Fn(vec![value_list_type()], Box::new(dynamic_value_type()));
-        }
-        let types: Vec<Type> = entry
-            .signatures
-            .iter()
-            .map(|signature| self.rssn_signature_type(signature))
-            .collect();
-        let first = types.first().cloned().unwrap_or(Type::Error);
-        if types.iter().all(|ty| *ty == first) {
-            return first;
-        }
-        self.error_help(
-            "E0303",
-            format!("`Rssn.{name}` is overloaded and cannot be used as a value"),
-            span,
-            "call it, or bind the result of a call to a name",
+/// Help for an operand that is a local value spelled like a unit (§5.1.3).
+fn shadowed_unit_help(name: &str) -> String {
+    format!(
+        "`{name}` here is the local binding in scope, not the unit: in an expression a value shadows a unit name (§5.1.3). Rename the binding, or write the unit in a literal (`1.0 {name}`), where unit names are never shadowed"
+    )
+}
+
+#[cfg(test)]
+mod exponent_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn dimensioned_powers_accept_integer_exponents_beyond_i64() {
+        let source = "fn wide(x: Real[L]) = x ^ 9223372036854775808\n";
+        let lexed = aevia_syntax::lex(0, source).unwrap();
+        let (module, parsed) = aevia_syntax::parse_module(0, source, &lexed);
+        assert!(!parsed.has_errors(), "{:?}", parsed.items);
+        let checked = check_module(0, &module);
+        assert!(
+            !checked.diagnostics.has_errors(),
+            "{:?}",
+            checked.diagnostics.items
         );
-        Type::Error
-    }
-
-    /// Types a call to `Rssn.<op>` by resolving the overload at the call site.
-    fn rssn_call(
-        &mut self,
-        name: &str,
-        args: &[Expr],
-        span: Span,
-    ) -> Type {
-        let Some(entry) = aevia_rssn::registry().op(name) else {
-            for arg in args {
-                self.synth(arg);
-            }
-            self.error_help(
-                "E0301",
-                format!("rssn has no operator `{name}`"),
-                span,
-                "run `aevia rssn --audit` for the operators this build provides",
-            );
-            return Type::Error;
-        };
-        let mut arg_types = Vec::new();
-        let mut classified = Vec::new();
-        for arg in args {
-            let ty = self.synth(arg);
-            let resolved = self.infer.resolve(&ty);
-            classified.push(self.classify_arg(&resolved));
-            arg_types.push(resolved);
-        }
-        match crate::rssn_resolve::resolve(entry, &classified) {
-            | crate::rssn_resolve::Resolution::Unique { index, .. } => {
-                let Some(signature) = entry.signatures.get(index) else {
-                    return Type::Error;
-                };
-                let ret = if entry.source.is_exact() {
-                    if entry
-                        .raw
-                        .get(index)
-                        .is_some_and(aevia_rssn::registry::signature_has_unrepresentable_dimensions)
-                    {
-                        self.error_help(
-                            "E1001",
-                            format!("`Rssn.{name}` has dimensions this checker cannot represent"),
-                            span,
-                            "use `Rssn.dynamic` and inspect the kernel result",
-                        );
-                        return Type::Error;
-                    }
-                    match crate::rssn_resolve::instantiate_dimensions(
-                        signature,
-                        &arg_types,
-                        &mut self.infer,
-                    ) {
-                        | Ok(Some(ret)) => ret,
-                        | Ok(None) => Type::Dyn(Rep::Real),
-                        | Err(error) => {
-                            self.report_unify(error, span);
-                            return Type::Error;
-                        },
-                    }
-                } else {
-                    // A derived signature identifies a dispatch form, not the
-                    // dimensional relation of the actual kernel result.
-                    Type::Dyn(Rep::Real)
-                };
-                if let Some(key) = entry.key(index) {
-                    self.checked.rssn_calls.push(RssnCall {
-                        span,
-                        name: name.to_string(),
-                        key: key.clone(),
-                        overload: index,
-                    });
-                }
-                ret
+        let wide = BigInt::from(i64::MAX) + 1_u8;
+        let literal = Expr::new(ExprKind::Int(wide.clone()), Span::default());
+        let negated = Expr::new(
+            ExprKind::Unary {
+                op: UnOp::Neg,
+                operand: Box::new(literal),
             },
-            | crate::rssn_resolve::Resolution::Ambiguous { candidates } => {
-                let rendered: Vec<String> = candidates
-                    .iter()
-                    .filter_map(|index| entry.signatures.get(*index))
-                    .map(aevia_rssn::Sig::render)
-                    .collect();
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        "E1002",
-                        format!("`Rssn.{name}` is ambiguous for these arguments"),
-                        span,
-                    )
-                    .with_primary_label("several overloads match equally well")
-                    .with_note(format!("candidates: {}", rendered.join("; ")))
-                    .with_help("annotate an argument so one overload wins"),
-                );
-                Type::Error
-            },
-            | crate::rssn_resolve::Resolution::None => {
-                let rendered: Vec<String> = entry
-                    .signatures
-                    .iter()
-                    .map(aevia_rssn::Sig::render)
-                    .collect();
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        "E1003",
-                        format!("no overload of `Rssn.{name}` accepts these arguments"),
-                        span,
-                    )
-                    .with_primary_label("no candidate accepts this argument list")
-                    .with_note(format!("overloads: {}", rendered.join("; ")))
-                    .with_help("use `Rssn.dynamic` for a signature-free call"),
-                );
-                Type::Error
-            },
-            | crate::rssn_resolve::Resolution::Unknown => {
-                self.error("E0301", format!("rssn has no operator `{name}`"), span);
-                Type::Error
-            },
-        }
-    }
-
-    /// Classifies an argument for overload resolution.
-    ///
-    /// A literal that has not been committed yet is classified by the
-    /// representation it defaults to: `sin(0.5)` must pick the numeric
-    /// overload, not tie with the symbolic one.
-    fn classify_arg(
-        &self,
-        ty: &Type,
-    ) -> aevia_rssn::SigType {
-        match ty {
-            | Type::Var(_) => {
-                match self.infer.literal_kind(ty) {
-                    | Some(kind) => {
-                        crate::rssn_resolve::classify(&Type::Scalar(
-                            Rep::default_for_literal(kind),
-                            Dim::one(),
-                        ))
-                    },
-                    | None => aevia_rssn::SigType::Dyn,
-                }
-            },
-            | Type::Scalar(Rep::Var(id), dim) => {
-                match self.infer.rep_literal_kind(Rep::Var(*id)) {
-                    | Some(kind) => {
-                        crate::rssn_resolve::classify(&Type::Scalar(
-                            Rep::default_for_literal(kind),
-                            dim.clone(),
-                        ))
-                    },
-                    | None => aevia_rssn::SigType::Dyn,
-                }
-            },
-            | other => crate::rssn_resolve::classify(other),
-        }
-    }
-
-    /// The Aevia type of one manifest signature.
-    fn rssn_signature_type(
-        &mut self,
-        signature: &aevia_rssn::Sig,
-    ) -> Type {
-        let mut params: Vec<Type> = Vec::with_capacity(signature.params.len() + 1);
-        for param in &signature.params {
-            params.push(rssn_type(param, &mut self.infer));
-        }
-        if signature.variadic.is_some() {
-            params.push(Type::tensor(Shape::Rank(1), dynamic_value_type()));
-        }
-        Type::Fn(params, Box::new(rssn_type(&signature.ret, &mut self.infer)))
-    }
-
-    /// Types a call to a class method and solves its constraints.
-    fn class_method_call(
-        &mut self,
-        name: &str,
-        scheme: &Scheme,
-        args: &[Expr],
-        span: Span,
-    ) -> Type {
-        let (ty, constraints) = self.infer.instantiate_scheme(scheme);
-        let ret = self.call_with_type(ty, args, span);
-        for constraint in &constraints {
-            self.solve_constraint(constraint, span);
-            if let Some(arg) = constraint.args.first() {
-                let head = self.infer.resolve(arg);
-                let target = self.dict_target(&constraint.class, name, &head);
-                self.checked.dictionaries.push(DictionaryUse {
-                    span,
-                    class: constraint.class.clone(),
-                    head,
-                    method: name.to_string(),
-                    target,
-                });
-            }
-        }
-        ret
-    }
-
-    /// What a class-method call site should execute (round-2 decision 1c).
-    ///
-    /// * a concrete head with a matching instance → that instance's key;
-    /// * a structural `Show` head → the builtin printer (the guarantee);
-    /// * a quantified head → the witnessable candidate instances, in
-    ///   registration order. Instances without a runtime witness cannot be
-    ///   dispatched this way and are left to the runtime's existing shape
-    ///   dispatch until Phase B pins them; the checker has already rejected
-    ///   colliding witnesses at registration (`E0311`).
-    fn dict_target(
-        &self,
-        class: &str,
-        method: &str,
-        head: &Type,
-    ) -> DictTarget {
-        let _ = method;
-        if let Some(instance) = self.classes.resolve_instance(class, head) {
-            if instance.origin == Origin::Derived {
-                return DictTarget::Builtin(BuiltinDispatch::Derived);
-            }
-            return DictTarget::Instance(instance.key.clone());
-        }
-        if is_structural_show(class, head) {
-            return DictTarget::Builtin(BuiltinDispatch::ShowStructural);
-        }
-        let instances = self.classes.instances_of(class);
-        let candidates = instances
-            .iter()
-            .map(|instance| instance.key.clone())
-            .collect();
-        let derived = instances
-            .iter()
-            .filter(|instance| instance.origin == Origin::Derived)
-            .map(|instance| (instance.key.clone(), instance.head.clone()))
-            .collect();
-        DictTarget::Witness { candidates, derived }
+            Span::default(),
+        );
+        assert_eq!(
+            literal_exponent(&negated),
+            Some(BigRational::from_integer(-wide))
+        );
     }
 }
 
-fn shape_items(shape: &Shape) -> Vec<Option<Nat>> {
-    match shape {
-        | Shape::Rank(rank) => vec![None; usize::try_from(*rank).unwrap_or(0)],
-        | Shape::Refined(items) => items.clone(),
+#[cfg(test)]
+mod builtin_arity_tests {
+    #[test]
+    fn explicit_special_builtin_calls_report_extra_type_arguments() {
+        for (name, expression) in [
+            ("zeros_of", "zeros_of<[2], [3]>()"),
+            ("refine_shape", "refine_shape<[2], [3]>([1, 2])"),
+            ("check", "check<L, T>(dyn(1.0 m))"),
+            ("from_system", r#"from_system<L, T>("natural", 1.0)"#),
+            ("dyn", "dyn<L>(1.0 m)"),
+            ("to_system", r#"to_system<L>("natural", 1.0 m)"#),
+        ] {
+            let source = format!("let result = {expression}\n");
+            let lexed = aevia_syntax::lex(0, &source).unwrap();
+            let (module, diagnostics) = aevia_syntax::parse_module(0, &source, &lexed);
+            assert!(
+                !diagnostics.has_errors(),
+                "{source}: {:?}",
+                diagnostics.items
+            );
+            let checked = super::check_module(0, &module);
+            assert!(
+                checked.diagnostics.items.iter().any(|diagnostic| {
+                    diagnostic.code == "E0315" && diagnostic.message.contains(name)
+                }),
+                "{source}: {:?}",
+                checked.diagnostics.items,
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod call_materialization_tests {
+    use super::*;
+
+    #[test]
+    fn a_call_materialization_respects_lexical_generics() {
+        let mut checker = Checker::new(0, CheckOptions::default());
+        let Type::Var(protected) = checker.infer.fresh_type() else {
+            panic!("expected a fresh type variable");
+        };
+        let Type::Var(local) = checker.infer.fresh_type() else {
+            panic!("expected a fresh type variable");
+        };
+        checker
+            .type_params
+            .push(("Parameter".to_owned(), Type::Var(protected)));
+
+        let mut scheme = Scheme::mono(Type::func(Vec::new(), Type::Bool));
+        scheme.materializations = vec![Type::Var(protected), Type::Var(local)];
+        checker.globals.insert("stored".to_owned(), scheme);
+        let callee = Expr::new(ExprKind::Var("stored".to_owned()), Span::new(0, 0, 6));
+        let result = checker.synth_call(&callee, &[], Span::new(0, 0, 8));
+
+        assert_eq!(result, Type::Bool);
+        assert_eq!(
+            checker.call_materializations[&callee.span],
+            [Type::Var(protected), Type::Var(local)]
+        );
+        assert!(!checker.infer.is_weak(protected));
+        assert!(checker.infer.is_weak(local));
+    }
+
+    #[test]
+    fn source_call_materializations_keep_their_literal_types() {
+        let source = r#"fn plain(x: Bool): Bool = x
+fn produce(): Int = 42
+fn caller<a>(x: a): a =
+    let flag = plain(true)
+    let number: Int = produce()
+    x
+let answer = caller(true)
+"#;
+        let tokens = aevia_syntax::lex(0, source).unwrap();
+        let (module, parsed) = aevia_syntax::parse_module(0, source, &tokens);
+        assert!(!parsed.has_errors(), "{:?}", parsed.items);
+        let checked = check_module(0, &module);
+        assert!(
+            !checked.diagnostics.has_errors(),
+            "{:?}",
+            checked.diagnostics.items
+        );
+        let exports = &checked.module.exports;
+        let Export::Value { scheme: plain, .. } = &exports["plain"] else {
+            panic!("expected a value scheme");
+        };
+        let Export::Value {
+            scheme: materialized, ..
+        } = &exports["produce"]
+        else {
+            panic!("expected a value scheme");
+        };
+        let Export::Value { scheme: answer, .. } = &exports["answer"] else {
+            panic!("expected a value scheme");
+        };
+        assert!(plain.materializations.is_empty());
+        assert_eq!(materialized.materializations, [Type::int()]);
+        assert_eq!(answer.ty, Type::Bool);
     }
 }
 
@@ -13233,7 +12142,7 @@ mod literal_region_tests {
                         let (module, diagnostics) = aevia_syntax::parse_module(0, &source, &lexed);
                         assert!(!diagnostics.has_errors(), "{:?}", diagnostics.items);
                         let mut checker = Checker::new(0, CheckOptions::default());
-                        checker.run(&module);
+                        checker.run(&module, &ImportSources::default());
                         assert!(
                             !checker.diagnostics.has_errors(),
                             "{:?}",
@@ -13260,6 +12169,35 @@ mod literal_region_tests {
             .join()
             .unwrap();
     }
+
+    #[test]
+    fn tensor_literal_keeps_concrete_evidence_for_each_scalar() {
+        let items = 1024;
+        let source = format!("let samples = [1{}]\n", ", 2".repeat(items - 1));
+        let lexed = aevia_syntax::lex(0, &source).unwrap();
+        let (module, diagnostics) = aevia_syntax::parse_module(0, &source, &lexed);
+        assert!(!diagnostics.has_errors());
+        let result = check_module(0, &module);
+        assert!(!result.diagnostics.has_errors());
+        let expected = Type::int();
+        assert_eq!(
+            result
+                .module
+                .expr_types
+                .values()
+                .filter(|ty| **ty == expected)
+                .count(),
+            items
+        );
+        let Some(Export::Value { scheme, .. }) = result.module.exports.get("samples") else {
+            panic!("missing tensor export");
+        };
+        assert_eq!(
+            scheme.ty,
+            Type::tensor(Shape::refined([Some(items)]), expected)
+        );
+    }
+
     #[test]
     fn mixed_literal_spines_are_iterative_and_keep_separate_domains() {
         std::thread::Builder::new()
@@ -13272,7 +12210,7 @@ mod literal_region_tests {
                         let (module, diagnostics) = aevia_syntax::parse_module(0, &source, &lexed);
                         assert!(!diagnostics.has_errors());
                         let mut checker = Checker::new(0, CheckOptions::default());
-                        checker.run(&module);
+                        checker.run(&module, &ImportSources::default());
                         assert!(
                             !checker.diagnostics.has_errors(),
                             "{:?}",
@@ -13310,7 +12248,7 @@ mod literal_region_tests {
             let (module, diagnostics) = aevia_syntax::parse_module(0, &source, &lexed);
             assert!(!diagnostics.has_errors());
             let mut checker = Checker::new(0, CheckOptions::default());
-            checker.run(&module);
+            checker.run(&module, &ImportSources::default());
             assert!(
                 !checker.diagnostics.has_errors(),
                 "{:?}",
@@ -13333,7 +12271,7 @@ mod literal_region_tests {
                 assert!(!diagnostics.has_errors());
                 let mut checker = Checker::new(0, CheckOptions::default());
                 let started = std::time::Instant::now();
-                checker.run(&module);
+                checker.run(&module, &ImportSources::default());
                 assert!(
                     !checker.diagnostics.has_errors(),
                     "{:?}",
@@ -13355,220 +12293,5 @@ mod literal_region_tests {
                 }
             }
         }
-    }
-}
-
-pub(crate) fn instantiate_pattern_field(
-    id: adt::AdtId,
-    field: &Type,
-    arguments: &[Type],
-) -> Type {
-    let mut types = Vec::new();
-    let mut dims = HashMap::new();
-    for (kind, argument) in adt::param_kinds_of(id).iter().zip(arguments) {
-        match (kind, argument) {
-            | (adt::ParamKind::Type, value) => types.push(Some(value.clone())),
-            | (adt::ParamKind::Dim(id), Type::UnitOf(dim)) => {
-                types.push(None);
-                dims.insert(*id, dim.clone());
-            },
-            | _ => types.push(None),
-        }
-    }
-    field.substitute_kinded(&types, &dims, &HashMap::new(), &HashMap::new())
-}
-
-/// Help for an operand that is a local value spelled like a unit (§5.1.3).
-fn shadowed_unit_help(name: &str) -> String {
-    format!(
-        "`{name}` here is the local binding in scope, not the unit: in an expression a value shadows a unit name (§5.1.3). Rename the binding, or write the unit in a literal (`1.0 {name}`), where unit names are never shadowed"
-    )
-}
-
-/// The candidate closest to a misspelt `name`, for a "did you mean" help.
-///
-/// Distance is optimal string alignment over characters (a transposition
-/// costs one), and the accepted distance grows with the name: one edit for
-/// names of up to three characters, two up to six, three beyond. Internal
-/// names (mangled instance globals, generated helpers) are never offered.
-/// Ties go to the lexicographically smallest candidate, so the help text is
-/// deterministic.
-#[must_use]
-pub fn closest_name<'a>(
-    name: &str,
-    candidates: impl IntoIterator<Item = &'a str>,
-) -> Option<&'a str> {
-    let target: Vec<char> = name.chars().collect();
-    let limit = match target.len() {
-        | 0 => return None,
-        | 1..=3 => 1,
-        | 4..=6 => 2,
-        | _ => 3,
-    };
-    let mut best: Option<(usize, &'a str)> = None;
-    for candidate in candidates {
-        if candidate == name
-            || candidate.is_empty()
-            || candidate.contains([':', '@', '$', '#'])
-            || candidate.starts_with("__")
-        {
-            continue;
-        }
-        let other: Vec<char> = candidate.chars().collect();
-        if other.len().abs_diff(target.len()) > limit {
-            continue;
-        }
-        let distance = osa_distance(&target, &other);
-        if distance > limit || distance >= other.len() {
-            continue;
-        }
-        // Beyond one edit the first letter must agree (ignoring case): a
-        // reader misspells the middle of a name, and `Normal` -> `format`
-        // is two edits away but no help at all.
-        if distance > 1 && !target[0].to_lowercase().eq(other[0].to_lowercase()) {
-            continue;
-        }
-        let better = match best {
-            | None => true,
-            | Some((d, current)) => distance < d || (distance == d && candidate < current),
-        };
-        if better {
-            best = Some((distance, candidate));
-        }
-    }
-    best.map(|(_, candidate)| candidate)
-}
-
-/// Whether `short` can be obtained from `long` by deleting characters.
-fn is_subsequence(
-    short: &[char],
-    long: &[char],
-) -> bool {
-    let mut rest = long.iter();
-    short
-        .iter()
-        .all(|wanted| rest.by_ref().any(|have| have == wanted))
-}
-
-/// The unit spellings a reader is most likely to have meant; they win ties
-/// between equally distant candidates.
-const COMMON_UNITS: &[&str] = &[
-    "m", "s", "g", "kg", "A", "K", "mol", "cd", "Hz", "N", "Pa", "J", "W", "C", "V", "F", "Ω", "S",
-    "T", "L", "min", "h", "d", "rad", "deg", "eV", "bar", "atm", "ft", "in", "mi", "lb", "°C",
-];
-
-/// The unit spelling closest to a misspelt `name`.
-///
-/// Like [`closest_name`] (same distance and first-letter rules), but
-/// equally distant candidates are ranked by what a reader most plausibly
-/// meant instead of alphabetically: first the *containment-minimal* edit (the
-/// candidate is `name` with characters deleted, or `name` with characters
-/// added — `kmm` is `km` plus a stray letter, not `klm` with a wrong one),
-/// then a common unit, then alphabetical order. A pure deletion is accepted
-/// even when it leaves a single character (`mm` -> `m`).
-#[must_use]
-pub fn closest_unit<'a>(
-    name: &str,
-    candidates: impl IntoIterator<Item = &'a str>,
-) -> Option<&'a str> {
-    let target: Vec<char> = name.chars().collect();
-    let limit = match target.len() {
-        | 0 => return None,
-        | 1..=3 => 1,
-        | 4..=6 => 2,
-        | _ => 3,
-    };
-    let mut best: Option<((usize, bool, bool), &'a str)> = None;
-    for candidate in candidates {
-        if candidate == name || candidate.is_empty() || candidate.contains([':', '@', '$', '#']) {
-            continue;
-        }
-        let other: Vec<char> = candidate.chars().collect();
-        if other.len().abs_diff(target.len()) > limit {
-            continue;
-        }
-        let contained = is_subsequence(&other, &target) || is_subsequence(&target, &other);
-        let distance = osa_distance(&target, &other);
-        if distance > limit || (distance >= other.len() && !contained) {
-            continue;
-        }
-        if distance > 1 && !target[0].to_lowercase().eq(other[0].to_lowercase()) {
-            continue;
-        }
-        let key = (distance, !contained, !COMMON_UNITS.contains(&candidate));
-        let better = match best {
-            | None => true,
-            | Some((current_key, current)) => {
-                key < current_key || (key == current_key && candidate < current)
-            },
-        };
-        if better {
-            best = Some((key, candidate));
-        }
-    }
-    best.map(|(_, candidate)| candidate)
-}
-
-fn osa_distance(
-    a: &[char],
-    b: &[char],
-) -> usize {
-    let width = b.len() + 1;
-    let mut table = vec![0usize; (a.len() + 1) * width];
-    for (i, cell) in table.iter_mut().step_by(width).enumerate() {
-        *cell = i;
-    }
-    for (j, cell) in table.iter_mut().take(width).enumerate() {
-        *cell = j;
-    }
-    for i in 1..=a.len() {
-        for j in 1..=b.len() {
-            let cost = usize::from(a[i - 1] != b[j - 1]);
-            let mut value = (table[(i - 1) * width + j] + 1)
-                .min(table[i * width + j - 1] + 1)
-                .min(table[(i - 1) * width + j - 1] + cost);
-            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
-                value = value.min(table[(i - 2) * width + j - 2] + 1);
-            }
-            table[i * width + j] = value;
-        }
-    }
-    table[a.len() * width + b.len()]
-}
-
-#[cfg(test)]
-mod suggestion_tests {
-    use super::closest_name;
-    use super::closest_unit;
-
-    #[test]
-    fn a_stray_letter_is_deleted_rather_than_substituted() {
-        // `kmm` is `km` with an extra `m`; `klm` (kilolumen) is a wrong
-        // letter, and used to win alphabetically.
-        let bases = ["m", "lm", "mi", "s"];
-        assert_eq!(closest_unit("mm", bases), Some("m"));
-        assert_eq!(closest_unit("mm", ["lm", "m"]), Some("m"));
-        assert_eq!(closest_unit("kmm", ["klm", "km", "kg"]), Some("km"));
-        // Equally good and equally contained: a common unit beats an
-        // alphabetically earlier odd one.
-        assert_eq!(closest_unit("hh", ["ah", "h"]), Some("h"));
-        assert_eq!(closest_unit("kgg", ["kg", "kgg2"]), Some("kg"));
-        assert_eq!(closest_unit("secs", ["sec", "s", "secs2"]), Some("sec"));
-        // Nothing near stays nothing.
-        assert_eq!(closest_unit("qqqq", ["m", "s"]), None);
-    }
-
-    #[test]
-    fn close_names_are_suggested_and_far_ones_are_not() {
-        let names = ["println", "print", "length", "linspace", "sqrt"];
-        assert_eq!(closest_name("pritnln", names), Some("println"));
-        assert_eq!(closest_name("lenght", names), Some("length"));
-        assert_eq!(closest_name("sqtr", names), Some("sqrt"));
-        assert_eq!(closest_name("zzz", names), None);
-        assert_eq!(closest_name("x", ["y"]), None);
-        assert_eq!(
-            closest_name("value", ["valeu", "Show@Int::show"]),
-            Some("valeu")
-        );
     }
 }
