@@ -1,10 +1,17 @@
-module(name = "aevia", version = "0.1.0-beta.1")
+module(
+    name = "aevia",
+    version = "0.1.0-beta.1",
+)
 
 bazel_dep(name = "platforms", version = "0.0.10")
 bazel_dep(name = "rssn", version = "3.0.0-beta.1")
+
 # CI checks out the verified RSSN revision alongside this repository. Local
 # development uses the same arrangement, including uncommitted changes.
-local_path_override(module_name = "rssn", path = "../rssn")
+local_path_override(
+    module_name = "rssn",
+    path = "../rssn",
+)
 
 host = use_extension("@rssn//bazel:host.bzl", "host")
 use_repo(host, "scientific_host")
