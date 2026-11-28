@@ -237,6 +237,9 @@ download_asset() {
     if [ "$have_curl" = yes ]; then
         curl -fsSL --retry 3 --retry-delay 2 -o "$tmp_dir/$name" \
             "https://github.com/$repo/releases/download/$tag/$name"
+    elif [ "$have_wget" = yes ]; then
+        wget -q -O "$tmp_dir/$name" \
+            "https://github.com/$repo/releases/download/$tag/$name"
     else
         gh release download "$tag" --repo "github.com/$repo" --pattern "$name" --dir "$tmp_dir"
     fi

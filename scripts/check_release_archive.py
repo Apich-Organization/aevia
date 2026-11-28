@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Check the Aevia release archive contract used by both installers."""
 
+import argparse
 import hashlib
 from pathlib import Path, PurePosixPath
 import re
-import sys
 import tarfile
 import zipfile
 
@@ -19,7 +19,7 @@ TARGETS = {
 }
 
 
-def verify(archive: Path) -> None:
+def verify(archive: Path, *, require_build_guides: bool = False) -> None:
     match = re.fullmatch(
         r"(aevia-(?:[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?|nightly-[0-9]{4}-[0-9]{2}-[0-9]{2})"
         r"-((?:x86_64|aarch64)-[a-z-]+))\.(zip|tar\.gz)",
@@ -54,6 +54,10 @@ def verify(archive: Path) -> None:
         "platform/stdlib-docs/stdlib-docs.json",
         "examples/kinematics.aev",
     }
+    if require_build_guides:
+        required.update(("BAZEL.md", "BAZEL.zh-CN.md"))
+        if target.endswith("-linux-gnu"):
+            required.add("aevia-registry")
     commit_name = f"{root}/RSSN-COMMIT"
     # A 40-byte Git hash and CRLF, plus one byte to detect trailing data.
     commit_read_limit = 43
@@ -86,4 +90,8 @@ def verify(archive: Path) -> None:
 
 
 if __name__ == "__main__":
-    verify(Path(sys.argv[1]))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("archive", type=Path)
+    parser.add_argument("--require-build-guides", action="store_true")
+    args = parser.parse_args()
+    verify(args.archive, require_build_guides=args.require_build_guides)

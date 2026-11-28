@@ -21,68 +21,114 @@ BETA = "v2.0.0-beta.1"
 NIGHTLY = "nightly-2026-11-20"
 WINDOWS = os.name == "nt"
 
-GH = r'''
+HTTPS = r'''
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
-import subprocess
 import sys
+import urllib.request
 import zipfile
+
+root = Path(os.environ["FIXTURE_DIR"])
+mode = os.environ["FIXTURE_MODE"]
+
+
+def record(method, url):
+    with Path(os.environ["FIXTURE_HTTPS_LOG"]).open("a", encoding="utf-8") as log:
+        log.write(json.dumps([method, url]) + "\n")
+
+
+def metadata(url):
+    record("metadata", url)
+    base = "https://api.github.com/repos/example/fixture/releases"
+    if url == base + "/latest":
+        stable = json.loads((root / "stable.json").read_text())
+        if mode == "stable_absent":
+            stable["immutable"] = False
+        return stable
+    assert url.startswith(base + "?per_page=100&page="), url
+    page = int(url.rsplit("=", 1)[-1])
+    assert page >= 1, page
+    pages = json.loads((root / "pages.json").read_text())
+    return pages[page - 1] if page <= len(pages) else []
+
+
+def download(url, destination):
+    record("download", url)
+    match = re.fullmatch(
+        r"https://github\.com/example/fixture/releases/download/([A-Za-z0-9.-]+)/([A-Za-z0-9_.-]+)", url
+    )
+    assert match, url
+    tag, name = match.groups()
+    assert destination.name == name and name.startswith("aevia-" + tag.removeprefix("v") + "-"), url
+    if name.endswith(".sha256"):
+        archive = destination.with_suffix("")
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        if mode == "bad_hash":
+            digest = "1" * 64
+        checksum_name = "some-other-name" if mode == "wrong_name" else archive.name
+        destination.write_bytes(f"{digest} *{checksum_name}\r\n".encode())
+    elif mode in {"missing_bundle", "missing_executable", "empty_executable"}:
+        with zipfile.ZipFile(root / name) as original, zipfile.ZipFile(destination, "w") as changed:
+            for entry in original.infolist():
+                relative = Path(entry.filename)
+                if mode == "missing_executable" and relative.name == "aevia-pkg.exe":
+                    continue
+                path = f"other-bundle/{relative.name}" if mode == "missing_bundle" else entry.filename
+                content = b"" if mode == "empty_executable" and relative.name == "aevia-lsp.exe" else original.read(entry)
+                changed.writestr(path, content)
+    else:
+        shutil.copyfile(root / name, destination)
+
+
+transport, *args = sys.argv[1:]
+if transport == "python3":
+    assert args[0] == "-", args
+
+    def urlopen(request, *, timeout):
+        assert request.get_header("Accept") == "application/vnd.github+json", request
+        assert timeout == 30, timeout
+        return io.BytesIO(json.dumps(metadata(request.full_url)).encode())
+
+    urllib.request.urlopen = urlopen
+    sys.argv = args
+    exec(compile(sys.stdin.read(), "<installer>", "exec"), {"__name__": "__main__"})
+elif transport in {"curl", "wget"}:
+    expected = (
+        ["-fsSL", "--retry", "3", "--retry-delay", "2", "-o"]
+        if transport == "curl" else ["-q", "-O"]
+    )
+    assert args[:-2] == expected, args
+    destination, url = args[-2:]
+    download(url, Path(destination))
+elif transport == "rest":
+    (url,) = args
+    print(json.dumps(metadata(url)))
+elif transport == "download":
+    url, destination = args
+    download(url, Path(destination))
+else:
+    raise AssertionError(transport)
+'''
+
+GH = r'''
+import json
+import os
+from pathlib import Path
+import sys
 
 options = sys.argv[1:]
 mode = os.environ["FIXTURE_MODE"]
 logs = Path(os.environ["FIXTURE_GH_LOG"])
 with logs.open("a", encoding="utf-8") as log:
     log.write(json.dumps(options) + "\n")
-fixtures = Path(os.environ["FIXTURE_DIR"])
-
 if options == ["release", "verify-asset", "--help"]:
     sys.exit(0)
-if options[:3] == ["api", "--hostname", "github.com"]:
-    end = next(arg for arg in options if arg.startswith("repos/example/fixture/"))
-    if end.endswith("/latest"):
-        latest = None if mode == "stable_absent" else "v1.2.3"
-        if latest is not None:
-            assert "--jq" in options and "immutable == true" in options[-1]
-            print(latest)
-        sys.exit(0)
-    pages = json.loads((fixtures / "pages.json").read_text())
-    if "--paginate" in options:
-        assert end.endswith("?per_page=100") and options[-2] == "--jq", options
-        for page in pages:
-            subprocess.run(["jq", "-r", options[-1]], input=json.dumps(page), text=True, check=True)
-    else:
-        assert end == "repos/example/fixture/releases" and "per_page=100" in options, options
-        page = int(next(arg for arg in options if arg.startswith("page=")).split("=", 1)[1])
-        print(json.dumps(pages[page - 1] if page <= len(pages) else []))
-elif options[:2] == ["release", "download"]:
-    _, _, tag, repo_flag, repo, pattern, archive, second_pattern, sha_name, dest_flag, dest = options
-    assert (repo_flag, repo, pattern, second_pattern, sha_name, dest_flag) == (
-        "--repo", "github.com/example/fixture", "--pattern", "--pattern", archive + ".sha256", "--dir"
-    )
-    tag_prefix = "aevia-" + tag.removeprefix("v") + "-"
-    assert archive.startswith(tag_prefix), archive
-    source = fixtures / archive
-    download = Path(dest) / archive
-    if mode in {"missing_bundle", "missing_executable", "empty_executable"}:
-        with zipfile.ZipFile(source) as original, zipfile.ZipFile(download, "w") as changed:
-            for entry in original.infolist():
-                relative = Path(entry.filename)
-                if mode == "missing_executable" and relative.name == "aevia-pkg.exe":
-                    continue
-                name = f"other-bundle/{relative.name}" if mode == "missing_bundle" else entry.filename
-                content = b"" if mode == "empty_executable" and relative.name == "aevia-lsp.exe" else original.read(entry)
-                changed.writestr(name, content)
-    else:
-        shutil.copyfile(source, download)
-    digest = hashlib.sha256(download.read_bytes()).hexdigest()
-    if mode == "bad_hash":
-        digest = "1" * 64
-    checksum_name = "some-other-name" if mode == "wrong_name" else archive
-    (Path(dest) / sha_name).write_bytes(f"{digest} *{checksum_name}\r\n".encode())
-elif options[:2] == ["release", "verify-asset"]:
+if options[:2] == ["release", "verify-asset"]:
     _, _, tag, local_path, repo_switch, repo = options
     assert (repo_switch, repo) == ("--repo", "github.com/example/fixture")
     assert Path(local_path).name.startswith("aevia-" + tag.removeprefix("v") + "-")
@@ -120,6 +166,78 @@ public class FixtureToolchain {
         return 0;
     }
 }
+'''
+
+WINDOWS_SHELL = r'''
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Text;
+
+public static class FixturePowerShell {
+    private static string Quote(string value) {
+        var result = new StringBuilder("\"");
+        int slashes = 0;
+        foreach (char ch in value) {
+            if (ch == '\\') { slashes++; continue; }
+            result.Append('\\', ch == '"' ? slashes * 2 + 1 : slashes);
+            result.Append(ch);
+            slashes = 0;
+        }
+        return result.Append('\\', slashes * 2).Append('"').ToString();
+    }
+
+    public static int Main(string[] args) {
+        int file = Array.IndexOf(args, "-File");
+        if (file < 0 || file + 1 >= args.Length) return 2;
+        var command = new List<string>(args);
+        command.Insert(file + 1, Environment.GetEnvironmentVariable("FIXTURE_POWERSHELL_SCRIPT"));
+        command.Insert(file + 2, "-Installer");
+        var start = new ProcessStartInfo {
+            FileName = Environment.GetEnvironmentVariable("FIXTURE_REAL_POWERSHELL"),
+            Arguments = String.Join(" ", command.ConvertAll(Quote).ToArray()),
+            UseShellExecute = false,
+        };
+        using (var child = Process.Start(start)) {
+            child.WaitForExit();
+            return child.ExitCode;
+        }
+    }
+}
+'''
+
+WINDOWS_HTTPS = r'''
+param(
+    [Parameter(Mandatory)][string]$Installer,
+    [string]$HomeDirectory,
+    [string]$Channel,
+    [string]$Version,
+    [switch]$NoPath,
+    [switch]$NoActivate
+)
+$ErrorActionPreference = 'Stop'
+
+function Invoke-RestMethod {
+    param([string]$Uri, [hashtable]$Headers, [string]$Method, [string]$ErrorAction)
+    if ($Method -ne 'Get' -or $Headers['Accept'] -ne 'application/vnd.github+json') {
+        throw 'Unexpected release metadata request.'
+    }
+    $json = & $env:FIXTURE_PYTHON -B $env:FIXTURE_HTTPS rest $Uri
+    if ($LASTEXITCODE -ne 0) { throw 'Fixture release lookup failed.' }
+    ConvertFrom-Json -InputObject ($json -join "`n")
+}
+
+function Invoke-WebRequest {
+    param([string]$Uri, [string]$OutFile, [switch]$UseBasicParsing, [string]$ErrorAction)
+    & $env:FIXTURE_PYTHON -B $env:FIXTURE_HTTPS download $Uri $OutFile
+    if ($LASTEXITCODE -ne 0) { throw 'Fixture asset download failed.' }
+}
+
+$arguments = @{}
+foreach ($name in $PSBoundParameters.Keys) {
+    if ($name -ne 'Installer') { $arguments[$name] = $PSBoundParameters[$name] }
+}
+& $Installer @arguments
 '''
 
 
@@ -164,22 +282,46 @@ def prepare(root):
 
     gh_file = root / "gh_fixture.py"
     gh_file.write_text(GH, encoding="utf-8")
+    https_file = root / "https_fixture.py"
+    https_file.write_text(HTTPS, encoding="utf-8")
+    windows_env = {}
     if WINDOWS:
         (root / "gh.cmd").write_text(
             '@"%FIXTURE_PYTHON%" "%FIXTURE_GH%" %*\n@exit /b %errorlevel%\n', encoding="ascii"
         )
         fixture = root / "fixture.exe"
-        env = os.environ | {"FIXTURE_EXE": str(fixture), "FIXTURE_SOURCE": WINDOWS_CLI}
+        powershell = shutil.which("powershell.exe")
+        assert powershell is not None, "Windows PowerShell is required to exercise install.ps1"
+        shadow = root / "powershell.exe"
+        shim = root / "https_fixture.ps1"
+        shim.write_text(WINDOWS_HTTPS, encoding="ascii")
+        env = os.environ | {
+            "FIXTURE_EXE": str(fixture), "FIXTURE_SOURCE": WINDOWS_CLI,
+            "FIXTURE_SHELL_EXE": str(shadow), "FIXTURE_SHELL_SOURCE": WINDOWS_SHELL,
+        }
         subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+            [powershell, "-NoProfile", "-NonInteractive", "-Command",
              "$ErrorActionPreference = 'Stop'; Add-Type -TypeDefinition $env:FIXTURE_SOURCE "
-             "-OutputAssembly $env:FIXTURE_EXE -OutputType ConsoleApplication"],
+             "-OutputAssembly $env:FIXTURE_EXE -OutputType ConsoleApplication; "
+             "Add-Type -TypeDefinition $env:FIXTURE_SHELL_SOURCE "
+             "-OutputAssembly $env:FIXTURE_SHELL_EXE -OutputType ConsoleApplication"],
             env=env, check=True, timeout=60,
         )
+        windows_env = {
+            "FIXTURE_REAL_POWERSHELL": powershell,
+            "FIXTURE_POWERSHELL_SCRIPT": str(shim),
+        }
     else:
         gh = root / "gh"
         gh.write_text('#!/bin/sh\nexec "$FIXTURE_PYTHON" "$FIXTURE_GH" "$@"\n', encoding="ascii")
         gh.chmod(0o755)
+        for command in ("python3", "curl", "wget"):
+            wrapper = root / command
+            wrapper.write_text(
+                f'#!/bin/sh\nexec "$FIXTURE_PYTHON" -B "$FIXTURE_HTTPS" {command} "$@"\n',
+                encoding="ascii",
+            )
+            wrapper.chmod(0o755)
         fixture = root / "fixture"
         fixture.write_text(SHELL_CLI, encoding="ascii")
         fixture.chmod(0o755)
@@ -194,29 +336,46 @@ def prepare(root):
         release("nightly-2026-11-19", target),
     ] + [release("a-note", target)] * 94, [release(NIGHTLY, target)]]
     (root / "pages.json").write_text(json.dumps(pages), encoding="utf-8")
+    (root / "stable.json").write_text(json.dumps(release(LATEST, target)), encoding="utf-8")
 
-    return target, os.environ | {
+    return target, os.environ | windows_env | {
         "PATH": str(root) + os.pathsep + os.environ["PATH"],
         "AEVIA_GITHUB_REPO": REPO.removeprefix("github.com/"),
         "FIXTURE_DIR": str(root),
         "FIXTURE_GH": str(gh_file),
+        "FIXTURE_HTTPS": str(https_file),
         "FIXTURE_PYTHON": sys.executable,
     }
 
 
+def wget_only_path(root):
+    tools = root / "wget-only-tools"
+    tools.mkdir()
+    # An allowlist keeps system curl and gh out of the installer process.
+    for command in ("awk", "grep", "gzip", "mkdir", "mktemp", "perl", "rm", "sh",
+                    "sha256sum", "shasum", "sort", "tail", "tar", "uname"):
+        executable = shutil.which(command)
+        if executable is not None:
+            (tools / command).symlink_to(Path(executable).absolute())
+    for command in ("python3", "wget"):
+        (tools / command).symlink_to(root / command)
+    return str(tools)
+
+
 def run_case(root, env, target, name, selector=(), *, tag=None, channel=None,
              message=None, mode="valid", configure_shell=False, no_activate=False,
-             installer_home=None, verify_asset=False):
+             installer_home=None, verify_asset=False, wget_only=False):
     scratch = root / name
     scratch.mkdir()
     prefix = scratch / "Aevia with spaces and an 'apostrophe"
     home = scratch / "profile"
     home.mkdir()
     ghrc = scratch / "gh.jsonl"
+    https_log = scratch / "https.jsonl"
     cli_log = scratch / "cli.txt"
     args = list(selector)
     if WINDOWS:
-        command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        command = [str(root / "powershell.exe"), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                    "-File", str(ROOT / "install.ps1"), "-HomeDirectory", installer_home or str(prefix)]
         args = [value.replace("--channel", "-Channel").replace("--version", "-Version") for value in args]
         if not configure_shell:
@@ -235,6 +394,7 @@ def run_case(root, env, target, name, selector=(), *, tag=None, channel=None,
             (home / ".config" / "fish").mkdir(parents=True)
     local = env | {
         "FIXTURE_MODE": mode, "FIXTURE_GH_LOG": str(ghrc), "FIXTURE_CLI_LOG": str(cli_log),
+        "FIXTURE_HTTPS_LOG": str(https_log),
         "HOME": str(home), "SHELL": "/bin/bash", "XDG_CONFIG_HOME": str(home / ".config"),
     }
     result = subprocess.run([*command, *args], env=local, cwd=scratch, text=True, encoding="utf-8",
@@ -268,11 +428,21 @@ def run_case(root, env, target, name, selector=(), *, tag=None, channel=None,
 
     calls = [json.loads(line) for line in ghrc.read_text().splitlines()] if ghrc.exists() else []
     actual_checks = [args for args in calls if args[:2] == ["release", "verify-asset"] and args[-1] == REPO]
-    assert len(actual_checks) == int(tag is not None or mode == "bad_attestation" or verify_asset), calls
+    expect_attestation = (tag is not None and not wget_only) or mode == "bad_attestation" or verify_asset
+    assert len(actual_checks) == int(expect_attestation), calls
     if installer_home is not None:
         assert not calls, calls
-    if channel == "exact":
-        assert all(args[0] != "api" for args in calls), calls
+    if wget_only:
+        assert not calls, calls
+        if tag is not None:
+            assert "checksum verified" in result.stderr, result
+        requests = [json.loads(line) for line in https_log.read_text().splitlines()]
+        archive = archive_name(LATEST, target)
+        url = f"https://{REPO}/releases/download/{LATEST}/{archive}"
+        assert [uri for method, uri in requests if method == "download"] == [url, f"{url}.sha256"], requests
+    elif channel == "exact":
+        requests = [json.loads(line) for line in https_log.read_text().splitlines()]
+        assert len(requests) == 2 and all(method == "download" for method, _ in requests), requests
     print(f"{name}: passed", flush=True)
 
 
@@ -285,6 +455,7 @@ def verify_real_cli(root, env, target, executable):
         "AEVIA_HOME": str(home),
         "FIXTURE_MODE": "valid",
         "FIXTURE_GH_LOG": str(root / "real-cli-gh.jsonl"),
+        "FIXTURE_HTTPS_LOG": str(root / "real-cli-https.jsonl"),
     }
 
     def invoke(command, *args, local=env, status=0):
@@ -338,6 +509,11 @@ def main():
                      message="invalid executable: aevia-lsp.exe", verify_asset=True)
         if not WINDOWS:
             run_case(root, env, target, "shell-setup", tag=LATEST, channel="stable", configure_shell=True)
+        if sys.platform == "linux":
+            wget_env = env | {"PATH": wget_only_path(root)}
+            run_case(root, wget_env, target, "wget-only", tag=LATEST, channel="stable", wget_only=True)
+            run_case(root, wget_env, target, "wget-only-bad-hash", mode="bad_hash",
+                     message="sha-256 mismatch", wget_only=True)
         if options.aevia:
             verify_real_cli(root, env, target, options.aevia.resolve())
 

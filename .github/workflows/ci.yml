@@ -111,13 +111,15 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
-      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
         with:
-          workspaces: aevia/${{ matrix.workspace }}
+          module-root: aevia
+          bazelisk-cache: true
+          repository-cache: true
       - name: System dependencies
         run: sudo apt-get update && sudo apt-get install -y fontconfig libfontconfig1-dev
-      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-        working-directory: aevia/${{ matrix.workspace }}
+      - run: bazel test ${{ matrix.workspace == 'platform' && '//:platform_clippy_test' || '//:clippy_test' }}
+        working-directory: aevia
 
   test:
     needs: kernel-revision
@@ -130,9 +132,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, features: default, flags: '' }
-          - { os: windows-latest, features: default, flags: '' }
-          - { os: ubuntu-latest, features: all, flags: '--all-features' }
+          - { os: ubuntu-latest, features: default }
+          - { os: windows-latest, features: default }
+          - { os: ubuntu-latest, features: all }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -155,21 +157,21 @@ jobs:
       - name: System dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y fontconfig libfontconfig1-dev
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+        with:
+          module-root: aevia
+          bazelisk-cache: true
+          repository-cache: true
       - name: Run the workspace tests
         env:
           # MSVC otherwise writes a large PDB for every linked test.
           _LINK_: ${{ runner.os == 'Windows' && '/DEBUG:NONE' || '' }}
-        run: cargo test --locked --workspace ${{ matrix.flags }}
+        run: bazel test --test_env=_LINK_ ${{ matrix.features == 'all' && ':rust_all_features_test' || ':rust_tests' }}
       - name: Exercise installation and toolchain management
         if: matrix.features == 'default'
         shell: bash
         run: |
-          suffix=""
-          python_cmd=python3
-          if [[ "$RUNNER_OS" == Windows ]]; then suffix=".exe"; python_cmd=python; fi
-          test -f "target/debug/aevia${suffix}" || cargo build --locked -p aevia-cli
-          "$python_cmd" platform/scripts/test_installers.py --aevia "target/debug/aevia${suffix}"
-          "$python_cmd" scripts/test_toolchain.py "target/debug/aevia${suffix}"
+          bazel test --test_env=_LINK_ :toolchain_test
       - name: Lint the Windows sampling profiler
         if: runner.os == 'Windows'
         run: cargo clippy --locked -p aevia-prof --all-targets -- -D warnings
@@ -214,29 +216,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
         with:
-          workspaces: aevia/platform
-      - name: Mirror of the language workspace root is current
-        run: sh infra/check-lang-workspace.sh ..
-        working-directory: aevia/platform
-      - name: Create a disposable OpenPGP signing certificate
-        run: |
-          export GNUPGHOME="$RUNNER_TEMP/aevia-ci-gpg"
-          install -d -m 700 "$GNUPGHOME"
-          gpg --batch --pinentry-mode loopback --passphrase '' \
-            --quick-generate-key 'Aevia CI <ci@aevia.invalid>' ed25519 cert 1d
-          fingerprint=$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" && !seen++ { print $10 }')
-          test -n "$fingerprint"
-          gpg --batch --pinentry-mode loopback --passphrase '' \
-            --quick-add-key "$fingerprint" ed25519 sign 1d
-          printf 'GNUPGHOME=%s\n' "$GNUPGHOME" >> "$GITHUB_ENV"
-      - name: Tests (with a database)
-        run: cargo test --locked --workspace --all-features
-        working-directory: aevia/platform
-      - name: Test the documentation crate without the compiler feature
-        run: cargo test --locked -p aevia-registry-docs --no-default-features
-        working-directory: aevia/platform
+          module-root: aevia
+          bazelisk-cache: true
+          repository-cache: true
+      - name: Tests and disposable signing fixtures
+        run: bazel test //:platform_test //:platform_scripts_test
 
   contracts:
     needs: kernel-revision
@@ -262,16 +248,6 @@ jobs:
           workspaces: aevia
       - name: System dependencies
         run: sudo apt-get update && sudo apt-get install -y fontconfig libfontconfig1-dev
-      - name: Generated standard library is current
-        run: cargo run --locked -p aevia-stdlib-gen -- --check
-      - name: Both editions of the standard-library reference cover the complete library
-        run: |
-          cargo build --locked -p aevia-cli
-          python3 tools/check_stdlib_docs.py --aevia target/debug/aevia
-      - name: Kernel source-derived bindings are current
-        run: cargo run --locked -p rssn-api-audit -- --codecs-check
-      - name: Verify kernel API inventory and callable coverage
-        run: cargo run --locked -p rssn-api-audit -- --verify
       - name: Install the specification renderer
         run: |
           archive="$RUNNER_TEMP/pandoc-3.11-linux-amd64.tar.gz"
@@ -280,24 +256,18 @@ jobs:
           printf '%s  %s\n' '37edb3bbcf722f921a009941bf5874e2e0c09263226c9b4a2d980788cb062ab6' "$archive" | sha256sum --check
           tar -xzf "$archive" -C "$RUNNER_TEMP"
           printf '%s\n' "$RUNNER_TEMP/pandoc-3.11/bin" >> "$GITHUB_PATH"
-      - name: Both Markdown and HTML editions of the specification are current
-        run: python3 tools/bundle_spec.py --check
-      - name: Check the book and architecture manuals
-        run: |
-          python3 tools/check_manuals.py --aevia target/debug/aevia
-          target/debug/aevia --caps= --jobs 1 test examples/sensor_calibration.aev
-          target/debug/aevia --caps= --jobs 1 test examples/relaxation_fit.aev
-      - name: Editor protocol smoke tests
-        run: |
-          cargo build --locked -p aevia-lsp
-          node editors/test/lsp-smoke.js target/debug/aevia-lsp
-          node editors/test/dap-smoke.js target/debug/aevia
-          node editors/test/dap-smoke.js target/debug/aevia --exception
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+        with:
+          module-root: aevia
+          bazelisk-cache: true
+          repository-cache: true
+      - name: Verify contracts, documentation and editor protocols
+        run: bazel test //:contracts_test //:editor_protocol_test //:release_inputs_test
       - name: Run the playground image with Podman
         shell: bash
         run: |
           command -v podman >/dev/null || sudo apt-get install -y podman
-          sh platform/infra/build-playground.sh target/debug/aevia localhost/aevia-playground:ci
+          sh platform/infra/build-playground.sh bazel-bin/toolchain/bin/aevia localhost/aevia-playground:ci
           printf 'fn main(): IO Unit = do\n    println("playground ready")\n' |
             podman run --rm -i --network=none --read-only --cap-drop=ALL \
               --security-opt=no-new-privileges --tmpfs=/work:rw,nodev,nosuid,noexec,mode=1777 \
@@ -306,6 +276,7 @@ jobs:
             grep -Fx 'playground ready'
 
   editors:
+    needs: kernel-revision
     name: Editor configurations
     runs-on: ubuntu-latest
     timeout-minutes: 35
@@ -314,41 +285,35 @@ jobs:
         with:
           path: aevia
           persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Apich-Organization/rssn
+          ref: ${{ needs.kernel-revision.outputs.commit }}
+          path: rssn
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
       - name: Install editor test dependencies
         run: sudo apt-get update && sudo apt-get install -y emacs-nox python3-yaml vim
-      - name: Vim and Emacs filetype smoke tests
-        run: |
-          vim -Nu NONE -i NONE -n -es --cmd "set runtimepath^=$PWD/editors/vim" \
-            -c 'filetype plugin indent on' -c 'syntax enable' examples/symbolic.aev \
-            -c "if &filetype !=# 'aevia' || &syntax !=# 'aevia' || exists(':AeviaRun') != 2 || exists(':AeviaTest') != 2 || exists(':AeviaRepl') != 2 | cquit | endif" \
-            -c 'quit'
-          emacs --batch -Q -l editors/emacs/aevia-mode.el examples/symbolic.aev \
-            --eval '(unless (and (derived-mode-p (quote aevia-mode)) (commandp (quote aevia-run-file)) (commandp (quote aevia-test-file)) (commandp (quote aevia-repl))) (error "Aevia mode failed to register"))'
-      - name: Helix, Kate and Sublime Text configurations
-        run: |
-          /usr/bin/python3 editors/test/configs.py
-          bash -n editors/helix/scripts/install.sh
-      - name: Tree-sitter parser and scanner
-        working-directory: aevia/editors/tree-sitter-aevia
-        run: |
-          node --check grammar.js
-          cc -std=c11 -fsyntax-only -I src src/parser.c src/scanner.c
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: wasm32-wasip2
           components: clippy
-      - name: Zed WebAssembly extension
-        working-directory: aevia/editors/zed
-        run: |
-          cargo clippy --locked --target wasm32-wasip2 --all-targets -- -D warnings
-          cargo build --locked --target wasm32-wasip2
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+        with:
+          module-root: aevia
+          bazelisk-cache: true
+          repository-cache: true
+      - name: Editor runtime, configuration and WebAssembly tests
+        run: bazel test --repo_env=PYTHON=/usr/bin/python3 //:editor_config_test //:editor_zed_wasm_test
 
   editor-packages:
+    needs: kernel-revision
     uses: ./.github/workflows/editor-packages.yml
+    with:
+      rssn_commit: ${{ needs.kernel-revision.outputs.commit }}
 
   docs:
     needs: kernel-revision
@@ -377,6 +342,7 @@ jobs:
       - run: cargo doc --locked --workspace --no-deps
 
   platform-image:
+    needs: kernel-revision
     name: platform container image (build only)
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -385,16 +351,22 @@ jobs:
         with:
           persist-credentials: false
           path: aevia
-      - name: Build the registry image
-        working-directory: aevia/platform
-        run: |
-          docker build -f infra/Containerfile.server \
-            --build-context lang=../crates \
-            -t aevia-registry:ci .
-          status=0
-          docker run --rm --network=none aevia-registry:ci > "$RUNNER_TEMP/registry-boot.log" 2>&1 || status=$?
-          test "$status" -eq 2
-          grep -F 'DATABASE_URL' "$RUNNER_TEMP/registry-boot.log"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Apich-Organization/rssn
+          ref: ${{ needs.kernel-revision.outputs.commit }}
+          path: rssn
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+        with:
+          module-root: aevia
+          bazelisk-cache: true
+          repository-cache: true
+      - name: Build and smoke-test the registry image
+        run: bazel run //:registry_image_test -- --tag aevia-registry:ci
 
   ci-success:
     name: CI success

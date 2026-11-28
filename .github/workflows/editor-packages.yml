@@ -2,13 +2,17 @@ name: Editor packages
 
 "on":
   workflow_call:
+    inputs:
+      rssn_commit:
+        type: string
+        required: true
 
 permissions:
   contents: read
 
 jobs:
   packages:
-    name: VS Code and JetBrains packages
+    name: Editor extension packages
     runs-on: ubuntu-latest
     timeout-minutes: 35
     defaults:
@@ -19,20 +23,17 @@ jobs:
         with:
           path: aevia
           persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Apich-Organization/rssn
+          ref: ${{ inputs.rssn_commit }}
+          path: rssn
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: aevia/editors/vscode/package-lock.json
-      - name: Test and package the VS Code extension
-        working-directory: aevia/editors/vscode
-        run: |
-          npm ci --ignore-scripts
-          node --check extension.js
-          npm test
-          node -e 'JSON.parse(require("node:fs").readFileSync("syntaxes/aevia.tmLanguage.json", "utf8"))'
-          mkdir -p ../../dist/editor-extensions
-          npm run package -- --out ../../dist/editor-extensions
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           java-version: '21'
@@ -40,13 +41,17 @@ jobs:
       - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
         with:
           gradle-version: '8.14.3'
-      - name: Package the JetBrains plugin
-        working-directory: aevia/editors/jetbrains
-        run: |
-          gradle --no-daemon buildPlugin verifyPluginStructure
-          cp build/distributions/*.zip ../../dist/editor-extensions/
-      - name: Verify editor package contents
-        run: python3 editors/test/packages.py dist/editor-extensions
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+        with:
+          module-root: aevia
+          bazelisk-cache: true
+          repository-cache: true
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: '1.100.0'
+          targets: wasm32-wasip2
+      - name: Build and verify the editor distributions
+        run: bazel run --config=release-max //:editor_packages
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: aevia-editor-extensions
@@ -54,3 +59,4 @@ jobs:
           path: |
             aevia/dist/editor-extensions/*.vsix
             aevia/dist/editor-extensions/*.zip
+            aevia/dist/editor-extensions/*.sha256

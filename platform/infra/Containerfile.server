@@ -2,7 +2,7 @@
 #
 # aevia-registry — the aevia.apich.org service binary.
 #
-# Build from the checkout's platform/ directory:
+# Build a local development image from the checkout's platform/ directory:
 #
 #   podman build -f infra/Containerfile.server \
 #       --build-context lang=../crates \
@@ -28,7 +28,9 @@ FROM docker.io/library/rust:${RUST_VERSION}-slim-trixie AS builder
 # Never let cargo write an incremental cache: it doubles the layer size and the
 # build is a one-shot.
 ENV CARGO_INCREMENTAL=0 \
-    CARGO_TERM_COLOR=never
+    CARGO_TERM_COLOR=never \
+    CARGO_PROFILE_DEV_OPT_LEVEL=1 \
+    CARGO_PROFILE_DEV_DEBUG=0
 
 WORKDIR /build/platform
 
@@ -78,7 +80,7 @@ RUN set -eux; \
 ARG CARGO_LOCKED=--locked
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
-    cargo build --release -p aevia-registry-server --bin aevia-registry ${CARGO_LOCKED}
+    cargo build -p aevia-registry-server --bin aevia-registry ${CARGO_LOCKED}
 
 # Layer 3 — real sources. Everything above is cached; only the workspace crates
 # are recompiled here.
@@ -92,15 +94,15 @@ COPY --from=lang aevia-resolve /build/crates/aevia-resolve
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     find crates /build/crates -type f -name '*.rs' -exec touch {} + && \
-    cargo build --release -p aevia-registry-server --bin aevia-registry ${CARGO_LOCKED} && \
-    install -D -m 0755 target/release/aevia-registry /out/aevia-registry && \
+    cargo build -p aevia-registry-server --bin aevia-registry ${CARGO_LOCKED} && \
+    install -D -m 0755 target/debug/aevia-registry /out/aevia-registry && \
     strip --strip-all /out/aevia-registry
 
 # --- runtime ---------------------------------------------------------------
 # No toolchain, no cargo registry, no source tree: the final image carries a
 # stripped binary and two shared libraries' worth of Debian. Nothing in the
 # image can be used to rebuild or to read the build's intermediate state.
-FROM docker.io/library/debian:trixie-slim AS runtime
+FROM docker.io/library/debian:trixie-slim AS runtime-base
 
 # ca-certificates: outbound TLS to github.com and orcid.org for the OAuth flows.
 # curl: the healthcheck below. It is ~1.5 MB with its dependencies and is the
@@ -123,8 +125,6 @@ RUN set -eux; \
         --home-dir /var/lib/aevia --no-create-home \
         --shell /usr/sbin/nologin aevia; \
     install -d -o aevia -g aevia -m 0750 /var/lib/aevia/packages
-
-COPY --from=builder /out/aevia-registry /usr/local/bin/aevia-registry
 
 # The archive root is the only path the process writes. Declared as a volume so
 # an anonymous run still persists packages, and so the mount point is documented
@@ -154,3 +154,11 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
          "http://127.0.0.1:8080/healthz"]
 
 ENTRYPOINT ["/usr/local/bin/aevia-registry"]
+
+# Published images consume the binary produced by the Bazel release job.
+FROM runtime-base AS optimized-runtime
+COPY --from=optimized aevia-registry /usr/local/bin/aevia-registry
+
+# The default target is the source builder used by local deploy tooling.
+FROM runtime-base AS local-runtime
+COPY --from=builder /out/aevia-registry /usr/local/bin/aevia-registry

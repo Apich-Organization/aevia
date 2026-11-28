@@ -59,7 +59,8 @@ aevia-lsp = { path = "crates/aevia-lsp" }
 [profile.release]
 lto = true
 codegen-units = 1
-panic = "abort"
+# Numerical callback interruptions must return typed errors to callers.
+panic = "unwind"
 opt-level = 3
 strip = true
 debug = false
