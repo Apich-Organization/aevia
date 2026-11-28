@@ -1,6 +1,6 @@
 ## The generated `Rssn_NumberTheory` domain module: typed wrappers over the rssn
 ## kernel with a `Result` error channel, and `Zmod` residues that carry their modulus.
-## Run with: cargo run -p aevia-cli -- test tests/domain_number_theory.aev
+## Run with: bazel run //:aevia -- test tests/domain_number_theory.aev
 import Rssn_NumberTheory as NT
 
 fn int_is(r: Result<Int, OpError>, expected: Int): Bool =

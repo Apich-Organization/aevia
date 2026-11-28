@@ -1,6 +1,6 @@
 ## Complex analysis operators of the rssn `complex` and `numeric` rule sets
 ## through `Rssn_Elementary` and `Rssn_Numeric`.
-## Run with: cargo run -p aevia-cli -- test tests/domain_complex.aev
+## Run with: bazel run //:aevia -- test tests/domain_complex.aev
 import Rssn_Elementary as E
 import Rssn_Numeric as N
 

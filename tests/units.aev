@@ -1,5 +1,5 @@
 ## Conformance tests for the unit and dimension layer.
-## Run with: cargo run -p aevia-cli -- test tests/units.aev
+## Run with: bazel run //:aevia -- test tests/units.aev
 test "kilometres convert exactly" = approx_eq(value_in(m, 3.2 km), 3200.0, 0.000001)
 
 test "feet convert exactly" = approx_eq(value_in(m, 1.0 ft), 0.3048, 1e-12)

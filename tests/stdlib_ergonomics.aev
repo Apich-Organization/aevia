@@ -1,5 +1,5 @@
 ## Rank-complete tensor operations, Result combinators and numeric helpers.
-## Run with: cargo run -p aevia-cli -- test tests/stdlib_ergonomics.aev
+## Run with: bazel run //:aevia -- test tests/stdlib_ergonomics.aev
 test "sum and mean reduce a matrix" = sum([[1.0, 2.0], [3.0, 4.0]]) == 10.0 && mean([[1.0, 2.0], [3.0, 4.0]]) == 2.5
 
 test "sum reduces a rank-3 tensor" = sum([[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]]) == 36.0

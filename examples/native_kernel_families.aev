@@ -1,5 +1,5 @@
 ## Native source-inventory functions now execute through generated adapters.
-## Run: cargo run -p aevia-cli -- test examples/native_kernel_families.aev
+## Run: bazel run //:aevia -- test examples/native_kernel_families.aev
 import Rssn_numerical_vector as N
 import Rssn_numerical_stats as S
 import Rssn_numerical_special as Special

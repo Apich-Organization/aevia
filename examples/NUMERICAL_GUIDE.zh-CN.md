@@ -3,7 +3,7 @@
 运行示例中的可执行断言：
 
 ```sh
-cargo run -p aevia-cli -- test examples/dimensioned_numerics.aev
+bazel run //:aevia -- test examples/dimensioned_numerics.aev
 ```
 
 数值算法由 RSSN 实现；Aevia 负责语言绑定、量纲见证、回调及对象生命周期。
@@ -508,7 +508,7 @@ Jet 接口返回 `Ok(None)`。`sec`、`csc`、`cot`、`sech`、`csch` 和 `coth`
 默认构建包含 Cranelift、wgpu 和 NumPy 文件支持。用标准 CLI 运行原生执行示例：
 
 ```sh
-cargo run -p aevia-cli -- test examples/native_execution.aev
+bazel run //:aevia -- test examples/native_execution.aev
 ```
 
 [数值变换用例](../tests/domain_numerical_transforms.aev) 演示了
@@ -601,11 +601,11 @@ test "稳定的一阶传递函数" =
 源码覆盖表位于 `tools/rssn-api-audit/inventory.tsv`，语言可达性报告位于
 `tools/rssn-api-audit/RSSN-COVERAGE.md`。`object_binding!` 从类型声明生成参数
 个数、模式、编解码和注册信息；简单函数与记录使用经审阅的量纲策略生成绑定。
-`cargo run -p rssn-api-audit -- --verify` 用一次源码扫描检查快照和所有清点出的可调用
+`bazel test //:rssn_api_audit_test` 用一次源码扫描检查快照和所有清点出的可调用
 接口是否有绑定；只有源码解析证明是同一个 Rust 项目时，重导出才继承覆盖。
 宏及未解析重导出的指纹仍单独保留，不能据此宣称运行时可调用。
 
-使用 `tools/sync-kernel.sh` 更新契约、绑定及清单。验证时优先运行对应的原生
+使用 `bazel run //:refresh_kernel` 更新契约、绑定及清单。验证时优先运行对应的原生
 契约测试与 AST/IR 示例目标；无需为每个适配器反复运行整个工作区测试。
 
 ## 复用精确的模算术计划

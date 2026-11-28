@@ -1,5 +1,5 @@
 ## Native particle, continuum and quantum entry points with checked unit contracts.
-## Run: cargo run -p aevia-cli -- test examples/native_particle_engines.aev
+## Run: bazel run //:aevia -- test examples/native_particle_engines.aev
 import Rssn_numerical_vector as Native
 
 fn native(name: String, args: Tensor<1, Value>): Option<Value> =

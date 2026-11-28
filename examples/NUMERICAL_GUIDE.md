@@ -3,7 +3,7 @@
 Run an example's executable assertions with:
 
 ```sh
-cargo run -p aevia-cli -- test examples/dimensioned_numerics.aev
+bazel run //:aevia -- test examples/dimensioned_numerics.aev
 ```
 
 The examples call RSSN kernels through Aevia's generated modules. Physical
@@ -1332,7 +1332,7 @@ The source API inventory and callable-manifest report are separate:
 and resolved aliases;
 `tools/rssn-api-audit/RSSN-COVERAGE.md` records language reachability. A Rust
 helper is not counted as callable merely because it appears in the inventory.
-Regenerate contracts, adapters and inventories with `tools/sync-kernel.sh`.
+Regenerate contracts, adapters and inventories with `bazel run //:refresh_kernel`.
 
 Native generic and opaque interfaces use explicit specializations: Float/exact
 matrices, constant dimensions, sampled initializers, finite provider recipes,
@@ -1345,7 +1345,7 @@ report `Unsupported` when their RSSN feature is disabled. Default builds include
 execution examples with the regular CLI.
 
 ```sh
-cargo run -p aevia-cli -- test examples/native_execution.aev
+bazel run //:aevia -- test examples/native_execution.aev
 ```
 
 ## Triangulate a measured planar domain
@@ -1398,7 +1398,7 @@ real cube root in a chosen direction. `cbrt_dyadic_enclosure`,
 
 `object_binding!` derives schemas, codecs, arity and registration from typed
 adapter declarations. Source-derived scalar/record bindings use reviewed unit
-policies. `cargo run -p rssn-api-audit -- --verify` checks the inventory snapshot
+policies. `bazel test //:rssn_api_audit_test` checks the inventory snapshot
 and callable coverage from one scan. A re-export inherits coverage when Rust
 source resolution proves it is the same public item. The inventory also records
 macro and re-export fingerprints for review.

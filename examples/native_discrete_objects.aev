@@ -1,5 +1,5 @@
 ## Native source objects are session capabilities; all mathematical work is in RSSN.
-## Run: cargo run -p aevia-cli -- test examples/native_discrete_objects.aev
+## Run: bazel run //:aevia -- test examples/native_discrete_objects.aev
 
 import Rssn_numerical_special as Special
 
