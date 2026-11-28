@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Drives `aevia-lsp --stdio` the way an editor does and checks that each
-// feature the plugins rely on answers. Usage: node lsp-smoke.js [path-to-aevia-lsp]
+// feature the plugins rely on answers.
+// Usage: node lsp-smoke.js [path-to-aevia-lsp] [--initialize-only]
 'use strict';
 const { spawn } = require('child_process');
 const { mkdtempSync, rmSync, writeFileSync } = require('fs');
@@ -8,17 +9,19 @@ const { tmpdir } = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
 
-const bin = process.argv[2] || process.env.AEVIA_LSP || 'aevia-lsp';
-const fixture = mkdtempSync(path.join(tmpdir(), 'aevia lsp '));
-const file = path.join(fixture, 'smoke.aev');
+const [executable, mode] = process.argv.slice(2);
+const bin = executable || process.env.AEVIA_LSP || 'aevia-lsp';
+const initializeOnly = mode === '--initialize-only';
+const fixture = initializeOnly ? null : mkdtempSync(path.join(tmpdir(), 'aevia lsp '));
+const file = fixture && path.join(fixture, 'smoke.aev');
 const text = 'let distance = 3.2 km\nfn main(): IO Unit = println("editor run complete")\n\n'
   + 'test "selection" = false\n\ntest "exact selection" = true\n';
-writeFileSync(file, text);
-const uri = pathToFileURL(file).href;
+if (file) writeFileSync(file, text);
+const uri = file && pathToFileURL(file).href;
 
 const child = spawn(bin, ['--stdio'], { stdio: ['pipe', 'pipe', 'inherit'] });
 const closed = new Promise(resolve => child.once('close', resolve));
-child.once('close', () => rmSync(fixture, { force: true, recursive: true }));
+if (fixture) child.once('close', () => rmSync(fixture, { force: true, recursive: true }));
 const timeout = setTimeout(() => {
   console.error('Aevia language server smoke timed out');
   child.kill();
@@ -72,6 +75,16 @@ function check(name, ok, detail) {
   if (!ok) failed++;
 }
 
+async function shutdown() {
+  const response = await request('shutdown', null);
+  notify('exit', null);
+  child.stdin.end();
+  const exitCode = await closed;
+  check('shutdown', response.result === null && exitCode === 0);
+  clearTimeout(timeout);
+  process.exitCode = failed ? 1 : 0;
+}
+
 (async () => {
   const init = await request('initialize', {
     processId: process.pid,
@@ -81,6 +94,10 @@ function check(name, ok, detail) {
   const caps = init.result && init.result.capabilities;
   check('initialize', !!caps);
   notify('initialized', {});
+  if (initializeOnly) {
+    await shutdown();
+    return;
+  }
   notify('textDocument/didOpen', { textDocument: { uri, languageId: 'aevia', version: 1, text } });
 
   const td = { uri };
@@ -141,12 +158,7 @@ function check(name, ok, detail) {
   const diag = notes.find((n) => n.method === 'textDocument/publishDiagnostics' && n.params.uri === bad);
   check('diagnostics', diag && diag.params.diagnostics.length > 0, diag && diag.params.diagnostics[0] && diag.params.diagnostics[0].message);
 
-  await request('shutdown', null);
-  notify('exit', null);
-  child.stdin.end();
-  check('shutdown', (await closed) === 0);
-  clearTimeout(timeout);
-  process.exitCode = failed ? 1 : 0;
+  await shutdown();
 })().catch(error => {
   console.error(error);
   child.kill();

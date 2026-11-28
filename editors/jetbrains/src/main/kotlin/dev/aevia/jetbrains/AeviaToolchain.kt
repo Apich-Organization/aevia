@@ -10,8 +10,19 @@ internal fun findAeviaTool(name: String): String? {
     System.getenv(env)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
     val executable = if (SystemInfo.isWindows) "$name.exe" else name
     PathEnvironmentVariableUtil.findInPath(executable)?.let { return it.absolutePath }
-    val home = System.getProperty("user.home")?.takeIf { it.isNotBlank() } ?: return null
-    return listOf(Path.of(home, ".cargo", "bin", executable), Path.of(home, ".local", "bin", executable))
+    val home = System.getProperty("user.home")?.takeIf { it.isNotBlank() }
+    val managed = System.getenv("AEVIA_HOME")?.takeIf { it.isNotBlank() }?.let { Path.of(it) }
+        ?: if (SystemInfo.isWindows) {
+            System.getenv("LOCALAPPDATA")?.takeIf { it.isNotBlank() }?.let { Path.of(it, "aevia") }
+        } else {
+            home?.let { Path.of(it, ".aevia") }
+        }
+    return listOfNotNull(
+        managed?.resolve("bin"),
+        home?.let { Path.of(it, ".cargo", "bin") },
+        home?.let { Path.of(it, ".local", "bin") },
+    ).asSequence()
+        .map { it.resolve(executable) }
         .firstOrNull { Files.isRegularFile(it) && Files.isExecutable(it) }
         ?.toString()
 }
