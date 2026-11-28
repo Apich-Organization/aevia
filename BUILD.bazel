@@ -347,6 +347,16 @@ scientific_test(
             ],
         ),
         (
+            "editor_vscode_test",
+            "editor-vscode",
+            [],
+            [],
+            [
+                "manual",
+                "external",
+            ],
+        ),
+        (
             "toolchain_test",
             "toolchain-test",
             [":toolchain"],

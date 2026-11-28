@@ -53,6 +53,7 @@ bazel test --override_module=rssn=/work/rssn-worktree //:joint_test
 | `bazel test //:editor_kate_test //:editor_zed_runnables_test //:editor_zed_wasm_test` | Kate 高亮、Zed 查询及 WASI 扩展 |
 | `bazel test //:editor_package_test` | VS Code 和 JetBrains 扩展打包及内容验证 |
 | `bazel run //:editor_packages` | 生成可分发的编辑器扩展，默认写入 `dist/editor-extensions/` |
+| `bazel test //:editor_vscode_test` / `bazel run //:editor_packages -- --editor vscode` | 仅用 Node.js 测试或打包 VS Code 扩展 |
 | `bazel test @rssn//:bindings_test` | RSSN 的四语言绑定测试 |
 | `bazel test //:rssn_api_audit_test` / `bazel run //:rssn_api_audit -- --report` | 验证 RSSN 可调用接口清单或输出审计报告 |
 | `bazel test //:clippy_test //:platform_clippy_test` | 对语言和平台工作区执行严格 Clippy |

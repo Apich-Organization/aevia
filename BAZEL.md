@@ -56,6 +56,7 @@ bazel test --override_module=rssn=/work/rssn-worktree //:joint_test
 | `bazel test //:release_inputs_test` | Check the release source provenance and Linux ABI gates |
 | `bazel test //:editor_package_test` | Build and inspect the VS Code and JetBrains packages |
 | `bazel run //:editor_packages` | Package editor extensions, by default into `dist/editor-extensions/` |
+| `bazel test //:editor_vscode_test` / `bazel run //:editor_packages -- --editor vscode` | Test or package the VS Code extension using Node.js alone |
 | `bazel test @rssn//:bindings_test` | Run all four RSSN language suites |
 | `bazel test //:rssn_api_audit_test` / `bazel run //:rssn_api_audit -- --report` | Verify the RSSN callable inventory or print its audit report |
 | `bazel run //:refresh_kernel` | Refresh RSSN generators, the Aevia API inventory, stdlib sources and coverage |

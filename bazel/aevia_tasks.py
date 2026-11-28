@@ -475,24 +475,35 @@ def zed_wasm(build):
     build.cargo(["build", "--target", "wasm32-wasip2"], cwd=root, target=False)
 
 
+def vscode_check(build):
+    vscode = build.root / "editors/vscode"
+    build.run(["npm", "ci", "--ignore-scripts"], cwd=vscode)
+    build.run(["node", "--check", "extension.js"], cwd=vscode)
+    build.run(["npm", "test"], cwd=vscode)
+    build.run(["node", "-e", 'JSON.parse(require("node:fs").readFileSync("syntaxes/aevia.tmLanguage.json", "utf8"))'],
+              cwd=vscode)
+
+
 def editor_packages(build, args):
+    parser = argparse.ArgumentParser(description="Package and verify Aevia editor extensions")
+    parser.add_argument("--editor", choices=("all", "vscode"), default="all")
+    parser.add_argument("output", type=Path, nargs="?", help="output directory (default: dist/editor-extensions)")
+    options = parser.parse_args(args)
+    vscode_check(build)
     vscode = build.root / "editors/vscode"
     jetbrains = build.root / "editors/jetbrains"
     with tempfile.TemporaryDirectory(dir=build.scratch) as temporary:
         destination = Path(temporary) / "extensions"
         destination.mkdir()
-        build.run(["npm", "ci", "--ignore-scripts"], cwd=vscode)
-        build.run(["node", "--check", "extension.js"], cwd=vscode)
-        build.run(["npm", "test"], cwd=vscode)
-        build.run(["node", "-e", 'JSON.parse(require("node:fs").readFileSync("syntaxes/aevia.tmLanguage.json", "utf8"))'],
-                  cwd=vscode)
         build.run(["npm", "run", "package", "--", "--out", destination], cwd=vscode)
-        build.run(["gradle", "--no-daemon", "buildPlugin", "verifyPluginStructure"], cwd=jetbrains)
-        for package in (jetbrains / "build/distributions").glob("*.zip"):
-            shutil.copy2(package, destination)
-        build.python("editors/test/packages.py", destination)
+        if options.editor == "all":
+            build.run(["gradle", "--no-daemon", "buildPlugin", "verifyPluginStructure"], cwd=jetbrains)
+            for package in (jetbrains / "build/distributions").glob("*.zip"):
+                shutil.copy2(package, destination)
+        build.python("editors/test/packages.py", destination, "--editor", options.editor)
         if not os.getenv("TEST_TMPDIR"):
-            out = Path(args[0]).absolute() if args else build.workspace / "dist/editor-extensions"
+            caller = Path(build.env.get("BUILD_WORKING_DIRECTORY", build.workspace))
+            out = caller / options.output if options.output else build.workspace / "dist/editor-extensions"
             out.mkdir(parents=True, exist_ok=True)
             for package in destination.iterdir():
                 shutil.copy2(package, out)
@@ -668,6 +679,8 @@ def dispatch(build, workflow, args):
         build.run(["node", "editors/test/lsp-smoke.js", lsp])
         build.run(["node", "editors/test/dap-smoke.js", cli])
         build.run(["node", "editors/test/dap-smoke.js", cli, "--exception"])
+    elif workflow == "editor-vscode":
+        vscode_check(build)
     elif workflow == "editor-packages":
         editor_packages(build, args)
     elif workflow == "toolchain-test":
