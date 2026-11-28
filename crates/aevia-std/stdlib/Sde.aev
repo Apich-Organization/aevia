@@ -1,6 +1,6 @@
 ## The `Sde` module of §8.20.
 # Generated standard library; do not edit.
-# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Regenerate with `bazel run //:refresh_stdlib`.
 module Sde
 
 ## The scheme for a stochastic differential equation. The name fixes the stochastic calculus: names containing Stratonovich converge to the Stratonovich solution and the rest to the Ito solution. EulerMaruyama is the simplest (strong order 1/2); Milstein, SrkPlaten and their variants reach strong order 1; DriftImplicitEuler, ThetaMaruyama and DriftImplicitMilstein treat the drift implicitly for stiff drifts.

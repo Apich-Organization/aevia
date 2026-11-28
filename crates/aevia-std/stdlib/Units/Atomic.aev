@@ -1,5 +1,5 @@
 # Generated from the RSSN kernel manifest.
-# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Regenerate with `bazel run //:refresh_stdlib`.
 # RSSN 3.0.0-beta.1, API 2
 ## Physical constants in Hartree atomic units: hbar = m_e = e = 4 pi epsilon_0 = 1; lengths are in bohr and energies in hartree.
 ##

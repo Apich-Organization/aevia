@@ -1,6 +1,6 @@
 ## The `Interpolate` module of §8.20.
 # Generated standard library; do not edit.
-# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Regenerate with `bazel run //:refresh_stdlib`.
 module Interpolate
 
 ## Least-squares fit of a Chebyshev series of the given degree to the points (xs, ys), which is better conditioned than polyfit for high degrees.

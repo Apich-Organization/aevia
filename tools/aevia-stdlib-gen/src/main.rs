@@ -1,5 +1,5 @@
 //! Regenerate or check standard-library sources and the embedding table.
-//! Usage: cargo run -p aevia-stdlib-gen -- --check|--write [--root DIR]
+//! Run the workspace generation workflow with `bazel run //:refresh_stdlib`.
 //! `--check` reports drift. `--write` preflights output paths and replaces changed files.
 #![deny(
     missing_docs,

@@ -1,6 +1,6 @@
 ## The `Tensor` module of §8.20.
 # Generated standard library; do not edit.
-# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Regenerate with `bazel run //:refresh_stdlib`.
 module Tensor
 
 ## fill(value, n1, n2, ...) builds a tensor of the given shape with every element equal to value, keeping its type and dimension: fill(2.0 m, 3) is three lengths of 2 m.

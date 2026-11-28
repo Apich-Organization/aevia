@@ -1,6 +1,6 @@
 ## The `Math/NumberTheory` module of §8.20.
 # Generated standard library; do not edit.
-# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Regenerate with `bazel run //:refresh_stdlib`.
 module Math.NumberTheory
 
 ## On an Int, returns its prime factorisation as a vector of (prime, exponent) pairs: factor(12) is [(2, 2), (3, 1)].

@@ -76,7 +76,7 @@ pub fn constants_module_source() -> String {
         .1;
     format!(
         "# Generated from the RSSN kernel manifest.\n\
-         # Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.\n\
+         # Regenerate with `bazel run //:refresh_stdlib`.\n\
          # RSSN {version}, API {api}\n\
          ## Physical constants in SI units. Each entry names its reference and\n\
          ## says whether the value is exact or measured.\n\

@@ -75,7 +75,7 @@ fn the_committed_coverage_report_is_current() {
     assert!(
         committed == report,
         "tools/rssn-api-audit/RSSN-COVERAGE.md is out of date: run \
-         `AEVIA_BLESS=1 cargo test -p aevia-rssn --test domains` and review the diff"
+         `bazel run //:refresh_kernel` and review the diff"
     );
 }
 

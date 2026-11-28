@@ -50,8 +50,10 @@ Each `pub use` statement has a fingerprint with its own resolution status.
 `partial-reexport` indicates a mixture of callable rows and unresolved imports.
 `unresolved-reexport` records statements that yielded no callable rows.
 
-The independent RSSN-side `cargo run -p rssn-api-gen -- --bindings-report`,
-`--bindings-check`, and `--bindings-write` generate the
+Use `bazel run @rssn//:refresh_contracts` to regenerate the RSSN artifacts,
+or `bazel test @rssn//:generated_sources_check_test` to compare them.
+The RSSN generator's `--bindings-report`, `--bindings-check`, and
+`--bindings-write` commands generate the
 checked-in RSSN numerical binding fragment from public Rust function syntax and
 `rssn/tools/rssn-api-gen/numerical-policy.tsv`. Each policy row explicitly
 chooses the ABI name, namespace, dimension relation and nonfinite-output
@@ -82,18 +84,16 @@ source inventory: for every kernel operator family it states how Aevia exposes i
 (curated typed wrapper, generated dynamic wrapper, or excluded with a reason) and
 whether the exact-typed flat `Rssn.<op>` facade covers it. It is produced from the
 live Kernel Manifest and `crates/aevia-rssn/domains.overlay`. Use
-`cargo run -p rssn-api-audit -- --domains-report --manifest PATH` to render
-the report from a release artifact. After review, `--domains-write` records
-the report and `--domains-check` compares it with the checkout. Each command
-uses the linked manifest when the path is omitted.
-
-`cargo test -p aevia-rssn --test domains` fails when it is stale or when an
-operator is neither bound nor excluded, and `AEVIA_BLESS=1` rewrites it.
+`bazel run //:rssn_api_audit -- --domains-report --manifest PATH` to render
+the report from a release artifact. The command uses the linked manifest when
+the path is omitted. `bazel run //:refresh_kernel` regenerates the checked-in
+report and `bazel test //:contracts_test` checks it with the other contracts.
 
 ## Source-derived composable bindings
 
-`cargo run -p rssn-api-audit -- --codecs-{report,check,write}` (or RSSN's
-independent `rssn-api-gen` with the same commands) generates
+`bazel run @rssn//:refresh_contracts` updates the shared generated fragments.
+`bazel run //:rssn_api_audit -- --codecs-report` previews the fragment for
+a policy change. The generator produces
 `rssn/src/rules/numerical_abi/codec_generated.rs` from
 `rssn/tools/rssn-api-gen/codec-policy.tsv`. Each policy row supplies only a
 public Rust path, an ABI name, its existing numerical namespace, and a reviewed
@@ -165,7 +165,7 @@ retain exact runtime unit witnesses through the checked Value interface; they
 do not claim a source signature with a compile-time-known shape exponent.
 
 For a controlled verification pass, run the host numerical unit target plus
-`cargo test -p aevia-rssn --test kernel_contracts --test source_generated`.
+`bazel test //:rust_tests --test_arg=-p --test_arg=aevia-rssn --test_arg=--test --test_arg=kernel_contracts --test_arg=--test --test_arg=source_generated`.
 `kernel_contracts` runs RSSN's existing safe ABI, AD and callback regression
 sources in Aevia's build profile, avoiding a second scientific-engine build
 under RSSN's differently optimized test profile. The C-pointer manifest test
