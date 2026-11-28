@@ -1,0 +1,27 @@
+import Rssn_Special as Special
+
+let zero = complex(0.0, 0.0)
+let one = complex(1.0, 0.0)
+let two = complex(2.0, 0.0)
+
+test "Möbius triples preserve projective interpolation" =
+    match Special.mobius_three_points(zero, one, two, zero, complex(0.5, 0.0), complex(to_real(2.0 / 3.0), 0.0)) with
+    | Ok(map) ->
+        let z = complex(3.0, 0.0)
+        let v = (map.a * z + map.b) / (map.c * z + map.d)
+        approx_eq(re(v), 0.75, 1e-11) && approx_eq(im(v), 0.0, 1e-11)
+    | Err(_) -> false
+
+test "a padded polynomial basis preserves the diagonal Bergman kernel" =
+    let z = complex(0.3, 0.2)
+    match Special.bergman_polynomial_basis([[one, zero], [zero, complex(0.5, 0.0)]], z, z) with
+    | Ok(result) -> approx_eq(re(result), 1.0325, 1e-12) && approx_eq(im(result), 0.0, 1e-12)
+    | Err(_) -> false
+
+test "portable Schwarz–Christoffel parameters evaluate on the open half-plane" =
+    let map = { prevertices = [-1.0, 1.0], interior_angles_pi = [1.0, 1.0], scale = two, shift = one }
+    let right = Special.schwarz_christoffel_evaluate(map, complex(0.5, 0.5), 1e-12, 32)
+    let boundary = Special.schwarz_christoffel_evaluate(map, zero, 1e-12, 32)
+    match (right, boundary) with
+    | (Ok(result), Err(_)) -> result.converged && result.evaluations > 0 && approx_eq(re(result.value), 2.0, 1e-12) && approx_eq(im(result.value), -1.0, 1e-12)
+    | _ -> false

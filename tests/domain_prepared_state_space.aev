@@ -1,0 +1,21 @@
+import Rssn_Control as Control
+
+test "a normalized discrete model shares the stored matrices across queries" =
+    match Control.prepare_discrete_state_space([[0.5]], [[1.0]], [[1.0]], [[0.0]], 0.125) with
+    | Ok(model) ->
+        let stable = Control.state_space_is_stable(model)
+        let controllable = Control.state_space_is_controllable(model)
+        let observable = Control.state_space_is_observable(model)
+        match (Control.state_space_poles(model), Control.simulate_state_space_with_dt(model, [1.0], [[0.0], [0.0]], 0.125)) with
+        | (Ok(poles), Ok(outputs)) -> approx_eq(re(at(poles, 0)), 0.5, 1e-12) && approx_eq(outputs[1, 0], 0.5, 1e-12) && stable == Ok(true) && controllable == Ok(true) && observable == Ok(true)
+        | _ -> false
+    | Err(_) -> false
+
+test "prepared models validate shape, positive sampling interval, and handle lifetimes" =
+    let bad_shape = Control.prepare_state_space([[0.5]], [[1.0], [2.0]], [[1.0]], [[0.0]])
+    let bad_dt = Control.prepare_discrete_state_space([[0.5]], [[1.0]], [[1.0]], [[0.0]], 0.0)
+    match Control.prepare_continuous_state_space([[-2.0]], [[0.0]], [[1.0]], [[0.0]]) with
+    | Ok(model) ->
+        let released = Control.release_state_space(model)
+        released == Ok(true) && is_err(Control.state_space_poles(model)) && is_err(bad_shape) && is_err(bad_dt)
+    | Err(_) -> false

@@ -1,0 +1,16 @@
+import Rssn_Contour as Contour
+
+test "the measured Bromwich path runs upwards and stays open" =
+    match Contour.bromwich(2.0 m, 3.0 m) with
+    | Ok(path) -> !path.closed && length(path.arc_segments) == 0 && approx_eq(im(path.starts[0]), -3.0 m, 1e-12 m) && approx_eq(im(path.ends[0]), 3.0 m, 1e-12 m)
+    | Err(_) -> false
+
+test "keyhole and Hankel paths give explicit closure and arc positions" =
+    match (Contour.keyhole(complex(0.0 m, 0.0 m), 0.5 m, 2.0 m, 3.141592653589793, 0.1), Contour.hankel(0.5 m, 2.0 m, 3.141592653589793, 0.1)) with
+    | (Ok(keyhole), Ok(hankel)) -> keyhole.closed && !hankel.closed && keyhole.arc_segments == [0, 2] && hankel.arc_segments == [1] && approx_eq(keyhole.arc_radii[0], 2.0 m, 1e-12 m)
+    | _ -> false
+
+test "an indented path has one arc per pole and rejects an endpoint pole" =
+    match (Contour.indented_semicircle(2.0 m, [-0.5 m, 0.5 m], 0.125 m, true), Contour.indented_semicircle(2.0 m, [1.99 m], 0.125 m, true)) with
+    | (Ok(path), Err(_)) -> path.closed && length(path.arc_segments) == 3 && approx_eq(path.arc_radii[0], 0.125 m, 1e-12 m)
+    | _ -> false

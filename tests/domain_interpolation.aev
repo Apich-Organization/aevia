@@ -1,0 +1,13 @@
+import Rssn_Interpolation as Interp
+
+test "prepared interpolation supports three independent units and clamps the edges" =
+    match Interp.prepare_bilinear([0.0 m, 2.0 m], [1.0 s, 5.0 s], [[0.0 V, 4.0 V], [8.0 V, 12.0 V]]) with
+    | Ok(grid) -> Interp.interpolate(grid, 1.0 m, 3.0 s, 1.0 V) == Ok(6.0 V) && Interp.interpolate(grid, -10.0 m, 7.0 s, 1.0 V) == Ok(8.0 V) && Interp.release(grid) == Ok(true)
+    | Err(_) -> false
+
+test "prepared interpolation rejects transposed storage, duplicate nodes, and wrong unit witnesses" =
+    let shape_error = Interp.prepare_bilinear([0.0 m, 2.0 m, 4.0 m], [1.0 s, 5.0 s], [[0.0 V, 4.0 V], [8.0 V, 12.0 V], [16.0 V, 20.0 V]])
+    let duplicate = Interp.prepare_bilinear([0.0 m, 0.0 m], [1.0 s, 5.0 s], [[0.0 V, 4.0 V], [8.0 V, 12.0 V]])
+    match Interp.prepare_bilinear([0.0 m, 2.0 m], [1.0 s, 5.0 s], [[0.0 V, 4.0 V], [8.0 V, 12.0 V]]) with
+    | Ok(grid) -> is_err(shape_error) && is_err(duplicate) && is_err(Interp.interpolate(grid, 1.0 s, 3.0 s, 1.0 V)) && is_err(Interp.interpolate(grid, 1.0 m, 3.0 s, 1.0 m)) && Interp.release(grid) == Ok(true) && is_err(Interp.interpolate(grid, 1.0 m, 3.0 s, 1.0 V))
+    | Err(_) -> false

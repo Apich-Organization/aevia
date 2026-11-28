@@ -1,0 +1,33 @@
+import Rssn_numerical_callback as Saddle
+
+fn scaled(z: Complex[Length]): Complex = z / complex(1.0 m, 0.0 m)
+fn phi(z: Complex[Length]): Complex =
+    let u = scaled(z)
+    complex(-0.5, 0.0) * u * u
+fn slope(z: Complex[Length]): Complex[1/Length] =
+    -z / complex((1.0 m) * (1.0 m), (0.0 m) * (1.0 m))
+fn curvature(_z: Complex[Length]): Complex[1/Length^2] =
+    complex(-1.0 / ((1.0 m) * (1.0 m)), 0.0 / ((1.0 m) * (1.0 m)))
+fn amplitude(_z: Complex[Length]): Complex[Time] = complex(3.0 s, 0.0 s)
+
+test "saddle find transports a typed optional record and enforces its callback budget" =
+    let guess = complex(0.25 m, 0.1 m)
+    let exhaustion = Saddle.num_saddle_find_typed(guess, 1.0 m, 1e-12, 3, phi, slope, curvature)
+    match Saddle.num_saddle_find_typed(guess, 1.0 m, 1e-12, 16, phi, slope, curvature) with
+    | Ok(Some(result)) -> result.degeneracy == 2 && is_err(exhaustion) && approx_eq(re(result.z0) / (1.0 m), 0.0, 1e-12)
+    | _ -> false
+
+test "leading, first correction and numeric contour preserve integral units" =
+    let reference = 1.0 m
+    let abs_error = (1e-10 m) * (1.0 s)
+    let expected = (2.658680776358274 m) * (1.0 s)
+    let guess = complex(0.25 m, 0.1 m)
+    match Saddle.num_saddle_find_typed(guess, reference, 1e-12, 16, phi, slope, curvature) with
+    | Ok(Some(result)) ->
+        let leading = Saddle.num_saddle_leading_typed(result, reference, 8.0, 8, amplitude)
+        let corrected = Saddle.num_saddle_order2_typed(result, reference, 8.0, 96, phi, amplitude)
+        let traced = Saddle.num_saddle_integrate_typed(result, reference, 8.0, 4.0 m, abs_error, 16000, phi, amplitude)
+        match (leading, corrected, traced) with
+        | (Ok(a), Ok(b), Ok(c)) -> approx_eq(re(a), to_real(expected), to_real(abs_error)) && approx_eq(re(b), to_real(expected), to_real(abs_error)) && approx_eq(re(c), to_real(expected), to_real(abs_error))
+        | _ -> false
+    | _ -> false

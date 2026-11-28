@@ -1,0 +1,25 @@
+import Rssn_Statistics as Stats
+
+test "the complementary log-log link preserves a rare response" =
+    match Stats.glm_inverse_link("cloglog", -50.0) with
+    | Ok(mean) ->
+        match Stats.glm_link("cloglog", mean) with
+        | Ok(predictor) -> mean > 0.0 && approx_eq(predictor, -50.0, 1e-12)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "GLM variance and link derivatives use their named mathematical domains" =
+    let variance = Stats.glm_variance("binomial", 0.25)
+    let derivative = Stats.glm_link_derivative("inverse", 2.0)
+    let bad_mean = Stats.glm_link_derivative("logit", -0.25)
+    let bad_variance = Stats.glm_variance("poisson", -1.0)
+    variance == Ok(0.1875) && derivative == Ok(-0.25) && is_err(bad_mean) && is_err(bad_variance)
+
+test "a portable GLM model predicts using the fitted response link" =
+    let design = [[0.0], [1.0], [2.0], [3.0]]
+    match Stats.fit_glm(design, [2.0, 4.0, 6.0, 8.0], "gaussian", "identity", None, 64, 1e-12) with
+    | Ok(model) ->
+        match Stats.predict_glm(model, [[4.0], [5.0]]) with
+        | Ok(means) -> model.estimation.converged && approx_eq(at(means, 0), 10.0, 1e-10) && approx_eq(at(means, 1), 12.0, 1e-10) && is_err(Stats.predict_glm(model, [[0.0, 1.0]]))
+        | _ -> false
+    | _ -> false

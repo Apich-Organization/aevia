@@ -1,0 +1,16 @@
+import Rssn_ComplexPolynomial as Polynomial
+
+test "a repeated root retains both candidates" =
+    match Polynomial.aberth_ehrlich([complex(1.0, 0.0), complex(-2.0, 0.0), complex(1.0, 0.0)], 64, 1e-12) with
+    | Ok(result) -> result.degree == 2 && length(result.roots) == 2 && approx_eq(re(at(result.roots, 0)), 1.0, 1e-8) && approx_eq(re(at(result.roots, 1)), 1.0, 1e-8) && result.coefficient_error < 1e-12
+    | Err(_) -> false
+
+test "Laguerre finds the same root after scaling the coefficients" =
+    match Polynomial.laguerre([complex(-1e-200, 0.0), complex(1e-200, 0.0)], complex(4.0, 0.0), 8, 1e-12) with
+    | Ok(Some(result)) -> approx_eq(re(result.root), 1.0, 1e-12) && result.backward_error < 1e-12
+    | _ -> false
+
+test "a constant and the zero polynomial have distinct outcomes" =
+    match (Polynomial.durand_kerner([complex(2.0, 0.0)], 8, 1e-12), Polynomial.durand_kerner([complex(0.0, 0.0)], 8, 1e-12)) with
+    | (Ok(result), Err(_)) -> result.degree == 0 && length(result.roots) == 0
+    | _ -> false

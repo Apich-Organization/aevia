@@ -1,0 +1,19 @@
+## Outward real inverse sine and cosine at domain boundaries.
+import Rssn_Multiprecision as MP
+
+let zero: MP.Dyadic = { mantissa = 0, exponent = 0, precision = 1 }
+
+let one: MP.Dyadic = { mantissa = 1, exponent = 0, precision = 1 }
+
+test "asin of one has a radius and acos of one is exact zero" =
+    match MP.asin_dyadic(one, 16) with
+    | Ok(interval) -> MP.dyadic_sign(interval.radius) == Ok(1) && MP.acos_dyadic(one, 1) == Ok({ midpoint = zero, radius = zero })
+    | Err(_) -> false
+
+test "closed intervals allow both endpoints and reject outside values" =
+    match MP.acos_ball({ midpoint = zero, radius = one }, 16) with
+    | Ok(_) ->
+        match MP.asin_ball({ midpoint = one, radius = one }, 16) with
+        | Err(_) -> true
+        | Ok(_) -> false
+    | Err(_) -> false

@@ -1,0 +1,31 @@
+import Rssn_numerical_callback as Numeric
+
+fn measured_square(z: Complex[Length]): Complex[Time] =
+    complex(1.0 s/m^2, 0.0 s/m^2) * z * z
+fn identity(z: Complex): Complex = z
+fn derivative(_z: Complex): Complex = complex(1.0, 0.0)
+fn second_derivative(_z: Complex): Complex = complex(0.0, 0.0)
+
+test "Schwarzian derivatives carry inverse coordinate squared" =
+    match Numeric.num_univalent_schwarzian_checked_typed(complex(1.0 m, 0.0 m), 0.25 m, 1.0 s, 64, measured_square) with
+    | Ok(result) -> approx_eq(re(result) * 1.0 m^2, -1.5, 1e-10) && approx_eq(im(result) * 1.0 m^2, 0.0, 1e-10)
+    | Err(_) -> false
+
+test "Nehari sample grid is bounded and checks the normalized disk" =
+    let valid = Numeric.num_univalent_nehari_sampled_typed([0.125, 0.5], 4, 0.125, 512, identity)
+    let invalid = Numeric.num_univalent_nehari_sampled_typed([0.95], 4, 0.125, 256, identity)
+    match invalid with
+    | Ok(_) -> false
+    | Err(_) -> valid == Ok(true)
+
+test "sampled identity attains the requested maximum radius" =
+    let star = Numeric.num_univalent_starlikeness_radius_sampled_typed(1.0, 8, 640, identity, derivative)
+    let convex = Numeric.num_univalent_convexity_radius_sampled_typed(1.0, 8, 640, derivative, second_derivative)
+    match (star, convex) with
+    | (Ok(x), Ok(y)) -> approx_eq(x, 1.0, 1e-11) && approx_eq(y, 1.0, 1e-11)
+    | _ -> false
+
+test "worst-case callback limit is checked before circle sampling" =
+    match Numeric.num_univalent_schwarzian_checked_typed(complex(1.0 m, 0.0 m), 0.25 m, 1.0 s, 63, measured_square) with
+    | Ok(_) -> false
+    | Err(_) -> true

@@ -1,0 +1,19 @@
+import Rssn_ComplexPolynomial as Polynomial
+
+let zero = complex(0.0, 0.0)
+let one = complex(1.0, 0.0)
+
+test "verified isolation reports all simple roots as disjoint disk rows" =
+    match Polynomial.isolate_verified([-one, zero, one], 1e-8) with
+    | Ok(result) ->
+        let locations_match = approx_eq(abs(result.disks[0, 0]), 1.0, 1e-8) && approx_eq(result.disks[0, 0] + result.disks[1, 0], 0.0, 1e-8)
+        result.complete && result.degree == 2 && shape(result.disks) == [2, 3] && locations_match
+    | Err(_) -> false
+
+test "repeated roots keep the result partial and constants retain a zero-row shape" =
+    match (Polynomial.isolate_verified([complex(2.0, 0.0), complex(-3.0, 0.0), zero, one], 1e-8), Polynomial.isolate_verified([one], 1e-8)) with
+    | (Ok(partial), Ok(constant)) ->
+        let definite = approx_eq(partial.disks[0, 0], -2.0, 1e-8) && !partial.complete && partial.degree == 3 && shape(partial.disks) == [1, 3]
+        let empty = constant.complete && constant.degree == 0 && shape(constant.disks) == [0, 3]
+        definite && empty
+    | _ -> false

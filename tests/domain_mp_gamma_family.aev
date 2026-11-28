@@ -1,0 +1,40 @@
+## Certified gamma family. Dyadic records keep exact integers and branch input.
+import Rssn_Multiprecision as MP
+
+let zero: MP.Dyadic = { mantissa = 0, exponent = 0, precision = 1 }
+
+let two: MP.Dyadic = { mantissa = 1, exponent = 1, precision = 1 }
+
+let five: MP.Dyadic = { mantissa = 5, exponent = 0, precision = 3 }
+
+let negative_half: MP.Dyadic = { mantissa = -1, exponent = -1, precision = 1 }
+
+let zero_ball: MP.DyadicBall = { midpoint = zero, radius = zero }
+
+fn real_point(x: MP.Dyadic) : MP.DyadicRectangle =
+    { real = { midpoint = x, radius = zero }, imag = zero_ball }
+
+test "gamma of five is exactly twenty-four" =
+    match MP.gamma_complex_rectangle(real_point(five), 5) with
+    | Err(_) -> false
+    | Ok(result) -> result.real.midpoint.mantissa == 24 && result.real.midpoint.exponent == 0 && result.real.radius.mantissa == 0 && result.imag.midpoint.mantissa == 0 && result.imag.radius.mantissa == 0
+
+test "analytic log-gamma is zero at two" =
+    MP.log_gamma_complex_rectangle(real_point(two), 1) == Ok(real_point(zero))
+
+test "gamma and digamma keep a negative real nonpole on the real axis" =
+    match MP.gamma_complex_rectangle(real_point(negative_half), 96) with
+    | Err(_) -> false
+    | Ok(g) -> match MP.digamma_complex_rectangle(real_point(negative_half), 96) with
+        | Err(_) -> false
+        | Ok(d) -> g.real.midpoint.mantissa < 0 && g.imag.radius.mantissa == 0 && d.imag.radius.mantissa == 0
+
+test "log-gamma exposes the negative real branch cut" =
+    match MP.log_gamma_complex_rectangle(real_point(negative_half), 96) with
+    | Err(_) -> true
+    | Ok(_) -> false
+
+test "gamma reports a pole at zero" =
+    match MP.gamma_complex_rectangle(real_point(zero), 96) with
+    | Err(_) -> true
+    | Ok(_) -> false

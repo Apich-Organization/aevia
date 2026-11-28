@@ -1,0 +1,39 @@
+## Certified Bessel J on a dyadic rectangle.
+import Rssn_Multiprecision as MP
+
+let zero: MP.Dyadic = { mantissa = 0, exponent = 0, precision = 1 }
+
+let one: MP.Dyadic = { mantissa = 1, exponent = 0, precision = 1 }
+
+let half: MP.Dyadic = { mantissa = 1, exponent = -1, precision = 1 }
+
+let zero_ball: MP.DyadicBall = { midpoint = zero, radius = zero }
+
+let origin: MP.DyadicRectangle = { real = zero_ball, imag = zero_ball }
+
+let point_one: MP.DyadicRectangle = { real = { midpoint = one, radius = zero }, imag = zero_ball }
+
+let negative_one: MP.DyadicRectangle = { real = { midpoint = { mantissa = -1, exponent = 0, precision = 1 }, radius = zero }, imag = zero_ball }
+
+let half_order: MP.DyadicRectangle = { real = { midpoint = half, radius = zero }, imag = zero_ball }
+
+test "zero order at the origin is one" =
+    MP.bessel_j_complex_rectangle(origin, origin, 1) == Ok(point_one)
+
+test "positive integer and fractional orders vanish at the origin" =
+    MP.bessel_j_complex_rectangle(origin, point_one, 1) == Ok(origin) && MP.bessel_j_complex_rectangle(origin, half_order, 1) == Ok(origin)
+
+test "integer order admits a negative argument" =
+    match MP.bessel_j_complex_rectangle(negative_one, point_one, 96) with
+    | Err(_) -> false
+    | Ok(value) -> value.real.midpoint.mantissa < 0 && value.imag.midpoint.mantissa == 0 && value.imag.radius.mantissa == 0
+
+test "fractional order rejects the negative real cut" =
+    match MP.bessel_j_complex_rectangle(negative_one, half_order, 96) with
+    | Err(_) -> true
+    | Ok(_) -> false
+
+test "positive fractional order preserves the real axis" =
+    match MP.bessel_j_complex_rectangle(point_one, half_order, 96) with
+    | Err(_) -> false
+    | Ok(value) -> value.real.midpoint.mantissa > 0 && value.imag.midpoint.mantissa == 0 && value.imag.radius.mantissa == 0

@@ -1,0 +1,21 @@
+## Outward point and rectangle arguments.
+import Rssn_Multiprecision as MP
+
+let zero: MP.Dyadic = { mantissa = 0, exponent = 0, precision = 1 }
+
+let one: MP.Dyadic = { mantissa = 1, exponent = 0, precision = 1 }
+
+let negative: MP.Dyadic = { mantissa = -1, exponent = 0, precision = 1 }
+
+let span: MP.DyadicBall = { midpoint = zero, radius = one }
+
+test "a rectangular argument equals the real coordinate enclosure" =
+    let y: MP.DyadicBall = { midpoint = one, radius = zero }
+    let rectangle: MP.DyadicRectangle = { real = span, imag = y }
+    MP.dyadic_rectangle_argument(rectangle, 16) == MP.atan2_ball(y, span, 16)
+
+test "atan2 rejects crossing the cut" =
+    let x: MP.DyadicBall = { midpoint = negative, radius = zero }
+    match MP.atan2_ball(span, x, 16) with
+    | Err(_) -> true
+    | Ok(_) -> false

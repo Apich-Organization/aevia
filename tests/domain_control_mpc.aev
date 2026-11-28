@@ -1,0 +1,36 @@
+## Normalized MPC prepared once and solved against each successive state.
+import Rssn_Control as Control
+
+fn fails<T>(result: Result<T, OpError>): Bool =
+    match result with
+    | Err(_) -> true
+    | Ok(_) -> false
+
+fn settings(max_state: Option<Tensor<1, Float>>): Control.MpcSettings =
+    { horizon = 1, control_horizon = 1, q = [1.0], r = [1.0],
+      u_min = None, u_max = None, x_min = None, x_max = max_state }
+
+test "a reusable unconstrained plan matches the scalar optimum" =
+    match Control.prepare_mpc([[1.0]], [[1.0]], 0.1, settings(None)) with
+    | Ok(plan) ->
+        match Control.mpc_closed_loop(plan, [0.0], [1.0], 3) with
+        | Ok(samples) ->
+            (approx_eq(samples[1][0], 0.5, 1e-10)
+                && approx_eq(samples[3][0], 0.875, 1e-10)
+                && Control.mpc_closed_loop(plan, [0.0], [1.0], 0) == Ok([[0.0]])
+                && Control.release_mpc(plan) == Ok(true)
+                && fails(Control.mpc_closed_loop(plan, [0.0], [1.0], 1)))
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "state bounds shift with each state and an excessive trajectory is rejected" =
+    match Control.prepare_mpc([[1.0]], [[1.0]], 0.1, settings(Some([0.1]))) with
+    | Ok(plan) ->
+        match Control.mpc_closed_loop(plan, [0.0], [1.0], 3) with
+        | Ok(samples) ->
+            (approx_eq(samples[1][0], 0.1, 1e-10)
+                && approx_eq(samples[3][0], 0.1, 1e-10)
+                && fails(Control.mpc_closed_loop(plan, [0.0], [1.0], 257))
+                && Control.release_mpc(plan) == Ok(true))
+        | Err(_) -> false
+    | Err(_) -> false

@@ -1,0 +1,18 @@
+import Rssn_Statrs as Stats
+
+test "normal upper tails remain visible when the cdf rounds to one" =
+    match Stats.prepare("normal", [0.0, 1.0]) with
+    | Ok(dist) ->
+        match (Stats.cdf(dist, 9.0), Stats.sf(dist, 9.0), Stats.variance(dist)) with
+        | (Ok(cdf), Ok(sf), Ok(var)) -> approx_eq(sf, 1.12858840595384e-19, 1e-28) && cdf == 1.0 && var == 1.0
+        | _ -> false
+    | Err(_) -> false
+
+test "invalid parameters and expired prepared distributions return errors" =
+    let wrong = Stats.prepare("normal", [0.0, -1.0])
+    match Stats.prepare("discrete-uniform", [-2.0, 2.0]) with
+    | Ok(dist) ->
+        let signed = Stats.is_signed_discrete(dist)
+        let released = Stats.release_distribution(dist)
+        signed == Ok(true) && released == Ok(true) && is_err(wrong) && is_err(Stats.mean(dist))
+    | Err(_) -> false

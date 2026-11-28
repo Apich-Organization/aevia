@@ -1,0 +1,32 @@
+import Rssn_Special as Special
+import Rssn_numerical_callback as Numeric
+
+let zero = complex(0.0, 0.0)
+let one = complex(1.0, 0.0)
+let minus_one = complex(-1.0, 0.0)
+let i = complex(0.0, 1.0)
+let minus_i = complex(0.0, -1.0)
+let coefficients = [[zero, minus_one], [zero, zero], [one, zero]]
+
+fn measured_log(z: Complex[Length]): Complex[Time] =
+    complex(1.0 s, 0.0 s) * complex_ln(z / complex(1.0 m, 0.0 m))
+
+test "positive local infinity cycles compose with the finite cycles" =
+    match Special.superelliptic_covering([zero, one], 3) with
+    | Ok(s) -> s.genus == 1 && s.has_branch_at_infinity && s.monodromy_generators.indices == [1, 2, 0, 1, 2, 0, 1, 2, 0]
+    | Err(_) -> false
+
+test "monodromy distinguishes winding from crossing a branch point" =
+    match (Special.monodromy(coefficients, [one, i, minus_one, minus_i], 256), Special.monodromy(coefficients, [one, minus_one], 256)) with
+    | (Ok(permutation), Err(_)) -> permutation == [1, 0]
+    | _ -> false
+
+test "branch-cut jump preserves the codomain unit in four calls" =
+    match Numeric.num_complex_coords_branch_jump_checked_typed(complex(-1.0 m, 0.0 m), 1e-6 m, 1.5707963267948966, 1.0 s, 4, measured_log) with
+    | Ok(x) -> approx_eq(re(x), 0.0 s, 1e-12 s) && approx_eq(im(x), 6.283185307179586 s, 1e-12 s)
+    | Err(_) -> false
+
+test "elliptic double covering packs four finite ramification cycles" =
+    match Special.hyperelliptic_covering([zero, one, i, minus_one]) with
+    | Ok(s) -> s.genus == 1 && !s.has_branch_at_infinity && s.ramification_indices.offsets == [0, 1, 2, 3, 4]
+    | Err(_) -> false

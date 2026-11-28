@@ -1,0 +1,17 @@
+## Certified rounded constants and exact name catalogs.
+import Rssn_Multiprecision as MP
+
+test "named and dedicated pi share the certified dyadic result" = MP.named_dyadic_constant("pi", 64) == MP.pi_dyadic(64) && MP.floor_pi_times_power_of_two(8) == Ok(804)
+
+test "named constants return outward balls and invalid names return errors" =
+    match MP.enclose_dyadic_constant("tau", 32) with
+    | Ok(ball) -> MP.dyadic_sign(ball.radius) == Ok(1) && (match MP.named_dyadic_constant("sqrt3", 32) with | Err(_) -> true | Ok(_) -> false)
+    | Err(_) -> false
+
+test "constant and parser catalogs are typed text tensors" =
+    match MP.dyadic_constant_names() with
+    | Ok(_) ->
+        match MP.mp_expression_function_names() with
+        | Ok(_) -> true
+        | Err(_) -> false
+    | Err(_) -> false
