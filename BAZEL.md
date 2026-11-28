@@ -28,7 +28,9 @@ bazel test --override_module=rssn=/work/rssn-worktree //:joint_test
 | `bazel run //:aevia -- rssn --manifest-json > manifest.json` | Export the linked RSSN manifest for audit and bindings tools |
 | `bazel run @rssn//:refresh_bindings_from_manifest -- --manifest manifest.json` | Refresh the linked RSSN version's language bindings from the exported manifest |
 | `bazel run //:benchmark -- interp\|matmul\|startup` | Measure IR workloads, dense matrix multiplication, or RSSN bridge startup |
+| `bazel run //:benchmark -- startup-phases` | Report per-phase median times for starting an empty Aevia program in the test profile |
 | `bazel run //:benchmark -- tail-call\|dense-tensors\|dense-matmul` | Run the dedicated tail-call, boxed/dense tensor, or language matrix-product timing harness |
+| `bazel run //:benchmark -- dense-axis\|dense-minmax` | Compare dense and boxed storage for axis sums or full-tensor minima in the test profile |
 | `bazel run --config=release-local //:aevia -- bench program.aev` | Measure user programs annotated with `@bench` using an optimized CLI |
 | `bazel run //:profile -- run program.aev` | Sample an Aevia command on x86-64 Windows with an unstripped CLI and, on MSVC, an adjacent PDB |
 | `bazel run //:check` | Check the Rust workspace without linking test binaries |

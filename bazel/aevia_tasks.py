@@ -542,12 +542,18 @@ def benchmark(build, args):
         "interp": ["bench", "-p", "aevia-core", "--bench", "interp"],
         "matmul": ["run", "-p", "aevia-std", "--release", "--example", "matmul_bench"],
         "startup": ["run", "-p", "aevia-rssn", "--profile", "profiling", "--example", "startup"],
+        "startup-phases": ["test", "-p", "aevia-core", "--test", "startup",
+                           "--", "--nocapture", "--exact", "startup_phases_are_profiled"],
         "tail-call": ["test", "-p", "aevia-core", "--test", "ir_tail",
                       "--", "--ignored", "--nocapture", "--exact", "bench_tail_call_step"],
         "dense-tensors": ["test", "--release", "-p", "aevia-core", "--test", "tensors_dense",
                           "--", "--ignored", "--nocapture", "--exact", "bench_dense_vs_boxed_100k"],
         "dense-matmul": ["test", "--release", "-p", "aevia-core", "--test", "tensors_dense",
                          "--", "--ignored", "--nocapture", "--exact", "bench_matmul_256"],
+        "dense-axis": ["test", "-p", "aevia-core", "--test", "reductions_axis",
+                       "--", "--nocapture", "--exact", "the_dense_axis_path_does_not_box_per_element"],
+        "dense-minmax": ["test", "-p", "aevia-core", "--test", "reductions_minmax",
+                         "--", "--nocapture", "--exact", "the_dense_scan_is_the_fast_path"],
     }
     parser = argparse.ArgumentParser(description="Run an Aevia performance benchmark")
     parser.add_argument("workload", choices=tuple(workloads))
