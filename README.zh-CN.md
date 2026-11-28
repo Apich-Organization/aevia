@@ -33,6 +33,8 @@ aevia run examples/kinematics.aev
 
 用 `aevia docs --section book --lang zh --open` 打开在线教程，添加 `--download` 获取独立 HTML 的地址。用 `aevia doc --stdlib --lang zh` 生成中文标准库参考。`aevia <command> --help` 说明命令及其选项。
 
+本机工具链默认启用 RSSN 的 JIT、wgpu 和 NumPy IO 功能。运行 `aevia devices` 可查看宿主 SIMD 能力和已注册设备。自动执行可为符合条件的热点标量函数启用 Cranelift，也可在不损失精度的情况下将合适的稠密 `Float` 矩阵乘法交给 GPU。运行 `aevia --rssn-backend cranelift devices` 可选择 RSSN 表达式编译器并确认当前选项。`--backend` 控制 Aevia 求值器与矩阵计算卸载策略。在 REPL 中，`:rssn-backend` 显示可用选项，`:rssn-backend auto` 恢复自动选择。
+
 Aevia 自动探测语言并行求值可用的 CPU。`--jobs` 设置单次运行的线程数，`AEVIA_JOBS` 可供当前 shell 会话使用。`RAYON_NUM_THREADS` 控制默认 Rayon 池，未指定 Aevia 线程数时也用作语言工作线程数。 [并行求值与性能测量](platform/manuals/book/zh/12-parallel-and-profiling.md)
 
 文本客户端可从[文档索引](https://aevia.apich.org/llms.txt?lang=zh)读取本地化 Markdown 章节和生成的标准库目录。
@@ -53,7 +55,7 @@ aevia test
 
 ## 安装工具链
 
-安装支持 `gh release verify-asset` 的 [GitHub CLI](https://cli.github.com/)，并运行 `gh auth login` 登录。安装脚本先验证 SHA-256 校验和及 GitHub 发布证明，再安装 `aevia`、`aevia-lsp` 和 `aevia-pkg`。脚本会配置 PATH 和 shell 命令补全。
+安装脚本先验证归档的 SHA-256 校验和，再安装 `aevia`、`aevia-lsp` 和 `aevia-pkg`。若要同时验证 GitHub 发布证明，请安装支持 `gh release verify-asset` 的 [GitHub CLI](https://cli.github.com/)，并运行 `gh auth login` 登录。脚本会配置 PATH 和 shell 命令补全。
 
 脚本默认安装最新稳定版。等 `v0.1.0-beta.1` 发布后，可显式指定该版本进行安装。
 
@@ -82,16 +84,18 @@ aevia toolchain update stable
 
 ## 从源码构建
 
+[Bazel 构建指南](BAZEL.zh-CN.md)涵盖与 RSSN 的工作树协同、测试、生成步骤和优化发布。
+
 使用 Rust 1.100 或更新版本。将 [RSSN](https://github.com/Apich-Organization/rssn/tree/v0.3) 放在本仓库旁，使 `aevia` 与 `rssn` 位于同一个父目录。选择与所构建 Aevia 版本配套的 RSSN 修订。
 
 ```console
-cargo build --locked -p aevia-cli
-cargo build --locked --manifest-path platform/Cargo.toml -p aevia-pkg
+bazel build //:toolchain //:platform_cli
+bazel test //:rust_all_features_test
 ```
 
-平台有独立 Cargo 工作区和[部署指南](platform/docs/DEPLOY.zh.md)。语言工作区使用 `cargo test --locked --workspace` 验证。定向检查时选定所改 crate 或特定测试目标。`cargo +nightly fmt --all --check` 检查语言工作区的格式。
+平台有独立 Cargo 工作区和[部署指南](platform/docs/DEPLOY.zh.md)。运行 `bazel test //:joint_all_features_test` 可同时测试语言工作区和选定的 RSSN 工作树。定向检查可用 `--test_arg=--test --test_arg=allocations` 指定测试目标。`cargo +nightly fmt --all --check` 检查语言工作区的格式。
 
-使用 `python3 tools/bundle_spec.py` 与 Pandoc 生成单页规范。使用 `aevia-stdlib-gen` 生成并检查标准库源码。`aevia doc --stdlib --json` 生成参考页面及 JSON 索引。用 `--lang en` 生成仓库中的参考文件，用 `--lang zh` 输出中文页面。 [双语参考检查](tools/check_stdlib_docs.py)
+安装 Pandoc 后，运行 `bazel run //:refresh_spec` 生成单页规范。运行 `bazel run //:refresh_stdlib` 生成标准库源码。`bazel run //:aevia -- doc --stdlib --json` 生成参考页面及 JSON 索引。用 `--lang en` 生成仓库中的参考文件，用 `--lang zh` 输出中文页面。 [双语参考检查](tools/check_stdlib_docs.py)
 
 ## 许可
 

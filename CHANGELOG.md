@@ -40,6 +40,12 @@ The entries cover the language toolchain, the package registry and their documen
 - NPY input decodes Fortran layouts directly to row-major storage. Large arrays with three or more varying axes can use the active RSSN CPU pool. Wide record patterns with ignored fields use the same exhaustiveness rules as narrow patterns.
 - Parallel maps and tabulations can return homogeneous Float batches in dense storage. Fixed-signature native RSSN calls can borrow contiguous Float inputs and return dense tensors with their dimensions.
 
+- Elementwise Float addition, subtraction and multiplication share RSSN's SIMD vector kernels. The [measured update example](examples/measured_vector_updates.aev) applies a velocity correction to a vector of positions.
+- RSSN polynomial models can fit a measured axis and evaluate a batch of queries after composition. The [calibration example](examples/polynomial_calibration.aev) shows how Aevia tracks time and distance through both models.
+
+- The measured [Kalman tracking](examples/kalman_tracking.aev), [state-space response](examples/measured_state_space.aev) and [tridiagonal spring chain](examples/tridiagonal_spring_chain.aev) workflows use RSSN's typed interfaces.
+- Generated PDE event calls accept typed callbacks in their declared positions and check the event result's units. Exact [dyadic arithmetic](examples/dyadic_real.aev), [hyperbolic charts](examples/hyperbolic_charts.aev) and [Weierstrass periods](examples/weierstrass_periods.aev) show named results and numerical contracts in source.
+
 ### Toolchain and registry
 
 - The language server reuses line indexes, document outlines and semantic tokens. Clients can request semantic highlighting for a visible range. Document highlights use declaration identity, and formatting edits use the open text.
@@ -94,6 +100,12 @@ The entries cover the language toolchain, the package registry and their documen
 - 带量纲的 RSSN 调用包括预备 Newton–CG、网格传递和计算带选列。生成的数值帮助与源码覆盖率核验读取运行内核的同一份清单。
 - NPY 输入可将 Fortran 布局直接解码到行主序。非单例轴达到三个或更多的大型数组可以使用当前 RSSN CPU 池。含忽略字段的宽记录模式按常规完备性规则检查。
 - 并行映射和制表可以用稠密存储返回同质 Float 批次。固定签名的 RSSN 原生调用可以借用连续的 Float 输入，并返回带量纲的稠密张量。
+
+- Float 张量的逐元素加、减、乘共用 RSSN 的 SIMD 向量内核。[带量纲向量更新示例](examples/measured_vector_updates.aev)展示如何把速度修正应用到一组位置。
+- RSSN 多项式模型可以拟合带量纲横轴、复合模型和批量求值。[校准示例](examples/polynomial_calibration.aev)展示 Aevia 如何跟踪两个模型的时间和距离量纲。
+
+- [Kalman 跟踪](examples/kalman_tracking.aev)、[状态空间响应](examples/measured_state_space.aev)和[三对角弹簧链](examples/tridiagonal_spring_chain.aev)使用 RSSN 的带量纲强类型接口。
+- 生成的 PDE 事件接口按声明位置接收强类型回调，并检查事件结果的量纲。[精确二进制算术](examples/dyadic_real.aev)、[双曲坐标](examples/hyperbolic_charts.aev)与[魏尔斯特拉斯周期](examples/weierstrass_periods.aev)示例展示了命名结果和数值契约。
 
 ### 工具链与注册中心
 

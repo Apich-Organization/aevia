@@ -14,7 +14,7 @@ Inverse cosine in radians.
 
 **Signature:** `acos : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `acos : (Real) -> Real`
 - `acos : (Dyn<term>) -> Dyn<term>`
 
@@ -38,7 +38,7 @@ Inverse hyperbolic cosine.
 
 **Signature:** `acosh : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `acosh : (Real) -> Real`
 - `acosh : (Dyn<term>) -> Dyn<term>`
 
@@ -62,7 +62,7 @@ Inverse sine in radians.
 
 **Signature:** `asin : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `asin : (Real) -> Real`
 - `asin : (Dyn<term>) -> Dyn<term>`
 
@@ -86,7 +86,7 @@ Inverse hyperbolic sine of a dimensionless argument.
 
 **Signature:** `asinh : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `asinh : (Real) -> Real`
 - `asinh : (Dyn<term>) -> Dyn<term>`
 
@@ -110,7 +110,7 @@ Inverse tangent in radians, in (-pi/2, pi/2).
 
 **Signature:** `atan : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `atan : (Real) -> Real`
 - `atan : (Dyn<term>) -> Dyn<term>`
 
@@ -134,7 +134,7 @@ The angle, in radians in (-pi, pi], of the point (x, y) measured from the positi
 
 **Signature:** `atan2 : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `atan2 : (Real, Real) -> Real`
 - `atan2 : (Dyn<term>, Dyn<term>) -> Dyn<term>`
 
@@ -159,7 +159,7 @@ Inverse hyperbolic tangent.
 
 **Signature:** `atanh : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `atanh : (Real) -> Real`
 - `atanh : (Dyn<term>) -> Dyn<term>`
 
@@ -204,7 +204,7 @@ Trigonometric function.
 
 **Signature:** `cos : Complex[1] -> Complex[1]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `cos : (Real) -> Real`
 - `cos : (Dyn<term>) -> Dyn<term>`
 
@@ -229,7 +229,7 @@ Hyperbolic cosine of a dimensionless argument.
 
 **Signature:** `cosh : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `cosh : (Real) -> Real`
 - `cosh : (Dyn<term>) -> Dyn<term>`
 
@@ -285,7 +285,7 @@ Exponential or logarithmic function on a dimensionless input.
 
 **Signature:** `exp : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `exp : (Real) -> Real`
 - `exp : (Dyn<term>) -> Dyn<term>`
 
@@ -443,7 +443,7 @@ Positive infinity as an exact Real.
 
 **Signature:** `oo : Real[1]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `oo : () -> Real`
 - `oo : () -> Dyn<term>`
 
@@ -483,7 +483,7 @@ The exact symbolic constant pi.
 
 **Signature:** `pi : Real[1]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `pi : () -> Real`
 - `pi : () -> Dyn<term>`
 
@@ -534,7 +534,7 @@ Hyperbolic sine of a dimensionless argument.
 
 **Signature:** `sinh : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `sinh : (Real) -> Real`
 - `sinh : (Dyn<term>) -> Dyn<term>`
 
@@ -556,7 +556,7 @@ Compute a square root.
 
 **Signature:** `sqrt : Scalar<ρ,d> -> Scalar<ρ,d^(1/2)>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `sqrt : (Real) -> Real`
 - `sqrt : (Dyn<term>) -> Dyn<term>`
 
@@ -581,7 +581,7 @@ Trigonometric function.
 
 **Signature:** `tan : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `tan : (Real) -> Real`
 - `tan : (Dyn<term>) -> Dyn<term>`
 
@@ -606,7 +606,7 @@ Hyperbolic tangent of a dimensionless argument.
 
 **Signature:** `tanh : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `tanh : (Real) -> Real`
 - `tanh : (Dyn<term>) -> Dyn<term>`
 

@@ -33,7 +33,7 @@ let answer = s.compute(diff(sin(x) * cos(x), x), &Config::new())?;
 - `Session` owns a hash-consed term graph; `Term<'s>` is a handle with a lifetime.
 - `Config` specifies rule sets, the target phase (`Symbolic`/`Numeric`), bindings, assumptions, budgets, the dimension mode, dimension assumptions and custom base dimensions.
 - `compute` copies the request into a clone of the template graph, runs e-graph rewriting, extracts the answer and imports it back into the session. `Answer` holds `term`, `value`, `error`, `reduced`, `dimension`, `diagnostics` and `report`.
-- `Term::eval(bindings)` evaluates numerically without rewriting; `Term::compile(inputs)` compiles a closed form (the `jit` feature uses Cranelift); `Term::as_tensor()` turns nested `list` terms into `(shape, Vec<f64>)`; `to_latex()`/`to_typst()`/`to_pretty()` typeset.
+- `Term::eval(bindings)` evaluates numerically without rewriting; `Term::compile(inputs)` compiles a closed form with the active RSSN backend; `Term::as_tensor()` turns nested `list` terms into `(shape, Vec<f64>)`; `to_latex()`/`to_typst()`/`to_pretty()` typeset.
 - `sim::scenario::run(name, json)` runs a simulation; `sim::scenario::SCENARIOS` is the only source of scenario names (29 at present).
 - `Session::register_unit(UnitDef)` registers a unit; `Session::manifest()` uses `KernelManifest::build_with_units`, so session-private units appear in that session's manifest.
 - SDE: `rules::sde` exposes the callback-free `sde_wiener`/`sde_levy_areas` and the scheme metadata `sde_scheme_info(name) -> Tensor<1, Real>` as manifest operators (`features.sde`, capability `core.sde`). The solve loop needs host callbacks (`&Fn + Sync`) and is not in the manifest; Aevia's `sdeint_diag`/`sdeint_general` call `kernels::sde` on the host side.
@@ -262,7 +262,29 @@ A `Term<'s>` is borrowed only during a `compute` call and converted to a `u32` i
 
 ### 10.6.4 JIT
 
-`Term::compile` compiles a closed `Float` expression into a function; Aevia's hot functions take this path. `TieredBackend` interprets first and compiles in the background; if the JIT fails it falls back to the interpreter with no change of semantics. The default build has `features.jit = false`, and `@jit` MUST read `Features`, otherwise it reports `E1001("core.jit")`.
+RSSN's `Term::compile` compiles a closed `Float` expression into a function. Its
+`TieredBackend` interprets first and can compile in the background. Aevia lowers
+eligible checked Core IR scalar functions to RSSN's LIR and compiles it with
+Cranelift after warm-up, or on request with `@jit`. Native execution requires a
+verified concrete activation with supported scalar representations. Effects,
+unsupported programs and failed compilation keep the interpreter path.
+
+The native toolchain enables Cranelift, wgpu and RSSN's NumPy I/O feature by
+default. An explicit `@jit` in a build with no native JIT support reports
+`E1001("core.jit")`.
+
+Use `aevia devices` to inspect the active and available RSSN selectors.
+`--rssn-backend <name>` sets the process-wide RSSN backend, and the REPL exposes
+the same selection as `:rssn-backend [name]`. With `auto`, RSSN selects the
+available host execution path at runtime. Aevia controls its own evaluator and
+matrix offload policy independently via `--backend`.
+
+For example, `aevia --rssn-backend cpu-parallel test examples/native_backend.aev`
+uses the parallel CPU backend for RSSN compilation in the example. Source
+code can select a backend for an individual RSSN program with
+`Rssn.num_backend_named` and `Rssn.num_backend_compile`. Selecting or using an
+RSSN GPU backend in source code requires the `gpu` capability. To set the
+process default, use the CLI option or the REPL command.
 
 ### 10.6.5 Devices and data-parallel execution
 
@@ -278,9 +300,19 @@ evaluation, array operations, and fixed-step ensembles. The Aevia interpreter's 
 batch path accepts the pure scalar subset described in §9.6.1. Device enumeration,
 launch fusion and explicit GPU buffer transfers are RSSN host APIs.
 
-The RSSN GPU backend represents its emulated F64 buffers as two F32 parts. Programs
-requiring IEEE F64 results use the CPU backend. A host controls transfers and checks
-device capabilities before loading a kernel.
+For large dense `Float` matrix products on the `@` path, Aevia's automatic
+policy can select a compatible hardware GPU with native F64 in the RSSN registry.
+The `gpu` capability must be available. Aevia keeps tensors on the host and uploads and
+downloads the operands and result for each offloaded product. `--backend gpu`
+also considers smaller products and the exact subset supported by wgpu. The CPU
+path handles unsupported work and device failures.
+
+The RSSN wgpu backend represents emulated F64 buffers as two F32 parts. Aevia
+can use its F32 kernel only when all inputs are exactly representable integers
+and the magnitude of any partial sum is bounded by 2^24, so rounding cannot
+change the products or accumulated result. Inputs that can create negative zero
+products use the host path. General `Float` products retain
+binary64 arithmetic on the host unless the device offers it directly.
 
 ## 10.7 Error mapping
 

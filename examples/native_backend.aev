@@ -1,8 +1,10 @@
 ## Run: cargo run -p aevia-cli -- test examples/native_backend.aev
 ## Expressions use dimensionless normalized coordinates; handles retain each axis unit.
+## This program uses the active RSSN backend. Run the same example with
+## `--rssn-backend cpu`, `--rssn-backend cranelift`, or a GPU selector from `aevia devices`.
 import Rssn_numerical_matrix as N
 
-let backend = unwrap_or(N.num_backend_interpreter([]), to_value(0))
+let backend = unwrap_or(N.num_backend_current([]), to_value(0))
 
 let x_reference = unwrap_or(N.num_backend_reference([to_value(2.0 m)]), to_value(0))
 

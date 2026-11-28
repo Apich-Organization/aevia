@@ -1,0 +1,15 @@
+import Rssn_numerical_vector as Native
+
+fn round_trip_time(distance: Float[Length]): Float[Time] = (distance / 1.0 m) * 2.0 s
+
+fn round_trip_times(): Result<Tensor<1, Float[Time]>, OpError> =
+    let distances = [1.0 m, 2.0 m, 3.0 m]
+    let args = [to_value(distances), to_value(1), to_value(3)]
+    match Native.num_native_par_map_slice(args, [to_callback(round_trip_time)]) with
+    | Ok(value) -> from_value<Tensor<1, Float[Time]>>(value)
+    | Err(error) -> Err(error)
+
+test "callback results retain order and time units" =
+    match round_trip_times() with
+    | Ok(values) -> values == [2.0 s, 4.0 s, 6.0 s]
+    | Err(_) -> false

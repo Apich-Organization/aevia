@@ -816,10 +816,9 @@ chebyshev_fit : (Tensor<1, Scalar<ρ,1>>, Tensor<1, Scalar<ρ,e>>, Int) -> Tenso
 
 - `fft2`/`ifft2` 变换最后两个轴；`fftn`/`ifftn` 变换全部轴；`fft_axis(t, k)` 一个轴；`fftn_axes(t, axes)` 任意轴列表。轴号从 0 开始，负数从末尾数；越界或重复的轴是 `E0802`。
 - 归一化按被变换的总点数 `N`（各变换轴长度之积）：`Backward` 正向 1、逆向 `1/N`；`Forward` 正向 `1/N`、逆向 1；`Unitary` 两向都是 `1/√N`。
-- `rfft`/`rfft2`/`rfftn` 取实数输入，最后一个被变换的轴只保留 `n/2 + 1` 个非冗余频点；`irfft`/`irfft2`/`irfftn` 由半谱重建实数张量，默认原长度为 `2(m − 1)`（偶数），奇数长度用带 `Int`
-  的形式显式给出；`m` 与长度不相容是 `E0802`。
+- `rfft`/`rfft2`/`rfftn` 取实数输入，最后一个被变换的轴只保留 `n/2 + 1` 个非冗余频点。逆变换由该轴的 `m` 个频点重建实数张量。只有一个频点时，默认重建一个样本。有多个频点时，默认原长度为偶数 `2(m − 1)`，其他奇数长度用 `Int` 显式给出。长度与 `m` 不相容时返回 `E0802`。
 - `rfftn_axes(t, axes)`/`irfftn_axes(s, axes)`/`irfftn_axes(s, axes, n)` 是任意轴子集的实数变换（与 numpy 的 `rfftn(a, axes=…)` 一致）：列表里**最后一个**轴是半谱轴，其余轴做完整复数变换；
-  `irfftn_axes` 在最后一个列出的轴上做 Hermitian 还原，`n` 是该轴的原长度（缺省 `2(m − 1)`）。列表为空、轴越界或重复是 `E0802`。
+  `irfftn_axes` 在最后一个列出的轴上做 Hermitian 还原，`n` 是该轴的原长度，缺省规则与 `irfftn` 相同。列表为空、轴越界或重复时返回 `E0802`。
 - `fftshift`/`ifftshift` 把零频率移到中间（每个被移位的轴循环平移 `⌊n/2⌋`，逆操作反向），对任意元素类型成立；`*_axis` 形式只移一个轴。
 
 ```
@@ -1387,7 +1386,7 @@ uncertainty : Measurement<d> -> Real[d]
 ## 8.15 Complex
 
 ```
-complex   : (Real[1], Real[1]) -> Complex[1]
+complex   : (Real[d], Real[d]) -> Complex[d]
 re im     : Complex[d] -> Real[d]
 conj      : Complex[d] -> Complex[d]
 magnitude : Complex[d] -> Real[d]
@@ -1397,6 +1396,8 @@ complex_exp  : Complex[1] -> Complex[1]
 complex_ln   : Complex[1] -> Complex[1]
 complex_sin cos : Complex[1] -> Complex[1]
 ```
+
+`complex(re, im)` 的实部和虚部须有相同的量纲。结果保留该量纲，例如 `complex(3 m, 400 cm)` 的模为 `5 m`。
 
 `abs` 只用于实数；复数的模用 `magnitude`，避免 `abs : Complex[d] ->
 Real[d]` 与 `abs : Scalar<ρ,d> -> Scalar<ρ,d>` 冲突。`complex_sqrt` 的结果

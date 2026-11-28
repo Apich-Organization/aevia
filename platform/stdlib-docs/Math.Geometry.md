@@ -14,7 +14,7 @@ Euclidean distance between two points given as vectors of equal length, in the c
 
 **Signature:** `distance : (Tensor<1, Real[L]>, Tensor<1, Real[L]>) -> Real[L]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `distance : (Real, Real) -> Real`
 - `distance : (Dyn<term>, Dyn<term>) -> Dyn<term>`
 

@@ -141,7 +141,7 @@ Rssn.Units           : Tensor<1, String>     # unit names; values are in the gen
 ```
 
 - `Rssn.call` is an alias of `Rssn.dynamic` and looks up only by short name/alias; an ambiguous short name is `E1002`.
-- `Rssn.call_key` "runs without resolving": it takes a name + `signature_hash` (32 hex characters), which together are the writable form of an `OpKey`; all zeros means the operator has no declared overload. A key that does not match the current manifest is `E1005` (regenerate the module); an argument that departs from the pinned signature on the kernel side is `UnknownOp`, which becomes an error value at the Aevia boundary.
+- `Rssn.call_key` "runs without resolving": it takes a name + `signature_hash` (32 hex characters), which together are the writable form of an `OpKey`; all zeros means the operator has no declared overload. A key that does not match the current manifest returns `E1005` with guidance to regenerate the module. For a live key, `Rssn.call_key` reports the expected argument count or the first mismatched argument. `Rssn.call_ho_key` can identify a concrete dimension mismatch in a callback’s scalar result. Both calls return these diagnostics as error values.
 - `Rssn.resolve_overload` exposes the run-time selection for caching and diagnostics: on success it returns `"rule_set.name@signature_hash"`; both a tie and "no signature accepts" are `OpError::Ambiguous`. `Rssn.overloads` returns the rendered signature of every overload.
 - Wrap arguments with `to_value(x)` and recover a static result with `from_value<T>(v)`. `Rssn.dynamic` supports standard and plugin operators, including entries without a generated typed wrapper. For a graph result with a derived signature, a `Same(index)` dimension rule supplies dimensionless evidence when the designated argument is known to be dimensionless. A typed conversion checks that evidence together with the result representation and shape.
 - `type_rep<T>()` keeps the concrete type resolved by the checker; it is an opaque value that an ordinary record cannot forge. After the dynamic call, `Rssn.typed` checks representation, shape and dimensions against that witness; a mismatch or missing evidence returns `Err(OpError)`. A successful result is still a `Value`, validated and converted through `from_value<T>`; a generic not made concrete by a run-time type dictionary cannot produce a `TypeRep`.
@@ -403,9 +403,9 @@ Backend abilities are described by capability names. **The only source of names 
 
 ```
 core.dynamic_call
-core.jit                    # false: the default build has no jit feature
-core.jit_branch             # false (as above)
-core.jit_index              # false (as above)
+core.jit                    # enabled with the jit feature
+core.jit_branch             # enabled with the jit feature
+core.jit_index              # enabled with the jit feature
 core.parallel_symbolic
 core.higher_order
 core.structured_results
@@ -424,7 +424,7 @@ The default build's `Rssn.Capabilities` actually lists twelve rows (all except t
 
 `storage.sparse` (§13.9.5/§8.4.1) is Aevia's own storage class, is enabled, and is not published by the manifest's `Features`, so it does not appear in `Rssn.Capabilities`.
 
-After type checking the Aevia compiler checks capabilities; when one is missing: statically known (such as a `@jit` target) → `E1001` at compile time; a dynamic call → `OpError.Unsupported` at run time, which Aevia turns into `E1001`. **No language feature is removed**: when the GPU is unimplemented, `on(Gpu(0), ...)` is still well-typed and reports `E1001("core.gpu")` at run time.
+After type checking the Aevia compiler checks capabilities; when one is missing: statically known (such as a `@jit` target) → `E1001` at compile time; a dynamic call → `OpError.Unsupported` at run time, which Aevia turns into `E1001`. **No language feature is removed**: a request for unavailable explicit GPU placement, such as `on(Gpu(0), ...)`, is well-typed and reports `E1001("core.gpu")` at run time.
 
 ---
 

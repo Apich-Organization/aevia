@@ -1,35 +1,41 @@
 ## Run: aevia test examples/symbolic_poisson_boundary.aev
+## The Differential wrapper validates a Real result. Rssn.dynamic retains
+## the kernel Value for exact decoding or symbolic output.
 import Rssn_Differential as Differential
+
 open Units.SI
 
 test "the constant disk extension equals its boundary datum" =
     match Differential.pde_poisson_integral(5.0, 2.0, 2) with
-    | Ok(value) ->
-        match from_value<Float>(value) with
-        | Ok(field) -> field == 5.0
-        | Err(_) -> false
+    | Ok(field) -> decide(field == 5.0) == Some(true)
     | Err(_) -> false
 
-test "the constant ball extension keeps the exact integer datum" =
-    match Differential.pde_poisson_integral(7, 2, 3) with
+test "the constant ball extension keeps an integer beyond binary64 precision" =
+    let datum = 9007199254740993
+    match Rssn.dynamic("pde_poisson_integral", [to_value(datum), to_value(2), to_value(3)]) with
     | Ok(value) ->
         match from_value<Int>(value) with
-        | Ok(field) -> field == 7
+        | Ok(field) -> field == datum
         | Err(_) -> false
     | Err(_) -> false
 
-test "a dimensionless extension cannot be decoded as a temperature" =
-    match Differential.pde_poisson_integral(5.0, 2.0, 2) with
+test "the disk extension decodes as dimensionless and rejects a temperature" =
+    match Rssn.dynamic("pde_poisson_integral", [to_value(5.0), to_value(2.0), to_value(2)]) with
     | Ok(value) ->
-        match from_value<Float[Temperature]>(value) with
-        | Ok(_) -> false
-        | Err(_) -> true
+        match (from_value<Float>(value), from_value<Float[Temperature]>(value)) with
+        | (Ok(field), Err(_)) -> field == 5.0
+        | _ -> false
     | Err(_) -> false
 
-test "unsupported geometry leaves a symbolic expression" =
+test "the Real wrapper rejects an extension that cannot reduce" =
     match Differential.pde_poisson_integral(7, 2, 4) with
+    | Ok(_) -> false
+    | Err(error) -> "{error}" == "TypeMismatch: kernel value does not prove expected type Real"
+
+test "the dynamic call preserves the unsupported geometry as a term" =
+    match Rssn.dynamic("pde_poisson_integral", [to_value(7), to_value(2), to_value(4)]) with
     | Ok(value) ->
         match from_value<Int>(value) with
         | Ok(_) -> false
-        | Err(_) -> true
+        | Err(_) -> "{value}" == "pde_poisson_integral(7, 2, 4)"
     | Err(_) -> false

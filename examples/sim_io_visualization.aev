@@ -27,13 +27,18 @@ fn main(): IO Unit = do
     ])
     match tbl_res with
     | Ok(tbl) -> do
-        let _ = Data.write_csv("damped_oscillator.csv", tbl)
-        println("Wrote damped_oscillator.csv")
-    | Err(e) -> println("Table error")
-    let _ = Data.write_npy("damped_oscillator.npy", [[1.0, 0.58], [0.5, 0.34], [1.0, 0.19]])
+        csv <- Data.write_csv("damped_oscillator.csv", tbl)
+        match csv with
+        | Ok(_) -> println("Wrote damped_oscillator.csv")
+        | Err(error) -> println(error)
+    | Err(error) -> println(error)
+    npy <- Data.write_npy("damped_oscillator.npy", [[1.0, 0.58], [0.5, 0.34], [1.0, 0.19]])
+    match npy with
+    | Ok(_) -> println("Wrote damped_oscillator.npy")
+    | Err(error) -> println(error)
     Plots.save("damped_oscillator.svg", frame1)
     Plots.save("damped_residuals.html", frame2)
     anim <- Plots.plot_save_gif("damped_evolution.gif", [frame1, frame2, frame3], 30)
     match anim with
-    | Ok(_) -> println("Wrote damped_oscillator.npy, damped_oscillator.svg, damped_residuals.html, and damped_evolution.gif.")
+    | Ok(_) -> println("Wrote damped_oscillator.svg, damped_residuals.html, and damped_evolution.gif.")
     | Err(e) -> println(e)

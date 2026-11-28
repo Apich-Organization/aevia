@@ -1,0 +1,13 @@
+## Keep integer counts exact until the numerical kernel evaluates the coefficient.
+import Rssn_Special as Special
+
+let log_choices = Special.log_binomial(18446744073709551615, 32)
+
+let partitions = Special.multinomial_float(9, [2, 3, 4])
+
+let threshold = Special.inverse_regularized_beta(2.0, 2.0, 0.15625)
+
+fn main(): IO Unit = do
+    println("Log binomial coefficient: {log_choices}")
+    println("Number of allocations: {partitions}")
+    println("Beta quantile: {threshold}")

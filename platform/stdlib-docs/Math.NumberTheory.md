@@ -16,7 +16,7 @@ On an Int, returns its prime factorisation as a vector of (prime, exponent) pair
 
 **Signature:** `factor : Int -> Tensor<1, (Int, Int)>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `factor : (Real) -> Real`
 - `factor : (Dyn<term>) -> Dyn<term>`
 

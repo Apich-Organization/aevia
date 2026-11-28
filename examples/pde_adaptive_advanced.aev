@@ -67,3 +67,51 @@ test "FEM source callback budget is enforced" =
 test "native two-dimensional DG adapts SSPRK3 without flattening the mesh" =
     let r = N.num_pde_dg_nd_adaptive([2, 2], [1.0 m, 1.0 m], 2, [1.0 m/s, 0.3 m/s], map(fn (_: Int) => 1.0 m, range(0, 36)), control)
     all(fn (v: Float[Length]) => approx_eq(v, 1.0 m, 0.000001 m), flatten(r.states)) && at(shape(r.coordinates), 0) == 36
+
+## The event direction comes between the PDE callbacks and the terminal callback.
+type EventTrajectory = { times: Tensor<1, Float[Time]>, states: Tensor<2, Float[Length]>, velocities: Tensor<2, Float[Length/Time]>, coordinates: Tensor<2, Float[Length]>, accepted: Int, rejected: Int, step_calls: Int, evaluations: Int, error_ratio: Float, event_time: Option<Float[Time]> }
+
+let event_state = [1.0 m, 1.0 m, 1.0 m, 1.0 m]
+let zero_state = [0.0 m, 0.0 m, 0.0 m, 0.0 m, 0.0 m]
+
+fn increasing_event(t: Float[Time], _u: Tensor<1, Float[Length]>): Float = (t - 0.1 s) / 1.0 s
+
+fn stopped_at_event(result: Result<EventTrajectory, OpError>, expected: Float[Length]): Bool =
+    match result with
+    | Ok(r) -> match r.event_time with
+        | Some(t) -> approx_eq(t, 0.1 s, 0.00000001 s) && approx_eq(at(r.times, length(r.times) - 1), t, 0.00000001 s) && approx_eq(at(at(r.states, length(r.times) - 1), 0), expected, 0.00001 m) && r.evaluations > 0
+        | None -> false
+    | Err(_) -> false
+
+test "fvm_upwind terminates with physical time and field units" =
+    stopped_at_event(N.num_pde_fvm_upwind_adaptive_event_typed(1.0 m, event_state, true, control, flux, wave_speed, 1, increasing_event), 1.0 m)
+
+test "fvm_lax_friedrichs terminates with physical time and field units" =
+    stopped_at_event(N.num_pde_fvm_lax_friedrichs_adaptive_event_typed(1.0 m, event_state, true, control, flux, wave_speed, 1, increasing_event), 1.0 m)
+
+test "fvm_muscl_minmod terminates with physical time and field units" =
+    stopped_at_event(N.num_pde_fvm_muscl_minmod_adaptive_event_typed(1.0 m, event_state, true, control, flux, wave_speed, 1, increasing_event), 1.0 m)
+
+test "fvm_muscl_van_leer terminates with physical time and field units" =
+    stopped_at_event(N.num_pde_fvm_muscl_van_leer_adaptive_event_typed(1.0 m, event_state, true, control, flux, wave_speed, 1, increasing_event), 1.0 m)
+
+test "fem_be_source terminates with physical time and field units" =
+    stopped_at_event(N.num_pde_fem_be_source_adaptive_event_typed([4], [0.0 m], [1.0 m], 1, 1.0 m^2/s, 0.0 Hz, zero_state, insulating, control, nodal_source, 1, increasing_event), (0.1 + 0.1 ^ 3 / 3.0) * 1.0 m)
+
+test "fem_cn_source terminates with physical time and field units" =
+    stopped_at_event(N.num_pde_fem_cn_source_adaptive_event_typed([4], [0.0 m], [1.0 m], 1, 1.0 m^2/s, 0.0 Hz, zero_state, insulating, control, nodal_source, 1, increasing_event), (0.1 + 0.1 ^ 3 / 3.0) * 1.0 m)
+
+test "spectral_etdrk4 terminates with physical time and field units" =
+    stopped_at_event(N.num_pde_spectral_etdrk4_adaptive_event_typed([4], [4.0 m], 0.0 m^2/s, 0.0 Hz, event_state, control, reaction, 1, increasing_event), exp(0.1) * 1.0 m)
+
+test "negative direction ignores an increasing event" =
+    match N.num_pde_fvm_upwind_adaptive_event_typed(1.0 m, event_state, true, control, flux, wave_speed, -1, increasing_event) with
+    | Ok(r) -> match r.event_time with
+        | Some(_) -> false
+        | None -> approx_eq(at(r.times, length(r.times) - 1), 0.2 s, 0.00000001 s)
+    | Err(_) -> false
+
+test "invalid event direction is a kernel error" =
+    match N.num_pde_fvm_upwind_adaptive_event_typed(1.0 m, event_state, true, control, flux, wave_speed, 2, increasing_event) with
+    | Ok(_) -> false
+    | Err(_) -> true

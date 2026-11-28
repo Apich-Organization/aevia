@@ -1,0 +1,40 @@
+## Estimate a constant position from two pressure measurements.
+import Rssn_numerical_vector as Series
+
+let pressure = [[2.0 Pa], [4.0 Pa]]
+
+let transition = [[1.0]]
+
+let sensor = [[1.0 Pa/m]]
+
+let process_covariance = [[0.0 m^2]]
+
+let noise_covariance = [[1.0 Pa^2]]
+
+let initial_state = [0.0 m]
+
+let initial_covariance = [[1.0 m^2]]
+
+let filtered = Series.num_timeseries_kalman_filter(pressure, transition, sensor, process_covariance, noise_covariance, initial_state, initial_covariance, 1.0 Pa)
+
+let smoothed = Series.num_timeseries_kalman_smooth(pressure, transition, sensor, process_covariance, noise_covariance, initial_state, initial_covariance)
+
+let restored = Series.num_timeseries_integrate([2.0 m, 3.0 m], [1.0 m])
+
+let rolling = Series.num_timeseries_rolling_moments(restored, 2, 0)
+
+fn main(): IO Unit = do
+    println("Filtered positions: {filtered.filtered}")
+    println("Smoothed positions: {smoothed}")
+    println("Restored samples: {restored}")
+    println("Rolling population variances: {rolling.variance}")
+
+test "the filter uses only observations available at the time" = approx_eq(filtered.filtered[0, 0], 1.0 m, 1e-12 m)
+
+test "the smoother uses both pressure observations" = approx_eq(smoothed[0, 0], 2.0 m, 1e-12 m)
+
+test "inverse differences keep the sample dimension" = restored == [1.0 m, 3.0 m, 6.0 m]
+
+test "rolling means keep the sample dimension" = approx_eq(rolling.mean[0], 2.0 m, 1e-12 m)
+
+test "rolling variances square the sample dimension" = approx_eq(rolling.variance[1], 2.25 m^2, 1e-12 m^2)

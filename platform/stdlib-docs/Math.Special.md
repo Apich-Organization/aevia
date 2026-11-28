@@ -150,7 +150,7 @@ The error function, 2/sqrt(pi) times the integral of exp(-t^2) from 0 to x.
 
 **Signature:** `erf : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `erf : (Real) -> Real`
 - `erf : (Dyn<term>) -> Dyn<term>`
 
@@ -174,7 +174,7 @@ The complementary error function, 1 - erf(x).
 
 **Signature:** `erfc : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `erfc : (Real) -> Real`
 - `erfc : (Dyn<term>) -> Dyn<term>`
 
@@ -198,7 +198,7 @@ Fresnel cosine integral C(x), the integral of cos(pi t^2 / 2) from 0 to x.
 
 **Signature:** `fresnel_c : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `fresnel_c : (Real) -> Real`
 - `fresnel_c : (Dyn<term>) -> Dyn<term>`
 
@@ -222,7 +222,7 @@ Fresnel sine integral S(x), the integral of sin(pi t^2 / 2) from 0 to x.
 
 **Signature:** `fresnel_s : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `fresnel_s : (Real) -> Real`
 - `fresnel_s : (Dyn<term>) -> Dyn<term>`
 
@@ -377,7 +377,7 @@ The Riemann zeta function for a dimensionless argument.
 
 **Signature:** `zeta : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `zeta : (Real) -> Real`
 - `zeta : (Dyn<term>) -> Dyn<term>`
 

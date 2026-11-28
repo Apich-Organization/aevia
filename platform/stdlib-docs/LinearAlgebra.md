@@ -682,7 +682,7 @@ Computes sample standard deviation in the elements’ dimension.
 
 **Signature:** `std : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `std : (Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** the result has the dimension of argument 1
@@ -902,7 +902,8 @@ A tensor of zeros whose shape is a type argument: zeros_of<[2, 3]>().
 
 **Signature:** `zeros_of : Tensor<shape, Float>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
+- `zeros_of : (Dyn<term>, Symbol) -> Tensor<2, Int>`
 - `zeros_of : (Dyn<term>, Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** kernel rule `Custom("")`

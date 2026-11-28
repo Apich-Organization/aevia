@@ -57,6 +57,43 @@ cargo run -p aevia-cli -- test examples/dimensioned_numerics.aev
 
 运行 `aevia rssn --describe num_signal_autocovariance` 可查看当前内核提供的算子文档、重载和 Aevia 绑定名称。
 
+`Rssn_numerical_vector.num_signal_filtfilt(b, a, samples)` 对边缘做奇反射后执行
+正反两次滤波。滤波器系数无量纲，输出保留样本数和量纲。系数无效或稳态无定义时返回定义域错误。
+[压力样本示例](zero_phase_filter.aev)
+
+`Rssn_numerical_vector.num_cauchy_sharp_root_bound` 使用按幂次升序排列的复系数，
+返回 Cauchy 根界。系数均为正实数时，`num_enestrom_kakeya_bounds` 返回含
+`lower`、`upper` 半径的记录。自变量无量纲，系数共用的量纲会抵消。
+`Rssn_numerical_special` 提供单位圆盘内的三个 Koebe 界。
+[根界示例](polynomial_root_bounds.aev)
+
+用 `Rssn_numerical_special.num_mp_real_round` 构造无量纲记录
+`{mantissa, exponent, precision}`，三个字段均为精确整数。
+`num_mp_real_compare` 精确比较记录值。加、减、乘算子分别接收以位计的
+结果精度和舍入模式，例如 `"nearest"`（等距取偶）或 `"up"`。
+[精确二进制多精度示例](dyadic_real.aev)
+
+`Rssn_FiniteField.poly_mul_ntt_mod(a, b, p)` 在奇素数模下做精确系数卷积。
+变换长度为不小于结果长度的最小二次幂，须整除 `p - 1`。
+`Rssn_NumberTheory.extended_gcd_u64` 返回具名 Bézout 系数。
+[模多项式示例](modular_polynomials.aev)
+
+`num_timeseries_kalman_filter` 和 `num_timeseries_kalman_smooth` 接收线性状态空间模型。
+状态分量共用一个量纲，观测分量可以共用另一个量纲。滤波返回状态均值、协方差矩阵和对数似然，
+最后一个参数是对数似然使用的正观测参考量。平滑按每条观测返回一个状态均值。
+同一模块的 `num_timeseries_integrate` 可还原多阶差分。
+`num_timeseries_rolling_moments(samples, window, ddof)` 计算带量纲序列的完整滑动窗口。
+返回的 `mean` 保留样本量纲，`variance` 使用平方量纲。总体方差取 `ddof=0`，
+样本方差取 `ddof=1`，此时窗口需至少包含两个样本。
+[带量纲跟踪示例](kalman_tracking.aev)
+
+用 `Rssn_numerical_matrix.num_control_c2d_zoh(a, b, c, d, dt)`
+按带量纲的采样周期离散化线性状态空间模型。返回的记录可直接传给
+`num_control_simulate_discrete(model, x0, inputs)`。对于不等间隔的时间网格，
+可用 `num_control_simulate_continuous(a, b, c, d, x0, inputs, times)`。
+第一行输出使用初始状态，并计入输入的直接馈通项。
+[带量纲仿真示例](measured_state_space.aev)
+
 `num_native_irfft_plan_new` 按固定的实数输出长度准备逆实数 FFT。用同一计划反复调用 `num_native_irfft_plan_apply`，结果保留频谱的物理量纲。`num_native_irfft_plan_output_len` 返回实数样本数，`num_native_irfft_plan_spectrum_len` 返回所需的非负频率分量数。四个和五个实数样本都需要三个频率分量。[可运行示例](native_kernel_families.aev)
 
 `num_stats_simple_linear_regression` 接收各自带量纲的预测张量和响应张量。斜率的单位为响应单位除以预测单位，截距保留响应单位。内核在极端尺度下缩放样本，以处理超出浮点范围的中间矩。[可运行示例](native_kernel_families.aev)
@@ -316,14 +353,14 @@ cargo run -p aevia-cli -- test examples/dimensioned_numerics.aev
 每种具体化及其形状和工作预算；Rust 泛型签名不代表支持任意 Aevia 类型或维数。
 可变切片接口返回或更新受检查的拥有型数据；Rust 借用布局和原始指针不作为
 语言值暴露。JIT/GPU 接口在相应 RSSN 功能未启用时返回 `Unsupported`。
-普通示例使用默认功能即可。可从 CLI 构建可选后端及 NPY 文件适配器：
+默认构建包含 Cranelift、wgpu 和 NumPy 文件支持。用标准 CLI 运行原生执行示例：
 
 ```sh
-cargo run -p aevia-cli --features jit,gpu-wgpu,npy -- test examples/native_execution.aev
+cargo run -p aevia-cli -- test examples/native_execution.aev
 ```
 
-`npy` 启用 NPY 文件支持。后端功能标志仅启用相应适配器；实际后端及 GPU
-设备的可用性仍在运行时检查。
+运行 `aevia devices` 查看可用的 RSSN 后端选择器。[带量纲的编译示例](native_backend.aev)
+使用当前选择。可加上 `--rssn-backend cpu` 或 `--rssn-backend cranelift` 来比较执行结果。
 
 会话对象每次调用都检查种类、所属会话及存活状态。`num_native_release`
 成功后使句柄的所有副本失效；存在存活依赖时，父对象的释放请求会被拒绝，

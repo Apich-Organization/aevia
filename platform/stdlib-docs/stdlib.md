@@ -252,7 +252,7 @@ Rounds up to the nearest whole number, keeping the type and dimension: ceil(-2.2
 
 **Signature:** `ceil : Scalar<ρ,d> -> Scalar<ρ,d>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `ceil : (Real) -> Real`
 - `ceil : (Dyn<term>) -> Dyn<term>`
 
@@ -664,7 +664,7 @@ Rounds down to the nearest whole number, keeping the type and dimension: floor(-
 
 **Signature:** `floor : Scalar<ρ,d> -> Scalar<ρ,d>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `floor : (Real) -> Real`
 - `floor : (Dyn<term>) -> Dyn<term>`
 
@@ -1501,7 +1501,7 @@ Rounds to the nearest whole number, with halves going away from zero (round(2.5)
 
 **Signature:** `round : (Scalar<ρ,d>, Int) -> Scalar<ρ,d>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `round : (Real) -> Real`
 - `round : (Dyn<term>) -> Dyn<term>`
 
@@ -2111,7 +2111,7 @@ Inverse cosine in radians.
 
 **Signature:** `acos : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `acos : (Real) -> Real`
 - `acos : (Dyn<term>) -> Dyn<term>`
 
@@ -2135,7 +2135,7 @@ Inverse hyperbolic cosine.
 
 **Signature:** `acosh : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `acosh : (Real) -> Real`
 - `acosh : (Dyn<term>) -> Dyn<term>`
 
@@ -2159,7 +2159,7 @@ Inverse sine in radians.
 
 **Signature:** `asin : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `asin : (Real) -> Real`
 - `asin : (Dyn<term>) -> Dyn<term>`
 
@@ -2183,7 +2183,7 @@ Inverse hyperbolic sine of a dimensionless argument.
 
 **Signature:** `asinh : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `asinh : (Real) -> Real`
 - `asinh : (Dyn<term>) -> Dyn<term>`
 
@@ -2207,7 +2207,7 @@ Inverse tangent in radians, in (-pi/2, pi/2).
 
 **Signature:** `atan : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `atan : (Real) -> Real`
 - `atan : (Dyn<term>) -> Dyn<term>`
 
@@ -2231,7 +2231,7 @@ The angle, in radians in (-pi, pi], of the point (x, y) measured from the positi
 
 **Signature:** `atan2 : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `atan2 : (Real, Real) -> Real`
 - `atan2 : (Dyn<term>, Dyn<term>) -> Dyn<term>`
 
@@ -2256,7 +2256,7 @@ Inverse hyperbolic tangent.
 
 **Signature:** `atanh : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `atanh : (Real) -> Real`
 - `atanh : (Dyn<term>) -> Dyn<term>`
 
@@ -2301,7 +2301,7 @@ Trigonometric function.
 
 **Signature:** `cos : Complex[1] -> Complex[1]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `cos : (Real) -> Real`
 - `cos : (Dyn<term>) -> Dyn<term>`
 
@@ -2326,7 +2326,7 @@ Hyperbolic cosine of a dimensionless argument.
 
 **Signature:** `cosh : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `cosh : (Real) -> Real`
 - `cosh : (Dyn<term>) -> Dyn<term>`
 
@@ -2382,7 +2382,7 @@ Exponential or logarithmic function on a dimensionless input.
 
 **Signature:** `exp : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `exp : (Real) -> Real`
 - `exp : (Dyn<term>) -> Dyn<term>`
 
@@ -2540,7 +2540,7 @@ Positive infinity as an exact Real.
 
 **Signature:** `oo : Real[1]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `oo : () -> Real`
 - `oo : () -> Dyn<term>`
 
@@ -2580,7 +2580,7 @@ The exact symbolic constant pi.
 
 **Signature:** `pi : Real[1]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `pi : () -> Real`
 - `pi : () -> Dyn<term>`
 
@@ -2631,7 +2631,7 @@ Hyperbolic sine of a dimensionless argument.
 
 **Signature:** `sinh : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `sinh : (Real) -> Real`
 - `sinh : (Dyn<term>) -> Dyn<term>`
 
@@ -2653,7 +2653,7 @@ Compute a square root.
 
 **Signature:** `sqrt : Scalar<ρ,d> -> Scalar<ρ,d^(1/2)>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `sqrt : (Real) -> Real`
 - `sqrt : (Dyn<term>) -> Dyn<term>`
 
@@ -2678,7 +2678,7 @@ Trigonometric function.
 
 **Signature:** `tan : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `tan : (Real) -> Real`
 - `tan : (Dyn<term>) -> Dyn<term>`
 
@@ -2703,7 +2703,7 @@ Hyperbolic tangent of a dimensionless argument.
 
 **Signature:** `tanh : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `tanh : (Real) -> Real`
 - `tanh : (Dyn<term>) -> Dyn<term>`
 
@@ -2888,7 +2888,7 @@ The error function, 2/sqrt(pi) times the integral of exp(-t^2) from 0 to x.
 
 **Signature:** `erf : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `erf : (Real) -> Real`
 - `erf : (Dyn<term>) -> Dyn<term>`
 
@@ -2912,7 +2912,7 @@ The complementary error function, 1 - erf(x).
 
 **Signature:** `erfc : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `erfc : (Real) -> Real`
 - `erfc : (Dyn<term>) -> Dyn<term>`
 
@@ -2936,7 +2936,7 @@ Fresnel cosine integral C(x), the integral of cos(pi t^2 / 2) from 0 to x.
 
 **Signature:** `fresnel_c : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `fresnel_c : (Real) -> Real`
 - `fresnel_c : (Dyn<term>) -> Dyn<term>`
 
@@ -2960,7 +2960,7 @@ Fresnel sine integral S(x), the integral of sin(pi t^2 / 2) from 0 to x.
 
 **Signature:** `fresnel_s : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `fresnel_s : (Real) -> Real`
 - `fresnel_s : (Dyn<term>) -> Dyn<term>`
 
@@ -3115,7 +3115,7 @@ The Riemann zeta function for a dimensionless argument.
 
 **Signature:** `zeta : Scalar<ρ,1> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `zeta : (Real) -> Real`
 - `zeta : (Dyn<term>) -> Dyn<term>`
 
@@ -3146,10 +3146,10 @@ The phase angle of a complex number in radians, in (-pi, pi].
 
 **Signature:** `arg : Complex[d] -> Real[1]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `arg : (Dyn<term>) -> Dyn<term>`
 
-**Dimensions:** the result is dimensionless
+**Dimensions:** the result is an angle (dimensionless)
 
 **Examples:**
 ```text
@@ -3163,13 +3163,13 @@ arg(complex(0, 1))
 let complex = complex
 ```
 
-complex(re, im) builds a complex number from its real and imaginary parts.
+Builds a complex number from real and imaginary parts with a common dimension.
 
-**Signature:** `complex : (Real[1], Real[1]) -> Complex[1]`
+**Signature:** `complex : (Real[d], Real[d]) -> Complex[d]`
 
 **Examples:**
 ```text
-complex(1, 2)
+complex(3 m, 400 cm)
 ```
 
 *Source: Aevia standard library guide.*
@@ -3274,7 +3274,7 @@ Trigonometric function.
 
 **Signature:** `cos : Complex[1] -> Complex[1]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `cos : (Real) -> Real`
 - `cos : (Dyn<term>) -> Dyn<term>`
 
@@ -3299,7 +3299,7 @@ The imaginary part of a complex number.
 
 **Signature:** `im : Complex[d] -> Real[d]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `im : (Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** the result has the dimension of argument 1
@@ -3338,7 +3338,7 @@ The real part of a complex number.
 
 **Signature:** `re : Complex[d] -> Real[d]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `re : (Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** the result has the dimension of argument 1
@@ -3368,7 +3368,7 @@ On an Int, returns its prime factorisation as a vector of (prime, exponent) pair
 
 **Signature:** `factor : Int -> Tensor<1, (Int, Int)>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `factor : (Real) -> Real`
 - `factor : (Dyn<term>) -> Dyn<term>`
 
@@ -3561,7 +3561,7 @@ Euclidean distance between two points given as vectors of equal length, in the c
 
 **Signature:** `distance : (Tensor<1, Real[L]>, Tensor<1, Real[L]>) -> Real[L]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `distance : (Real, Real) -> Real`
 - `distance : (Dyn<term>, Dyn<term>) -> Dyn<term>`
 
@@ -5663,7 +5663,7 @@ Computes sample standard deviation in the elements’ dimension.
 
 **Signature:** `std : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `std : (Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** the result has the dimension of argument 1
@@ -5883,7 +5883,8 @@ A tensor of zeros whose shape is a type argument: zeros_of<[2, 3]>().
 
 **Signature:** `zeros_of : Tensor<shape, Float>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
+- `zeros_of : (Dyn<term>, Symbol) -> Tensor<2, Int>`
 - `zeros_of : (Dyn<term>, Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** kernel rule `Custom("")`
@@ -6399,7 +6400,7 @@ defint(f, a, b) is the exact definite integral of f from a to b, as a Result: Er
 
 **Signature:** `defint : (Real[d] -> Real[e], Real[d], Real[d]) -> Result<Real[e*d], MathError>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `defint : (Dyn<term>, Symbol, Dyn<term>, Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** argument 1 multiplied by argument 2
@@ -6567,7 +6568,7 @@ The Laplacian of a scalar field at a point: the sum of its second partial deriva
 
 **Signature:** `laplacian : ((Tensor<1, Real[d]> -> Real[e]), Tensor<1, Real[d]>) -> Real[e/d^2]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `laplacian : (Dyn<term>, Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** kernel rule `DiffN { f: 0, x: 1, n: 2 }`
@@ -6590,7 +6591,7 @@ limit(f, x) is the limit of f as its argument approaches x, as a Result; use oo 
 
 **Signature:** `limit : (Real[d] -> Real[e], Real[d]) -> Result<Real[e], MathError>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `limit : () -> Dyn<term> with 0... x Dyn<term>`
 
 **Dimensions:** the result has the dimension of argument 1
@@ -6631,7 +6632,7 @@ product(f, a, b) is the exact product of f(k) for k from a to b, both integers; 
 
 **Signature:** `product : (Real[1] -> Real[1], Real[1], Real[1]) -> Real[1]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `product : (Dyn<term>, Symbol, Dyn<term>, Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** kernel rule `ProductOver { f: 0, index: 1 }`
@@ -6788,7 +6789,7 @@ nsolve(f, x0) finds a root of f numerically, starting the search at x0.
 
 **Signature:** `nsolve : (Real[d] -> Real[e], Real[d]) -> Result<Real[d], MathError>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `nsolve : (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** the result has the dimension of argument 2
@@ -6869,7 +6870,8 @@ Like solve, but for a function that returns a Complex value: it finds all roots 
 
 **Signature:** `solve_complex : (Real[d] -> Complex[e]) -> Result<Solutions<Complex,d>, MathError>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
+- `solve_complex : (Dyn<term>, Symbol) -> Tensor<1, Dyn<term>>`
 - `solve_complex : (Dyn<term>, Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** the result has the dimension of argument 2
@@ -7195,7 +7197,7 @@ Sample skewness of a vector: positive when the long tail is on the right.
 
 **Signature:** `skewness : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `skewness : (Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** the result is dimensionless
@@ -7218,7 +7220,7 @@ Computes sample standard deviation in the elements’ dimension.
 
 **Signature:** `std : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `std : (Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** the result has the dimension of argument 1
@@ -7381,7 +7383,7 @@ cdf(dist, x) is the probability that a draw from the distribution is at most x: 
 
 **Signature:** `cdf : (Distribution<d>, Real[d]) -> Real[1]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `cdf : (Dyn<term>, Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** kernel rule `CompatibleDimensionless`
@@ -7441,7 +7443,7 @@ pdf(dist, x) is the probability density (or mass, for discrete distributions) of
 
 **Signature:** `pdf : (Distribution<d>, Real[d]) -> Real[1/d]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `pdf : (Dyn<term>, Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** kernel rule `Custom("")`
@@ -8231,7 +8233,7 @@ Integrates dy/dt = f(t, y) and returns the state at each requested time: odeint(
 
 **Signature:** `odeint : (((Float[T], s) -> RateOf<s>), s, Tensor<1, Float[T]>) -> Tensor<1, s>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `odeint : (Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** the result has the dimension of argument 5
@@ -10025,6 +10027,32 @@ Runs the `geodesic` simulation with the given parameters and returns its result,
 
 - `abs(0)` → `Int`
 
+## `complex.abs_sq` (Stable)
+
+```aevia
+(Dyn<term>) -> Dyn<term>
+```
+
+`abs_sq(z)`: squared modulus `re(z)^2 + im(z)^2`.
+
+Squared modulus `|z|^2 = re^2 + im^2`.
+
+## `numeric.acf` (Stable)
+
+```aevia
+(Tensor<1, Real>, Int) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`acf(x, max_lag)`: the sample autocorrelation of `x` for lags `0..=max_lag`.
+
+Sample autocorrelation function.
+
+Returns `max_lag + 1` values with `result[0] = 1`. The lag-`k` estimate is
+`Σ_{t>k} (x_t - x̄)(x_{t-k} - x̄) / Σ_t (x_t - x̄)²`, the usual biased
+estimator with the full-sample denominator. Lags beyond `x.len() - 1` are
+not produced, and a constant series yields zeros after lag zero.
+
 ## `elementary.acos` (Stable)
 
 ```aevia
@@ -10033,6 +10061,11 @@ Runs the `geodesic` simulation with the given parameters and returns its result,
 ```
 
 `acos(x)`: principal inverse cosine of `x`, in `[0, pi]` for real `x` in `[-1, 1]`.
+
+`acos(x)` as a ball, for `|x| <= 1`.
+
+# Errors
+Fails outside `[-1, 1]` or when an exponent leaves the range.
 
 ## `complex.acos_branch` (Stable)
 
@@ -10132,6 +10165,7 @@ The empty sum is `0`.
 ## `lie.adjoint_rep` (Stable)
 
 ```aevia
+(Tensor<2, Int>, Tensor<3, Int>) -> Tensor<2, Int>
 () -> Dyn<term> with 0... x Dyn<term>
 ```
 
@@ -10183,6 +10217,74 @@ The empty sum is `0`.
 ```
 
 `airfoil_equation(f, x, t)`: inversion of the finite Hilbert transform on `[-1, 1]`.
+
+## `numeric.airy_ai_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`airy_ai_complex(re, im)`: `list(re, im)` of `Ai(z)`.
+
+Complex Airy function `(Ai(z), Ai'(z))` via power series near the origin and
+Bessel connection `(1/pi)*sqrt(z/3)*K_{1/3}(zeta)` / reflection for large `|z|`.
+
+## `numeric.airy_ai_prime_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`airy_ai_prime_complex(re, im)`: `list(re, im)` of `Ai'(z)`.
+
+Complex Airy function `(Ai(z), Ai'(z))` via power series near the origin and
+Bessel connection `(1/pi)*sqrt(z/3)*K_{1/3}(zeta)` / reflection for large `|z|`.
+
+## `numeric.airy_bi_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`airy_bi_complex(re, im)`: `list(re, im)` of `Bi(z)`.
+
+Complex Airy function `(Bi(z), Bi'(z))`.
+
+## `numeric.airy_bi_prime_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`airy_bi_prime_complex(re, im)`: `list(re, im)` of `Bi'(z)`.
+
+Complex Airy function `(Bi(z), Bi'(z))`.
+
+## `numeric.airy_gi_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`airy_gi_complex(re, im)`: `list(re, im)` of Scorer `Gi(z)`.
+
+Scorer function `Gi(z) = (1/pi) * int_0^oo sin(t^3/3 + z*t) dt = Bi(z) - Hi(z)`.
+
+## `numeric.airy_hi_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`airy_hi_complex(re, im)`: `list(re, im)` of Scorer `Hi(z)`.
+
+Scorer function `Hi(z) = (1/pi) * int_0^oo exp(-t^3/3 + z*t) dt`.
 
 ## `special.airyai` (Stable)
 
@@ -10287,6 +10389,7 @@ Computes the algebraic connectivity (second smallest Laplacian eigenvalue) of un
 ## `linalg.angle` (Stable)
 
 ```aevia
+(Tensor<1, Float>, Tensor<1, Float>) -> Float
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -10381,7 +10484,8 @@ Decomposes `numer / denom` over the rationals.
 Input coefficients are in
 ascending degree. The result gives the polynomial quotient and nonzero
 fraction numerators, in factor order and increasing denominator power.
-Returns `None` for a zero denominator or an incomplete factorisation.
+Returns `None` for a zero denominator, an incomplete factorisation, or a
+decomposition that does not recombine.
 
 ## `special.appell_f1` (Stable)
 
@@ -10445,6 +10549,35 @@ Applies homogeneous transform matrix `M` to direction vector `v` (appending `0` 
 
 - `apply_transform_vector(translation_2d(1, 2), list(3, 4))` → `[Int]`
 
+## `numeric.ar_fit` (Stable)
+
+```aevia
+(Tensor<1, Real>, Int) -> { phi: Tensor<1, Real>, sigma2: Real, aic: Real, intercept: Real }
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`ar_fit(x, p)`: `list(phi, sigma2, aic, intercept)` of an autoregression of order `p` fitted by the Yule–Walker equations.
+
+Fits an autoregression of order `p` by the Yule–Walker equations, solved
+with the Levinson–Durbin recursion.
+
+The series is centred on its sample mean before the autocovariances are
+formed; the returned [`ArFit::intercept`] maps the centred model back to
+the original scale.
+
+# Errors
+Returns a lowercase message when `p` is zero, the series is too short for
+the requested order, it has no variance, or the recursion meets a
+non-positive partial variance (a sign that the sample is not stationary).
+
+## `complex.arc` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`arc(c, r, t0, t1)`: circular arc contour `c + r * exp(I*t)` for `t` from `t0` to `t1`.
+
 ## `functional.are_orthogonal` (Stable)
 
 ```aevia
@@ -10468,6 +10601,78 @@ Applies homogeneous transform matrix `M` to direction vector `v` (appending `0` 
 `arg(z)`: principal argument (phase angle) of `z` in `(-pi, pi]`.
 
 The argument, `arg z`, in `(-π, π]`.
+
+### Examples
+
+- `arg(0.5 + I)` → `Float`
+
+## `complex.arg_branch` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`arg_branch(z, theta0)`: argument of `z` in `(theta0, theta0 + 2*pi]`, placing the branch cut along ray `theta0`.
+
+Argument of `z` in `(theta0, theta0 + 2*pi]`, placing the branch cut along ray `theta0`.
+
+## `numeric.arima_fit` (Stable)
+
+```aevia
+(Tensor<1, Real>, Int, Int, Int) -> { ar: Tensor<1, Real>, ma: Tensor<1, Real>, sigma2: Real, aic: Real, loglik: Real, mean: Real }
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`arima_fit(x, p, d, q)`: `list(ar, ma, sigma2, aic, loglik, mean)` of an ARIMA(`p`, `d`, `q`) fitted by Hannan–Rissanen and refined by conditional sum of squares.
+
+Fits an ARIMA(`p`, `d`, `q`) model.
+
+The series is differenced `d` times and an ARMA(`p`, `q`) is fitted to the
+result by the Hannan–Rissanen procedure: a long autoregression provides
+residuals, a regression on lagged values and lagged residuals gives initial
+parameters, and a Gauss–Newton search on the conditional sum of squares
+refines them. Orders are capped at `p ≤ 6` and `q ≤ 4`.
+
+# Errors
+Returns a lowercase message when an order exceeds the cap, the series is
+too short for the requested differencing or order, or a least-squares stage
+cannot be solved.
+
+## `numeric.arima_forecast` (Stable)
+
+```aevia
+(Tensor<1, Real>, Int, Int, Int, Int) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`arima_forecast(x, p, d, q, horizon)`: the next `horizon` values of `x` under an ARIMA(`p`, `d`, `q`) refitted to the whole series.
+
+Forecasts an ARIMA model forward from a series.
+
+`x` must be the series the model was fitted to, i.e. already differenced
+`d` times, so the returned values are forecasts of the same differenced
+series. Future shocks are set to zero, so the forecasts follow the
+conditional mean recursion.
+
+# Errors
+Returns a lowercase message when the horizon is zero and the series is
+empty, or the series is shorter than the model order.
+
+## `numeric.arx_fit` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<1, Real>, Int, Int, Int) -> { a: Tensor<1, Real>, b: Tensor<1, Real>, fit: Real }
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`arx_fit(u, y, na, nb, delay)`: `list(a, b, fit)` of an ARX model by least squares.
+
+Fits an ARX model to input/output data.
+
+# Errors
+Returns an error when the signals differ in length, when both `na` and
+`nb` are zero, or when there are not enough samples to form a full-rank
+regression.
 
 ## `elementary.asec` (Stable)
 
@@ -10495,6 +10700,11 @@ The argument, `arg z`, in `(-π, π]`.
 ```
 
 `asin(x)`: principal inverse sine of `x`, in `[-pi/2, pi/2]` for real `x` in `[-1, 1]`.
+
+`asin(x)` as a ball, for `|x| <= 1`.
+
+# Errors
+Fails outside `[-1, 1]` or when an exponent leaves the range.
 
 ## `complex.asin_branch` (Stable)
 
@@ -10546,6 +10756,11 @@ The argument, `arg z`, in `(-π, π]`.
 
 `atan(x)`: principal inverse tangent of `x`, in `(-pi/2, pi/2)` for real `x`.
 
+`atan(x)` as a ball.
+
+# Errors
+Fails when an exponent leaves the representable range.
+
 ## `elementary.atan2` (Stable)
 
 ```aevia
@@ -10554,6 +10769,11 @@ The argument, `arg z`, in `(-π, π]`.
 ```
 
 `atan2(y, x)`: two-argument arctangent of `(y, x)`, giving the angle in `(-pi, pi]` from the positive x-axis.
+
+`atan2(y, x)` as a ball, with the quadrant resolved.
+
+# Errors
+Fails when both operands are zero or an exponent leaves the range.
 
 ## `complex.atan_branch` (Stable)
 
@@ -10583,6 +10803,7 @@ The argument, `arg z`, in `(-π, π]`.
 ## `lie.baker_campbell_hausdorff` (Stable)
 
 ```aevia
+(Tensor<2, Int>, Tensor<2, Int>, Int) -> Tensor<2, Real>
 () -> Dyn<term> with 0... x Dyn<term>
 ```
 
@@ -10629,6 +10850,17 @@ Requires at least two finite observations.
 
 Silverman's rule-of-thumb bandwidth `0.9 min(sd, IQR/1.34) n^(-1/5)`.
 Uses `sd` when `IQR` is zero. Requires at least two finite observations.
+
+## `numeric.barnes_g_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`barnes_g_complex(re, im)`: `list(re, im)` of Barnes G-function `G(z)`.
+
+Complex Barnes G-function `G(z)` satisfying `G(z + 1) = Gamma(z) * G(z)`, `G(1) = 1`.
 
 ## `discrete.barycentric` (Stable)
 
@@ -10716,6 +10948,7 @@ enough).
 ## `logic.bdd_size` (Stable)
 
 ```aevia
+(Tensor<2, Int>) -> Int
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -10781,6 +11014,10 @@ overflows `f64` (`n >= 219`).
 
 Computes the n-th Bernoulli number `B_n`.
 
+Orders up to `BERNOULLI_TABLE_MAX` are served from a small bucketed table
+cache (the three buckets are 32, 64 and 128), so repeated polynomial and
+zeta evaluations do not rebuild the recurrence.
+
 ### Examples
 
 - `bernoulli_number(1)` → `Rat`
@@ -10821,6 +11058,7 @@ complex `z` (principal branch of `z^ν`, cut along the negative real axis).
 ## `special.bessel_k0` (Stable)
 
 ```aevia
+(Float) -> Float
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -10831,12 +11069,37 @@ complex `z` (principal branch of `z^ν`, cut along the negative real axis).
 ## `special.bessel_k1` (Stable)
 
 ```aevia
+(Float) -> Float
 (Dyn<term>) -> Dyn<term>
 ```
 
 `bessel_k1(x)`: modified Bessel function of the second kind of order one `K_1(x)`.
 
 `K₁(x)`.
+
+## `numeric.bessel_k_complex` (Stable)
+
+```aevia
+(Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`bessel_k_complex(nu, re, im)`: `list(re, im)` of `K_nu(z)`.
+
+Complex modified Bessel function of the second kind `K_nu(z)` for real order `nu`.
+Returns NaN if the integer series would start with an overflowing factorial.
+
+## `numeric.bessel_ke_complex` (Stable)
+
+```aevia
+(Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`bessel_ke_complex(nu, re, im)`: `list(re, im)` of `exp(z) * K_nu(z)`.
+
+Exponentially scaled `exp(z) * K_nu(z)` computed without `exp(z)` overflow for large `Re(z)`.
+Returns NaN if the integer series would start with an overflowing factorial.
 
 ## `pde.bessel_neg_root` (Stable)
 
@@ -10855,6 +11118,18 @@ complex `z` (principal branch of `z^ν`, cut along the negative real axis).
 ```
 
 `bessel_root(nu, h, k)`: `k`-th positive root of the Robin Bessel equation `z J_nu'(z) + h J_nu(z) = 0`.
+
+## `numeric.bessel_y_complex` (Stable)
+
+```aevia
+(Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`bessel_y_complex(nu, re, im)`: `list(re, im)` of `Y_nu(z)`.
+
+Complex Bessel function of the second kind `Y_nu(z)` for real order `nu`.
+Returns NaN if the integer series would start with an overflowing factorial.
 
 ## `pde.bessel_zero` (Stable)
 
@@ -10926,6 +11201,17 @@ complex `z` (principal branch of `z^ν`, cut along the negative real axis).
 - `beta(2, 3)` → `Rat`
 - `beta(2, 3.5)` → `Float`
 - `beta(2.5, 4.5)` → `Float`
+
+## `numeric.beta_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`beta_complex(ar, ai, br, bi)`: `list(re, im)` of `B(a, b)`.
+
+Complex beta function `B(a, b) = Gamma(a) * Gamma(b) / Gamma(a + b)`.
 
 ## `stats.beta_dist` (Stable)
 
@@ -11049,6 +11335,17 @@ Splits a Bezier curve with control points `P` at parameter `t0`, returning `list
 
 - `binomial(0, 0)` → `Int`
 
+## `numeric.binomial_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`binomial_complex(nr, ni, kr, ki)`: `list(re, im)` of `C(n, k)`.
+
+Complex binomial coefficient `C(n, k) = Gamma(n + 1) / (Gamma(k + 1) * Gamma(n - k + 1))`.
+
 ## `stats.binomial_dist` (Stable)
 
 ```aevia
@@ -11060,6 +11357,7 @@ Splits a Bezier curve with control points `P` at parameter `t0`, returning `list
 ## `number_theory.binomial_mod` (Stable)
 
 ```aevia
+(Int, Int, Int) -> Int
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -11126,6 +11424,7 @@ symmetric with both endpoints at zero (in exact arithmetic).
 ## `physics.boltzmann_distribution` (Stable)
 
 ```aevia
+(Int, Int, Int) -> Real
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -11138,6 +11437,10 @@ symmetric with both endpoints at zero (in exact arithmetic).
 ```
 
 `boltzmann_entropy(Omega)`: statistical entropy `S = k_B ln(Omega)`.
+
+### Examples
+
+- `boltzmann_entropy(exp(1/(2*k_B)))` → `Rat`
 
 ## `numeric.bootstrap_basic_ci` (Stable)
 
@@ -11173,10 +11476,20 @@ resample in draw order and excludes NaN replicates from the interval.
 ## `physics.bose_einstein_distribution` (Stable)
 
 ```aevia
+(Dyn<term>, Int, Int) -> Real
+(Dyn<term>, Int, Symbol) -> Real
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
 `bose_einstein_distribution(E, mu, T)`: Bose-Einstein mean occupation number at energy `E`, chemical potential `mu`, temperature `T`.
+
+## `complex.bottcher_series` (Stable)
+
+```aevia
+(Dyn<term>, Symbol, Dyn<term>) -> Dyn<term>
+```
+
+`bottcher_series(c, z, order)`: formal Laurent series of the Böttcher coordinate `phi_c(z)` for `z^2 + c` up to `z^(-order)`.
 
 ## `discrete.bottleneck_distance` (Stable)
 
@@ -11213,6 +11526,8 @@ numbers differ the distance is infinite.
 ## `discrete.box_counting` (Stable)
 
 ```aevia
+(Tensor<2, Int>, Tensor<1, Int>) -> Float
+(Tensor<2, Int>, Int) -> Float
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -11234,6 +11549,7 @@ Estimates the box-counting dimension of `points` using `k` automatic scales or a
 ## `physics.braket` (Stable)
 
 ```aevia
+(Dyn<term>, Dyn<term>, Symbol) -> Real
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -11242,6 +11558,7 @@ Estimates the box-counting dimension of `points` using `k` automatic scales or a
 ## `physics.braket_on` (Stable)
 
 ```aevia
+(Symbol, Symbol, Symbol, Int, Int) -> Real
 (Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -11260,6 +11577,14 @@ Estimates the box-counting dimension of `points` using `k` automatic scales or a
 - `branch_cut(ln(z), z)` → `[Obj<ray>]`
 - `branch_cut(z^2 + exp(z) + 1/z, z)` → `[Never]`
 
+## `complex.branch_cut_jump` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`branch_cut_jump(f, z, p)`: symbolic discontinuity `lim_{eps -> 0+} (f(p + I*eps) - f(p - I*eps))` across a principal branch cut at `z = p`.
+
 ## `discrete.bravais_lattices` (Stable)
 
 ```aevia
@@ -11267,6 +11592,14 @@ Estimates the box-counting dimension of `points` using `k` automatic scales or a
 ```
 
 Returns the 14 Bravais lattices as `list(pearson_symbol, system, centering, holohedry)`.
+
+## `complex.bromwich_inverse_laplace` (Stable)
+
+```aevia
+(Dyn<term>, Symbol, Dyn<term>) -> Dyn<term>
+```
+
+`bromwich_inverse_laplace(F, s, t)`: Bromwich inverse Laplace transform via sum of residues of `F(s)*exp(s*t)`.
 
 ## `discrete.bspline` (Stable)
 
@@ -11351,6 +11684,26 @@ Computes the Burning Ship fractal escape time at `c = cr + i*ci` up to `max_iter
 ### Examples
 
 - `canonical_momentum(diff(y(t), t)^3 + diff(x(t), t)^2, list(x(t), y(t)), t)` → `[Expr]`
+
+## `numeric.care` (Stable)
+
+```aevia
+(Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>) -> Tensor<2, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`care(a, b, q, r)`: the stabilising solution `P` of the continuous algebraic Riccati equation `A'P + PA - PBR^-1B'P + Q = 0`.
+
+Solves the continuous algebraic Riccati equation
+`A^T P + P A - P B R^{-1} B^T P + Q = 0`.
+
+The solution is the stabilizing one, obtained from the stable invariant
+subspace of the Hamiltonian matrix. A Kleinman iteration refines it when
+the eigenvector solution leaves a residual above `1e-6` relative.
+
+# Errors
+Returns an error for inconsistent dimensions, a singular `R`, or when the
+Hamiltonian eigensystem cannot be formed.
 
 ## `number_theory.carmichael` (Stable)
 
@@ -11451,6 +11804,42 @@ The local Taylor coefficient of order `n` determines the integral. When that coe
 
 `cauchy_integral(f, z, a)`: Cauchy integral `∮ f(z) / (z - a) dz` around `a`.
 
+## `complex.cauchy_pv` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cauchy_pv(f, x, a, b, pole)`: Cauchy principal value `P.V. int_a^b f(x) dx` across a simple pole in `(a, b)`.
+
+## `complex.cauchy_riemann_cartesian` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cauchy_riemann_cartesian(f, z)`: returns `list(u_x - v_y, u_y + v_x)` for `f(x + I*y) = u + I*v`.
+
+## `complex.cauchy_riemann_polar` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cauchy_riemann_polar(f, r, theta)`: returns `list(r*u_r - v_theta, u_theta + r*v_r)` for `f(r*exp(I*theta)) = u + I*v`.
+
+## `complex.cauchy_root_bound` (Stable)
+
+```aevia
+(Dyn<term>, Symbol) -> Dyn<term>
+```
+
+`cauchy_root_bound(poly, z)`: Cauchy upper bound `1 + max_{k<n} |c_k / c_n|` on the roots of polynomial `poly(z)`.
+
+Classic Cauchy upper bound on the modulus of all roots of
+$p(z) = \sum_{k=0}^n `c_k` z^k$ (ascending coefficients):
+$R = 1 + \max_{0 \le k < n} |`c_k` / `c_n`|$.
+
 ## `linalg.cayley_hamilton` (Stable)
 
 ```aevia
@@ -11466,6 +11855,315 @@ The local Taylor coefficient of order `n` determines the integral. When that coe
 - `cayley_hamilton(list(list(4, 1, 0), list(0, 4, 1), list(0, 0, 4)))` → `[[Int]]`
 - `cayley_hamilton(list(list(a, b), list(c, d)))` → `[[Int]]`
 
+## `complex.cayley_transform` (Stable)
+
+```aevia
+(Dyn<term>) -> Dyn<term>
+```
+
+`cayley_transform(z)`: Cayley transform `(z - I) / (z + I)` mapping the upper half-plane to the unit disk.
+
+Cayley transform $C(z) = \frac{z - i}{z + i}$ mapping the upper half-plane to the unit disk.
+
+## `numeric.cball_abs` (Stable)
+
+```aevia
+(Tensor<[3], Real>) -> Tensor<[3], Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cball_abs(z)`: modulus enclosure `|z|` as a complex ball `list(re, 0, rad)`.
+
+Modulus ball `|z| + 0i` enclosing all `|w|` for `w in self`.
+
+## `numeric.cball_acos` (Stable)
+
+```aevia
+(Tensor<[3], Real>) -> Tensor<[3], Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cball_acos(z)`: principal inverse cosine enclosure of `list(re, im, rad)`.
+
+Inverse cosine `acos(z) = pi/2 - asin(z)`.
+
+## `numeric.cball_acosh` (Stable)
+
+```aevia
+(Tensor<[3], Real>) -> Tensor<[3], Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cball_acosh(z)`: principal inverse hyperbolic cosine enclosure of `list(re, im, rad)`.
+
+Inverse hyperbolic cosine `acosh(z)`. Returns `None` if the ball meets `(-inf, 1]`.
+
+## `numeric.cball_add` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cball_add(a, b)`: sum of two complex balls `list(re, im, rad)`.
+
+Addition `self + other`.
+
+## `numeric.cball_arg` (Stable)
+
+```aevia
+(Tensor<[3], Real>) -> Tensor<[3], Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cball_arg(z)`: principal argument enclosure `arg(z)` as a complex ball `list(re, 0, rad)`.
+
+Principal argument `arg(z) + 0i` in `(-pi, pi]`.
+Returns `None` if the ball meets the non-positive real axis `(-inf, 0]`.
+
+## `numeric.cball_asin` (Stable)
+
+```aevia
+(Tensor<[3], Real>) -> Tensor<[3], Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cball_asin(z)`: principal inverse sine enclosure of `list(re, im, rad)`.
+
+Inverse sine `asin(z)`. Returns `None` if the ball meets `(-inf, -1] U [1, inf)`.
+
+## `numeric.cball_asinh` (Stable)
+
+```aevia
+(Tensor<[3], Real>) -> Tensor<[3], Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cball_asinh(z)`: principal inverse hyperbolic sine enclosure of `list(re, im, rad)`.
+
+Inverse hyperbolic sine `asinh(z)`. Returns `None` if the ball meets `+-i [1, inf)`.
+
+## `numeric.cball_atan` (Stable)
+
+```aevia
+(Tensor<[3], Real>) -> Tensor<[3], Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cball_atan(z)`: principal inverse tangent enclosure of `list(re, im, rad)`.
+
+Inverse tangent `atan(z)`. Returns `None` if the ball meets `+-i [1, inf)`.
+
+## `numeric.cball_atanh` (Stable)
+
+```aevia
+(Tensor<[3], Real>) -> Tensor<[3], Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cball_atanh(z)`: principal inverse hyperbolic tangent enclosure of `list(re, im, rad)`.
+
+Inverse hyperbolic tangent `atanh(z)`. Returns `None` if the ball meets `(-inf, -1] U [1, inf)`.
+
+## `numeric.cball_conj` (Stable)
+
+```aevia
+(Tensor<[3], Real>) -> Tensor<[3], Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cball_conj(z)`: complex conjugate enclosure of `list(re, im, rad)`.
+
+Complex conjugate of this ball.
+
+## `numeric.cball_contains` (Stable)
+
+```aevia
+(Tensor<[3], Real>, Tensor<[3], Real>) -> Float
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cball_contains(b, pt)`: returns `1` if `pt` (`list(re, im, 0)` or `list(re, im, rad)`) lies in `b`, else `0`.
+
+## `numeric.cball_cos` (Stable)
+
+```aevia
+(Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cball_cos(z)`: complex cosine enclosure of `list(re, im, rad)`.
+
+Complex cosine `cos(z)`.
+
+## `numeric.cball_cosh` (Stable)
+
+```aevia
+(Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cball_cosh(z)`: complex hyperbolic cosine enclosure of `list(re, im, rad)`.
+
+Complex hyperbolic cosine `cosh(z)`.
+
+## `numeric.cball_div` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cball_div(a, b)`: quotient of two complex balls `list(re, im, rad)` when `b` excludes zero.
+
+Division `self / other`. Returns `None` if `other` cannot be separated from zero.
+
+## `numeric.cball_exp` (Stable)
+
+```aevia
+(Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cball_exp(z)`: complex exponential enclosure of `list(re, im, rad)`.
+
+Complex exponential `exp(z)`.
+
+## `numeric.cball_ln` (Stable)
+
+```aevia
+(Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cball_ln(z)`: principal complex logarithm enclosure of `list(re, im, rad)`.
+
+Principal complex logarithm `ln(z)`.
+Returns `None` if the ball intersects the non-positive real axis `(-inf, 0]`.
+
+## `numeric.cball_mul` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cball_mul(a, b)`: product of two complex balls `list(re, im, rad)`.
+
+Multiplication `self * other`.
+
+## `numeric.cball_overlaps` (Stable)
+
+```aevia
+(Tensor<[3], Real>, Tensor<[3], Real>) -> Float
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cball_overlaps(a, b)`: returns `1` if complex balls `a` and `b` overlap, else `0`.
+
+Whether two balls intersect.
+
+## `numeric.cball_pow` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cball_pow(a, b)`: principal complex power `a^b` over complex balls `list(re, im, rad)`.
+
+Complex power `self^exponent = exp(exponent * ln(self))`.
+
+## `numeric.cball_powi` (Stable)
+
+```aevia
+(Tensor<[3], Real>, Int) -> Tensor<[3], Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cball_powi(z, n)`: integer power enclosure `z^n` of `list(re, im, rad)`.
+
+Integer power `self^n`. Returns `None` if `!self.is_finite()` or if `n < 0` and `self` may contain zero.
+
+## `numeric.cball_sin` (Stable)
+
+```aevia
+(Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cball_sin(z)`: complex sine enclosure of `list(re, im, rad)`.
+
+Complex sine `sin(z)`.
+
+## `numeric.cball_sinh` (Stable)
+
+```aevia
+(Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cball_sinh(z)`: complex hyperbolic sine enclosure of `list(re, im, rad)`.
+
+Complex hyperbolic sine `sinh(z)`.
+
+## `numeric.cball_sqrt` (Stable)
+
+```aevia
+(Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cball_sqrt(z)`: principal complex square root enclosure of `list(re, im, rad)`.
+
+Principal square root `sqrt(z)`.
+Returns `None` if the ball crosses the negative real axis `(-inf, 0)` away from `0`.
+If the ball contains `0`, returns an enclosure centered at `0` covering all branches.
+
+## `numeric.cball_sub` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cball_sub(a, b)`: difference of two complex balls `list(re, im, rad)`.
+
+Subtraction `self - other`.
+
+## `numeric.cball_tan` (Stable)
+
+```aevia
+(Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cball_tan(z)`: complex tangent enclosure of `list(re, im, rad)`.
+
+Complex tangent `tan(z) = sin(z) / cos(z)`.
+
+## `numeric.cball_tanh` (Stable)
+
+```aevia
+(Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cball_tanh(z)`: complex hyperbolic tangent enclosure of `list(re, im, rad)`.
+
+Complex hyperbolic tangent `tanh(z) = sinh(z) / cosh(z)`.
+
+## `numeric.cball_to_cinterval` (Stable)
+
+```aevia
+(Tensor<[3], Real>) -> Tensor<[4], Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cball_to_cinterval(b)`: converts a complex ball `list(re, im, rad)` to a rectangular interval `list(re_lo, re_hi, im_lo, im_hi)`.
+
+Converts this disk into an enclosing rectangular [`Cball`].
+
 ## `stats.cdf` (Stable)
 
 ```aevia
@@ -11473,6 +12171,28 @@ The local Taylor coefficient of order `n` determines the integral. When that coe
 ```
 
 `cdf(d, x)`: cumulative distribution function `P(X <= x)` of distribution `d` at point `x`. The point shares the distribution's dimension and the probability is dimensionless. Floating normal, lognormal, exponential, Weibull, and Cauchy calls use tail-stable evaluation.
+
+## `numeric.cdt_2d` (Stable)
+
+```aevia
+(Tensor<2, Real>, Tensor<2, Real>) -> Tensor<2, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cdt_2d(points, segments)`: the constrained Delaunay triangulation of `points` that keeps every `list(i, j)` segment as an edge.
+
+Delaunay triangulation of `points` with the given segments forced in.
+
+Each `(u, v)` in `segments` becomes a chain of constrained edges in the
+returned triangulation: any segment passing through existing collinear
+vertices is automatically split at those vertices before enforcement.
+
+# Errors
+
+Returns `Err` when the points are invalid, when a segment index is out of
+range, when a segment joins a vertex to itself, or when two segments cross
+transversely (in which case [`constrained_delaunay_2d_mesh`] should be used
+so the intersection Steiner points can be returned).
 
 ## `special.ceil` (Stable)
 
@@ -11511,6 +12231,7 @@ The local Taylor coefficient of order `n` determines the integral. When that coe
 ## `stats.central_moment_of` (Stable)
 
 ```aevia
+(Dyn<term>, Int) -> Real
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -11519,6 +12240,7 @@ The local Taylor coefficient of order `n` determines the integral. When that coe
 ## `physics.centripetal_acceleration` (Stable)
 
 ```aevia
+(Int, Int) -> Real
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -11547,6 +12269,22 @@ The local Taylor coefficient of order `n` determines the integral. When that coe
 ```
 
 `chain(terms)`: formal linear combination `list(list(mult, cell), ...)` of oriented cells.
+
+## `numeric.chain_autocorrelation` (Stable)
+
+```aevia
+(Tensor<1, Real>, Int) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`chain_autocorrelation(chain, max_lag)`: the sample autocorrelation of `chain` for lags `0..=max_lag`.
+
+Sample autocorrelation of `chain` at lags `0..=max_lag`.
+
+The estimate uses the usual biased denominator, the full sum of squared
+deviations from the mean, so the sequence is positive semidefinite. Lag 0 is
+always 1. Entries that cannot be estimated — a chain with fewer than two
+draws, a lag of at least the chain length, or a constant chain — are `NaN`.
 
 ## `discrete.character_adams` (Stable)
 
@@ -11620,6 +12358,7 @@ Returns `true` if class function `chi` of finite group `G` has `<chi, chi> = 1`.
 ## `discrete.character_of_matrices` (Stable)
 
 ```aevia
+(dihedral_group, Tensor<3, Int>) -> Tensor<1, Int>
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -11628,6 +12367,7 @@ Computes the class function (traces at conjugacy class representatives) of matri
 ## `discrete.character_projection` (Stable)
 
 ```aevia
+(cyclic_group, Int, Tensor<3, Int>) -> Tensor<2, Int>
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -11688,6 +12428,7 @@ Computes the pointwise (tensor) product `chi * psi` of two class functions on fi
 ## `stats.charfn` (Stable)
 
 ```aevia
+(Dyn<term>, Int) -> Real
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -11700,9 +12441,6 @@ Computes the pointwise (tensor) product `chi * psi` of two class functions on fi
 ```
 
 `charpoly(A, lambda)`: characteristic polynomial `det(lambda*I - A)` in `lambda`.
-
-The characteristic polynomial `det(x I - m)` as coefficients of
-`x^0 ..= x^n` (Faddeev-LeVerrier).
 
 ## `special.chebyshev_approx` (Stable)
 
@@ -11851,6 +12589,18 @@ Cholesky factor `L` (lower triangular) with `A = L L^T`.
 
 - `cholesky(list(list(4, 2), list(2, 3)))` → `[[Expr]]`
 
+## `complex.chordal_distance` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`chordal_distance(z1, z2)`: spherical chordal distance `2*abs(z1 - z2) / sqrt((1 + abs(z1)^2)*(1 + abs(z2)^2))` on `S^2`.
+
+Spherical chordal distance on the Riemann sphere:
+`2 * |z1 - z2| / sqrt((1 + |z1|^2) * (1 + |z2|^2))`.
+Overflow-safe for large moduli.
+
 ## `geometry.christoffel` (Stable)
 
 ```aevia
@@ -11888,6 +12638,245 @@ Cholesky factor `L` (lower triangular) with `A = L L^T`.
 
 `ci(x)`: cosine integral `Ci(x) = -int_x^infty cos(t)/t dt`.
 
+## `numeric.cinterval_acos` (Stable)
+
+```aevia
+(Tensor<[4], Real>) -> Tensor<[4], Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_acos(z)`: principal inverse cosine enclosure of `list(re_lo, re_hi, im_lo, im_hi)`.
+
+Rectangular enclosure of principal `acos(z) = pi/2 - asin(z)`.
+
+## `numeric.cinterval_acosh` (Stable)
+
+```aevia
+(Tensor<[4], Real>) -> Tensor<[4], Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_acosh(z)`: principal inverse hyperbolic cosine enclosure of dimensionless bounds `list(re_lo, re_hi, im_lo, im_hi)`. Symbolic calls stay unevaluated when a bound cannot be formed. Checked calls report a domain diagnostic.
+
+Rectangular enclosure of principal `acosh(z) = ln(z + sqrt(z - 1) * sqrt(z + 1))`.
+
+## `numeric.cinterval_add` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_add(a, b)`: sum of two complex intervals `list(re_lo, re_hi, im_lo, im_hi)`.
+
+## `numeric.cinterval_asin` (Stable)
+
+```aevia
+(Tensor<[4], Real>) -> Tensor<[4], Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_asin(z)`: principal inverse sine enclosure of `list(re_lo, re_hi, im_lo, im_hi)`.
+
+Rectangular enclosure of principal `asin(z) = -i * ln(i*z + sqrt(1 - z^2))`.
+
+## `numeric.cinterval_asinh` (Stable)
+
+```aevia
+(Tensor<[4], Real>) -> Tensor<[4], Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_asinh(z)`: principal inverse hyperbolic sine enclosure of dimensionless bounds `list(re_lo, re_hi, im_lo, im_hi)`. Symbolic calls stay unevaluated when a bound cannot be formed. Checked calls report a domain diagnostic.
+
+Rectangular enclosure of principal `asinh(z) = ln(z + sqrt(z^2 + 1))`.
+
+## `numeric.cinterval_atan` (Stable)
+
+```aevia
+(Tensor<[4], Real>) -> Tensor<[4], Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_atan(z)`: principal inverse tangent enclosure of `list(re_lo, re_hi, im_lo, im_hi)`.
+
+Rectangular enclosure of principal `atan(z) = (i/2) * ln((1 - i*z)/(1 + i*z))`.
+
+## `numeric.cinterval_atanh` (Stable)
+
+```aevia
+(Tensor<[4], Real>) -> Tensor<[4], Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_atanh(z)`: principal inverse hyperbolic tangent enclosure of dimensionless bounds `list(re_lo, re_hi, im_lo, im_hi)`. Symbolic calls stay unevaluated when a bound cannot be formed. Checked calls report a domain diagnostic.
+
+Rectangular enclosure of principal `atanh(z) = 0.5 * ln((1 + z)/(1 - z))`.
+
+## `numeric.cinterval_cos` (Stable)
+
+```aevia
+(Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_cos(z)`: complex cosine enclosure of `list(re_lo, re_hi, im_lo, im_hi)`.
+
+Rectangular enclosure of `cos(z)`.
+
+## `numeric.cinterval_cosh` (Stable)
+
+```aevia
+(Tensor<[4], Real>) -> Tensor<[4], Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_cosh(z)`: complex hyperbolic cosine enclosure of `list(re_lo, re_hi, im_lo, im_hi)`.
+
+Rectangular enclosure of `cosh(z)`.
+
+## `numeric.cinterval_div` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_div(a, b)`: quotient of two complex intervals `list(re_lo, re_hi, im_lo, im_hi)`.
+
+`self / other`. Returns `None` when the denominator enclosure
+cannot be separated from zero.
+
+## `numeric.cinterval_exp` (Stable)
+
+```aevia
+(Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_exp(z)`: complex exponential enclosure of `list(re_lo, re_hi, im_lo, im_hi)`.
+
+Rectangular enclosure of `exp(z)`.
+
+## `numeric.cinterval_intersect` (Stable)
+
+```aevia
+(Tensor<[4], Real>, Tensor<[4], Real>) -> Tensor<[4], Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_intersect(a, b)`: intersection of two rectangular complex intervals.
+
+The intersection, when the rectangles meet.
+
+## `numeric.cinterval_ln` (Stable)
+
+```aevia
+(Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_ln(z)`: principal complex logarithm enclosure of `list(re_lo, re_hi, im_lo, im_hi)`.
+
+Rectangular enclosure of principal `ln(z)`. Returns `None` if the
+rectangle meets the non-positive real axis `(-inf, 0]`.
+
+## `numeric.cinterval_mul` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_mul(a, b)`: product of two complex intervals `list(re_lo, re_hi, im_lo, im_hi)`.
+
+## `numeric.cinterval_pow` (Stable)
+
+```aevia
+(Tensor<[4], Real>, Tensor<[4], Real>) -> Tensor<[4], Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_pow(a, b)`: principal complex power enclosure `a^b`.
+
+Rectangular enclosure of `self^exponent = exp(exponent * ln(self))`.
+
+## `numeric.cinterval_sin` (Stable)
+
+```aevia
+(Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_sin(z)`: complex sine enclosure of `list(re_lo, re_hi, im_lo, im_hi)`.
+
+Rectangular enclosure of `sin(z)`.
+
+## `numeric.cinterval_sinh` (Stable)
+
+```aevia
+(Tensor<[4], Real>) -> Tensor<[4], Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_sinh(z)`: complex hyperbolic sine enclosure of `list(re_lo, re_hi, im_lo, im_hi)`.
+
+Rectangular enclosure of `sinh(z)`.
+
+## `numeric.cinterval_sqrt` (Stable)
+
+```aevia
+(Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_sqrt(z)`: principal complex square root enclosure of `list(re_lo, re_hi, im_lo, im_hi)`.
+
+Rectangular enclosure of principal `sqrt(z)`.
+Returns `None` if the rectangle crosses `(-inf, 0)` away from `0`.
+
+## `numeric.cinterval_sub` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_sub(a, b)`: difference of two complex intervals `list(re_lo, re_hi, im_lo, im_hi)`.
+
+## `numeric.cinterval_tan` (Stable)
+
+```aevia
+(Tensor<[4], Real>) -> Tensor<[4], Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_tan(z)`: complex tangent enclosure of `list(re_lo, re_hi, im_lo, im_hi)`.
+
+Rectangular enclosure of `tan(z) = sin(z) / cos(z)`.
+
+## `numeric.cinterval_tanh` (Stable)
+
+```aevia
+(Tensor<[4], Real>) -> Tensor<[4], Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_tanh(z)`: complex hyperbolic tangent enclosure of `list(re_lo, re_hi, im_lo, im_hi)`.
+
+Rectangular enclosure of `tanh(z) = sinh(z) / cosh(z)`.
+
+## `numeric.cinterval_to_cball` (Stable)
+
+```aevia
+(Tensor<[4], Real>) -> Tensor<[3], Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`cinterval_to_cball(rect)`: converts a rectangular complex interval `list(re_lo, re_hi, im_lo, im_hi)` to a complex ball `list(re, im, rad)`.
+
+Converts a rectangular [`Cball`] into an enclosing [`ComplexBall`].
+
 ## `complex.circle` (Stable)
 
 ```aevia
@@ -11896,9 +12885,20 @@ Cholesky factor `L` (lower triangular) with `A = L L^T`.
 
 `circle(c, r)`: counter-clockwise circular contour with center `c` and radius `r`.
 
+## `complex.cis` (Stable)
+
+```aevia
+(Dyn<term>) -> Dyn<term>
+```
+
+`cis(t)`: unit complex number `cos(t) + I*sin(t)`.
+
+Unit complex number `cos(theta) + i * sin(theta)`.
+
 ## `physics_quantum.clebsch_gordan` (Stable)
 
 ```aevia
+(Real, Real, Real, Real, Int, Int) -> Real
 (Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -11922,6 +12922,7 @@ Cholesky factor `L` (lower triangular) with `A = L L^T`.
 ## `discrete.code_min_distance` (Stable)
 
 ```aevia
+(Tensor<2, Int>) -> Int
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -11995,6 +12996,18 @@ Useful for comparing variability across datasets with different means.
 
 `coherence(x, y, window, hop, sample_rate)`: one-sided magnitude-squared Welch coherence. Bins with zero power have zero coherence.
 
+Estimates one-sided cross-spectral density and magnitude-squared coherence.
+
+Applies the same complete-frame Welch convention as [`welch_psd`] to
+both inputs. For the Fourier bins `X` and `Y`, it averages `conj(X) * Y`
+across frames to obtain the cross-spectral density `Pxy`, and computes
+`abs(Pxy)^2 / (Pxx * Pyy)`. Auto-spectra and cross-spectra share the
+same window energy and one-sided scaling.
+
+# Errors
+Returns an error on unequal lengths or on the invalid input domains
+described by [`welch_psd`].
+
 ## `poly.collect` (Stable)
 
 ```aevia
@@ -12028,6 +13041,7 @@ Useful for comparing variability across datasets with different means.
 ## `lie.commutator_table` (Stable)
 
 ```aevia
+(Tensor<3, Int>) -> Tensor<4, Int>
 () -> Dyn<term> with 0... x Dyn<term>
 ```
 
@@ -12049,6 +13063,30 @@ Useful for comparing variability across datasets with different means.
 
 - `companion(x^3 - 2*x^2 + 3*x - 4, x)` → `[[Int]]`
 
+## `complex.complex_diff` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`complex_diff(f, z, n)`: `n`-th complex derivative of holomorphic `f(z)`.
+
+## `complex.complex_expand` (Stable)
+
+```aevia
+(Dyn<term>) -> Dyn<term>
+```
+
+`complex_expand(z)`: expands `z` into explicit Cartesian form `re(z) + I*im(z)`.
+
+## `complex.complex_laplacian` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`complex_laplacian(f, z)`: `4 * d/dz d/d(conj(z)) f(z)`.
+
 ## `discrete.complex_map_fixed_points` (Stable)
 
 ```aevia
@@ -12064,10 +13102,19 @@ Finds fixed points solving `f(z) = z` for map `f` in variable `z`.
 ## `discrete.complex_map_stability` (Stable)
 
 ```aevia
+(Dyn<term>, Symbol, Real) -> Real
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
 Computes the stability multiplier `|f'(z0)|` of complex map `f` in `z` at `z0`.
+
+## `complex.complex_risch_integrate` (Stable)
+
+```aevia
+(Dyn<term>, Symbol) -> Dyn<term>
+```
+
+`complex_risch_integrate(f, z)`: Risch–Bronstein complex antiderivative via Euler complexification and complex logarithmic residues.
 
 ## `geometry.component` (Stable)
 
@@ -12149,6 +13196,7 @@ Computes the stability multiplier `|f'(z0)|` of complex map `f` in `z` at `z0`.
 ## `complex.continue_along` (Stable)
 
 ```aevia
+(Dyn<term>, Symbol, Tensor<1, Real>, Int) -> Real
 (Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -12297,6 +13345,8 @@ The Pearson correlation coefficient as an `f64`.
 ## `discrete.correlation_dimension` (Stable)
 
 ```aevia
+(Tensor<2, Int>, Tensor<1, Int>) -> Float
+(Tensor<2, Int>, Int) -> Float
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -12317,7 +13367,16 @@ non-finite coordinates or distances outside the range of `f64`.
 
 `cos(x)`: cosine of angle `x` in radians.
 
-`cos z`.
+## `numeric.cos_integral_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cos_integral_complex(re, im)`: `list(re, im)` of `Ci(z)`.
+
+Complex sine and cosine integrals `(Si(z), Ci(z))`.
 
 ## `elementary.cosh` (Stable)
 
@@ -12327,6 +13386,22 @@ non-finite coordinates or distances outside the range of `f64`.
 ```
 
 `cosh(x)`: hyperbolic cosine `(e^x + e^-x) / 2`.
+
+`cosh(x)` as a ball.
+
+# Errors
+Fails when an exponent leaves the representable range.
+
+## `numeric.cosh_integral_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cosh_integral_complex(re, im)`: `list(re, im)` of `Chi(z)`.
+
+Complex hyperbolic sine and cosine integrals `(Shi(z), Chi(z))`.
 
 ## `elementary.cot` (Stable)
 
@@ -12479,6 +13554,7 @@ The Coulomb phase shift `σ_l(η) = arg Γ(l + 1 + iη)` (DLMF 33.2.10).
 ## `logic.count_models` (Stable)
 
 ```aevia
+(Tensor<2, Int>) -> Int
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -12504,6 +13580,7 @@ The Coulomb phase shift `σ_l(η) = arg Γ(l + 1 + iη)` (DLMF 33.2.10).
 ## `complex.count_zeros_poles` (Stable)
 
 ```aevia
+(Dyn<term>, Symbol, polygon) -> Int
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -12558,6 +13635,44 @@ length or hold fewer than two points.
 
 `covariant_divergence(V, g, vars)`: covariant divergence `nabla_i V^i` of vector `V` for metric `g(vars)`.
 
+## `numeric.cox_fit` (Stable)
+
+```aevia
+(Tensor<2, Real>, Tensor<1, Real>, Tensor<1, Real>, Symbol, Real) -> { beta: Tensor<1, Real>, se: Tensor<1, Real>, z: Tensor<1, Real>, p: Tensor<1, Real>, loglik: Real, concordance: Real }
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cox_fit(x, time, event, ties, tol)`: `list(beta, se, z, p, loglik, concordance)` of the Cox proportional-hazards model; `x` is a list of covariate rows without an intercept and `ties` is `breslow` or `efron`.
+
+Fits a Cox proportional-hazards model by Newton-Raphson on the partial
+likelihood, with step halving when a full step lowers the likelihood.
+
+`x` holds one row of covariates per observation, `time` the observed times
+and `event` whether the observation ended in the event. The iteration stops
+when the largest absolute change of a coefficient falls below `tol` or
+after `max_iter` iterations; the fit reports which happened through
+[`CoxFit::converged`].
+
+# Errors
+Returns an error for empty or mismatched inputs, non-finite values, an empty
+design matrix, a covariate column with zero variance, a sample in which
+every observation is censored, a singular observed information matrix, or a
+non-positive `max_iter` or `tol`.
+
+## `numeric.cox_predict` (Stable)
+
+```aevia
+(Tensor<2, Real>, Tensor<1, Real>) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cox_predict(x, beta)`: the relative hazard `exp(x . beta)` of each covariate row.
+
+Predicts relative hazards from fitted log-hazard coefficients.
+
+# Errors
+Fails when an observation has a different number of columns than the model.
+
 ## `numeric.cp_als` (Stable)
 
 ```aevia
@@ -12609,6 +13724,13 @@ normalization protects uniformly very small or very large tensors.
 
 `cp_dense(weights, factors)`: reconstruct dense tensor from CP `weights` and factor matrices.
 
+The dense tensor `sum_r weights[r] * a_r o b_r o ..` of a CP model, with
+`factors[k]` of size `n_k x rank`.
+
+# Errors
+Returns an error if there are fewer than two factors, a factor does not
+have one column per weight, or an extent is zero.
+
 ## `discrete.crc16` (Stable)
 
 ```aevia
@@ -12654,6 +13776,7 @@ Finalizes a running CRC-32 state `crc` by applying the final XOR mask.
 ## `discrete.crc32_update` (Stable)
 
 ```aevia
+(Int, Tensor<1, Int>) -> Int
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -12753,9 +13876,20 @@ let res = cross_correlation(&a, &v);
 
 - `cross_entropy(list(0.2, 0.3, 0.5), list(0.3, 0.3, 0.4))` → `Float`
 
+## `complex.cross_ratio` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`cross_ratio(z1, z2, z3, z4)`: Möbius-invariant cross ratio `((z1 - z3)*(z2 - z4)) / ((z1 - z4)*(z2 - z3))`.
+
+Computes the cross ratio `(z_1, z_2; z_3, z_4) = \frac{(z_1 - z_3)(z_2 - z_4)}{(z_1 - z_4)(z_2 - z_3)}`.
+
 ## `number_theory.crt` (Stable)
 
 ```aevia
+(Tensor<1, Int>, Tensor<1, Int>) -> Int
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -12929,6 +14063,7 @@ Curl of a three-dimensional vector field. Returns `None` for wrong dimensions.
 ## `combinatorics.cycle_type` (Stable)
 
 ```aevia
+(Tensor<1, Int>) -> Tensor<1, Int>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -12952,6 +14087,35 @@ Constructs the cyclic group `Z_n` of order `n` on elements `0..n-1` under additi
 
 - `cyclic_group(5)` → `Obj<group>`
 
+## `numeric.dare` (Stable)
+
+```aevia
+(Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>) -> Tensor<2, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`dare(a, b, q, r)`: the stabilising solution `P` of the discrete algebraic Riccati equation.
+
+Solves the discrete algebraic Riccati equation
+`P = A^T P A - A^T P B (R + B^T P B)^{-1} B^T P A + Q`.
+
+Uses monotone value iteration from `P = Q` with a `1e-12` stopping
+tolerance and an iteration cap of 10 000.
+
+# Errors
+Returns an error for inconsistent dimensions or a singular `R + B^T P B`.
+
+## `numeric.dawson_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`dawson_complex(re, im)`: `list(re, im)` of Dawson integral `D+(z)`.
+
+Complex Dawson integral `D+(z) = exp(-z^2) * int_0^z exp(t^2) dt`.
+
 ## `physics.debye_frequency` (Stable)
 
 ```aevia
@@ -12967,6 +14131,18 @@ Constructs the cyclic group `Z_n` of order `n` on elements `0..n-1` under additi
 ```
 
 `debye_heat_capacity(N, TD, T)`: Debye model heat capacity at temperature `T` with Debye temperature `TD`.
+
+## `numeric.dedekind_eta_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`dedekind_eta_complex(re, im)`: `list(re, im)` of `eta(tau)`.
+
+Dedekind eta function `eta(tau)` on the upper half-plane `Im(tau) > 0`
+using modular reduction to the fundamental domain and Euler's pentagonal theorem.
 
 ## `calculus.definite_sum` (Stable)
 
@@ -12991,6 +14167,7 @@ For example, `definite_sum(binomial(n, k), k, n)` returns `2^n`. The request rem
 ## `poly.degree` (Stable)
 
 ```aevia
+(Dyn<term>, Symbol) -> Int
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -13019,6 +14196,43 @@ The de-interleaved data.
 ### Examples
 
 - `deinterleave(list(1, 4, 7, 2, 5, 8, 3, 6, 9), 3)` → `[Int]`
+
+## `numeric.delaunay_2d` (Stable)
+
+```aevia
+(Tensor<2, Real>) -> Tensor<2, Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`delaunay_2d(points)`: the counter-clockwise Delaunay triangulation of a list of `list(x, y)` points, as `list(i, j, k)` index triples.
+
+Delaunay triangulation of `points` by Bowyer–Watson insertion.
+
+Returns counter-clockwise triangles as triples of indices into `points`.
+
+# Errors
+
+Returns `Err` when fewer than three points are supplied, when a coordinate
+is not finite, or when two points coincide.
+
+## `numeric.delaunay_3d` (Stable)
+
+```aevia
+(Tensor<2, Real>) -> Tensor<2, Real>
+(Dyn<term>) -> Dyn<term>
+```
+
+`delaunay_3d(points)`: the Delaunay tetrahedralisation of a list of `list(x, y, z)` points, as `list(i, j, k, l)` index quadruples.
+
+Delaunay tetrahedralisation of `points`.
+
+Returns positively oriented tetrahedra as quadruples of indices into
+`points`.
+
+# Errors
+
+Returns `Err` when fewer than four points are supplied, when a coordinate is
+not finite, or when two points coincide.
 
 ## `radicals.denest_sqrt` (Stable)
 
@@ -13084,6 +14298,20 @@ The de-interleaved data.
 The derivative of `f` with respect to the symbol `x`, as an unevaluated
 request.
 
+## `numeric.difference` (Stable)
+
+```aevia
+(Tensor<1, Real>, Int) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`difference(x, d)`: the `d`-fold first difference of `x`.
+
+`d`-fold first difference.
+
+Each pass replaces `x` by `x[t+1] - x[t]`, so the result is `d` entries
+shorter than the input (and empty once the series is exhausted).
+
 ## `calculus.diffn` (Stable)
 
 ```aevia
@@ -13136,6 +14364,8 @@ Constructs the dihedral group `D_n` of order `2*n` with rotations `r0..r(n-1)` a
 ## `lie_structure.dim_irrep` (Stable)
 
 ```aevia
+(Symbol, Tensor<1, Int>) -> Int
+(Tensor<2, Int>, Tensor<1, Int>) -> Int
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -13237,6 +14467,19 @@ Constructs the dihedral group `D_n` of order `2*n` with rotations `r0..r(n-1)` a
 
 `directional(f, vars, v)`: directional derivative `(grad f) . v` along vector `v`.
 
+## `numeric.dirichlet_eta_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`dirichlet_eta_complex(re, im)`: `list(re, im)` of `eta(s)`.
+
+Complex Dirichlet eta function `eta(s) = sum_{n>=1} (-1)^(n-1) / n^s`
+using Borwein's accelerated alternating sum for small `|Im(s)|` and
+`(1 - 2^(1-s)) * zeta(s)` elsewhere.
+
 ## `transforms.discrete_convolution` (Stable)
 
 ```aevia
@@ -13282,6 +14525,17 @@ The discriminant is one for a linear polynomial and zero when the polynomial has
 
 `div_in(F, sys, vars)`: divergence of physical-component vector `F` in orthogonal coordinate system `sys(vars)`.
 
+## `arith.divide` (Stable)
+
+```aevia
+(Real, Real) -> Real
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`divide(a, b)`: the quotient `a / b`.
+
+Rewritten to `mul(a, pow(b, -1))` and printed as `a/b`. The name is `divide` because `div` is the divergence of a vector field.
+
 ## `number_theory.divisor_count` (Stable)
 
 ```aevia
@@ -13290,6 +14544,8 @@ The discriminant is one for a linear polynomial and zero when the polynomial has
 ```
 
 `divisor_count(n)`: number of positive divisors `tau(n)` of positive integer `n`.
+
+Returns the number of positive divisors `\tau(n) = \sigma_0(n)` (`divisor_count(0) = 0`).
 
 ### Examples
 
@@ -13317,6 +14573,8 @@ The discriminant is one for a linear polynomial and zero when the polynomial has
 
 `divisors(n)`: sorted list of all positive divisors of `n`.
 
+Returns all positive divisors of `n` in ascending order (`divisors(0)` is empty).
+
 ### Examples
 
 - `divisors(12)` → `[Int]`
@@ -13328,6 +14586,21 @@ The discriminant is one for a linear polynomial and zero when the polynomial has
 ```
 
 `dlog(g, h, n)`: discrete logarithm `k` satisfying `g^k = h (mod n)`.
+
+## `numeric.dlqr` (Stable)
+
+```aevia
+(Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>) -> { gain: Tensor<2, Real>, riccati: Tensor<2, Real> }
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`dlqr(a, b, q, r)`: `list(K, P)`, the discrete linear-quadratic gain and the Riccati solution.
+
+Discrete linear-quadratic regulator: returns `(K, P)` with
+`K = (R + B^T P B)^{-1} B^T P A`.
+
+# Errors
+As [`dare`].
 
 ## `logic.dnf` (Stable)
 
@@ -13534,6 +14807,7 @@ Returns the additive inverse `-P` of point `P` on elliptic curve `C`.
 ## `discrete.ec_on_curve` (Stable)
 
 ```aevia
+(Tensor<1, Int>, Tensor<1, Int>) -> Bool
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -13542,6 +14816,7 @@ Returns `true` if point `P` lies on elliptic curve `C` (including the point at i
 ## `discrete.ec_order` (Stable)
 
 ```aevia
+(Tensor<1, Int>, Tensor<1, Int>) -> Int
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -13611,10 +14886,31 @@ Computes an ECDSA signature `list(r, s)` for `(C, G, n, d, h, k)` with generator
 ## `discrete.ecdsa_verify` (Stable)
 
 ```aevia
+(Tensor<1, Int>, Tensor<1, Int>, Int, Tensor<1, Int>, Int, Tensor<1, Int>) -> Bool
 (Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
 Verifies an ECDSA signature `list(r, s)` for `(C, G, n, Q, h, sig)` against public key `Q` and message hash `h`, returning a boolean.
+
+## `numeric.effective_sample_size` (Stable)
+
+```aevia
+(Tensor<1, Real>) -> Real
+(Dyn<term>) -> Dyn<term>
+```
+
+`effective_sample_size(chain)`: the effective number of independent draws in `chain`, from the initial positive sequence of its autocorrelations.
+
+Effective sample size by the initial positive sequence estimator.
+
+The autocorrelations are summed in adjacent pairs and the sum is truncated
+at the first non-positive pair, which keeps the estimate from being dragged
+down by the noise of the tail. Lags are computed only until that truncation,
+so a well-mixing chain costs two passes over the data. Returns the number of
+independent draws with the same information content as the chain.
+
+# Errors
+Returns an error for fewer than four draws or a constant chain.
 
 ## `number_theory.egcd` (Stable)
 
@@ -13712,6 +15008,30 @@ Verifies an ECDSA signature `list(r, s)` for `(C, G, n, Q, h, sig)` against publ
 - `einstein_tensor_from(list(list(2, 0), list(0, 3)), 5, identity(2))` → `[[Rat]]`
 - `einstein_tensor_from(ricci(list(list(a^2, 0), list(0, a^2*sin(theta)^2)), list(theta, phi)), ricci_scalar(list(list(a^2, 0), list(0, a^2*sin(theta)^2)), list(theta, phi)), list(list(a^2, 0), list(0, a^2*sin(theta)^2)))` → `[[Int]]`
 
+## `numeric.eisenstein_e4_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`eisenstein_e4_complex(re, im)`: `list(re, im)` of `E_4(tau)`.
+
+Normalized Eisenstein series `E_4(tau) = 1 + 240 * sum_{n>=1} n^3 q^n / (1 - q^n)`
+with `q = exp(2*pi*i*tau)` for `Im(tau) > 0`.
+
+## `numeric.eisenstein_e6_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`eisenstein_e6_complex(re, im)`: `list(re, im)` of `E_6(tau)`.
+
+Normalized Eisenstein series `E_6(tau) = 1 - 504 * sum_{n>=1} n^5 q^n / (1 - q^n)`
+with `q = exp(2*pi*i*tau)` for `Im(tau) > 0`.
+
 ## `physics.electric_field_from_potential` (Stable)
 
 ```aevia
@@ -13740,6 +15060,61 @@ Verifies an ECDSA signature `list(r, s)` for `(C, G, n, Q, h, sig)` against publ
 - `electric_field_from_potentials(0, list(-E0*t, 0, 0), list(x, y, z), t)` → `[Expr]`
 - `electric_field_from_potentials(-E0*x, list(-E0*t, 0, 0), list(x, y, z), t)` → `[Expr]`
 
+## `numeric.elliptic_e_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`elliptic_e_complex(re, im)`: `list(re, im)` of `E(m)`.
+
+Complete elliptic integral of the second kind `E(m)` for complex parameter `m`.
+
+## `numeric.elliptic_e_inc_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`elliptic_e_inc_complex(pr, pi, mr, mi)`: `list(re, im)` of `E(phi | m)`.
+
+Incomplete elliptic integral of the second kind `E(phi | m)`.
+
+## `numeric.elliptic_f_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`elliptic_f_complex(pr, pi, mr, mi)`: `list(re, im)` of `F(phi | m)`.
+
+Incomplete elliptic integral of the first kind `F(phi | m)`.
+
+## `numeric.elliptic_k_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`elliptic_k_complex(re, im)`: `list(re, im)` of `K(m)`.
+
+Complete elliptic integral of the first kind `K(m)` for complex parameter `m`.
+
+## `numeric.elliptic_pi_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`elliptic_pi_complex(nr, ni, pr, pi, mr, mi)`: `list(re, im)` of `Pi(n; phi | m)`.
+
+Incomplete elliptic integral of the third kind `Pi(n; phi | m)`.
+
 ## `physics.em_energy_density` (Stable)
 
 ```aevia
@@ -13767,6 +15142,9 @@ Verifies an ECDSA signature `list(r, s)` for `(C, G, n, Q, h, sig)` against publ
 ## `logic.entails` (Stable)
 
 ```aevia
+(Int, Int) -> Bool
+(Symbol, Symbol) -> Bool
+(Tensor<1, Int>, Tensor<1, Int>) -> Bool
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -13889,6 +15267,17 @@ scaled with the Faddeeva factor near the floating-point range limits.
 
 `erfc(x)`: complementary error function `1 - erf(x)`.
 
+## `numeric.erfc_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`erfc_complex(re, im)`: `list(re, im)` of `erfc(z)`.
+
+Complex complementary error function `erfc(z) = 1 - erf(z)`.
+
 ## `special.erfcinv` (Stable)
 
 ```aevia
@@ -13903,6 +15292,17 @@ scaled with the Faddeeva factor near the floating-point range limits.
 
 - `erfcinv(0.3)` → `Float`
 
+## `numeric.erfcx_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`erfcx_complex(re, im)`: `list(re, im)` of `exp(z^2) * erfc(z)`.
+
+Scaled complementary error function `erfcx(z) = exp(z^2) * erfc(z) = w(i*z)`.
+
 ## `special.erfi` (Stable)
 
 ```aevia
@@ -13915,6 +15315,17 @@ scaled with the Faddeeva factor near the floating-point range limits.
 The imaginary error function `erfi(x) = -i erf(ix) = (2/√π) ∫_0^x e^{t²}
 dt`, from its everywhere-convergent power series (all terms of one
 sign, so no cancellation).
+
+## `numeric.erfi_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`erfi_complex(re, im)`: `list(re, im)` of `erfi(z)`.
+
+Imaginary error function `erfi(z) = -i * erf(i * z)`.
 
 ## `discrete.euclidean_distance` (Stable)
 
@@ -14003,6 +15414,33 @@ The Euclidean distance between two points.
 ```
 
 `exp(x)`: natural exponential function `e^x`.
+
+`exp(x)` as a ball.
+
+# Errors
+Fails when an exponent leaves the representable range.
+
+## `numeric.exp_integral_e1_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`exp_integral_e1_complex(re, im)`: `list(re, im)` of `E_1(z)`.
+
+Complex exponential integral `E_1(z) = int_z^oo exp(-t)/t dt`, cut along `(-inf, 0]`.
+
+## `numeric.exp_integral_ei_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`exp_integral_ei_complex(re, im)`: `list(re, im)` of `Ei(z)`.
+
+Complex exponential integral `Ei(z) = -E_1(-z) + i * pi * sign` (principal branch).
 
 ## `lie.exp_map` (Stable)
 
@@ -14161,6 +15599,17 @@ The factorial of `n` as an `f64`. Returns `f64::INFINITY` if `n` is too large to
 - `factorint(360)` → `[[Int]]`
 - `factorint(1)` → `[Never]`
 
+## `numeric.faddeeva_w_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`faddeeva_w_complex(re, im)`: `list(re, im)` of Faddeeva function `w(z)`.
+
+Faddeeva / Voigt plasma dispersion function `w(z) = exp(-z^2) * erfc(-i * z)`.
+
 ## `combinatorics.falling` (Stable)
 
 ```aevia
@@ -14315,6 +15764,7 @@ The factorial of `n` as an `f64`. Returns `f64::INFINITY` if `n` is too large to
 ## `transforms.final_value_laplace` (Stable)
 
 ```aevia
+(Dyn<term>, Symbol) -> Real
 (Dyn<term>, Symbol) -> Dyn<term>
 ```
 
@@ -14323,6 +15773,7 @@ The factorial of `n` as an `f64`. Returns `f64::INFINITY` if `n` is too large to
 ## `transforms.final_value_z` (Stable)
 
 ```aevia
+(Dyn<term>, Symbol) -> Real
 (Dyn<term>, Symbol) -> Dyn<term>
 ```
 
@@ -14465,6 +15916,9 @@ Computes the abelianization invariant factors (torsion factors `> 1` followed by
 ## `discrete.fp_group_order` (Stable)
 
 ```aevia
+(Tensor<1, Symbol>, Tensor<2, Symbol>) -> Int
+(Tensor<1, Symbol>, Tensor<2, Dyn<term>>) -> Int
+(Tensor<1, Int>, Tensor<2, Int>) -> Int
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -14531,6 +15985,14 @@ Computes the order of the finitely presented group `<gens | relators>` via Todd-
 
 `fresnel_c_complex(re, im)`: `list(re, im)` of the complex Fresnel cosine integral `C(re + i*im)`.
 
+`(S(z), C(z))` for a complex argument `z = re + i·im`, returned as
+`((S.re, S.im), (C.re, C.im))`.
+
+With `a = √π/2`, `E₁ = erf(a (1-i) z)`, `E₂ = erf(a (1+i) z)`:
+`C(z) = (1+i)/4 · E₁ + (1-i)/4 · E₂`,
+`S(z) = (1-i)/4 · E₁ + (1+i)/4 · E₂`.
+Real arguments take the real kernels, so they keep full accuracy.
+
 ## `numeric.fresnel_s_complex` (Stable)
 
 ```aevia
@@ -14539,6 +16001,14 @@ Computes the order of the finitely presented group `<gens | relators>` via Todd-
 ```
 
 `fresnel_s_complex(re, im)`: `list(re, im)` of the complex Fresnel sine integral `S(re + i*im)`.
+
+`(S(z), C(z))` for a complex argument `z = re + i·im`, returned as
+`((S.re, S.im), (C.re, C.im))`.
+
+With `a = √π/2`, `E₁ = erf(a (1-i) z)`, `E₂ = erf(a (1+i) z)`:
+`C(z) = (1+i)/4 · E₁ + (1-i)/4 · E₂`,
+`S(z) = (1-i)/4 · E₁ + (1+i)/4 · E₂`.
+Real arguments take the real kernels, so they keep full accuracy.
 
 ## `special.fresnelc` (Stable)
 
@@ -14590,6 +16060,27 @@ Converts a Cartesian point to the system `to`.
 
 Returns an error if `point` has the wrong number of components (2 for
 polar, 3 for cylindrical and spherical).
+
+## `complex.from_polar` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`from_polar(r, theta)`: reconstructs `r * (cos(theta) + I*sin(theta))`.
+
+Reconstructs `r * exp(i * theta)`.
+
+## `complex.from_riemann_sphere` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`from_riemann_sphere(X, Y, Z)`: inverse stereographic projection `(X + I*Y) / (1 - Z)` from `S^2` to `C`.
+
+Inverse stereographic projection from `S^2` to `C`.
+Returns `None` at the north pole `(0, 0, 1)` (infinity).
 
 ## `combinatorics.fubini` (Stable)
 
@@ -14988,7 +16479,8 @@ polar, 3 for cylindrical and spherical).
 
 `gcd(a, b)`: greatest common divisor of integers `a` and `b`.
 
-Computes the greatest common divisor (GCD) of two numbers using the Euclidean algorithm.
+Computes the greatest common divisor (GCD) of two numbers using Stein's binary GCD algorithm
+after one initial Euclidean reduction step.
 
 # Arguments
 * `a` - The first number.
@@ -15059,6 +16551,24 @@ The greatest common divisor of `a` and `b`.
 
 Computes the geometric mean of a slice of positive data.
 GM = (x1 * x2 * ... * xn)^(1/n)
+
+## `numeric.geweke` (Stable)
+
+```aevia
+(Tensor<1, Real>) -> Real
+(Dyn<term>) -> Dyn<term>
+```
+
+`geweke(chain)`: the Geweke convergence z-score of the first tenth against the last half of `chain`.
+
+Geweke z-score comparing the first 10 % with the last 50 % of a chain.
+
+The two segments are compared with a difference of means standardised by
+their sample variances. Values far from zero in absolute value suggest that
+the chain has not converged.
+
+# Errors
+Returns an error for fewer than twenty draws or a zero variance.
 
 ## `discrete.gf256_add` (Stable)
 
@@ -15171,6 +16681,7 @@ Computes the formal derivative of polynomial `p` over GF(2^8).
 ## `discrete.gf256_poly_divmod` (Stable)
 
 ```aevia
+(Tensor<1, Int>, Tensor<1, Int>) -> Tensor<2, Int>
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -15205,6 +16716,7 @@ Computes the monic greatest common divisor of polynomials `p` and `q` over GF(2^
 ## `discrete.gf256_poly_mod` (Stable)
 
 ```aevia
+(Tensor<1, Int>, Tensor<1, Int>) -> Tensor<1, Int>
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -15279,6 +16791,7 @@ Computes `(a + b) mod p` in the prime field GF(p).
 ## `discrete.gf_div` (Stable)
 
 ```aevia
+(Int, Int, Int) -> Int
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -15287,6 +16800,7 @@ Computes `a * b^(-1) mod p` in GF(p) when `gcd(b, p) = 1`.
 ## `discrete.gf_inv` (Stable)
 
 ```aevia
+(Int, Int) -> Int
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -15434,6 +16948,7 @@ Computes the formal derivative `f'` of polynomial `f` over GF(p).
 ## `discrete.gfp_divmod` (Stable)
 
 ```aevia
+(Tensor<1, Int>, Tensor<1, Int>, Int) -> Tensor<2, Int>
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -15442,6 +16957,7 @@ Computes Euclidean polynomial division `f / g` over GF(p), returning `list(quoti
 ## `discrete.gfp_edf` (Stable)
 
 ```aevia
+(Tensor<1, Int>, Int, Int) -> Tensor<2, Int>
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -15450,6 +16966,7 @@ Computes the equal-degree factorization (Cantor-Zassenhaus) of a squarefree poly
 ## `discrete.gfp_egcd` (Stable)
 
 ```aevia
+(Tensor<1, Int>, Tensor<1, Int>, Int) -> Tensor<2, Int>
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -15487,6 +17004,7 @@ Computes the monic greatest common divisor of polynomials `f` and `g` over GF(p)
 ## `discrete.gfp_invmod` (Stable)
 
 ```aevia
+(Tensor<1, Int>, Tensor<1, Int>, Int) -> Tensor<1, Int>
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -15495,6 +17013,7 @@ Computes the inverse of polynomial `f` modulo `m` over GF(p) when `gcd(f, m) = 1
 ## `discrete.gfp_isirreducible` (Stable)
 
 ```aevia
+(Tensor<1, Int>, Int) -> Bool
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -15503,6 +17022,7 @@ Tests whether polynomial `f` is irreducible over GF(p) using Rabin's irreducibil
 ## `discrete.gfp_monic` (Stable)
 
 ```aevia
+(Tensor<1, Int>, Int) -> Tensor<1, Int>
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -15540,6 +17060,7 @@ Normalizes a highest-degree-first polynomial `f` over GF(p) by reducing coeffici
 ## `discrete.gfp_powmod` (Stable)
 
 ```aevia
+(Tensor<1, Int>, Int, Tensor<1, Int>, Int) -> Tensor<1, Int>
 (Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -15588,6 +17109,7 @@ Computes `(a + b) mod m` in the extension field GF(p)[x]/(m).
 ## `discrete.gfx_div` (Stable)
 
 ```aevia
+(Tensor<1, Int>, Tensor<1, Int>, Tensor<1, Int>, Int) -> Tensor<1, Int>
 (Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -15695,6 +17217,47 @@ Computes `(a - b) mod m` in the extension field GF(p)[x]/(m).
 ### Examples
 
 - `gl_basis(2)` → `[[[Int]]]`
+
+## `numeric.glm_fit` (Stable)
+
+```aevia
+(Tensor<2, Real>, Tensor<1, Real>, Symbol, Symbol, Tensor<1, Real>, Real) -> { beta: Tensor<1, Real>, se: Tensor<1, Real>, deviance: Real, null_deviance: Real, aic: Real, iterations: Real, fitted: Tensor<1, Real> }
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`glm_fit(x, y, family, link, weights, tol)`: `list(beta, se, deviance, null_deviance, aic, iterations, fitted)` of a generalised linear model fitted by iteratively reweighted least squares; `x` is a list of rows without an intercept, `weights` is empty for equal weights.
+
+Fits a generalised linear model by iteratively reweighted least squares.
+
+`x` holds one row of covariates per observation and must **not** contain an
+intercept column; `fit` prepends one, so the returned coefficient vector has
+`x[0].len() + 1` entries with the intercept first. `weights` are prior
+weights (number of trials for a binomial proportion, exposure for a Poisson
+rate); when `None` every observation weighs one.
+
+Convergence is declared when `max |Δβ| / (1 + |β|) < tol`. Each step is
+halved up to `MAX_HALVINGS` times while the deviance would increase.
+
+# Errors
+Returns a lowercase message when the design and response disagree in
+length, the design is empty or non-finite, a weight is not strictly
+positive, the response leaves the family's support, `max_iter` is zero,
+`tol` is not positive, there are fewer observations than parameters, or a
+linear system in the iteration is singular.
+
+## `numeric.glm_predict` (Stable)
+
+```aevia
+(Tensor<2, Real>, Tensor<1, Real>, Symbol) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`glm_predict(x, beta, link)`: the fitted mean of each row of `x` given the coefficients `beta` (intercept first) and the `link`.
+
+Predicts response means from an intercept followed by fitted coefficients.
+
+# Errors
+Fails on an empty coefficient vector, a mismatched row, or a non-finite mean.
 
 ## `linalg.grad` (Stable)
 
@@ -15868,6 +17431,7 @@ Returns the breadth-first search vertex visitation order starting from vertex `s
 ## `discrete.graph_bipartite_matching` (Stable)
 
 ```aevia
+(graph, Tensor<1, Int>) -> Tensor<2, Int>
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -16021,6 +17585,7 @@ Computes single-source shortest paths from `s` in non-negatively weighted graph 
 ## `discrete.graph_dinic` (Stable)
 
 ```aevia
+(graph, Int, Int) -> Real
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -16057,6 +17622,7 @@ Returns the edge list `list(list(u, v, w), ...)` of graph `g` (undirected edges 
 ## `discrete.graph_edmonds_karp` (Stable)
 
 ```aevia
+(graph, Int, Int) -> Real
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -16124,6 +17690,7 @@ Returns `true` if graph `g` contains a cycle.
 ## `discrete.graph_hopcroft_karp` (Stable)
 
 ```aevia
+(graph, Tensor<1, Int>) -> Tensor<2, Int>
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -16146,6 +17713,7 @@ Returns the list of hyperedges `list(list(vs, w), ...)` of graph `g`.
 ## `discrete.graph_in_degree` (Stable)
 
 ```aevia
+(graph, Int) -> Int
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -16320,6 +17888,7 @@ Returns the number of vertices in graph `g`.
 ## `discrete.graph_node_id` (Stable)
 
 ```aevia
+(graph, Int) -> Int
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -16341,6 +17910,7 @@ Returns the list of vertex indices `0..n-1` of graph `g`.
 ## `discrete.graph_out_degree` (Stable)
 
 ```aevia
+(graph, Int) -> Int
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -16515,6 +18085,7 @@ The basis is returned as a list of polynomials over the listed `vars`.
 ## `poly.groebner_f4` (Stable)
 
 ```aevia
+(Tensor<1, Dyn<term>>, Tensor<1, Symbol>) -> Tensor<1, Dyn<term>>
 () -> Dyn<term> with 0... x Dyn<term>
 ```
 
@@ -16523,6 +18094,7 @@ The basis is returned as a list of polynomials over the listed `vars`.
 ## `poly.groebner_f5` (Stable)
 
 ```aevia
+(Tensor<1, Dyn<term>>, Tensor<1, Symbol>) -> Tensor<1, Dyn<term>>
 () -> Dyn<term> with 0... x Dyn<term>
 ```
 
@@ -16638,6 +18210,8 @@ Returns the number of conjugacy classes of finite group `G`.
 ## `discrete.group_class_index` (Stable)
 
 ```aevia
+(dihedral_group, Symbol) -> Int
+(cyclic_group, Int) -> Int
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -16646,6 +18220,7 @@ Returns the 1-based conjugacy class index of element `x` in finite group `G`.
 ## `discrete.group_class_representatives` (Stable)
 
 ```aevia
+(dihedral_group) -> Tensor<1, Symbol>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -17135,6 +18710,7 @@ Enumerates all subgroups of finite group `G` (for orders up to 48) as element li
 ## `discrete.group_sylow_count` (Stable)
 
 ```aevia
+(dihedral_group, Int) -> Int
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -17151,6 +18727,7 @@ Returns a Sylow `p`-subgroup of finite group `G` for prime `p` as an element lis
 ## `discrete.group_sylow_subgroups` (Stable)
 
 ```aevia
+(dihedral_group, Int) -> Tensor<2, Symbol>
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -17198,6 +18775,8 @@ Enumerates all Sylow `p`-subgroups of finite group `G` as element lists.
 ## `physics.hamilton_equations` (Stable)
 
 ```aevia
+(Dyn<term>, Int, Int) -> Tensor<1, Dyn<term>>
+(Dyn<term>, Symbol, Symbol) -> Tensor<1, Dyn<term>>
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -17349,6 +18928,30 @@ Generates a Hamming window of length `n`.
 # Arguments
 * `n` - The number of points in the output window.
 
+## `numeric.hankel_h1_complex` (Stable)
+
+```aevia
+(Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`hankel_h1_complex(nu, re, im)`: `list(re, im)` of `H_nu^(1)(z)`.
+
+Complex Hankel function of the first kind `H_nu^(1)(z) = J_nu(z) + i * Y_nu(z)`.
+Uses `K_nu(-i*z)` connection in the upper half-plane (`Im(z) > 1.0`) to avoid cancellation.
+
+## `numeric.hankel_h2_complex` (Stable)
+
+```aevia
+(Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`hankel_h2_complex(nu, re, im)`: `list(re, im)` of `H_nu^(2)(z)`.
+
+Complex Hankel function of the second kind `H_nu^(2)(z) = J_nu(z) - i * Y_nu(z)`.
+Uses `K_nu(i*z)` connection in the lower half-plane (`Im(z) < -1.0`) to avoid cancellation.
+
 ## `numeric.hann_window` (Stable)
 
 ```aevia
@@ -17373,10 +18976,20 @@ Generates a Hann window of length `n`.
 
 `harmonic(n)`: `n`-th harmonic number `H_n = sum_{k=1}^n 1/k` (analytically continued via `psi(x + 1) + gamma`).
 
+The `n`-th harmonic number `sum_{k=1..n} 1/k`, with `H_0 = 0`.
+
 ### Examples
 
 - `harmonic(2)` → `Rat`
 - `harmonic(0)` → `Int`
+
+## `complex.harmonic_conjugate` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`harmonic_conjugate(u, x, y)`: constructs a harmonic conjugate `v(x, y)` of harmonic `u(x, y)`.
 
 ## `stats.harmonic_mean` (Stable)
 
@@ -17575,6 +19188,14 @@ The entries are exact rational numbers.
 
 - `hilbert(2)` → `[[Rat]]`
 
+## `complex.hilbert_transform` (Stable)
+
+```aevia
+(Dyn<term>, Symbol, Dyn<term>) -> Dyn<term>
+```
+
+`hilbert_transform(f, x, y)`: symbolic Hilbert transform `(1/pi) PV int_{-oo}^{oo} f(x)/(y - x) dx`.
+
 ## `pde.hill_eigen` (Stable)
 
 ```aevia
@@ -17610,6 +19231,7 @@ The entries are exact rational numbers.
 ## `holonomic.holonomic_ode` (Stable)
 
 ```aevia
+(Dyn<term>, Symbol) -> Tensor<1, Int>
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -17622,6 +19244,7 @@ The entries are exact rational numbers.
 ## `holonomic.holonomic_recurrence` (Stable)
 
 ```aevia
+(Dyn<term>, Symbol, Symbol) -> Tensor<2, Dyn<term>>
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -17642,6 +19265,7 @@ The entries are exact rational numbers.
 ## `holonomic.holonomic_zero` (Stable)
 
 ```aevia
+(Dyn<term>, Symbol) -> Bool
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -17650,6 +19274,50 @@ The entries are exact rational numbers.
 ### Examples
 
 - `holonomic_zero(cos(x)^2 + sin(x)^2 - 1, x)` → `Bool`
+
+## `numeric.holt_winters` (Stable)
+
+```aevia
+(Tensor<1, Real>, Int, Real, Real, Real) -> { fitted: Tensor<1, Real>, level: Tensor<1, Real>, trend: Tensor<1, Real>, season: Tensor<1, Real>, sse: Real }
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`holt_winters(x, season, alpha, beta, gamma)`: `list(fitted, level, trend, season, sse)` of additive Holt–Winters smoothing.
+
+Holt–Winters smoothing with an additive seasonal component.
+
+The recursion is
+`l_t = α(y_t - s_{t-m}) + (1-α)(l_{t-1} + b_{t-1})`,
+`b_t = β(l_t - l_{t-1}) + (1-β)b_{t-1}` and
+`s_t = γ(y_t - l_{t-1} - b_{t-1}) + (1-γ)s_{t-m}`, with the first two
+seasons used for the starting values.
+
+# Errors
+Returns a lowercase message when the seasonal period is zero, the series
+covers fewer than two seasons, a value is not finite, or a smoothing
+parameter leaves `[0, 1]`.
+
+## `numeric.holt_winters_mul` (Stable)
+
+```aevia
+(Tensor<1, Real>, Int, Real, Real, Real) -> { fitted: Tensor<1, Real>, level: Tensor<1, Real>, trend: Tensor<1, Real>, season: Tensor<1, Real>, sse: Real }
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`holt_winters_mul(x, season, alpha, beta, gamma)`: the multiplicative Holt–Winters form, `list(fitted, level, trend, season, sse)`.
+
+Holt–Winters smoothing with a multiplicative seasonal component.
+
+The recursion is
+`l_t = α(y_t / s_{t-m}) + (1-α)(l_{t-1} + b_{t-1})`,
+`b_t = β(l_t - l_{t-1}) + (1-β)b_{t-1}` and
+`s_t = γ(y_t / (l_{t-1} + b_{t-1})) + (1-γ)s_{t-m}`.
+
+# Errors
+Returns a lowercase message when the seasonal period is zero, the series
+covers fewer than two seasons, a value is not finite or not strictly
+positive, a smoothing parameter leaves `[0, 1]`, or a level or seasonal
+index is zero where the recursion divides by it.
 
 ## `numeric.hooi` (Stable)
 
@@ -17751,6 +19419,18 @@ yields NaN. An undefined or zero MAD gives the sample median.
 Computes the Hurwitz zeta function ζ(s, q) for real s and q.
 Defined as Σ_{n=0}^∞ 1/(n+q)^s.
 
+## `numeric.hurwitz_zeta_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`hurwitz_zeta_complex(sr, si, ar, ai)`: `list(re, im)` of `zeta(s, a)`.
+
+Complex Hurwitz zeta function `zeta(s, a) = sum_{n>=0} (n + a)^(-s)`
+via adaptive Euler-Maclaurin summation.
+
 ## `physics_quantum.hydrogen_energy` (Stable)
 
 ```aevia
@@ -17774,6 +19454,49 @@ Defined as Σ_{n=0}^∞ 1/(n+q)^s.
 ```
 
 `hydrogen_wavefunction(n, l, m, r, theta, phi)`: full hydrogen atom eigenfunction `R_nl(r) * Y_l^m(theta, phi)`.
+
+## `numeric.hyp0f1_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`hyp0f1_complex(br, bi, zr, zi)`: `list(re, im)` of `0F1(; b; z)`.
+
+Confluent hypergeometric limit function `0F1(; b; z)`.
+
+## `numeric.hyp1f1_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`hyp1f1_complex(ar, ai, br, bi, zr, zi)`: `list(re, im)` of `1F1(a; b; z)`.
+
+Kummer's confluent hypergeometric function `M(a, b, z) = 1F1(a; b; z)`.
+
+All arguments are complex. For `Re z < 0` Kummer's transformation
+`M(a, b, z) = e^z M(b - a, b, -z)` is applied so that the dominant
+solution is the one being continued.
+
+## `numeric.hyp2f1_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real, Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`hyp2f1_complex(ar, ai, br, bi, cr, ci, zr, zi)`: `list(re, im)` of `2F1(a, b; c; z)`.
+
+Gauss hypergeometric function `2F1(a, b; c; z)` for complex parameters
+and argument (principal branch, cut along `[1, inf)`; the value on the
+cut is the limit from `Im z -> 0+`).
+
+For positive real parameters at `z = 1`, the gamma ratio in
+[Gauss's theorem](https://dlmf.nist.gov/15.4.E20) is evaluated in logarithmic
+form without forming large gamma values.
 
 ## `ode.hyper1f1` (Stable)
 
@@ -17846,6 +19569,8 @@ Ideal gas law: PV = nRT, solving for pressure.
 ```
 
 `identity(n)`: `n x n` identity matrix `I_n`.
+
+Identity matrix of size `n`.
 
 ## `numeric.idwt` (Stable)
 
@@ -17986,6 +19711,17 @@ Generates `n` points via the deterministic chaos game with `seed` for `"sierpins
 
 - `inclusion_exclusion(list())` → `Int`
 
+## `numeric.incomplete_beta_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`incomplete_beta_complex(ar, ai, br, bi, zr, zi)`: `list(re, im)` of `B_z(a, b)`.
+
+Incomplete beta function `B_z(a, b) = (z^a / a) * 2F1(a, 1 - b; a + 1; z)`.
+
 ## `calculus.indefinite_product` (Stable)
 
 ```aevia
@@ -18125,6 +19861,8 @@ The interleaved data.
 
 `inverse(A)`: multiplicative inverse `A^{-1}` of square invertible matrix `A`.
 
+Inverse of a square matrix through LU solves.
+
 ### Examples
 
 - `inverse(list(list(2, 0), list(0, 1)))` → `[[Rat]]`
@@ -18164,6 +19902,17 @@ return NaN. Refinement in the far tail uses a logarithmic residual.
 
 `inverse_laplace(F, s, t)`: inverse Laplace transform recovering `f(t)` from `F(s)`.
 
+## `complex.inverse_mellin_transform` (Stable)
+
+```aevia
+(Dyn<term>, Symbol, Dyn<term>) -> Dyn<term>
+```
+
+`inverse_mellin_transform(F, s, x)`: symbolic inverse Mellin transform.
+
+Numerical inverse Mellin transform
+$f(x) = \frac{1}{2\pi i} \int_{c - i T}^{c + i T} x^{-s} F(s) \, ds$.
+
 ## `numeric.inverse_wavelet_packet` (Stable)
 
 ```aevia
@@ -18198,6 +19947,7 @@ their lengths differ, or they are empty.
 ## `number_theory.invmod` (Stable)
 
 ```aevia
+(Int, Int) -> Int
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -18257,6 +20007,14 @@ Computes the Interquartile Range (IQR) = Q3 - Q1.
 
 - `irrep_weights(A2, list(1, 1))` → `[([Int],Int)]`
 
+## `complex.is_attracting_fixed_point` (Stable)
+
+```aevia
+(Dyn<term>, Symbol, Dyn<term>) -> Dyn<term>
+```
+
+`is_attracting_fixed_point(f, z, z0)`: returns `1` if `f(z0) = z0` and `|f'(z0)| < 1`, `0` otherwise.
+
 ## `optimize.is_concave` (Stable)
 
 ```aevia
@@ -18270,6 +20028,14 @@ Computes the Interquartile Range (IQR) = Q3 - Q1.
 
 - `is_concave(-x^2 - y^2, list(x, y))` → `Bool`
 
+## `complex.is_conformal_at` (Stable)
+
+```aevia
+(Dyn<term>, Symbol, Dyn<term>) -> Dyn<term>
+```
+
+`is_conformal_at(f, z, z0)`: returns `1` if holomorphic `f` has `f'(z0) != 0`, `0` if `f'(z0) == 0`.
+
 ## `optimize.is_convex` (Stable)
 
 ```aevia
@@ -18282,6 +20048,14 @@ Computes the Interquartile Range (IQR) = Q3 - Q1.
 ### Examples
 
 - `is_convex(x^2 + x*y + y^2, list(x, y))` → `Bool`
+
+## `complex.is_entire` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>) -> Bool
+```
+
+`is_entire(f, z)`: `true` if `f(z)` is holomorphic on all of `C` with no poles or branch cuts.
 
 ## `complex.is_inside_contour` (Stable)
 
@@ -18343,10 +20117,17 @@ Tests whether a polynomial expression `f` in variable `x` is irreducible modulo 
 
 ### Examples
 
-- `is_lie_algebra(sl_basis(4))` → `Bool`
 - `is_lie_algebra(list(list(list(0, 1), list(0, 0)), list(list(0, 0), list(1, 0))))` → `Bool`
 - `is_lie_algebra(so3_basis)` → `Bool`
 - `is_lie_algebra(su_basis(3))` → `Bool`
+
+## `complex.is_meromorphic` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>) -> Bool
+```
+
+`is_meromorphic(f, z)`: `true` if `f(z)` is meromorphic on `C` (holomorphic away from isolated poles, no branch cuts).
 
 ## `linalg.is_orthogonal` (Stable)
 
@@ -18464,6 +20245,30 @@ Floor of the square root of `n`, exact for all `u64`.
 
 `jacobi(x, n)`: Jacobi symbol `(x / n)` for odd positive integer `n`.
 
+## `numeric.jacobi_cn_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`jacobi_cn_complex(ur, ui, mr, mi)`: `list(re, im)` of `cn(u | m)`.
+
+Complex Jacobi elliptic functions `(sn(u | m), cn(u | m), dn(u | m))`
+via the arithmetic-geometric mean (Landen descending transform).
+
+## `numeric.jacobi_dn_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`jacobi_dn_complex(ur, ui, mr, mi)`: `list(re, im)` of `dn(u | m)`.
+
+Complex Jacobi elliptic functions `(sn(u | m), cn(u | m), dn(u | m))`
+via the arithmetic-geometric mean (Landen descending transform).
+
 ## `variational.jacobi_equation` (Stable)
 
 ```aevia
@@ -18471,6 +20276,29 @@ Floor of the square root of `n`, exact for all `u64`.
 ```
 
 `jacobi_equation(L, y, x, h)`: computes the Jacobi accessory differential expression for variation `h` around an extremal of Lagrangian `L(x, y, y')`.
+
+## `numeric.jacobi_sn_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`jacobi_sn_complex(ur, ui, mr, mi)`: `list(re, im)` of `sn(u | m)`.
+
+Complex Jacobi elliptic functions `(sn(u | m), cn(u | m), dn(u | m))`
+via the arithmetic-geometric mean (Landen descending transform).
+
+## `numeric.jacobi_theta_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`jacobi_theta_complex(k, zr, zi, qr, qi)`: `list(re, im)` of `theta_k(z, q)`.
+
+Complex Jacobi theta functions `theta_k(z, q)` for `k in 1..=4` and `|q| < 1`.
 
 ## `linalg.jacobian` (Stable)
 
@@ -18519,6 +20347,16 @@ Floor of the square root of `n`, exact for all `u64`.
 
 - `jordan_blocks(list(list(4, 1, 0), list(0, 4, 1), list(0, 0, 4)))` → `[[Int]]`
 
+## `complex.joukowsky` (Stable)
+
+```aevia
+(Dyn<term>) -> Dyn<term>
+```
+
+`joukowsky(z)`: Joukowsky conformal map `(z + 1/z) / 2`.
+
+Joukowsky airfoil transformation $J(z) = \frac{1}{2}(z + 1/z)$.
+
 ## `discrete.julia_escape` (Stable)
 
 ```aevia
@@ -18542,6 +20380,66 @@ Computes the Julia set escape time of `z^2 + c` starting at `z = zr + i*zi` with
 ```
 
 `k_B`: Boltzmann constant in J/K (exact SI).
+
+## `numeric.kalman_filter` (Stable)
+
+```aevia
+(Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>) -> { filtered: Tensor<2, Real>, loglik: Real }
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`kalman_filter(y, transition, observation, process_cov, noise_cov)`: `list(filtered, loglik)` of a linear Gaussian state-space model from a zero initial state and the unit initial covariance; `y` is a list of observation vectors.
+
+Runs the Kalman filter for a linear Gaussian state-space model
+
+`x_t = F x_{t-1} + w_t` with `w_t ~ N(0, Q)` and
+`y_t = H x_t + v_t` with `v_t ~ N(0, R)`, started from
+`x_0 ~ N(x0, p0)`.
+
+# Errors
+Returns a diagnostic for invalid shapes, non-finite data, nonsymmetric
+or indefinite model covariances and an innovation covariance that is not
+positive definite. Model covariances may be positive semidefinite.
+
+## `numeric.kalman_gain` (Stable)
+
+```aevia
+(Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>) -> Tensor<2, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`kalman_gain(a, c, w, v)`: the steady-state Kalman gain of `x+ = a x + w` observed through `c`, with process covariance `w` and noise covariance `v`.
+
+Steady-state Kalman gain from the dual Riccati equation.
+
+`W` is the process-noise covariance and `V` the measurement-noise
+covariance. Returns `L = P C^T V^{-1}` where `P` solves
+`A P + P A^T - P C^T V^{-1} C P + W = 0`.
+
+# Errors
+Returns an error for inconsistent dimensions or a singular `V`.
+
+## `numeric.kaplan_meier` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<1, Real>, Real) -> { times: Tensor<1, Real>, at_risk: Tensor<1, Real>, events: Tensor<1, Real>, survival: Tensor<1, Real>, variance: Tensor<1, Real>, lower: Tensor<1, Real>, upper: Tensor<1, Real> }
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`kaplan_meier(time, event, conf)`: `list(times, at_risk, events, survival, variance, lower, upper)` of the product-limit estimator, with `event` a list of 1 (observed) and 0 (censored) and a `conf` confidence level.
+
+Kaplan-Meier product-limit estimate of the survival function.
+
+`time` holds the observed times and `event` is true when the observation
+ended in the event of interest and false when it was censored. The inputs
+are not modified; the estimate is computed on an internal sorted copy.
+`conf` is the two-sided confidence level and must lie strictly between 0
+and 1.
+
+# Errors
+Returns an error for empty or mismatched inputs, non-finite times, a
+confidence level outside `(0, 1)`, or a sample in which every observation
+is censored.
 
 ## `numeric.kde` (Stable)
 
@@ -18573,6 +20471,7 @@ Computes the Julia set escape time of `z^2 + c` starting at `z = zr + i*zi` with
 ## `lie.killing_form` (Stable)
 
 ```aevia
+(Tensor<3, Int>) -> Tensor<2, Int>
 () -> Dyn<term> with 0... x Dyn<term>
 ```
 
@@ -18681,6 +20580,17 @@ Constructs the Klein four-group `V_4` on elements `e, a, b, c`.
 
 `klein_gordon_equation(phi, m, x)`: residual `(partial_mu partial^mu + m^2) phi` of the Klein-Gordon equation in natural units.
 
+## `numeric.klein_j_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`klein_j_complex(re, im)`: `list(re, im)` of `j(tau)`.
+
+Klein modular j-invariant `j(tau)` on the upper half-plane `Im(tau) > 0`.
+
 ## `rewriting.knuth_bendix` (Stable)
 
 ```aevia
@@ -18693,6 +20603,14 @@ Constructs the Klein four-group `V_4` on elements `e, a, b, c`.
 ### Examples
 
 - `knuth_bendix(list(op(u, x) = x, op(inv(x), x) = u, op(op(x, y), z) = op(x, op(y, z))), list(x, y, z), list(u, op, inv))` → `[Prop]`
+
+## `complex.koebe` (Stable)
+
+```aevia
+(Dyn<term>) -> Dyn<term>
+```
+
+`koebe(z)`: Koebe univalent extremal map `z / (1 - z)^2`.
 
 ## `geometry.kretschmann` (Stable)
 
@@ -18966,6 +20884,22 @@ For example, `laplacian(x^2 + y^2, list(x, y))` returns `4`.
 
 `laurent(f, x, a, n)`: Laurent/Puiseux series expansion of `f` about `x = a` up to order `n`.
 
+## `complex.laurent_analytic_part` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`laurent_analytic_part(f, z, a, order)`: non-negative-power terms of the Laurent series of `f(z)` at `z = a`.
+
+## `complex.laurent_principal_part` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`laurent_principal_part(f, z, a, order)`: negative-power terms of the Laurent series of `f(z)` at `z = a`.
+
 ## `number_theory.lcm` (Stable)
 
 ```aevia
@@ -19015,6 +20949,7 @@ value does not fit (use [`checked_lcm`] to tell the two apart).
 ## `poly.leading_coeff` (Stable)
 
 ```aevia
+(Dyn<term>, Tensor<1, Symbol>) -> Real
 () -> Dyn<term> with 0... x Dyn<term>
 ```
 
@@ -19104,10 +21039,16 @@ value does not fit (use [`checked_lcm`] to tell the two apart).
 ## `number_theory.legendre_symbol` (Stable)
 
 ```aevia
+(Int, Int) -> Int
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
 `legendre_symbol(a, p)`: Legendre symbol `(a / p)` for odd prime `p`.
+
+Computes the Legendre symbol $\left(\frac{a}{p}\right)$ for an odd prime `p`.
+
+Returns `0` if `p < 3`, `p` is composite, or `p` divides `a`; `1` if `a` is
+a quadratic residue modulo `p`; and `-1` if `a` is a quadratic non-residue.
 
 ## `optimize.legendre_transform` (Stable)
 
@@ -19134,10 +21075,21 @@ For `|z| <= 9/10` the defining series is summed directly. For `s > 0` and
 `Φ = 1/Γ(s) ∫_0^∞ t^(s-1) e^(-a t)/(1 - z e^(-t)) dt`
 is evaluated by double-exponential quadrature, which covers `z < 0`
 (`|z| > 1` included) as well as `z ↑ 1`. Non-positive integer `s` use the
-rational form `(z d/dz + a)^n 1/(1-z)`. At `z = 1` the analytic
-continuation `ζ(s, a)` is returned; `z > 1` and non-positive non-integer
-`s` with `|z| > 9/10` are outside the implemented range (`NaN`). Accuracy
-is about `1e-13` for moderate parameters.
+rational form `(z d/dz + a)^n 1/(1-z)`. Non-integer orders in
+`[-15.5, 0)` use an Euler integral with the order shifted above zero.
+At `z = 1` the analytic continuation `ζ(s, a)` is returned. Outside
+the implemented range the result is `NaN`.
+
+## `numeric.lerch_phi_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`lerch_phi_complex(zr, zi, sr, si, ar, ai)`: `list(re, im)` of `Phi(z, s, a)`.
+
+Complex Lerch transcendent `Phi(z, s, a) = sum_{n>=0} z^n / (n + a)^s`.
 
 ## `special.lgamma` (Stable)
 
@@ -19161,6 +21113,11 @@ is about `1e-13` for moderate parameters.
 ```
 
 `lgamma_complex(re, im)`: `list(re, im)` of `ln Gamma(z)` for `z = re + i*im`, continuous off the non-positive real axis.
+
+The analytic branch of `ln Γ(z)`, defined and continuous on the plane cut
+along the non-positive real axis, with `ln Γ(z + 1) = ln Γ(z) + ln z`.
+
+Non-positive integers (the poles) give `+∞`.
 
 ## `special.li` (Stable)
 
@@ -19190,6 +21147,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_cartan_matrix` (Stable)
 
 ```aevia
+(Symbol) -> Tensor<2, Int>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -19202,6 +21160,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_cartan_solvable_test` (Stable)
 
 ```aevia
+(Tensor<3, Int>) -> Bool
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -19210,6 +21169,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_cartan_subalgebra` (Stable)
 
 ```aevia
+(Tensor<3, Int>) -> Tensor<2, Int>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -19218,6 +21178,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_cartan_type` (Stable)
 
 ```aevia
+(Symbol) -> String
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -19226,6 +21187,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_casimir_operator` (Stable)
 
 ```aevia
+(Tensor<3, Int>) -> Tensor<2, Real>
 () -> Dyn<term> with 0... x Dyn<term>
 ```
 
@@ -19234,6 +21196,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_center` (Stable)
 
 ```aevia
+(Tensor<3, Int>) -> Tensor<2, Int>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -19242,6 +21205,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_coxeter_number` (Stable)
 
 ```aevia
+(Symbol) -> Int
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -19272,6 +21236,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_dimension` (Stable)
 
 ```aevia
+(Symbol) -> Int
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -19288,6 +21253,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_dynkin_diagram` (Stable)
 
 ```aevia
+(Symbol) -> Tensor<2, Int>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -19300,6 +21266,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_elements` (Stable)
 
 ```aevia
+(Tensor<3, Int>, Tensor<2, Int>) -> Tensor<3, Int>
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -19320,6 +21287,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_fundamental_weights` (Stable)
 
 ```aevia
+(Symbol) -> Tensor<2, Real>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -19332,6 +21300,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_gram` (Stable)
 
 ```aevia
+(Symbol) -> Tensor<2, Int>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -19344,6 +21313,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_highest_root` (Stable)
 
 ```aevia
+(Symbol) -> Tensor<1, Int>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -19356,6 +21326,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_is_nilpotent` (Stable)
 
 ```aevia
+(Tensor<3, Int>) -> Bool
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -19377,6 +21348,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_is_solvable` (Stable)
 
 ```aevia
+(Tensor<3, Int>) -> Bool
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -19385,6 +21357,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_is_subalgebra` (Stable)
 
 ```aevia
+(Tensor<3, Int>, Tensor<2, Int>) -> Bool
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -19393,6 +21366,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_levi` (Stable)
 
 ```aevia
+(Tensor<3, Int>) -> Tensor<3, Int>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -19417,6 +21391,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_num_positive_roots` (Stable)
 
 ```aevia
+(Symbol) -> Int
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -19425,6 +21400,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_positive_roots` (Stable)
 
 ```aevia
+(Symbol) -> Tensor<2, Int>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -19437,6 +21413,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_radical` (Stable)
 
 ```aevia
+(Tensor<3, Int>) -> Tensor<2, Int>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -19445,6 +21422,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_rank` (Stable)
 
 ```aevia
+(Symbol) -> Int
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -19477,6 +21455,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_simple_roots` (Stable)
 
 ```aevia
+(Symbol) -> Tensor<2, Int>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -19505,6 +21484,7 @@ is about `1e-13` for moderate parameters.
 ## `lie_structure.lie_weyl_group_order` (Stable)
 
 ```aevia
+(Symbol) -> Int
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -19657,9 +21637,25 @@ A literal leaf: a number, a truth value, a string or a blob.
 
 `ln(x)`: natural logarithm (base `e`) of `x`.
 
+`ln(x)` as a ball, for `x > 0`.
+
+# Errors
+Fails for a non-positive operand or when an exponent leaves the range.
+
 ### Examples
 
 - `ln(0.3)` → `Float`
+
+## `numeric.ln_beta_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`ln_beta_complex(ar, ai, br, bi)`: `list(re, im)` of `ln B(a, b)`.
+
+Complex natural log-beta function `ln B(a, b) = ln Gamma(a) + ln Gamma(b) - ln Gamma(a + b)`.
 
 ## `special.ln_factorial` (Stable)
 
@@ -19700,6 +21696,48 @@ A literal leaf: a number, a truth value, a string or a blob.
 ```
 
 `log_branch(z, k)`: branch `k` of the complex logarithm `ln|z| + I * (arg(z) + 2*pi*k)`.
+
+## `complex.log_cut` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`log_cut(z, theta0)`: complex logarithm `ln|z| + I*arg_branch(z, theta0)` with branch cut along ray `theta0`.
+
+Logarithm `ln|z| + i * arg_branch(z, theta0)` with branch cut along ray `theta0`.
+
+## `numeric.log_integral_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`log_integral_complex(re, im)`: `list(re, im)` of `li(z)`.
+
+Complex logarithmic integral `li(z) = Ei(ln z)`.
+
+## `numeric.log_rank` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<1, Real>, Tensor<1, Real>, Tensor<1, Real>) -> { chi2: Real, p_value: Real, observed: Tensor<1, Real>, expected: Tensor<1, Real> }
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`log_rank(time_a, event_a, time_b, event_b)`: `list(chi2, p_value, observed, expected)` of the two-sample log-rank test.
+
+Log-rank test comparing the survival curves of two independent groups.
+
+At every distinct event time the observed number of events in the first
+group is compared with its hypergeometric expectation over the pooled risk
+set; the squared standardised difference is referred to a chi-square
+distribution with one degree of freedom.
+
+# Errors
+Returns an error for empty or mismatched inputs, non-finite times, or when
+the pooled risk sets carry no variance (for example when a single subject
+is at risk at every event time).
 
 ## `stats.logistic` (Stable)
 
@@ -19755,6 +21793,7 @@ Computes the orbit of length `n + 1` of the logistic map `r*x*(1 - x)` starting 
 ## `discrete.logistic_lyapunov` (Stable)
 
 ```aevia
+(Float, Float, Int) -> Float
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -19858,6 +21897,7 @@ Returns the Lorenz vector field `list(sigma*(y - x), x*(rho - z) - y, x*y - beta
 ## `discrete.lorenz_lyapunov` (Stable)
 
 ```aevia
+(Tensor<1, Float>, Float, Int) -> Float
 () -> Dyn<term> with 0... x Dyn<term>
 ```
 
@@ -19875,6 +21915,17 @@ Integrates the Lorenz system `lorenz_orbit(p0, dt, n[, sigma, rho, beta])` for `
 
 - `lorenz_orbit(list(1, 1, 1), 0.01, 2)` → `[[Float]]`
 - `lorenz_orbit(list(1, 1, 1), 0.01, 2, 10, 28, 8/3)` → `[[Float]]`
+
+## `numeric.lower_gamma_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`lower_gamma_complex(ar, ai, zr, zi)`: `list(re, im)` of lower incomplete gamma `gamma(a, z)`.
+
+Lower incomplete gamma function `gamma(a, z) = int_0^z t^(a-1) e^(-t) dt`.
 
 ## `geometry.lower_index` (Stable)
 
@@ -19901,6 +21952,35 @@ Computes the $`L_p`$ norm of a vector.
 
 Formula: $||\mathbf{v}||_p = (\sum_{i=1}^n |`v_i|^p)^{1/p`}$
 
+## `numeric.lqg` (Stable)
+
+```aevia
+(Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>) -> { gain: Tensor<2, Real>, estimator: Tensor<2, Real> }
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`lqg(a, b, c, q, r, w, v)`: `list(K, L)`, the LQR gain and the steady-state Kalman gain of the dual problem.
+
+Linear-quadratic-Gaussian controller: returns `(LQR gain, Kalman gain)`.
+
+# Errors
+As [`lqr`] and [`kalman_gain`].
+
+## `numeric.lqr` (Stable)
+
+```aevia
+(Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>) -> { gain: Tensor<2, Real>, riccati: Tensor<2, Real> }
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`lqr(a, b, q, r)`: `list(K, P)`, the continuous linear-quadratic gain `K = R^-1 B' P` and the Riccati solution.
+
+Continuous linear-quadratic regulator: returns `(K, P)` with
+`K = R^{-1} B^T P`.
+
+# Errors
+As [`care`].
+
 ## `linalg.lstsq` (Stable)
 
 ```aevia
@@ -19909,6 +21989,8 @@ Formula: $||\mathbf{v}||_p = (\sum_{i=1}^n |`v_i|^p)^{1/p`}$
 ```
 
 `lstsq(A, b)`: least-squares solution minimizing `||A x - b||_2`.
+
+Least-squares solution of `a x = b`.
 
 ### Examples
 
@@ -19963,6 +22045,12 @@ Formula: $||\mathbf{v}||_p = (\sum_{i=1}^n |`v_i|^p)^{1/p`}$
 ```
 
 Computes the Lyapunov exponent `(1/n) * sum ln|f'(x_k)|` of 1D map `f` in `x` along the `n`-step orbit from `x0`.
+
+Estimates the Lyapunov exponent $\frac{1}{N} \sum_{n=\text{burn\_in}}^{\text{burn\_in}+N-1} \ln |f'(`z_n`)|$.
+
+# Errors
+
+Returns an error for a zero step count or a zero or non-finite derivative along the orbit.
 
 ### Examples
 
@@ -20110,6 +22198,7 @@ Computes the stability multiplier `|2*z|` at fixed point `z` of `z^2 + c`.
 ## `discrete.map_fixed_points` (Stable)
 
 ```aevia
+(Dyn<term>, Symbol) -> Tensor<1, Int>
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -20172,6 +22261,8 @@ Computes the derivative `f'(x0)` of 1D map `f` in `x` at `x0`.
 ```
 
 `matmul(A, B, ...)`: matrix product of two or more matrices or vectors.
+
+Matrix product, propagating shape errors.
 
 ### Examples
 
@@ -20345,6 +22436,24 @@ The median of the data as an `f64`.
 
 `median_of(d)`: median (50th percentile) of distribution `d`.
 
+## `complex.meijer_g` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`meijer_g(a_list, b_list, n, m, z)`: Meijer G-function `G_{p,q}^{m,n}(z | a; b)` with elementary reductions.
+
+Value of `G^{m,n}_{p,q}(z | a; b)`, the Meijer G-function, at complex
+parameters and complex `z` (principal branch; see the module
+documentation).
+
+`p = a.len()` and `q = b.len()`. Returns `None` for invalid orders
+(`m > q` or `n > p`), non-finite inputs, `z = 0` where the limit does not
+exist, or when a finite value cannot be resolved. The single-pole
+exponential reduction uses its closed form. Residue series use the
+Mellin-Barnes integral as an independent cross-check where it applies.
+
 ## `special.meijer_mellin` (Stable)
 
 ```aevia
@@ -20374,9 +22483,29 @@ The median of the data as an `f64`.
 
 - `meijerg(1, 0, list(), list(0, 0), -2)` → `Float`
 
+## `complex.mellin_barnes_to_meijer_g` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`mellin_barnes_to_meijer_g(num_plus, num_minus, den_plus, den_minus, z)`: reduces a Mellin–Barnes Gamma-product integral to `meijer_g`.
+
+## `complex.mellin_transform` (Stable)
+
+```aevia
+(Dyn<term>, Symbol, Dyn<term>) -> Dyn<term>
+```
+
+`mellin_transform(f, x, s)`: symbolic Mellin transform `int_0^oo x^(s-1) f(x) dx`.
+
+Numerical Mellin transform `\mathcal{M}[f](s) = \int_0^\infty x^{s-1} f(x) \, dx`
+via the substitution `x = e^u` (`u \in [-L, L]`).
+
 ## `discrete.mesh_normals` (Stable)
 
 ```aevia
+(Tensor<2, Int>, Tensor<2, Int>) -> Tensor<2, Int>
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -20432,6 +22561,22 @@ Triangulates polygonal mesh `faces` into triangles using a triangle fan from eac
 
 `mgf(d, t)`: moment-generating function `M_X(t) = E[exp(t X)]` of distribution `d` at argument `t`.
 
+## `numeric.milp_solve` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<2, Real>, Tensor<1, Symbol>, Tensor<1, Real>, Tensor<1, Real>, Tensor<1, Real>, Int) -> { x: Tensor<1, Real>, objective: Real, nodes: Real, gap: Real, optimal: Real }
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`milp_solve(c, a, rel, b, bounds, kinds, max_nodes)`: `list(x, objective, nodes, gap, optimal)` of a mixed-integer linear program by branch and bound; `kinds` is a list of `continuous`, `integer` or `binary`.
+
+Solves a mixed-integer linear program.
+
+# Errors
+Returns `"infeasible"` when the root relaxation is infeasible (or when no
+integer-feasible point exists), `"unbounded"` when a relaxation is
+unbounded, and a descriptive string for dimension or finiteness errors.
+
 ## `stats.min_of` (Stable)
 
 ```aevia
@@ -20458,6 +22603,7 @@ Triangulates polygonal mesh `faces` into triangles using a triangle fan from eac
 ## `physics.minkowski_metric` (Stable)
 
 ```aevia
+() -> Tensor<2, Int>
 () -> Dyn<term>
 ```
 
@@ -20483,6 +22629,26 @@ Triangulates polygonal mesh `faces` into triangles using a triangle fan from eac
 ### Examples
 
 - `minres_solve(list(list(2, 1), list(1, 3)), list(1, 2), 0.0000000001)` → `[Float]`
+
+## `numeric.mittag_leffler_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`mittag_leffler_complex(ar, ai, br, bi, zr, zi)`: `list(re, im)` of `E_{alpha, beta}(z)`.
+
+Complex Mittag-Leffler function `E_{alpha, beta}(z) = sum_{k>=0} z^k / Gamma(alpha * k + beta)`
+for `Re(alpha) > 0`.
+
+## `complex.mittag_leffler_expansion` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`mittag_leffler_expansion(f, z)`: Mittag-Leffler principal-part expansion over the poles of rational `f(z)`.
 
 ## `number_theory.mobius` (Stable)
 
@@ -20581,6 +22747,17 @@ Returns None if no mode exists (all values unique or empty).
 ```
 
 `mode_of(d)`: mode (point of maximum density or probability mass) of distribution `d`.
+
+## `numeric.modular_lambda_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`modular_lambda_complex(re, im)`: `list(re, im)` of `lambda(tau)`.
+
+Modular lambda function `lambda(tau) = (theta_2(0, q) / theta_3(0, q))^4`, `q = exp(i*pi*tau)`.
 
 ## `discrete.molecule_decomposition` (Stable)
 
@@ -20728,6 +22905,258 @@ Numerically solves the Moran equation `sum r_i^D = 1` by bisection for a list of
 
 - `motzkin(6)` → `Int`
 
+## `numeric.mp_add` (Stable)
+
+```aevia
+(String, String, Int) -> String
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`mp_add(a, b, digits)`: the sum of two decimal numbers, to `digits` significant digits.
+
+Applies one of the four arithmetic operations to two decimal literals.
+
+`operation` is `add`, `sub`, `mul` or `div`.
+
+# Errors
+Fails on malformed text, division by zero, an unknown operation, or when an
+exponent leaves the range.
+
+## `numeric.mp_ball` (Stable)
+
+```aevia
+(String, Int) -> Tensor<1, String>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`mp_ball(expr, digits)`: `list(low, high)`, a rigorous enclosure of `expr` at `digits` significant digits.
+
+Evaluates decimal expression `text` to a rigorous enclosure at `digits`
+significant digits, rounded outward, as `(low, high)`.
+
+# Errors
+Fails on malformed text, a domain error, or when an exponent leaves the
+range.
+
+## `numeric.mp_compare` (Stable)
+
+```aevia
+(String, String) -> Real
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`mp_compare(a, b)`: `-1`, `0` or `1` as the decimal `a` is below, equal to or above `b`, compared exactly.
+
+Compares two decimal literals: `-1`, `0` or `1`.
+
+# Errors
+Fails on malformed text or when an exponent leaves the range.
+
+## `numeric.mp_complex_ball` (Stable)
+
+```aevia
+(String, Int) -> Tensor<2, String>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`mp_complex_ball(expr, digits)`: `list(list(re_lo, re_hi), list(im_lo, im_hi))`, a rigorous complex enclosure of `expr` at `digits` significant digits.
+
+Evaluates a complex expression `text` to a rigorous enclosure at `digits`
+significant decimal digits, returning `((re_lo, re_hi), (im_lo, im_hi))`.
+
+# Errors
+Fails on syntax errors, branch cuts/poles, or exponent overflow.
+
+## `numeric.mp_complex_eval` (Stable)
+
+```aevia
+(String, Int) -> Tensor<1, String>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`mp_complex_eval(expr, digits)`: `list(re, im)` of the complex expression `expr` to `digits` significant decimal digits.
+
+Evaluates a complex expression `text` to `digits` significant decimal digits
+for both real and imaginary parts, using Ziv's strategy.
+
+# Errors
+Fails on syntax errors, branch cuts/poles, or if digits cannot be certified
+within [`MAX_BITS`].
+
+## `numeric.mp_const` (Stable)
+
+```aevia
+(Symbol, Int) -> String
+(String, Int) -> String
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`mp_const(name, digits)`: the constant `pi`, `e`, `tau`, `ln2`, `sqrt2` or `phi` to `digits` significant decimal digits.
+
+A constant by name, to `digits` significant digits.
+
+# Errors
+Fails for an unknown name or when an exponent leaves the range.
+
+## `numeric.mp_digits` (Stable)
+
+```aevia
+(String) -> Real
+(Dyn<term>) -> Dyn<term>
+```
+
+`mp_digits(x)`: the number of significant decimal digits the literal `x` carries.
+
+The number of significant decimal digits a literal carries.
+
+# Errors
+Fails on malformed text.
+
+## `numeric.mp_div` (Stable)
+
+```aevia
+(String, String, Int) -> String
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`mp_div(a, b, digits)`: the quotient of two decimal numbers, to `digits` significant digits.
+
+Applies one of the four arithmetic operations to two decimal literals.
+
+`operation` is `add`, `sub`, `mul` or `div`.
+
+# Errors
+Fails on malformed text, division by zero, an unknown operation, or when an
+exponent leaves the range.
+
+## `numeric.mp_eval` (Stable)
+
+```aevia
+(String, Int) -> String
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`mp_eval(expr, digits)`: the value of the expression `expr` to `digits` significant decimal digits, as text, correctly rounded.
+
+Evaluates decimal expression `text` to `digits` significant digits.
+
+Plain decimal literals are rounded directly. Other expressions use
+progressively higher precision until the enclosure pins the digits.
+
+# Errors
+Fails on malformed text, a domain error, or when the digits cannot be
+pinned within [`MAX_BITS`].
+
+## `numeric.mp_from_float` (Stable)
+
+```aevia
+(Real, Int) -> String
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`mp_from_float(x, digits)`: the decimal expansion of the double `x` to `digits` significant digits; the double is exact, so the digits are its true value.
+
+The exact decimal expansion of an `f64`, to `digits` significant digits.
+
+# Errors
+Fails for a non-finite value or when an exponent leaves the range.
+
+## `numeric.mp_mul` (Stable)
+
+```aevia
+(String, String, Int) -> String
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`mp_mul(a, b, digits)`: the product of two decimal numbers, to `digits` significant digits.
+
+Applies one of the four arithmetic operations to two decimal literals.
+
+`operation` is `add`, `sub`, `mul` or `div`.
+
+# Errors
+Fails on malformed text, division by zero, an unknown operation, or when an
+exponent leaves the range.
+
+## `numeric.mp_round` (Stable)
+
+```aevia
+(String, Int) -> String
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`mp_round(x, digits)`: the decimal `x` rounded to `digits` significant digits, nearest even.
+
+Rounds decimal text to `digits` significant digits in `mode`.
+
+# Errors
+Fails on malformed text or when an exponent leaves the range.
+
+## `numeric.mp_round_mode` (Stable)
+
+```aevia
+(String, Int, Symbol) -> String
+(String, Int, String) -> String
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`mp_round_mode(x, digits, mode)`: `x` rounded to `digits` significant digits in `mode` (`nearest`, `zero`, `away`, `up`, `down`).
+
+Rounds decimal text to `digits` significant digits in `mode`.
+
+# Errors
+Fails on malformed text or when an exponent leaves the range.
+
+## `numeric.mp_sub` (Stable)
+
+```aevia
+(String, String, Int) -> String
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`mp_sub(a, b, digits)`: the difference of two decimal numbers, to `digits` significant digits.
+
+Applies one of the four arithmetic operations to two decimal literals.
+
+`operation` is `add`, `sub`, `mul` or `div`.
+
+# Errors
+Fails on malformed text, division by zero, an unknown operation, or when an
+exponent leaves the range.
+
+## `numeric.mp_to_float` (Stable)
+
+```aevia
+(String) -> Real
+(Dyn<term>) -> Dyn<term>
+```
+
+`mp_to_float(x)`: the decimal `x` narrowed to a double, correctly rounded (no double rounding through an intermediate).
+
+The correctly rounded `f64` value of a decimal literal.
+
+# Errors
+Fails on malformed text or when an exponent leaves the range.
+
+## `numeric.mpc_plan` (Stable)
+
+```aevia
+(Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>, Tensor<1, Real>, Tensor<1, Real>, Int, Tensor<1, Real>, Tensor<1, Real>) -> { u: Tensor<1, Real>, predicted_states: Tensor<2, Real>, objective: Real, iterations: Real }
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`mpc_plan(a, b, c, d, x0, reference, horizon, q, r)`: `list(u, predicted_states, objective, iterations)` of one receding-horizon step solved as a condensed quadratic program.
+
+Computes one MPC step.
+
+The quadratic program is condensed: the predicted states are eliminated
+with the prediction matrices, leaving only the control moves over the
+control horizon. Moves beyond the control horizon are held at zero.
+
+# Errors
+Returns an error for a continuous model, inconsistent option lengths, or a
+failed quadratic program.
+
 ## `linalg.mpow` (Stable)
 
 ```aevia
@@ -20817,6 +23246,14 @@ Computes the Multibrot escape time of `z^d + c` for exponent `d` and parameter `
 
 - `multinomial(list())` → `Int`
 - `multinomial(list(2, 3, 4))` → `Int`
+
+## `complex.multiplier` (Stable)
+
+```aevia
+(Dyn<term>, Symbol, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`multiplier(f, z, z0, period)`: symbolic periodic-point multiplier `d/dz (f^{o p})(z) |_{z=z0}`.
 
 ## `stats.mutual_information` (Stable)
 
@@ -21008,6 +23445,17 @@ Computes the Multibrot escape time of `z^d + c` for exponent `d` and parameter `
 
 - `necklaces(6, 2)` → `Int`
 
+## `arith.neg` (Stable)
+
+```aevia
+(Real) -> Real
+(Dyn<term>) -> Dyn<term>
+```
+
+`neg(a)`: the negation `-a`.
+
+Rewritten to `mul(-1, a)` and printed as `-a`.
+
 ## `stats.negative_binomial` (Stable)
 
 ```aevia
@@ -21015,6 +23463,24 @@ Computes the Multibrot escape time of `z^d + c` for exponent `d` and parameter `
 ```
 
 `negative_binomial(r, p)`: negative binomial distribution for `r` successes with probability `p`.
+
+## `numeric.nelson_aalen` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<1, Real>) -> { times: Tensor<1, Real>, hazard: Tensor<1, Real>, cumulative_hazard: Tensor<1, Real> }
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`nelson_aalen(time, event)`: `list(times, hazard, cumulative_hazard)` of the Nelson–Aalen estimator.
+
+Nelson-Aalen estimate of the cumulative hazard function.
+
+The increment at a time with `d` events among `n` subjects at risk is
+`d / n`. The inputs are not modified.
+
+# Errors
+Returns an error for empty or mismatched inputs, non-finite times, or a
+sample in which every observation is censored.
 
 ## `numeric.nested_dissection_order` (Stable)
 
@@ -21026,13 +23492,8 @@ Computes the Multibrot escape time of `z^d + c` for exponent `d` and parameter `
 
 `nested_dissection_order(adjacency)`: fill-reducing elimination ordering `perm` of a symmetric graph by multilevel nested dissection.
 
-Nested dissection ordering by recursive level-structure bisection.
-
-Pieces of at most 300 vertices are ordered by [`amd_order`]; larger
-connected pieces are split by a vertex separator taken from a BFS level
-structure rooted at a pseudo-peripheral vertex (the level near the middle
-with the best size/balance trade-off, pruned of vertices without
-neighbours on the far side); separators are numbered after both halves.
+Multilevel nested dissection ordering of the pattern `adj` (see the
+module documentation). Returns `perm` with `perm[new] = old`.
 
 ### Examples
 
@@ -21586,12 +24047,12 @@ The Airy function `Bi(x)`: `+inf` from `x > 105` (overflow) and at `+inf`, `0` a
 (Dyn<term>, Int, Dyn<term>, Dyn<term>, Dyn<term>, Float, Int, Int) -> rssn/native/analysis/argmin/result/v1
 ```
 
-Actual native argmin auto_solve_conjugate_gradient instantiated with an owned native tape cost and exact reverse gradient. Inputs and parameters retain independent reference domains; target_cost is normalized objective target,not a gradient tolerance. Oracle budget covers both cost and gradient calls. PSO uses initial/upper as bounds and the native randomness semantics. Other methods ignore upper. Generic auto_solve explicitly instantiates the native steepest-descent solver.
+Actual native basin auto_solve_conjugate_gradient instantiated with an owned native tape cost and exact reverse gradient. Inputs and parameters retain independent reference domains; target_cost is normalized objective target,not a gradient tolerance. Oracle budget covers both cost and gradient calls. PSO uses initial/upper as bounds and the native randomness semantics. Other methods ignore upper. Generic auto_solve explicitly instantiates the native steepest-descent solver.
 
-Automatically configures and solves a problem using the Conjugate Gradient method.
+Minimises `problem` with nonlinear conjugate gradients.
 
 # Errors
-Returns an error if the optimization process fails.
+Propagates [`minimize`]'s errors.
 
 ## `numerical_vector.num_analysis_auto_solve_tape` (Experimental)
 
@@ -21599,18 +24060,12 @@ Returns an error if the optimization process fails.
 (Dyn<term>, Int, Dyn<term>, Dyn<term>, Dyn<term>, Float, Int, Int) -> rssn/native/analysis/argmin/result/v1
 ```
 
-Actual native argmin auto_solve instantiated with an owned native tape cost and exact reverse gradient. Inputs and parameters retain independent reference domains; target_cost is normalized objective target,not a gradient tolerance. Oracle budget covers both cost and gradient calls. PSO uses initial/upper as bounds and the native randomness semantics. Other methods ignore upper. Generic auto_solve explicitly instantiates the native steepest-descent solver.
+Actual native basin auto_solve instantiated with an owned native tape cost and exact reverse gradient. Inputs and parameters retain independent reference domains; target_cost is normalized objective target,not a gradient tolerance. Oracle budget covers both cost and gradient calls. PSO uses initial/upper as bounds and the native randomness semantics. Other methods ignore upper. Generic auto_solve explicitly instantiates the native steepest-descent solver.
 
-Runs `solver` on `problem` with an `argmin` executor.
-
-`problem` is any argmin problem type (the cost function / gradient
-provider), not the parameter vector. `configure` receives the solver's
-fresh state and returns it set up, e.g. `|s| s.param(x0).max_iters(100)`
-for iterative solvers or `|s| s.max_iters(200)` for population solvers;
-it is required because argmin's default iteration limit is unbounded.
+Runs any [`SolverKind`] on `problem`.
 
 # Errors
-Returns an error if the optimization process fails.
+Propagates [`minimize`]'s errors.
 
 ## `numerical_vector.num_analysis_band_lu_factor` (Experimental)
 
@@ -22430,6 +24885,9 @@ Panics if `f0` has fewer components than `y`.
 
 Instantiate the real native parallel finite-difference mode for immutable owned RHS functions; no host callback is shared unsafely.
 
+Columns / colours evaluated concurrently ([`fd_jacobian_dense_par`],
+[`fd_jacobian_colored_par`]).
+
 ## `numerical_vector.num_analysis_fd_mode_serial` (Experimental)
 
 ```aevia
@@ -22437,6 +24895,8 @@ Instantiate the real native parallel finite-difference mode for immutable owned 
 ```
 
 Instantiate the real native serial finite-difference mode for owned compiled RHS functions.
+
+Sequential evaluation (any right-hand side).
 
 ## `numerical_vector.num_analysis_fft_fft_axes` (Experimental)
 
@@ -22973,9 +25433,7 @@ Native hypergeometric ln_gamma_c; normalized dimensionless arguments unless the 
 
 Logarithm of the complex gamma function.
 
-Lanczos approximation with relative accuracy about `1e-15`. For
-`Re z < 1/2` the reflection formula is used, so the imaginary part is
-determined only modulo `2 pi`.
+Complex log-gamma function, delegating to [`super::special_complex::ln_gamma_complex`].
 
 ## `numerical_vector.num_analysis_importance_sampling_gaussian_compiled` (Experimental)
 
@@ -23309,6 +25767,8 @@ Inspect normalized native matrix data and actual evaluation count. RHS-derived J
 
 Actual native provider evaluation on explicitly normalized time/state/rate data; updated caller evaluation count and physical frame remain with the returned matrix.
 
+Evaluates the Jacobian at `(t, y)` with `f0 = f(t, y)`.
+
 ## `numerical_vector.num_analysis_jacobian_provider_eval_with` (Experimental)
 
 ```aevia
@@ -23317,6 +25777,8 @@ Actual native provider evaluation on explicitly normalized time/state/rate data;
 
 Actual native provider evaluation with explicit real serial/parallel FD mode; normalized frame contracts and actual updated nfev are preserved.
 
+As [`JacobianProvider::eval`] with the finite-difference routines of `fd`.
+
 ## `numerical_vector.num_analysis_jacobian_provider_new` (Experimental)
 
 ```aevia
@@ -23324,6 +25786,10 @@ Actual native provider evaluation with explicit real serial/parallel FD mode; no
 ```
 
 Actual native JacobianProvider builder over an owned RHS tape. Structure Dense,Banded,Sparse; analytic0 finite differences,1 exact native tape dense AD,2 exact native tape sparse AD. Sparse structure requires its normalized matrix pattern. Provider borrows are reconstructed per invocation to retain safe owned lifetimes; every evaluation uses the real native provider.
+
+Prepares the provider for a system of dimension `n`. A sparse
+callback with `Dense` structure makes the structure sparse.
+Returns `None` if a banded/sparse pattern does not fit `n`.
 
 ## `numerical_vector.num_analysis_jacobian_sparse` (Experimental)
 
@@ -23430,10 +25896,11 @@ The physical nodes, in the order required by [`Self::integrate_samples`].
 
 Construct an actual native regression CostFunction with independently measured predictor/response domains and positive reference quantities; coefficients retain intercept E and slope E/D units.
 
-Creates a new `LinearRegression` problem instance.
+Builds a least-squares problem from predictors and responses.
 
 # Errors
-Returns an error if the input data dimensions are mismatched or empty.
+Returns an error when the row counts differ, the design is empty, or a
+value is not finite.
 
 ## `numerical_callback.num_analysis_lm_scaled` (Experimental)
 
@@ -23459,6 +25926,8 @@ finite-difference Jacobian. Works for `m >= n` residuals.
 
 Actual native normalized least-squares report convergence predicate. All original report fields/status are supplied explicitly; this does not synthesize convergence from an iteration count.
 
+Whether the reported termination passed a convergence test.
+
 ## `numerical_vector.num_analysis_lsq_status_converged` (Experimental)
 
 ```aevia
@@ -23466,6 +25935,8 @@ Actual native normalized least-squares report convergence predicate. All origina
 ```
 
 Actual native least-squares status predicate; budget/stagnation statuses never imply convergence.
+
+Whether an explicit residual or first-order convergence test passed.
 
 ## `numerical_vector.num_analysis_mass_band` (Experimental)
 
@@ -23475,6 +25946,8 @@ Actual native least-squares status predicate; budget/stagnation statuses never i
 
 Actual native normalized mass-matrix band.
 
+Half bandwidths `(kl, ku)` of the stored nonzeros.
+
 ## `numerical_vector.num_analysis_mass_cols` (Experimental)
 
 ```aevia
@@ -23482,6 +25955,8 @@ Actual native normalized mass-matrix band.
 ```
 
 Actual native normalized mass-matrix cols.
+
+Dimension (columns) of the matrix.
 
 ## `numerical_callback.num_analysis_mass_for_each` (Experimental)
 
@@ -23491,6 +25966,8 @@ Actual native normalized mass-matrix cols.
 
 Genuine serial native matrix visitor on normalized coefficients. Ordinary native handle is authenticated by its session bank and never enters the callback. Visitor receives exact row/column Int and Float value,returns an ignored Bool acknowledgement. Shared evaluation budget and original source errors stop subsequent source invocations; native iteration order is preserved.
 
+Calls `g(i, j, value)` for every nonzero entry.
+
 ## `numerical_vector.num_analysis_mass_matvec` (Experimental)
 
 ```aevia
@@ -23499,6 +25976,8 @@ Genuine serial native matrix visitor on normalized coefficients. Ordinary native
 
 Actual native mass-matrix action in explicitly normalized coordinates; vector length is checked before native indexing.
 
+Matrix-vector product `M x`.
+
 ## `numerical_vector.num_analysis_mass_rows` (Experimental)
 
 ```aevia
@@ -23506,6 +25985,8 @@ Actual native mass-matrix action in explicitly normalized coordinates; vector le
 ```
 
 Actual native normalized mass-matrix rows.
+
+Dimension (rows) of the matrix.
 
 ## `numerical_vector.num_analysis_mechanics_acceleration_new` (Experimental)
 
@@ -24436,6 +26917,22 @@ mismatch, a singular stage Jacobian, or failure of the implicit iteration.
 
 Actual tolerance-controlled native geometric driver; method-specific full/two-half-step error control, physical step bounds, native events and explicit attempt/evaluation budgets.
 
+Integrate the selected RK4 or geometric method forward using step doubling.
+The finite interval uses `start <= end`.
+
+The accepted state is two half steps of the requested method, without
+extrapolation or method substitution. Both the endpoint estimate and the
+midpoint defect of its cubic Hermite extension control acceptance. A trial
+needs a representable time strictly between its endpoints. A bracketed event
+between adjacent times is reported at the later timestamp. Adaptive
+state-dependent step selection does not retain fixed-step symplecticity.
+Gauss–Legendre trials reuse stage storage for the duration of the solve.
+
+# Errors
+Invalid inputs or callback outputs, exhausted attempts/evaluations, a
+tolerance requiring a smaller step than `h_min`, an unsplittable time grid,
+or failed implicit stages.
+
 ## `numerical_vector.num_analysis_ode_geometric_fixed` (Experimental)
 
 ```aevia
@@ -24457,6 +26954,11 @@ Invalid state, time interval, callback dimensions, or failed implicit iteration.
 
 Actual native fixed-geometric requested-time sampler. Times have the RHS time dimension; mixed physical state components retain independent references.
 
+Sample a requested fixed method with `steps` substeps per output interval.
+
+# Errors
+Invalid grids, callback values, or geometric-stage convergence failures.
+
 ## `numerical_vector.num_analysis_ode_hermite_segment` (Experimental)
 
 ```aevia
@@ -24464,6 +26966,12 @@ Actual native fixed-geometric requested-time sampler. Times have the RHS time di
 ```
 
 Native Hermite segment; endpoints are physical state vectors and endpoint rates have each state dimension divided by the RHS time dimension.
+
+Evaluate one checked cubic Hermite segment in linear state-vector work.
+
+# Errors
+Empty or mismatched vectors, nonfinite inputs, a query outside the segment,
+or arithmetic overflow during the evaluation.
 
 ## `numerical_vector.num_analysis_ode_imex_rk` (Experimental)
 
@@ -24851,6 +27359,14 @@ so the extension adds no right-hand-side evaluations.
 
 Actual native damped shooting-parameter solve. Positive independent parameter/residual references define the normalized Newton metric; returned parameters retain their own physical units. Original tape failures take precedence over native nonconvergence.
 
+Initial state solving a boundary residual by damped finite-difference Newton.
+
+The caller supplies an integration-backed residual. At most 60 Newton trials,
+each with at most 30 backtracking residuals, preserve the legacy work bound.
+
+# Errors
+Original residual errors or a malformed, singular, nonconverged iteration.
+
 ## `numerical_vector.num_analysis_ode_shooting` (Experimental)
 
 ```aevia
@@ -24969,7 +27485,7 @@ Fourth-order symplectic Yoshida (triple-jump) composition of leapfrog.
 
 Native analyzer of retained optimizer state; native labels use normalized objective thresholds and are heuristics,not convergence certificates.
 
-Analyzes the convergence state and returns a summary string.
+Labels the convergence quality of `result`.
 
 ## `numerical_callback.num_analysis_optimization_gradient_scaled` (Experimental)
 
@@ -24989,7 +27505,7 @@ Central-difference gradient of `f` at `x`.
 
 Print native normalized optimizer-state diagnostics. Particle populations project their actual best position,cost,iteration and evaluation counts to the vector State required by the native printer.
 
-Prints the optimization results to the console.
+Prints a short report for `result`.
 
 ## `numerical_vector.num_analysis_optimization_result` (Experimental)
 
@@ -25046,6 +27562,13 @@ up front.
 
 Native advection_2d in the grid physical reference frame. Boundary handles share that frame. Heat coefficient L^2/T,wave/advection L/T; primary compiled output V for initial data or V/L^2 for Poisson; secondary V/T only for wave. Method SparseLu/Cg/MeanFree for elliptic,Upwind/LaxWendroff for advection; relative>0. Dedicated Laplace ignores primary; other unused coefficients/secondary are explicit placeholder Values.
 
+Solves `u_t + a_x u_x + a_y u_y = 0` on the periodic rectangle
+`[x0, x1) x [y0, y1)` (the upper ends are identified with the lower ones).
+
+# Errors
+[`PdeError::Unstable`] when a directional Courant number exceeds one,
+[`PdeError::InvalidInput`] or [`PdeError::NonFinite`].
+
 ## `numerical_vector.num_analysis_pde_advection_3d` (Experimental)
 
 ```aevia
@@ -25053,6 +27576,12 @@ Native advection_2d in the grid physical reference frame. Boundary handles share
 ```
 
 Native advection_3d in the grid physical reference frame. Boundary handles share that frame. Heat coefficient L^2/T,wave/advection L/T; primary compiled output V for initial data or V/L^2 for Poisson; secondary V/T only for wave. Method SparseLu/Cg/MeanFree for elliptic,Upwind/LaxWendroff for advection; relative>0. Dedicated Laplace ignores primary; other unused coefficients/secondary are explicit placeholder Values.
+
+Solves `u_t + a . grad(u) = 0` on the periodic box
+`[x0, x1) x [y0, y1) x [z0, z1)`.
+
+# Errors
+As [`advection_2d`].
 
 ## `numerical_vector.num_analysis_pde_dirichlet` (Experimental)
 
@@ -25130,6 +27659,8 @@ Checked native3D field sample with physical field units.
 
 Actual native3D maximum nodal error against an immutable physical exact-solution program, with original evaluation failures preserved.
 
+Maximum absolute difference to `exact(x, y, z)` over all nodes.
+
 ## `numerical_vector.num_analysis_pde_field3_point` (Experimental)
 
 ```aevia
@@ -25137,6 +27668,8 @@ Actual native3D maximum nodal error against an immutable physical exact-solution
 ```
 
 Checked actual native3D node coordinates in physical length units.
+
+Coordinates of node `(i, j, k)`.
 
 ## `numerical_vector.num_analysis_pde_field_data` (Experimental)
 
@@ -25202,6 +27735,8 @@ Spacing in `y`.
 
 Actual native3D grid method; physical spacings retain the grid length reference.
 
+Spacing in `x`.
+
 ## `numerical_vector.num_analysis_pde_grid3_dy` (Experimental)
 
 ```aevia
@@ -25210,6 +27745,8 @@ Actual native3D grid method; physical spacings retain the grid length reference.
 
 Actual native3D grid method; physical spacings retain the grid length reference.
 
+Spacing in `y`.
+
 ## `numerical_vector.num_analysis_pde_grid3_dz` (Experimental)
 
 ```aevia
@@ -25217,6 +27754,8 @@ Actual native3D grid method; physical spacings retain the grid length reference.
 ```
 
 Actual native3D grid method; physical spacings retain the grid length reference.
+
+Spacing in `z`.
 
 ## `numerical_vector.num_analysis_pde_grid3_is_empty` (Experimental)
 
@@ -25241,6 +27780,8 @@ Actual native3D grid method; physical spacings retain the grid length reference.
 ```
 
 Native unit-cube grid interpreted through explicit physical references, bounded before native allocation.
+
+Unit cube with `n` nodes per axis.
 
 ## `numerical_vector.num_analysis_pde_grid_unit_square` (Experimental)
 
@@ -25291,6 +27832,12 @@ As [`heat_1d`].
 
 Native heat_3d in the grid physical reference frame. Boundary handles share that frame. Heat coefficient L^2/T,wave/advection L/T; primary compiled output V for initial data or V/L^2 for Poisson; secondary V/T only for wave. Method SparseLu/Cg/MeanFree for elliptic,Upwind/LaxWendroff for advection; relative>0. Dedicated Laplace ignores primary; other unused coefficients/secondary are explicit placeholder Values.
 
+Solves `u_t = alpha (u_xx + u_yy + u_zz)` with Crank-Nicolson;
+`bc = [x-, x+, y-, y+, z-, z+]`.
+
+# Errors
+As [`heat_1d`](super::heat_1d).
+
 ## `numerical_vector.num_analysis_pde_laplace_1d` (Experimental)
 
 ```aevia
@@ -25298,6 +27845,11 @@ Native heat_3d in the grid physical reference frame. Boundary handles share that
 ```
 
 Native laplace_1d in the grid physical reference frame. Boundary handles share that frame. Heat coefficient L^2/T,wave/advection L/T; primary compiled output V for initial data or V/L^2 for Poisson; secondary V/T only for wave. Method SparseLu/Cg/MeanFree for elliptic,Upwind/LaxWendroff for advection; relative>0. Dedicated Laplace ignores primary; other unused coefficients/secondary are explicit placeholder Values.
+
+Solves `u_xx = 0` on a 1D grid.
+
+# Errors
+As [`poisson_1d`].
 
 ## `numerical_vector.num_analysis_pde_laplace_2d` (Experimental)
 
@@ -25319,6 +27871,11 @@ As [`poisson_2d`].
 ```
 
 Native laplace_3d in the grid physical reference frame. Boundary handles share that frame. Heat coefficient L^2/T,wave/advection L/T; primary compiled output V for initial data or V/L^2 for Poisson; secondary V/T only for wave. Method SparseLu/Cg/MeanFree for elliptic,Upwind/LaxWendroff for advection; relative>0. Dedicated Laplace ignores primary; other unused coefficients/secondary are explicit placeholder Values.
+
+Solves `Laplace(u) = 0` on a 3D grid.
+
+# Errors
+As [`poisson_3d`].
 
 ## `numerical_vector.num_analysis_pde_method_of_lines_1d` (Experimental)
 
@@ -25387,6 +27944,11 @@ Constant Neumann flux (`0.0` for an insulated / reflecting wall).
 
 Native poisson_1d in the grid physical reference frame. Boundary handles share that frame. Heat coefficient L^2/T,wave/advection L/T; primary compiled output V for initial data or V/L^2 for Poisson; secondary V/T only for wave. Method SparseLu/Cg/MeanFree for elliptic,Upwind/LaxWendroff for advection; relative>0. Dedicated Laplace ignores primary; other unused coefficients/secondary are explicit placeholder Values.
 
+Solves `-u_xx = f` on a 1D grid; `bc = [left, right]`.
+
+# Errors
+As [`poisson_2d`](super::poisson_2d).
+
 ## `numerical_vector.num_analysis_pde_poisson_2d` (Experimental)
 
 ```aevia
@@ -25416,6 +27978,12 @@ not converged), [`PdeError::Incompatible`] or [`PdeError::NotConverged`]
 ```
 
 Native poisson_3d in the grid physical reference frame. Boundary handles share that frame. Heat coefficient L^2/T,wave/advection L/T; primary compiled output V for initial data or V/L^2 for Poisson; secondary V/T only for wave. Method SparseLu/Cg/MeanFree for elliptic,Upwind/LaxWendroff for advection; relative>0. Dedicated Laplace ignores primary; other unused coefficients/secondary are explicit placeholder Values.
+
+Solves `-(u_xx + u_yy + u_zz) = f` with the 7-point stencil;
+`bc = [x-, x+, y-, y+, z-, z+]`.
+
+# Errors
+As [`poisson_2d`](super::poisson_2d).
 
 ## `numerical_vector.num_analysis_pde_solver` (Experimental)
 
@@ -25469,6 +28037,12 @@ As [`wave_1d`].
 ```
 
 Native wave_3d in the grid physical reference frame. Boundary handles share that frame. Heat coefficient L^2/T,wave/advection L/T; primary compiled output V for initial data or V/L^2 for Poisson; secondary V/T only for wave. Method SparseLu/Cg/MeanFree for elliptic,Upwind/LaxWendroff for advection; relative>0. Dedicated Laplace ignores primary; other unused coefficients/secondary are explicit placeholder Values.
+
+Solves `u_tt = c^2 (u_xx + u_yy + u_zz)` with leapfrog; stable for
+`c dt sqrt(1/dx^2 + 1/dy^2 + 1/dz^2) <= 1`.
+
+# Errors
+As [`wave_1d`](super::wave_1d).
 
 ## `numerical_vector.num_analysis_physics_backward_euler_step` (Experimental)
 
@@ -26207,14 +28781,14 @@ Evaluate the retained native regression CostFunction with measured intercept/slo
 
 Return the half mean-squared residual and its coefficient gradient using the same residual pass. If predictor units are D and response units are E, coefficients use E then E/D, value uses E squared, and the gradient uses E then E times D. The gradient preserves the intercept-first coefficient order.
 
-Evaluates the half mean-squared residual and its coefficient gradient.
+Half the mean squared residual and its coefficient gradient.
 
 The intercept is the first coefficient, followed by one slope per
-column of `x`. Both outputs use the same residual evaluation.
+column of the design. Both outputs come from the same residual pass.
 
 # Errors
-Returns an error if the data are empty, the row and target counts
-differ, or the coefficient count differs from `x.ncols() + 1`.
+Returns an error when the design is empty, the row counts differ, or
+the coefficient count is not `columns + 1`.
 
 ## `numerical_callback.num_analysis_root_near_scaled` (Experimental)
 
@@ -27137,12 +29711,12 @@ tolerance, or when every strategy fails.
 (Dyn<term>, Int, Dyn<term>, Dyn<term>, Dyn<term>, Float, Int, Int) -> rssn/native/analysis/argmin/result/v1
 ```
 
-Actual native argmin solve_with_bfgs instantiated with an owned native tape cost and exact reverse gradient. Inputs and parameters retain independent reference domains; target_cost is normalized objective target,not a gradient tolerance. Oracle budget covers both cost and gradient calls. PSO uses initial/upper as bounds and the native randomness semantics. Other methods ignore upper. Generic auto_solve explicitly instantiates the native steepest-descent solver.
+Actual native basin solve_with_bfgs instantiated with an owned native tape cost and exact reverse gradient. Inputs and parameters retain independent reference domains; target_cost is normalized objective target,not a gradient tolerance. Oracle budget covers both cost and gradient calls. PSO uses initial/upper as bounds and the native randomness semantics. Other methods ignore upper. Generic auto_solve explicitly instantiates the native steepest-descent solver.
 
-Solve using BFGS quasi-Newton method
+Minimises `problem` with BFGS.
 
 # Errors
-Returns an error if the BFGS optimization fails.
+Propagates [`minimize`]'s errors.
 
 ## `numerical_vector.num_analysis_solve_with_gradient_descent_tape` (Experimental)
 
@@ -27150,12 +29724,12 @@ Returns an error if the BFGS optimization fails.
 (Dyn<term>, Int, Dyn<term>, Dyn<term>, Dyn<term>, Float, Int, Int) -> rssn/native/analysis/argmin/result/v1
 ```
 
-Actual native argmin solve_with_gradient_descent instantiated with an owned native tape cost and exact reverse gradient. Inputs and parameters retain independent reference domains; target_cost is normalized objective target,not a gradient tolerance. Oracle budget covers both cost and gradient calls. PSO uses initial/upper as bounds and the native randomness semantics. Other methods ignore upper. Generic auto_solve explicitly instantiates the native steepest-descent solver.
+Actual native basin solve_with_gradient_descent instantiated with an owned native tape cost and exact reverse gradient. Inputs and parameters retain independent reference domains; target_cost is normalized objective target,not a gradient tolerance. Oracle budget covers both cost and gradient calls. PSO uses initial/upper as bounds and the native randomness semantics. Other methods ignore upper. Generic auto_solve explicitly instantiates the native steepest-descent solver.
 
-Solve using gradient descent
+Minimises `problem` with steepest descent.
 
 # Errors
-Returns an error if the optimization process fails to initialize or execute.
+Propagates [`minimize`]'s errors.
 
 ## `numerical_vector.num_analysis_solve_with_pso_tape` (Experimental)
 
@@ -27163,12 +29737,14 @@ Returns an error if the optimization process fails to initialize or execute.
 (Dyn<term>, Int, Dyn<term>, Dyn<term>, Dyn<term>, Float, Int, Int) -> rssn/native/analysis/argmin/result/v1
 ```
 
-Actual native argmin solve_with_pso instantiated with an owned native tape cost and exact reverse gradient. Inputs and parameters retain independent reference domains; target_cost is normalized objective target,not a gradient tolerance. Oracle budget covers both cost and gradient calls. PSO uses initial/upper as bounds and the native randomness semantics. Other methods ignore upper. Generic auto_solve explicitly instantiates the native steepest-descent solver.
+Actual native basin solve_with_pso instantiated with an owned native tape cost and exact reverse gradient. Inputs and parameters retain independent reference domains; target_cost is normalized objective target,not a gradient tolerance. Oracle budget covers both cost and gradient calls. PSO uses initial/upper as bounds and the native randomness semantics. Other methods ignore upper. Generic auto_solve explicitly instantiates the native steepest-descent solver.
 
-Solve using particle swarm optimization (for non-differentiable functions)
+Minimises `problem` with a global-best particle swarm.
+
+`bounds` is `(lower, upper)`; the swarm needs a finite box.
 
 # Errors
-Returns an error if the PSO optimization fails.
+Propagates [`minimize`]'s errors.
 
 ## `numerical_vector.num_analysis_special_complex_bessel_i_complex` (Experimental)
 
@@ -28179,12 +30755,11 @@ Native transforms fft; normalized dimensionless arguments unless the declared co
 
 Computes the Fast Fourier Transform (FFT) of a sequence of complex numbers.
 
-Works at any length and leaves the length unchanged: a power-of-two `n` uses
-the scalar radix-2 kernel. Other lengths use a shared, runtime-selected
-FFT plan. Both paths compute the unpadded `n`-point DFT.
+Works at any length and leaves the length unchanged using a shared,
+runtime-selected SIMD FFT plan from [`super::fft`].
 
 # Arguments
-* `data` - A mutable `Vec<Complex<f64>>` representing the input sequence.
+* `data` - A mutable slice of `Complex<f64>` representing the input sequence.
 
 # Example
 ```rust
@@ -29155,7 +31730,15 @@ Pade approximant `[m/n]` from Taylor coefficients `c_0, c_1, ...` (needs `m + n 
 (rssn/native/compiled/v1) -> Int
 ```
 
-Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Interpreter compilation has explicit source/node/allocation and per-call work bounds; an unsupported selected backend errors without substitution. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
+Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Compilation enforces source, allocation and per-call work bounds for the selected backend. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
+
+## `numerical_matrix.num_backend_available` (Experimental)
+
+```aevia
+() -> Tensor<1, String>
+```
+
+List valid backend selectors discovered on this host. The first device query can initialize GPU adapters.
 
 ## `numerical_matrix.num_backend_call` (Experimental)
 
@@ -29163,7 +31746,7 @@ Session-owned native backend/compiled/scalar handles. Compile an elementary ASCI
 (rssn/native/compiled/v1, Tensor<1, rssn/native/backend-scalar/v1>) -> Dyn<term>
 ```
 
-Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Interpreter compilation has explicit source/node/allocation and per-call work bounds; an unsupported selected backend errors without substitution. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
+Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Compilation enforces source, allocation and per-call work bounds for the selected backend. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
 
 ## `numerical_matrix.num_backend_call_batch` (Experimental)
 
@@ -29171,7 +31754,7 @@ Session-owned native backend/compiled/scalar handles. Compile an elementary ASCI
 (rssn/native/compiled/v1, Tensor<2, rssn/native/backend-scalar/v1>) -> Dyn<term>
 ```
 
-Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Interpreter compilation has explicit source/node/allocation and per-call work bounds; an unsupported selected backend errors without substitution. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
+Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Compilation enforces source, allocation and per-call work bounds for the selected backend. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
 
 ## `numerical_matrix.num_backend_call_batch_columns` (Experimental)
 
@@ -29199,7 +31782,7 @@ The measured result preserves row order. Cancellation is checked between blocks,
 (rssn/native/backend/v1, String, Tensor<1, String>, Tensor<1, rssn/native/backend-scalar/v1>, rssn/native/backend-scalar/v1, Int) -> rssn/native/compiled/v1
 ```
 
-Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Interpreter compilation has explicit source/node/allocation and per-call work bounds; an unsupported selected backend errors without substitution. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
+Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Compilation enforces source, allocation and per-call work bounds for the selected backend. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
 
 ## `numerical_matrix.num_backend_compile_current` (Experimental)
 
@@ -29207,7 +31790,7 @@ Session-owned native backend/compiled/scalar handles. Compile an elementary ASCI
 (String, Tensor<1, String>, Tensor<1, rssn/native/backend-scalar/v1>, rssn/native/backend-scalar/v1, Int) -> rssn/native/compiled/v1
 ```
 
-Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Interpreter compilation has explicit source/node/allocation and per-call work bounds; an unsupported selected backend errors without substitution. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
+Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Compilation enforces source, allocation and per-call work bounds for the selected backend. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
 
 Compiles `root` with the [current] backend.
 
@@ -29220,11 +31803,19 @@ See [`BackendError`].
 () -> rssn/native/backend/v1
 ```
 
-Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Interpreter compilation has explicit source/node/allocation and per-call work bounds; an unsupported selected backend errors without substitution. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
+Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Compilation enforces source, allocation and per-call work bounds for the selected backend. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
 
 The backend numeric kernels compile with: the innermost
 [`with_backend`] scope, else the process default ([`set_default`]),
 else the [`Interpreter`].
+
+## `numerical_matrix.num_backend_current_name` (Experimental)
+
+```aevia
+() -> String
+```
+
+Return the canonical active backend selector without allocating a handle.
 
 ## `numerical_matrix.num_backend_interpreter` (Experimental)
 
@@ -29232,7 +31823,7 @@ else the [`Interpreter`].
 () -> rssn/native/backend/v1
 ```
 
-Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Interpreter compilation has explicit source/node/allocation and per-call work bounds; an unsupported selected backend errors without substitution. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
+Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Compilation enforces source, allocation and per-call work bounds for the selected backend. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
 
 ## `numerical_matrix.num_backend_name` (Experimental)
 
@@ -29240,7 +31831,15 @@ Session-owned native backend/compiled/scalar handles. Compile an elementary ASCI
 (rssn/native/backend/v1) -> String
 ```
 
-Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Interpreter compilation has explicit source/node/allocation and per-call work bounds; an unsupported selected backend errors without substitution. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
+Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Compilation enforces source, allocation and per-call work bounds for the selected backend. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
+
+## `numerical_matrix.num_backend_named` (Experimental)
+
+```aevia
+(String) -> rssn/native/backend/v1
+```
+
+Resolve a named backend into a session-owned handle for measured compilation. An unavailable selector returns Unsupported.
 
 ## `numerical_matrix.num_backend_reference` (Experimental)
 
@@ -29248,7 +31847,7 @@ Session-owned native backend/compiled/scalar handles. Compile an elementary ASCI
 (Float[_]) -> rssn/native/backend-scalar/v1
 ```
 
-Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Interpreter compilation has explicit source/node/allocation and per-call work bounds; an unsupported selected backend errors without substitution. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
+Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Compilation enforces source, allocation and per-call work bounds for the selected backend. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
 
 ## `numerical_matrix.num_backend_release` (Experimental)
 
@@ -29256,7 +31855,15 @@ Session-owned native backend/compiled/scalar handles. Compile an elementary ASCI
 (Dyn<term>) -> Bool
 ```
 
-Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Interpreter compilation has explicit source/node/allocation and per-call work bounds; an unsupported selected backend errors without substitution. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
+Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Compilation enforces source, allocation and per-call work bounds for the selected backend. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
+
+## `numerical_matrix.num_backend_select_default` (Experimental)
+
+```aevia
+(String) -> String
+```
+
+Set a named process default and return its resolved selector. Use auto to clear the override. Thread-local overrides keep priority.
 
 ## `numerical_matrix.num_backend_set_default` (Experimental)
 
@@ -29264,7 +31871,7 @@ Session-owned native backend/compiled/scalar handles. Compile an elementary ASCI
 (rssn/native/backend/v1, String) -> String
 ```
 
-Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Interpreter compilation has explicit source/node/allocation and per-call work bounds; an unsupported selected backend errors without substitution. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
+Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Compilation enforces source, allocation and per-call work bounds for the selected backend. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
 
 Sets the process-wide default backend (`None` restores the interpreter).
 
@@ -29274,7 +31881,7 @@ Sets the process-wide default backend (`None` restores the interpreter).
 (Float[_]) -> rssn/native/backend-scalar/v1
 ```
 
-Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Interpreter compilation has explicit source/node/allocation and per-call work bounds; an unsupported selected backend errors without substitution. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
+Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Compilation enforces source, allocation and per-call work bounds for the selected backend. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
 
 ## `numerical_matrix.num_backend_with_backend_compile` (Experimental)
 
@@ -29282,7 +31889,7 @@ Session-owned native backend/compiled/scalar handles. Compile an elementary ASCI
 (rssn/native/backend/v1, String, Tensor<1, String>, Tensor<1, rssn/native/backend-scalar/v1>, rssn/native/backend-scalar/v1, Int) -> rssn/native/compiled/v1
 ```
 
-Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Interpreter compilation has explicit source/node/allocation and per-call work bounds; an unsupported selected backend errors without substitution. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
+Session-owned native backend/compiled/scalar handles. Compile an elementary ASCII expression in declared symbol order, normalized by positive physical coordinate references and a positive output reference. Scalar-value handles preserve mixed dimensions individually; call columns are [arity,rows] handles, not mixed-unit numeric tensors. The compiled object retains its private elementary RSSN Session and actual backend. Compilation enforces source, allocation and per-call work bounds for the selected backend. Current snapshots environment; scoped compile selects its backend explicitly. Process-default changes require an explicit action string. Kind/session/lifetime and units are checked; release invalidates every handle copy.
 
 Runs `f` with `backend` as the current backend on this thread.
 
@@ -29543,6 +32150,30 @@ the distance is positive infinity.
 Indices of AABBs hit by origin+t*direction, t>=0, on an immutable portable BVH. Origin shares coordinate units; direction is dimensionless and nonzero. Payload kind/version, finite corners and allocation bounds are checked before reconstruction.
 
 Returns the indices of all [`Aabb`]s intersected by the ray `origin + t * dir` (`t >= 0`).
+
+## `numerical_vector.num_cauchy_root_bound` (Experimental)
+
+```aevia
+(Tensor<1, Complex[_]>) -> Float
+```
+
+Classic Cauchy upper bound from a complex coefficient vector in ascending order. Coefficients may share ordinate units. The polynomial coordinate and the result are dimensionless.
+
+Classic Cauchy upper bound on the modulus of all roots of
+$p(z) = \sum_{k=0}^n `c_k` z^k$ (ascending coefficients):
+$R = 1 + \max_{0 \le k < n} |`c_k` / `c_n`|$.
+
+## `numerical_vector.num_cauchy_sharp_root_bound` (Experimental)
+
+```aevia
+(Tensor<1, Complex[_]>) -> Float
+```
+
+Compute the sharp Cauchy radius from ascending complex coefficients with a common ordinate dimension. Returns zero for a nonconstant monomial. The polynomial coordinate and the result are dimensionless.
+
+Computes the sharp Cauchy radius, the positive solution of
+$|`c_n`| R^n = \sum_{k=0}^{n-1} |`c_k`| R^k$ for a non-monomial polynomial.
+Coefficients are ascending. A monomial has radius zero.
 
 ## `numerical_matrix.num_cholesky` (Experimental)
 
@@ -30194,6 +32825,69 @@ Converts radians to degrees.
 # Errors
 As [`svd`].
 
+## `numerical_matrix.num_control_c2d_zoh` (Experimental)
+
+```aevia
+(Tensor<2, Float[1/Time]>, Tensor<2, Float[_]>, Tensor<2, Float[_]>, Tensor<2, Float[_]>, Float[Time]) -> { a: Tensor<2, Float>, b: Tensor<2, Float[_]>, c: Tensor<2, Float[_]>, d: Tensor<2, Float[_]>, dt: Float[Time] }
+```
+
+Discretise a measured continuous state-space model under a zero-order hold. Accepts positive sample time and returns a portable record with a, b, c, d and dt. Matrix a has inverse-time units before discretisation, and b gains one factor of Time.
+
+Zero-order-hold discretisation with sample time `dt`.
+
+Computes `exp([A B; 0 0] dt)` by scaling and squaring with a diagonal
+Pade approximant of order six. The upper-right block is the exactly
+integrated input matrix, not a Euler approximation.
+
+# Errors
+Returns an error when `dt` is not finite and positive, or when the
+matrix exponential fails.
+
+## `numerical_matrix.num_control_simulate_continuous` (Experimental)
+
+```aevia
+(Tensor<2, Float[1/Time]>, Tensor<2, Float[_]>, Tensor<2, Float[_]>, Tensor<2, Float[_]>, Tensor<1, Float[_]>, Tensor<2, Float[_]>, Tensor<1, Float[Time]>) -> Tensor<2, Float[_]>
+```
+
+Simulate a measured continuous state-space model on a strictly increasing time grid. Hold each input row until the next time and return one measured output row per grid point.
+
+Simulates a continuous-time model on the strictly increasing time grid
+`t` from initial state `x0` under piecewise-constant (zero-order-hold)
+inputs `u`, where `u[k]` is held across `[t[k], t[k + 1])`.
+
+Each step uses exact zero-order-hold discretisation via
+[`StateSpace::c2d_zoh`], caching `(Ad, Bd)` whenever consecutive step
+sizes match to a relative tolerance of `1e-12`. Uniform grids compute
+the matrix exponential only once.
+
+Returns the output `y[k] = C x(t[k]) + D u[k]` at each grid point.
+
+# Errors
+Returns an error when the model is discrete-time, when `x0` or `u`
+dimensions are wrong, when `u.len() != t.len()`, when any entry is
+non-finite, or when `t` is not strictly increasing.
+
+## `numerical_matrix.num_control_simulate_discrete` (Experimental)
+
+```aevia
+({ a: Tensor<2, Float>, b: Tensor<2, Float[_]>, c: Tensor<2, Float[_]>, d: Tensor<2, Float[_]>, dt: Float[Time] }, Tensor<1, Float[_]>, Tensor<2, Float[_]>) -> Tensor<2, Float[_]>
+```
+
+Simulate a portable discrete state-space model from an initial state and one input row per sample. Return one measured output row per input row, including the initial output and direct feedthrough.
+
+Simulates a discrete-time model from `x0` under the input sequence `u`.
+
+The recursion `x[k+1] = A x[k] + B u[k]`, `y[k] = C x[k] + D u[k]` is
+applied directly. For continuous-time models, use
+[`StateSpace::simulate_continuous`] (with an explicit time grid) or
+[`StateSpace::simulate_with_dt`] (with a uniform sample time).
+
+Returns the output at each input sample.
+
+# Errors
+Returns an error for a wrong `x0` or input length, or when the model has
+no sample time.
+
 ## `numerical_vector.num_convergence_aitken_acceleration` (Experimental)
 
 ```aevia
@@ -30802,6 +33496,22 @@ Solves the square system `A x = b` by LU.
 # Errors
 Propagates the errors of [`lu_factor`] and [`Lu::solve_into`].
 
+## `numerical_matrix.num_dense_solve_spd_tridiagonal` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<1, Float[_]>, Tensor<1, Float[_]>) -> Tensor<1, Float[_]>
+```
+
+Solves a symmetric positive-definite tridiagonal linear system in `O(n)` time via `LDL^T` factorisation.
+
+## `numerical_matrix.num_dense_solve_tridiagonal` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<1, Float[_]>, Tensor<1, Float[_]>, Tensor<1, Float[_]>) -> Tensor<1, Float[_]>
+```
+
+Solves a general tridiagonal linear system in `O(n)` time via the Thomas algorithm: `sub[i - 1] * x[i - 1] + diag[i] * x[i] + sup[i] * x[i + 1] = rhs[i]`.
+
 ## `numerical_vector.num_descriptive_corr` (Experimental)
 
 ```aevia
@@ -30924,7 +33634,7 @@ The arithmetic mean of an exact sample.
 
 Median with type-7 interpolation; sorting occurs in adapter-owned storage, preserving the caller's vector.
 
-The median of a float sample.
+The median of a float sample (runs in `O(n)` average time via selection).
 
 # Errors
 
@@ -31460,6 +34170,17 @@ Numerical digamma function.
 
 Computes the digamma function, ψ(x) = d/dx ln(Γ(x)) = Γ'(x)/Γ(x).
 
+## `numerical_special.num_disk_to_uhp` (Experimental)
+
+```aevia
+(Complex) -> Complex
+```
+
+Maps a dimensionless complex point in the open Poincare unit disk to the open upper half-plane. An input on or outside the unit circle or a nonfinite result produces a domain error.
+
+Inverse Cayley transform mapping the unit disk `{ |w| < 1 }` to the upper half-plane:
+`z = i * (1 + w) / (1 - w)`. Returns `None` at `w = 1`.
+
 ## `numerical_vector.num_distance` (Experimental)
 
 ```aevia
@@ -31899,6 +34620,17 @@ the corresponding orthonormal eigenvectors.
 # Errors
 [`DenseError::Shape`] for non-square input, [`DenseError::NoConvergence`]
 after 100 sweeps.
+
+## `numerical_vector.num_enestrom_kakeya_bounds` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>) -> { lower: Float, upper: Float }
+```
+
+Root annulus for at least two positive, finite real coefficients in ascending order. Coefficients may share ordinate units. The lower and upper root radii are dimensionless.
+
+Eneström–Kakeya annulus bounds $(r_{\min}, r_{\max})$ for a polynomial
+with strictly positive real ascending coefficients $`a_0`, \dots, `a_n` > 0$.
 
 ## `numerical_stats.num_entropy` (Experimental)
 
@@ -32684,6 +35416,35 @@ interpreted as an `i64`. Use [`poly_mul_i64_checked`] to detect overflow.
 
 Multiplies two integer polynomials (ascending coefficients) exactly. Returns `None` if any output coefficient is outside the range of `i64`.
 
+## `numerical_vector.num_finite_field_batch_inverse_mod` (Experimental)
+
+```aevia
+(Tensor<1, Int>, Int) -> Tensor<1, Int>
+```
+
+`num_finite_field_batch_inverse_mod(values, modulus)` returns every modular inverse using a single inversion and pooled storage. The modulus must be at least 2 and every element must be invertible.
+
+Computes the modular inverses of all elements in `values` modulo `modulus`
+using Montgomery's batch-inversion trick.
+
+Returns `None` if `modulus < 2` or any element is not coprime to `modulus`.
+
+## `numerical_vector.num_finite_field_batch_inverse_skip_zeros` (Experimental)
+
+```aevia
+(Tensor<1, Int>, Int) -> Tensor<1, Int>
+```
+
+`num_finite_field_batch_inverse_skip_zeros(values, modulus)` returns each inverse, with 0 in the position of any noninvertible element. The modulus must be at least 2.
+
+## `numerical_vector.num_finite_field_dot_mod` (Experimental)
+
+```aevia
+(Tensor<1, Int>, Tensor<1, Int>, Int) -> Int
+```
+
+`num_finite_field_dot_mod(a, b, modulus)` returns the exact modular dot product of two equal-length vectors. The modulus must be at least 2.
+
 ## `numerical_vector.num_finite_field_gf256_add` (Experimental)
 
 ```aevia
@@ -32748,6 +35509,59 @@ Performs exponentiation in GF(2^8).
 Multiplies every byte by the supplied coefficient in GF(256) with polynomial 0x11d. Inputs and results are exact integers from 0 through 255. Returns the products in input order.
 
 Multiplies each byte of the slice by the coefficient in place.
+
+## `numerical_vector.num_finite_field_poly_mul_ntt_mod` (Experimental)
+
+```aevia
+(Tensor<1, Int>, Tensor<1, Int>, Int) -> Tensor<1, Int>
+```
+
+Exact coefficient convolution modulo an odd prime. Inputs use the same coefficient order. For a nonempty product the next power of two of the output length must divide p-1. An empty input gives an empty product. Output uses the native tensor size limit.
+
+## `numerical_vector.num_finite_field_primitive_root_prime` (Experimental)
+
+```aevia
+(Int) -> Int
+```
+
+Smallest positive primitive root modulo a prime. Accepts 2 and the odd primes representable in u64.
+
+Finds the smallest positive primitive root modulo a prime `modulus`.
+
+The root and Montgomery context for an odd prime are cached by modulus.
+Returns `None` if the modulus is composite, zero or one.
+
+## `numerical_vector.num_finite_field_slice_add_mod` (Experimental)
+
+```aevia
+(Tensor<1, Int>, Tensor<1, Int>, Int) -> Tensor<1, Int>
+```
+
+`num_finite_field_slice_add_mod(a, b, modulus)` adds two equal-length vectors of exact u64 integers, returning residues in [0, modulus). The modulus must be at least 2.
+
+## `numerical_vector.num_finite_field_slice_axpy_mod` (Experimental)
+
+```aevia
+(Int, Tensor<1, Int>, Tensor<1, Int>, Int) -> Tensor<1, Int>
+```
+
+`num_finite_field_slice_axpy_mod(alpha, x, y, modulus)` returns (alpha*x + y) reduced elementwise. The vectors must have equal lengths and the modulus must be at least 2.
+
+## `numerical_vector.num_finite_field_slice_scale_mod` (Experimental)
+
+```aevia
+(Tensor<1, Int>, Int, Int) -> Tensor<1, Int>
+```
+
+`num_finite_field_slice_scale_mod(values, scalar, modulus)` multiplies an exact u64 vector by a scalar modulo an integer of at least 2.
+
+## `numerical_vector.num_finite_field_slice_sub_mod` (Experimental)
+
+```aevia
+(Tensor<1, Int>, Tensor<1, Int>, Int) -> Tensor<1, Int>
+```
+
+`num_finite_field_slice_sub_mod(a, b, modulus)` subtracts two equal-length vectors of exact u64 integers, returning residues in [0, modulus). The modulus must be at least 2.
 
 ## `numerical_vector.num_flow_inflow_velocity` (Experimental)
 
@@ -33464,6 +36278,17 @@ assert!(c < 0.0);
 ```
 
 `(sin(π x² / 2), cos(π x² / 2))` with the phase reduced exactly.
+
+## `numerical_vector.num_fujiwara_root_bound` (Experimental)
+
+```aevia
+(Tensor<1, Complex[_]>) -> Float
+```
+
+Fujiwara upper bound from ascending complex coefficients with a common ordinate dimension. The polynomial coordinate and the result are dimensionless.
+
+Fujiwara upper bound on the modulus of all polynomial roots:
+$R = 2 \max_{1 \le k \le n} \left|\frac{c_{n-k}}{c_n}\right|^{1/k}$ with factor $1/2$ on $k=n$.
 
 ## `numerical_vector.num_functional_gram_schmidt` (Experimental)
 
@@ -35211,6 +38036,8 @@ Elasticity matrix in Voigt notation.
 
 Native elasticity call in an explicit mechanical reference frame. Numeric displacements/coordinates use Length, body forces use Mass/(Length^2 Time^2), stress/Young modulus use Mass/(Length Time^2), and density uses Mass/Length^3. Reduced 2D hyperelastic energies are per unit out-of-plane thickness. Outputs retain distinct dimensional reference witnesses. Native DOF, nonlinear work, callbacks and allocation budgets are checked.
 
+Displacement vector at dof `d`.
+
 ## `numerical_vector.num_grid_elastic_eval` (Experimental)
 
 ```aevia
@@ -35218,6 +38045,8 @@ Native elasticity call in an explicit mechanical reference frame. Numeric displa
 ```
 
 Native elasticity call in an explicit mechanical reference frame. Numeric displacements/coordinates use Length, body forces use Mass/(Length^2 Time^2), stress/Young modulus use Mass/(Length Time^2), and density uses Mass/Length^3. Reduced 2D hyperelastic energies are per unit out-of-plane thickness. Outputs retain distinct dimensional reference witnesses. Native DOF, nonlinear work, callbacks and allocation budgets are checked.
+
+Displacement at a point (point location by search).
 
 ## `numerical_vector.num_grid_elastic_roller` (Experimental)
 
@@ -35270,6 +38099,9 @@ As [`solve`].
 
 Native elasticity call in an explicit mechanical reference frame. Numeric displacements/coordinates use Length, body forces use Mass/(Length^2 Time^2), stress/Young modulus use Mass/(Length Time^2), and density uses Mass/Length^3. Reduced 2D hyperelastic energies are per unit out-of-plane thickness. Outputs retain distinct dimensional reference witnesses. Native DOF, nonlinear work, callbacks and allocation budgets are checked.
 
+Stress (Voigt) at the centroid of a cell, using that cell's
+constitutive matrix (heterogeneous material) or the homogeneous one.
+
 ## `numerical_vector.num_grid_elastic_traction` (Experimental)
 
 ```aevia
@@ -35287,6 +38119,8 @@ Constant traction.
 ```
 
 Native elasticity call in an explicit mechanical reference frame. Numeric displacements/coordinates use Length, body forces use Mass/(Length^2 Time^2), stress/Young modulus use Mass/(Length Time^2), and density uses Mass/Length^3. Reduced 2D hyperelastic energies are per unit out-of-plane thickness. Outputs retain distinct dimensional reference witnesses. Native DOF, nonlinear work, callbacks and allocation budgets are checked.
+
+Von Mises equivalent of a Voigt stress (2D: plane-stress form with `σ_zz = 0`).
 
 ## `numerical_vector.num_grid_etdrk4` (Experimental)
 
@@ -35965,6 +38799,8 @@ Actual native finite-element assembly/structural method in an explicit mechanica
 
 Returns the nodal shape, including the boundary, in x, y and optional z order.
 
+Nodal shape in x, y and optional z order, including the boundary.
+
 ## `numerical_vector.num_grid_fem_cartesian_prepare` (Experimental)
 
 ```aevia
@@ -35973,6 +38809,12 @@ Returns the nodal shape, including the boundary, in x, y and optional z order.
 
 Prepares the tensor-product Q1 finite-element Poisson operator on a two- or three-dimensional unit grid. Element counts may differ by axis. The physical domain uses the frame's length reference and all boundary values are zero.
 
+Prepares a grid with two or three positive element counts.
+Coordinates and output storage use x-fast order on the unit domain.
+
+# Errors
+Rejects invalid extents and grids too large for addressable storage.
+
 ## `numerical_vector.num_grid_fem_cartesian_solve_prepared` (Experimental)
 
 ```aevia
@@ -35980,6 +38822,11 @@ Prepares the tensor-product Q1 finite-element Poisson operator on a two- or thre
 ```
 
 Solves the prepared Poisson equation for a new compiled source. Each quadrature point needs one evaluation from measured Length coordinates to the field divided by Length squared. Result data are normalized by value_reference and use x-fast order.
+
+Solves for a new source. The callback runs once per element quadrature point.
+
+# Errors
+Reports non-finite source values, cancellation and unrepresentable results.
 
 ## `numerical_vector.num_grid_fem_constant_problem` (Experimental)
 
@@ -37318,6 +40165,8 @@ Computes the vorticity ω = ∂v/∂x - ∂u/∂y from velocity field.
 
 Explicit native Float FDM-grid and sampled-initializer specialization. Measured field/coefficient/time/spacing inputs are normalized by retained physical references. Grid, CFL, work and data bounds precede native work; BC callbacks retain native errors.
 
+Returns a mutable slice to the underlying data.
+
 ## `numerical_vector.num_grid_legacy_fdm_as_slice` (Experimental)
 
 ```aevia
@@ -37325,6 +40174,8 @@ Explicit native Float FDM-grid and sampled-initializer specialization. Measured 
 ```
 
 Explicit native Float FDM-grid and sampled-initializer specialization. Measured field/coefficient/time/spacing inputs are normalized by retained physical references. Grid, CFL, work and data bounds precede native work; BC callbacks retain native errors.
+
+Returns a slice to the underlying data.
 
 ## `numerical_vector.num_grid_legacy_fdm_dimensions` (Experimental)
 
@@ -37334,6 +40185,8 @@ Explicit native Float FDM-grid and sampled-initializer specialization. Measured 
 
 Explicit native Float FDM-grid and sampled-initializer specialization. Measured field/coefficient/time/spacing inputs are normalized by retained physical references. Grid, CFL, work and data bounds precede native work; BC callbacks retain native errors.
 
+Returns the dimensions of the grid.
+
 ## `numerical_vector.num_grid_legacy_fdm_from_data` (Experimental)
 
 ```aevia
@@ -37341,6 +40194,8 @@ Explicit native Float FDM-grid and sampled-initializer specialization. Measured 
 ```
 
 Explicit native Float FDM-grid and sampled-initializer specialization. Measured field/coefficient/time/spacing inputs are normalized by retained physical references. Grid, CFL, work and data bounds precede native work; BC callbacks retain native errors.
+
+Creates a new grid from existing data and dimensions.
 
 ## `numerical_vector.num_grid_legacy_fdm_heat_bc` (Experimental)
 
@@ -37366,6 +40221,8 @@ For inconsistent sizes or boundary descriptions.
 
 Explicit native Float FDM-grid and sampled-initializer specialization. Measured field/coefficient/time/spacing inputs are normalized by retained physical references. Grid, CFL, work and data bounds precede native work; BC callbacks retain native errors.
 
+Is the grid empty.
+
 ## `numerical_vector.num_grid_legacy_fdm_len` (Experimental)
 
 ```aevia
@@ -37374,6 +40231,8 @@ Explicit native Float FDM-grid and sampled-initializer specialization. Measured 
 
 Explicit native Float FDM-grid and sampled-initializer specialization. Measured field/coefficient/time/spacing inputs are normalized by retained physical references. Grid, CFL, work and data bounds precede native work; BC callbacks retain native errors.
 
+Size of the grid.
+
 ## `numerical_vector.num_grid_legacy_fdm_new` (Experimental)
 
 ```aevia
@@ -37381,6 +40240,8 @@ Explicit native Float FDM-grid and sampled-initializer specialization. Measured 
 ```
 
 Explicit native Float FDM-grid and sampled-initializer specialization. Measured field/coefficient/time/spacing inputs are normalized by retained physical references. Grid, CFL, work and data bounds precede native work; BC callbacks retain native errors.
+
+Creates a new grid with the given dimensions, initialized with a default value.
 
 ## `numerical_vector.num_grid_legacy_fdm_poisson_2d` (Experimental)
 
@@ -37522,6 +40383,8 @@ If the CFL condition is violated or the description is inconsistent.
 ```
 
 Explicit native Float FDM-grid and sampled-initializer specialization. Measured field/coefficient/time/spacing inputs are normalized by retained physical references. Grid, CFL, work and data bounds precede native work; BC callbacks retain native errors.
+
+Creates a new grid with the given dimensions, initialized with a specified value.
 
 ## `numerical_vector.num_grid_legacy_fluid_air` (Experimental)
 
@@ -37928,6 +40791,8 @@ Invalid/non-finite RHS or initial data, unrepresentable output, or an iterative 
 
 Native boundary model. Scalar/fluid quantities use the explicit grid reference frame; standalone elasticity boundary coefficients are normalized and require the solver material/reference frame. Marker and capability bounds are checked.
 
+Condition of a marker, or the default.
+
 ## `numerical_vector.num_grid_marker_new` (Experimental)
 
 ```aevia
@@ -37935,6 +40800,8 @@ Native boundary model. Scalar/fluid quantities use the explicit grid reference f
 ```
 
 Native boundary model. Scalar/fluid quantities use the explicit grid reference frame; standalone elasticity boundary coefficients are normalized and require the solver material/reference frame. Marker and capability bounds are checked.
+
+Empty assignment without default.
 
 ## `numerical_vector.num_grid_marker_set` (Experimental)
 
@@ -37944,6 +40811,8 @@ Native boundary model. Scalar/fluid quantities use the explicit grid reference f
 
 Native boundary model. Scalar/fluid quantities use the explicit grid reference frame; standalone elasticity boundary coefficients are normalized and require the solver material/reference frame. Marker and capability bounds are checked.
 
+Assigns a condition to a marker.
+
 ## `numerical_vector.num_grid_marker_with_default` (Experimental)
 
 ```aevia
@@ -37951,6 +40820,8 @@ Native boundary model. Scalar/fluid quantities use the explicit grid reference f
 ```
 
 Native boundary model. Scalar/fluid quantities use the explicit grid reference frame; standalone elasticity boundary coefficients are normalized and require the solver material/reference frame. Marker and capability bounds are checked.
+
+Assignment where unlisted markers use `default`.
 
 ## `numerical_vector.num_grid_material_aluminum` (Experimental)
 
@@ -38906,8 +41777,6 @@ For sizes that are not powers of two or inconsistent data.
 
 Actual native grid/transform method in explicit Length/Time/field references; arrays and coefficients are normalized in that frame and native x-fastest storage is retained. Method identity, FFT normalization, boundary semantics and bounded work/history are preserved.
 
-Performs a 2D FFT by applying 1D FFT along rows and then columns.
-
 ## `numerical_vector.num_grid_sm_fft3d` (Experimental)
 
 ```aevia
@@ -38915,8 +41784,6 @@ Performs a 2D FFT by applying 1D FFT along rows and then columns.
 ```
 
 Actual native grid/transform method in explicit Length/Time/field references; arrays and coefficients are normalized in that frame and native x-fastest storage is retained. Method identity, FFT normalization, boundary semantics and bounded work/history are preserved.
-
-Performs a 3D FFT.
 
 ## `numerical_vector.num_grid_sm_ifft2d` (Experimental)
 
@@ -38926,8 +41793,6 @@ Performs a 3D FFT.
 
 Actual native grid/transform method in explicit Length/Time/field references; arrays and coefficients are normalized in that frame and native x-fastest storage is retained. Method identity, FFT normalization, boundary semantics and bounded work/history are preserved.
 
-Performs a 2D IFFT.
-
 ## `numerical_vector.num_grid_sm_ifft3d` (Experimental)
 
 ```aevia
@@ -38935,8 +41800,6 @@ Performs a 2D IFFT.
 ```
 
 Actual native grid/transform method in explicit Length/Time/field references; arrays and coefficients are normalized in that frame and native x-fastest storage is retained. Method identity, FFT normalization, boundary semantics and bounded work/history are preserved.
-
-Performs a 3D IFFT.
 
 ## `numerical_vector.num_grid_sm_solve_advection_diffusion_1d` (Experimental)
 
@@ -39515,6 +42378,16 @@ Halley's method (cubic convergence) using `f`, `f'` and `f''`.
 
 # Errors
 [`RootError::NoConvergence`] / [`RootError::Singular`].
+
+## `numerical_special.num_harmonic` (Experimental)
+
+```aevia
+(Int) -> Float
+```
+
+`num_harmonic(n)` returns the floating-point harmonic number H_n for a nonnegative u64 integer. H_0 is zero.
+
+The `n`-th harmonic number `sum_{k=1..n} 1/k`, with `H_0 = 0`.
 
 ## `numerical_stats.num_harmonic_mean` (Experimental)
 
@@ -40120,6 +42993,7 @@ Bilinear interpolation on a rectilinear grid.
 
 `grid` is `ny × nx` in row-major order, with `xs` varying fastest.
 Finite coordinates outside the grid are clamped to its edges.
+Use [`BilinearGrid`] to reuse validation across a series of queries.
 
 # Errors
 
@@ -40343,6 +43217,25 @@ Tensor-product cubic spline interpolation on a rectilinear grid (1D, 2D, 3D, ...
 
 Trilinear interpolation on the grid `xs x ys x zs` (`values[i + nx * (j + ny * k)]`); the 3D case of [`multilinear_interpolation`].
 
+## `numerical_special.num_inverse_beta_reg` (Experimental)
+
+```aevia
+(Float, Float, Float) -> Float
+```
+
+`num_inverse_beta_reg(a, b, p)` returns the regularized beta quantile at a probability in [0, 1]. Shape parameters must be finite and positive. The general inversion uses a bounded search and reports nonrepresentable forward evaluations as domain errors.
+
+The inverse of the regularized incomplete beta function.
+
+Returns the `x` in `[0, 1]` such that `I_x(a, b) = p`. Endpoints and
+the one-unit-shape cases use their analytic values. Other cases bracket
+the quantile in binary64. Reflection gives the upper-tail probability
+directly from the forward kernel when `x > 0.5`.
+
+# Errors
+The shapes must be finite and positive, and the probability must lie in
+`[0, 1]`. A nonrepresentable forward evaluation returns an error.
+
 ## `numerical_special.num_inverse_erf` (Experimental)
 
 ```aevia
@@ -40394,6 +43287,14 @@ statistic. Callback errors propagate.
 
 Validate a rectangular point tensor and store it as a portable k-d-tree descriptor. Coordinates retain units. Query operators construct the native tree from the defining points.
 
+Builds a k-d tree from `points`.
+
+# Errors
+
+* [`GeometryError::Empty`] if `points` is empty or 0-dimensional.
+* [`GeometryError::ShapeMismatch`] if points have differing dimensions.
+* [`GeometryError::Domain`] if a coordinate is non-finite.
+
 ## `numerical_vector.num_kdtree_nearest` (Experimental)
 
 ```aevia
@@ -40401,6 +43302,12 @@ Validate a rectangular point tensor and store it as a portable k-d-tree descript
 ```
 
 Exact k-nearest queries on a portable k-d-tree descriptor. Returns index and distance tensors; query coordinates share descriptor units.
+
+Finds up to `k` nearest points to `query`, sorted by ascending distance.
+
+# Errors
+
+As in [`Self::nearest`].
 
 ## `numerical_vector.num_kdtree_nearest_batch` (Experimental)
 
@@ -40410,6 +43317,14 @@ Exact k-nearest queries on a portable k-d-tree descriptor. Returns index and dis
 
 Finds one nearest point per query row in a portable k-d tree, reconstructing the tree once. Indices follow query order and distances retain the descriptor's coordinate dimension. An empty query matrix returns empty index and distance vectors.
 
+Finds the nearest point for every query in input order, using the same
+selection rule as [`Self::nearest`]. Large batches use the execution
+policy for parallel mapping. A query does not allocate its own buffer.
+
+# Errors
+
+The error from the first invalid query, as in [`Self::nearest`].
+
 ## `numerical_vector.num_kdtree_radius` (Experimental)
 
 ```aevia
@@ -40418,6 +43333,14 @@ Finds one nearest point per query row in a portable k-d tree, reconstructing the
 
 Radius queries with coordinate and radius units checked against the descriptor. Returns indices and measured distances.
 
+Finds all points within Euclidean `radius` of `query`, sorted by ascending distance.
+
+A negative radius returns an empty result. Positive infinity includes every point.
+
+# Errors
+
+As in [`Self::nearest`]. A NaN radius returns [`GeometryError::Domain`].
+
 ## `numerical_vector.num_kdtree_single_nearest` (Experimental)
 
 ```aevia
@@ -40425,6 +43348,50 @@ Radius queries with coordinate and radius units checked against the descriptor. 
 ```
 
 Nearest query on the portable native k-d tree, preserving coordinate units. A portable tree requires at least one point.
+
+Finds the nearest point to `query`, returning `(point_index, euclidean_distance)`.
+
+Distance is infinite if the mathematical distance exceeds the Float range.
+
+# Errors
+
+[`GeometryError::ShapeMismatch`] if `query.len()` does not match the tree dimension.
+[`GeometryError::Domain`] if a query coordinate is non-finite.
+
+## `numerical_special.num_koebe_distortion_bounds` (Experimental)
+
+```aevia
+(Float) -> { lower: Float, upper: Float }
+```
+
+Koebe lower and upper bounds on |f'(z)| for normalized univalent functions at |z|=r in [0,1).
+
+Koebe distortion theorem bounds for $f \in \mathcal{S}$ at $|z| = r \in [0, 1)$:
+$\frac{1-r}{(1+r)^3} \le |f'(z)| \le \frac{1+r}{(1-r)^3}$.
+
+## `numerical_special.num_koebe_growth_bounds` (Experimental)
+
+```aevia
+(Float) -> { lower: Float, upper: Float }
+```
+
+Koebe lower and upper bounds on |f(z)| for normalized univalent functions at |z|=r in [0,1).
+
+Koebe growth theorem bounds for $f \in \mathcal{S}$ at $|z| = r \in [0, 1)$:
+$\frac{r}{(1+r)^2} \le |f(z)| \le \frac{r}{(1-r)^2}$.
+
+## `numerical_special.num_koebe_rotation_bound` (Experimental)
+
+```aevia
+(Float) -> Float
+```
+
+Goluzin's sharp upper bound in radians on the absolute continuous argument of f'(z) for |z|=r in [0,1).
+
+Returns Goluzin’s sharp rotation bound on the circle of radius `r`.
+
+Goluzin's sharp rotation theorem bound on $|\arg f'(z)|$ for $f \in \mathcal{S}$ at $|z| = r \in [0, 1)$:
+$4 \arcsin(r)$ for $r \le 1/\sqrt{2}$, and $\pi + \ln\frac{r^2}{1 - r^2}$ for $1/\sqrt{2} < r < 1$.
 
 ## `numerical_stats.num_kurtosis` (Experimental)
 
@@ -40495,6 +43462,18 @@ Limited-memory BFGS with history `m` (two-loop recursion).
 ```
 
 Damped nonlinear least squares with a scoped vector residual callback. Initial parameters and residuals may have independent dimensions. Returns the best point, residual norm, work counters, convergence and explicit stopping status; callback failures propagate.
+
+Minimise one half of the squared residual norm using a damped, column-scaled
+augmented SVD. The Jacobian may be analytic or safely differenced.
+
+The reported scaled gradient is formed from `J[:,j]/max(abs(J[:,j]))` and
+`f/max(abs(f))`; it is a dimensionless first-order test, not a root proof.
+Trial steps are accepted only on positive actual and predicted decrease.
+Residual length must remain constant on every evaluation.
+
+# Errors
+Invalid input, malformed callback results, or a failed decomposition return
+a [`LeastSquaresError`]. Nonconvergence is reported as a result status.
 
 ## `numerical_matrix.num_linear_amg_build` (Experimental)
 
@@ -40871,6 +43850,9 @@ A slice shorter than the matrix extent can panic.
 Native sparse factor/preconditioner with its matrix entry reference. Application returns a normalized result with physical reference RHS/matrix; shapes, unit domains and factor work are checked.
 
 `z = M^-1 r`, block by block.
+
+Blocks are independent, so large systems invert them in parallel without
+changing a bit: every output block keeps its own arithmetic order.
 
 # Panics
 A slice shorter than the matrix extent can panic.
@@ -41705,6 +44687,12 @@ unpreconditioned path or falls back to [`Csr::jacobi_inverse`].
 
 Native sparse factor/preconditioner with its matrix entry reference. Application returns a normalized result with physical reference RHS/matrix; shapes, unit domains and factor work are checked.
 
+Compute threshold incomplete LU with deterministic bounded row storage.
+
+# Errors
+Returns [`IlutError`] for malformed input, non-finite data, unsafe
+pivots or unrepresentable factorisation arithmetic. No pivoting occurs.
+
 ## `numerical_matrix.num_linear_csr_jacobi_inverse` (Experimental)
 
 ```aevia
@@ -42046,6 +45034,9 @@ Returns shape, non-finite input, or SVD convergence errors.
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
 
+The sign of the permutation that brings the pivots to the diagonal
+(`true` for odd), for a square matrix of full rank.
+
 ## `numerical_matrix.num_linear_echelon_rank` (Experimental)
 
 ```aevia
@@ -42053,6 +45044,8 @@ Native exact sparse/domain operation specialized to BigRational or a validated p
 ```
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
+
+The rank over the pivotable columns.
 
 ## `numerical_matrix.num_linear_eigs` (Experimental)
 
@@ -42421,6 +45414,8 @@ Actual native f64 Field faer multi-RHS solve hook; solution entries retain RHS/m
 
 Native f64 Field inverse; output dimension is the inverse of the measured scalar dimension.
 
+Inverse of a non-zero element.
+
 ## `numerical_matrix.num_linear_field_is_invertible` (Experimental)
 
 ```aevia
@@ -42611,7 +45606,7 @@ right-hand sides or applied iterates give an undefined residual
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
 
-The inverse of `a` (Fermat), or `None` for zero.
+The inverse of `a` modulo `p`, or `None` for zero.
 
 ## `numerical_matrix.num_linear_gfp_mul_mod` (Experimental)
 
@@ -42805,6 +45800,11 @@ Solves `L U z = r` (applies the preconditioner `M^-1`).
 
 Native sparse factor/preconditioner with its matrix entry reference. Application returns a normalized result with physical reference RHS/matrix; shapes, unit domains and factor work are checked.
 
+Apply `L^-1` and `U^-1` without changing `out` on failure.
+
+# Errors
+Rejects mismatched/non-finite inputs and non-finite triangular solves.
+
 ## `numerical_matrix.num_linear_ilut_stats` (Experimental)
 
 ```aevia
@@ -42812,6 +45812,8 @@ Native sparse factor/preconditioner with its matrix entry reference. Application
 ```
 
 Actual retained ILUT storage/drop diagnostics, with dimensionless counts.
+
+Factorisation work and retained storage counts.
 
 ## `numerical_matrix.num_linear_inner` (Experimental)
 
@@ -42936,7 +45938,9 @@ at specified points. The resulting polynomial is unique and passes exactly throu
 A `Result` containing a `Polynomial` struct representing the interpolating polynomial.
 
 # Errors
-Returns an error if duplicate x-coordinates are found among the input points.
+Returns an error for repeated coordinates, nonfinite samples, or overflowing
+divided differences or power-basis coefficients. Empty input returns zero.
+For nonempty input the polynomial retains one coefficient per sample.
 
 # Example
 ```rust
@@ -42969,7 +45973,9 @@ at specified points. The resulting polynomial is unique and passes exactly throu
 A `Result` containing a `Polynomial` struct representing the interpolating polynomial.
 
 # Errors
-Returns an error if duplicate x-coordinates are found among the input points.
+Returns an error for repeated coordinates, nonfinite samples, or overflowing
+divided differences or power-basis coefficients. Empty input returns zero.
+For nonempty input the polynomial retains one coefficient per sample.
 
 # Example
 ```rust
@@ -43117,7 +46123,7 @@ Matrix-vector product.
 
 Checked native linear calculation in normalized reference coordinates. Physical tensors must be explicitly nondimensionalized; normalized outputs use the same declared reference basis.
 
-Frobenius norm.
+Frobenius norm with a serial SIMD reduction and scaling at extreme magnitudes.
 
 ## `numerical_matrix.num_linear_mat_set` (Experimental)
 
@@ -43150,13 +46156,15 @@ Native exact sparse/domain operation specialized to BigRational or a validated p
 The minimal polynomial of a square matrix over `GF(p)` by Wiedemann's
 algorithm, monic, lowest degree first.
 
-The algorithm multiplies by the matrix `2n` times per trial and stores
-two vectors: no entry of the matrix is ever changed, so there is no
-fill-in. One random projection yields a divisor of the minimal
-polynomial, and the right one with probability at least `1 - 2n/p`; the
-result here is the least common multiple over `trials` projections
-(seeded, so the function is deterministic). `None` when the matrix is not
-square.
+The algorithm flattens `matrix` once into a Montgomery-domain CSR
+workspace, multiplies by the matrix `2n` times per trial with delayed
+`u128` row accumulation, and leases Krylov vectors from
+[`crate::kernels::reuse::global_pool`]: no entry of the matrix is ever
+changed, so there is no fill-in. One random projection yields a divisor
+of the minimal polynomial, and the right one with probability at least
+`1 - 2n/p`; the result here is the least common multiple over `trials`
+projections (seeded, so the function is deterministic). `None` when the
+matrix is not square.
 
 ## `numerical_matrix.num_linear_multigrid_mean_factor` (Experimental)
 
@@ -43415,6 +46423,8 @@ solution with zeros in the `n - rank` columns the pivoting put last.
 
 Native sparse factor/preconditioner with its matrix entry reference. Application returns a normalized result with physical reference RHS/matrix; shapes, unit domains and factor work are checked.
 
+Writes `M^-1 r` into `z`.
+
 ## `numerical_matrix.num_linear_prime_sparse_new` (Experimental)
 
 ```aevia
@@ -43455,6 +46465,8 @@ the dense decomposition of the projected matrix fails.
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
 
+`a + b` in the field.
+
 ## `numerical_matrix.num_linear_rational_domain_div` (Experimental)
 
 ```aevia
@@ -43462,6 +46474,8 @@ Native exact sparse/domain operation specialized to BigRational or a validated p
 ```
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
+
+`a / b` in the field, `None` when `b` is zero.
 
 ## `numerical_matrix.num_linear_rational_domain_is_zero` (Experimental)
 
@@ -43471,6 +46485,8 @@ Native exact sparse/domain operation specialized to BigRational or a validated p
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
 
+Whether a coefficient is zero.
+
 ## `numerical_matrix.num_linear_rational_domain_mul` (Experimental)
 
 ```aevia
@@ -43478,6 +46494,8 @@ Native exact sparse/domain operation specialized to BigRational or a validated p
 ```
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
+
+`a * b` in the field.
 
 ## `numerical_matrix.num_linear_rational_domain_neg` (Experimental)
 
@@ -43487,6 +46505,8 @@ Native exact sparse/domain operation specialized to BigRational or a validated p
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
 
+`-a` in the field.
+
 ## `numerical_matrix.num_linear_rational_domain_one` (Experimental)
 
 ```aevia
@@ -43494,6 +46514,8 @@ Native exact sparse/domain operation specialized to BigRational or a validated p
 ```
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
+
+The one of the field, in canonical form.
 
 ## `numerical_matrix.num_linear_rational_domain_sub` (Experimental)
 
@@ -43503,6 +46525,8 @@ Native exact sparse/domain operation specialized to BigRational or a validated p
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
 
+`a - b` in the field.
+
 ## `numerical_matrix.num_linear_rational_domain_zero` (Experimental)
 
 ```aevia
@@ -43510,6 +46534,8 @@ Native exact sparse/domain operation specialized to BigRational or a validated p
 ```
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
+
+The zero of the field, in canonical form.
 
 ## `numerical_matrix.num_linear_rational_reconstruct` (Experimental)
 
@@ -43529,6 +46555,8 @@ Rational reconstruction: the fraction `n / d` with `n = a d (mod m)` and
 ```
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
+
+`self + other`, or `None` when the shapes differ.
 
 ## `numerical_matrix.num_linear_rational_sparse_det` (Experimental)
 
@@ -43551,6 +46579,10 @@ Native exact sparse/domain operation specialized to BigRational or a validated p
 The determinant of a square rational matrix, exactly, by modular
 determinants combined with the Chinese remainder theorem up to
 Hadamard's bound. `None` when the matrix is not square.
+
+Evaluates word-sized prime moduli in parallel via [`crate::kernels::par::map_indexed`]
+when [`crate::execution::should_split_work`] indicates enough work, and folds
+the modular determinants in deterministic prime order via incremental CRT.
 
 ## `numerical_matrix.num_linear_rational_sparse_echelon` (Experimental)
 
@@ -43575,6 +46607,8 @@ Pivot ties are broken by the original row and column indices.
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
 
+A sparse copy of a dense matrix.
+
 ## `numerical_matrix.num_linear_rational_sparse_from_triplets` (Experimental)
 
 ```aevia
@@ -43582,6 +46616,12 @@ Native exact sparse/domain operation specialized to BigRational or a validated p
 ```
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
+
+Builds a matrix from `(row, column, value)` triplets. Repeated
+positions are added and zeros dropped.
+
+# Errors
+When a triplet lies outside the shape.
 
 ## `numerical_matrix.num_linear_rational_sparse_matmul` (Experimental)
 
@@ -43591,6 +46631,12 @@ Native exact sparse/domain operation specialized to BigRational or a validated p
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
 
+`self * other`, or `None` when the inner dimensions differ. Each
+result row is accumulated from the rows of `other` it touches
+(Gustavson's algorithm) using a sparse dense-indexed accumulator with
+pooled index scratch, so the cost follows the number of products that
+are actually non-zero without `BTreeMap` node allocations.
+
 ## `numerical_matrix.num_linear_rational_sparse_matvec` (Experimental)
 
 ```aevia
@@ -43599,6 +46645,8 @@ Native exact sparse/domain operation specialized to BigRational or a validated p
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
 
+`self * x`, or `None` when the length of `x` is not the column count.
+
 ## `numerical_matrix.num_linear_rational_sparse_nnz` (Experimental)
 
 ```aevia
@@ -43606,6 +46654,8 @@ Native exact sparse/domain operation specialized to BigRational or a validated p
 ```
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
+
+Number of stored entries.
 
 ## `numerical_matrix.num_linear_rational_sparse_nullspace` (Experimental)
 
@@ -43634,6 +46684,8 @@ The rank of a matrix.
 ```
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
+
+`c * self`.
 
 ## `numerical_matrix.num_linear_rational_sparse_solve` (Experimental)
 
@@ -43678,6 +46730,8 @@ primes, means singular); use [`solve`] to analyse a singular system.
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
 
+The dense form.
+
 ## `numerical_matrix.num_linear_rational_sparse_transpose` (Experimental)
 
 ```aevia
@@ -43685,6 +46739,8 @@ Native exact sparse/domain operation specialized to BigRational or a validated p
 ```
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
+
+The transpose.
 
 ## `numerical_matrix.num_linear_rational_sparse_triplets` (Experimental)
 
@@ -43694,6 +46750,8 @@ Native exact sparse/domain operation specialized to BigRational or a validated p
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
 
+The entries as `(row, column, value)`, in row-major order.
+
 ## `numerical_matrix.num_linear_rational_sparse_zeros` (Experimental)
 
 ```aevia
@@ -43701,6 +46759,8 @@ Native exact sparse/domain operation specialized to BigRational or a validated p
 ```
 
 Native exact sparse/domain operation specialized to BigRational or a validated prime field. Coefficients are normalized dimensionless exact values; finite shape, coefficient-bit and work budgets are enforced.
+
+The zero matrix.
 
 ## `numerical_matrix.num_linear_reference_det` (Experimental)
 
@@ -43872,6 +46932,8 @@ Native exact sparse/domain operation specialized to BigRational or a validated p
 Solves a square non-singular system `A x = b` over `GF(p)` by Wiedemann's
 algorithm.
 
+Flattens `matrix` once into a Montgomery-domain CSR workspace and leases
+Krylov vectors from [`crate::kernels::reuse::global_pool`].
 Returns `None` when the projection does not determine a solution
 (singular matrix, or an unlucky projection in each of the `trials`). A
 returned vector always satisfies `A x = b`.
@@ -44046,6 +47108,11 @@ As [`lu_solve`], including an overflow or mismatch in the RHS shape.
 ```
 
 Native sparse solver with explicit matrix/RHS reference domains. Solutions retain RHS/matrix units; initial vectors use that normalized solution reference. Native method/preconditioner choices, residuals and convergence reports are preserved; shape and work budgets are checked.
+
+`y = A x`.
+
+# Errors
+[`NumericError::ShapeMismatch`] when `x` does not have `cols` entries.
 
 ## `numerical_matrix.num_linear_sparse_native_solve_auto` (Experimental)
 
@@ -44464,6 +47531,23 @@ Computes the Infinity norm ($L_\infty$ norm) of a vector.
 
 Formula: $||\mathbf{v}||_\infty = \max_{i} |`v_i`|$
 
+## `numerical_special.num_ln_binomial` (Experimental)
+
+```aevia
+(Int, Int) -> Float
+```
+
+`num_ln_binomial(n, k)` returns the natural logarithm of the binomial coefficient on 0 <= k <= n. The result stays finite when the coefficient would overflow binary64.
+
+The logarithm of the binomial coefficient `ln C(n, k)`.
+
+For a small reduced `k`, sum the logarithms of the multiplicative
+factors. Otherwise combine the leading Stirling terms algebraically
+and add the corrections. Both paths avoid subtracting nearly equal
+log-factorials for large, unbalanced inputs.
+
+Returns negative infinity when `k > n`.
+
 ## `numerical_special.num_ln_factorial` (Experimental)
 
 ```aevia
@@ -44617,6 +47701,8 @@ Returns [`DenseError::Shape`] for incompatible matrix dimensions or storage.
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Returns the number of columns in the matrix.
+
 ## `numerical_matrix.num_matrix_float_data` (Experimental)
 
 ```aevia
@@ -44624,6 +47710,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Returns an immutable reference to the matrix's internal data vector.
 
 ## `numerical_matrix.num_matrix_float_decompose_cholesky` (Experimental)
 
@@ -44633,6 +47721,10 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Computes a matrix decomposition using the Faer backend.
+Returns None if the backend is not set to Faer, if the decomposition type is unsupported
+for the matrix type, or if the decomposition fails (e.g., Cholesky on non-SPD).
+
 ## `numerical_matrix.num_matrix_float_decompose_eigen` (Experimental)
 
 ```aevia
@@ -44640,6 +47732,10 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Computes a matrix decomposition using the Faer backend.
+Returns None if the backend is not set to Faer, if the decomposition type is unsupported
+for the matrix type, or if the decomposition fails (e.g., Cholesky on non-SPD).
 
 ## `numerical_matrix.num_matrix_float_decompose_lu` (Experimental)
 
@@ -44649,6 +47745,10 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Computes a matrix decomposition using the Faer backend.
+Returns None if the backend is not set to Faer, if the decomposition type is unsupported
+for the matrix type, or if the decomposition fails (e.g., Cholesky on non-SPD).
+
 ## `numerical_matrix.num_matrix_float_decompose_qr` (Experimental)
 
 ```aevia
@@ -44656,6 +47756,10 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Computes a matrix decomposition using the Faer backend.
+Returns None if the backend is not set to Faer, if the decomposition type is unsupported
+for the matrix type, or if the decomposition fails (e.g., Cholesky on non-SPD).
 
 ## `numerical_matrix.num_matrix_float_decompose_svd` (Experimental)
 
@@ -44665,6 +47769,10 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Computes a matrix decomposition using the Faer backend.
+Returns None if the backend is not set to Faer, if the decomposition type is unsupported
+for the matrix type, or if the decomposition fails (e.g., Cholesky on non-SPD).
+
 ## `numerical_matrix.num_matrix_float_determinant` (Experimental)
 
 ```aevia
@@ -44672,6 +47780,19 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Computes the determinant of a square matrix.
+
+This method uses block matrix decomposition (Schur complement) for efficient
+determinant calculation, especially for large matrices.
+
+# Returns
+The determinant of the matrix.
+
+# Errors
+Returns an error if:
+- The matrix is not square.
+- The matrix is singular or reduction fails.
 
 ## `numerical_matrix.num_matrix_float_determinant_block` (Experimental)
 
@@ -44681,6 +47802,17 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+# Block Matrix Determinant
+
+Computes the determinant using block matrix decomposition (Schur complement).
+This is efficient for large matrices.
+
+# Errors
+
+This function will return an error if:
+- The matrix is not square.
+- The matrix is singular or reduction fails.
+
 ## `numerical_matrix.num_matrix_float_determinant_lu` (Experimental)
 
 ```aevia
@@ -44688,6 +47820,14 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Computes the determinant using LU decomposition.
+
+# Errors
+
+This function will return an error if:
+- The matrix is not square.
+- The matrix is singular or reduction fails.
 
 ## `numerical_matrix.num_matrix_float_frobenius_norm` (Experimental)
 
@@ -44697,6 +47837,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Computes the Frobenius norm of the matrix.
+
 ## `numerical_matrix.num_matrix_float_get` (Experimental)
 
 ```aevia
@@ -44704,6 +47846,18 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Returns an immutable reference to the element at the specified row and column.
+
+# Arguments
+* `row` - The row index.
+* `col` - The column index.
+
+# Returns
+An immutable reference to the element.
+
+# Panics
+Panics if the `row` or `col` indices are out of bounds.
 
 ## `numerical_matrix.num_matrix_float_get_cols` (Experimental)
 
@@ -44713,6 +47867,13 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Returns a `Vec` of `Vec<T>` where each inner `Vec` represents a column of the matrix.
+
+This method effectively transposes the matrix data into a column-major representation.
+
+# Returns
+A `Vec<Vec<T>>` where each inner vector is a column.
+
 ## `numerical_matrix.num_matrix_float_get_mut` (Experimental)
 
 ```aevia
@@ -44720,6 +47881,18 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Returns a mutable reference to the element at the specified row and column.
+
+# Arguments
+* `row` - The row index.
+* `col` - The column index.
+
+# Returns
+A mutable reference to the element.
+
+# Panics
+Panics if the `row` or `col` indices are out of bounds.
 
 ## `numerical_matrix.num_matrix_float_identity` (Experimental)
 
@@ -44729,6 +47902,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Creates an identity matrix of a given size.
+
 ## `numerical_matrix.num_matrix_float_into_data` (Experimental)
 
 ```aevia
@@ -44736,6 +47911,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Consumes the matrix and returns its internal data vector.
 
 ## `numerical_matrix.num_matrix_float_inverse` (Experimental)
 
@@ -44745,6 +47922,15 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Computes the inverse of a square matrix.
+
+This method uses Gaussian elimination on an augmented matrix `[A | I]`
+to transform `A` into the identity matrix `I`, resulting in `[I | A^-1]`.
+
+# Returns
+* `Some(Matrix)` containing the inverse matrix if it exists.
+* `None` if the matrix is not square or is singular (not invertible).
+
 ## `numerical_matrix.num_matrix_float_is_diagonal` (Experimental)
 
 ```aevia
@@ -44752,6 +47938,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Checks if the matrix is diagonal.
 
 ## `numerical_matrix.num_matrix_float_is_identity` (Experimental)
 
@@ -44761,6 +47949,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Checks if the matrix is identity within a given tolerance.
+
 ## `numerical_matrix.num_matrix_float_is_orthogonal` (Experimental)
 
 ```aevia
@@ -44768,6 +47958,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Checks if the matrix is orthogonal ($A^T A = I$).
 
 ## `numerical_matrix.num_matrix_float_is_symmetric` (Experimental)
 
@@ -44777,6 +47969,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Checks if the matrix is symmetric ($A = A^T$).
+
 ## `numerical_matrix.num_matrix_float_jacobi_eigen_decomposition` (Experimental)
 
 ```aevia
@@ -44784,6 +47978,24 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Finds the eigenvalues and eigenvectors of a symmetric matrix using the Jacobi iteration method.
+
+The Jacobi method is an iterative algorithm for computing the eigenvalues and eigenvectors
+of a real symmetric matrix by performing a sequence of orthogonal similarity transformations.
+
+# Arguments
+* `max_sweeps` - The maximum number of sweeps (iterations) to perform.
+* `tolerance` - The convergence tolerance for off-diagonal elements.
+
+# Returns
+A `Result` containing a tuple `(eigenvalues, eigenvectors)` where `eigenvalues` is a `Vec<f64>`
+and `eigenvectors` is a `Matrix<f64>` (columns are eigenvectors).
+
+# Errors
+Returns an error if:
+- The matrix is not square.
+- The decomposition fails to converge within the maximum sweeps.
 
 ## `numerical_matrix.num_matrix_float_l1_norm` (Experimental)
 
@@ -44793,6 +48005,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Computes the L1 norm of the matrix (max column sum).
+
 ## `numerical_matrix.num_matrix_float_linf_norm` (Experimental)
 
 ```aevia
@@ -44800,6 +48014,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Computes the Linf norm of the matrix (max row sum).
 
 ## `numerical_matrix.num_matrix_float_lu_decomposition` (Experimental)
 
@@ -44809,6 +48025,16 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Computes the LU decomposition of a square matrix.
+
+# Returns
+A tuple containing the LU matrix and the number of row swaps.
+
+# Errors
+Returns an error if:
+- The matrix is not square.
+- The matrix is singular.
+
 ## `numerical_matrix.num_matrix_float_mul_strassen` (Experimental)
 
 ```aevia
@@ -44816,6 +48042,22 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+# Strassen's Matrix Multiplication
+
+This function multiplies two matrices using Strassen's algorithm, which is more
+efficient for large matrices than the naive O(n^3) algorithm.
+
+## Arguments
+* `other` - The matrix to multiply with.
+
+## Returns
+A new `Matrix` representing the product of the two matrices.
+
+## Errors
+Returns an error if:
+- Matrix multiplication is not possible due to incompatible dimensions.
+- The matrices are not square (for the internal recursive calls).
 
 ## `numerical_matrix.num_matrix_float_new` (Experimental)
 
@@ -44825,6 +48067,16 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Creates a new `Matrix` from dimensions and a flat `Vec` of data.
+
+# Arguments
+* `rows` - The number of rows.
+* `cols` - The number of columns.
+* `data` - A `Vec` containing the matrix elements in row-major order.
+
+# Panics
+Panics if the product of the dimensions overflows or differs from `data.len()`.
+
 ## `numerical_matrix.num_matrix_float_null_space` (Experimental)
 
 ```aevia
@@ -44832,6 +48084,18 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Computes a basis for the null space (kernel) of the matrix.
+
+The null space of a matrix `A` is the set of all vectors `x` such that `Ax = 0`.
+This method finds the null space by first computing the RREF of the matrix,
+identifying pivot and free variables, and then constructing basis vectors.
+
+# Returns
+A `Matrix` whose columns form a basis for the null space.
+
+# Errors
+Returns an error if the RREF calculation fails.
 
 ## `numerical_matrix.num_matrix_float_rank` (Experimental)
 
@@ -44841,6 +48105,12 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Computes the rank of the matrix.
+
+# Errors
+
+Returns an error if the RREF computation fails.
+
 ## `numerical_matrix.num_matrix_float_rows` (Experimental)
 
 ```aevia
@@ -44848,6 +48118,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Returns the number of rows in the matrix.
 
 ## `numerical_matrix.num_matrix_float_rref` (Experimental)
 
@@ -44857,6 +48129,18 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Computes the reduced row echelon form (RREF) of the matrix in-place.
+
+This method applies Gaussian elimination to transform the matrix into its RREF.
+It is used for solving linear systems, finding matrix inverses, and determining rank.
+
+# Returns
+The rank of the matrix (number of non-zero rows in RREF).
+
+# Errors
+Returns an error if a division by zero occurs during the elimination process,
+which can happen if the matrix elements are not from a proper field.
+
 ## `numerical_matrix.num_matrix_float_set_backend` (Experimental)
 
 ```aevia
@@ -44864,6 +48148,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Updates the backend for the matrix in-place.
 
 ## `numerical_matrix.num_matrix_float_trace` (Experimental)
 
@@ -44873,6 +48159,11 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Computes the trace of the matrix (sum of diagonal elements).
+
+# Errors
+Returns an error if the matrix is not square.
+
 ## `numerical_matrix.num_matrix_float_transpose` (Experimental)
 
 ```aevia
@@ -44880,6 +48171,14 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Computes the transpose of the matrix.
+
+The transpose of a matrix `A` (denoted `A^T`) is obtained by flipping the matrix
+over its diagonal; that is, it switches the row and column indices of the matrix.
+
+# Returns
+A new `Matrix` representing the transpose.
 
 ## `numerical_matrix.num_matrix_float_with_backend` (Experimental)
 
@@ -44889,6 +48188,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Sets the backend for the matrix.
+
 ## `numerical_matrix.num_matrix_float_zeros` (Experimental)
 
 ```aevia
@@ -44896,6 +48197,18 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Creates a new `Matrix` filled with the zero element of type `T`.
+
+# Arguments
+* `rows` - The number of rows.
+* `cols` - The number of columns.
+
+# Returns
+A new `Matrix` of the specified dimensions, with all elements initialized to `T::zero()`.
+
+# Panics
+Panics if the product of the dimensions overflows.
 
 ## `numerical_matrix.num_matrix_real_cols` (Experimental)
 
@@ -44905,6 +48218,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Returns the number of columns in the matrix.
+
 ## `numerical_matrix.num_matrix_real_data` (Experimental)
 
 ```aevia
@@ -44912,6 +48227,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Returns an immutable reference to the matrix's internal data vector.
 
 ## `numerical_matrix.num_matrix_real_determinant` (Experimental)
 
@@ -44921,6 +48238,19 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Computes the determinant of a square matrix.
+
+This method uses block matrix decomposition (Schur complement) for efficient
+determinant calculation, especially for large matrices.
+
+# Returns
+The determinant of the matrix.
+
+# Errors
+Returns an error if:
+- The matrix is not square.
+- The matrix is singular or reduction fails.
+
 ## `numerical_matrix.num_matrix_real_determinant_block` (Experimental)
 
 ```aevia
@@ -44928,6 +48258,17 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+# Block Matrix Determinant
+
+Computes the determinant using block matrix decomposition (Schur complement).
+This is efficient for large matrices.
+
+# Errors
+
+This function will return an error if:
+- The matrix is not square.
+- The matrix is singular or reduction fails.
 
 ## `numerical_matrix.num_matrix_real_determinant_lu` (Experimental)
 
@@ -44937,6 +48278,14 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Computes the determinant using LU decomposition.
+
+# Errors
+
+This function will return an error if:
+- The matrix is not square.
+- The matrix is singular or reduction fails.
+
 ## `numerical_matrix.num_matrix_real_frobenius_norm` (Experimental)
 
 ```aevia
@@ -44944,6 +48293,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Computes the Frobenius norm of the matrix.
 
 ## `numerical_matrix.num_matrix_real_get` (Experimental)
 
@@ -44953,6 +48304,18 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Returns an immutable reference to the element at the specified row and column.
+
+# Arguments
+* `row` - The row index.
+* `col` - The column index.
+
+# Returns
+An immutable reference to the element.
+
+# Panics
+Panics if the `row` or `col` indices are out of bounds.
+
 ## `numerical_matrix.num_matrix_real_get_cols` (Experimental)
 
 ```aevia
@@ -44960,6 +48323,13 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Returns a `Vec` of `Vec<T>` where each inner `Vec` represents a column of the matrix.
+
+This method effectively transposes the matrix data into a column-major representation.
+
+# Returns
+A `Vec<Vec<T>>` where each inner vector is a column.
 
 ## `numerical_matrix.num_matrix_real_get_mut` (Experimental)
 
@@ -44969,6 +48339,18 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Returns a mutable reference to the element at the specified row and column.
+
+# Arguments
+* `row` - The row index.
+* `col` - The column index.
+
+# Returns
+A mutable reference to the element.
+
+# Panics
+Panics if the `row` or `col` indices are out of bounds.
+
 ## `numerical_matrix.num_matrix_real_identity` (Experimental)
 
 ```aevia
@@ -44976,6 +48358,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Creates an identity matrix of a given size.
 
 ## `numerical_matrix.num_matrix_real_into_data` (Experimental)
 
@@ -44985,6 +48369,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Consumes the matrix and returns its internal data vector.
+
 ## `numerical_matrix.num_matrix_real_inverse` (Experimental)
 
 ```aevia
@@ -44992,6 +48378,15 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Computes the inverse of a square matrix.
+
+This method uses Gaussian elimination on an augmented matrix `[A | I]`
+to transform `A` into the identity matrix `I`, resulting in `[I | A^-1]`.
+
+# Returns
+* `Some(Matrix)` containing the inverse matrix if it exists.
+* `None` if the matrix is not square or is singular (not invertible).
 
 ## `numerical_matrix.num_matrix_real_is_diagonal` (Experimental)
 
@@ -45001,6 +48396,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Checks if the matrix is diagonal.
+
 ## `numerical_matrix.num_matrix_real_is_identity` (Experimental)
 
 ```aevia
@@ -45008,6 +48405,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Checks if the matrix is identity within a given tolerance.
 
 ## `numerical_matrix.num_matrix_real_is_orthogonal` (Experimental)
 
@@ -45017,6 +48416,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Checks if the matrix is orthogonal ($A^T A = I$).
+
 ## `numerical_matrix.num_matrix_real_is_symmetric` (Experimental)
 
 ```aevia
@@ -45024,6 +48425,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Checks if the matrix is symmetric ($A = A^T$).
 
 ## `numerical_matrix.num_matrix_real_l1_norm` (Experimental)
 
@@ -45033,6 +48436,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Computes the L1 norm of the matrix (max column sum).
+
 ## `numerical_matrix.num_matrix_real_linf_norm` (Experimental)
 
 ```aevia
@@ -45040,6 +48445,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Computes the Linf norm of the matrix (max row sum).
 
 ## `numerical_matrix.num_matrix_real_lu_decomposition` (Experimental)
 
@@ -45049,6 +48456,16 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Computes the LU decomposition of a square matrix.
+
+# Returns
+A tuple containing the LU matrix and the number of row swaps.
+
+# Errors
+Returns an error if:
+- The matrix is not square.
+- The matrix is singular.
+
 ## `numerical_matrix.num_matrix_real_mul_strassen` (Experimental)
 
 ```aevia
@@ -45056,6 +48473,22 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+# Strassen's Matrix Multiplication
+
+This function multiplies two matrices using Strassen's algorithm, which is more
+efficient for large matrices than the naive O(n^3) algorithm.
+
+## Arguments
+* `other` - The matrix to multiply with.
+
+## Returns
+A new `Matrix` representing the product of the two matrices.
+
+## Errors
+Returns an error if:
+- Matrix multiplication is not possible due to incompatible dimensions.
+- The matrices are not square (for the internal recursive calls).
 
 ## `numerical_matrix.num_matrix_real_new` (Experimental)
 
@@ -45065,6 +48498,16 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Creates a new `Matrix` from dimensions and a flat `Vec` of data.
+
+# Arguments
+* `rows` - The number of rows.
+* `cols` - The number of columns.
+* `data` - A `Vec` containing the matrix elements in row-major order.
+
+# Panics
+Panics if the product of the dimensions overflows or differs from `data.len()`.
+
 ## `numerical_matrix.num_matrix_real_null_space` (Experimental)
 
 ```aevia
@@ -45072,6 +48515,18 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Computes a basis for the null space (kernel) of the matrix.
+
+The null space of a matrix `A` is the set of all vectors `x` such that `Ax = 0`.
+This method finds the null space by first computing the RREF of the matrix,
+identifying pivot and free variables, and then constructing basis vectors.
+
+# Returns
+A `Matrix` whose columns form a basis for the null space.
+
+# Errors
+Returns an error if the RREF calculation fails.
 
 ## `numerical_matrix.num_matrix_real_rank` (Experimental)
 
@@ -45081,6 +48536,12 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Computes the rank of the matrix.
+
+# Errors
+
+Returns an error if the RREF computation fails.
+
 ## `numerical_matrix.num_matrix_real_rows` (Experimental)
 
 ```aevia
@@ -45088,6 +48549,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Returns the number of rows in the matrix.
 
 ## `numerical_matrix.num_matrix_real_rref` (Experimental)
 
@@ -45097,6 +48560,18 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Computes the reduced row echelon form (RREF) of the matrix in-place.
+
+This method applies Gaussian elimination to transform the matrix into its RREF.
+It is used for solving linear systems, finding matrix inverses, and determining rank.
+
+# Returns
+The rank of the matrix (number of non-zero rows in RREF).
+
+# Errors
+Returns an error if a division by zero occurs during the elimination process,
+which can happen if the matrix elements are not from a proper field.
+
 ## `numerical_matrix.num_matrix_real_set_backend` (Experimental)
 
 ```aevia
@@ -45104,6 +48579,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Updates the backend for the matrix in-place.
 
 ## `numerical_matrix.num_matrix_real_trace` (Experimental)
 
@@ -45113,6 +48590,11 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Computes the trace of the matrix (sum of diagonal elements).
+
+# Errors
+Returns an error if the matrix is not square.
+
 ## `numerical_matrix.num_matrix_real_transpose` (Experimental)
 
 ```aevia
@@ -45120,6 +48602,14 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Computes the transpose of the matrix.
+
+The transpose of a matrix `A` (denoted `A^T`) is obtained by flipping the matrix
+over its diagonal; that is, it switches the row and column indices of the matrix.
+
+# Returns
+A new `Matrix` representing the transpose.
 
 ## `numerical_matrix.num_matrix_real_with_backend` (Experimental)
 
@@ -45129,6 +48619,8 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
 
+Sets the backend for the matrix.
+
 ## `numerical_matrix.num_matrix_real_zeros` (Experimental)
 
 ```aevia
@@ -45136,6 +48628,18 @@ Validated portable Matrix specialization. Format/version, dense rank/shape, indi
 ```
 
 Validated portable Matrix specialization. Format/version, dense rank/shape, indices, finite values and allocation limits are checked. Real specializes exact rational arithmetic and permits only Native backend. Backend changes are immutable. Determinants return normalized magnitude, entry_unit and order, representing normalized*entry_unit^order; packed LU similarly operates on entries normalized by one canonical input unit. RREF/null-space vectors are dimensionless. No pointer or process-local handle is serialized.
+
+Creates a new `Matrix` filled with the zero element of type `T`.
+
+# Arguments
+* `rows` - The number of rows.
+* `cols` - The number of columns.
+
+# Returns
+A new `Matrix` of the specified dimensions, with all elements initialized to `T::zero()`.
+
+# Panics
+Panics if the product of the dimensions overflows.
 
 ## `numerical_stats.num_max` (Experimental)
 
@@ -45175,6 +48679,75 @@ Computes the median of a slice of data.
 # Returns
 The median of the data as an `f64`.
 
+## `numerical_vector.num_meshgen_boundary_faces` (Experimental)
+
+```aevia
+(Tensor<2, Int>) -> Tensor<2, Int>
+```
+
+`num_meshgen_boundary_faces(tetrahedra)` returns the oriented triangular faces incident to exactly one tetrahedron, in first occurrence order. Tetrahedron rows have four distinct zero-based vertex indices. Positively oriented tetrahedra give outward face winding.
+
+The faces of `tets` that belong to exactly one tetrahedron.
+
+Each face is returned once, with the winding it has in the tetrahedron that
+owns it, so the faces of a closed mesh point outwards.
+
+## `numerical_vector.num_meshgen_delaunay_2d_incremental` (Experimental)
+
+```aevia
+(Tensor<2, Float[_]>) -> Tensor<2, Int>
+```
+
+`num_meshgen_delaunay_2d_incremental(points)` inserts between 3 and 4096 distinct planar points in input order and returns counter-clockwise triangles of zero-based vertex indices. Points may carry coordinate units. The triangulation contains indices only.
+
+Incremental Delaunay triangulation of `points`.
+
+This is the incremental entry point of the same Bowyer–Watson insertion
+used by [`delaunay_2d`]: points are inserted one at a time into the growing
+triangulation, and each insertion only re-triangulates the cavity of
+triangles whose circumcircle contains the new point.
+
+# Errors
+
+Returns `Err` under the same conditions as [`delaunay_2d`].
+
+## `numerical_vector.num_meshgen_min_angle_deg` (Experimental)
+
+```aevia
+(Tensor<2, Float[_]>, Tensor<2, Int>) -> Float
+```
+
+`num_meshgen_min_angle_deg(points, triangles)` returns the smallest planar triangle angle as a scalar in degrees. Points have two columns and triangles have three zero-based vertex indices. An empty mesh or a degenerate triangle gives zero. Out-of-range indices are errors.
+
+The smallest angle in degrees over all `triangles`.
+
+Returns `0.0` for an empty mesh or a degenerate triangle.
+
+## `numerical_vector.num_meshgen_tetra_volumes` (Experimental)
+
+```aevia
+(Tensor<2, Float[_]>, Tensor<2, Int>) -> Tensor<1, Float[_]>
+```
+
+`num_meshgen_tetra_volumes(points, tetrahedra)` returns nonnegative volumes in input order, with cubed coordinate units. Points have three columns and tetrahedra have four zero-based vertex indices. Degenerate tetrahedra have zero volume. Out-of-range indices are errors.
+
+The volume of every tetrahedron in `tets`, always non-negative.
+
+Tetrahedra whose indices do not address `points` are reported as `0.0`.
+
+## `numerical_vector.num_meshgen_triangle_areas` (Experimental)
+
+```aevia
+(Tensor<2, Float[_]>, Tensor<2, Int>) -> Tensor<1, Float[_]>
+```
+
+`num_meshgen_triangle_areas(points, triangles)` returns an area for each triangle in input order, with squared coordinate units. Points have two columns and triangles have three zero-based vertex indices. Degenerate triangles have zero area. Out-of-range indices are errors.
+
+The area of every triangle in `triangles`.
+
+Triangles whose indices do not address `points` are reported as `0.0`.
+Large batches use the current execution pool and preserve input order.
+
 ## `numerical_stats.num_min` (Experimental)
 
 ```aevia
@@ -45182,6 +48755,293 @@ The median of the data as an `f64`.
 ```
 
 Computes the minimum value of a slice of data.
+
+## `numerical_special.num_mp_ball_abs` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+Returns a dyadic enclosure of the absolute values in the closed interval at the requested precision.
+
+The absolute value, as the hull of the endpoints' absolute values.
+
+# Errors
+Fails when an exponent leaves the range.
+
+## `numerical_special.num_mp_ball_contains_zero` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }) -> Bool
+```
+
+Tests whether the closed interval contains zero, including either endpoint.
+
+Whether the interval contains zero.
+
+## `numerical_special.num_mp_ball_div` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+Encloses all quotients of two closed dimensionless intervals. Both arguments and the result have canonical dyadic midpoint and radius fields. The radius is nonnegative and can have a different bit precision from the midpoint. The divisor interval must exclude zero, including at its endpoints. An out-of-range exponent is a domain error.
+
+Encloses the quotients of the two intervals when the divisor excludes zero.
+
+# Errors
+Fails when the divisor contains zero or an exponent leaves the range.
+
+## `numerical_special.num_mp_ball_endpoints` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }, Int) -> { lower: { mantissa: Int, exponent: Int, precision: Int }, upper: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+Returns the lower endpoint rounded down and upper endpoint rounded up at the requested precision.
+
+The two endpoints, `mid - rad` and `mid + rad`.
+
+# Errors
+Fails when an exponent leaves the range.
+
+## `numerical_special.num_mp_ball_neg` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+Reflects a closed interval about zero and retains its radius.
+
+The value negated.
+
+## `numerical_special.num_mp_ball_new` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, { mantissa: Int, exponent: Int, precision: Int }) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+Creates a closed interval from canonical dyadic midpoint and radius. The radius must be nonnegative.
+
+The ball of radius `rad` around `mid`.
+
+# Errors
+Fails for a negative radius or when an exponent leaves the range.
+
+## `numerical_special.num_mp_ball_point` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }) -> { midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }
+```
+
+Creates a closed interval containing exactly the given dyadic.
+
+The degenerate ball holding exactly `mid`.
+
+## `numerical_special.num_mp_ball_width` (Experimental)
+
+```aevia
+({ midpoint: { mantissa: Int, exponent: Int, precision: Int }, radius: { mantissa: Int, exponent: Int, precision: Int } }) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+Returns twice the radius as a dyadic. An out-of-range exponent is a domain error.
+
+The width `2 * rad`.
+
+# Errors
+Fails when an exponent leaves the range.
+
+## `numerical_special.num_mp_real_abs` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+Returns the absolute value of an exact dyadic without rounding.
+
+The absolute value.
+
+## `numerical_special.num_mp_real_add` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, { mantissa: Int, exponent: Int, precision: Int }, Int, String) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+Adds two canonical dyadic records and rounds the exact sum once to the requested bit precision and mode.
+
+The sum, rounded once to `prec` bits.
+
+# Errors
+Fails when the exponent would leave the representable range.
+
+## `numerical_special.num_mp_real_compare` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, { mantissa: Int, exponent: Int, precision: Int }) -> Int
+```
+
+Compares canonical dyadic records exactly. Returns -1, 0, or 1 and allows different operand precisions.
+
+Total order: `-1`, `0` or `1` as `self` is below, equal to or above
+`other`.
+
+## `numerical_special.num_mp_real_div` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, { mantissa: Int, exponent: Int, precision: Int }, Int, String) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+Divides two canonical dyadic records and rounds the exact quotient once to the requested bit precision and mode. A zero divisor or an out-of-range normalized exponent is a domain error.
+
+The quotient, rounded once to `prec` bits.
+
+# Errors
+Fails on division by zero or when the exponent leaves the range.
+
+## `numerical_special.num_mp_real_floor_log2` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }) -> None | Some(Int)
+```
+
+Returns floor(log2(abs(value))) or None if value is zero.
+
+`floor(log2(|x|))`, or `None` for zero.
+
+## `numerical_special.num_mp_real_is_integer` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }) -> Bool
+```
+
+Tests whether a dyadic has no fractional binary digits.
+
+Whether the value is an exact integer.
+
+## `numerical_special.num_mp_real_is_zero` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }) -> Bool
+```
+
+Tests whether a canonical dyadic is zero.
+
+Whether the value is zero.
+
+## `numerical_special.num_mp_real_mul` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, { mantissa: Int, exponent: Int, precision: Int }, Int, String) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+Multiplies two canonical dyadic records and rounds the exact product once to the requested bit precision and mode.
+
+The product, rounded once to `prec` bits.
+
+# Errors
+Fails when the exponent would leave the representable range.
+
+## `numerical_special.num_mp_real_neg` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+Negates an exact dyadic at its existing precision.
+
+The value negated.
+
+## `numerical_special.num_mp_real_round` (Experimental)
+
+```aevia
+(Int, Int, Int, String) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+Rounds mantissa times 2^exponent once to the requested bit precision. Returns the integer fields mantissa, exponent and precision. Nonzero mantissas have exactly precision bits and zero has exponent zero. Precision is 1 to 32768 bits, input mantissas may have up to 65536 bits and exponents must lie within +/-262144. Accepts nearest (ties to even), zero, away, up, or down.
+
+`mant * 2^exp` rounded to `prec` bits.
+
+# Errors
+Fails when the exponent would leave the representable range.
+
+## `numerical_special.num_mp_real_scale_pow2` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+Multiplies a dyadic by an integer power of two exactly. Zero keeps its canonical exponent. A requested exponent outside the representable range is a domain error.
+
+`self * 2^k`, exact.
+
+# Errors
+Fails when the exponent leaves the representable range.
+
+## `numerical_special.num_mp_real_sqrt` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int, String) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+Rounds the square root of a nonnegative dyadic at the requested bit precision. A negative input is a domain error.
+
+The square root, rounded once to `prec` bits.
+
+# Errors
+Fails for a negative operand or an exponent outside the range.
+
+## `numerical_special.num_mp_real_sub` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, { mantissa: Int, exponent: Int, precision: Int }, Int, String) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+Subtracts two canonical dyadic records and rounds the exact difference once to the requested bit precision and mode.
+
+The difference, rounded once to `prec` bits.
+
+# Errors
+Fails when the exponent would leave the representable range.
+
+## `numerical_special.num_mp_real_trunc_to_bigint` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }) -> Int
+```
+
+Truncates a dyadic toward zero and returns an exact integer. The dyadic representation bounds the result to 294912 bits.
+
+The value truncated toward zero to an integer.
+
+# Errors
+Fails when the exponent leaves the representable range.
+
+## `numerical_special.num_mp_real_with_precision` (Experimental)
+
+```aevia
+({ mantissa: Int, exponent: Int, precision: Int }, Int, String) -> { mantissa: Int, exponent: Int, precision: Int }
+```
+
+Rounds an existing canonical dyadic to a new bit precision. The rounding modes are nearest, zero, away, up and down.
+
+The same value rounded to `prec` bits.
+
+# Errors
+Fails when the exponent would leave the representable range.
+
+## `numerical_special.num_multinomial` (Experimental)
+
+```aevia
+(Int, Tensor<1, Int>) -> Float
+```
+
+`num_multinomial(n, parts)` returns the floating-point multinomial coefficient. Parts are nonnegative integers and must sum exactly to n. The empty partition of zero gives one. A coefficient that exceeds binary64 produces a domain error.
+
+Computes a floating-point multinomial coefficient as a product of binomials.
+
+Returns `None` if the parts do not sum to `n`, and `Some(infinity)` when
+the coefficient overflows. Zero parts and the empty partition of zero
+have no effect on the product.
 
 ## `numerical_stats.num_multivariate_normal_log_pdf_scaled` (Experimental)
 
@@ -46115,6 +49975,8 @@ Solves the 1D time-independent Schrödinger equation `Hψ = Eψ` using the finit
 This function discretizes the 1D Schrödinger equation on a grid, transforming it into
 an eigenvalue problem for the Hamiltonian matrix. The eigenvalues correspond to energy
 levels, and the eigenvectors correspond to the wave functions.
+All supplied grid points are unknowns, including the range endpoints.
+The stencil assumes zero values one grid spacing beyond each endpoint.
 Assumes `hbar = 1` and `m = 1`.
 
 # Arguments
@@ -46141,14 +50003,18 @@ Solves the 2D time-independent Schrödinger equation `Hψ = Eψ` on a rectangula
 
 This function discretizes the 2D Schrödinger equation using a 5-point Laplacian
 finite-difference stencil, converting it into a large eigenvalue problem.
-Dirichlet boundary conditions (`ψ=0`) are enforced by setting a large potential at boundary points.
+Homogeneous Dirichlet conditions are imposed at the supplied grid boundary.
+Interior modes have zero boundary coefficients. The full grid shape is
+retained with separate boundary modes at the diagonal values `1e12 + V`.
+Assumes `hbar = 1` and `m = 1`.
 Warning: For large grids, this dense matrix approach can be very slow and memory-intensive.
 
 # Arguments
-* `potential` - The potential `V(x,y)` as a function of the coordinates.
-* `var_x`, `var_y` - The independent variables (e.g., "x", "y").
+* `potential_fn` - The potential `V(x,y)` as a function of the coordinates.
 * `ranges` - The spatial ranges `(x_min, x_max, y_min, y_max)`.
 * `grid` - The number of grid points `(nx, ny)` in each direction (including boundaries).
+
+Eigenvectors are columns. Grid rows vary `y` fastest.
 
 # Returns
 A `Result` containing a tuple `(eigenvalues, eigenvectors_matrix)`,
@@ -46169,15 +50035,19 @@ Solves the 3D time-independent Schrödinger equation `Hψ = Eψ` on a rectangula
 
 This function discretizes the 3D Schrödinger equation using a 7-point Laplacian
 finite-difference stencil, converting it into a large eigenvalue problem.
-Dirichlet boundary conditions (`ψ=0`) are enforced by setting a large potential at boundary points.
+Homogeneous Dirichlet conditions are imposed at the supplied grid boundary.
+Interior modes have zero boundary coefficients. The full grid shape is
+retained with separate boundary modes at the diagonal values `1e12 + V`.
+Assumes `hbar = 1` and `m = 1`.
 Warning: For large grids, this dense matrix approach can be extremely slow and memory-intensive.
 Consider smaller grids or sparse/iterative methods for higher performance.
 
 # Arguments
-* `potential` - The potential `V(x,y,z)` as a function of the coordinates.
-* `var_x`, `var_y`, `var_z` - The independent variables (e.g., "x", "y", "z").
+* `potential_fn` - The potential `V(x,y,z)` as a function of the coordinates.
 * `ranges` - The spatial ranges `(x_min, x_max, y_min, y_max, z_min, z_max)`.
 * `grid` - The number of grid points `(nx, ny, nz)` in each direction (including boundaries).
+
+Eigenvectors are columns. Grid rows vary `z` fastest.
 
 # Returns
 A `Result` containing a tuple `(eigenvalues, eigenvectors_matrix)`,
@@ -47027,6 +50897,8 @@ A comparison as `1.0` / `0.0` (`!=` is true for NaN operands).
 ```
 
 Explicit native array/device object specialization. IR, buffer and generic storage values are normalized; physical programs retain their tape reference frame. Shapes and native execution work are bounded before launch.
+
+Element `index` of column `col`, NaN when either is out of range.
 
 ## `numerical_vector.num_native_device_column_offsets` (Experimental)
 
@@ -47970,6 +51842,21 @@ and cannot be composed).
 
 Explicit checked native device adapter. Machine IR and buffers use normalized coordinates; use physical map for independently measured columns. Session, shape and bounded work are validated before native execution.
 
+One classical Runge-Kutta 4 step of `y' = f([t,] y)` as a kernel.
+
+`rhs` has `n_state` outputs and either `n_state` inputs (autonomous) or
+`n_state + 1` with the time as input 0. The step kernel has `n_state`
+inputs (the state columns of every trajectory), the parameters of `rhs`
+followed by two more, `t` at index `rhs.params` and the step `h` at
+`rhs.params + 1`, and `n_state` outputs (the next state). Launching it
+`steps` times with a changing `t` integrates every row, that is every
+initial condition, with the same program: the ODE-ensemble pattern.
+
+# Errors
+[`DeviceError::InvalidKernel`] when the shape of `rhs` does not match, or
+when `rhs` is not elementwise or uses `gather` (which addresses columns
+and cannot be composed).
+
 ## `numerical_vector.num_native_device_run_cols` (Experimental)
 
 ```aevia
@@ -48373,6 +52260,8 @@ Kinetic temperature `m Σ v² / (d (N - 1))`.
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Cartesian vector of fractional coordinates `s`.
+
 ## `numerical_vector.num_native_engine_box_from_fractional_d2` (Experimental)
 
 ```aevia
@@ -48380,6 +52269,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Cartesian vector of fractional coordinates `s`.
 
 ## `numerical_vector.num_native_engine_box_from_fractional_d3` (Experimental)
 
@@ -48389,6 +52280,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Cartesian vector of fractional coordinates `s`.
+
 ## `numerical_vector.num_native_engine_box_height_d1` (Experimental)
 
 ```aevia
@@ -48396,6 +52289,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Perpendicular width of the cell along lattice direction `a` (distance between faces).
 
 ## `numerical_vector.num_native_engine_box_height_d2` (Experimental)
 
@@ -48405,6 +52300,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Perpendicular width of the cell along lattice direction `a` (distance between faces).
+
 ## `numerical_vector.num_native_engine_box_height_d3` (Experimental)
 
 ```aevia
@@ -48412,6 +52309,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Perpendicular width of the cell along lattice direction `a` (distance between faces).
 
 ## `numerical_vector.num_native_engine_box_matrix_d1` (Experimental)
 
@@ -48421,6 +52320,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Cell matrix (rows are lattice vectors; diagonal for an orthorhombic box).
+
 ## `numerical_vector.num_native_engine_box_matrix_d2` (Experimental)
 
 ```aevia
@@ -48428,6 +52329,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Cell matrix (rows are lattice vectors; diagonal for an orthorhombic box).
 
 ## `numerical_vector.num_native_engine_box_matrix_d3` (Experimental)
 
@@ -48437,6 +52340,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Cell matrix (rows are lattice vectors; diagonal for an orthorhombic box).
+
 ## `numerical_vector.num_native_engine_box_min_image_d1` (Experimental)
 
 ```aevia
@@ -48444,6 +52349,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Applies the minimum-image convention (including Lees-Edwards offset) to a separation.
 
 ## `numerical_vector.num_native_engine_box_min_image_d2` (Experimental)
 
@@ -48453,6 +52360,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Applies the minimum-image convention (including Lees-Edwards offset) to a separation.
+
 ## `numerical_vector.num_native_engine_box_min_image_d3` (Experimental)
 
 ```aevia
@@ -48460,6 +52369,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Applies the minimum-image convention (including Lees-Edwards offset) to a separation.
 
 ## `numerical_vector.num_native_engine_box_new_d1` (Experimental)
 
@@ -48469,6 +52380,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Box with explicit per-axis boundaries.
+
 ## `numerical_vector.num_native_engine_box_new_d2` (Experimental)
 
 ```aevia
@@ -48476,6 +52389,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Box with explicit per-axis boundaries.
 
 ## `numerical_vector.num_native_engine_box_new_d3` (Experimental)
 
@@ -48485,6 +52400,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Box with explicit per-axis boundaries.
+
 ## `numerical_vector.num_native_engine_box_periodic_d1` (Experimental)
 
 ```aevia
@@ -48492,6 +52409,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Fully periodic box.
 
 ## `numerical_vector.num_native_engine_box_periodic_d2` (Experimental)
 
@@ -48501,6 +52420,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Fully periodic box.
+
 ## `numerical_vector.num_native_engine_box_periodic_d3` (Experimental)
 
 ```aevia
@@ -48508,6 +52429,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Fully periodic box.
 
 ## `numerical_vector.num_native_engine_box_set_cell_d1` (Experimental)
 
@@ -48517,6 +52440,11 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Sets the general cell matrix (rows are lattice vectors), refreshing `len` and the inverse.
+
+# Errors
+Fails if the matrix is singular.
+
 ## `numerical_vector.num_native_engine_box_set_cell_d2` (Experimental)
 
 ```aevia
@@ -48524,6 +52452,11 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Sets the general cell matrix (rows are lattice vectors), refreshing `len` and the inverse.
+
+# Errors
+Fails if the matrix is singular.
 
 ## `numerical_vector.num_native_engine_box_set_cell_d3` (Experimental)
 
@@ -48533,6 +52466,11 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Sets the general cell matrix (rows are lattice vectors), refreshing `len` and the inverse.
+
+# Errors
+Fails if the matrix is singular.
+
 ## `numerical_vector.num_native_engine_box_to_fractional_d1` (Experimental)
 
 ```aevia
@@ -48540,6 +52478,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Fractional coordinates `s` with `x = sum_k s_k a_k` (orthorhombic: `x / L`).
 
 ## `numerical_vector.num_native_engine_box_to_fractional_d2` (Experimental)
 
@@ -48549,6 +52489,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Fractional coordinates `s` with `x = sum_k s_k a_k` (orthorhombic: `x / L`).
+
 ## `numerical_vector.num_native_engine_box_to_fractional_d3` (Experimental)
 
 ```aevia
@@ -48556,6 +52498,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Fractional coordinates `s` with `x = sum_k s_k a_k` (orthorhombic: `x / L`).
 
 ## `numerical_vector.num_native_engine_box_triclinic_d1` (Experimental)
 
@@ -48565,6 +52509,11 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Fully periodic triclinic box with lattice vectors `h[k]` (rows).
+
+# Errors
+Fails if the lattice vectors are linearly dependent.
+
 ## `numerical_vector.num_native_engine_box_triclinic_d2` (Experimental)
 
 ```aevia
@@ -48572,6 +52521,11 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Fully periodic triclinic box with lattice vectors `h[k]` (rows).
+
+# Errors
+Fails if the lattice vectors are linearly dependent.
 
 ## `numerical_vector.num_native_engine_box_triclinic_d3` (Experimental)
 
@@ -48581,6 +52535,11 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Fully periodic triclinic box with lattice vectors `h[k]` (rows).
+
+# Errors
+Fails if the lattice vectors are linearly dependent.
+
 ## `numerical_vector.num_native_engine_box_volume_d1` (Experimental)
 
 ```aevia
@@ -48588,6 +52547,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Volume (length in 1-D, area in 2-D).
 
 ## `numerical_vector.num_native_engine_box_volume_d2` (Experimental)
 
@@ -48597,6 +52558,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Volume (length in 1-D, area in 2-D).
+
 ## `numerical_vector.num_native_engine_box_volume_d3` (Experimental)
 
 ```aevia
@@ -48604,6 +52567,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Volume (length in 1-D, area in 2-D).
 
 ## `numerical_vector.num_native_engine_chain_energy` (Experimental)
 
@@ -48708,6 +52673,8 @@ Least-squares slope of the energy against time (the energy drift rate).
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Number of independent cell degrees of freedom.
+
 ## `numerical_vector.num_native_engine_flexible_energy` (Experimental)
 
 ```aevia
@@ -48715,6 +52682,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Cell contribution to the conserved quantity at volume `v`: `sum p_g^2/(2W) + P V (+ chain)`.
 
 ## `numerical_vector.num_native_engine_flexible_hydrostatic` (Experimental)
 
@@ -48724,6 +52693,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Hydrostatic barostat at pressure `p0` with piston mass `w`.
+
 ## `numerical_vector.num_native_engine_flexible_shear_flow` (Experimental)
 
 ```aevia
@@ -48731,6 +52702,12 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+SLLOD shear flow on a deforming cell: the velocity gradient `u_x = rate * y` is imposed
+(no cell dynamics), particles obey `dr/dt = v + G r`, `dv/dt = F/m - G v`, and the lattice
+vectors are advected by the flow and reduced (lattice-equivalent re-wrapping) when the
+shear exceeds half a box. Combine with a Nose-Hoover chain or Langevin thermostat acting on
+the peculiar velocities. Requires `d >= 2`.
 
 ## `numerical_vector.num_native_engine_flexible_with_chain` (Experimental)
 
@@ -48740,6 +52717,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Couples a Nose-Hoover chain of `m` thermostats (relaxation time `tau`, temperature `t0`) to the cell.
+
 ## `numerical_vector.num_native_engine_flexible_with_langevin_cell` (Experimental)
 
 ```aevia
@@ -48748,6 +52727,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Adds a Langevin piston with the given friction (see [`FlexibleBarostat::cell_friction`]).
+
 ## `numerical_vector.num_native_engine_flexible_with_tensor` (Experimental)
 
 ```aevia
@@ -48755,6 +52736,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Same with a general target pressure tensor (row-major).
 
 ## `numerical_vector.num_native_engine_forcefield_add_extra` (Experimental)
 
@@ -48772,6 +52755,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+New force field with the given pair terms and cutoff.
+
 ## `numerical_vector.num_native_engine_forcefield_new_d2` (Experimental)
 
 ```aevia
@@ -48779,6 +52764,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+New force field with the given pair terms and cutoff.
 
 ## `numerical_vector.num_native_engine_forcefield_new_d3` (Experimental)
 
@@ -48788,6 +52775,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+New force field with the given pair terms and cutoff.
+
 ## `numerical_vector.num_native_engine_forcefield_rebuild_exclusions_d1` (Experimental)
 
 ```aevia
@@ -48795,6 +52784,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Rebuilds the exclusion table (call after changing bonded terms).
 
 ## `numerical_vector.num_native_engine_forcefield_rebuild_exclusions_d2` (Experimental)
 
@@ -48804,6 +52795,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Rebuilds the exclusion table (call after changing bonded terms).
+
 ## `numerical_vector.num_native_engine_forcefield_rebuild_exclusions_d3` (Experimental)
 
 ```aevia
@@ -48811,6 +52804,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Rebuilds the exclusion table (call after changing bonded terms).
 
 ## `numerical_vector.num_native_engine_forcefield_set_bonded_d1` (Experimental)
 
@@ -48844,6 +52839,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Validates the force field for dimension `D`.
+
+# Errors
+Dihedrals need `D = 3`; angles need `D >= 2`.
+
 ## `numerical_vector.num_native_engine_forcefield_validate_d2` (Experimental)
 
 ```aevia
@@ -48852,6 +52852,11 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Validates the force field for dimension `D`.
+
+# Errors
+Dihedrals need `D = 3`; angles need `D >= 2`.
+
 ## `numerical_vector.num_native_engine_forcefield_validate_d3` (Experimental)
 
 ```aevia
@@ -48859,6 +52864,11 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Validates the force field for dimension `D`.
+
+# Errors
+Dihedrals need `D = 3`; angles need `D >= 2`.
 
 ## `numerical_vector.num_native_engine_forces_data_d1` (Experimental)
 
@@ -48892,6 +52902,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Zero forces for `n` particles.
+
 ## `numerical_vector.num_native_engine_forces_zeros_d2` (Experimental)
 
 ```aevia
@@ -48900,6 +52912,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Zero forces for `n` particles.
+
 ## `numerical_vector.num_native_engine_forces_zeros_d3` (Experimental)
 
 ```aevia
@@ -48907,6 +52921,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Zero forces for `n` particles.
 
 ## `numerical_vector.num_native_engine_lattice_cubic_d1` (Experimental)
 
@@ -49117,6 +53133,11 @@ Mean square displacement from unwrapped positions relative to a reference snapsh
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Rebuilds the list with a cell grid (brute force under Lees-Edwards shear).
+
+Sparse boxes store only occupied cells. Orthorhombic periodic positions
+are assigned to cells modulo the box length without modifying the system.
+
 ## `numerical_vector.num_native_engine_neighbours_build_d2` (Experimental)
 
 ```aevia
@@ -49124,6 +53145,11 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Rebuilds the list with a cell grid (brute force under Lees-Edwards shear).
+
+Sparse boxes store only occupied cells. Orthorhombic periodic positions
+are assigned to cells modulo the box length without modifying the system.
 
 ## `numerical_vector.num_native_engine_neighbours_build_d3` (Experimental)
 
@@ -49133,6 +53159,11 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Rebuilds the list with a cell grid (brute force under Lees-Edwards shear).
+
+Sparse boxes store only occupied cells. Orthorhombic periodic positions
+are assigned to cells modulo the box length without modifying the system.
+
 ## `numerical_vector.num_native_engine_neighbours_needs_rebuild_d1` (Experimental)
 
 ```aevia
@@ -49140,6 +53171,9 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Whether the list is stale: a particle moved (beyond the affine cell deformation) so that
+`2 max|dx| + |strain| (r_cut + skin) > skin`, the box shears, or the list was never built.
 
 ## `numerical_vector.num_native_engine_neighbours_needs_rebuild_d2` (Experimental)
 
@@ -49149,6 +53183,9 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Whether the list is stale: a particle moved (beyond the affine cell deformation) so that
+`2 max|dx| + |strain| (r_cut + skin) > skin`, the box shears, or the list was never built.
+
 ## `numerical_vector.num_native_engine_neighbours_needs_rebuild_d3` (Experimental)
 
 ```aevia
@@ -49156,6 +53193,9 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Whether the list is stale: a particle moved (beyond the affine cell deformation) so that
+`2 max|dx| + |strain| (r_cut + skin) > skin`, the box shears, or the list was never built.
 
 ## `numerical_vector.num_native_engine_neighbours_new_d1` (Experimental)
 
@@ -49165,6 +53205,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Creates an empty list.
+
 ## `numerical_vector.num_native_engine_neighbours_new_d2` (Experimental)
 
 ```aevia
@@ -49173,6 +53215,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Creates an empty list.
+
 ## `numerical_vector.num_native_engine_neighbours_new_d3` (Experimental)
 
 ```aevia
@@ -49180,6 +53224,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Creates an empty list.
 
 ## `numerical_vector.num_native_engine_pair_eval` (Experimental)
 
@@ -49237,6 +53283,9 @@ Random sequential placement of `n` particles with minimum separation `dmin` (`No
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Adds one configuration. An empty configuration contributes no counts
+or normalization weight.
+
 ## `numerical_vector.num_native_engine_rdf_add_frame_d2` (Experimental)
 
 ```aevia
@@ -49244,6 +53293,9 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Adds one configuration. An empty configuration contributes no counts
+or normalization weight.
 
 ## `numerical_vector.num_native_engine_rdf_add_frame_d3` (Experimental)
 
@@ -49253,6 +53305,9 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Adds one configuration. An empty configuration contributes no counts
+or normalization weight.
+
 ## `numerical_vector.num_native_engine_rdf_merge_d1` (Experimental)
 
 ```aevia
@@ -49260,6 +53315,15 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Combine radial distribution frame counts and per-frame ideal-gas references in the destination. Both accumulators must use the same bins, radius and physical reference frame. The source can be an independent accumulator.
+
+Combines counts and reference weights from independent frame groups.
+
+Both accumulators must use the same bins, cutoff and coordinate units.
+Each group's original per-frame population and volume determine its
+weight in the merged result.
+
+# Errors
+Mismatched bin counts or cutoffs, or a nonfinite combined count.
 
 ## `numerical_vector.num_native_engine_rdf_merge_d2` (Experimental)
 
@@ -49269,6 +53333,15 @@ Combine radial distribution frame counts and per-frame ideal-gas references in t
 
 Combine radial distribution frame counts and per-frame ideal-gas references in the destination. Both accumulators must use the same bins, radius and physical reference frame. The source can be an independent accumulator.
 
+Combines counts and reference weights from independent frame groups.
+
+Both accumulators must use the same bins, cutoff and coordinate units.
+Each group's original per-frame population and volume determine its
+weight in the merged result.
+
+# Errors
+Mismatched bin counts or cutoffs, or a nonfinite combined count.
+
 ## `numerical_vector.num_native_engine_rdf_merge_d3` (Experimental)
 
 ```aevia
@@ -49276,6 +53349,15 @@ Combine radial distribution frame counts and per-frame ideal-gas references in t
 ```
 
 Combine radial distribution frame counts and per-frame ideal-gas references in the destination. Both accumulators must use the same bins, radius and physical reference frame. The source can be an independent accumulator.
+
+Combines counts and reference weights from independent frame groups.
+
+Both accumulators must use the same bins, cutoff and coordinate units.
+Each group's original per-frame population and volume determine its
+weight in the merged result.
+
+# Errors
+Mismatched bin counts or cutoffs, or a nonfinite combined count.
 
 ## `numerical_vector.num_native_engine_rdf_new_d1` (Experimental)
 
@@ -49285,6 +53367,8 @@ Combine radial distribution frame counts and per-frame ideal-gas references in t
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+New accumulator with `bins` bins up to `rmax`.
+
 ## `numerical_vector.num_native_engine_rdf_new_d2` (Experimental)
 
 ```aevia
@@ -49292,6 +53376,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+New accumulator with `bins` bins up to `rmax`.
 
 ## `numerical_vector.num_native_engine_rdf_new_d3` (Experimental)
 
@@ -49301,6 +53387,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+New accumulator with `bins` bins up to `rmax`.
+
 ## `numerical_vector.num_native_engine_rdf_result_d1` (Experimental)
 
 ```aevia
@@ -49308,6 +53396,9 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Returns `(r, g(r))` pairs. The density ratios are undefined (`NaN`)
+until a frame with particles has been added.
 
 ## `numerical_vector.num_native_engine_rdf_result_d2` (Experimental)
 
@@ -49317,6 +53408,9 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Returns `(r, g(r))` pairs. The density ratios are undefined (`NaN`)
+until a frame with particles has been added.
+
 ## `numerical_vector.num_native_engine_rdf_result_d3` (Experimental)
 
 ```aevia
@@ -49324,6 +53418,9 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Returns `(r, g(r))` pairs. The density ratios are undefined (`NaN`)
+until a frame with particles has been added.
 
 ## `numerical_vector.num_native_engine_simulation_conserved_energy_d1` (Experimental)
 
@@ -49333,6 +53430,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Conserved quantity of the extended system (energy plus thermostat and MTK piston terms).
+
 ## `numerical_vector.num_native_engine_simulation_conserved_energy_d2` (Experimental)
 
 ```aevia
@@ -49340,6 +53439,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Conserved quantity of the extended system (energy plus thermostat and MTK piston terms).
 
 ## `numerical_vector.num_native_engine_simulation_conserved_energy_d3` (Experimental)
 
@@ -49349,6 +53450,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Conserved quantity of the extended system (energy plus thermostat and MTK piston terms).
+
 ## `numerical_vector.num_native_engine_simulation_dof_d1` (Experimental)
 
 ```aevia
@@ -49356,6 +53459,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Degrees of freedom (`D N - D - n_constraints`).
 
 ## `numerical_vector.num_native_engine_simulation_dof_d2` (Experimental)
 
@@ -49365,6 +53470,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Degrees of freedom (`D N - D - n_constraints`).
+
 ## `numerical_vector.num_native_engine_simulation_dof_d3` (Experimental)
 
 ```aevia
@@ -49372,6 +53479,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Degrees of freedom (`D N - D - n_constraints`).
 
 ## `numerical_vector.num_native_engine_simulation_new_d1` (Experimental)
 
@@ -49381,6 +53490,11 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Construct the actual native driver with an owned force field transferred once. The system is cloned; the force-field handle becomes consumed. Preflight checks run before the transfer; physical frame witnesses and compiled extra-force ownership stay in the simulation.
 
+Creates a simulation and evaluates the initial forces.
+
+# Errors
+Propagates force-field validation errors.
+
 ## `numerical_vector.num_native_engine_simulation_new_d2` (Experimental)
 
 ```aevia
@@ -49388,6 +53502,11 @@ Construct the actual native driver with an owned force field transferred once. T
 ```
 
 Construct the actual native driver with an owned force field transferred once. The system is cloned; the force-field handle becomes consumed. Preflight checks run before the transfer; physical frame witnesses and compiled extra-force ownership stay in the simulation.
+
+Creates a simulation and evaluates the initial forces.
+
+# Errors
+Propagates force-field validation errors.
 
 ## `numerical_vector.num_native_engine_simulation_new_d3` (Experimental)
 
@@ -49397,6 +53516,11 @@ Construct the actual native driver with an owned force field transferred once. T
 
 Construct the actual native driver with an owned force field transferred once. The system is cloned; the force-field handle becomes consumed. Preflight checks run before the transfer; physical frame witnesses and compiled extra-force ownership stay in the simulation.
 
+Creates a simulation and evaluates the initial forces.
+
+# Errors
+Propagates force-field validation errors.
+
 ## `numerical_vector.num_native_engine_simulation_pressure_d1` (Experimental)
 
 ```aevia
@@ -49404,6 +53528,8 @@ Construct the actual native driver with an owned force field transferred once. T
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Scalar pressure (trace of the pressure tensor over `D`).
 
 ## `numerical_vector.num_native_engine_simulation_pressure_d2` (Experimental)
 
@@ -49413,6 +53539,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Scalar pressure (trace of the pressure tensor over `D`).
+
 ## `numerical_vector.num_native_engine_simulation_pressure_d3` (Experimental)
 
 ```aevia
@@ -49420,6 +53548,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Scalar pressure (trace of the pressure tensor over `D`).
 
 ## `numerical_vector.num_native_engine_simulation_pressure_tensor_d1` (Experimental)
 
@@ -49429,6 +53559,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Pressure tensor `(sum m v v + virial) / V`.
+
 ## `numerical_vector.num_native_engine_simulation_pressure_tensor_d2` (Experimental)
 
 ```aevia
@@ -49436,6 +53568,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Pressure tensor `(sum m v v + virial) / V`.
 
 ## `numerical_vector.num_native_engine_simulation_pressure_tensor_d3` (Experimental)
 
@@ -49445,6 +53579,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Pressure tensor `(sum m v v + virial) / V`.
+
 ## `numerical_vector.num_native_engine_simulation_refresh_constraint_virial_d1` (Experimental)
 
 ```aevia
@@ -49452,6 +53588,9 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Replaces [`MdSimulation::constraint_virial`] by the exact instantaneous constraint-force
+virial of the current state (plain Newtonian flow, see the module notes).
 
 ## `numerical_vector.num_native_engine_simulation_refresh_constraint_virial_d2` (Experimental)
 
@@ -49461,6 +53600,9 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Replaces [`MdSimulation::constraint_virial`] by the exact instantaneous constraint-force
+virial of the current state (plain Newtonian flow, see the module notes).
+
 ## `numerical_vector.num_native_engine_simulation_refresh_constraint_virial_d3` (Experimental)
 
 ```aevia
@@ -49468,6 +53610,9 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Replaces [`MdSimulation::constraint_virial`] by the exact instantaneous constraint-force
+virial of the current state (plain Newtonian flow, see the module notes).
 
 ## `numerical_vector.num_native_engine_simulation_run_d1` (Experimental)
 
@@ -49477,6 +53622,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Runs `n` steps.
+
+# Errors
+Propagates step errors.
+
 ## `numerical_vector.num_native_engine_simulation_run_d2` (Experimental)
 
 ```aevia
@@ -49485,6 +53635,11 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Runs `n` steps.
+
+# Errors
+Propagates step errors.
+
 ## `numerical_vector.num_native_engine_simulation_run_d3` (Experimental)
 
 ```aevia
@@ -49492,6 +53647,11 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Runs `n` steps.
+
+# Errors
+Propagates step errors.
 
 ## `numerical_vector.num_native_engine_simulation_set_barostat_d1` (Experimental)
 
@@ -49597,6 +53757,11 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Advances one time step.
+
+# Errors
+Fails for unsupported combinations (isotropic MTK with a thermostat or constraints, Langevin with a flexible cell) or force-field errors.
+
 ## `numerical_vector.num_native_engine_simulation_step_d2` (Experimental)
 
 ```aevia
@@ -49604,6 +53769,11 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Advances one time step.
+
+# Errors
+Fails for unsupported combinations (isotropic MTK with a thermostat or constraints, Langevin with a flexible cell) or force-field errors.
 
 ## `numerical_vector.num_native_engine_simulation_step_d3` (Experimental)
 
@@ -49613,6 +53783,11 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Advances one time step.
+
+# Errors
+Fails for unsupported combinations (isotropic MTK with a thermostat or constraints, Langevin with a flexible cell) or force-field errors.
+
 ## `numerical_vector.num_native_engine_simulation_temperature_d1` (Experimental)
 
 ```aevia
@@ -49620,6 +53795,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Instantaneous temperature.
 
 ## `numerical_vector.num_native_engine_simulation_temperature_d2` (Experimental)
 
@@ -49629,6 +53806,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Instantaneous temperature.
+
 ## `numerical_vector.num_native_engine_simulation_temperature_d3` (Experimental)
 
 ```aevia
@@ -49636,6 +53815,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Instantaneous temperature.
 
 ## `numerical_vector.num_native_engine_simulation_total_energy_d1` (Experimental)
 
@@ -49645,6 +53826,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Total energy.
+
 ## `numerical_vector.num_native_engine_simulation_total_energy_d2` (Experimental)
 
 ```aevia
@@ -49652,6 +53835,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Total energy.
 
 ## `numerical_vector.num_native_engine_simulation_total_energy_d3` (Experimental)
 
@@ -49661,6 +53846,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Total energy.
+
 ## `numerical_vector.num_native_engine_system_apply_boundaries_d1` (Experimental)
 
 ```aevia
@@ -49668,6 +53855,9 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Applies boundary conditions after a displacement `dx` of every particle already added to `pos`.
+Periodic axes wrap (with Lees-Edwards velocity shift), walls reflect or thermalise.
 
 ## `numerical_vector.num_native_engine_system_apply_boundaries_d2` (Experimental)
 
@@ -49677,6 +53867,9 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Applies boundary conditions after a displacement `dx` of every particle already added to `pos`.
+Periodic axes wrap (with Lees-Edwards velocity shift), walls reflect or thermalise.
+
 ## `numerical_vector.num_native_engine_system_apply_boundaries_d3` (Experimental)
 
 ```aevia
@@ -49684,6 +53877,9 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Applies boundary conditions after a displacement `dx` of every particle already added to `pos`.
+Periodic axes wrap (with Lees-Edwards velocity shift), walls reflect or thermalise.
 
 ## `numerical_vector.num_native_engine_system_data_d1` (Experimental)
 
@@ -49717,6 +53913,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Kinetic energy.
+
 ## `numerical_vector.num_native_engine_system_kinetic_energy_d2` (Experimental)
 
 ```aevia
@@ -49724,6 +53922,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Kinetic energy.
 
 ## `numerical_vector.num_native_engine_system_kinetic_energy_d3` (Experimental)
 
@@ -49733,6 +53933,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Kinetic energy.
+
 ## `numerical_vector.num_native_engine_system_maxwell_boltzmann_d1` (Experimental)
 
 ```aevia
@@ -49740,6 +53942,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Draws Maxwell-Boltzmann velocities at temperature `t`, removes the drift and rescales to exactly `t`.
 
 ## `numerical_vector.num_native_engine_system_maxwell_boltzmann_d2` (Experimental)
 
@@ -49749,6 +53953,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Draws Maxwell-Boltzmann velocities at temperature `t`, removes the drift and rescales to exactly `t`.
+
 ## `numerical_vector.num_native_engine_system_maxwell_boltzmann_d3` (Experimental)
 
 ```aevia
@@ -49756,6 +53962,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Draws Maxwell-Boltzmann velocities at temperature `t`, removes the drift and rescales to exactly `t`.
 
 ## `numerical_vector.num_native_engine_system_momentum_d1` (Experimental)
 
@@ -49765,6 +53973,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Total momentum.
+
 ## `numerical_vector.num_native_engine_system_momentum_d2` (Experimental)
 
 ```aevia
@@ -49772,6 +53982,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Total momentum.
 
 ## `numerical_vector.num_native_engine_system_momentum_d3` (Experimental)
 
@@ -49781,6 +53993,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Total momentum.
+
 ## `numerical_vector.num_native_engine_system_n_d1` (Experimental)
 
 ```aevia
@@ -49788,6 +54002,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Number of particles.
 
 ## `numerical_vector.num_native_engine_system_n_d2` (Experimental)
 
@@ -49797,6 +54013,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Number of particles.
+
 ## `numerical_vector.num_native_engine_system_n_d3` (Experimental)
 
 ```aevia
@@ -49804,6 +54022,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Number of particles.
 
 ## `numerical_vector.num_native_engine_system_new_d1` (Experimental)
 
@@ -49813,6 +54033,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Builds a system at rest from positions with unit masses and zero charges.
+
 ## `numerical_vector.num_native_engine_system_new_d2` (Experimental)
 
 ```aevia
@@ -49820,6 +54042,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Builds a system at rest from positions with unit masses and zero charges.
 
 ## `numerical_vector.num_native_engine_system_new_d3` (Experimental)
 
@@ -49829,6 +54053,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Builds a system at rest from positions with unit masses and zero charges.
+
 ## `numerical_vector.num_native_engine_system_remove_com_velocity_d1` (Experimental)
 
 ```aevia
@@ -49836,6 +54062,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Removes the centre-of-mass velocity.
 
 ## `numerical_vector.num_native_engine_system_remove_com_velocity_d2` (Experimental)
 
@@ -49845,6 +54073,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Removes the centre-of-mass velocity.
+
 ## `numerical_vector.num_native_engine_system_remove_com_velocity_d3` (Experimental)
 
 ```aevia
@@ -49852,6 +54082,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Removes the centre-of-mass velocity.
 
 ## `numerical_vector.num_native_engine_system_set_state_d1` (Experimental)
 
@@ -49885,6 +54117,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Temperature `2 K / n_dof` for the given number of degrees of freedom.
+
 ## `numerical_vector.num_native_engine_system_temperature_d2` (Experimental)
 
 ```aevia
@@ -49893,6 +54127,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
 
+Temperature `2 K / n_dof` for the given number of degrees of freedom.
+
 ## `numerical_vector.num_native_engine_system_temperature_d3` (Experimental)
 
 ```aevia
@@ -49900,6 +54136,8 @@ Actual native MD method with checked physical or explicitly reduced reference fr
 ```
 
 Actual native MD method with checked physical or explicitly reduced reference frames. Shapes, finite state, object identity and allocation/work limits precede native work.
+
+Temperature `2 K / n_dof` for the given number of degrees of freedom.
 
 ## `numerical_vector.num_native_engine_vacf_d1` (Experimental)
 
@@ -51494,6 +55732,17 @@ A budget of `max_nodes` search nodes.
 
 Returns a dense strongly connected component label per vertex, numbered in topological order. Weights are ignored.
 
+Labels vertices by strongly connected component in linear time.
+
+Vertices with the same label can reach each other along directed edges.
+Labels are dense and topological: every edge crossing components points
+from a smaller label to a larger one. Edge weights are ignored. The
+traversal uses explicit stacks so deep paths do not grow the call stack.
+
+# Errors
+
+Reports an invalid edge endpoint.
+
 ## `numerical_vector.num_native_graph_topological_sort` (Experimental)
 
 ```aevia
@@ -51501,6 +55750,16 @@ Returns a dense strongly connected component label per vertex, numbered in topol
 ```
 
 Returns a vertex ordering in which every source precedes its targets. A directed cycle is rejected and weights are ignored.
+
+Returns a topological ordering of the vertices using Kahn's algorithm.
+
+An edge from `u` to `v` puts `u` before `v`. Parallel edges are counted
+separately, all vertices are returned, and edge weights are ignored.
+The traversal takes linear time in the number of vertices and edges.
+
+# Errors
+
+Reports an invalid edge endpoint or a directed cycle, including a self-loop.
 
 ## `numerical_vector.num_native_graph_undirected_cuts` (Experimental)
 
@@ -54273,6 +58532,8 @@ The type of a register.
 
 Typed native LIR adapter. Machine instructions use explicit normalized IEEE values, checked register/block/type references and bounded native interpreter steps.
 
+The LIR type of the value.
+
 ## `numerical_vector.num_native_lir_written_params` (Experimental)
 
 ```aevia
@@ -55024,6 +59285,12 @@ This function will return an error if `n` is not of the form `2^k + 1`, if
 
 Interpolate a rank-one point in axis order using an existing session-local grid. A Dynamic-element point carries each coordinate's dimension separately. A homogeneous measured point supplies one shared dimension. Every coordinate must match its axis and be inside the grid. Returns a value in the grid's stored ordinate dimension.
 
+Interpolates an in-bounds point without allocating or rescanning the grid.
+
+# Errors
+Returns an error if the point has the wrong dimension or any coordinate
+is non-finite or outside its axis.
+
 ## `numerical_vector.num_native_multilinear_grid_new` (Experimental)
 
 ```aevia
@@ -55031,6 +59298,13 @@ Interpolate a rank-one point in axis order using an existing session-local grid.
 ```
 
 Create an immutable session-local rectilinear grid. Axes is an ordered rank-one tensor of measured rank-one axis tensors, with independent units and possibly different lengths. Values is a measured rank-one tensor laid out with the first axis varying fastest. Axes must contain at least two finite increasing nodes each. Shape, unit, and allocation bounds are checked at construction.
+
+Prepares a shared grid for calls to [`Self::evaluate`].
+
+# Errors
+Returns an error if there are no axes, any axis has fewer than two
+finite strictly increasing nodes, the size overflows, or the values
+are non-finite or have the wrong length.
 
 ## `numerical_vector.num_native_multivariate_cov` (Experimental)
 
@@ -55393,6 +59667,8 @@ Propagates tree construction errors.
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Field `sum_j s_j K(x_j - x)` at `x`, skipping the body `skip` (pass `usize::MAX` for none).
+
 ## `numerical_vector.num_native_nbody_tree_field_d2` (Experimental)
 
 ```aevia
@@ -55400,6 +59676,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Field `sum_j s_j K(x_j - x)` at `x`, skipping the body `skip` (pass `usize::MAX` for none).
 
 ## `numerical_vector.num_native_nbody_tree_field_d3` (Experimental)
 
@@ -55409,6 +59687,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Field `sum_j s_j K(x_j - x)` at `x`, skipping the body `skip` (pass `usize::MAX` for none).
+
 ## `numerical_vector.num_native_nbody_tree_new_d1` (Experimental)
 
 ```aevia
@@ -55416,6 +59696,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Builds the tree for sources `src` at `pos`.
+
+# Errors
+Fails for `D > 3`, empty input or length mismatch.
 
 ## `numerical_vector.num_native_nbody_tree_new_d2` (Experimental)
 
@@ -55425,6 +59710,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Builds the tree for sources `src` at `pos`.
+
+# Errors
+Fails for `D > 3`, empty input or length mismatch.
+
 ## `numerical_vector.num_native_nbody_tree_new_d3` (Experimental)
 
 ```aevia
@@ -55432,6 +59722,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Builds the tree for sources `src` at `pos`.
+
+# Errors
+Fails for `D > 3`, empty input or length mismatch.
 
 ## `numerical_callback.num_native_nelder_mead_scaled` (Experimental)
 
@@ -56197,11 +60492,6 @@ This implementation uses the Extended Euclidean Algorithm.
 * `Some(PrimeFieldElement)` containing the inverse if it exists.
 * `None` if the element is not invertible (i.e., its value is not coprime to the modulus).
 
-# Panics
-Panics if the internal modular inverse calculation results in a value
-that cannot be converted to `u64`. This is not expected to happen if
-the modulus is a valid `u64`.
-
 ## `numerical_vector.num_native_prime_field_is_agnostic` (Experimental)
 
 ```aevia
@@ -56238,6 +60528,19 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Computes (self^exp) modulo modulus.
 
+## `numerical_vector.num_native_qlinalg_charpoly` (Experimental)
+
+```aevia
+(rssn/native/discrete/qmatrix/v1) -> None | Some(Tensor<1, Real>)
+```
+
+Return the exact characteristic polynomial coefficients in ascending degree, including the leading one. The normalized QMatrix must be square.
+
+Computes the characteristic polynomial of a square rational matrix.
+
+Returns the coefficients of $\det(\lambda I - A)$ in ascending powers, from the constant term
+`c_0` to the leading coefficient `c_n = 1`.
+
 ## `numerical_vector.num_native_qlinalg_det` (Experimental)
 
 ```aevia
@@ -56247,6 +60550,55 @@ Computes (self^exp) modulo modulus.
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
 The determinant of a square matrix.
+
+## `numerical_vector.num_native_qlinalg_det_bareiss` (Experimental)
+
+```aevia
+(rssn/native/discrete/qmatrix/v1) -> Int
+```
+
+Return the exact determinant of a square normalized QMatrix with integer coefficients, using fraction-free Bareiss elimination.
+
+Fraction-free Bareiss determinant of a square integer matrix over $\mathbb{Z}$.
+
+Uses exact integer division by the previous step's pivot (`(a[i][j] * pivot - a[i][k] * a[k][j]) / prev_pivot`)
+without any rational GCD reductions.
+
+## `numerical_vector.num_native_qlinalg_det_modular_int` (Experimental)
+
+```aevia
+(rssn/native/discrete/qmatrix/v1) -> Int
+```
+
+Return the exact determinant of a square normalized QMatrix with integer coefficients, using modular elimination and Chinese remaindering.
+
+Multi-prime modular determinant of a square integer matrix over $\mathbb{Z}$
+using 62-bit Montgomery `GF(p)` Gaussian elimination and Garner CRT reconstruction.
+
+## `numerical_vector.num_native_qlinalg_hermite_normal_form` (Experimental)
+
+```aevia
+(rssn/native/discrete/qmatrix/v1) -> Tensor<2, Int>
+```
+
+Return the row-style Hermite normal form of a normalized QMatrix with integer coefficients.
+
+Row-style Hermite Normal Form (HNF) of an integer matrix over $\mathbb{Z}$.
+
+Brings `m` by unimodular row operations into upper-echelon Hermite normal
+form $H$ where every leading non-zero pivot $H_{r, c} > 0$ and all entries
+above a pivot satisfy $0 \le H_{i, c} < H_{r, c}$.
+
+## `numerical_vector.num_native_qlinalg_hermite_normal_form_with_transform` (Experimental)
+
+```aevia
+(rssn/native/discrete/qmatrix/v1) -> { form: Tensor<2, Int>, transform: Tensor<2, Int> }
+```
+
+Return the row-style Hermite normal form and unimodular row transform satisfying transform * A = form.
+
+Row-style Hermite Normal Form $(H, U)$ of an integer matrix over $\mathbb{Z}$
+satisfying $U A = H$ with $U$ unimodular ($\det U = \pm 1$).
 
 ## `numerical_vector.num_native_qlinalg_identity` (Experimental)
 
@@ -56351,6 +60703,26 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 Brings `m` (rows of length `cols`) to reduced row echelon form in place,
 drops the zero rows and returns the pivot columns.
 
+## `numerical_vector.num_native_qlinalg_smith_normal_form` (Experimental)
+
+```aevia
+(rssn/native/discrete/qmatrix/v1) -> { left: Tensor<2, Int>, form: Tensor<2, Int>, right: Tensor<2, Int> }
+```
+
+Return the Smith normal form and unimodular transforms satisfying left * A * right = form.
+
+## `numerical_vector.num_native_qlinalg_smith_normal_form_diag` (Experimental)
+
+```aevia
+(rssn/native/discrete/qmatrix/v1) -> Tensor<1, Int>
+```
+
+Return the positive nonzero Smith invariant factors in divisibility order. The normalized QMatrix must have integer coefficients.
+
+Computes the non-zero diagonal invariant factors $[`d_1`, `d_2`, \dots, `d_r`]$
+of the Smith Normal Form of an integer matrix over $\mathbb{Z}$, with
+$`d_i` > 0$ and $`d_1` \mid `d_2` \mid \dots \mid `d_r`$.
+
 ## `numerical_vector.num_native_qlinalg_solve` (Experimental)
 
 ```aevia
@@ -56363,6 +60735,44 @@ A particular solution of `m x = b`, with free variables set to zero.
 
 Returns `None` for an inconsistent system, a mismatched right-hand
 side, or an invalid matrix shape. Pivots are chosen from left to right.
+
+## `numerical_vector.num_native_qlinalg_solve_dixon` (Experimental)
+
+```aevia
+(rssn/native/discrete/qmatrix/v1, Tensor<1, Real>) -> None | Some(Tensor<1, Real>)
+```
+
+Solve an exact square system by Dixon lifting and residual certification. A singular system returns None.
+
+Solves a nonsingular square system $A x = b$ over $\mathbb{Q}$ using Dixon's
+$p$-adic lifting over a 62-bit prime $p$ and exact residual certification.
+
+Returns `None` if `a` is not square, dimensions mismatch, or `a` is singular.
+
+## `numerical_vector.num_native_qlinalg_solve_mat` (Experimental)
+
+```aevia
+(rssn/native/discrete/qmatrix/v1, rssn/native/discrete/qmatrix/v1) -> None | Some(rssn/native/discrete/qmatrix/v1)
+```
+
+Solve an exact system with multiple right-hand sides. Free variables are zero, and inconsistent systems return None.
+
+Solves a matrix linear system $A X = B$ where $A$ has `cols` columns and `B`
+has matching row count. Free variables in underdetermined systems are set to zero.
+
+Uses Dixon $p$-adic lifting for square nonsingular systems of order $n \ge 6$
+and sparse-pivot elimination otherwise.
+
+## `numerical_vector.num_native_qlinalg_solve_unique` (Experimental)
+
+```aevia
+(rssn/native/discrete/qmatrix/v1, Tensor<1, Real>) -> None | Some(Tensor<1, Real>)
+```
+
+Solve an exact system with full column rank. Inconsistent and underdetermined systems return None.
+
+Solves `m * x = b` over `Q` when the system has a unique solution (full
+column rank `cols`), returning `None` if inconsistent or underdetermined.
 
 ## `numerical_vector.num_native_qlinalg_span_basis` (Experimental)
 
@@ -57044,17 +61454,6 @@ Schwarzschild black hole.
 
 Kerr shadow for a distant off-axis observer. Mass and spin use geometrized lengths, theta is in radians, and points is the sample count per half (2 through 2048). Returns a [2*points, 2] tensor of alpha and beta in the frame length units.
 
-Bardeen's critical curve of the Kerr shadow.
-
-The boundary of the shadow of a Kerr black hole on the observer's
-image plane (celestial coordinates `(alpha, beta)` of an observer at infinity and inclination
-`theta_o`), as `2 n` points (upper half then lower half). For `a = 0` it is the circle of
-radius `3 sqrt(3) M`.
-
-# Errors
-Fails for non-finite inputs, `|a| >= M`, an observer on the axis,
-`n < 2`, or an output size that cannot be allocated.
-
 ## `numerical_vector.num_native_relativity_trace_ray` (Experimental)
 
 ```aevia
@@ -57080,18 +61479,6 @@ the step budget is exhausted.
 ```
 
 Find the Kerr shadow by tracing up to 64 regularly spaced image-plane directions. Mass, spin and observer radius use frame lengths and inclination is in radians. Returns a [points, 2] tensor in frame length units in increasing image angle.
-
-Shadow boundary found by ray tracing.
-
-For each of `n` directions in the image plane the
-critical impact radius separating captured from escaping rays is located by bisection.
-Returns `(alpha, beta)` points of the observer's image plane (observer at inclination
-`theta_o`, far away at `r_o`).
-
-# Errors
-Propagates ray failures in image-angle order and honors host cancellation.
-Independent directions can run concurrently when the active pool has
-multiple workers, with the same point order and coordinates.
 
 ## `numerical_vector.num_native_relativity_unbound_advance` (Experimental)
 
@@ -58304,6 +62691,13 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Evaluates prepared SPH mass density for one measured mass and smoothing length per original particle. Use CubicSpline or WendlandC2. Results keep particle order and have mass divided by length to the spatial dimension units.
 
+Evaluates the mass density for a new mass, smoothing and kernel field.
+
+# Errors
+
+Wrong field lengths, negative or non-finite masses, invalid smoothing
+lengths or an unrepresentable density.
+
 ## `numerical_vector.num_native_sph_density_plan_evaluate_d2` (Experimental)
 
 ```aevia
@@ -58311,6 +62705,13 @@ Evaluates prepared SPH mass density for one measured mass and smoothing length p
 ```
 
 Evaluates prepared SPH mass density for one measured mass and smoothing length per original particle. Use CubicSpline or WendlandC2. Results keep particle order and have mass divided by length to the spatial dimension units.
+
+Evaluates the mass density for a new mass, smoothing and kernel field.
+
+# Errors
+
+Wrong field lengths, negative or non-finite masses, invalid smoothing
+lengths or an unrepresentable density.
 
 ## `numerical_vector.num_native_sph_density_plan_evaluate_d3` (Experimental)
 
@@ -58320,6 +62721,13 @@ Evaluates prepared SPH mass density for one measured mass and smoothing length p
 
 Evaluates prepared SPH mass density for one measured mass and smoothing length per original particle. Use CubicSpline or WendlandC2. Results keep particle order and have mass divided by length to the spatial dimension units.
 
+Evaluates the mass density for a new mass, smoothing and kernel field.
+
+# Errors
+
+Wrong field lengths, negative or non-finite masses, invalid smoothing
+lengths or an unrepresentable density.
+
 ## `numerical_vector.num_native_sph_density_plan_new_d1` (Experimental)
 
 ```aevia
@@ -58327,6 +62735,13 @@ Evaluates prepared SPH mass density for one measured mass and smoothing length p
 ```
 
 Prepares SPH mass-density neighborhoods at the current positions and boundaries of a native gas. Supply a positive measured maximum smoothing length. The plan can evaluate new mass and smoothing fields at those same positions after creation.
+
+Prepares a density plan with smoothing lengths up to `max_h`.
+
+# Errors
+
+Unsupported dimension, non-finite positions, invalid smoothing
+length or invalid periodic or reflecting extents.
 
 ## `numerical_vector.num_native_sph_density_plan_new_d2` (Experimental)
 
@@ -58336,6 +62751,13 @@ Prepares SPH mass-density neighborhoods at the current positions and boundaries 
 
 Prepares SPH mass-density neighborhoods at the current positions and boundaries of a native gas. Supply a positive measured maximum smoothing length. The plan can evaluate new mass and smoothing fields at those same positions after creation.
 
+Prepares a density plan with smoothing lengths up to `max_h`.
+
+# Errors
+
+Unsupported dimension, non-finite positions, invalid smoothing
+length or invalid periodic or reflecting extents.
+
 ## `numerical_vector.num_native_sph_density_plan_new_d3` (Experimental)
 
 ```aevia
@@ -58343,6 +62765,13 @@ Prepares SPH mass-density neighborhoods at the current positions and boundaries 
 ```
 
 Prepares SPH mass-density neighborhoods at the current positions and boundaries of a native gas. Supply a positive measured maximum smoothing length. The plan can evaluate new mass and smoothing fields at those same positions after creation.
+
+Prepares a density plan with smoothing lengths up to `max_h`.
+
+# Errors
+
+Unsupported dimension, non-finite positions, invalid smoothing
+length or invalid periodic or reflecting extents.
 
 ## `numerical_vector.num_native_sph_derivatives_d1` (Experimental)
 
@@ -58352,6 +62781,8 @@ Prepares SPH mass-density neighborhoods at the current positions and boundaries 
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Accelerations and energy rates for the current `(pos, vel, u)` (densities are refreshed).
+
 ## `numerical_vector.num_native_sph_derivatives_d2` (Experimental)
 
 ```aevia
@@ -58359,6 +62790,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Accelerations and energy rates for the current `(pos, vel, u)` (densities are refreshed).
 
 ## `numerical_vector.num_native_sph_derivatives_d3` (Experimental)
 
@@ -58368,6 +62801,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Accelerations and energy rates for the current `(pos, vel, u)` (densities are refreshed).
+
 ## `numerical_vector.num_native_sph_gravitational_energy_d1` (Experimental)
 
 ```aevia
@@ -58375,6 +62810,9 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Plummer-softened pair energy `-G sum_{i<j} m_i m_j / sqrt(r^2 + eps^2)` of the self-gravity
+(`O(N^2)`; three dimensions only; `None` without gravity or for `D != 3`).
 
 ## `numerical_vector.num_native_sph_gravitational_energy_d2` (Experimental)
 
@@ -58384,6 +62822,9 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Plummer-softened pair energy `-G sum_{i<j} m_i m_j / sqrt(r^2 + eps^2)` of the self-gravity
+(`O(N^2)`; three dimensions only; `None` without gravity or for `D != 3`).
+
 ## `numerical_vector.num_native_sph_gravitational_energy_d3` (Experimental)
 
 ```aevia
@@ -58391,6 +62832,9 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Plummer-softened pair energy `-G sum_{i<j} m_i m_j / sqrt(r^2 + eps^2)` of the self-gravity
+(`O(N^2)`; three dimensions only; `None` without gravity or for `D != 3`).
 
 ## `numerical_vector.num_native_sph_kernel_dw` (Experimental)
 
@@ -58420,6 +62864,8 @@ Kernel value `W(r, h)` in `d` dimensions.
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Total momentum.
+
 ## `numerical_vector.num_native_sph_momentum_d2` (Experimental)
 
 ```aevia
@@ -58427,6 +62873,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Total momentum.
 
 ## `numerical_vector.num_native_sph_momentum_d3` (Experimental)
 
@@ -58436,6 +62884,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Total momentum.
+
 ## `numerical_vector.num_native_sph_new_d1` (Experimental)
 
 ```aevia
@@ -58443,6 +62893,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Creates a gas of equal-mass particles at rest with given positions and specific energy.
 
 ## `numerical_vector.num_native_sph_new_d2` (Experimental)
 
@@ -58452,6 +62904,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Creates a gas of equal-mass particles at rest with given positions and specific energy.
+
 ## `numerical_vector.num_native_sph_new_d3` (Experimental)
 
 ```aevia
@@ -58459,6 +62913,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Creates a gas of equal-mass particles at rest with given positions and specific energy.
 
 ## `numerical_vector.num_native_sph_pressure_d1` (Experimental)
 
@@ -58468,6 +62924,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Pressure of particle `i`.
+
 ## `numerical_vector.num_native_sph_pressure_d2` (Experimental)
 
 ```aevia
@@ -58476,6 +62934,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Pressure of particle `i`.
+
 ## `numerical_vector.num_native_sph_pressure_d3` (Experimental)
 
 ```aevia
@@ -58483,6 +62943,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Pressure of particle `i`.
 
 ## `numerical_vector.num_native_sph_set_gravity_d1` (Experimental)
 
@@ -58516,6 +62978,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Sound speed of particle `i`.
+
 ## `numerical_vector.num_native_sph_sound_speed_d2` (Experimental)
 
 ```aevia
@@ -58524,6 +62988,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Sound speed of particle `i`.
+
 ## `numerical_vector.num_native_sph_sound_speed_d3` (Experimental)
 
 ```aevia
@@ -58531,6 +62997,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Sound speed of particle `i`.
 
 ## `numerical_vector.num_native_sph_state_d1` (Experimental)
 
@@ -58564,6 +63032,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Advances one Heun (RK2) step of size `dt`.
+
 ## `numerical_vector.num_native_sph_step_d2` (Experimental)
 
 ```aevia
@@ -58571,6 +63041,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Advances one Heun (RK2) step of size `dt`.
 
 ## `numerical_vector.num_native_sph_step_d3` (Experimental)
 
@@ -58580,6 +63052,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Advances one Heun (RK2) step of size `dt`.
+
 ## `numerical_vector.num_native_sph_suggest_dt_d1` (Experimental)
 
 ```aevia
@@ -58587,6 +63061,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+CFL-limited time step `cfl * min_i h_i / (c_i + |v_i| + viscous term)`.
 
 ## `numerical_vector.num_native_sph_suggest_dt_d2` (Experimental)
 
@@ -58596,6 +63072,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+CFL-limited time step `cfl * min_i h_i / (c_i + |v_i| + viscous term)`.
+
 ## `numerical_vector.num_native_sph_suggest_dt_d3` (Experimental)
 
 ```aevia
@@ -58603,6 +63081,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+CFL-limited time step `cfl * min_i h_i / (c_i + |v_i| + viscous term)`.
 
 ## `numerical_vector.num_native_sph_total_energy_d1` (Experimental)
 
@@ -58612,6 +63092,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Total kinetic plus thermal energy.
+
 ## `numerical_vector.num_native_sph_total_energy_d2` (Experimental)
 
 ```aevia
@@ -58619,6 +63101,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Total kinetic plus thermal energy.
 
 ## `numerical_vector.num_native_sph_total_energy_d3` (Experimental)
 
@@ -58628,6 +63112,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Total kinetic plus thermal energy.
+
 ## `numerical_vector.num_native_sph_update_density_d1` (Experimental)
 
 ```aevia
@@ -58635,6 +63121,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Recomputes `rho` and `h` by summation with a fixed-point iteration on `h`.
 
 ## `numerical_vector.num_native_sph_update_density_d2` (Experimental)
 
@@ -58644,6 +63132,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Recomputes `rho` and `h` by summation with a fixed-point iteration on `h`.
+
 ## `numerical_vector.num_native_sph_update_density_d3` (Experimental)
 
 ```aevia
@@ -58651,6 +63141,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Recomputes `rho` and `h` by summation with a fixed-point iteration on `h`.
 
 ## `numerical_vector.num_native_spin_binder_crossing` (Experimental)
 
@@ -58830,6 +63322,8 @@ Exact energy per site of the periodic 1-D Ising chain of `n` sites.
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Number of bonds.
+
 ## `numerical_vector.num_native_spin_lattice_bonds_d2` (Experimental)
 
 ```aevia
@@ -58837,6 +63331,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Number of bonds.
 
 ## `numerical_vector.num_native_spin_lattice_bonds_d3` (Experimental)
 
@@ -58846,6 +63342,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Number of bonds.
+
 ## `numerical_vector.num_native_spin_lattice_diagonal_bonds_d1` (Experimental)
 
 ```aevia
@@ -58853,6 +63351,9 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Number of diagonal (next-nearest-neighbour) bonds: `2 D (D - 1)` per site on a periodic
+lattice, fewer at open boundaries.
 
 ## `numerical_vector.num_native_spin_lattice_diagonal_bonds_d2` (Experimental)
 
@@ -58862,6 +63363,9 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Number of diagonal (next-nearest-neighbour) bonds: `2 D (D - 1)` per site on a periodic
+lattice, fewer at open boundaries.
+
 ## `numerical_vector.num_native_spin_lattice_diagonal_bonds_d3` (Experimental)
 
 ```aevia
@@ -58869,6 +63373,9 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Number of diagonal (next-nearest-neighbour) bonds: `2 D (D - 1)` per site on a periodic
+lattice, fewer at open boundaries.
 
 ## `numerical_vector.num_native_spin_lattice_neighbours_d1` (Experimental)
 
@@ -58878,6 +63385,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Neighbour slice of a site (`usize::MAX` marks a missing open-boundary neighbour).
+
 ## `numerical_vector.num_native_spin_lattice_neighbours_d2` (Experimental)
 
 ```aevia
@@ -58885,6 +63394,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Neighbour slice of a site (`usize::MAX` marks a missing open-boundary neighbour).
 
 ## `numerical_vector.num_native_spin_lattice_neighbours_d3` (Experimental)
 
@@ -58894,6 +63405,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Neighbour slice of a site (`usize::MAX` marks a missing open-boundary neighbour).
+
 ## `numerical_vector.num_native_spin_lattice_new_d1` (Experimental)
 
 ```aevia
@@ -58901,6 +63414,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Builds a lattice; periodic lattices need every side `>= 3`.
+
+# Errors
+Returns a message for empty or too small sides.
 
 ## `numerical_vector.num_native_spin_lattice_new_d2` (Experimental)
 
@@ -58910,6 +63428,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Builds a lattice; periodic lattices need every side `>= 3`.
+
+# Errors
+Returns a message for empty or too small sides.
+
 ## `numerical_vector.num_native_spin_lattice_new_d3` (Experimental)
 
 ```aevia
@@ -58917,6 +63440,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Builds a lattice; periodic lattices need every side `>= 3`.
+
+# Errors
+Returns a message for empty or too small sides.
 
 ## `numerical_vector.num_native_spin_lattice_second_neighbours_d1` (Experimental)
 
@@ -58926,6 +63454,10 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Diagonal (next-nearest-neighbour) slice of a site: for every pair of axes the four
+combinations `(+-1, +-1)` in the order `(++)`, `(+-)`, `(-+)`, `(--)`, with `usize::MAX`
+for a missing open-boundary neighbour. Empty in one dimension.
+
 ## `numerical_vector.num_native_spin_lattice_second_neighbours_d2` (Experimental)
 
 ```aevia
@@ -58933,6 +63465,10 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Diagonal (next-nearest-neighbour) slice of a site: for every pair of axes the four
+combinations `(+-1, +-1)` in the order `(++)`, `(+-)`, `(-+)`, `(--)`, with `usize::MAX`
+for a missing open-boundary neighbour. Empty in one dimension.
 
 ## `numerical_vector.num_native_spin_lattice_second_neighbours_d3` (Experimental)
 
@@ -58942,6 +63478,10 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Diagonal (next-nearest-neighbour) slice of a site: for every pair of axes the four
+combinations `(+-1, +-1)` in the order `(++)`, `(+-)`, `(-+)`, `(--)`, with `usize::MAX`
+for a missing open-boundary neighbour. Empty in one dimension.
+
 ## `numerical_vector.num_native_spin_lattice_sites_d1` (Experimental)
 
 ```aevia
@@ -58949,6 +63489,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Number of sites.
 
 ## `numerical_vector.num_native_spin_lattice_sites_d2` (Experimental)
 
@@ -58958,6 +63500,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Number of sites.
+
 ## `numerical_vector.num_native_spin_lattice_sites_d3` (Experimental)
 
 ```aevia
@@ -58965,6 +63509,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Number of sites.
 
 ## `numerical_vector.num_native_spin_mean_and_error` (Experimental)
 
@@ -58984,6 +63530,8 @@ Mean and blocking (binning) error estimate of a correlated series.
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Magnetisation per site (norm).
+
 ## `numerical_vector.num_native_spin_on_abs_magnetisation_per_site_d1_n2` (Experimental)
 
 ```aevia
@@ -58991,6 +63539,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Magnetisation per site (norm).
 
 ## `numerical_vector.num_native_spin_on_abs_magnetisation_per_site_d1_n3` (Experimental)
 
@@ -59000,6 +63550,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Magnetisation per site (norm).
+
 ## `numerical_vector.num_native_spin_on_abs_magnetisation_per_site_d1_n4` (Experimental)
 
 ```aevia
@@ -59007,6 +63559,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Magnetisation per site (norm).
 
 ## `numerical_vector.num_native_spin_on_abs_magnetisation_per_site_d2_n1` (Experimental)
 
@@ -59016,6 +63570,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Magnetisation per site (norm).
+
 ## `numerical_vector.num_native_spin_on_abs_magnetisation_per_site_d2_n2` (Experimental)
 
 ```aevia
@@ -59023,6 +63579,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Magnetisation per site (norm).
 
 ## `numerical_vector.num_native_spin_on_abs_magnetisation_per_site_d2_n3` (Experimental)
 
@@ -59032,6 +63590,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Magnetisation per site (norm).
+
 ## `numerical_vector.num_native_spin_on_abs_magnetisation_per_site_d2_n4` (Experimental)
 
 ```aevia
@@ -59039,6 +63599,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Magnetisation per site (norm).
 
 ## `numerical_vector.num_native_spin_on_abs_magnetisation_per_site_d3_n1` (Experimental)
 
@@ -59048,6 +63610,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Magnetisation per site (norm).
+
 ## `numerical_vector.num_native_spin_on_abs_magnetisation_per_site_d3_n2` (Experimental)
 
 ```aevia
@@ -59055,6 +63619,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Magnetisation per site (norm).
 
 ## `numerical_vector.num_native_spin_on_abs_magnetisation_per_site_d3_n3` (Experimental)
 
@@ -59064,6 +63630,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Magnetisation per site (norm).
+
 ## `numerical_vector.num_native_spin_on_abs_magnetisation_per_site_d3_n4` (Experimental)
 
 ```aevia
@@ -59071,6 +63639,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Magnetisation per site (norm).
 
 ## `numerical_vector.num_native_spin_on_cold_start_d1_n1` (Experimental)
 
@@ -59080,6 +63650,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Aligns all spins along component 0 (cold start).
+
 ## `numerical_vector.num_native_spin_on_cold_start_d1_n2` (Experimental)
 
 ```aevia
@@ -59087,6 +63659,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Aligns all spins along component 0 (cold start).
 
 ## `numerical_vector.num_native_spin_on_cold_start_d1_n3` (Experimental)
 
@@ -59096,6 +63670,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Aligns all spins along component 0 (cold start).
+
 ## `numerical_vector.num_native_spin_on_cold_start_d1_n4` (Experimental)
 
 ```aevia
@@ -59103,6 +63679,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Aligns all spins along component 0 (cold start).
 
 ## `numerical_vector.num_native_spin_on_cold_start_d2_n1` (Experimental)
 
@@ -59112,6 +63690,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Aligns all spins along component 0 (cold start).
+
 ## `numerical_vector.num_native_spin_on_cold_start_d2_n2` (Experimental)
 
 ```aevia
@@ -59119,6 +63699,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Aligns all spins along component 0 (cold start).
 
 ## `numerical_vector.num_native_spin_on_cold_start_d2_n3` (Experimental)
 
@@ -59128,6 +63710,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Aligns all spins along component 0 (cold start).
+
 ## `numerical_vector.num_native_spin_on_cold_start_d2_n4` (Experimental)
 
 ```aevia
@@ -59135,6 +63719,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Aligns all spins along component 0 (cold start).
 
 ## `numerical_vector.num_native_spin_on_cold_start_d3_n1` (Experimental)
 
@@ -59144,6 +63730,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Aligns all spins along component 0 (cold start).
+
 ## `numerical_vector.num_native_spin_on_cold_start_d3_n2` (Experimental)
 
 ```aevia
@@ -59151,6 +63739,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Aligns all spins along component 0 (cold start).
 
 ## `numerical_vector.num_native_spin_on_cold_start_d3_n3` (Experimental)
 
@@ -59160,6 +63750,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Aligns all spins along component 0 (cold start).
+
 ## `numerical_vector.num_native_spin_on_cold_start_d3_n4` (Experimental)
 
 ```aevia
@@ -59167,6 +63759,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Aligns all spins along component 0 (cold start).
 
 ## `numerical_vector.num_native_spin_on_couplings_d1_n1` (Experimental)
 
@@ -59272,6 +63866,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Total energy `-J sum_nn - J2 sum_diag - h sum s_i[0]`.
+
 ## `numerical_vector.num_native_spin_on_energy_d1_n2` (Experimental)
 
 ```aevia
@@ -59279,6 +63875,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Total energy `-J sum_nn - J2 sum_diag - h sum s_i[0]`.
 
 ## `numerical_vector.num_native_spin_on_energy_d1_n3` (Experimental)
 
@@ -59288,6 +63886,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Total energy `-J sum_nn - J2 sum_diag - h sum s_i[0]`.
+
 ## `numerical_vector.num_native_spin_on_energy_d1_n4` (Experimental)
 
 ```aevia
@@ -59295,6 +63895,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Total energy `-J sum_nn - J2 sum_diag - h sum s_i[0]`.
 
 ## `numerical_vector.num_native_spin_on_energy_d2_n1` (Experimental)
 
@@ -59304,6 +63906,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Total energy `-J sum_nn - J2 sum_diag - h sum s_i[0]`.
+
 ## `numerical_vector.num_native_spin_on_energy_d2_n2` (Experimental)
 
 ```aevia
@@ -59311,6 +63915,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Total energy `-J sum_nn - J2 sum_diag - h sum s_i[0]`.
 
 ## `numerical_vector.num_native_spin_on_energy_d2_n3` (Experimental)
 
@@ -59320,6 +63926,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Total energy `-J sum_nn - J2 sum_diag - h sum s_i[0]`.
+
 ## `numerical_vector.num_native_spin_on_energy_d2_n4` (Experimental)
 
 ```aevia
@@ -59327,6 +63935,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Total energy `-J sum_nn - J2 sum_diag - h sum s_i[0]`.
 
 ## `numerical_vector.num_native_spin_on_energy_d3_n1` (Experimental)
 
@@ -59336,6 +63946,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Total energy `-J sum_nn - J2 sum_diag - h sum s_i[0]`.
+
 ## `numerical_vector.num_native_spin_on_energy_d3_n2` (Experimental)
 
 ```aevia
@@ -59343,6 +63955,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Total energy `-J sum_nn - J2 sum_diag - h sum s_i[0]`.
 
 ## `numerical_vector.num_native_spin_on_energy_d3_n3` (Experimental)
 
@@ -59352,6 +63966,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Total energy `-J sum_nn - J2 sum_diag - h sum s_i[0]`.
+
 ## `numerical_vector.num_native_spin_on_energy_d3_n4` (Experimental)
 
 ```aevia
@@ -59359,6 +63975,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Total energy `-J sum_nn - J2 sum_diag - h sum s_i[0]`.
 
 ## `numerical_vector.num_native_spin_on_heat_bath_sweep_d1_n1` (Experimental)
 
@@ -59368,6 +63986,13 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One heat-bath sweep: every site is redrawn from its exact conditional distribution
+`P(s) ~ exp(beta s . f)` (`f` = local field). Ising: logistic; XY: von Mises
+(Best-Fisher rejection); Heisenberg: exact inverse CDF of `exp(a cos theta)`.
+
+# Errors
+Returns an error for `N = 0`.
+
 ## `numerical_vector.num_native_spin_on_heat_bath_sweep_d1_n2` (Experimental)
 
 ```aevia
@@ -59375,6 +64000,13 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One heat-bath sweep: every site is redrawn from its exact conditional distribution
+`P(s) ~ exp(beta s . f)` (`f` = local field). Ising: logistic; XY: von Mises
+(Best-Fisher rejection); Heisenberg: exact inverse CDF of `exp(a cos theta)`.
+
+# Errors
+Returns an error for `N = 0`.
 
 ## `numerical_vector.num_native_spin_on_heat_bath_sweep_d1_n3` (Experimental)
 
@@ -59384,6 +64016,13 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One heat-bath sweep: every site is redrawn from its exact conditional distribution
+`P(s) ~ exp(beta s . f)` (`f` = local field). Ising: logistic; XY: von Mises
+(Best-Fisher rejection); Heisenberg: exact inverse CDF of `exp(a cos theta)`.
+
+# Errors
+Returns an error for `N = 0`.
+
 ## `numerical_vector.num_native_spin_on_heat_bath_sweep_d1_n4` (Experimental)
 
 ```aevia
@@ -59391,6 +64030,13 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One heat-bath sweep: every site is redrawn from its exact conditional distribution
+`P(s) ~ exp(beta s . f)` (`f` = local field). Ising: logistic; XY: von Mises
+(Best-Fisher rejection); Heisenberg: exact inverse CDF of `exp(a cos theta)`.
+
+# Errors
+Returns an error for `N = 0`.
 
 ## `numerical_vector.num_native_spin_on_heat_bath_sweep_d2_n1` (Experimental)
 
@@ -59400,6 +64046,13 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One heat-bath sweep: every site is redrawn from its exact conditional distribution
+`P(s) ~ exp(beta s . f)` (`f` = local field). Ising: logistic; XY: von Mises
+(Best-Fisher rejection); Heisenberg: exact inverse CDF of `exp(a cos theta)`.
+
+# Errors
+Returns an error for `N = 0`.
+
 ## `numerical_vector.num_native_spin_on_heat_bath_sweep_d2_n2` (Experimental)
 
 ```aevia
@@ -59407,6 +64060,13 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One heat-bath sweep: every site is redrawn from its exact conditional distribution
+`P(s) ~ exp(beta s . f)` (`f` = local field). Ising: logistic; XY: von Mises
+(Best-Fisher rejection); Heisenberg: exact inverse CDF of `exp(a cos theta)`.
+
+# Errors
+Returns an error for `N = 0`.
 
 ## `numerical_vector.num_native_spin_on_heat_bath_sweep_d2_n3` (Experimental)
 
@@ -59416,6 +64076,13 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One heat-bath sweep: every site is redrawn from its exact conditional distribution
+`P(s) ~ exp(beta s . f)` (`f` = local field). Ising: logistic; XY: von Mises
+(Best-Fisher rejection); Heisenberg: exact inverse CDF of `exp(a cos theta)`.
+
+# Errors
+Returns an error for `N = 0`.
+
 ## `numerical_vector.num_native_spin_on_heat_bath_sweep_d2_n4` (Experimental)
 
 ```aevia
@@ -59423,6 +64090,13 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One heat-bath sweep: every site is redrawn from its exact conditional distribution
+`P(s) ~ exp(beta s . f)` (`f` = local field). Ising: logistic; XY: von Mises
+(Best-Fisher rejection); Heisenberg: exact inverse CDF of `exp(a cos theta)`.
+
+# Errors
+Returns an error for `N = 0`.
 
 ## `numerical_vector.num_native_spin_on_heat_bath_sweep_d3_n1` (Experimental)
 
@@ -59432,6 +64106,13 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One heat-bath sweep: every site is redrawn from its exact conditional distribution
+`P(s) ~ exp(beta s . f)` (`f` = local field). Ising: logistic; XY: von Mises
+(Best-Fisher rejection); Heisenberg: exact inverse CDF of `exp(a cos theta)`.
+
+# Errors
+Returns an error for `N = 0`.
+
 ## `numerical_vector.num_native_spin_on_heat_bath_sweep_d3_n2` (Experimental)
 
 ```aevia
@@ -59439,6 +64120,13 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One heat-bath sweep: every site is redrawn from its exact conditional distribution
+`P(s) ~ exp(beta s . f)` (`f` = local field). Ising: logistic; XY: von Mises
+(Best-Fisher rejection); Heisenberg: exact inverse CDF of `exp(a cos theta)`.
+
+# Errors
+Returns an error for `N = 0`.
 
 ## `numerical_vector.num_native_spin_on_heat_bath_sweep_d3_n3` (Experimental)
 
@@ -59448,6 +64136,13 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One heat-bath sweep: every site is redrawn from its exact conditional distribution
+`P(s) ~ exp(beta s . f)` (`f` = local field). Ising: logistic; XY: von Mises
+(Best-Fisher rejection); Heisenberg: exact inverse CDF of `exp(a cos theta)`.
+
+# Errors
+Returns an error for `N = 0`.
+
 ## `numerical_vector.num_native_spin_on_heat_bath_sweep_d3_n4` (Experimental)
 
 ```aevia
@@ -59455,6 +64150,13 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One heat-bath sweep: every site is redrawn from its exact conditional distribution
+`P(s) ~ exp(beta s . f)` (`f` = local field). Ising: logistic; XY: von Mises
+(Best-Fisher rejection); Heisenberg: exact inverse CDF of `exp(a cos theta)`.
+
+# Errors
+Returns an error for `N = 0`.
 
 ## `numerical_vector.num_native_spin_on_local_field_d1_n1` (Experimental)
 
@@ -59464,6 +64166,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Local field `h e_0 + J sum_nn s_j + J2 sum_diag s_j` acting on site `i`.
+
 ## `numerical_vector.num_native_spin_on_local_field_d1_n2` (Experimental)
 
 ```aevia
@@ -59471,6 +64175,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Local field `h e_0 + J sum_nn s_j + J2 sum_diag s_j` acting on site `i`.
 
 ## `numerical_vector.num_native_spin_on_local_field_d1_n3` (Experimental)
 
@@ -59480,6 +64186,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Local field `h e_0 + J sum_nn s_j + J2 sum_diag s_j` acting on site `i`.
+
 ## `numerical_vector.num_native_spin_on_local_field_d1_n4` (Experimental)
 
 ```aevia
@@ -59487,6 +64195,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Local field `h e_0 + J sum_nn s_j + J2 sum_diag s_j` acting on site `i`.
 
 ## `numerical_vector.num_native_spin_on_local_field_d2_n1` (Experimental)
 
@@ -59496,6 +64206,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Local field `h e_0 + J sum_nn s_j + J2 sum_diag s_j` acting on site `i`.
+
 ## `numerical_vector.num_native_spin_on_local_field_d2_n2` (Experimental)
 
 ```aevia
@@ -59503,6 +64215,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Local field `h e_0 + J sum_nn s_j + J2 sum_diag s_j` acting on site `i`.
 
 ## `numerical_vector.num_native_spin_on_local_field_d2_n3` (Experimental)
 
@@ -59512,6 +64226,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Local field `h e_0 + J sum_nn s_j + J2 sum_diag s_j` acting on site `i`.
+
 ## `numerical_vector.num_native_spin_on_local_field_d2_n4` (Experimental)
 
 ```aevia
@@ -59519,6 +64235,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Local field `h e_0 + J sum_nn s_j + J2 sum_diag s_j` acting on site `i`.
 
 ## `numerical_vector.num_native_spin_on_local_field_d3_n1` (Experimental)
 
@@ -59528,6 +64246,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Local field `h e_0 + J sum_nn s_j + J2 sum_diag s_j` acting on site `i`.
+
 ## `numerical_vector.num_native_spin_on_local_field_d3_n2` (Experimental)
 
 ```aevia
@@ -59535,6 +64255,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Local field `h e_0 + J sum_nn s_j + J2 sum_diag s_j` acting on site `i`.
 
 ## `numerical_vector.num_native_spin_on_local_field_d3_n3` (Experimental)
 
@@ -59544,6 +64266,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Local field `h e_0 + J sum_nn s_j + J2 sum_diag s_j` acting on site `i`.
+
 ## `numerical_vector.num_native_spin_on_local_field_d3_n4` (Experimental)
 
 ```aevia
@@ -59551,6 +64275,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Local field `h e_0 + J sum_nn s_j + J2 sum_diag s_j` acting on site `i`.
 
 ## `numerical_vector.num_native_spin_on_magnetisation_d1_n1` (Experimental)
 
@@ -59560,6 +64286,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Total magnetisation vector.
+
 ## `numerical_vector.num_native_spin_on_magnetisation_d1_n2` (Experimental)
 
 ```aevia
@@ -59567,6 +64295,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Total magnetisation vector.
 
 ## `numerical_vector.num_native_spin_on_magnetisation_d1_n3` (Experimental)
 
@@ -59576,6 +64306,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Total magnetisation vector.
+
 ## `numerical_vector.num_native_spin_on_magnetisation_d1_n4` (Experimental)
 
 ```aevia
@@ -59583,6 +64315,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Total magnetisation vector.
 
 ## `numerical_vector.num_native_spin_on_magnetisation_d2_n1` (Experimental)
 
@@ -59592,6 +64326,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Total magnetisation vector.
+
 ## `numerical_vector.num_native_spin_on_magnetisation_d2_n2` (Experimental)
 
 ```aevia
@@ -59599,6 +64335,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Total magnetisation vector.
 
 ## `numerical_vector.num_native_spin_on_magnetisation_d2_n3` (Experimental)
 
@@ -59608,6 +64346,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Total magnetisation vector.
+
 ## `numerical_vector.num_native_spin_on_magnetisation_d2_n4` (Experimental)
 
 ```aevia
@@ -59615,6 +64355,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Total magnetisation vector.
 
 ## `numerical_vector.num_native_spin_on_magnetisation_d3_n1` (Experimental)
 
@@ -59624,6 +64366,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Total magnetisation vector.
+
 ## `numerical_vector.num_native_spin_on_magnetisation_d3_n2` (Experimental)
 
 ```aevia
@@ -59631,6 +64375,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Total magnetisation vector.
 
 ## `numerical_vector.num_native_spin_on_magnetisation_d3_n3` (Experimental)
 
@@ -59640,6 +64386,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Total magnetisation vector.
+
 ## `numerical_vector.num_native_spin_on_magnetisation_d3_n4` (Experimental)
 
 ```aevia
@@ -59647,6 +64395,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Total magnetisation vector.
 
 ## `numerical_vector.num_native_spin_on_metropolis_sweep_d1_n1` (Experimental)
 
@@ -59656,6 +64406,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One Metropolis sweep (`N` randomly chosen sites); returns the acceptance rate.
+
 ## `numerical_vector.num_native_spin_on_metropolis_sweep_d1_n2` (Experimental)
 
 ```aevia
@@ -59663,6 +64415,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One Metropolis sweep (`N` randomly chosen sites); returns the acceptance rate.
 
 ## `numerical_vector.num_native_spin_on_metropolis_sweep_d1_n3` (Experimental)
 
@@ -59672,6 +64426,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One Metropolis sweep (`N` randomly chosen sites); returns the acceptance rate.
+
 ## `numerical_vector.num_native_spin_on_metropolis_sweep_d1_n4` (Experimental)
 
 ```aevia
@@ -59679,6 +64435,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One Metropolis sweep (`N` randomly chosen sites); returns the acceptance rate.
 
 ## `numerical_vector.num_native_spin_on_metropolis_sweep_d2_n1` (Experimental)
 
@@ -59688,6 +64446,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One Metropolis sweep (`N` randomly chosen sites); returns the acceptance rate.
+
 ## `numerical_vector.num_native_spin_on_metropolis_sweep_d2_n2` (Experimental)
 
 ```aevia
@@ -59695,6 +64455,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One Metropolis sweep (`N` randomly chosen sites); returns the acceptance rate.
 
 ## `numerical_vector.num_native_spin_on_metropolis_sweep_d2_n3` (Experimental)
 
@@ -59704,6 +64466,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One Metropolis sweep (`N` randomly chosen sites); returns the acceptance rate.
+
 ## `numerical_vector.num_native_spin_on_metropolis_sweep_d2_n4` (Experimental)
 
 ```aevia
@@ -59711,6 +64475,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One Metropolis sweep (`N` randomly chosen sites); returns the acceptance rate.
 
 ## `numerical_vector.num_native_spin_on_metropolis_sweep_d3_n1` (Experimental)
 
@@ -59720,6 +64486,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One Metropolis sweep (`N` randomly chosen sites); returns the acceptance rate.
+
 ## `numerical_vector.num_native_spin_on_metropolis_sweep_d3_n2` (Experimental)
 
 ```aevia
@@ -59727,6 +64495,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One Metropolis sweep (`N` randomly chosen sites); returns the acceptance rate.
 
 ## `numerical_vector.num_native_spin_on_metropolis_sweep_d3_n3` (Experimental)
 
@@ -59736,6 +64506,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One Metropolis sweep (`N` randomly chosen sites); returns the acceptance rate.
+
 ## `numerical_vector.num_native_spin_on_metropolis_sweep_d3_n4` (Experimental)
 
 ```aevia
@@ -59743,6 +64515,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One Metropolis sweep (`N` randomly chosen sites); returns the acceptance rate.
 
 ## `numerical_vector.num_native_spin_on_new_d1_n1` (Experimental)
 
@@ -59752,6 +64526,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Creates a model with a hot (random) start and `j = 1`, `j2 = 0`, `field = 0`.
+
+# Errors
+Propagates lattice construction errors.
+
 ## `numerical_vector.num_native_spin_on_new_d1_n2` (Experimental)
 
 ```aevia
@@ -59759,6 +64538,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Creates a model with a hot (random) start and `j = 1`, `j2 = 0`, `field = 0`.
+
+# Errors
+Propagates lattice construction errors.
 
 ## `numerical_vector.num_native_spin_on_new_d1_n3` (Experimental)
 
@@ -59768,6 +64552,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Creates a model with a hot (random) start and `j = 1`, `j2 = 0`, `field = 0`.
+
+# Errors
+Propagates lattice construction errors.
+
 ## `numerical_vector.num_native_spin_on_new_d1_n4` (Experimental)
 
 ```aevia
@@ -59775,6 +64564,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Creates a model with a hot (random) start and `j = 1`, `j2 = 0`, `field = 0`.
+
+# Errors
+Propagates lattice construction errors.
 
 ## `numerical_vector.num_native_spin_on_new_d2_n1` (Experimental)
 
@@ -59784,6 +64578,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Creates a model with a hot (random) start and `j = 1`, `j2 = 0`, `field = 0`.
+
+# Errors
+Propagates lattice construction errors.
+
 ## `numerical_vector.num_native_spin_on_new_d2_n2` (Experimental)
 
 ```aevia
@@ -59791,6 +64590,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Creates a model with a hot (random) start and `j = 1`, `j2 = 0`, `field = 0`.
+
+# Errors
+Propagates lattice construction errors.
 
 ## `numerical_vector.num_native_spin_on_new_d2_n3` (Experimental)
 
@@ -59800,6 +64604,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Creates a model with a hot (random) start and `j = 1`, `j2 = 0`, `field = 0`.
+
+# Errors
+Propagates lattice construction errors.
+
 ## `numerical_vector.num_native_spin_on_new_d2_n4` (Experimental)
 
 ```aevia
@@ -59807,6 +64616,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Creates a model with a hot (random) start and `j = 1`, `j2 = 0`, `field = 0`.
+
+# Errors
+Propagates lattice construction errors.
 
 ## `numerical_vector.num_native_spin_on_new_d3_n1` (Experimental)
 
@@ -59816,6 +64630,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Creates a model with a hot (random) start and `j = 1`, `j2 = 0`, `field = 0`.
+
+# Errors
+Propagates lattice construction errors.
+
 ## `numerical_vector.num_native_spin_on_new_d3_n2` (Experimental)
 
 ```aevia
@@ -59823,6 +64642,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Creates a model with a hot (random) start and `j = 1`, `j2 = 0`, `field = 0`.
+
+# Errors
+Propagates lattice construction errors.
 
 ## `numerical_vector.num_native_spin_on_new_d3_n3` (Experimental)
 
@@ -59832,6 +64656,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Creates a model with a hot (random) start and `j = 1`, `j2 = 0`, `field = 0`.
+
+# Errors
+Propagates lattice construction errors.
+
 ## `numerical_vector.num_native_spin_on_new_d3_n4` (Experimental)
 
 ```aevia
@@ -59839,6 +64668,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Creates a model with a hot (random) start and `j = 1`, `j2 = 0`, `field = 0`.
+
+# Errors
+Propagates lattice construction errors.
 
 ## `numerical_vector.num_native_spin_on_overrelax_sweep_d1_n1` (Experimental)
 
@@ -59848,6 +64682,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One sweep of micro-canonical over-relaxation (`N >= 2`): reflects every spin about its local field.
+
 ## `numerical_vector.num_native_spin_on_overrelax_sweep_d1_n2` (Experimental)
 
 ```aevia
@@ -59855,6 +64691,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One sweep of micro-canonical over-relaxation (`N >= 2`): reflects every spin about its local field.
 
 ## `numerical_vector.num_native_spin_on_overrelax_sweep_d1_n3` (Experimental)
 
@@ -59864,6 +64702,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One sweep of micro-canonical over-relaxation (`N >= 2`): reflects every spin about its local field.
+
 ## `numerical_vector.num_native_spin_on_overrelax_sweep_d1_n4` (Experimental)
 
 ```aevia
@@ -59871,6 +64711,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One sweep of micro-canonical over-relaxation (`N >= 2`): reflects every spin about its local field.
 
 ## `numerical_vector.num_native_spin_on_overrelax_sweep_d2_n1` (Experimental)
 
@@ -59880,6 +64722,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One sweep of micro-canonical over-relaxation (`N >= 2`): reflects every spin about its local field.
+
 ## `numerical_vector.num_native_spin_on_overrelax_sweep_d2_n2` (Experimental)
 
 ```aevia
@@ -59887,6 +64731,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One sweep of micro-canonical over-relaxation (`N >= 2`): reflects every spin about its local field.
 
 ## `numerical_vector.num_native_spin_on_overrelax_sweep_d2_n3` (Experimental)
 
@@ -59896,6 +64742,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One sweep of micro-canonical over-relaxation (`N >= 2`): reflects every spin about its local field.
+
 ## `numerical_vector.num_native_spin_on_overrelax_sweep_d2_n4` (Experimental)
 
 ```aevia
@@ -59903,6 +64751,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One sweep of micro-canonical over-relaxation (`N >= 2`): reflects every spin about its local field.
 
 ## `numerical_vector.num_native_spin_on_overrelax_sweep_d3_n1` (Experimental)
 
@@ -59912,6 +64762,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One sweep of micro-canonical over-relaxation (`N >= 2`): reflects every spin about its local field.
+
 ## `numerical_vector.num_native_spin_on_overrelax_sweep_d3_n2` (Experimental)
 
 ```aevia
@@ -59919,6 +64771,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One sweep of micro-canonical over-relaxation (`N >= 2`): reflects every spin about its local field.
 
 ## `numerical_vector.num_native_spin_on_overrelax_sweep_d3_n3` (Experimental)
 
@@ -59928,6 +64782,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One sweep of micro-canonical over-relaxation (`N >= 2`): reflects every spin about its local field.
+
 ## `numerical_vector.num_native_spin_on_overrelax_sweep_d3_n4` (Experimental)
 
 ```aevia
@@ -59935,6 +64791,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One sweep of micro-canonical over-relaxation (`N >= 2`): reflects every spin about its local field.
 
 ## `numerical_vector.num_native_spin_on_swendsen_wang_step_d1_n1` (Experimental)
 
@@ -59944,6 +64802,25 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One Swendsen-Wang sweep with a random embedding direction; returns the number of clusters.
+
+A non-zero field is included through the ghost spin `sign(h) e_0`: the cluster attached to
+the ghost is never flipped.
+
+A ferromagnetic `j2 > 0` joins the bond set and the clusters stay independent. An
+antiferromagnetic `j2 < 0` is frustrated, so it stays out of the bond set; its Boltzmann
+factor then couples the orientations of *pairs* of clusters and they are no longer
+independent, so the sweep becomes a cluster-level Metropolis: every cluster is flipped
+atomically, in a fixed order, and accepted with `min(1, exp(-beta dE))`, `dE` being the
+change of `2 J2 sum p_i p_j` over the diagonal bonds that cross it, evaluated against the
+configuration left by the clusters already flipped in the same sweep (`p_i = s_i . r` is
+the projection on the embedding direction, see [`Self::wolff_step`]). Both branches are
+exact; for `j2 < 0` only the independence of the clusters — and hence the reading of the
+sweep as independent Fortuin-Kasteleyn clusters — is lost.
+
+# Errors
+Fails for `J <= 0`.
+
 ## `numerical_vector.num_native_spin_on_swendsen_wang_step_d1_n2` (Experimental)
 
 ```aevia
@@ -59951,6 +64828,25 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One Swendsen-Wang sweep with a random embedding direction; returns the number of clusters.
+
+A non-zero field is included through the ghost spin `sign(h) e_0`: the cluster attached to
+the ghost is never flipped.
+
+A ferromagnetic `j2 > 0` joins the bond set and the clusters stay independent. An
+antiferromagnetic `j2 < 0` is frustrated, so it stays out of the bond set; its Boltzmann
+factor then couples the orientations of *pairs* of clusters and they are no longer
+independent, so the sweep becomes a cluster-level Metropolis: every cluster is flipped
+atomically, in a fixed order, and accepted with `min(1, exp(-beta dE))`, `dE` being the
+change of `2 J2 sum p_i p_j` over the diagonal bonds that cross it, evaluated against the
+configuration left by the clusters already flipped in the same sweep (`p_i = s_i . r` is
+the projection on the embedding direction, see [`Self::wolff_step`]). Both branches are
+exact; for `j2 < 0` only the independence of the clusters — and hence the reading of the
+sweep as independent Fortuin-Kasteleyn clusters — is lost.
+
+# Errors
+Fails for `J <= 0`.
 
 ## `numerical_vector.num_native_spin_on_swendsen_wang_step_d1_n3` (Experimental)
 
@@ -59960,6 +64856,25 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One Swendsen-Wang sweep with a random embedding direction; returns the number of clusters.
+
+A non-zero field is included through the ghost spin `sign(h) e_0`: the cluster attached to
+the ghost is never flipped.
+
+A ferromagnetic `j2 > 0` joins the bond set and the clusters stay independent. An
+antiferromagnetic `j2 < 0` is frustrated, so it stays out of the bond set; its Boltzmann
+factor then couples the orientations of *pairs* of clusters and they are no longer
+independent, so the sweep becomes a cluster-level Metropolis: every cluster is flipped
+atomically, in a fixed order, and accepted with `min(1, exp(-beta dE))`, `dE` being the
+change of `2 J2 sum p_i p_j` over the diagonal bonds that cross it, evaluated against the
+configuration left by the clusters already flipped in the same sweep (`p_i = s_i . r` is
+the projection on the embedding direction, see [`Self::wolff_step`]). Both branches are
+exact; for `j2 < 0` only the independence of the clusters — and hence the reading of the
+sweep as independent Fortuin-Kasteleyn clusters — is lost.
+
+# Errors
+Fails for `J <= 0`.
+
 ## `numerical_vector.num_native_spin_on_swendsen_wang_step_d1_n4` (Experimental)
 
 ```aevia
@@ -59967,6 +64882,25 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One Swendsen-Wang sweep with a random embedding direction; returns the number of clusters.
+
+A non-zero field is included through the ghost spin `sign(h) e_0`: the cluster attached to
+the ghost is never flipped.
+
+A ferromagnetic `j2 > 0` joins the bond set and the clusters stay independent. An
+antiferromagnetic `j2 < 0` is frustrated, so it stays out of the bond set; its Boltzmann
+factor then couples the orientations of *pairs* of clusters and they are no longer
+independent, so the sweep becomes a cluster-level Metropolis: every cluster is flipped
+atomically, in a fixed order, and accepted with `min(1, exp(-beta dE))`, `dE` being the
+change of `2 J2 sum p_i p_j` over the diagonal bonds that cross it, evaluated against the
+configuration left by the clusters already flipped in the same sweep (`p_i = s_i . r` is
+the projection on the embedding direction, see [`Self::wolff_step`]). Both branches are
+exact; for `j2 < 0` only the independence of the clusters — and hence the reading of the
+sweep as independent Fortuin-Kasteleyn clusters — is lost.
+
+# Errors
+Fails for `J <= 0`.
 
 ## `numerical_vector.num_native_spin_on_swendsen_wang_step_d2_n1` (Experimental)
 
@@ -59976,6 +64910,25 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One Swendsen-Wang sweep with a random embedding direction; returns the number of clusters.
+
+A non-zero field is included through the ghost spin `sign(h) e_0`: the cluster attached to
+the ghost is never flipped.
+
+A ferromagnetic `j2 > 0` joins the bond set and the clusters stay independent. An
+antiferromagnetic `j2 < 0` is frustrated, so it stays out of the bond set; its Boltzmann
+factor then couples the orientations of *pairs* of clusters and they are no longer
+independent, so the sweep becomes a cluster-level Metropolis: every cluster is flipped
+atomically, in a fixed order, and accepted with `min(1, exp(-beta dE))`, `dE` being the
+change of `2 J2 sum p_i p_j` over the diagonal bonds that cross it, evaluated against the
+configuration left by the clusters already flipped in the same sweep (`p_i = s_i . r` is
+the projection on the embedding direction, see [`Self::wolff_step`]). Both branches are
+exact; for `j2 < 0` only the independence of the clusters — and hence the reading of the
+sweep as independent Fortuin-Kasteleyn clusters — is lost.
+
+# Errors
+Fails for `J <= 0`.
+
 ## `numerical_vector.num_native_spin_on_swendsen_wang_step_d2_n2` (Experimental)
 
 ```aevia
@@ -59983,6 +64936,25 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One Swendsen-Wang sweep with a random embedding direction; returns the number of clusters.
+
+A non-zero field is included through the ghost spin `sign(h) e_0`: the cluster attached to
+the ghost is never flipped.
+
+A ferromagnetic `j2 > 0` joins the bond set and the clusters stay independent. An
+antiferromagnetic `j2 < 0` is frustrated, so it stays out of the bond set; its Boltzmann
+factor then couples the orientations of *pairs* of clusters and they are no longer
+independent, so the sweep becomes a cluster-level Metropolis: every cluster is flipped
+atomically, in a fixed order, and accepted with `min(1, exp(-beta dE))`, `dE` being the
+change of `2 J2 sum p_i p_j` over the diagonal bonds that cross it, evaluated against the
+configuration left by the clusters already flipped in the same sweep (`p_i = s_i . r` is
+the projection on the embedding direction, see [`Self::wolff_step`]). Both branches are
+exact; for `j2 < 0` only the independence of the clusters — and hence the reading of the
+sweep as independent Fortuin-Kasteleyn clusters — is lost.
+
+# Errors
+Fails for `J <= 0`.
 
 ## `numerical_vector.num_native_spin_on_swendsen_wang_step_d2_n3` (Experimental)
 
@@ -59992,6 +64964,25 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One Swendsen-Wang sweep with a random embedding direction; returns the number of clusters.
+
+A non-zero field is included through the ghost spin `sign(h) e_0`: the cluster attached to
+the ghost is never flipped.
+
+A ferromagnetic `j2 > 0` joins the bond set and the clusters stay independent. An
+antiferromagnetic `j2 < 0` is frustrated, so it stays out of the bond set; its Boltzmann
+factor then couples the orientations of *pairs* of clusters and they are no longer
+independent, so the sweep becomes a cluster-level Metropolis: every cluster is flipped
+atomically, in a fixed order, and accepted with `min(1, exp(-beta dE))`, `dE` being the
+change of `2 J2 sum p_i p_j` over the diagonal bonds that cross it, evaluated against the
+configuration left by the clusters already flipped in the same sweep (`p_i = s_i . r` is
+the projection on the embedding direction, see [`Self::wolff_step`]). Both branches are
+exact; for `j2 < 0` only the independence of the clusters — and hence the reading of the
+sweep as independent Fortuin-Kasteleyn clusters — is lost.
+
+# Errors
+Fails for `J <= 0`.
+
 ## `numerical_vector.num_native_spin_on_swendsen_wang_step_d2_n4` (Experimental)
 
 ```aevia
@@ -59999,6 +64990,25 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One Swendsen-Wang sweep with a random embedding direction; returns the number of clusters.
+
+A non-zero field is included through the ghost spin `sign(h) e_0`: the cluster attached to
+the ghost is never flipped.
+
+A ferromagnetic `j2 > 0` joins the bond set and the clusters stay independent. An
+antiferromagnetic `j2 < 0` is frustrated, so it stays out of the bond set; its Boltzmann
+factor then couples the orientations of *pairs* of clusters and they are no longer
+independent, so the sweep becomes a cluster-level Metropolis: every cluster is flipped
+atomically, in a fixed order, and accepted with `min(1, exp(-beta dE))`, `dE` being the
+change of `2 J2 sum p_i p_j` over the diagonal bonds that cross it, evaluated against the
+configuration left by the clusters already flipped in the same sweep (`p_i = s_i . r` is
+the projection on the embedding direction, see [`Self::wolff_step`]). Both branches are
+exact; for `j2 < 0` only the independence of the clusters — and hence the reading of the
+sweep as independent Fortuin-Kasteleyn clusters — is lost.
+
+# Errors
+Fails for `J <= 0`.
 
 ## `numerical_vector.num_native_spin_on_swendsen_wang_step_d3_n1` (Experimental)
 
@@ -60008,6 +65018,25 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One Swendsen-Wang sweep with a random embedding direction; returns the number of clusters.
+
+A non-zero field is included through the ghost spin `sign(h) e_0`: the cluster attached to
+the ghost is never flipped.
+
+A ferromagnetic `j2 > 0` joins the bond set and the clusters stay independent. An
+antiferromagnetic `j2 < 0` is frustrated, so it stays out of the bond set; its Boltzmann
+factor then couples the orientations of *pairs* of clusters and they are no longer
+independent, so the sweep becomes a cluster-level Metropolis: every cluster is flipped
+atomically, in a fixed order, and accepted with `min(1, exp(-beta dE))`, `dE` being the
+change of `2 J2 sum p_i p_j` over the diagonal bonds that cross it, evaluated against the
+configuration left by the clusters already flipped in the same sweep (`p_i = s_i . r` is
+the projection on the embedding direction, see [`Self::wolff_step`]). Both branches are
+exact; for `j2 < 0` only the independence of the clusters — and hence the reading of the
+sweep as independent Fortuin-Kasteleyn clusters — is lost.
+
+# Errors
+Fails for `J <= 0`.
+
 ## `numerical_vector.num_native_spin_on_swendsen_wang_step_d3_n2` (Experimental)
 
 ```aevia
@@ -60015,6 +65044,25 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One Swendsen-Wang sweep with a random embedding direction; returns the number of clusters.
+
+A non-zero field is included through the ghost spin `sign(h) e_0`: the cluster attached to
+the ghost is never flipped.
+
+A ferromagnetic `j2 > 0` joins the bond set and the clusters stay independent. An
+antiferromagnetic `j2 < 0` is frustrated, so it stays out of the bond set; its Boltzmann
+factor then couples the orientations of *pairs* of clusters and they are no longer
+independent, so the sweep becomes a cluster-level Metropolis: every cluster is flipped
+atomically, in a fixed order, and accepted with `min(1, exp(-beta dE))`, `dE` being the
+change of `2 J2 sum p_i p_j` over the diagonal bonds that cross it, evaluated against the
+configuration left by the clusters already flipped in the same sweep (`p_i = s_i . r` is
+the projection on the embedding direction, see [`Self::wolff_step`]). Both branches are
+exact; for `j2 < 0` only the independence of the clusters — and hence the reading of the
+sweep as independent Fortuin-Kasteleyn clusters — is lost.
+
+# Errors
+Fails for `J <= 0`.
 
 ## `numerical_vector.num_native_spin_on_swendsen_wang_step_d3_n3` (Experimental)
 
@@ -60024,6 +65072,25 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One Swendsen-Wang sweep with a random embedding direction; returns the number of clusters.
+
+A non-zero field is included through the ghost spin `sign(h) e_0`: the cluster attached to
+the ghost is never flipped.
+
+A ferromagnetic `j2 > 0` joins the bond set and the clusters stay independent. An
+antiferromagnetic `j2 < 0` is frustrated, so it stays out of the bond set; its Boltzmann
+factor then couples the orientations of *pairs* of clusters and they are no longer
+independent, so the sweep becomes a cluster-level Metropolis: every cluster is flipped
+atomically, in a fixed order, and accepted with `min(1, exp(-beta dE))`, `dE` being the
+change of `2 J2 sum p_i p_j` over the diagonal bonds that cross it, evaluated against the
+configuration left by the clusters already flipped in the same sweep (`p_i = s_i . r` is
+the projection on the embedding direction, see [`Self::wolff_step`]). Both branches are
+exact; for `j2 < 0` only the independence of the clusters — and hence the reading of the
+sweep as independent Fortuin-Kasteleyn clusters — is lost.
+
+# Errors
+Fails for `J <= 0`.
+
 ## `numerical_vector.num_native_spin_on_swendsen_wang_step_d3_n4` (Experimental)
 
 ```aevia
@@ -60031,6 +65098,25 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One Swendsen-Wang sweep with a random embedding direction; returns the number of clusters.
+
+A non-zero field is included through the ghost spin `sign(h) e_0`: the cluster attached to
+the ghost is never flipped.
+
+A ferromagnetic `j2 > 0` joins the bond set and the clusters stay independent. An
+antiferromagnetic `j2 < 0` is frustrated, so it stays out of the bond set; its Boltzmann
+factor then couples the orientations of *pairs* of clusters and they are no longer
+independent, so the sweep becomes a cluster-level Metropolis: every cluster is flipped
+atomically, in a fixed order, and accepted with `min(1, exp(-beta dE))`, `dE` being the
+change of `2 J2 sum p_i p_j` over the diagonal bonds that cross it, evaluated against the
+configuration left by the clusters already flipped in the same sweep (`p_i = s_i . r` is
+the projection on the embedding direction, see [`Self::wolff_step`]). Both branches are
+exact; for `j2 < 0` only the independence of the clusters — and hence the reading of the
+sweep as independent Fortuin-Kasteleyn clusters — is lost.
+
+# Errors
+Fails for `J <= 0`.
 
 ## `numerical_vector.num_native_spin_on_update_d1_n1` (Experimental)
 
@@ -60040,6 +65126,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Applies one update of the chosen kind (one sweep, or one Wolff cluster).
+
+# Errors
+Propagates unsupported-combination errors.
+
 ## `numerical_vector.num_native_spin_on_update_d1_n2` (Experimental)
 
 ```aevia
@@ -60047,6 +65138,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Applies one update of the chosen kind (one sweep, or one Wolff cluster).
+
+# Errors
+Propagates unsupported-combination errors.
 
 ## `numerical_vector.num_native_spin_on_update_d1_n3` (Experimental)
 
@@ -60056,6 +65152,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Applies one update of the chosen kind (one sweep, or one Wolff cluster).
+
+# Errors
+Propagates unsupported-combination errors.
+
 ## `numerical_vector.num_native_spin_on_update_d1_n4` (Experimental)
 
 ```aevia
@@ -60063,6 +65164,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Applies one update of the chosen kind (one sweep, or one Wolff cluster).
+
+# Errors
+Propagates unsupported-combination errors.
 
 ## `numerical_vector.num_native_spin_on_update_d2_n1` (Experimental)
 
@@ -60072,6 +65178,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Applies one update of the chosen kind (one sweep, or one Wolff cluster).
+
+# Errors
+Propagates unsupported-combination errors.
+
 ## `numerical_vector.num_native_spin_on_update_d2_n2` (Experimental)
 
 ```aevia
@@ -60079,6 +65190,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Applies one update of the chosen kind (one sweep, or one Wolff cluster).
+
+# Errors
+Propagates unsupported-combination errors.
 
 ## `numerical_vector.num_native_spin_on_update_d2_n3` (Experimental)
 
@@ -60088,6 +65204,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Applies one update of the chosen kind (one sweep, or one Wolff cluster).
+
+# Errors
+Propagates unsupported-combination errors.
+
 ## `numerical_vector.num_native_spin_on_update_d2_n4` (Experimental)
 
 ```aevia
@@ -60095,6 +65216,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Applies one update of the chosen kind (one sweep, or one Wolff cluster).
+
+# Errors
+Propagates unsupported-combination errors.
 
 ## `numerical_vector.num_native_spin_on_update_d3_n1` (Experimental)
 
@@ -60104,6 +65230,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Applies one update of the chosen kind (one sweep, or one Wolff cluster).
+
+# Errors
+Propagates unsupported-combination errors.
+
 ## `numerical_vector.num_native_spin_on_update_d3_n2` (Experimental)
 
 ```aevia
@@ -60111,6 +65242,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Applies one update of the chosen kind (one sweep, or one Wolff cluster).
+
+# Errors
+Propagates unsupported-combination errors.
 
 ## `numerical_vector.num_native_spin_on_update_d3_n3` (Experimental)
 
@@ -60120,6 +65256,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Applies one update of the chosen kind (one sweep, or one Wolff cluster).
+
+# Errors
+Propagates unsupported-combination errors.
+
 ## `numerical_vector.num_native_spin_on_update_d3_n4` (Experimental)
 
 ```aevia
@@ -60127,6 +65268,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Applies one update of the chosen kind (one sweep, or one Wolff cluster).
+
+# Errors
+Propagates unsupported-combination errors.
 
 ## `numerical_vector.num_native_spin_on_wolff_step_d1_n1` (Experimental)
 
@@ -60136,6 +65282,31 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Grows and flips one Wolff cluster; returns its size (`0` when the correction of a
+frustrated `J2` boundary rejects the flip).
+
+A non-zero field `h` is handled by the **ghost-spin** construction: the field couples every
+site to an extra ghost spin `sign(h) e_0` with strength `|h|`, the cluster may absorb the
+ghost, and when it does the cluster's complement is flipped instead (the global symmetry of the
+extended system), which keeps detailed balance.
+
+A ferromagnetic `j2 > 0` joins the bond set like `j`. An antiferromagnetic `j2 < 0` is
+frustrated with respect to the `j` bonds, so it stays out of the bond set: the cluster
+grows on the `j` bonds only and the flip is then accepted with `min(1, exp(-beta dE))`,
+where `dE = 2 J2 sum p_i p_j` runs over the diagonal bonds with exactly one endpoint in
+the cluster and `p_i = s_i . r` is the projection on the embedding direction. Those
+projections, not the scalar products `s_i . s_j`, are what the reflection
+`s_i -> s_i - 2 p_i r` changes: it maps `s_i . s_j` to `s_i . s_j - 2 p_i p_j`, so the
+perpendicular components drop out (`p_i p_j = s_i s_j` only for `N = 1`). Only the
+frustrated bonds need the correction — the Fortuin-Kasteleyn weight of a ferromagnetic
+bond is the same before and after a cluster flip, while the Boltzmann factor of a
+frustrated bond is not. The proposal is symmetric (the bond construction uses only bonds
+inside the cluster, whose products the flip leaves unchanged), so the correction keeps
+detailed balance.
+
+# Errors
+Fails for `J <= 0`.
+
 ## `numerical_vector.num_native_spin_on_wolff_step_d1_n2` (Experimental)
 
 ```aevia
@@ -60143,6 +65314,31 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Grows and flips one Wolff cluster; returns its size (`0` when the correction of a
+frustrated `J2` boundary rejects the flip).
+
+A non-zero field `h` is handled by the **ghost-spin** construction: the field couples every
+site to an extra ghost spin `sign(h) e_0` with strength `|h|`, the cluster may absorb the
+ghost, and when it does the cluster's complement is flipped instead (the global symmetry of the
+extended system), which keeps detailed balance.
+
+A ferromagnetic `j2 > 0` joins the bond set like `j`. An antiferromagnetic `j2 < 0` is
+frustrated with respect to the `j` bonds, so it stays out of the bond set: the cluster
+grows on the `j` bonds only and the flip is then accepted with `min(1, exp(-beta dE))`,
+where `dE = 2 J2 sum p_i p_j` runs over the diagonal bonds with exactly one endpoint in
+the cluster and `p_i = s_i . r` is the projection on the embedding direction. Those
+projections, not the scalar products `s_i . s_j`, are what the reflection
+`s_i -> s_i - 2 p_i r` changes: it maps `s_i . s_j` to `s_i . s_j - 2 p_i p_j`, so the
+perpendicular components drop out (`p_i p_j = s_i s_j` only for `N = 1`). Only the
+frustrated bonds need the correction — the Fortuin-Kasteleyn weight of a ferromagnetic
+bond is the same before and after a cluster flip, while the Boltzmann factor of a
+frustrated bond is not. The proposal is symmetric (the bond construction uses only bonds
+inside the cluster, whose products the flip leaves unchanged), so the correction keeps
+detailed balance.
+
+# Errors
+Fails for `J <= 0`.
 
 ## `numerical_vector.num_native_spin_on_wolff_step_d1_n3` (Experimental)
 
@@ -60152,6 +65348,31 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Grows and flips one Wolff cluster; returns its size (`0` when the correction of a
+frustrated `J2` boundary rejects the flip).
+
+A non-zero field `h` is handled by the **ghost-spin** construction: the field couples every
+site to an extra ghost spin `sign(h) e_0` with strength `|h|`, the cluster may absorb the
+ghost, and when it does the cluster's complement is flipped instead (the global symmetry of the
+extended system), which keeps detailed balance.
+
+A ferromagnetic `j2 > 0` joins the bond set like `j`. An antiferromagnetic `j2 < 0` is
+frustrated with respect to the `j` bonds, so it stays out of the bond set: the cluster
+grows on the `j` bonds only and the flip is then accepted with `min(1, exp(-beta dE))`,
+where `dE = 2 J2 sum p_i p_j` runs over the diagonal bonds with exactly one endpoint in
+the cluster and `p_i = s_i . r` is the projection on the embedding direction. Those
+projections, not the scalar products `s_i . s_j`, are what the reflection
+`s_i -> s_i - 2 p_i r` changes: it maps `s_i . s_j` to `s_i . s_j - 2 p_i p_j`, so the
+perpendicular components drop out (`p_i p_j = s_i s_j` only for `N = 1`). Only the
+frustrated bonds need the correction — the Fortuin-Kasteleyn weight of a ferromagnetic
+bond is the same before and after a cluster flip, while the Boltzmann factor of a
+frustrated bond is not. The proposal is symmetric (the bond construction uses only bonds
+inside the cluster, whose products the flip leaves unchanged), so the correction keeps
+detailed balance.
+
+# Errors
+Fails for `J <= 0`.
+
 ## `numerical_vector.num_native_spin_on_wolff_step_d1_n4` (Experimental)
 
 ```aevia
@@ -60159,6 +65380,31 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Grows and flips one Wolff cluster; returns its size (`0` when the correction of a
+frustrated `J2` boundary rejects the flip).
+
+A non-zero field `h` is handled by the **ghost-spin** construction: the field couples every
+site to an extra ghost spin `sign(h) e_0` with strength `|h|`, the cluster may absorb the
+ghost, and when it does the cluster's complement is flipped instead (the global symmetry of the
+extended system), which keeps detailed balance.
+
+A ferromagnetic `j2 > 0` joins the bond set like `j`. An antiferromagnetic `j2 < 0` is
+frustrated with respect to the `j` bonds, so it stays out of the bond set: the cluster
+grows on the `j` bonds only and the flip is then accepted with `min(1, exp(-beta dE))`,
+where `dE = 2 J2 sum p_i p_j` runs over the diagonal bonds with exactly one endpoint in
+the cluster and `p_i = s_i . r` is the projection on the embedding direction. Those
+projections, not the scalar products `s_i . s_j`, are what the reflection
+`s_i -> s_i - 2 p_i r` changes: it maps `s_i . s_j` to `s_i . s_j - 2 p_i p_j`, so the
+perpendicular components drop out (`p_i p_j = s_i s_j` only for `N = 1`). Only the
+frustrated bonds need the correction — the Fortuin-Kasteleyn weight of a ferromagnetic
+bond is the same before and after a cluster flip, while the Boltzmann factor of a
+frustrated bond is not. The proposal is symmetric (the bond construction uses only bonds
+inside the cluster, whose products the flip leaves unchanged), so the correction keeps
+detailed balance.
+
+# Errors
+Fails for `J <= 0`.
 
 ## `numerical_vector.num_native_spin_on_wolff_step_d2_n1` (Experimental)
 
@@ -60168,6 +65414,31 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Grows and flips one Wolff cluster; returns its size (`0` when the correction of a
+frustrated `J2` boundary rejects the flip).
+
+A non-zero field `h` is handled by the **ghost-spin** construction: the field couples every
+site to an extra ghost spin `sign(h) e_0` with strength `|h|`, the cluster may absorb the
+ghost, and when it does the cluster's complement is flipped instead (the global symmetry of the
+extended system), which keeps detailed balance.
+
+A ferromagnetic `j2 > 0` joins the bond set like `j`. An antiferromagnetic `j2 < 0` is
+frustrated with respect to the `j` bonds, so it stays out of the bond set: the cluster
+grows on the `j` bonds only and the flip is then accepted with `min(1, exp(-beta dE))`,
+where `dE = 2 J2 sum p_i p_j` runs over the diagonal bonds with exactly one endpoint in
+the cluster and `p_i = s_i . r` is the projection on the embedding direction. Those
+projections, not the scalar products `s_i . s_j`, are what the reflection
+`s_i -> s_i - 2 p_i r` changes: it maps `s_i . s_j` to `s_i . s_j - 2 p_i p_j`, so the
+perpendicular components drop out (`p_i p_j = s_i s_j` only for `N = 1`). Only the
+frustrated bonds need the correction — the Fortuin-Kasteleyn weight of a ferromagnetic
+bond is the same before and after a cluster flip, while the Boltzmann factor of a
+frustrated bond is not. The proposal is symmetric (the bond construction uses only bonds
+inside the cluster, whose products the flip leaves unchanged), so the correction keeps
+detailed balance.
+
+# Errors
+Fails for `J <= 0`.
+
 ## `numerical_vector.num_native_spin_on_wolff_step_d2_n2` (Experimental)
 
 ```aevia
@@ -60175,6 +65446,31 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Grows and flips one Wolff cluster; returns its size (`0` when the correction of a
+frustrated `J2` boundary rejects the flip).
+
+A non-zero field `h` is handled by the **ghost-spin** construction: the field couples every
+site to an extra ghost spin `sign(h) e_0` with strength `|h|`, the cluster may absorb the
+ghost, and when it does the cluster's complement is flipped instead (the global symmetry of the
+extended system), which keeps detailed balance.
+
+A ferromagnetic `j2 > 0` joins the bond set like `j`. An antiferromagnetic `j2 < 0` is
+frustrated with respect to the `j` bonds, so it stays out of the bond set: the cluster
+grows on the `j` bonds only and the flip is then accepted with `min(1, exp(-beta dE))`,
+where `dE = 2 J2 sum p_i p_j` runs over the diagonal bonds with exactly one endpoint in
+the cluster and `p_i = s_i . r` is the projection on the embedding direction. Those
+projections, not the scalar products `s_i . s_j`, are what the reflection
+`s_i -> s_i - 2 p_i r` changes: it maps `s_i . s_j` to `s_i . s_j - 2 p_i p_j`, so the
+perpendicular components drop out (`p_i p_j = s_i s_j` only for `N = 1`). Only the
+frustrated bonds need the correction — the Fortuin-Kasteleyn weight of a ferromagnetic
+bond is the same before and after a cluster flip, while the Boltzmann factor of a
+frustrated bond is not. The proposal is symmetric (the bond construction uses only bonds
+inside the cluster, whose products the flip leaves unchanged), so the correction keeps
+detailed balance.
+
+# Errors
+Fails for `J <= 0`.
 
 ## `numerical_vector.num_native_spin_on_wolff_step_d2_n3` (Experimental)
 
@@ -60184,6 +65480,31 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Grows and flips one Wolff cluster; returns its size (`0` when the correction of a
+frustrated `J2` boundary rejects the flip).
+
+A non-zero field `h` is handled by the **ghost-spin** construction: the field couples every
+site to an extra ghost spin `sign(h) e_0` with strength `|h|`, the cluster may absorb the
+ghost, and when it does the cluster's complement is flipped instead (the global symmetry of the
+extended system), which keeps detailed balance.
+
+A ferromagnetic `j2 > 0` joins the bond set like `j`. An antiferromagnetic `j2 < 0` is
+frustrated with respect to the `j` bonds, so it stays out of the bond set: the cluster
+grows on the `j` bonds only and the flip is then accepted with `min(1, exp(-beta dE))`,
+where `dE = 2 J2 sum p_i p_j` runs over the diagonal bonds with exactly one endpoint in
+the cluster and `p_i = s_i . r` is the projection on the embedding direction. Those
+projections, not the scalar products `s_i . s_j`, are what the reflection
+`s_i -> s_i - 2 p_i r` changes: it maps `s_i . s_j` to `s_i . s_j - 2 p_i p_j`, so the
+perpendicular components drop out (`p_i p_j = s_i s_j` only for `N = 1`). Only the
+frustrated bonds need the correction — the Fortuin-Kasteleyn weight of a ferromagnetic
+bond is the same before and after a cluster flip, while the Boltzmann factor of a
+frustrated bond is not. The proposal is symmetric (the bond construction uses only bonds
+inside the cluster, whose products the flip leaves unchanged), so the correction keeps
+detailed balance.
+
+# Errors
+Fails for `J <= 0`.
+
 ## `numerical_vector.num_native_spin_on_wolff_step_d2_n4` (Experimental)
 
 ```aevia
@@ -60191,6 +65512,31 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Grows and flips one Wolff cluster; returns its size (`0` when the correction of a
+frustrated `J2` boundary rejects the flip).
+
+A non-zero field `h` is handled by the **ghost-spin** construction: the field couples every
+site to an extra ghost spin `sign(h) e_0` with strength `|h|`, the cluster may absorb the
+ghost, and when it does the cluster's complement is flipped instead (the global symmetry of the
+extended system), which keeps detailed balance.
+
+A ferromagnetic `j2 > 0` joins the bond set like `j`. An antiferromagnetic `j2 < 0` is
+frustrated with respect to the `j` bonds, so it stays out of the bond set: the cluster
+grows on the `j` bonds only and the flip is then accepted with `min(1, exp(-beta dE))`,
+where `dE = 2 J2 sum p_i p_j` runs over the diagonal bonds with exactly one endpoint in
+the cluster and `p_i = s_i . r` is the projection on the embedding direction. Those
+projections, not the scalar products `s_i . s_j`, are what the reflection
+`s_i -> s_i - 2 p_i r` changes: it maps `s_i . s_j` to `s_i . s_j - 2 p_i p_j`, so the
+perpendicular components drop out (`p_i p_j = s_i s_j` only for `N = 1`). Only the
+frustrated bonds need the correction — the Fortuin-Kasteleyn weight of a ferromagnetic
+bond is the same before and after a cluster flip, while the Boltzmann factor of a
+frustrated bond is not. The proposal is symmetric (the bond construction uses only bonds
+inside the cluster, whose products the flip leaves unchanged), so the correction keeps
+detailed balance.
+
+# Errors
+Fails for `J <= 0`.
 
 ## `numerical_vector.num_native_spin_on_wolff_step_d3_n1` (Experimental)
 
@@ -60200,6 +65546,31 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Grows and flips one Wolff cluster; returns its size (`0` when the correction of a
+frustrated `J2` boundary rejects the flip).
+
+A non-zero field `h` is handled by the **ghost-spin** construction: the field couples every
+site to an extra ghost spin `sign(h) e_0` with strength `|h|`, the cluster may absorb the
+ghost, and when it does the cluster's complement is flipped instead (the global symmetry of the
+extended system), which keeps detailed balance.
+
+A ferromagnetic `j2 > 0` joins the bond set like `j`. An antiferromagnetic `j2 < 0` is
+frustrated with respect to the `j` bonds, so it stays out of the bond set: the cluster
+grows on the `j` bonds only and the flip is then accepted with `min(1, exp(-beta dE))`,
+where `dE = 2 J2 sum p_i p_j` runs over the diagonal bonds with exactly one endpoint in
+the cluster and `p_i = s_i . r` is the projection on the embedding direction. Those
+projections, not the scalar products `s_i . s_j`, are what the reflection
+`s_i -> s_i - 2 p_i r` changes: it maps `s_i . s_j` to `s_i . s_j - 2 p_i p_j`, so the
+perpendicular components drop out (`p_i p_j = s_i s_j` only for `N = 1`). Only the
+frustrated bonds need the correction — the Fortuin-Kasteleyn weight of a ferromagnetic
+bond is the same before and after a cluster flip, while the Boltzmann factor of a
+frustrated bond is not. The proposal is symmetric (the bond construction uses only bonds
+inside the cluster, whose products the flip leaves unchanged), so the correction keeps
+detailed balance.
+
+# Errors
+Fails for `J <= 0`.
+
 ## `numerical_vector.num_native_spin_on_wolff_step_d3_n2` (Experimental)
 
 ```aevia
@@ -60207,6 +65578,31 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Grows and flips one Wolff cluster; returns its size (`0` when the correction of a
+frustrated `J2` boundary rejects the flip).
+
+A non-zero field `h` is handled by the **ghost-spin** construction: the field couples every
+site to an extra ghost spin `sign(h) e_0` with strength `|h|`, the cluster may absorb the
+ghost, and when it does the cluster's complement is flipped instead (the global symmetry of the
+extended system), which keeps detailed balance.
+
+A ferromagnetic `j2 > 0` joins the bond set like `j`. An antiferromagnetic `j2 < 0` is
+frustrated with respect to the `j` bonds, so it stays out of the bond set: the cluster
+grows on the `j` bonds only and the flip is then accepted with `min(1, exp(-beta dE))`,
+where `dE = 2 J2 sum p_i p_j` runs over the diagonal bonds with exactly one endpoint in
+the cluster and `p_i = s_i . r` is the projection on the embedding direction. Those
+projections, not the scalar products `s_i . s_j`, are what the reflection
+`s_i -> s_i - 2 p_i r` changes: it maps `s_i . s_j` to `s_i . s_j - 2 p_i p_j`, so the
+perpendicular components drop out (`p_i p_j = s_i s_j` only for `N = 1`). Only the
+frustrated bonds need the correction — the Fortuin-Kasteleyn weight of a ferromagnetic
+bond is the same before and after a cluster flip, while the Boltzmann factor of a
+frustrated bond is not. The proposal is symmetric (the bond construction uses only bonds
+inside the cluster, whose products the flip leaves unchanged), so the correction keeps
+detailed balance.
+
+# Errors
+Fails for `J <= 0`.
 
 ## `numerical_vector.num_native_spin_on_wolff_step_d3_n3` (Experimental)
 
@@ -60216,6 +65612,31 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Grows and flips one Wolff cluster; returns its size (`0` when the correction of a
+frustrated `J2` boundary rejects the flip).
+
+A non-zero field `h` is handled by the **ghost-spin** construction: the field couples every
+site to an extra ghost spin `sign(h) e_0` with strength `|h|`, the cluster may absorb the
+ghost, and when it does the cluster's complement is flipped instead (the global symmetry of the
+extended system), which keeps detailed balance.
+
+A ferromagnetic `j2 > 0` joins the bond set like `j`. An antiferromagnetic `j2 < 0` is
+frustrated with respect to the `j` bonds, so it stays out of the bond set: the cluster
+grows on the `j` bonds only and the flip is then accepted with `min(1, exp(-beta dE))`,
+where `dE = 2 J2 sum p_i p_j` runs over the diagonal bonds with exactly one endpoint in
+the cluster and `p_i = s_i . r` is the projection on the embedding direction. Those
+projections, not the scalar products `s_i . s_j`, are what the reflection
+`s_i -> s_i - 2 p_i r` changes: it maps `s_i . s_j` to `s_i . s_j - 2 p_i p_j`, so the
+perpendicular components drop out (`p_i p_j = s_i s_j` only for `N = 1`). Only the
+frustrated bonds need the correction — the Fortuin-Kasteleyn weight of a ferromagnetic
+bond is the same before and after a cluster flip, while the Boltzmann factor of a
+frustrated bond is not. The proposal is symmetric (the bond construction uses only bonds
+inside the cluster, whose products the flip leaves unchanged), so the correction keeps
+detailed balance.
+
+# Errors
+Fails for `J <= 0`.
+
 ## `numerical_vector.num_native_spin_on_wolff_step_d3_n4` (Experimental)
 
 ```aevia
@@ -60223,6 +65644,31 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Grows and flips one Wolff cluster; returns its size (`0` when the correction of a
+frustrated `J2` boundary rejects the flip).
+
+A non-zero field `h` is handled by the **ghost-spin** construction: the field couples every
+site to an extra ghost spin `sign(h) e_0` with strength `|h|`, the cluster may absorb the
+ghost, and when it does the cluster's complement is flipped instead (the global symmetry of the
+extended system), which keeps detailed balance.
+
+A ferromagnetic `j2 > 0` joins the bond set like `j`. An antiferromagnetic `j2 < 0` is
+frustrated with respect to the `j` bonds, so it stays out of the bond set: the cluster
+grows on the `j` bonds only and the flip is then accepted with `min(1, exp(-beta dE))`,
+where `dE = 2 J2 sum p_i p_j` runs over the diagonal bonds with exactly one endpoint in
+the cluster and `p_i = s_i . r` is the projection on the embedding direction. Those
+projections, not the scalar products `s_i . s_j`, are what the reflection
+`s_i -> s_i - 2 p_i r` changes: it maps `s_i . s_j` to `s_i . s_j - 2 p_i p_j`, so the
+perpendicular components drop out (`p_i p_j = s_i s_j` only for `N = 1`). Only the
+frustrated bonds need the correction — the Fortuin-Kasteleyn weight of a ferromagnetic
+bond is the same before and after a cluster flip, while the Boltzmann factor of a
+frustrated bond is not. The proposal is symmetric (the bond construction uses only bonds
+inside the cluster, whose products the flip leaves unchanged), so the correction keeps
+detailed balance.
+
+# Errors
+Fails for `J <= 0`.
 
 ## `numerical_vector.num_native_spin_onsager_energy_per_site` (Experimental)
 
@@ -60262,6 +65708,8 @@ Critical temperature of the 2-D square-lattice Ising model (`k_B = 1`).
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Total energy `-J * (number of equal bonds)`.
+
 ## `numerical_vector.num_native_spin_potts_energy_d2` (Experimental)
 
 ```aevia
@@ -60269,6 +65717,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Total energy `-J * (number of equal bonds)`.
 
 ## `numerical_vector.num_native_spin_potts_energy_d3` (Experimental)
 
@@ -60278,6 +65728,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Total energy `-J * (number of equal bonds)`.
+
 ## `numerical_vector.num_native_spin_potts_heat_bath_probabilities_d1` (Experimental)
 
 ```aevia
@@ -60285,6 +65737,17 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Return the dimensionless heat-bath conditional probabilities in Potts color order for one zero-based site. Read the current neighborhood without changing spins or the seed stream.
+
+Writes the single-site heat-bath conditional probabilities in color order.
+
+The output has one entry per color. Probabilities use shifted log
+weights and include the infinite-coupling limits. The model and RNG
+are read-only.
+
+# Errors
+
+Returns an error for an invalid site, output length, local spin label
+or undefined effective coupling.
 
 ## `numerical_vector.num_native_spin_potts_heat_bath_probabilities_d2` (Experimental)
 
@@ -60294,6 +65757,17 @@ Return the dimensionless heat-bath conditional probabilities in Potts color orde
 
 Return the dimensionless heat-bath conditional probabilities in Potts color order for one zero-based site. Read the current neighborhood without changing spins or the seed stream.
 
+Writes the single-site heat-bath conditional probabilities in color order.
+
+The output has one entry per color. Probabilities use shifted log
+weights and include the infinite-coupling limits. The model and RNG
+are read-only.
+
+# Errors
+
+Returns an error for an invalid site, output length, local spin label
+or undefined effective coupling.
+
 ## `numerical_vector.num_native_spin_potts_heat_bath_probabilities_d3` (Experimental)
 
 ```aevia
@@ -60301,6 +65775,17 @@ Return the dimensionless heat-bath conditional probabilities in Potts color orde
 ```
 
 Return the dimensionless heat-bath conditional probabilities in Potts color order for one zero-based site. Read the current neighborhood without changing spins or the seed stream.
+
+Writes the single-site heat-bath conditional probabilities in color order.
+
+The output has one entry per color. Probabilities use shifted log
+weights and include the infinite-coupling limits. The model and RNG
+are read-only.
+
+# Errors
+
+Returns an error for an invalid site, output length, local spin label
+or undefined effective coupling.
 
 ## `numerical_vector.num_native_spin_potts_heat_bath_sweep_d1` (Experimental)
 
@@ -60310,6 +65795,12 @@ Return the dimensionless heat-bath conditional probabilities in Potts color orde
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Heat-bath sweep in site order, drawing once per site.
+
+Each neighbor contributes one bond, including multiple neighbors
+with the same color. Missing open-boundary neighbors contribute none.
+The geometry retains its usual minimum side length for periodic lattices.
+
 ## `numerical_vector.num_native_spin_potts_heat_bath_sweep_d2` (Experimental)
 
 ```aevia
@@ -60317,6 +65808,12 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Heat-bath sweep in site order, drawing once per site.
+
+Each neighbor contributes one bond, including multiple neighbors
+with the same color. Missing open-boundary neighbors contribute none.
+The geometry retains its usual minimum side length for periodic lattices.
 
 ## `numerical_vector.num_native_spin_potts_heat_bath_sweep_d3` (Experimental)
 
@@ -60326,6 +65823,12 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Heat-bath sweep in site order, drawing once per site.
+
+Each neighbor contributes one bond, including multiple neighbors
+with the same color. Missing open-boundary neighbors contribute none.
+The geometry retains its usual minimum side length for periodic lattices.
+
 ## `numerical_vector.num_native_spin_potts_metropolis_sweep_d1` (Experimental)
 
 ```aevia
@@ -60333,6 +65836,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Metropolis sweep; returns the acceptance rate.
 
 ## `numerical_vector.num_native_spin_potts_metropolis_sweep_d2` (Experimental)
 
@@ -60342,6 +65847,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Metropolis sweep; returns the acceptance rate.
+
 ## `numerical_vector.num_native_spin_potts_metropolis_sweep_d3` (Experimental)
 
 ```aevia
@@ -60349,6 +65856,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Metropolis sweep; returns the acceptance rate.
 
 ## `numerical_vector.num_native_spin_potts_new_d1` (Experimental)
 
@@ -60358,6 +65867,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Creates a Potts model with a random start.
+
+# Errors
+Propagates lattice errors; requires `q >= 2`.
+
 ## `numerical_vector.num_native_spin_potts_new_d2` (Experimental)
 
 ```aevia
@@ -60365,6 +65879,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Creates a Potts model with a random start.
+
+# Errors
+Propagates lattice errors; requires `q >= 2`.
 
 ## `numerical_vector.num_native_spin_potts_new_d3` (Experimental)
 
@@ -60374,6 +65893,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Creates a Potts model with a random start.
+
+# Errors
+Propagates lattice errors; requires `q >= 2`.
+
 ## `numerical_vector.num_native_spin_potts_order_parameter_d1` (Experimental)
 
 ```aevia
@@ -60381,6 +65905,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Order parameter `(q max_s n_s / N - 1)/(q - 1)`.
 
 ## `numerical_vector.num_native_spin_potts_order_parameter_d2` (Experimental)
 
@@ -60390,6 +65916,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Order parameter `(q max_s n_s / N - 1)/(q - 1)`.
+
 ## `numerical_vector.num_native_spin_potts_order_parameter_d3` (Experimental)
 
 ```aevia
@@ -60397,6 +65925,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Order parameter `(q max_s n_s / N - 1)/(q - 1)`.
 
 ## `numerical_vector.num_native_spin_potts_swendsen_wang_step_d1` (Experimental)
 
@@ -60406,6 +65936,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One Swendsen-Wang sweep (`J > 0`); returns the number of clusters.
+
 ## `numerical_vector.num_native_spin_potts_swendsen_wang_step_d2` (Experimental)
 
 ```aevia
@@ -60413,6 +65945,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One Swendsen-Wang sweep (`J > 0`); returns the number of clusters.
 
 ## `numerical_vector.num_native_spin_potts_swendsen_wang_step_d3` (Experimental)
 
@@ -60422,6 +65956,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One Swendsen-Wang sweep (`J > 0`); returns the number of clusters.
+
 ## `numerical_vector.num_native_spin_potts_tempering_new_d1` (Experimental)
 
 ```aevia
@@ -60429,6 +65965,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Creates replicas at the given inverse temperatures.
+
+# Errors
+Propagates lattice errors; requires at least two temperatures and `q >= 2`.
 
 ## `numerical_vector.num_native_spin_potts_tempering_new_d2` (Experimental)
 
@@ -60438,6 +65979,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Creates replicas at the given inverse temperatures.
+
+# Errors
+Propagates lattice errors; requires at least two temperatures and `q >= 2`.
+
 ## `numerical_vector.num_native_spin_potts_tempering_new_d3` (Experimental)
 
 ```aevia
@@ -60445,6 +65991,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Creates replicas at the given inverse temperatures.
+
+# Errors
+Propagates lattice errors; requires at least two temperatures and `q >= 2`.
 
 ## `numerical_vector.num_native_spin_potts_tempering_run_d1` (Experimental)
 
@@ -60454,6 +66005,9 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+`rounds` rounds of (`update` on every replica, then alternating even/odd exchanges
+accepted with probability `min(1, exp((b_k - b_k+1)(E_k - E_k+1)))`).
+
 ## `numerical_vector.num_native_spin_potts_tempering_run_d2` (Experimental)
 
 ```aevia
@@ -60461,6 +66015,9 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+`rounds` rounds of (`update` on every replica, then alternating even/odd exchanges
+accepted with probability `min(1, exp((b_k - b_k+1)(E_k - E_k+1)))`).
 
 ## `numerical_vector.num_native_spin_potts_tempering_run_d3` (Experimental)
 
@@ -60470,6 +66027,9 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+`rounds` rounds of (`update` on every replica, then alternating even/odd exchanges
+accepted with probability `min(1, exp((b_k - b_k+1)(E_k - E_k+1)))`).
+
 ## `numerical_vector.num_native_spin_potts_update_d1` (Experimental)
 
 ```aevia
@@ -60477,6 +66037,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Applies one update of the chosen kind.
 
 ## `numerical_vector.num_native_spin_potts_update_d2` (Experimental)
 
@@ -60486,6 +66048,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Applies one update of the chosen kind.
+
 ## `numerical_vector.num_native_spin_potts_update_d3` (Experimental)
 
 ```aevia
@@ -60493,6 +66057,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Applies one update of the chosen kind.
 
 ## `numerical_vector.num_native_spin_potts_wolff_step_d1` (Experimental)
 
@@ -60502,6 +66068,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One Wolff cluster (`J > 0`); returns its size.
+
 ## `numerical_vector.num_native_spin_potts_wolff_step_d2` (Experimental)
 
 ```aevia
@@ -60510,6 +66078,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+One Wolff cluster (`J > 0`); returns its size.
+
 ## `numerical_vector.num_native_spin_potts_wolff_step_d3` (Experimental)
 
 ```aevia
@@ -60517,6 +66087,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+One Wolff cluster (`J > 0`); returns its size.
 
 ## `numerical_vector.num_native_spin_replica_exchange_wang_landau_d1_n1` (Experimental)
 
@@ -60809,6 +66381,15 @@ Susceptibility per site `beta N (<m^2> - <|m|>^2)` from magnetisation-per-site s
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Creates replicas at the given inverse temperatures (`j = 1`, `j2 = 0`).
+
+The replicas are ordinary [`OnModel`]s, so a next-nearest-neighbour coupling is set by
+assigning `j2` on every replica before the run; the exchange criterion only uses
+[`OnModel::energy`], which includes it.
+
+# Errors
+Propagates lattice errors; requires at least two temperatures.
+
 ## `numerical_vector.num_native_spin_tempering_new_d1_n2` (Experimental)
 
 ```aevia
@@ -60816,6 +66397,15 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Creates replicas at the given inverse temperatures (`j = 1`, `j2 = 0`).
+
+The replicas are ordinary [`OnModel`]s, so a next-nearest-neighbour coupling is set by
+assigning `j2` on every replica before the run; the exchange criterion only uses
+[`OnModel::energy`], which includes it.
+
+# Errors
+Propagates lattice errors; requires at least two temperatures.
 
 ## `numerical_vector.num_native_spin_tempering_new_d1_n3` (Experimental)
 
@@ -60825,6 +66415,15 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Creates replicas at the given inverse temperatures (`j = 1`, `j2 = 0`).
+
+The replicas are ordinary [`OnModel`]s, so a next-nearest-neighbour coupling is set by
+assigning `j2` on every replica before the run; the exchange criterion only uses
+[`OnModel::energy`], which includes it.
+
+# Errors
+Propagates lattice errors; requires at least two temperatures.
+
 ## `numerical_vector.num_native_spin_tempering_new_d1_n4` (Experimental)
 
 ```aevia
@@ -60832,6 +66431,15 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Creates replicas at the given inverse temperatures (`j = 1`, `j2 = 0`).
+
+The replicas are ordinary [`OnModel`]s, so a next-nearest-neighbour coupling is set by
+assigning `j2` on every replica before the run; the exchange criterion only uses
+[`OnModel::energy`], which includes it.
+
+# Errors
+Propagates lattice errors; requires at least two temperatures.
 
 ## `numerical_vector.num_native_spin_tempering_new_d2_n1` (Experimental)
 
@@ -60841,6 +66449,15 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Creates replicas at the given inverse temperatures (`j = 1`, `j2 = 0`).
+
+The replicas are ordinary [`OnModel`]s, so a next-nearest-neighbour coupling is set by
+assigning `j2` on every replica before the run; the exchange criterion only uses
+[`OnModel::energy`], which includes it.
+
+# Errors
+Propagates lattice errors; requires at least two temperatures.
+
 ## `numerical_vector.num_native_spin_tempering_new_d2_n2` (Experimental)
 
 ```aevia
@@ -60848,6 +66465,15 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Creates replicas at the given inverse temperatures (`j = 1`, `j2 = 0`).
+
+The replicas are ordinary [`OnModel`]s, so a next-nearest-neighbour coupling is set by
+assigning `j2` on every replica before the run; the exchange criterion only uses
+[`OnModel::energy`], which includes it.
+
+# Errors
+Propagates lattice errors; requires at least two temperatures.
 
 ## `numerical_vector.num_native_spin_tempering_new_d2_n3` (Experimental)
 
@@ -60857,6 +66483,15 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Creates replicas at the given inverse temperatures (`j = 1`, `j2 = 0`).
+
+The replicas are ordinary [`OnModel`]s, so a next-nearest-neighbour coupling is set by
+assigning `j2` on every replica before the run; the exchange criterion only uses
+[`OnModel::energy`], which includes it.
+
+# Errors
+Propagates lattice errors; requires at least two temperatures.
+
 ## `numerical_vector.num_native_spin_tempering_new_d2_n4` (Experimental)
 
 ```aevia
@@ -60864,6 +66499,15 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Creates replicas at the given inverse temperatures (`j = 1`, `j2 = 0`).
+
+The replicas are ordinary [`OnModel`]s, so a next-nearest-neighbour coupling is set by
+assigning `j2` on every replica before the run; the exchange criterion only uses
+[`OnModel::energy`], which includes it.
+
+# Errors
+Propagates lattice errors; requires at least two temperatures.
 
 ## `numerical_vector.num_native_spin_tempering_new_d3_n1` (Experimental)
 
@@ -60873,6 +66517,15 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Creates replicas at the given inverse temperatures (`j = 1`, `j2 = 0`).
+
+The replicas are ordinary [`OnModel`]s, so a next-nearest-neighbour coupling is set by
+assigning `j2` on every replica before the run; the exchange criterion only uses
+[`OnModel::energy`], which includes it.
+
+# Errors
+Propagates lattice errors; requires at least two temperatures.
+
 ## `numerical_vector.num_native_spin_tempering_new_d3_n2` (Experimental)
 
 ```aevia
@@ -60880,6 +66533,15 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Creates replicas at the given inverse temperatures (`j = 1`, `j2 = 0`).
+
+The replicas are ordinary [`OnModel`]s, so a next-nearest-neighbour coupling is set by
+assigning `j2` on every replica before the run; the exchange criterion only uses
+[`OnModel::energy`], which includes it.
+
+# Errors
+Propagates lattice errors; requires at least two temperatures.
 
 ## `numerical_vector.num_native_spin_tempering_new_d3_n3` (Experimental)
 
@@ -60889,6 +66551,15 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Creates replicas at the given inverse temperatures (`j = 1`, `j2 = 0`).
+
+The replicas are ordinary [`OnModel`]s, so a next-nearest-neighbour coupling is set by
+assigning `j2` on every replica before the run; the exchange criterion only uses
+[`OnModel::energy`], which includes it.
+
+# Errors
+Propagates lattice errors; requires at least two temperatures.
+
 ## `numerical_vector.num_native_spin_tempering_new_d3_n4` (Experimental)
 
 ```aevia
@@ -60896,6 +66567,15 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Creates replicas at the given inverse temperatures (`j = 1`, `j2 = 0`).
+
+The replicas are ordinary [`OnModel`]s, so a next-nearest-neighbour coupling is set by
+assigning `j2` on every replica before the run; the exchange criterion only uses
+[`OnModel::energy`], which includes it.
+
+# Errors
+Propagates lattice errors; requires at least two temperatures.
 
 ## `numerical_vector.num_native_spin_tempering_run_d1_n1` (Experimental)
 
@@ -60905,6 +66585,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Performs `rounds` rounds of (`update` on every replica, then an exchange sweep).
+
+# Errors
+Propagates unsupported update errors.
+
 ## `numerical_vector.num_native_spin_tempering_run_d1_n2` (Experimental)
 
 ```aevia
@@ -60912,6 +66597,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Performs `rounds` rounds of (`update` on every replica, then an exchange sweep).
+
+# Errors
+Propagates unsupported update errors.
 
 ## `numerical_vector.num_native_spin_tempering_run_d1_n3` (Experimental)
 
@@ -60921,6 +66611,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Performs `rounds` rounds of (`update` on every replica, then an exchange sweep).
+
+# Errors
+Propagates unsupported update errors.
+
 ## `numerical_vector.num_native_spin_tempering_run_d1_n4` (Experimental)
 
 ```aevia
@@ -60928,6 +66623,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Performs `rounds` rounds of (`update` on every replica, then an exchange sweep).
+
+# Errors
+Propagates unsupported update errors.
 
 ## `numerical_vector.num_native_spin_tempering_run_d2_n1` (Experimental)
 
@@ -60937,6 +66637,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Performs `rounds` rounds of (`update` on every replica, then an exchange sweep).
+
+# Errors
+Propagates unsupported update errors.
+
 ## `numerical_vector.num_native_spin_tempering_run_d2_n2` (Experimental)
 
 ```aevia
@@ -60944,6 +66649,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Performs `rounds` rounds of (`update` on every replica, then an exchange sweep).
+
+# Errors
+Propagates unsupported update errors.
 
 ## `numerical_vector.num_native_spin_tempering_run_d2_n3` (Experimental)
 
@@ -60953,6 +66663,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Performs `rounds` rounds of (`update` on every replica, then an exchange sweep).
+
+# Errors
+Propagates unsupported update errors.
+
 ## `numerical_vector.num_native_spin_tempering_run_d2_n4` (Experimental)
 
 ```aevia
@@ -60960,6 +66675,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Performs `rounds` rounds of (`update` on every replica, then an exchange sweep).
+
+# Errors
+Propagates unsupported update errors.
 
 ## `numerical_vector.num_native_spin_tempering_run_d3_n1` (Experimental)
 
@@ -60969,6 +66689,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Performs `rounds` rounds of (`update` on every replica, then an exchange sweep).
+
+# Errors
+Propagates unsupported update errors.
+
 ## `numerical_vector.num_native_spin_tempering_run_d3_n2` (Experimental)
 
 ```aevia
@@ -60976,6 +66701,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Performs `rounds` rounds of (`update` on every replica, then an exchange sweep).
+
+# Errors
+Propagates unsupported update errors.
 
 ## `numerical_vector.num_native_spin_tempering_run_d3_n3` (Experimental)
 
@@ -60985,6 +66715,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
+Performs `rounds` rounds of (`update` on every replica, then an exchange sweep).
+
+# Errors
+Propagates unsupported update errors.
+
 ## `numerical_vector.num_native_spin_tempering_run_d3_n4` (Experimental)
 
 ```aevia
@@ -60992,6 +66727,11 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 ```
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+
+Performs `rounds` rounds of (`update` on every replica, then an exchange sweep).
+
+# Errors
+Propagates unsupported update errors.
 
 ## `numerical_vector.num_native_spin_wang_landau_ising_d1` (Experimental)
 
@@ -61754,8 +67494,9 @@ for `row < min(out lengths)`. Rows are processed in blocks of
 [`COLUMN_BLOCK`]: each instruction runs over a whole block before
 the next one, which turns the per-instruction dispatch of the scalar
 interpreter into one dispatch per block and lets the arithmetic
-vectorise. A gather reads the selected input column directly for each
-row. Every row gets exactly the bits [`Tape::eval`] gives it.
+vectorise. Large pure batches split independent row chunks across the
+active CPU pool while respecting cancellation and producing the exact
+same bits as [`Tape::eval`].
 
 ## `numerical_vector.num_native_tape_function_from_tape` (Experimental)
 
@@ -61809,6 +67550,8 @@ one forward pass and one reverse sweep on large input spaces.
 
 Native reverse tape gradient with heterogeneous coordinate units.
 
+Gradient of output `k`, in one value pass and one reverse sweep.
+
 ## `numerical_vector.num_native_tape_hash` (Experimental)
 
 ```aevia
@@ -61847,6 +67590,15 @@ evaluate rows concurrently in the active CPU pool.
 ```
 
 Native Hessian-vector product with a measured coordinate displacement direction; result units E/D_i.
+
+`H_k(inputs) direction` without assembling a Hessian.
+
+Forward-over-reverse AD uses one directional value pass and one reverse
+sweep of dual adjoints. Cost and storage are linear in tape size for
+bounded-arity analytic instructions, independent of input count.
+Opaque calls have no second-order rule: affected entries are NaN.
+Non-smooth functions use the documented hyper-dual conventions.
+An invalid output or direction length returns a vector of NaNs.
 
 ## `numerical_vector.num_native_tape_int_pow` (Experimental)
 
@@ -61901,6 +67653,17 @@ Evaluates every output over an arbitrary number type.
 
 Validate native tape register and output invariants.
 
+Validate SSA dependencies, input/parameter indices, calls and outputs.
+
+Every operand must refer to an earlier instruction; each input and
+parameter must lie within the declared arity. Call argument ranges
+must exist and all outputs must name instructions. Gather offsets are
+checked at runtime, since their values are data dependent.
+
+# Errors
+Returns [`BackendError::Codegen`] describing the invalid instruction or
+output. Native backends call this before generating any memory loads.
+
 ## `numerical_vector.num_native_tape_vjp` (Experimental)
 
 ```aevia
@@ -61908,6 +67671,15 @@ Validate native tape register and output invariants.
 ```
 
 Native VJP; weights have functional/output units and each answer has functional/input units. Positive functional reference specifies the normalized objective measure.
+
+Vector-Jacobian product `weightsᵀ J`, with respect to inputs.
+
+One value pass and one reverse sweep, with storage linear in tape size.
+Parameters are held constant. Repeated outputs and gathered inputs add
+their adjoints. Only selected branches receive adjoints; comparison and
+gather-index derivatives are zero. Opaque calls use the same central
+differences as forward-mode AD. A wrong weight count, invalid selected
+output, or NaN active output returns a vector of NaNs.
 
 ## `numerical_vector.num_native_uniform_dist_cdf` (Experimental)
 
@@ -62015,6 +67787,22 @@ Normalizes a vector to have a magnitude of 1.
 
 # Errors
 Returns an error if the vector is a zero vector.
+
+## `numerical_matrix.num_npy_decode` (Stable)
+
+```aevia
+(String) -> { shape: Tensor<1, Int>, data: Tensor<1, Float> }
+```
+
+Decode hexadecimal NumPy float32 or float64 bytes into shape and row-major Float storage. Accepts either byte order and C/Fortran layouts, up to 262144 values.
+
+## `numerical_matrix.num_npy_encode` (Stable)
+
+```aevia
+(Tensor<1, Int>, Tensor<1, Float>) -> String
+```
+
+Encode shape and dimensionless row-major Float storage as little-endian NumPy float64 bytes represented in lowercase hexadecimal. Accepts scalars and empty arrays, up to 262144 values.
 
 ## `numerical_vector.num_ns_cell_index` (Experimental)
 
@@ -62305,6 +68093,95 @@ Native staggered flow in explicit Length/Time/Mass/Temperature references. Field
 
 Fluid volume fraction of pressure cell `i` (1 without an immersed body).
 
+## `numerical_special.num_number_exact_bigint_crt_garner` (Experimental)
+
+```aevia
+(Tensor<1, Int>, Tensor<1, Int>) -> None | Some(Int)
+```
+
+Solves `x ≡ remainders[i] (mod primes[i])` via Garner's mixed-radix algorithm, returning the unique canonical solution `x` in `[0, prod(primes))`.
+
+## `numerical_special.num_number_exact_bigint_gcd` (Experimental)
+
+```aevia
+(Int, Int) -> Int
+```
+
+Nonnegative greatest common divisor of two arbitrary-precision integers.
+
+## `numerical_special.num_number_exact_bigint_isqrt` (Experimental)
+
+```aevia
+(Int) -> None | Some(Int)
+```
+
+Floor integer square root `floor(sqrt(n))` for nonnegative `n`, or `None` for `n < 0`.
+
+## `numerical_special.num_number_exact_bigint_mod_inverse` (Experimental)
+
+```aevia
+(Int, Int) -> None | Some(Int)
+```
+
+Modular multiplicative inverse of `a` modulo `modulus` in `[0, modulus)`.
+
+Returns `None` if `modulus <= 0` or `gcd(a, modulus) != 1` (except `modulus == 1`,
+which returns `Some(0)`).
+
+## `numerical_special.num_number_exact_bigint_nth_root` (Experimental)
+
+```aevia
+(Int, Int) -> None | Some(Int)
+```
+
+Truncated integer `k`-th root of `n` (`Some(r)` with `r^k` closest to `n` toward zero without exceeding `|n|` in magnitude).
+
+## `numerical_special.num_number_exact_bigint_xgcd` (Experimental)
+
+```aevia
+(Int, Int) -> { item0: Int, item1: Int, item2: Int }
+```
+
+Extended greatest common divisor `(g, x, y)` of arbitrary-precision integers such that `g = gcd(a, b) >= 0` and `a * x + b * y == g`.
+
+## `numerical_special.num_number_exact_jacobi_bigint` (Experimental)
+
+```aevia
+(Int, Int) -> None | Some(Int)
+```
+
+The Jacobi symbol `(a / n)` for odd positive arbitrary-precision `n`.
+
+Returns `None` if `n <= 0` or `n` is even.
+
+## `numerical_special.num_number_exact_strong_lucas_bigint` (Experimental)
+
+```aevia
+(Int) -> Bool
+```
+
+Applies the strong Lucas probable-prime test with Selfridge’s parameters.
+
+Strong Lucas probable-prime test of an odd integer `n > 2` with Selfridge's
+parameters (`D` the first of `5, -7, 9, -11, ...` with Jacobi symbol `-1`,
+`P = 1`, `Q = (1 - D) / 4`): checks `U_d = 0` or `V_{d 2^r} = 0` for some
+`r < s`, where `n + 1 = d 2^s` with `d` odd.
+
+## `numerical_special.num_number_ext_batch_mod_pow` (Experimental)
+
+```aevia
+(Tensor<1, Int>, Tensor<1, Int>, Int) -> Tensor<1, Int>
+```
+
+Batched modular exponentiation computing `bases[i]^exponents[i] mod modulus` in `[0, modulus)`.
+
+Uses division-free Montgomery multiplication (`MontU64`) when `modulus` is odd
+and parallelizes across large batches via [`par::map_indexed`].
+
+# Errors
+Returns [`NumberExtError::ShapeMismatch`] if `bases` and `exponents` differ in
+length, or [`NumberExtError::Domain`] if `modulus <= 0`.
+
 ## `numerical_special.num_number_ext_catalan_exact` (Experimental)
 
 ```aevia
@@ -62327,6 +68204,22 @@ least common multiple of the moduli. Non-coprime moduli are supported.
 # Errors
 The inputs must be nonempty, of the same length, and have positive moduli
 and consistent congruences. The period must fit in `i64`.
+
+## `numerical_special.num_number_ext_crt_bigint` (Experimental)
+
+```aevia
+(Tensor<1, Int>, Tensor<1, Int>) -> { item0: Int, item1: Int }
+```
+
+Arbitrary-precision Chinese Remainder Theorem solving `x ≡ remainders[i] (mod moduli[i])`.
+
+Returns `(first, period)` with `0 <= first < period`, where `period` is the
+least common multiple of `moduli`. Non-coprime moduli are supported.
+
+# Errors
+Returns [`NumberExtError::ShapeMismatch`] if slice lengths differ,
+[`NumberExtError::Empty`] if the slices are empty, or [`NumberExtError::Domain`]
+if any modulus is nonpositive or the congruences are inconsistent.
 
 ## `numerical_special.num_number_ext_mobius` (Experimental)
 
@@ -62440,6 +68333,21 @@ Returns zero when `n < 0` or `k` lies outside `0..=n`.
 # Panics
 Panics when the recurrence's workspace length cannot fit the address space.
 
+## `numerical_special.num_number_ext_totient_sieve` (Experimental)
+
+```aevia
+(Int) -> Tensor<1, Int>
+```
+
+Computes Euler's totient `φ(0)` through `φ(limit)` with a linear sieve.
+
+The value at index zero is zero and `φ(1) = 1`. Uses pooled prime scratch
+storage from [`global_pool`] and runs in `O(limit)` time.
+
+# Errors
+Returns [`NumberExtError::Domain`] when the inclusive length overflows
+`usize` or cannot be reserved in memory.
+
 ## `numerical_special.num_number_ext_xgcd` (Experimental)
 
 ```aevia
@@ -62447,6 +68355,18 @@ Panics when the recurrence's workspace length cannot fit the address space.
 ```
 
 Extended greatest common divisor `(g, x, y)` such that `a * x + b * y == g` and `g >= 0`. Wide outputs represent `gcd(i64::MIN, 0)` without overflow.
+
+## `numerical_special.num_number_theory_carmichael_lambda` (Experimental)
+
+```aevia
+(Int) -> Int
+```
+
+Computes Carmichael's reduced totient function $\lambda(n)$ (`carmichael_lambda(0) = 0`).
+
+$\lambda(n)$ is the exponent of the multiplicative group $(\mathbb{Z}/n\mathbb{Z})^\times$,
+i.e. the smallest positive integer $m$ such that $a^m \equiv 1 \pmod n$ for all
+$\gcd(a, n) = 1$.
 
 ## `numerical_special.num_number_theory_checked_lcm` (Experimental)
 
@@ -62469,6 +68389,43 @@ the modulus. Returns `None` if there is no solution or `p` is outside
 `2..=2^48`. After removing common factors, baby-step giant-step takes
 `O(sqrt p)` time and memory in the worst case.
 
+## `numerical_special.num_number_theory_divisor_count` (Experimental)
+
+```aevia
+(Int) -> Int
+```
+
+Returns the number of positive divisors `\tau(n) = \sigma_0(n)` (`divisor_count(0) = 0`).
+
+## `numerical_special.num_number_theory_divisor_sigma` (Experimental)
+
+```aevia
+(Int, Int) -> Int
+```
+
+Returns the sum of the `k`-th powers of the positive divisors of `n`, `\sigma_k(n) = \sum_{d \mid n} d^k`, saturating at `u128::MAX` (`divisor_sigma(0, _) = 0`).
+
+## `numerical_special.num_number_theory_divisors` (Experimental)
+
+```aevia
+(Int) -> Tensor<1, Int>
+```
+
+Returns all positive divisors of `n` in ascending order (`divisors(0)` is empty).
+
+## `numerical_special.num_number_theory_extended_gcd_u64` (Experimental)
+
+```aevia
+(Int, Int) -> { gcd: Int, x: Int, y: Int }
+```
+
+Given unsigned 64-bit integers a and b, return the exact record {gcd, x, y} satisfying a*x + b*y = gcd(a,b). Coefficients x and y are signed.
+
+The extended Euclidean algorithm on `u64` inputs.
+
+Returns `(g, x, y)` with `g = gcd(a, b)` and `a * x + b * y = g`. The
+Bézout coefficients of `u64` inputs stay within `i128`.
+
 ## `numerical_special.num_number_theory_factorize` (Experimental)
 
 ```aevia
@@ -62487,14 +68444,23 @@ the cofactor is split with Miller–Rabin and Pollard–Brent rho, so every
 (Int, Int) -> Int
 ```
 
-Computes the greatest common divisor (GCD) of two numbers using the Euclidean algorithm.
+Computes the greatest common divisor (GCD) of two numbers using Stein's binary GCD algorithm after one initial Euclidean reduction step.
 
-# Arguments
-* `a` - The first number.
-* `b` - The second number.
+## `numerical_special.num_number_theory_gcd_u128` (Experimental)
 
-# Returns
-The greatest common divisor of `a` and `b`.
+```aevia
+(Int, Int) -> Int
+```
+
+Computes the greatest common divisor (GCD) of two 128-bit unsigned integers using Stein's binary GCD algorithm.
+
+## `numerical_special.num_number_theory_is_prime_bpsw` (Experimental)
+
+```aevia
+(Int) -> Bool
+```
+
+Deterministic Baillie–PSW primality test over `u64` (strong base-2 Miller–Rabin test combined with a strong Lucas probable-prime test using Selfridge's parameters, executed in the Montgomery domain).
 
 ## `numerical_special.num_number_theory_is_prime_miller_rabin` (Experimental)
 
@@ -62502,16 +68468,15 @@ The greatest common divisor of `a` and `b`.
 (Int) -> Bool
 ```
 
-Performs a Miller-Rabin primality test.
+Performs a deterministic Miller-Rabin primality test over `u64` using division-free Montgomery multiplication (`MontU64`).
 
-The first twelve prime bases are a deterministic witness set over the
-entire `u64` range. Divisibility by those primes is checked first.
+## `numerical_special.num_number_theory_is_prime_u128` (Experimental)
 
-# Arguments
-* `n` - The number to test for primality.
+```aevia
+(Int) -> Bool
+```
 
-# Returns
-`true` if `n` is prime, `false` otherwise.
+Primality test for 128-bit unsigned integers combining deterministic `u64` Miller–Rabin with 13-base strong Miller–Rabin and a strong Selfridge Lucas test (Baillie–PSW) for values above `u64::MAX`.
 
 ## `numerical_special.num_number_theory_isqrt` (Experimental)
 
@@ -62520,6 +68485,18 @@ entire `u64` range. Divisibility by those primes is checked first.
 ```
 
 Floor of the square root of `n`, exact for all `u64`.
+
+## `numerical_special.num_number_theory_jacobi_symbol` (Experimental)
+
+```aevia
+(Int, Int) -> Int
+```
+
+Jacobi symbol of a signed 128-bit numerator and a positive odd unsigned 64-bit denominator. Returns -1, 0, or 1.
+
+Computes the Jacobi symbol $\left(\frac{a}{n}\right)$ for an odd positive integer `n`.
+
+Returns `0` when `n == 0`, `n` is even, or $\gcd(a, n) > 1$. For `n == 1`, returns `1`.
 
 ## `numerical_special.num_number_theory_lcm` (Experimental)
 
@@ -62531,6 +68508,34 @@ Computes the least common multiple (LCM) of two numbers.
 
 Returns `0` when either argument is `0`, and `u64::MAX` when the true
 value does not fit (use [`checked_lcm`] to tell the two apart).
+
+## `numerical_special.num_number_theory_legendre_symbol` (Experimental)
+
+```aevia
+(Int, Int) -> Int
+```
+
+Legendre symbol of an unsigned 64-bit numerator and an odd prime denominator. Returns zero when the prime divides the numerator.
+
+Computes the Legendre symbol $\left(\frac{a}{p}\right)$ for an odd prime `p`.
+
+Returns `0` if `p < 3`, `p` is composite, or `p` divides `a`; `1` if `a` is
+a quadratic residue modulo `p`; and `-1` if `a` is a quadratic non-residue.
+
+## `numerical_special.num_number_theory_mod_inv_u64` (Experimental)
+
+```aevia
+(Int, Int) -> Int
+```
+
+Canonical inverse of an unsigned 64-bit integer modulo m >= 2. Returns a domain error when a and m are not coprime.
+
+`a^(-1) mod modulus`, or `None` when `gcd(a, modulus) != 1` or
+`modulus < 2`.
+
+The extended Euclidean algorithm terminates in `O(log modulus)` steps with
+small quotients, which is faster than Fermat exponentiation and works for
+composite moduli.
 
 ## `numerical_special.num_number_theory_mod_inverse` (Experimental)
 
@@ -62556,16 +68561,39 @@ An `Option<i64>` containing the modular inverse if it exists, otherwise `None`.
 
 Computes `(base^exp) % modulus` efficiently using modular exponentiation (binary exponentiation).
 
-`modulus == 0` has no meaning; the function returns `0` for it instead of
-dividing by zero. `x^0 mod 1` is `0`.
+## `numerical_special.num_number_theory_mod_pow_u128` (Experimental)
 
-# Arguments
-* `base` - The base.
-* `exp` - The exponent.
-* `modulus` - The modulus.
+```aevia
+(Int, Int, Int) -> Int
+```
 
-# Returns
-The result of `(base^exp) % modulus`.
+`num_number_theory_mod_pow_u128(base, exponent, modulus)` raises a u128 base to a u128 exponent modulo a positive u128 integer without overflow.
+
+Computes `(base^exp) % modulus` for 128-bit unsigned integers without overflow.
+
+Returns `0` when `modulus <= 1`.
+
+## `numerical_special.num_number_theory_mul_mod` (Experimental)
+
+```aevia
+(Int, Int, Int) -> Int
+```
+
+`num_number_theory_mul_mod(a, b, modulus)` multiplies two u64 values modulo a positive u64 integer without overflow.
+
+`a * b mod m` without overflow. `m` must be non-zero.
+
+## `numerical_special.num_number_theory_mul_mod_u128` (Experimental)
+
+```aevia
+(Int, Int, Int) -> Int
+```
+
+`num_number_theory_mul_mod_u128(a, b, modulus)` multiplies two u128 values modulo a positive u128 integer without overflow.
+
+Computes `(a * b) % m` for 128-bit unsigned integers without overflow.
+
+Returns `0` when `m <= 1`.
 
 ## `numerical_special.num_number_theory_phi` (Experimental)
 
@@ -62615,10 +68643,27 @@ The argument is reduced modulo the prime. Non-residues give `None`.
 (Int) -> Tensor<1, Int>
 ```
 
-Generates primes up to limit using Sieve of Eratosthenes.
+Generates primes up to `limit` using the Sieve of Eratosthenes.
+
+For `limit <= 1_000_000`, reuses the cached prime table in
+[`crate::kernels::reuse::global_pool`]. For larger limits, executes an
+odd-only bit-packed L1-cache-resident segmented sieve leasing scratch
+storage from [`crate::kernels::reuse::global_pool`].
 
 Returns an empty vector when the sieve table cannot be allocated
 (`limit` near `usize::MAX`) instead of aborting.
+
+## `numerical_special.num_number_theory_primitive_root` (Experimental)
+
+```aevia
+(Int) -> Int
+```
+
+Smallest positive primitive root modulo an unsigned 64-bit integer. Returns a domain error if the multiplicative group has no primitive root.
+
+Returns the smallest positive primitive root modulo `n` if the multiplicative
+group $(\mathbb{Z}/n\mathbb{Z})^\times$ is cyclic ($n \in \{2, 4, p^k, 2p^k\}$
+for an odd prime $p$), or `None` otherwise.
 
 ## `numerical_special.num_number_theory_sqrt_mod_prime` (Experimental)
 
@@ -62673,6 +68718,22 @@ integration at the event time.
 
 Dimension-aware adaptive requested-method integration: t0,t1,y0,atol,rtol,h0,h_min,h_max,max_steps,max_evaluations,rhs. Callback derivative has state/time dimensions. Returns accepted times/states/Hermite rates and actual work counters; no method substitution. Adaptive state-dependent stepping does not preserve fixed-step symplecticity.
 
+Integrate the selected RK4 or geometric method forward using step doubling.
+The finite interval uses `start <= end`.
+
+The accepted state is two half steps of the requested method, without
+extrapolation or method substitution. Both the endpoint estimate and the
+midpoint defect of its cubic Hermite extension control acceptance. A trial
+needs a representable time strictly between its endpoints. A bracketed event
+between adjacent times is reported at the later timestamp. Adaptive
+state-dependent step selection does not retain fixed-step symplecticity.
+Gauss–Legendre trials reuse stage storage for the duration of the solve.
+
+# Errors
+Invalid inputs or callback outputs, exhausted attempts/evaluations, a
+tolerance requiring a smaller step than `h_min`, an unsplittable time grid,
+or failed implicit stages.
+
 ## `numerical_callback.num_ode_gauss6_adaptive` (Experimental)
 
 ```aevia
@@ -62680,6 +68741,22 @@ Dimension-aware adaptive requested-method integration: t0,t1,y0,atol,rtol,h0,h_m
 ```
 
 Dimension-aware adaptive requested-method integration: t0,t1,y0,atol,rtol,h0,h_min,h_max,max_steps,max_evaluations,rhs. Callback derivative has state/time dimensions. Returns accepted times/states/Hermite rates and actual work counters; no method substitution. Adaptive state-dependent stepping does not preserve fixed-step symplecticity.
+
+Integrate the selected RK4 or geometric method forward using step doubling.
+The finite interval uses `start <= end`.
+
+The accepted state is two half steps of the requested method, without
+extrapolation or method substitution. Both the endpoint estimate and the
+midpoint defect of its cubic Hermite extension control acceptance. A trial
+needs a representable time strictly between its endpoints. A bracketed event
+between adjacent times is reported at the later timestamp. Adaptive
+state-dependent step selection does not retain fixed-step symplecticity.
+Gauss–Legendre trials reuse stage storage for the duration of the solve.
+
+# Errors
+Invalid inputs or callback outputs, exhausted attempts/evaluations, a
+tolerance requiring a smaller step than `h_min`, an unsplittable time grid,
+or failed implicit stages.
 
 ## `numerical_vector.num_ode_history_eval` (Experimental)
 
@@ -62699,6 +68776,22 @@ Malformed, empty or nonfinite history, nonincreasing times, or an out-of-span qu
 ```
 
 Dimension-aware adaptive requested-method integration: t0,t1,y0,atol,rtol,h0,h_min,h_max,max_steps,max_evaluations,rhs. Callback derivative has state/time dimensions. Returns accepted times/states/Hermite rates and actual work counters; no method substitution. Adaptive state-dependent stepping does not preserve fixed-step symplecticity.
+
+Integrate the selected RK4 or geometric method forward using step doubling.
+The finite interval uses `start <= end`.
+
+The accepted state is two half steps of the requested method, without
+extrapolation or method substitution. Both the endpoint estimate and the
+midpoint defect of its cubic Hermite extension control acceptance. A trial
+needs a representable time strictly between its endpoints. A bracketed event
+between adjacent times is reported at the later timestamp. Adaptive
+state-dependent step selection does not retain fixed-step symplecticity.
+Gauss–Legendre trials reuse stage storage for the duration of the solve.
+
+# Errors
+Invalid inputs or callback outputs, exhausted attempts/evaluations, a
+tolerance requiring a smaller step than `h_min`, an unsplittable time grid,
+or failed implicit stages.
 
 ## `numerical_callback.num_ode_radau5` (Experimental)
 
@@ -62722,6 +68815,22 @@ or [`OdeError::Invalid`].
 ```
 
 Dimension-aware adaptive requested-method integration: t0,t1,y0,atol,rtol,h0,h_min,h_max,max_steps,max_evaluations,rhs. Callback derivative has state/time dimensions. Returns accepted times/states/Hermite rates and actual work counters; no method substitution. Adaptive state-dependent stepping does not preserve fixed-step symplecticity.
+
+Integrate the selected RK4 or geometric method forward using step doubling.
+The finite interval uses `start <= end`.
+
+The accepted state is two half steps of the requested method, without
+extrapolation or method substitution. Both the endpoint estimate and the
+midpoint defect of its cubic Hermite extension control acceptance. A trial
+needs a representable time strictly between its endpoints. A bracketed event
+between adjacent times is reported at the later timestamp. Adaptive
+state-dependent step selection does not retain fixed-step symplecticity.
+Gauss–Legendre trials reuse stage storage for the duration of the solve.
+
+# Errors
+Invalid inputs or callback outputs, exhausted attempts/evaluations, a
+tolerance requiring a smaller step than `h_min`, an unsplittable time grid,
+or failed implicit stages.
 
 ## `numerical_callback.num_ode_rosenbrock23` (Experimental)
 
@@ -62748,6 +68857,22 @@ interpolant of the step ([`OdeSolution::eval`]); events are not supported.
 
 Dimension-aware adaptive requested-method integration: t0,t1,y0,atol,rtol,h0,h_min,h_max,max_steps,max_evaluations,rhs. Callback derivative has state/time dimensions. Returns accepted times/states/Hermite rates and actual work counters; no method substitution. Adaptive state-dependent stepping does not preserve fixed-step symplecticity.
 
+Integrate the selected RK4 or geometric method forward using step doubling.
+The finite interval uses `start <= end`.
+
+The accepted state is two half steps of the requested method, without
+extrapolation or method substitution. Both the endpoint estimate and the
+midpoint defect of its cubic Hermite extension control acceptance. A trial
+needs a representable time strictly between its endpoints. A bracketed event
+between adjacent times is reported at the later timestamp. Adaptive
+state-dependent step selection does not retain fixed-step symplecticity.
+Gauss–Legendre trials reuse stage storage for the duration of the solve.
+
+# Errors
+Invalid inputs or callback outputs, exhausted attempts/evaluations, a
+tolerance requiring a smaller step than `h_min`, an unsplittable time grid,
+or failed implicit stages.
+
 ## `numerical_callback.num_ode_verlet_adaptive` (Experimental)
 
 ```aevia
@@ -62755,6 +68880,59 @@ Dimension-aware adaptive requested-method integration: t0,t1,y0,atol,rtol,h0,h_m
 ```
 
 Dimension-aware adaptive requested-method integration: t0,t1,y0,atol,rtol,h0,h_min,h_max,max_steps,max_evaluations,rhs. Callback derivative has state/time dimensions. Returns accepted times/states/Hermite rates and actual work counters; no method substitution. Adaptive state-dependent stepping does not preserve fixed-step symplecticity.
+
+Integrate the selected RK4 or geometric method forward using step doubling.
+The finite interval uses `start <= end`.
+
+The accepted state is two half steps of the requested method, without
+extrapolation or method substitution. Both the endpoint estimate and the
+midpoint defect of its cubic Hermite extension control acceptance. A trial
+needs a representable time strictly between its endpoints. A bracketed event
+between adjacent times is reported at the later timestamp. Adaptive
+state-dependent step selection does not retain fixed-step symplecticity.
+Gauss–Legendre trials reuse stage storage for the duration of the solve.
+
+# Errors
+Invalid inputs or callback outputs, exhausted attempts/evaluations, a
+tolerance requiring a smaller step than `h_min`, an unsplittable time grid,
+or failed implicit stages.
+
+## `numerical_vector.num_par_dot_fixed` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<1, Float[_]>, Int, Int) -> Float[_]
+```
+
+Deterministic dot product of `a` and `b` over their common prefix `a.len().min(b.len())`.
+
+Each fixed block of `block` elements accumulates with a 4-way unrolled sum, and block sums
+are folded sequentially in block order so serial execution (`grain = usize::MAX`) and
+parallel execution produce bit-identical results.
+
+## `numerical_vector.num_par_norm2_fixed` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Int, Int) -> Float[_]
+```
+
+Deterministic Euclidean (`L2`) norm of `a` using fixed blocks of `block` elements.
+
+Uses [`dot_fixed`] on the ordinary path and falls back to scale-normalized block
+accumulation when intermediate squares overflow or underflow, keeping serial
+(`grain = usize::MAX`) and parallel results bit-identical.
+
+## `numerical_vector.num_par_prefix_sum_f64_fixed` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Int, Int) -> Tensor<1, Float[_]>
+```
+
+Deterministic inclusive prefix sum of `data` using a two-pass fixed-block scan.
+
+Pass 1 scans each contiguous block of `block` elements independently; a sequential scan
+computes exclusive block offsets left-to-right; pass 2 adds each block's offset to its
+elements. Serial (`grain = usize::MAX`) and parallel executions produce bit-identical
+outputs.
 
 ## `numerical_callback.num_pde_advection_adaptive` (Experimental)
 
@@ -63675,6 +69853,16 @@ Moore-Penrose pseudo-inverse through the SVD.
 # Errors
 As [`svd`].
 
+## `numerical_special.num_poincare_disk_distance` (Experimental)
+
+```aevia
+(Complex, Complex) -> Float
+```
+
+Returns the dimensionless hyperbolic geodesic distance between two complex points inside the open Poincare unit disk.
+
+Hyperbolic distance in the Poincaré unit disk `|z| < 1`.
+
 ## `numerical_vector.num_polyfit_normalized` (Experimental)
 
 ```aevia
@@ -63697,6 +69885,26 @@ The coefficients of the least-squares polynomial of `degree`, ascending.
 ```
 
 Portable descending-coefficient Polynomial of normalized x/coordinate_scale. Coefficients retain ordinate dimensions; derivative and integral restore physical scale powers. Arithmetic requires identical coordinate scales. Kind/version, positive scale, finite values and degree/allocation budgets are validated. Native polynomial algorithms are called directly; no pointer or process-local handle is exposed.
+
+## `numerical_vector.num_polynomial_model_compose` (Experimental)
+
+```aevia
+({ format: String, coefficients: Tensor<1, Float[_]>, coordinate_scale: Float[_] }, { format: String, coefficients: Tensor<1, Float[_]>, coordinate_scale: Float[_] }) -> { format: String, coefficients: Tensor<1, Float[_]>, coordinate_scale: Float[_] }
+```
+
+Compose outer(inner(x)). Inner ordinates must have the dimension of the outer coordinate. The result preserves the inner coordinate scale and the outer ordinate dimension. The maximum result degree is 128.
+
+Computes the polynomial composition $P(\text{inner}(x))$ where `self` is $P$.
+
+The arithmetic runs in double-double and the result is rounded to `f64`
+once, at the end. Composition is ill-conditioned whenever the
+intermediate terms $`c_k` Q(x)^k$ are much larger than the result: a `f64`
+Horner and a `f64` Brent-Kung composition then disagree in the last
+digits, not because either is wrong but because they round at different
+points. Carrying the same two algorithms over [`Dd`] drops the
+accumulated error to about `1e-32` relative, so both round to the same
+`f64` and the answer is the correctly-rounded one rather than whichever
+strategy happened to run.
 
 ## `numerical_vector.num_polynomial_model_degree` (Experimental)
 
@@ -63771,6 +69979,23 @@ it computes `P(x) = (...((c_n*x + c_{n-1})*x + c_{n-2})*x + ... + c_1)*x + c_0`.
 # Returns
 The value of the polynomial at `x` as an `f64`.
 
+## `numerical_vector.num_polynomial_model_eval_batch` (Experimental)
+
+```aevia
+({ format: String, coefficients: Tensor<1, Float[_]>, coordinate_scale: Float[_] }, Tensor<1, Float[_]>) -> Tensor<1, Float[_]>
+```
+
+Evaluate a descending-coefficient polynomial at a rank-one tensor of up to 16384 physical coordinates. The output retains the input shape, sample order and polynomial ordinate dimension. An empty tensor produces an empty result.
+
+Evaluates the polynomial at a slice of points `xs` using 4-way unrolled
+Horner evaluation and deterministic multi-core parallelism when the
+workload exceeds the execution threshold.
+
+The points are split into disjoint contiguous chunks; every chunk runs
+the same unrolled kernel, so each output element is produced by exactly
+one call and the result is bit-identical to [`Self::eval`] for every
+thread count.
+
 ## `numerical_vector.num_polynomial_model_find_roots` (Experimental)
 
 ```aevia
@@ -63793,6 +70018,17 @@ if root isolation or refinement fails.
 # Errors
 Returns an error if root isolation or refinement fails.
 
+## `numerical_vector.num_polynomial_model_from_roots` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Float[_]) -> { format: String, coefficients: Tensor<1, Float>, coordinate_scale: Float[_] }
+```
+
+Build a portable polynomial from up to 128 real roots and a positive coordinate scale in the same units. The result is the monic product in x/coordinate_scale with dimensionless coefficients. Repeated roots retain their multiplicity. An empty root tensor gives the constant one.
+
+Builds the monic polynomial $\prod_{i} (x - `r_i`)$ from its roots using a
+balanced divide-and-conquer subproduct tree.
+
 ## `numerical_vector.num_polynomial_model_integral` (Experimental)
 
 ```aevia
@@ -63802,6 +70038,23 @@ Returns an error if root isolation or refinement fails.
 Portable descending-coefficient Polynomial of normalized x/coordinate_scale. Coefficients retain ordinate dimensions; derivative and integral restore physical scale powers. Arithmetic requires identical coordinate scales. Kind/version, positive scale, finite values and degree/allocation budgets are validated. Native polynomial algorithms are called directly; no pointer or process-local handle is exposed.
 
 Returns the indefinite integral of the polynomial (constant of integration = 0).
+
+## `numerical_vector.num_polynomial_model_interpolate_lagrange` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<1, Float[_]>, Float[_]) -> { format: String, coefficients: Tensor<1, Float[_]>, coordinate_scale: Float[_] }
+```
+
+Build a portable polynomial from 1 to 129 distinct coordinates, their ordinates and a positive coordinate scale. Coordinates and scale share units. The model stores descending coefficients in ordinate units for x/coordinate_scale.
+
+Computes the unique interpolating polynomial of degree `< xs.len()` passing
+through `(xs[i], ys[i])` using Newton divided differences converted to the
+descending power basis.
+
+# Errors
+Returns an error if `xs` and `ys` have different lengths, are empty,
+contain non-finite values or duplicate `x` nodes, or the divided differences
+or power-basis coefficients overflow.
 
 ## `numerical_vector.num_polynomial_model_is_zero` (Experimental)
 
@@ -63839,6 +70092,52 @@ Panics if the divisor has no coefficients.
 ```
 
 Portable descending-coefficient Polynomial of normalized x/coordinate_scale. Coefficients retain ordinate dimensions; derivative and integral restore physical scale powers. Arithmetic requires identical coordinate scales. Kind/version, positive scale, finite values and degree/allocation budgets are validated. Native polynomial algorithms are called directly; no pointer or process-local handle is exposed.
+
+## `numerical_vector.num_polynomial_model_mul_fft` (Experimental)
+
+```aevia
+({ format: String, coefficients: Tensor<1, Float[_]>, coordinate_scale: Float[_] }, { format: String, coefficients: Tensor<1, Float[_]>, coordinate_scale: Float[_] }) -> { format: String, coefficients: Tensor<1, Float[_]>, coordinate_scale: Float[_] }
+```
+
+Multiply two descending-coefficient polynomials with the same coordinate reference using the native FFT kernel. Coefficient units multiply.
+
+Multiplies two polynomials using a packed 2-for-1 real-input complex FFT
+backed by [`crate::kernels::reuse::fft_plan`] and [`crate::kernels::reuse::fft_scratch_for`].
+
+Falls back to [`Self::mul_karatsuba`] if any input coefficient is non-finite.
+
+# Accuracy
+
+The FFT accumulates a relative error of a few `f64` epsilons times
+`log n`, where the schoolbook loop stays at one or two epsilons and
+Karatsuba at a handful. That is a deliberate trade for the 1.4–3x
+speedup above the threshold; a caller that needs the tighter
+association should call [`Self::mul_karatsuba`] directly, and
+[`Self::compose`] sidesteps the question by accumulating in
+double-double. `pow` inherits whatever tier its operands select, which
+is why `p.pow(3)` and `p * p * p` agree exactly: both go through this
+same dispatch.
+
+## `numerical_vector.num_polynomial_model_mul_karatsuba` (Experimental)
+
+```aevia
+({ format: String, coefficients: Tensor<1, Float[_]>, coordinate_scale: Float[_] }, { format: String, coefficients: Tensor<1, Float[_]>, coordinate_scale: Float[_] }) -> { format: String, coefficients: Tensor<1, Float[_]>, coordinate_scale: Float[_] }
+```
+
+Multiply two descending-coefficient polynomials with the same coordinate reference using the native Karatsuba kernel. Coefficient units multiply.
+
+Multiplies two polynomials using recursive Karatsuba multiplication
+backed by a reusable scratch buffer from [`crate::kernels::reuse::f64_scratch`].
+
+## `numerical_vector.num_polynomial_model_mul_schoolbook` (Experimental)
+
+```aevia
+({ format: String, coefficients: Tensor<1, Float[_]>, coordinate_scale: Float[_] }, { format: String, coefficients: Tensor<1, Float[_]>, coordinate_scale: Float[_] }) -> { format: String, coefficients: Tensor<1, Float[_]>, coordinate_scale: Float[_] }
+```
+
+Multiply two descending-coefficient polynomials with the same coordinate reference using schoolbook convolution. Coefficient units multiply.
+
+Multiplies two polynomials using the 4-way unrolled $O(n m)$ schoolbook algorithm.
 
 ## `numerical_vector.num_polynomial_model_new` (Experimental)
 
@@ -64623,6 +70922,25 @@ Orthonormal Type-II Discrete Cosine Transform (DCT-II) in `O(n log n)`.
 
 Orthonormal Type-II Discrete Sine Transform (DST-II) in `O(n log n)`.
 
+## `numerical_vector.num_signal_filtfilt` (Experimental)
+
+```aevia
+(Tensor<1, Float>, Tensor<1, Float>, Tensor<1, Float[_]>) -> Tensor<1, Float[_]>
+```
+
+`num_signal_filtfilt(b, a, samples)` filters forward and backward with odd reflection. Coefficients are dimensionless. The result preserves the length and units of the samples.
+
+Checked zero-phase forward-backward digital filter.
+
+Uses odd reflection up to `3 * (max(b.len(), a.len()) - 1)` samples on
+each side, capped at the signal length minus one. Coefficients are
+normalized by `a[0]`. The returned vector has the same length as `x`.
+
+# Errors
+Rejects empty coefficient vectors, a zero leading denominator, an
+undefined steady state, non-finite inputs or intermediate values, and
+an unallocatable output extent.
+
 ## `numerical_vector.num_signal_firwin_bandpass` (Experimental)
 
 ```aevia
@@ -64759,7 +71077,7 @@ Either sign of a finite `beta` produces the same coefficients. For
 (Tensor<1, Float>, Tensor<1, Float>, Tensor<1, Float[_]>) -> Tensor<1, Float[_]>
 ```
 
-Linear FIR/IIR digital filter (`a[0] * y[n] = sum_k b[k]*x[n-k] - sum_{k>=1} a[k]*y[n-k]`).
+Linear FIR/IIR digital filter (`a[0] * y[n] = sum_k b[k]*x[n-k] - sum_{k>=1} a[k]*y[n-k]`) evaluated via Direct Form II Transposed with pooled scratch state.
 
 ## `numerical_vector.num_signal_partial_autocorrelation` (Experimental)
 
@@ -65197,6 +71515,10 @@ Solves `A x = b`.
 
 Computes the n-th Bernoulli number `B_n`.
 
+Orders up to `BERNOULLI_TABLE_MAX` are served from a small bucketed table
+cache (the three buckets are 32, 64 and 128), so repeated polynomial and
+zeta evaluations do not rebuild the recurrence.
+
 ## `numerical_special.num_special_bernoulli_poly` (Experimental)
 
 ```aevia
@@ -65212,6 +71534,14 @@ Computes the n-th Bernoulli polynomial `B_n(x)`.
 ```
 
 Modified Bessel function of the first kind `I_ν(x)`, by `(1/π)∫_0^π e^{x cos θ} cos νθ dθ - (sin νπ/π)∫_0^∞ e^{-x cosh t - νt} dt` (`x < 0` for integer orders by parity).
+
+## `numerical_special.num_special_bessel_i0_batch` (Experimental)
+
+```aevia
+(Tensor<1, Float>) -> Tensor<1, Float>
+```
+
+[`bessel_i0`] over a slice, with the same bit-identical contract as [`gamma_batch`].
 
 ## `numerical_special.num_special_bessel_i0e` (Experimental)
 
@@ -65231,6 +71561,22 @@ Both infinities map to zero and NaN is propagated.
 ```
 
 Bessel function of the first kind `J_ν(x)` for real order `ν` and real `x` (`x < 0` only for integer orders, through `J_n(-x) = (-1)^n J_n(x)`).
+
+## `numerical_special.num_special_bessel_j0_batch` (Experimental)
+
+```aevia
+(Tensor<1, Float>) -> Tensor<1, Float>
+```
+
+[`bessel_j0`] over a slice, with the same bit-identical contract as [`gamma_batch`].
+
+## `numerical_special.num_special_bessel_j1_batch` (Experimental)
+
+```aevia
+(Tensor<1, Float>) -> Tensor<1, Float>
+```
+
+[`bessel_j1`] over a slice, with the same bit-identical contract as [`gamma_batch`].
 
 ## `numerical_special.num_special_bessel_k` (Experimental)
 
@@ -65274,6 +71620,14 @@ Computes the Chebyshev polynomial of the first kind `T_n(x)`.
 ```
 
 Computes the Chebyshev polynomial of the second kind `U_n(x)`.
+
+## `numerical_special.num_special_digamma_batch` (Experimental)
+
+```aevia
+(Tensor<1, Float>) -> Tensor<1, Float>
+```
+
+[`digamma_numerical`] over a slice, with the same bit-identical contract as [`gamma_batch`].
 
 ## `numerical_special.num_special_double_factorial` (Experimental)
 
@@ -65327,6 +71681,22 @@ Prepares a complete integral and its incomplete continuation.
 
 The characteristic or parameter is non-finite or greater than or
 equal to one, or the computed complete integral is unrepresentable.
+
+## `numerical_special.num_special_erf_batch` (Experimental)
+
+```aevia
+(Tensor<1, Float>) -> Tensor<1, Float>
+```
+
+[`erf_numerical`] over a slice, with the same bit-identical contract as [`gamma_batch`].
+
+## `numerical_special.num_special_erfc_batch` (Experimental)
+
+```aevia
+(Tensor<1, Float>) -> Tensor<1, Float>
+```
+
+[`erfc_numerical`] over a slice, with the same bit-identical contract as [`gamma_batch`].
 
 ## `numerical_vector.num_special_exact_chebyshev_t_exact` (Experimental)
 
@@ -65753,6 +72123,18 @@ The polylogarithm `Li_s(z)` for complex `s` and `z`, on the principal branch (cu
 
 The Weber function `E_ν(x) = (1/π) ∫_0^π sin(νθ - x sin θ) dθ` for real `ν` and `x`.
 
+## `numerical_special.num_special_gamma_batch` (Experimental)
+
+```aevia
+(Tensor<1, Float>) -> Tensor<1, Float>
+```
+
+[`gamma_numerical`] over a slice.
+
+Elements are independent and the outputs are collected in input order, so
+the result is bit-identical to calling the scalar function on each element,
+for every thread count.
+
 ## `numerical_special.num_special_generalized_laguerre` (Experimental)
 
 ```aevia
@@ -65837,6 +72219,14 @@ Computes the natural logarithm of the beta function, ln(B(a, b)).
 
 Defined for `a, b > 0`; other arguments give NaN (see
 [`beta_numerical`]).
+
+## `numerical_special.num_special_ln_gamma_batch` (Experimental)
+
+```aevia
+(Tensor<1, Float>) -> Tensor<1, Float>
+```
+
+[`ln_gamma_numerical`] over a slice, with the same bit-identical contract as [`gamma_batch`].
 
 ## `numerical_special.num_special_lower_incomplete_gamma` (Experimental)
 
@@ -66353,6 +72743,103 @@ Tanh-sinh quadrature with an explicit refinement budget.
 A zero budget returns an unconverged estimate. Refinement is capped at 20
 levels to keep its exponentially growing node count bounded.
 
+## `numerical_vector.num_timeseries_integrate` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<1, Float[_]>) -> Tensor<1, Float[_]>
+```
+
+Undo repeated first differences using the original leading samples. Input vectors share a dimension, which the result preserves. The returned length is the sum of the input lengths.
+
+Inverse of [`difference`].
+
+`initial` holds the first `initial.len()` values of the undifferenced
+series, which fixes the integration order. The returned vector has
+`d.len() + initial.len()` entries. An empty `initial` copies `d` unchanged.
+
+## `numerical_vector.num_timeseries_kalman_filter` (Experimental)
+
+```aevia
+(Tensor<2, Float[_]>, Tensor<2, Float>, Tensor<2, Float[_]>, Tensor<2, Float[_]>, Tensor<2, Float[_]>, Tensor<1, Float[_]>, Tensor<2, Float[_]>, Float[_]) -> { filtered: Tensor<2, Float[_]>, predicted: Tensor<2, Float[_]>, covariance: Tensor<3, Float[_]>, loglik: Float }
+```
+
+Filter a homogeneous-dimensional linear Gaussian state-space model with explicit initial mean and covariance. Return filtered means, predicted means, filtered covariance matrices, and log likelihood relative to a positive observation scale.
+
+Runs the Kalman filter for a linear Gaussian state-space model
+
+`x_t = F x_{t-1} + w_t` with `w_t ~ N(0, Q)` and
+`y_t = H x_t + v_t` with `v_t ~ N(0, R)`, started from
+`x_0 ~ N(x0, p0)`.
+
+# Errors
+Returns a diagnostic for invalid shapes, non-finite data, nonsymmetric
+or indefinite model covariances and an innovation covariance that is not
+positive definite. Model covariances may be positive semidefinite.
+
+## `numerical_vector.num_timeseries_kalman_smooth` (Experimental)
+
+```aevia
+(Tensor<2, Float[_]>, Tensor<2, Float>, Tensor<2, Float[_]>, Tensor<2, Float[_]>, Tensor<2, Float[_]>, Tensor<1, Float[_]>, Tensor<2, Float[_]>) -> Tensor<2, Float[_]>
+```
+
+Rauch–Tung–Striebel smoothed state means with explicit initial mean and covariance. State components share a dimension and observations may have a different common dimension. Returns one state per observation.
+
+Rauch–Tung–Striebel smoothed state means.
+
+Runs the filter and then the backward recursion
+`x_t^s = x_t + C_t (x_{t+1}^s - x_{t+1})` with
+`C_t = P_t F' P_{t+1}^{-1}`, returning one smoothed state per observation.
+
+# Errors
+Returns the errors of [`kalman_filter`], plus a message when a predicted
+covariance is singular and the smoother cannot be formed.
+
+## `numerical_vector.num_timeseries_rolling_moments` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Int, Int) -> { mean: Tensor<1, Float[_]>, variance: Tensor<1, Float[_]> }
+```
+
+Compute means and variances for complete windows of a finite real time series. Use ddof 0 for population variance or ddof 1 for sample variance. The result contains empty vectors when the positive window width exceeds the input length. Means retain sample units and variances square them.
+
+Computes a mean and variance for every complete window in `samples`.
+
+Result `i` describes `samples[i..i + window]`. The result is empty when
+`window` exceeds the input length. Pass `ddof = 0` for population variance
+or `ddof = 1` for sample variance. Samples are always required to be finite.
+
+Windows are evaluated in linear time. Windows of at most 16 samples use
+two passes around an anchor when the whole series has the same sign, its
+magnitudes are within a factor of two, and their exponents leave enough
+headroom to square the deviations. For other series and window widths,
+fixed blocks of window starts combine suffix and prefix moments. Large
+inputs use the configured worker pool, with identical arithmetic order
+for any worker count.
+
+# Errors
+Returns [`RollingError`] for a zero window width, `ddof >= window`, a
+non-finite sample, an overflowing variance, or host cancellation.
+
+# Example
+```
+use rssn::kernels::timeseries::rolling::RollingMoment;
+use rssn::kernels::timeseries::rolling::rolling_moments;
+
+assert_eq!(
+    rolling_moments(&[1.0, 3.0, 5.0], 2, 0)?,
+    vec![
+        RollingMoment {
+            mean: 2.0,
+            variance: 1.0
+        },
+        RollingMoment {
+            mean: 4.0,
+            variance: 1.0
+        },
+    ],
+);
+```
+
 ## `numerical_vector.num_topology_betti_number` (Experimental)
 
 ```aevia
@@ -66602,7 +73089,7 @@ Computes the real-input FFT: the `n/2 + 1` non-redundant bins of the DFT of a re
 
 Transpose a dense matrix.
 
-Transpose.
+Transpose (cache-blocked in 32x32 tiles and parallelised for large matrices).
 
 ## `numerical_vector.num_triangle_boundary_vertices` (Experimental)
 
@@ -66801,6 +73288,27 @@ avoid squaring the input's scale in intermediate norm computations.
 Returns an error for invalid shape/options, non-finite input, SVD failure,
 allocation/size overflow or unrepresentable rescaling.
 
+## `numerical_special.num_uhp_distance` (Experimental)
+
+```aevia
+(Complex, Complex) -> Float
+```
+
+Returns the dimensionless hyperbolic geodesic distance between two complex points with positive imaginary parts.
+
+Hyperbolic distance in the upper half-plane `Im(z) > 0`.
+
+## `numerical_special.num_uhp_to_disk` (Experimental)
+
+```aevia
+(Complex) -> Complex
+```
+
+Maps a dimensionless complex point in the open upper half-plane to the open Poincare unit disk. A nonpositive input imaginary part or a result that rounds outside the open disk produces a domain error.
+
+Cayley transform mapping the upper half-plane `{ Im(z) > 0 }` to the unit disk `{ |w| < 1 }`:
+`w = (z - i) / (z + i)`. Returns `None` at `z = -i`.
+
 ## `numerical_stats.num_variance` (Experimental)
 
 ```aevia
@@ -66835,6 +73343,54 @@ Formula: $\mathbf{r}_i = \mathbf{v1}_i + \mathbf{v2}_i$
 
 # Returns
 * `Ok(Vec<f64>)` - The sum of the two vectors.
+
+# Errors
+Returns an error if the vectors have different lengths.
+
+## `numerical_vector.num_vector_axpby` (Experimental)
+
+```aevia
+(Float[_], Tensor<1, Float[_]>, Float[_], Tensor<1, Float[_]>) -> Tensor<1, Float[_]>
+```
+
+`num_vector_axpby(alpha, x, beta, y)` computes alpha*x + beta*y with the native SIMD kernel. Both scaled terms must have the same dimension. Returns a new vector in those units.
+
+Computes `y[i] = alpha * x[i] + beta * y[i]` in place (BLAS-1 AXPBY).
+
+# Errors
+Returns an error if `x` and `y` have different lengths.
+
+## `numerical_vector.num_vector_axpy` (Experimental)
+
+```aevia
+(Float[_], Tensor<1, Float[_]>, Tensor<1, Float[_]>) -> Tensor<1, Float[_]>
+```
+
+`num_vector_axpy(alpha, x, y)` computes alpha*x + y with the native SIMD kernel. The scaled increment and the retained input y must have the same dimension. Returns a new vector.
+
+Computes `y[i] += alpha * x[i]` in place (BLAS-1 AXPY).
+
+# Errors
+Returns an error if `x` and `y` have different lengths.
+
+## `numerical_vector.num_vector_hadamard_div` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<1, Float[_]>) -> Tensor<1, Float[_]>
+```
+
+Computes the element-wise (Hadamard) quotient `v1[i] / v2[i]`.
+
+# Errors
+Returns an error if the vectors have different lengths.
+
+## `numerical_vector.num_vector_hadamard_mul` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<1, Float[_]>) -> Tensor<1, Float[_]>
+```
+
+Computes the element-wise (Hadamard) product `v1[i] * v2[i]`.
 
 # Errors
 Returns an error if the vectors have different lengths.
@@ -66876,6 +73432,16 @@ Formula: $\mathbf{r} = (1 - t)\mathbf{v1} + t\mathbf{v2}$
 
 # Errors
 Returns an error if the vectors have different lengths.
+
+## `numerical_vector.num_vector_outer_product` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<1, Float[_]>) -> Tensor<2, Float[_]>
+```
+
+`num_vector_outer_product(left, right)` returns a row-major matrix with shape [left length, right length] and product units. The result may contain at most 8388608 entries.
+
+Computes the outer product $u v^T$ as a dense matrix of shape `(u.len(), v.len())`.
 
 ## `numerical_vector.num_vector_sub` (Experimental)
 
@@ -67027,6 +73593,26 @@ zero by the threshold, in the same units as `samples`.
 Errors for non-finite data, a negative threshold, an unrepresentable
 signal or unsupported depth or shape.
 
+## `numerical_special.num_weierstrass_invariants_complex` (Experimental)
+
+```aevia
+(Complex, Complex) -> { g2: Complex, g3: Complex }
+```
+
+Computes the Weierstrass invariants g2 and g3 as a named complex record. The dimensionless arguments omega1 and omega2 are nonzero, non-collinear half-periods. An invalid lattice or a nonfinite result produces a domain error.
+
+Weierstrass invariants `(g2, g3)` for half-periods `(omega1, omega2)`.
+
+## `numerical_special.num_weierstrass_p_prime_complex` (Experimental)
+
+```aevia
+(Complex, Complex, Complex) -> Complex
+```
+
+Numerically evaluates the Weierstrass derivative at z. The arguments omega1 and omega2 are nonzero, non-collinear half-periods, so the basic periods are 2*omega1 and 2*omega2. All arguments and the result are dimensionless. A detected lattice pole, an invalid lattice or a nonfinite result produces a domain error.
+
+Weierstrass elliptic derivative `wp'(z; omega1, omega2)` via central complex step or theta.
+
 ## `numerical_stats.num_z_scores` (Experimental)
 
 ```aevia
@@ -67079,6 +73665,8 @@ z = (x - mean) / `std_dev`
 ## `ode.ode_darboux` (Stable)
 
 ```aevia
+(Tensor<1, Dyn<term>>, Tensor<1, Dyn<term>>) -> Tensor<2, Dyn<term>>
+(Tensor<1, Dyn<term>>, Tensor<1, Dyn<term>>, Int) -> Tensor<2, Dyn<term>>
 () -> Dyn<term> with 0... x Dyn<term>
 ```
 
@@ -67384,6 +73972,14 @@ The Shannon entropy of the distribution.
 
 - `orbit_entropy(list(list(1, 1), list(1, 1)))` → `Float`
 
+## `complex.orbit_iterate` (Stable)
+
+```aevia
+(Dyn<term>, Symbol, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`orbit_iterate(f, z, z0, n)`: symbolic `n`-fold iterate `f^{o n}(z0)`.
+
 ## `functional.orthogonal_coefficients` (Stable)
 
 ```aevia
@@ -67461,6 +74057,33 @@ Constructs a 4x4 OpenGL-style orthographic projection matrix from `(left, right,
 ### Examples
 
 - `outer(list(1, 2), list(3, 4))` → `[[Int]]`
+
+## `numeric.pacf` (Stable)
+
+```aevia
+(Tensor<1, Real>, Int) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`pacf(x, max_lag)`: the partial autocorrelation of `x` for lags `1..=max_lag`, by the Durbin–Levinson recursion.
+
+Partial autocorrelation function, from the Durbin–Levinson recursion.
+
+Returns `max_lag + 1` values with `result[0] = 1`; entry `k` is the last
+coefficient of the order-`k` autoregression fitted to the sample
+autocorrelations.
+
+## `numeric.parabolic_cylinder_d_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`parabolic_cylinder_d_complex(nur, nui, zr, zi)`: `list(re, im)` of `D_nu(z)`.
+
+Parabolic cylinder function `D_nu(z)` via asymptotic expansion for large `|z|`
+in `|arg(z)| < 3*pi/4` and `1F1` connection formula with `rgamma` elsewhere.
 
 ## `stats.pareto` (Stable)
 
@@ -67554,6 +74177,7 @@ Constructs a 4x4 OpenGL-style orthographic projection matrix from `(left, right,
 ## `physics.pauli_matrices` (Stable)
 
 ```aevia
+() -> Tensor<3, Dyn<term>>
 () -> Dyn<term>
 ```
 
@@ -67562,6 +74186,7 @@ Constructs a 4x4 OpenGL-style orthographic projection matrix from `(left, right,
 ## `physics.pauli_x` (Stable)
 
 ```aevia
+() -> Tensor<2, Int>
 () -> Dyn<term>
 ```
 
@@ -67570,6 +74195,7 @@ Constructs a 4x4 OpenGL-style orthographic projection matrix from `(left, right,
 ## `physics.pauli_y` (Stable)
 
 ```aevia
+() -> Tensor<2, Dyn<term>>
 () -> Dyn<term>
 ```
 
@@ -67578,6 +74204,7 @@ Constructs a 4x4 OpenGL-style orthographic projection matrix from `(left, right,
 ## `physics.pauli_z` (Stable)
 
 ```aevia
+() -> Tensor<2, Int>
 () -> Dyn<term>
 ```
 
@@ -67743,6 +74370,10 @@ Constructs a 4x4 OpenGL-style orthographic projection matrix from `(left, right,
 
 `pde_order(pde, u)`: highest partial-derivative order of `u` appearing in `pde`.
 
+### Examples
+
+- `pde_order(diff(u(x, y), x) + diff(u(x, y), y), u(x, y))` → `Int`
+
 ## `pde.pde_poisson_integral` (Stable)
 
 ```aevia
@@ -67861,6 +74492,7 @@ Constructs a 4x4 OpenGL-style orthographic projection matrix from `(left, right,
 ## `number_theory.pell` (Stable)
 
 ```aevia
+(Int) -> Tensor<1, Int>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -67927,6 +74559,7 @@ Composes two permutations `p` and `q` (1-based image lists) as `(p * q)(i) = p(q
 ## `discrete.perm_cycles` (Stable)
 
 ```aevia
+(Tensor<1, Int>) -> Tensor<2, Int>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -67935,6 +74568,7 @@ Decomposes permutation `p` into its non-trivial disjoint cycles.
 ## `discrete.perm_group_are_conjugate` (Stable)
 
 ```aevia
+(Tensor<2, Int>, Tensor<1, Int>, Tensor<1, Int>) -> Bool
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -67983,6 +74617,7 @@ Returns generators of the centralizer of permutation `x` in the permutation grou
 ## `discrete.perm_group_class_count` (Stable)
 
 ```aevia
+(Tensor<2, Int>) -> Int
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -68015,6 +74650,7 @@ Finds a permutation `g` in `<gens>` such that `g * x * g^(-1) = y`, or returns `
 ## `discrete.perm_group_contains` (Stable)
 
 ```aevia
+(Tensor<2, Int>, Tensor<1, Int>) -> Bool
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -68031,6 +74667,7 @@ Computes the orders of the derived series `G = G_0 > G_1 > ...` of the group gen
 ## `discrete.perm_group_derived_subgroup` (Stable)
 
 ```aevia
+(Tensor<2, Int>) -> Tensor<2, Int>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -68039,6 +74676,7 @@ Returns generators of the commutator (derived) subgroup `G'` of the group genera
 ## `discrete.perm_group_elements` (Stable)
 
 ```aevia
+(Tensor<2, Int>) -> Tensor<2, Int>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -68063,6 +74701,7 @@ Returns generators of the intersection `<gens> ∩ <hgens>` of two permutation g
 ## `discrete.perm_group_is_abelian` (Stable)
 
 ```aevia
+(Tensor<2, Int>) -> Bool
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -68071,6 +74710,7 @@ Returns `true` if the permutation group generated by `gens` is abelian.
 ## `discrete.perm_group_is_nilpotent` (Stable)
 
 ```aevia
+(Tensor<2, Int>) -> Bool
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -68079,6 +74719,7 @@ Returns `true` if the permutation group generated by `gens` is nilpotent.
 ## `discrete.perm_group_is_normal` (Stable)
 
 ```aevia
+(Tensor<2, Int>, Tensor<2, Int>) -> Bool
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -68087,6 +74728,7 @@ Returns `true` if `<hgens>` is a normal subgroup of `<gens>`.
 ## `discrete.perm_group_is_primitive` (Stable)
 
 ```aevia
+(Tensor<2, Int>) -> Bool
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -68095,6 +74737,7 @@ Returns `true` if `<gens>` acts primitively (transitively with no non-trivial bl
 ## `discrete.perm_group_is_solvable` (Stable)
 
 ```aevia
+(Tensor<2, Int>) -> Bool
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -68103,6 +74746,7 @@ Returns `true` if the permutation group generated by `gens` is solvable.
 ## `discrete.perm_group_is_transitive` (Stable)
 
 ```aevia
+(Tensor<2, Int>) -> Bool
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -68119,6 +74763,7 @@ Computes the orders of the lower central series `G = gamma_1 > gamma_2 > ...` of
 ## `discrete.perm_group_minimal_block_systems` (Stable)
 
 ```aevia
+(Tensor<2, Int>) -> Tensor<3, Int>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -68143,6 +74788,7 @@ Returns generators of the normalizer of `<hgens>` in `<gens>`.
 ## `discrete.perm_group_orbits` (Stable)
 
 ```aevia
+(Tensor<2, Int>) -> Tensor<2, Int>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -68151,6 +74797,7 @@ Returns the orbits of the permutation group generated by `gens` on `1..n`.
 ## `discrete.perm_group_order` (Stable)
 
 ```aevia
+(Tensor<2, Int>) -> Int
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -68175,6 +74822,7 @@ Returns generators of the setwise stabilizer of `points` in `<gens>`.
 ## `discrete.perm_group_stabilizer_order` (Stable)
 
 ```aevia
+(Tensor<2, Int>, Int) -> Int
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -68183,6 +74831,7 @@ Computes the order of the point stabilizer of `i` in the permutation group gener
 ## `discrete.perm_group_strong_generators` (Stable)
 
 ```aevia
+(Tensor<2, Int>) -> Tensor<2, Int>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -68207,6 +74856,7 @@ Computes the inverse permutation `p^(-1)` of a 1-based permutation list `p`.
 ## `discrete.perm_order` (Stable)
 
 ```aevia
+(Tensor<1, Int>) -> Int
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -68215,6 +74865,7 @@ Computes the order (LCM of cycle lengths) of permutation `p`.
 ## `discrete.perm_sign` (Stable)
 
 ```aevia
+(Tensor<1, Int>) -> Int
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -68223,6 +74874,7 @@ Computes the sign (`1` for even, `-1` for odd) of permutation `p`.
 ## `combinatorics.permutation_order` (Stable)
 
 ```aevia
+(Tensor<1, Int>) -> Int
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -68231,6 +74883,7 @@ Computes the sign (`1` for even, `-1` for odd) of permutation `p`.
 ## `combinatorics.permutation_rank` (Stable)
 
 ```aevia
+(Tensor<1, Int>) -> Int
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -68239,6 +74892,7 @@ Computes the sign (`1` for even, `-1` for odd) of permutation `p`.
 ## `combinatorics.permutation_sign` (Stable)
 
 ```aevia
+(Tensor<1, Int>) -> Int
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -68353,6 +75007,29 @@ Constructs a 4x4 OpenGL-style perspective projection matrix from `(fovy, aspect,
 
 `pi`: Archimedes' constant, the ratio of a circle's circumference to its diameter.
 
+`pi` at `prec` bits.
+
+# Errors
+Fails when an exponent leaves the representable range.
+
+## `numeric.pid_tune` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<1, Real>, Symbol, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`pid_tune(num, den, rule, lambda)`: `list(kp, ki, kd)` from a first-order-plus-dead-time model of the plant; `rule` is `ziegler_nichols`, `cohen_coon`, `imc`, `amigo` or `chien_hrones_reswick`.
+
+Tunes a PID controller for `plant` with the selected rule.
+
+`lambda` is the closed-loop time constant of the IMC rule; it is ignored by
+the other rules and defaults to `max(0.1 tau, theta)`.
+
+# Errors
+Returns an error when the plant step response does not identify a finite
+first-order-plus-dead-time model or when `lambda` is not positive.
+
 ## `linalg.pinv` (Stable)
 
 ```aevia
@@ -68386,6 +75063,17 @@ As [`svd`].
 ```
 
 `plasma_frequency(n, e, eps, m)`: plasma angular frequency `sqrt(n e^2 / (eps m))`.
+
+## `numeric.pochhammer_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`pochhammer_complex(zr, zi, wr, wi)`: `list(re, im)` of `(z)_w`.
+
+Complex Pochhammer symbol `(z)_w = Gamma(z + w) / Gamma(z)`.
 
 ## `physics.point_charge_potential` (Stable)
 
@@ -68532,6 +75220,7 @@ Returns the Mulliken labels of the irreducible representations of point group `n
 ## `discrete.point_group_is_crystallographic` (Stable)
 
 ```aevia
+(Symbol) -> Bool
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -68552,6 +75241,7 @@ Returns the integer multiplicities of class function `chi` aligned with `point_g
 ## `discrete.point_group_order` (Stable)
 
 ```aevia
+(Symbol) -> Int
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -68635,6 +75325,7 @@ Returns the character of the polar vector `(x, y, z)` representation in point gr
 ## `complex.poles` (Stable)
 
 ```aevia
+(Dyn<term>, Symbol) -> Tensor<2, Int>
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -68653,6 +75344,17 @@ Returns the character of the polar vector `(x, y, z)` representation in point gr
 ```
 
 `polygamma(n, x)`: `n`-th derivative of the digamma function `psi^(n)(x)`.
+
+## `numeric.polygamma_complex` (Stable)
+
+```aevia
+(Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`polygamma_complex(n, re, im)`: `list(re, im)` of `psi^(n)(z)`.
+
+Complex polygamma function `psi^(n)(z) = d^n/dz^n digamma(z)`.
 
 ## `complex.polygon` (Stable)
 
@@ -68678,6 +75380,34 @@ value is complex in general and `NaN` is returned, except for
 non-positive integer `s`, where `Li_{-n}(z)` is the real rational
 function `z A_n(z)/(1-z)^(n+1)`. At `z = 1` the analytic continuation
 `ζ(s)` is returned (and `+∞` at the pole `s = 1`).
+
+## `numeric.polylog_complex` (Stable)
+
+```aevia
+(Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`polylog_complex(s, re, im)`: `list(re, im)` of `Li_s(z)`.
+
+The polylogarithm `Li_s(z)` for complex `s` and `z`, on the principal
+branch (cut along `[1, ∞)`).
+
+* `|z| <= 1/2`: the defining power series;
+* non-positive integer `s = -n`: the rational function
+  `z A_n(z)/(1-z)^(n+1)` with Eulerian numbers `A_n`;
+* positive integer `s`: the logarithmic (Bernoulli/Hurwitz) continuation
+  for `|z| <= 3/2` and Kummer's inversion relation beyond, so every `z` is
+  covered;
+* real `s >= -15.5` and real `z < 1` outside the series' fast region:
+  the same continuation as [`lerch`] with `a = 1`;
+* other `s`: the logarithmic expansion about `z = 1` for `|ln z| < 4.5`
+  (the expansion is valid for `|ln z| < 2π`, but `ζ(s-k)` overflows
+  `f64` before it converges near that bound);
+* `z = 1`: `ζ(s)` (the analytic continuation, as in `mpmath`).
+
+Outside the stated domain the result is `NaN + NaN i`. Accuracy is about
+`1e-13` for moderate parameters.
 
 ## `stats.polynomial_regression` (Stable)
 
@@ -68705,6 +75435,24 @@ function `z A_n(z)/(1-z)^(n+1)`. At `z = 1` the analytic continuation
 ```
 
 `polynomial_system_roots(system)`: finite roots of a square polynomial system by total-degree homotopy continuation as `list(list(re, im), ...)`.
+
+Solves a square polynomial system by total-degree homotopy continuation.
+
+Solves the square polynomial system `system[i] = 0` (terms of equation
+`i`, exponent vectors with one entry per variable) by total-degree
+homotopy continuation in projective coordinates with a Cauchy endgame
+and path-jumping protection; see the module documentation.
+
+One [`PathEnd`] is returned per start solution (the product of the
+degrees). Regular finite endpoints are Newton-polished; singular finite
+endpoints and endpoints at infinity are classified with their winding
+number. [`HomotopyOptions::precision`] selects double, double-double or
+adaptive extended-precision tracking.
+
+# Errors
+[`RootError::Invalid`] for an empty system, exponent vectors of the wrong
+length, nonfinite coefficients, equations without a positive declared
+degree, or a product of equation degrees above 100 000.
 
 ### Examples
 
@@ -68770,6 +75518,16 @@ function `z A_n(z)/(1-z)^(n+1)`. At `z = 1` the analytic continuation
 For positive real bases, the scalar overload also accepts fractional exponents.
 
 The symbolic overload represents powers as terms and can preserve an exact expression such as `2^(1/2)`.
+
+## `complex.pow_cut` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`pow_cut(z, w, theta0)`: complex power `exp(w * log_cut(z, theta0))` with branch cut along ray `theta0`.
+
+Complex power `exp(w * log_cut(z, theta0))` with branch cut along ray `theta0`.
 
 ## `physics.power` (Stable)
 
@@ -68895,6 +75653,10 @@ Prime numbers strictly below `limit`; negative limits yield an empty list.
 
 `primitive_root(n)`: smallest primitive root modulo `n`, if `(Z/nZ)^*` is cyclic.
 
+Returns the smallest positive primitive root modulo `n` if the multiplicative
+group $(\mathbb{Z}/n\mathbb{Z})^\times$ is cyclic ($n \in \{2, 4, p^k, 2p^k\}$
+for an odd prime $p$), or `None` otherwise.
+
 ## `physics.probability_density` (Stable)
 
 ```aevia
@@ -68947,6 +75709,9 @@ Symbolic bounds can reduce through factorials or a known finite-product formula.
 ## `stats.proportion_z_test` (Stable)
 
 ```aevia
+(Int, Int, Int) -> Tensor<1, Dyn<term>>
+(Int, Int, Symbol) -> Tensor<1, Dyn<term>>
+(Int, Int, Tensor<1, Int>) -> Tensor<1, Dyn<term>>
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -69011,6 +75776,24 @@ Symbolic bounds can reduce through factorials or a known finite-product formula.
 
 - `qp_eq(list(list(1, 0), list(0, 1)), list(0, 0), list(list(1, 1)), list(2))` → `[[Int]]~`
 
+## `numeric.qp_solve` (Stable)
+
+```aevia
+(Tensor<2, Real>, Tensor<1, Real>, Tensor<2, Real>, Tensor<1, Symbol>, Tensor<1, Real>, Tensor<1, Real>) -> { x: Tensor<1, Real>, objective: Real, iterations: Real, active: Tensor<1, Real> }
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`qp_solve(q, c, a, rel, b, bounds)`: `list(x, objective, iterations, active)` minimising `0.5 x'Qx + c'x` subject to `a x (rel) b` and `bounds` (`list(list(lo, hi), ..)`, `inf` for no upper bound).
+
+Solves a convex quadratic program.
+
+# Errors
+Returns an error string when the dimensions disagree, when an entry is not
+finite, when `q` has a negative eigenvalue (a non-convex problem), when the
+problem is infeasible, when a positive semidefinite problem is unbounded
+below on its feasible set, or when the active-set iteration exceeds
+`max_iter`.
+
 ## `linalg.qr` (Stable)
 
 ```aevia
@@ -69033,6 +75816,19 @@ Symbolic bounds can reduce through factorials or a known finite-product formula.
 
 `qr_pivoted_diagonal(a)`: non-increasing absolute diagonal `|R_ii|` from column-pivoted QR of `a`.
 
+Column-pivoted Householder QR (Businger and Golub).
+
+At each step the remaining column of largest norm is brought forward, so
+the diagonal of `R` decreases in magnitude and its decay reveals the
+numerical rank. Column norms are downdated and recomputed when
+cancellation makes the downdate unreliable. Each reflector applies to
+contiguous columns, with large independent column batches running in parallel.
+
+# Errors
+[`LowRankError::Shape`] for inconsistent storage or non-finite entries,
+and [`LowRankError::NoConvergence`] if the resulting factor exceeds the
+representable floating-point range.
+
 ## `numeric.qr_pivoted_permutation` (Stable)
 
 ```aevia
@@ -69042,6 +75838,19 @@ Symbolic bounds can reduce through factorials or a known finite-product formula.
 
 `qr_pivoted_permutation(a)`: 0-based column permutation vector `perm` from column-pivoted QR of `a`.
 
+Column-pivoted Householder QR (Businger and Golub).
+
+At each step the remaining column of largest norm is brought forward, so
+the diagonal of `R` decreases in magnitude and its decay reveals the
+numerical rank. Column norms are downdated and recomputed when
+cancellation makes the downdate unreliable. Each reflector applies to
+contiguous columns, with large independent column batches running in parallel.
+
+# Errors
+[`LowRankError::Shape`] for inconsistent storage or non-finite entries,
+and [`LowRankError::NoConvergence`] if the resulting factor exceeds the
+representable floating-point range.
+
 ## `numeric.qr_pivoted_rank` (Stable)
 
 ```aevia
@@ -69050,6 +75859,19 @@ Symbolic bounds can reduce through factorials or a known finite-product formula.
 ```
 
 `qr_pivoted_rank(a, tol)`: numerical rank of matrix `a` from column-pivoted QR diagonal entries above `tol * max(|R_ii|)`.
+
+Column-pivoted Householder QR (Businger and Golub).
+
+At each step the remaining column of largest norm is brought forward, so
+the diagonal of `R` decreases in magnitude and its decay reveals the
+numerical rank. Column norms are downdated and recomputed when
+cancellation makes the downdate unreliable. Each reflector applies to
+contiguous columns, with large independent column batches running in parallel.
+
+# Errors
+[`LowRankError::Shape`] for inconsistent storage or non-finite entries,
+and [`LowRankError::NoConvergence`] if the resulting factor exceeds the
+representable floating-point range.
 
 ## `number_theory.quadratic_residues` (Stable)
 
@@ -69090,6 +75912,10 @@ Symbolic bounds can reduce through factorials or a known finite-product formula.
 ```
 
 `quantile_hf(data, p, kind)`: sample quantile at probability `p` in `[0, 1]` using Hyndman-Fan definition `kind` (1 to 9).
+
+Sample quantile of `data` at probability `p` using the Hyndman-Fan
+definition `kind` (1..=9; 7 is the NumPy/R default). NaNs are ignored.
+Returns NaN for empty data or an invalid `p`/`kind`.
 
 ## `stats.quantile_of` (Stable)
 
@@ -69413,6 +76239,7 @@ Intersects ray `(origin, dir)` with triangle `(a, b, c)`, returning `list(t, hit
 ## `poly.real_root_intervals` (Stable)
 
 ```aevia
+(Dyn<term>, Symbol) -> Tensor<2, Int>
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -69434,6 +76261,36 @@ Intersects ray `(origin, dir)` with triangle `(a, b, c)`, returning `list(t, hit
 ### Examples
 
 - `reciprocal_lattice_vectors(list(a, 0, 0), list(0, a, 0), list(0, 0, a))` → `[[Expr]]`
+
+## `complex.reconstruct_holomorphic` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`reconstruct_holomorphic(u, x, y)`: constructs holomorphic `u + I*v` from harmonic real part `u(x, y)`.
+
+## `numeric.refine_quality` (Stable)
+
+```aevia
+(Tensor<2, Real>, Tensor<2, Real>, Real, Real) -> { points: Tensor<2, Real>, triangles: Tensor<2, Real> }
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`refine_quality(points, triangles, min_angle, max_area)`: `list(points, triangles)` after Ruppert-style circumcentre insertion until no triangle is below `min_angle` degrees or above `max_area`.
+
+Refines `triangles` until every triangle satisfies an angle and area bound.
+
+`min_angle_deg` is the smallest angle a triangle may have, and `max_area`
+the largest area it may have. New vertices are inserted at circumcentres
+(or at convex-hull edge midpoints when the circumcentre leaves the mesh),
+and the triangulation is rebuilt as a Delaunay mesh after every pass.
+
+# Errors
+
+Returns `Err` when fewer than three points are given, when a triangle index
+is out of range, when `min_angle_deg` is not in `(0, 60)`, or when
+`max_area` is not positive and finite.
 
 ## `discrete.reflect` (Stable)
 
@@ -69504,6 +76361,39 @@ Returns `None` for total internal reflection.
 
 - `refract(list(0, -1, 0), list(0, 1, 0), 0.5)` → `[Float]`
 - `refract(list(1, -0.1, 0), list(0, 1, 0), 1.5)` → `Bool`
+
+## `numeric.reg_beta_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`reg_beta_complex(ar, ai, br, bi, zr, zi)`: `list(re, im)` of `I_z(a, b)`.
+
+Regularized incomplete beta `I_z(a, b) = B_z(a, b) / B(a, b)`.
+
+## `numeric.reg_lower_gamma_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`reg_lower_gamma_complex(ar, ai, zr, zi)`: `list(re, im)` of `P(a, z)`.
+
+Regularized lower incomplete gamma `P(a, z) = gamma(a, z) / Gamma(a)`.
+
+## `numeric.reg_upper_gamma_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`reg_upper_gamma_complex(ar, ai, zr, zi)`: `list(re, im)` of `Q(a, z)`.
+
+Regularized upper incomplete gamma `Q(a, z) = Gamma(a, z) / Gamma(a)`.
 
 ## `physics.relativistic_energy` (Stable)
 
@@ -69596,6 +76486,30 @@ It returns zero at a regular point and for a removable singularity.
 
 It uses a pole calculation or a Laurent expansion and leaves a request unevaluated if the coefficient cannot be determined.
 
+## `complex.residue_at_infinity` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`residue_at_infinity(f, z)`: residue of `f(z)` at `z = infinity`, defined as `residue(-f(1/w)/w^2, w, 0)`.
+
+## `complex.residue_real_integral` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`residue_real_integral(f, x)`: evaluates `int_{-oo}^{oo} f(x) dx` by summing upper half-plane residues.
+
+## `complex.residue_trig_integral` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`residue_trig_integral(f, theta)`: evaluates `int_0^{2*pi} f(theta) dtheta` by unit-circle residue substitution.
+
 ## `logic.restrict` (Stable)
 
 ```aevia
@@ -69623,6 +76537,38 @@ A positive-degree common factor gives zero. The resultant of two nonzero constan
 ```
 
 `rewrite_with(term, rules, vars)`: normalizes `term` to a normal form by exhaustively applying the rewrite `rules` over `vars`.
+
+## `numeric.rgamma_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`rgamma_complex(re, im)`: `list(re, im)` of `1 / Gamma(z)`.
+
+Reciprocal gamma function `1 / Gamma(z)`, which is entire on `C` with
+zeros at the non-positive integers.
+
+## `numeric.rhat` (Stable)
+
+```aevia
+(Tensor<1, Real>) -> Real
+(Dyn<term>) -> Dyn<term>
+```
+
+`rhat(chains)`: the split Gelman–Rubin potential scale reduction of a list of chains of the same parameter; values near 1 indicate the chains have mixed.
+
+Split-Rhat potential scale reduction factor of several chains.
+
+Every chain is cut in half, the two halves are treated as independent
+chains, and the ratio of the pooled variance estimate to the mean
+within-chain variance is returned. Values near one indicate that the chains
+have mixed; values well above one indicate that they disagree.
+
+# Errors
+Returns an error for fewer than two chains, chains of different lengths,
+chains shorter than four draws, or a zero within-chain variance.
 
 ## `geometry.ricci` (Stable)
 
@@ -69664,6 +76610,30 @@ point, or an unrepresentable stencil or result.
 ### Examples
 
 - `riemann(list(list(a^2, 0), list(0, a^2*sin(theta)^2)), list(theta, phi))` → `[[[[Expr]]]]`
+
+## `complex.riemann_genus` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`riemann_genus(n, d)`: topological genus of the superelliptic Riemann surface `w^n = prod_{k=1}^d (z - r_k)` with distinct roots by the Riemann-Hurwitz formula.
+
+## `numeric.riemann_zeta_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`riemann_zeta_complex(re, im)`: `list(re, im)` of `zeta(s)`.
+
+Complex Riemann zeta function `zeta(s)` over the entire complex plane.
+
+
+Uses `eta(s) / (1 - 2^(1 - s))` for `Re(s) >= 0.5`, and the functional
+equation `zeta(s) = 2^s * pi^(s - 1) * sin(pi * s / 2) * Gamma(1 - s) * zeta(1 - s)`
+for `Re(s) < 0.5`.
 
 ## `discrete.rips_filtration` (Stable)
 
@@ -69742,6 +76712,9 @@ Integrates the Rossler system `(p0, dt, n, a, b, c)` for `n` steps of size `dt` 
 ## `discrete.rotation` (Stable)
 
 ```aevia
+(Int) -> Tensor<2, Dyn<term>>
+(Symbol) -> Tensor<2, Dyn<term>>
+(Tensor<1, Int>) -> Tensor<2, Dyn<term>>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -69750,6 +76723,9 @@ Constructs a 3x3 homogeneous 2D rotation matrix by angle `theta`.
 ## `discrete.rotation_2d` (Stable)
 
 ```aevia
+(Int) -> Tensor<2, Dyn<term>>
+(Symbol) -> Tensor<2, Dyn<term>>
+(Tensor<1, Int>) -> Tensor<2, Dyn<term>>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -69763,6 +76739,9 @@ Constructs a 3x3 homogeneous 2D rotation matrix by angle `theta`.
 ## `discrete.rotation_3d_x` (Stable)
 
 ```aevia
+(Int) -> Tensor<2, Dyn<term>>
+(Symbol) -> Tensor<2, Dyn<term>>
+(Tensor<1, Int>) -> Tensor<2, Dyn<term>>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -69775,6 +76754,9 @@ Constructs a 4x4 homogeneous 3D rotation matrix about the x-axis by angle `theta
 ## `discrete.rotation_3d_y` (Stable)
 
 ```aevia
+(Int) -> Tensor<2, Dyn<term>>
+(Symbol) -> Tensor<2, Dyn<term>>
+(Tensor<1, Int>) -> Tensor<2, Dyn<term>>
 (Dyn<term>) -> Dyn<term>
 ```
 
@@ -69821,6 +76803,14 @@ Constructs a 4x4 homogeneous 3D Rodrigues rotation matrix about normalized axis 
 
 `rotational_kinetic_energy(inertia, w)`: rotational kinetic energy `(1/2) I w^2`.
 
+## `complex.rouche_compare` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>, Symbol, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`rouche_compare(f, g, z, center, radius)`: returns `1` if `|f(z)| > |g(z)|` on `|z - center| = radius`, `0` if `|f(z)| < |g(z)|`.
+
 ## `special.round` (Stable)
 
 ```aevia
@@ -69855,9 +76845,6 @@ Constructs a 4x4 homogeneous 3D Rodrigues rotation matrix about normalized axis 
 ```
 
 `rref(A)`: reduced row echelon form of matrix `A`.
-
-Brings `m` (rows of length `cols`) to reduced row echelon form in place,
-drops the zero rows and returns the pivot columns.
 
 ### Examples
 
@@ -69939,6 +76926,7 @@ Computes RSA encryption `m^e mod n` for message `m`, public exponent `e`, and mo
 ## `discrete.rsa_keygen` (Stable)
 
 ```aevia
+(Int, Int, Int) -> Tensor<1, Int>
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -69959,6 +76947,14 @@ Generates an RSA key tuple `list(n, e, d)` from distinct primes `p`, `q` and pub
 ```
 
 `rsolve_z(rec, seq, [ics...])`: solves a linear constant-coefficient recurrence relation `rec` for sequence `seq` via Z-transform.
+
+## `complex.saddle_point_asymptotic` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`saddle_point_asymptotic(g, phi, z, z0, lambda)`: leading saddle-point asymptotic approximation of `int g(z) exp(lambda * phi(z)) dz` near `z0`.
 
 ## `stats.sample_std` (Stable)
 
@@ -70252,6 +77248,7 @@ Computes exact integral homology groups `H_k(K; Z)` for all dimensions `k = 0..d
 ## `discrete.sc_homology_mod` (Stable)
 
 ```aevia
+(sc, Int, Int) -> Int
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -70268,6 +77265,7 @@ Computes the rational matrix of the induced homomorphism `f_* : H_k(K; Q) -> H_k
 ## `discrete.sc_induced_homology_rank` (Stable)
 
 ```aevia
+(sc, sc, Tensor<2, Int>, Int) -> Int
 (Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -70615,6 +77613,7 @@ Constructs the wedge sum `sc_wedge(K, L[, u, v])` by identifying vertex `u` of `
 ## `discrete.scaling` (Stable)
 
 ```aevia
+(Int, Int) -> Tensor<2, Int>
 () -> Dyn<term> with 0... x Dyn<term>
 ```
 
@@ -70680,6 +77679,14 @@ Constructs a 4x4 homogeneous 3D scaling matrix for `(sx, sy, sz)`.
 
 - `schroeder(4)` → `Int`
 
+## `complex.schwarzian_derivative` (Stable)
+
+```aevia
+(Dyn<term>, Symbol) -> Dyn<term>
+```
+
+`schwarzian_derivative(f, z)`: Schwarzian derivative `(f'''/f') - (3/2)*(f''/f')^2`.
+
 ## `physics.schwarzschild_metric` (Stable)
 
 ```aevia
@@ -70724,6 +77731,21 @@ Constructs a 4x4 homogeneous 3D scaling matrix for `(sx, sy, sz)`.
 ```
 
 `sde_wiener(seed, m, steps, h)`: the `steps x m` matrix of seeded Brownian increments `dW[k][j] ~ N(0, h)`, reproducible bit for bit from `seed`.
+
+## `numeric.sdp_solve` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<2, Real>, Tensor<1, Real>, Tensor<2, Real>, Tensor<1, Symbol>, Tensor<1, Real>, Int) -> { x: Tensor<1, Real>, objective: Real, iterations: Real, primal_residual: Real, dual_residual: Real, min_eigenvalue: Real }
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`sdp_solve(c, f0, fs, a, rel, b, max_iter)`: `list(x, objective, iterations, primal_residual, dual_residual, min_eigenvalue)` minimising `c . x` subject to `F_0 + sum x_i F_i >= 0` and the equality rows `a x = b`.
+
+Solves a semidefinite program by SDPAD.
+
+# Errors
+Returns an error string when the dimensions disagree, when an entry is not
+finite, when `max_iter` is zero, or when the `x`-update system is singular.
 
 ## `elementary.sec` (Stable)
 
@@ -70842,6 +77864,16 @@ Constructs a 4x4 homogeneous 3D shear matrix from 6 off-diagonal shear factors.
 - `sign(0)` → `Int`
 - `sign(-7/3)` → `Int`
 
+## `complex.sign_complex` (Stable)
+
+```aevia
+(Dyn<term>) -> Dyn<term>
+```
+
+`sign_complex(z)`: complex signum `z / abs(z)` on the unit circle.
+
+Complex signum `z / |z|`, or `0` if `z == 0`.
+
 ## `discrete.similarity_dimension` (Stable)
 
 ```aevia
@@ -70894,11 +77926,20 @@ Computes the similarity dimension `-ln(N)/ln(r)` for equal contraction ratios, o
 
 `sin(x)`: sine of angle `x` in radians.
 
-`sin z`.
-
 ### Examples
 
 - `sin(0.5)` → `Float`
+
+## `numeric.sin_integral_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`sin_integral_complex(re, im)`: `list(re, im)` of `Si(z)`.
+
+Complex sine and cosine integrals `(Si(z), Ci(z))`.
 
 ## `special.sinc` (Stable)
 
@@ -70928,6 +77969,22 @@ Computes the sinc function sinc(x) = sin(πx) / (πx).
 
 `sinh(x)`: hyperbolic sine `(e^x - e^-x) / 2`.
 
+`sinh(x)` as a ball.
+
+# Errors
+Fails when an exponent leaves the representable range.
+
+## `numeric.sinh_integral_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`sinh_integral_complex(re, im)`: `list(re, im)` of `Shi(z)`.
+
+Complex hyperbolic sine and cosine integrals `(Shi(z), Chi(z))`.
+
 ## `stats.skewness` (Stable)
 
 ```aevia
@@ -70955,6 +78012,7 @@ Returns `NaN` for fewer than three points and `0.0` for constant data.
 ## `lie.sl2_basis` (Stable)
 
 ```aevia
+() -> Tensor<3, Int>
 () -> Dyn<term>
 ```
 
@@ -71088,6 +78146,7 @@ Returns `NaN` for fewer than three points and `0.0` for constant data.
 ## `lie.so3_basis` (Stable)
 
 ```aevia
+() -> Tensor<3, Int>
 () -> Dyn<term>
 ```
 
@@ -71113,6 +78172,21 @@ Returns `NaN` for fewer than three points and `0.0` for constant data.
 ```
 
 `sobolev_h1(f, x, a, b)`: Sobolev `H^1` norm `sqrt(||f||_2^2 + ||f'||_2^2)` on `[a, b]`.
+
+## `numeric.socp_solve` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<2, Real>, Tensor<1, Symbol>, Tensor<1, Real>, Tensor<1, Real>, Tensor<1, Real>, Int) -> { x: Tensor<1, Real>, objective: Real, iterations: Real, primal_residual: Real, dual_residual: Real, gap: Real }
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`socp_solve(c, a, rel, b, cones, bounds, max_iter)`: `list(x, objective, iterations, primal_residual, dual_residual, gap)` of a second-order cone program; each cone is `list(a, b, c, d)` standing for `||A x + b|| <= c . x + d`.
+
+Solves a second-order cone program.
+
+# Errors
+Returns an error string when the dimensions disagree, when an entry is not
+finite, when `max_iter` is zero, or when the KKT system is singular.
 
 ## `solve.solve` (Stable)
 
@@ -71149,6 +78223,7 @@ Returns `NaN` for fewer than three points and `0.0` for constant data.
 ## `solve.solve_complex` (Stable)
 
 ```aevia
+(Dyn<term>, Symbol) -> Tensor<1, Dyn<term>>
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -71736,6 +78811,17 @@ Returns `list(eigenvals(M), eigenvects(M))` for square matrix `M`.
 
 - `spectral_analysis(list(list(2, 0), list(0, 3)))` → `([Int],[(Int,Int,[[Int]])])`
 
+## `numeric.spence_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`spence_complex(re, im)`: `list(re, im)` of `Li_2(1 - z)`.
+
+Spence's dilogarithm `spence(z) = Li_2(1 - z)`.
+
 ## `physics_quantum.spherical_harmonic` (Stable)
 
 ```aevia
@@ -71743,6 +78829,50 @@ Returns `list(eigenvals(M), eigenvects(M))` for square matrix `M`.
 ```
 
 `spherical_harmonic(l, m, theta, phi)`: orthonormal spherical harmonic `Y_l^m(theta, phi)` with the Condon-Shortley phase as an explicit trigonometric expression.
+
+## `numeric.spherical_in_complex` (Stable)
+
+```aevia
+(Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`spherical_in_complex(n, re, im)`: `list(re, im)` of `i_n(z)`.
+
+Modified spherical Bessel function `i_n(z) = sqrt(pi / (2z)) * I_{n + 1/2}(z)`.
+
+## `numeric.spherical_jn_complex` (Stable)
+
+```aevia
+(Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`spherical_jn_complex(n, re, im)`: `list(re, im)` of `j_n(z)`.
+
+Spherical Bessel function `j_n(z) = sqrt(pi / (2z)) * J_{n + 1/2}(z)`.
+
+## `numeric.spherical_kn_complex` (Stable)
+
+```aevia
+(Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`spherical_kn_complex(n, re, im)`: `list(re, im)` of `k_n(z)`.
+
+Modified spherical Bessel function `k_n(z) = sqrt(2 / (pi*z)) * K_{n + 1/2}(z)` (DLMF 10.47.9: `sqrt(pi/(2z)) * K_{n+1/2}(z)`).
+
+## `numeric.spherical_yn_complex` (Stable)
+
+```aevia
+(Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`spherical_yn_complex(n, re, im)`: `list(re, im)` of `y_n(z)`.
+
+Spherical Bessel function `y_n(z) = sqrt(pi / (2z)) * Y_{n + 1/2}(z)`.
 
 ## `pde.spheroidal_eigen` (Stable)
 
@@ -71800,6 +78930,16 @@ Returns `list(eigenvals(M), eigenvects(M))` for square matrix `M`.
 
 `sqrt_branch(z, k)` selects the principal square root for an even integer `k` and its negative for an odd integer `k`.
 
+## `complex.sqrt_cut` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`sqrt_cut(z, theta0)`: square root with branch cut along ray `theta0`.
+
+Square root `sqrt(|z|) * cis(arg_branch(z, theta0) / 2)` with branch cut along ray `theta0`.
+
 ## `number_theory.sqrtmod` (Stable)
 
 ```aevia
@@ -71819,6 +78959,26 @@ Returns `list(eigenvals(M), eigenvects(M))` for square matrix `M`.
 Returns `list(unit, list(list(factor, multiplicity), ...))`. The unit is the leading coefficient. Each factor is monic and square-free, and the factors are pairwise coprime and ordered by increasing multiplicity.
 
 A nonzero constant has an empty factor list. The zero polynomial and coefficients outside the rationals leave the request unevaluated.
+
+## `numeric.ss_transfer` (Stable)
+
+```aevia
+(Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>, Tensor<2, Real>) -> { num: Tensor<1, Real>, den: Tensor<1, Real> }
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`ss_transfer(a, b, c, d)`: `list(num, den)`, the transfer function from the first input to the first output.
+
+Converts a state-space model to one transfer function per input/output
+pair, ordered output-major (output `0` against every input, then output
+`1`, and so on).
+
+The denominator is obtained by the Faddeev-LeVerrier algorithm and the
+numerator from the Markov parameters `C A^k B` plus the feedthrough term.
+
+# Errors
+Returns an error when the model has inconsistent dimensions or the
+polynomial construction fails.
 
 ## `stats.standard_error` (Stable)
 
@@ -71913,6 +79073,18 @@ Computes the sample standard error of the mean (SEM = `std_dev` / sqrt(n)).
 
 `struve_h(nu, z)`: Struve function `H_nu(z)`.
 
+## `numeric.struve_h_complex` (Stable)
+
+```aevia
+(Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`struve_h_complex(nu, re, im)`: `list(re, im)` of `H_nu(z)`.
+
+Complex Struve function `H_nu(z)` via ascending power series (using `rgamma`
+to handle negative half-integer `nu`) and large-`|z|` asymptotic expansion.
+
 ## `pde.struve_l` (Stable)
 
 ```aevia
@@ -71921,6 +79093,17 @@ Computes the sample standard error of the mean (SEM = `std_dev` / sqrt(n)).
 ```
 
 `struve_l(nu, z)`: modified Struve function `L_nu(z)`.
+
+## `numeric.struve_l_complex` (Stable)
+
+```aevia
+(Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`struve_l_complex(nu, re, im)`: `list(re, im)` of `L_nu(z)`.
+
+Complex modified Struve function `L_nu(z) = -i * exp(-i*nu*pi/2) * H_nu(i*z)`.
 
 ## `stats.student_t` (Stable)
 
@@ -71933,6 +79116,7 @@ Computes the sample standard error of the mean (SEM = `std_dev` / sqrt(n)).
 ## `poly.sturm_sequence` (Stable)
 
 ```aevia
+(Dyn<term>, Symbol) -> Tensor<1, Dyn<term>>
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -71949,6 +79133,7 @@ A constant produces a singleton list, including `list(0)` for zero. For example,
 ## `lie.su2_basis` (Stable)
 
 ```aevia
+() -> Tensor<3, Dyn<term>>
 () -> Dyn<term>
 ```
 
@@ -71966,6 +79151,17 @@ A constant produces a singleton list, including `list(0)` for zero. For example,
 ### Examples
 
 - `su_basis(2)` → `[[[Expr]]]`
+
+## `arith.sub` (Stable)
+
+```aevia
+(Real, Real) -> Real
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`sub(a, b)`: the difference `a - b`.
+
+The engine's normal form has no subtraction node: this request is rewritten to `add(a, mul(-1, b))` and prints as `a - b`.
 
 ## `calculus.sum` (Stable)
 
@@ -72077,6 +79273,12 @@ Constructs the symmetric group `S_n` (`n <= 6`) of permutations in lexicographic
 
 `tan(x)`: tangent `sin(x) / cos(x)` of angle `x` in radians.
 
+`tan(x)` as a ball.
+
+# Errors
+Fails where the cosine interval contains zero, or for an argument beyond
+`2^20` in magnitude.
+
 ## `elementary.tanh` (Stable)
 
 ```aevia
@@ -72085,6 +79287,11 @@ Constructs the symmetric group `S_n` (`n <= 6`) of permutations in lexicographic
 ```
 
 `tanh(x)`: hyperbolic tangent `sinh(x) / cosh(x)`.
+
+`tanh(x)` as a ball.
+
+# Errors
+Fails when an exponent leaves the representable range.
 
 ## `logic.tautology` (Stable)
 
@@ -72232,6 +79439,61 @@ Returns the axis and output shape errors of [`tensordot_views`].
 
 - `tensordot(list(list(1, 2), list(3, 4)), list(list(0, 1), list(1, 0)), list(1), list(0))` → `[[Float]]`
 
+## `numeric.tf_bode` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<1, Real>, Tensor<1, Real>) -> { magnitude_db: Tensor<1, Real>, phase_deg: Tensor<1, Real> }
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`tf_bode(num, den, omega)`: `list(magnitude_db, phase_deg)` of the frequency response at `omega`.
+
+Bode data: magnitude in decibels and unwrapped phase in degrees.
+
+# Errors
+Returns an error when a frequency is negative or not finite.
+
+## `numeric.tf_nyquist` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<1, Real>, Tensor<1, Real>) -> { re: Tensor<1, Real>, im: Tensor<1, Real> }
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`tf_nyquist(num, den, omega)`: `list(re, im)` of `G(i omega)` at `omega`.
+
+Nyquist plot points `(Re G(j w), Im G(j w))`.
+
+# Errors
+Returns an error when a frequency is negative or not finite.
+
+## `numeric.tf_poles` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<1, Real>) -> Tensor<2, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`tf_poles(num, den)`: the poles of the transfer function as `list(re, im)` pairs.
+
+Poles: roots of the denominator.
+
+## `numeric.tf_state_space` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<1, Real>) -> { a: Tensor<2, Real>, b: Tensor<2, Real>, c: Tensor<2, Real>, d: Tensor<2, Real> }
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`tf_state_space(num, den)`: `list(a, b, c, d)`, the controllable canonical realisation of the transfer function `num(s)/den(s)` (descending powers).
+
+Converts to a continuous-time state-space model in controllable
+canonical form.
+
+# Errors
+Returns an error when the numerator is improper or the denominator has
+no nonzero leading coefficient.
+
 ## `physics.time_dependent_schrodinger_equation` (Stable)
 
 ```aevia
@@ -72280,6 +79542,29 @@ Returns an error if `point` has the wrong number of components.
 
 - `to_cartesian(polar, list(r, t))` → `[Expr]`
 
+## `complex.to_polar` (Stable)
+
+```aevia
+(Dyn<term>) -> Dyn<term>
+```
+
+`to_polar(z)`: polar coordinates `list(abs(z), arg(z))`.
+
+Polar coordinates `(r, theta)` with `r = |z|` and `theta = arg(z) in (-pi, pi]`.
+
+## `complex.to_riemann_sphere` (Stable)
+
+```aevia
+(Dyn<term>) -> Dyn<term>
+```
+
+`to_riemann_sphere(z)`: stereographic projection `(X, Y, Z)` onto the unit Riemann sphere `S^2`.
+
+Stereographic projection from `C` to the unit Riemann sphere `S^2`.
+
+Maps `0` to `(0, 0, -1)` and `infinity` to `(0, 0, 1)`.
+Uses `1/z` scaling when `|z| > 1` to avoid overflow for huge `|z|`.
+
 ## `discrete.todd_coxeter` (Stable)
 
 ```aevia
@@ -72300,6 +79585,10 @@ Runs Todd-Coxeter coset enumeration on `<gens | relators>` over `subgroup_gens`,
 ```
 
 Computes the index of `subgroup_gens` in the finitely presented group `<gens | relators>` by Todd–Coxeter enumeration. The result counts live cosets with complete inverse transitions.
+
+### Examples
+
+- `todd_coxeter_index(list(a, b), list(list(a, a, a), list(b, b), list(a, b, a, b)), list())` → `Int`
 
 ## `poly.together` (Stable)
 
@@ -72460,6 +79749,8 @@ Constructs a 4x4 homogeneous 3D translation matrix for `(tx, ty, tz)`.
 
 `transpose(A)`: transpose `A^T` of matrix `A`.
 
+Transpose of a rectangular slice-of-rows matrix.
+
 ## `numeric.trimmed_mean` (Stable)
 
 ```aevia
@@ -72504,6 +79795,13 @@ Mean after discarding the fraction `trim` from each tail.
 
 `tt_dense(cores)`: reconstruct dense tensor from a list of tensor-train cores.
 
+Dense conversion with an explicit limit on the output element count.
+Use this when loading cores supplied by another process or when the
+logical tensor may be exponentially larger than its compressed storage.
+
+# Errors
+Returns an error when size exceeds the limit, allocation fails, or arithmetic overflows.
+
 ### Examples
 
 - `tt_dense(list(list(list(list(-0.44721359549995815), list(-0.8944271909999159))), list(list(list(-0.3015113445777635), list(0.30151134457776363), list(-0.904534033733291))), list(list(list(14.832396974191315), list(7.416198487095657)))))` → `[[[Float]]]`
@@ -72544,6 +79842,14 @@ allocation/size overflow or unrepresentable rescaling.
 
 `tucker_dense(core, factors)`: reconstruct dense tensor from Tucker `core` and mode factor matrices.
 
+The dense tensor `core x_1 U_1 .. x_N U_N` of a Tucker model, with
+`factors[k]` of size `n_k x r_k` and `core` of shape `r_1 x .. x r_N`.
+
+# Errors
+Returns an error if the number of factors differs from the rank of the
+core, a factor's column count differs from its core extent, or the result
+would be empty.
+
 ## `number_theory.two_squares` (Stable)
 
 ```aevia
@@ -72575,6 +79881,17 @@ allocation/size overflow or unrepresentable rescaling.
 ```
 
 `unify_expression(expr)`: evaluates and simplifies a dimensional expression `expr` into a unified `quantity(value, unit)`.
+
+## `numeric.upper_gamma_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`upper_gamma_complex(ar, ai, zr, zi)`: `list(re, im)` of upper incomplete gamma `Gamma(a, z)`.
+
+Upper incomplete gamma function `Gamma(a, z) = int_z^oo t^(a-1) e^(-t) dt`.
 
 ## `linalg.vandermonde` (Stable)
 
@@ -72624,6 +79941,7 @@ The variance of the data as an `f64`.
 ## `physics_quantum.variational_ground_state` (Stable)
 
 ```aevia
+(Dyn<term>, Dyn<term>, Symbol, Symbol) -> Tensor<1, Dyn<term>>
 (Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -72670,6 +79988,7 @@ The variance of the data as an `f64`.
 ## `verify.verify_integral` (Stable)
 
 ```aevia
+(Dyn<term>, Symbol, Dyn<term>) -> Bool
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -72942,9 +80261,21 @@ The wedge sum, gluing vertex `vk` of `K` to vertex `vl` of `L`.
 
 `weierstrass_e(L, y, x, p)`: computes the Weierstrass excess function `E = L(x, y, p) - L(x, y, y') - (p - y') * dL/dy'`.
 
+## `numeric.weierstrass_p_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`weierstrass_p_complex(zr, zi, w1r, w1i, w2r, w2i)`: `list(re, im)` of `wp(z; w1, w2)`.
+
+Weierstrass elliptic function `wp(z; omega1, omega2)` via Jacobi theta functions.
+
 ## `lie_structure.weight_multiplicity` (Stable)
 
 ```aevia
+(Symbol, Tensor<1, Int>, Tensor<1, Int>) -> Int
 (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 
@@ -72965,6 +80296,28 @@ The wedge sum, gluing vertex `vk` of `K` to vertex `vl` of `L`.
 - `welch_test(list(a, b, c), list(c, d, a, d), 1/2)` → `[Expr]`
 - `welch_test(list(1.5, 2, 4.5), list(4.5, 3, 1.5, 3), 1/2)` → `[Float]`
 - `welch_test(list(4.1, 5.3, 6.2, 5.9, 4.8, 5.5), list(6.1, 7.2, 5.9, 6.8, 7.5), 0)` → `[Float]`
+
+## `numeric.whittaker_m_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`whittaker_m_complex(kr, ki, mr, mi, zr, zi)`: `list(re, im)` of `M_{kappa, mu}(z)`.
+
+Whittaker function `M_{kappa, mu}(z) = exp(-z/2) * z^(mu + 1/2) * 1F1(mu - kappa + 1/2; 2*mu + 1; z)`.
+
+## `numeric.whittaker_w_complex` (Stable)
+
+```aevia
+(Real, Real, Real, Real, Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`whittaker_w_complex(kr, ki, mr, mi, zr, zi)`: `list(re, im)` of `W_{kappa, mu}(z)`.
+
+Whittaker function `W_{kappa, mu}(z) = exp(-z/2) * z^(mu + 1/2) * U(mu - kappa + 1/2, 2*mu + 1, z)`.
 
 ## `physics.wien_peak_wavelength` (Stable)
 
@@ -73026,6 +80379,22 @@ A point on the boundary has no winding number and leaves the request unevaluated
 Mean after replacing the lowest and highest fraction `trim` by the
 nearest retained values.
 
+## `complex.wirtinger_dz` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`wirtinger_dz(f, z)`: Wirtinger derivative `1/2 * (d/dx - I * d/dy) f(z)`.
+
+## `complex.wirtinger_dzbar` (Stable)
+
+```aevia
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`wirtinger_dzbar(f, z)`: Wirtinger derivative `1/2 * (d/dx + I * d/dy) f(z)` (vanishes for holomorphic `f`).
+
 ## `physics_quantum.wkb_energy` (Stable)
 
 ```aevia
@@ -73057,6 +80426,18 @@ nearest retained values.
 ```
 
 `work_line_integral(F, curve, t, a, b)`: line integral of force field `F` along `curve(t)` for `t in [a, b]`.
+
+## `numeric.wright_omega_complex` (Stable)
+
+```aevia
+(Real, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`wright_omega_complex(re, im)`: `list(re, im)` of `omega(z)`.
+
+Complex Wright omega function `omega(z)` solving `omega + ln(omega) = z`
+on the principal branch (Corless-Jeffrey Halley iteration).
 
 ## `logic.xor` (Stable)
 
@@ -73119,7 +80500,7 @@ nearest retained values.
 
 `zeros(m, n)`: `m x n` zero matrix.
 
-The zero vector of length `n`.
+Zero matrix with `rows` rows and `cols` columns.
 
 ### Examples
 
@@ -73128,6 +80509,7 @@ The zero vector of length `n`.
 ## `complex.zeros_of` (Stable)
 
 ```aevia
+(Dyn<term>, Symbol) -> Tensor<2, Int>
 (Dyn<term>, Dyn<term>) -> Dyn<term>
 ```
 

@@ -14,10 +14,10 @@ The phase angle of a complex number in radians, in (-pi, pi].
 
 **Signature:** `arg : Complex[d] -> Real[1]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `arg : (Dyn<term>) -> Dyn<term>`
 
-**Dimensions:** the result is dimensionless
+**Dimensions:** the result is an angle (dimensionless)
 
 **Examples:**
 ```text
@@ -31,13 +31,13 @@ arg(complex(0, 1))
 let complex = complex
 ```
 
-complex(re, im) builds a complex number from its real and imaginary parts.
+Builds a complex number from real and imaginary parts with a common dimension.
 
-**Signature:** `complex : (Real[1], Real[1]) -> Complex[1]`
+**Signature:** `complex : (Real[d], Real[d]) -> Complex[d]`
 
 **Examples:**
 ```text
-complex(1, 2)
+complex(3 m, 400 cm)
 ```
 
 *Source: Aevia standard library guide.*
@@ -142,7 +142,7 @@ Trigonometric function.
 
 **Signature:** `cos : Complex[1] -> Complex[1]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `cos : (Real) -> Real`
 - `cos : (Dyn<term>) -> Dyn<term>`
 
@@ -167,7 +167,7 @@ The imaginary part of a complex number.
 
 **Signature:** `im : Complex[d] -> Real[d]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `im : (Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** the result has the dimension of argument 1
@@ -206,7 +206,7 @@ The real part of a complex number.
 
 **Signature:** `re : Complex[d] -> Real[d]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `re : (Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** the result has the dimension of argument 1

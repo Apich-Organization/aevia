@@ -56,7 +56,7 @@ defint(f, a, b) is the exact definite integral of f from a to b, as a Result: Er
 
 **Signature:** `defint : (Real[d] -> Real[e], Real[d], Real[d]) -> Result<Real[e*d], MathError>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `defint : (Dyn<term>, Symbol, Dyn<term>, Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** argument 1 multiplied by argument 2
@@ -224,7 +224,7 @@ The Laplacian of a scalar field at a point: the sum of its second partial deriva
 
 **Signature:** `laplacian : ((Tensor<1, Real[d]> -> Real[e]), Tensor<1, Real[d]>) -> Real[e/d^2]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `laplacian : (Dyn<term>, Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** kernel rule `DiffN { f: 0, x: 1, n: 2 }`
@@ -247,7 +247,7 @@ limit(f, x) is the limit of f as its argument approaches x, as a Result; use oo 
 
 **Signature:** `limit : (Real[d] -> Real[e], Real[d]) -> Result<Real[e], MathError>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `limit : () -> Dyn<term> with 0... x Dyn<term>`
 
 **Dimensions:** the result has the dimension of argument 1
@@ -288,7 +288,7 @@ product(f, a, b) is the exact product of f(k) for k from a to b, both integers; 
 
 **Signature:** `product : (Real[1] -> Real[1], Real[1], Real[1]) -> Real[1]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `product : (Dyn<term>, Symbol, Dyn<term>, Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** kernel rule `ProductOver { f: 0, index: 1 }`

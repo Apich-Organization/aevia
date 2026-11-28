@@ -243,8 +243,9 @@ RSSN 拥有数值算法，包括精确整数/有理数、复数、张量收缩�
 - `features.jit_branch = false`：含 `if`/`match` 的函数不 JIT；
 - `features.jit_index = false`：含张量索引的函数不 JIT。
 
-满足门控后，还需：函数只含 `Float` 标量、算术、初等函数（按 flag 允许 `if`/索引）；被调用超过阈值（默认 1000 次）
-或显式 `@jit`；输入/输出类型固定（无符号、无 `Dyn`、无记录/变体）。
+默认 Core IR 策略会在符合条件的函数进入 2,000 次后尝试原生编译。候选函数必须是纯函数、无捕获，且经过静态
+检查，参数与返回值均为固定的无量纲 `Float`、`Bool` 或 `Int`。显式 `@jit` 可以跳过预热；`--backend ir`
+只尝试显式标注的函数，`--backend ast` 使用参考解释器。带取消检查的执行走解释器。
 
 ### 9.6.2 流程
 
@@ -269,8 +270,9 @@ RSSN 拥有数值算法，包括精确整数/有理数、复数、张量收缩�
 - JIT 结果与解释器 MUST 逐位一致；不能保证一致的情形 MUST bail，不一致是 bug。
 - `map_floats`（设备接缝）仍用直线 tape 降级，因为 GPU 需要无控制流的程序。
 
-可选构建：`cargo build -p aevia-cli --features jit` 启用 RSSN 的 Cranelift 后端（需 Rust 1.100+）；默认关闭，
-`@jit` 报 `E1001`。参考测试 `tests/jit_native.aev`。
+默认构建包含 Cranelift、wgpu 与 NumPy `.npy` 支持。用 `aevia devices` 查看当前构建和设备。
+精简构建可使用 `cargo build -p aevia-cli --no-default-features`。此时普通函数仍可解释执行，
+显式 `@jit` 报 `E1001("core.jit")`。参考测试 `tests/jit_native.aev`。
 
 ### 9.6.4 设备目标
 

@@ -1,0 +1,29 @@
+## Bound the roots of a polynomial in a dimensionless coordinate.
+import Rssn_numerical_vector as Polynomials
+
+import Rssn_numerical_special as Special
+
+let annulus = Polynomials.num_enestrom_kakeya_bounds([1.0 kg, 2.0 kg, 4.0 kg])
+
+let constant = complex(0.0 kg, 0.0 kg)
+
+let linear = complex(-4.0 kg, 0.0 kg)
+
+let quadratic = complex(1.0 kg, 0.0 kg)
+
+let coefficients = [constant, linear, quadratic]
+
+let cauchy = Polynomials.num_cauchy_sharp_root_bound(coefficients)
+
+let growth = Special.num_koebe_growth_bounds(0.5)
+
+fn main(): IO Unit = do
+    println("Positive-coefficient annulus: {annulus}")
+    println("Cauchy radius for z(z - 4): {cauchy}")
+    println("Koebe growth bounds: {growth}")
+
+test "a common coefficient dimension cancels from the annulus" = annulus.lower == 0.5 && annulus.upper == 0.5
+
+test "zero is one root and the Cauchy radius also encloses the root at four" = approx_eq(cauchy, 4.0, 1e-14)
+
+test "the Koebe growth interval has upper bound two at radius one half" = growth.upper == 2.0

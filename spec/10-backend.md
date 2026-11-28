@@ -48,7 +48,7 @@ let answer = s.compute(diff(sin(x) * cos(x), x), &Config::new())?;
 - `Config` 指定规则集、目标相位（`Symbolic`/`Numeric`）、绑定、假设、预算、量纲模式、量纲假设、自定义基量纲。
 - `compute` 把请求复制到模板图的克隆中，运行 e-graph 重写，抽取答案，再导入回会话。`Answer` 含 `term`、
   `value`、`error`、`reduced`、`dimension`、`diagnostics`、`report`。
-- `Term::eval(bindings)` 不重写，直接数值求值；`Term::compile(inputs)` 编译闭式（`jit` feature 用 Cranelift）；
+- `Term::eval(bindings)` 直接数值求值。`Term::compile(inputs)` 使用当前 RSSN 后端编译闭式；
   `Term::as_tensor()` 把嵌套 `list` 项转成 `(shape, Vec<f64>)`；`to_latex()`/`to_typst()`/`to_pretty()` 排版。
 - `sim::scenario::run(name, json)` 运行仿真；`sim::scenario::SCENARIOS` 是场景名的唯一来源（当前 29 个）。
 - `Session::register_unit(UnitDef)` 注册单位；`Session::manifest()` 用 `KernelManifest::build_with_units`，
@@ -342,8 +342,22 @@ pub fn kernel() -> Rc<Kernel>;   // 当前线程的会话，首次使用时创�
 
 ### 10.6.4 JIT
 
-`Term::compile` 把闭式 `Float` 表达式编译成函数；Aevia 的热点函数走这条路径。`TieredBackend` 先解释、后台编译；JIT 失败回退
-解释器，不改变语义。默认构建 `features.jit = false`，`@jit` 必须读 `Features`，否则报 `E1001("core.jit")`。
+RSSN 的 `Term::compile` 将闭式 `Float` 表达式编译成函数。`TieredBackend` 先解释执行，
+可在后台编译。Aevia 将满足条件的 Core IR 标量函数降级到 RSSN LIR，经预热后使用
+Cranelift 编译，也可用 `@jit` 主动请求。进入本机代码前，调用必须经过验证且具有受支持的
+具体标量表示。含副作用的函数、不支持的程序和编译失败的情况继续由解释器执行。
+
+本机工具链默认启用 Cranelift、wgpu 和 RSSN 的 NumPy IO 功能。不支持本机 JIT 的构建中，
+显式使用 `@jit` 会报告 `E1001("core.jit")`。
+
+用 `aevia devices` 查看当前和可用的 RSSN 后端。`--rssn-backend <name>` 设置进程级
+RSSN 后端，REPL 的 `:rssn-backend [name]` 提供同样的选择。默认的 `auto` 在运行时
+根据可用能力选择宿主执行路径。Aevia 自身的求值器和矩阵卸载策略由 `--backend` 独立控制。
+
+例如，`aevia --rssn-backend cpu-parallel test examples/native_backend.aev` 会为示例中的
+RSSN 编译选择并行 CPU 后端。源程序可用 `Rssn.num_backend_named` 和
+`Rssn.num_backend_compile` 为单个 RSSN 程序选择后端。源程序选择或使用 RSSN GPU 后端
+需要 `gpu` 能力。设置进程默认值时，可用命令行选项或 REPL 命令。
 
 ### 10.6.5 设备与数据并行执行
 
@@ -357,8 +371,14 @@ RSSN 设备层提供缓冲区、数值内核 IR、CPU 参考及并行执行器�
 Aevia 解释器的 CPU 批量路径接受 §9.6.1 所述纯标量子集。设备枚举、启动融合和显式
 GPU 缓冲区传输由 RSSN 宿主 API 提供。
 
-RSSN GPU 后端用两个 F32 分量模拟 F64 缓冲区。要求 IEEE F64 结果的程序使用 CPU
-后端。宿主负责传输，并在装入内核前检查设备能力。
+对 `@` 的大型稠密 `Float` 矩阵乘法，Aevia 可自动选择 RSSN 注册表中满足条件且支持原生 F64 的硬件 GPU。
+运行时需要 `gpu` 能力。张量保留在宿主，乘法卸载时上传操作数并下载结果。
+`--backend gpu` 也会尝试对较小的乘法和 wgpu 能够精确计算的子集使用 GPU。不支持的任务或设备失败时由 CPU 计算。
+
+RSSN 的 wgpu 后端用两个 F32 分量模拟 F64 缓冲区。只有当输入是可精确表示的整数
+且部分和的绝对值不超过 2^24 时，Aevia 才能使用其 F32 内核，确保乘积和累加无需舍入。
+可能出现负零乘积的输入仍在宿主上计算。
+一般的 `Float` 矩阵乘法由宿主以 binary64 计算，也可由提供原生 binary64 的设备执行。
 
 ## 10.7 错误映射
 

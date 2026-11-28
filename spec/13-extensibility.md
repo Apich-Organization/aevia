@@ -163,7 +163,7 @@ Rssn.Units           : Tensor<1, String>     # 单位名；单位值在生成的
 
 - `Rssn.call` 是 `Rssn.dynamic` 的别名，只按短名/别名查找；短名歧义报 `E1002`。
 - `Rssn.call_key` “不解析、直接执行”：收 name + `signature_hash`（32 hex 字符），合起来是 `OpKey` 的可写形式；全零表示该算子没有声明重载。key 与当前 manifest 不符报
-  `E1005`（提示重新生成模块）；kernel 侧参数偏离钉住签名时报 `UnknownOp`，在 Aevia 边界变成错误值。
+  `E1005`，并提示重新生成模块。对于有效的 key，`Rssn.call_key` 报告预期参数个数或首个类型不匹配的参数。`Rssn.call_ho_key` 可指出回调标量结果的具体量纲冲突。两种调用均以错误值返回诊断。
 - `Rssn.resolve_overload` 暴露运行时选择结果，供缓存/诊断用：成功返回 `"rule_set.name@signature_hash"`；并列与“没有签名接受”都报 `OpError::Ambiguous`。`Rssn.overloads` 返回每条
   overload 的渲染签名。
 - 用 `to_value(x)` 包装参数，再用 `from_value<T>(v)` 恢复静态类型。`Rssn.dynamic` 支持标准算子和插件算子，包括未生成类型化包装的入口。若图后端结果使用推导签名，且 `Same(index)` 指定的参数已知为无量纲，适配器可据此认定结果无量纲。类型化转换同时检查该证据与结果的表示和形状。
@@ -450,9 +450,9 @@ exports = ["Entropy"]
 
 ```
 core.dynamic_call
-core.jit                    # false：默认构建无 jit feature
-core.jit_branch             # false（同上）
-core.jit_index              # false（同上）
+core.jit                    # 由 jit 功能启用
+core.jit_branch             # 由 jit 功能启用
+core.jit_index              # 由 jit 功能启用
 core.parallel_symbolic
 core.higher_order
 core.structured_results
@@ -467,14 +467,14 @@ dim.affine_units
 dim.user_base_dimensions
 ```
 
-默认构建 `Rssn.Capabilities` 实际列出十二行（除 `jit*` 三行与 `plugin.cdylib` 外全部）。另有**规范声明、但 manifest 没有对应 `Features` 字段**的名字，可出现在诊断里，
-`Rssn.Capabilities` 不会列出：`core.symbolic`、`core.numeric`、`core.tensor`、`core.linalg`、`core.ode`、`core.pde`、`core.fft`、`core.stats`、`core.units`、`core.assume.general`、
+本机工具链默认在 `Rssn.Capabilities` 中列出 `jit*` 三行。未启用 `jit` 的精简构建省略这些行。
+一些没有对应能力表条目的名字也可出现在诊断中：`core.symbolic`、`core.numeric`、`core.tensor`、`core.linalg`、`core.ode`、`core.pde`、`core.fft`、`core.stats`、`core.units`、`core.assume.general`、
 `core.gpu`、`core.distributed`、`io.binary`。
 
 `storage.sparse`（§13.9.5/§8.4.1）是 Aevia 自己的存储类，已启用，不由 manifest 的 `Features` 发布，所以不出现在 `Rssn.Capabilities` 里。
 
 Aevia 编译器在类型检查后检查 capability；缺失时：静态可知（如 `@jit` 目标）→ 编译期 `E1001`；动态调用 → 运行时 `OpError.Unsupported`，Aevia 转成 `E1001`。
-**不删语言特性**：GPU 未实现时 `on(Gpu(0), ...)` 仍类型正确，运行时报 `E1001("core.gpu")`。
+**不删语言特性**：若 `on(Gpu(0), ...)` 请求的显式 GPU 放置不可用，代码仍类型正确，运行时报 `E1001("core.gpu")`。
 
 ---
 

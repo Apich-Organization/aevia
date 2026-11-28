@@ -15,11 +15,12 @@ test "the Yee incident line reports separate field units and times" =
     let wave = checked_native("num_backend_compile_current", [to_value("2"), to_value(["time"]), to_value([time_ref]), electric_ref, to_value(10000)])
     match Rssn.dynamic("num_analysis_yee_set_plane_wave", [solver, to_value(2), to_value(5), to_value(0.0), wave, to_value(10), to_value(1000)]) with
     | Ok(_) ->
+        let released = Rssn.dynamic("num_backend_release", [wave])
         match Rssn.dynamic("num_analysis_yee_step", [solver]) with
         | Ok(_) ->
             let sample = checked_native("num_analysis_yee_plane_wave_sample", [solver, to_value(0)])
             match from_value<Option<{ electric: Float[Mass*Length/(Current*Time^3)], magnetic: Float[Current/Length], electric_time: Float[Time], magnetic_time: Float[Time] }>>(sample) with
-            | Ok(Some(out)) -> out.electric == 2.0 V/m && out.magnetic == 0.0 A/m && out.electric_time == 0.5 s && out.magnetic_time == 0.25 s
+            | Ok(Some(out)) -> is_ok(released) && out.electric == 2.0 V/m && out.magnetic == 0.0 A/m && out.electric_time == 0.5 s && out.magnetic_time == 0.25 s
             | _ -> false
         | Err(_) -> false
     | Err(_) -> false

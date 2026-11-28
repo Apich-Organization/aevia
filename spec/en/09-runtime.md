@@ -310,10 +310,11 @@ The manifest's `Features` are read first:
 - `features.jit_branch = false`: a function containing `if`/`match` is not JIT-compiled;
 - `features.jit_index = false`: a function containing tensor indexing is not JIT-compiled.
 
-Past the gates the function must also: contain only `Float` scalars, arithmetic and elementary
-functions (with `if`/indexing as the flags allow); be called more than a threshold (default
-1000) times or carry an explicit `@jit`; and have fixed input and output types (no symbols,
-no `Dyn`, no records or variants).
+By default the Core IR evaluator considers native compilation after 2,000 entries into an
+eligible function. The function must be pure, capture-free and statically checked, with
+concrete dimensionless `Float`, `Bool` or `Int` parameters and result. An explicit `@jit` skips
+warm-up. `--backend ir` considers only explicit annotations and `--backend ast` uses the
+reference interpreter. Cancellable execution uses the interpreter.
 
 ### 9.6.2 Procedure
 
@@ -351,9 +352,11 @@ no `Dyn`, no records or variants).
 - `map_floats` (the device seam) still lowers to a straight-line tape, because a GPU needs a
   program without control flow.
 
-Optional build: `cargo build -p aevia-cli --features jit` enables RSSN's Cranelift backend
-(Rust 1.100 or newer). It is off by default, and `@jit` is then `E1001`. Reference test:
-`tests/jit_native.aev`.
+Default builds include Cranelift, wgpu and NumPy `.npy` support. Run `aevia devices` to inspect
+the build and detected devices. To make a lean build, run
+`cargo build -p aevia-cli --no-default-features`. Ordinary functions still run in the
+interpreter in that build. An explicit `@jit` reports `E1001("core.jit")`. The native test
+cases live in `tests/jit_native.aev`.
 
 ### 9.6.4 Device targets
 

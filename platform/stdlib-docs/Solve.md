@@ -40,7 +40,7 @@ nsolve(f, x0) finds a root of f numerically, starting the search at x0.
 
 **Signature:** `nsolve : (Real[d] -> Real[e], Real[d]) -> Result<Real[d], MathError>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `nsolve : (Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** the result has the dimension of argument 2
@@ -121,7 +121,8 @@ Like solve, but for a function that returns a Complex value: it finds all roots 
 
 **Signature:** `solve_complex : (Real[d] -> Complex[e]) -> Result<Solutions<Complex,d>, MathError>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
+- `solve_complex : (Dyn<term>, Symbol) -> Tensor<1, Dyn<term>>`
 - `solve_complex : (Dyn<term>, Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** the result has the dimension of argument 2

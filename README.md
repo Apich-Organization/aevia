@@ -33,6 +33,8 @@ The model compares an exact expression for fall time with its floating-point app
 
 Use `aevia docs --section book --open` to open the hosted manual, or add `--download` to resolve the standalone HTML. `aevia <command> --help` describes a command and its options.
 
+The native toolchain enables RSSN's JIT, wgpu and NumPy I/O features by default. Run `aevia devices` to see the host SIMD support and registered devices. Automatic execution uses Cranelift for eligible hot scalar functions and can offload suitable dense `Float` matrix products while preserving their precision. Use `aevia --rssn-backend cranelift devices` to select the RSSN expression compiler and check the active selection. `--backend` controls the Aevia evaluator and matrix offload policy. In a REPL, `:rssn-backend` lists the choices and `:rssn-backend auto` restores automatic selection.
+
 Aevia detects the available CPUs for parallel language evaluation and grows its worker pool as work arrives. Use `--jobs` to set the worker limit for one invocation or `AEVIA_JOBS` for a shell session. `RAYON_NUM_THREADS` controls the default Rayon pool and also supplies the language worker limit when Aevia has no override. [Parallel evaluation and profiling](platform/manuals/book/en/12-parallel-and-profiling.md)
 
 For text clients, the [documentation index](https://aevia.apich.org/llms.txt) links to localized Markdown chapters and the generated standard-library catalog.
@@ -53,7 +55,7 @@ The manifest `aevia.toml` defines the entry and dependencies. Consult the [packa
 
 ## Install a toolchain
 
-Install [GitHub CLI](https://cli.github.com/) with `gh release verify-asset` support and sign in with `gh auth login`. The installers verify the SHA-256 checksum and the GitHub release attestation before installing `aevia`, `aevia-lsp`, and `aevia-pkg`. They add the toolchain to PATH and set up shell completions.
+The installers verify the archive's SHA-256 checksum before installing `aevia`, `aevia-lsp`, and `aevia-pkg`. To verify the GitHub release attestation as well, install [GitHub CLI](https://cli.github.com/) with `gh release verify-asset` support and sign in with `gh auth login`. The installers add the toolchain to PATH and set up shell completions.
 
 The default is the latest stable release. To install `v0.1.0-beta.1` once it is published, specify the version explicitly.
 
@@ -82,16 +84,18 @@ To install manually, find the archive for your operating system and CPU on [GitH
 
 ## Build from source
 
+The [Bazel build guide](BAZEL.md) covers local RSSN worktrees, tests, generators, and optimized distributions.
+
 Use Rust 1.100 or later. Place [RSSN](https://github.com/Apich-Organization/rssn/tree/v0.3) beside this checkout so `aevia` and `rssn` share a parent directory. Use the RSSN revision paired with the Aevia version you are building.
 
 ```console
-cargo build --locked -p aevia-cli
-cargo build --locked --manifest-path platform/Cargo.toml -p aevia-pkg
+bazel build //:toolchain //:platform_cli
+bazel test //:rust_all_features_test
 ```
 
-The platform has a separate Cargo workspace and a [deployment guide](platform/docs/DEPLOY.md). The language workspace runs tests with `cargo test --locked --workspace`. For a focused check, select the modified package or a named test target. `cargo +nightly fmt --all --check` checks the language workspace's formatting.
+The platform has a separate Cargo workspace and a [deployment guide](platform/docs/DEPLOY.md). Run `bazel test //:joint_all_features_test` to test the language workspace and the selected RSSN checkout together. For a focused check, pass a named test target with `--test_arg=--test --test_arg=allocations`. `cargo +nightly fmt --all --check` checks the language workspace's formatting.
 
-Generate the standalone specification with `python3 tools/bundle_spec.py` and Pandoc. Generate and check the standard library sources with `aevia-stdlib-gen`. `aevia doc --stdlib --json` writes the reference pages and their JSON index. Use `--lang en` for the checked-in reference or `--lang zh` for the Chinese pages. [Bilingual reference check](tools/check_stdlib_docs.py)
+Run `bazel run //:refresh_spec` with Pandoc to generate the standalone specification, and `bazel run //:refresh_stdlib` to generate the standard library sources. `bazel run //:aevia -- doc --stdlib --json` writes the reference pages and their JSON index. Use `--lang en` for the checked-in reference or `--lang zh` for the Chinese pages. [Bilingual reference check](tools/check_stdlib_docs.py)
 
 ## License
 

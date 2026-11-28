@@ -26,6 +26,39 @@ Large dense exact matrices can also use this worker budget in `det`, `inv`, and 
 
 Reading a large Fortran-order NPY array can use the active RSSN CPU pool for the row-major conversion, including arrays with three or more varying axes. Measure the conversion separately from disk reads when comparing worker counts.
 
+## Choose and inspect the backend
+
+```console
+aevia devices
+aevia --backend auto run candidates.aev
+aevia --backend cpu --jobs 1 run candidates.aev
+aevia --rssn-backend cpu-parallel run candidates.aev
+```
+
+`auto` is the default. It uses the Core IR interpreter and can compile eligible
+hot scalar functions with RSSN's Cranelift JIT. Larger dense `Float` matrix
+products may also run on a GPU that supports native F64. `--backend gpu`
+considers smaller products and can use wgpu for exact integer-valued `Float`
+products within its precision and range.
+An absent adapter, a denied `gpu` capability or incompatible work leaves the
+calculation on the CPU. `cpu-parallel` keeps work on the host and uses the
+configured CPU worker count. `ir` and `ast` select the reference evaluators for
+comparison. In a REPL, evaluator switches govern new evaluation and definitions.
+
+`--rssn-backend` selects the process-wide RSSN backend for portable expressions
+and native kernels. `aevia devices` lists the active and available RSSN
+selectors. In the REPL, use `:rssn-backend` to inspect the current selection
+and `:rssn-backend auto` to restore automatic selection. `--backend` controls
+the Aevia evaluator and matrix routing independently.
+
+The CLI or embedding application controls RSSN's process default. Aevia
+source can choose a backend handle for a specific compilation. GPU discovery
+and execution require the `gpu` capability, including calls that reuse a GPU
+handle or compiled GPU program inside a narrower `with_cap` block.
+
+To build the minimal CLI without linking the optional RSSN JIT, wgpu, and NumPy
+features, use `cargo build -p aevia-cli --no-default-features`.
+
 ## Measure the right part
 
 Separate file and terminal work from the part you want to measure. Use a fixed fixture, a warm-up, repeat runs, and common settings for threads and optimization. Verify the result on each configuration before comparing time. `aevia bench --help` describes the tool's benchmark declarations and baseline format.

@@ -4158,8 +4158,8 @@ chebyshev_fit : (Tensor&lt;1, Scalar&lt;ρ,1&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,
 <ul>
 <li><code>fft2</code>/<code>ifft2</code> 变换最后两个轴；<code>fftn</code>/<code>ifftn</code> 变换全部轴；<code>fft_axis(t, k)</code> 一个轴；<code>fftn_axes(t, axes)</code> 任意轴列表。轴号从 0 开始，负数从末尾数；越界或重复的轴是 <code>E0802</code>。</li>
 <li>归一化按被变换的总点数 <code>N</code>（各变换轴长度之积）：<code>Backward</code> 正向 1、逆向 <code>1/N</code>；<code>Forward</code> 正向 <code>1/N</code>、逆向 1；<code>Unitary</code> 两向都是 <code>1/√N</code>。</li>
-<li><code>rfft</code>/<code>rfft2</code>/<code>rfftn</code> 取实数输入，最后一个被变换的轴只保留 <code>n/2 + 1</code> 个非冗余频点；<code>irfft</code>/<code>irfft2</code>/<code>irfftn</code> 由半谱重建实数张量，默认原长度为 <code>2(m − 1)</code>（偶数），奇数长度用带 <code>Int</code> 的形式显式给出；<code>m</code> 与长度不相容是 <code>E0802</code>。</li>
-<li><code>rfftn_axes(t, axes)</code>/<code>irfftn_axes(s, axes)</code>/<code>irfftn_axes(s, axes, n)</code> 是任意轴子集的实数变换（与 numpy 的 <code>rfftn(a, axes=…)</code> 一致）：列表里<strong>最后一个</strong>轴是半谱轴，其余轴做完整复数变换； <code>irfftn_axes</code> 在最后一个列出的轴上做 Hermitian 还原，<code>n</code> 是该轴的原长度（缺省 <code>2(m − 1)</code>）。列表为空、轴越界或重复是 <code>E0802</code>。</li>
+<li><code>rfft</code>/<code>rfft2</code>/<code>rfftn</code> 取实数输入，最后一个被变换的轴只保留 <code>n/2 + 1</code> 个非冗余频点。逆变换由该轴的 <code>m</code> 个频点重建实数张量。只有一个频点时，默认重建一个样本。有多个频点时，默认原长度为偶数 <code>2(m − 1)</code>，其他奇数长度用 <code>Int</code> 显式给出。长度与 <code>m</code> 不相容时返回 <code>E0802</code>。</li>
+<li><code>rfftn_axes(t, axes)</code>/<code>irfftn_axes(s, axes)</code>/<code>irfftn_axes(s, axes, n)</code> 是任意轴子集的实数变换（与 numpy 的 <code>rfftn(a, axes=…)</code> 一致）：列表里<strong>最后一个</strong>轴是半谱轴，其余轴做完整复数变换； <code>irfftn_axes</code> 在最后一个列出的轴上做 Hermitian 还原，<code>n</code> 是该轴的原长度，缺省规则与 <code>irfftn</code> 相同。列表为空、轴越界或重复时返回 <code>E0802</code>。</li>
 <li><code>fftshift</code>/<code>ifftshift</code> 把零频率移到中间（每个被移位的轴循环平移 <code>⌊n/2⌋</code>，逆操作反向），对任意元素类型成立；<code>*_axis</code> 形式只移一个轴。</li>
 </ul>
 <pre class="code"><code>type Norm = | Backward | Forward | Unitary
@@ -4596,7 +4596,7 @@ uncertainty : Measurement&lt;d&gt; -&gt; Real[d]
 </ul>
 <p>相关误差需要协方差矩阵，核心库不提供。<code>Measurement</code> 是库类型：checker 把它当普通记录 <code>{ value, uncertainty }</code> <strong>结构化识别</strong>（不是新的名义类型），字段名/顺序因此是边界的一部分。 上面的是<strong>算子</strong>（重载），不是名字，所以不在名字覆盖审计里。checker（<code>binary_type</code>）与运行时（<code>apply_binary</code>）都已实现（<code>aevia-core/tests/measurement.rs</code>）。实现还支持一元 <code>-</code> 与“测量 ×/÷ 标量” （不确定度乘 <code>|scalar|</code>）；<code>Measurement + number</code>（或 <code>-</code>）仍是 <code>E0302</code>，<code>number / measurement</code> 也被拒绝（提示用测量的值相除）。</p>
 <h2 id="08-stdlib--815-complex">8.15 Complex</h2>
-<pre class="code"><code>complex   : (Real[1], Real[1]) -&gt; Complex[1]
+<pre class="code"><code>complex   : (Real[d], Real[d]) -&gt; Complex[d]
 re im     : Complex[d] -&gt; Real[d]
 conj      : Complex[d] -&gt; Complex[d]
 magnitude : Complex[d] -&gt; Real[d]
@@ -4605,6 +4605,7 @@ complex_sqrt : Complex[d] -&gt; Complex[d^(1/2)]
 complex_exp  : Complex[1] -&gt; Complex[1]
 complex_ln   : Complex[1] -&gt; Complex[1]
 complex_sin cos : Complex[1] -&gt; Complex[1]</code></pre>
+<p><code>complex(re, im)</code> 的实部和虚部须有相同的量纲。结果保留该量纲，例如 <code>complex(3 m, 400 cm)</code> 的模为 <code>5 m</code>。</p>
 <p><code>abs</code> 只用于实数；复数的模用 <code>magnitude</code>，避免 <code>abs : Complex[d] -&gt; Real[d]</code> 与 <code>abs : Scalar&lt;ρ,d&gt; -&gt; Scalar&lt;ρ,d&gt;</code> 冲突。<code>complex_sqrt</code> 的结果 量纲是 <code>d^(1/2)</code>；类型显示/诊断里的维度变量指数保留下标（<code>:type complex_sqrt</code> → <code>Complex[d0] -&gt; Complex[d0^(1/2)]</code>，不会塌成 <code>d0^1</code>）。</p>
 <h2 id="08-stdlib--816-numbertheory--combinatorics--geometry">8.16 NumberTheory / Combinatorics / Geometry</h2>
 <pre class="code"><code>factor      : Int -&gt; Tensor&lt;1, (Int, Int)&gt;       # (prime, exponent)
@@ -5105,7 +5106,7 @@ Physics
 <li><code>features.jit_branch = false</code>：含 <code>if</code>/<code>match</code> 的函数不 JIT；</li>
 <li><code>features.jit_index = false</code>：含张量索引的函数不 JIT。</li>
 </ul>
-<p>满足门控后，还需：函数只含 <code>Float</code> 标量、算术、初等函数（按 flag 允许 <code>if</code>/索引）；被调用超过阈值（默认 1000 次） 或显式 <code>@jit</code>；输入/输出类型固定（无符号、无 <code>Dyn</code>、无记录/变体）。</p>
+<p>默认 Core IR 策略会在符合条件的函数进入 2,000 次后尝试原生编译。候选函数必须是纯函数、无捕获，且经过静态 检查，参数与返回值均为固定的无量纲 <code>Float</code>、<code>Bool</code> 或 <code>Int</code>。显式 <code>@jit</code> 可以跳过预热；<code>--backend ir</code> 只尝试显式标注的函数，<code>--backend ast</code> 使用参考解释器。带取消检查的执行走解释器。</p>
 <h3 id="09-runtime--962-流程">9.6.2 流程</h3>
 <ol type="1">
 <li>把 Core IR 降成 rssn 的 LIR（<code>rssn::backend::lir</code>）：带类型的寄存器机，有基本块、块参数、直接（可递归） 调用、带检查的整数运算、有界检查的切片和 <em>bail</em> 出口。每个激活（参数种类 + 结果种类 + 字面量特化）生成两个 LIR 函数：入口形式返回 <code>(状态, 结果, 下一组参数, 剩余燃料)</code>，值形式只返回结果，供值位置的递归调用。</li>
@@ -5122,7 +5123,7 @@ Physics
 <li>JIT 结果与解释器 MUST 逐位一致；不能保证一致的情形 MUST bail，不一致是 bug。</li>
 <li><code>map_floats</code>（设备接缝）仍用直线 tape 降级，因为 GPU 需要无控制流的程序。</li>
 </ul>
-<p>可选构建：<code>cargo build -p aevia-cli --features jit</code> 启用 RSSN 的 Cranelift 后端（需 Rust 1.100+）；默认关闭， <code>@jit</code> 报 <code>E1001</code>。参考测试 <code>tests/jit_native.aev</code>。</p>
+<p>默认构建包含 Cranelift、wgpu 与 NumPy <code>.npy</code> 支持。用 <code>aevia devices</code> 查看当前构建和设备。 精简构建可使用 <code>cargo build -p aevia-cli --no-default-features</code>。此时普通函数仍可解释执行， 显式 <code>@jit</code> 报 <code>E1001("core.jit")</code>。参考测试 <code>tests/jit_native.aev</code>。</p>
 <h3 id="09-runtime--964-设备目标">9.6.4 设备目标</h3>
 <p><code>@jit</code> 始终是标量、CPU、机器码路径；<code>Cpu</code>/<code>CpuParallel</code>/<code>Gpu(n)</code> 上的数据并行是另一套机制（rssn <code>Device</code>，§10.6.5）， 满足 <code>@jit</code> 的函数也满足设备批量路径。</p>
 <ul>
@@ -5511,7 +5512,7 @@ let answer = s.compute(diff(sin(x) * cos(x), x), &amp;Config::new())?;</code></p
 <li><code>Session</code> 拥有 hash-consed 项图；<code>Term&lt;'s&gt;</code> 是带生命周期的句柄。</li>
 <li><code>Config</code> 指定规则集、目标相位（<code>Symbolic</code>/<code>Numeric</code>）、绑定、假设、预算、量纲模式、量纲假设、自定义基量纲。</li>
 <li><code>compute</code> 把请求复制到模板图的克隆中，运行 e-graph 重写，抽取答案，再导入回会话。<code>Answer</code> 含 <code>term</code>、 <code>value</code>、<code>error</code>、<code>reduced</code>、<code>dimension</code>、<code>diagnostics</code>、<code>report</code>。</li>
-<li><code>Term::eval(bindings)</code> 不重写，直接数值求值；<code>Term::compile(inputs)</code> 编译闭式（<code>jit</code> feature 用 Cranelift）； <code>Term::as_tensor()</code> 把嵌套 <code>list</code> 项转成 <code>(shape, Vec&lt;f64&gt;)</code>；<code>to_latex()</code>/<code>to_typst()</code>/<code>to_pretty()</code> 排版。</li>
+<li><code>Term::eval(bindings)</code> 直接数值求值。<code>Term::compile(inputs)</code> 使用当前 RSSN 后端编译闭式； <code>Term::as_tensor()</code> 把嵌套 <code>list</code> 项转成 <code>(shape, Vec&lt;f64&gt;)</code>；<code>to_latex()</code>/<code>to_typst()</code>/<code>to_pretty()</code> 排版。</li>
 <li><code>sim::scenario::run(name, json)</code> 运行仿真；<code>sim::scenario::SCENARIOS</code> 是场景名的唯一来源（当前 29 个）。</li>
 <li><code>Session::register_unit(UnitDef)</code> 注册单位；<code>Session::manifest()</code> 用 <code>KernelManifest::build_with_units</code>， 所以 session 私有单位出现在该 session 的 manifest 里。</li>
 <li>SDE：<code>rules::sde</code> 把无回调的 <code>sde_wiener</code>/<code>sde_levy_areas</code> 与方案元数据 <code>sde_scheme_info(name) -&gt; Tensor&lt;1, Real&gt;</code> 暴露成 manifest 算子（<code>features.sde</code>，能力 <code>core.sde</code>）。求解循环需要 host 回调 （<code>&amp;Fn + Sync</code>），不在 manifest 里；Aevia 的 <code>sdeint_diag</code>/<code>sdeint_general</code> 在宿主侧调用 <code>kernels::sde</code>。</li>
@@ -5844,11 +5845,15 @@ pub fn kernel() -&gt; Rc&lt;Kernel&gt;;   // 当前线程的会话，首次使�
 <li>数值张量用 <code>F64</code> 路径，不进项图。</li>
 </ul>
 <h3 id="10-backend--1064-jit">10.6.4 JIT</h3>
-<p><code>Term::compile</code> 把闭式 <code>Float</code> 表达式编译成函数；Aevia 的热点函数走这条路径。<code>TieredBackend</code> 先解释、后台编译；JIT 失败回退 解释器，不改变语义。默认构建 <code>features.jit = false</code>，<code>@jit</code> 必须读 <code>Features</code>，否则报 <code>E1001("core.jit")</code>。</p>
+<p>RSSN 的 <code>Term::compile</code> 将闭式 <code>Float</code> 表达式编译成函数。<code>TieredBackend</code> 先解释执行， 可在后台编译。Aevia 将满足条件的 Core IR 标量函数降级到 RSSN LIR，经预热后使用 Cranelift 编译，也可用 <code>@jit</code> 主动请求。进入本机代码前，调用必须经过验证且具有受支持的 具体标量表示。含副作用的函数、不支持的程序和编译失败的情况继续由解释器执行。</p>
+<p>本机工具链默认启用 Cranelift、wgpu 和 RSSN 的 NumPy IO 功能。不支持本机 JIT 的构建中， 显式使用 <code>@jit</code> 会报告 <code>E1001("core.jit")</code>。</p>
+<p>用 <code>aevia devices</code> 查看当前和可用的 RSSN 后端。<code>--rssn-backend &lt;name&gt;</code> 设置进程级 RSSN 后端，REPL 的 <code>:rssn-backend [name]</code> 提供同样的选择。默认的 <code>auto</code> 在运行时 根据可用能力选择宿主执行路径。Aevia 自身的求值器和矩阵卸载策略由 <code>--backend</code> 独立控制。</p>
+<p>例如，<code>aevia --rssn-backend cpu-parallel test examples/native_backend.aev</code> 会为示例中的 RSSN 编译选择并行 CPU 后端。源程序可用 <code>Rssn.num_backend_named</code> 和 <code>Rssn.num_backend_compile</code> 为单个 RSSN 程序选择后端。源程序选择或使用 RSSN GPU 后端 需要 <code>gpu</code> 能力。设置进程默认值时，可用命令行选项或 REPL 命令。</p>
 <h3 id="10-backend--1065-设备与数据并行执行">10.6.5 设备与数据并行执行</h3>
 <p>Aevia 的 <code>Device</code> 值标识请求的执行位置。<code>device_of(tensor)</code> 返回张量所在位置。 <code>to_device(tensor, device)</code> 和 <code>on(device, thunk)</code> 是 IO 动作，目前均支持 <code>Cpu</code>。 请求 <code>Gpu</code> 或 <code>Distributed</code> 放置时，即便 RSSN 宿主设备注册表已发现 GPU， 仍分别以能力名 <code>core.gpu</code> 或 <code>core.distributed</code> 报 <code>E1001</code>（§13.9.4）。</p>
 <p>RSSN 设备层提供缓冲区、数值内核 IR、CPU 参考及并行执行器，以及通过 <code>gpu-wgpu</code> 启用的 WGSL 后端。嵌入宿主可用它批量求值、执行数组运算与固定步长集合仿真。 Aevia 解释器的 CPU 批量路径接受 §9.6.1 所述纯标量子集。设备枚举、启动融合和显式 GPU 缓冲区传输由 RSSN 宿主 API 提供。</p>
-<p>RSSN GPU 后端用两个 F32 分量模拟 F64 缓冲区。要求 IEEE F64 结果的程序使用 CPU 后端。宿主负责传输，并在装入内核前检查设备能力。</p>
+<p>对 <code>@</code> 的大型稠密 <code>Float</code> 矩阵乘法，Aevia 可自动选择 RSSN 注册表中满足条件且支持原生 F64 的硬件 GPU。 运行时需要 <code>gpu</code> 能力。张量保留在宿主，乘法卸载时上传操作数并下载结果。 <code>--backend gpu</code> 也会尝试对较小的乘法和 wgpu 能够精确计算的子集使用 GPU。不支持的任务或设备失败时由 CPU 计算。</p>
+<p>RSSN 的 wgpu 后端用两个 F32 分量模拟 F64 缓冲区。只有当输入是可精确表示的整数 且部分和的绝对值不超过 2^24 时，Aevia 才能使用其 F32 内核，确保乘积和累加无需舍入。 可能出现负零乘积的输入仍在宿主上计算。 一般的 <code>Float</code> 矩阵乘法由宿主以 binary64 计算，也可由提供原生 binary64 的设备执行。</p>
 <h2 id="10-backend--107-错误映射">10.7 错误映射</h2>
 <table>
 <thead>
@@ -6734,7 +6739,7 @@ Rssn.Constants       : Tensor&lt;<span class="n">1</span>, String&gt;     <span 
 Rssn.Units           : Tensor&lt;<span class="n">1</span>, String&gt;     <span class="c"># 单位名；单位值在生成的 Units 模块</span></code></pre>
 <ul>
 <li><code>Rssn.call</code> 是 <code>Rssn.dynamic</code> 的别名，只按短名/别名查找；短名歧义报 <code>E1002</code>。</li>
-<li><code>Rssn.call_key</code> “不解析、直接执行”：收 name + <code>signature_hash</code>（32 hex 字符），合起来是 <code>OpKey</code> 的可写形式；全零表示该算子没有声明重载。key 与当前 manifest 不符报 <code>E1005</code>（提示重新生成模块）；kernel 侧参数偏离钉住签名时报 <code>UnknownOp</code>，在 Aevia 边界变成错误值。</li>
+<li><code>Rssn.call_key</code> “不解析、直接执行”：收 name + <code>signature_hash</code>（32 hex 字符），合起来是 <code>OpKey</code> 的可写形式；全零表示该算子没有声明重载。key 与当前 manifest 不符报 <code>E1005</code>，并提示重新生成模块。对于有效的 key，<code>Rssn.call_key</code> 报告预期参数个数或首个类型不匹配的参数。<code>Rssn.call_ho_key</code> 可指出回调标量结果的具体量纲冲突。两种调用均以错误值返回诊断。</li>
 <li><code>Rssn.resolve_overload</code> 暴露运行时选择结果，供缓存/诊断用：成功返回 <code>"rule_set.name@signature_hash"</code>；并列与“没有签名接受”都报 <code>OpError::Ambiguous</code>。<code>Rssn.overloads</code> 返回每条 overload 的渲染签名。</li>
 <li>用 <code>to_value(x)</code> 包装参数，再用 <code>from_value&lt;T&gt;(v)</code> 恢复静态类型。<code>Rssn.dynamic</code> 支持标准算子和插件算子，包括未生成类型化包装的入口。若图后端结果使用推导签名，且 <code>Same(index)</code> 指定的参数已知为无量纲，适配器可据此认定结果无量纲。类型化转换同时检查该证据与结果的表示和形状。</li>
 <li><code>type_rep&lt;T&gt;()</code> 保存检查器解析出的具体类型；它是不透明值，普通记录不能伪造。<code>Rssn.typed</code> 执行动态调用后按该见证检查表示、形状及量纲；不匹配或缺少证据返回 <code>Err(OpError)</code>。 成功结果仍是 <code>Value</code>，经 <code>from_value&lt;T&gt;</code> 验证并转换；未经运行时类型字典具体化的泛型不能生成 <code>TypeRep</code>。</li>
@@ -6945,9 +6950,9 @@ exports = [&quot;Entropy&quot;]</code></pre>
 <h3 id="13-extensibility--1382-capability">13.8.2 Capability</h3>
 <p>后端能力用 capability 名描述。<strong>名字的唯一来源是 capability 表</strong>：由 manifest 的 <code>Features</code> 派生，<code>Rssn.Capabilities</code> 只列 <code>enabled = true</code> 的行（<code>aevia-rssn</code> 的 <code>Capabilities::table()</code>）。完整表：</p>
 <pre class="code"><code>core.dynamic_call
-core.jit                    # false：默认构建无 jit feature
-core.jit_branch             # false（同上）
-core.jit_index              # false（同上）
+core.jit                    # 由 jit 功能启用
+core.jit_branch             # 由 jit 功能启用
+core.jit_index              # 由 jit 功能启用
 core.parallel_symbolic
 core.higher_order
 core.structured_results
@@ -6960,9 +6965,9 @@ core.plugin.cdylib          # 仅 plugin-cdylib 构建
 dim.exact_units
 dim.affine_units
 dim.user_base_dimensions</code></pre>
-<p>默认构建 <code>Rssn.Capabilities</code> 实际列出十二行（除 <code>jit*</code> 三行与 <code>plugin.cdylib</code> 外全部）。另有<strong>规范声明、但 manifest 没有对应 <code>Features</code> 字段</strong>的名字，可出现在诊断里， <code>Rssn.Capabilities</code> 不会列出：<code>core.symbolic</code>、<code>core.numeric</code>、<code>core.tensor</code>、<code>core.linalg</code>、<code>core.ode</code>、<code>core.pde</code>、<code>core.fft</code>、<code>core.stats</code>、<code>core.units</code>、<code>core.assume.general</code>、 <code>core.gpu</code>、<code>core.distributed</code>、<code>io.binary</code>。</p>
+<p>本机工具链默认在 <code>Rssn.Capabilities</code> 中列出 <code>jit*</code> 三行。未启用 <code>jit</code> 的精简构建省略这些行。 一些没有对应能力表条目的名字也可出现在诊断中：<code>core.symbolic</code>、<code>core.numeric</code>、<code>core.tensor</code>、<code>core.linalg</code>、<code>core.ode</code>、<code>core.pde</code>、<code>core.fft</code>、<code>core.stats</code>、<code>core.units</code>、<code>core.assume.general</code>、 <code>core.gpu</code>、<code>core.distributed</code>、<code>io.binary</code>。</p>
 <p><code>storage.sparse</code>（§13.9.5/§8.4.1）是 Aevia 自己的存储类，已启用，不由 manifest 的 <code>Features</code> 发布，所以不出现在 <code>Rssn.Capabilities</code> 里。</p>
-<p>Aevia 编译器在类型检查后检查 capability；缺失时：静态可知（如 <code>@jit</code> 目标）→ 编译期 <code>E1001</code>；动态调用 → 运行时 <code>OpError.Unsupported</code>，Aevia 转成 <code>E1001</code>。 <strong>不删语言特性</strong>：GPU 未实现时 <code>on(Gpu(0), ...)</code> 仍类型正确，运行时报 <code>E1001("core.gpu")</code>。</p>
+<p>Aevia 编译器在类型检查后检查 capability；缺失时：静态可知（如 <code>@jit</code> 目标）→ 编译期 <code>E1001</code>；动态调用 → 运行时 <code>OpError.Unsupported</code>，Aevia 转成 <code>E1001</code>。 <strong>不删语言特性</strong>：若 <code>on(Gpu(0), ...)</code> 请求的显式 GPU 放置不可用，代码仍类型正确，运行时报 <code>E1001("core.gpu")</code>。</p>
 <hr />
 <h2 id="13-extensibility--139-已决定的扩展设计">13.9 已决定的扩展设计</h2>
 <h3 id="13-extensibility--1391-形状细化">13.9.1 形状细化</h3>

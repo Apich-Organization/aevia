@@ -126,7 +126,7 @@ cdf(dist, x) is the probability that a draw from the distribution is at most x: 
 
 **Signature:** `cdf : (Distribution<d>, Real[d]) -> Real[1]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `cdf : (Dyn<term>, Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** kernel rule `CompatibleDimensionless`
@@ -186,7 +186,7 @@ pdf(dist, x) is the probability density (or mass, for discrete distributions) of
 
 **Signature:** `pdf : (Distribution<d>, Real[d]) -> Real[1/d]`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `pdf : (Dyn<term>, Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** kernel rule `Custom("")`

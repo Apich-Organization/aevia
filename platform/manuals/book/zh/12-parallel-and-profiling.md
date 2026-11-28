@@ -26,6 +26,29 @@ fn main(): IO Unit = do
 
 读取大型 Fortran 列主序 NPY 数组时，转换为行主序的工作可以由当前的 RSSN CPU 池分担，包括有三个或更多非单例轴的数组。比较不同线程数时，分别测量转换和文件读取耗时。
 
+## 查看和选择执行后端
+
+```console
+aevia devices
+aevia --backend auto run candidates.aev
+aevia --backend cpu --jobs 1 run candidates.aev
+aevia --rssn-backend cpu-parallel run candidates.aev
+```
+
+`auto` 是默认设置。它使用 Core IR 解释器，并可通过 RSSN 的 Cranelift JIT 编译符合条件的热点标量函数。
+较大的稠密 `Float` 矩阵乘法也可交给支持原生 F64 的 GPU。`--backend gpu` 还会尝试较小的合格乘法，
+以及 wgpu 能在其精度和范围内精确计算的整数值 `Float` 乘法。没有设备、未授予 `gpu` 能力或运算不符合条件时，由 CPU 计算。`cpu-parallel` 在宿主上按工作线程设置运行。
+`ir` 和 `ast` 分别选择用于对照的解释器。在 REPL 中，切换解释器会影响后续求值和新定义。
+
+`--rssn-backend` 为可移植表达式和本机内核选择进程级 RSSN 后端。`aevia devices` 列出
+当前和可用的 RSSN 后端。在 REPL 中，用 `:rssn-backend` 查看，用 `:rssn-backend auto`
+恢复自动选择。`--backend` 独立控制 Aevia 的求值器和矩阵运算路由。
+
+RSSN 的进程默认后端由 CLI 或嵌入应用控制。Aevia 源码可以为单次编译选择后端句柄。
+探测或执行 GPU 运算需要 `gpu` 能力，在收紧权限的 `with_cap` 块内使用先前创建的 GPU 句柄或编译程序时也是如此。
+
+使用 `cargo build -p aevia-cli --no-default-features` 可构建不链接 RSSN 可选 JIT、wgpu 和 NumPy 功能的精简 CLI。
+
 ## 测量需要比较的部分
 
 把文件和终端 IO 与待测计算分开。使用固定样本、预热和多次重复运行，并保持线程与优化设置一致。比较耗时前先验证各配置的结果。`aevia bench --help` 说明基准声明和基线文件的格式。

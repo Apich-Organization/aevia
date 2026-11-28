@@ -4282,10 +4282,9 @@ chebyshev_fit : (Tensor<1, Scalar<ρ,1>>, Tensor<1, Scalar<ρ,e>>, Int) -> Tenso
 
 - `fft2`/`ifft2` 变换最后两个轴；`fftn`/`ifftn` 变换全部轴；`fft_axis(t, k)` 一个轴；`fftn_axes(t, axes)` 任意轴列表。轴号从 0 开始，负数从末尾数；越界或重复的轴是 `E0802`。
 - 归一化按被变换的总点数 `N`（各变换轴长度之积）：`Backward` 正向 1、逆向 `1/N`；`Forward` 正向 `1/N`、逆向 1；`Unitary` 两向都是 `1/√N`。
-- `rfft`/`rfft2`/`rfftn` 取实数输入，最后一个被变换的轴只保留 `n/2 + 1` 个非冗余频点；`irfft`/`irfft2`/`irfftn` 由半谱重建实数张量，默认原长度为 `2(m − 1)`（偶数），奇数长度用带 `Int`
-  的形式显式给出；`m` 与长度不相容是 `E0802`。
+- `rfft`/`rfft2`/`rfftn` 取实数输入，最后一个被变换的轴只保留 `n/2 + 1` 个非冗余频点。逆变换由该轴的 `m` 个频点重建实数张量。只有一个频点时，默认重建一个样本。有多个频点时，默认原长度为偶数 `2(m − 1)`，其他奇数长度用 `Int` 显式给出。长度与 `m` 不相容时返回 `E0802`。
 - `rfftn_axes(t, axes)`/`irfftn_axes(s, axes)`/`irfftn_axes(s, axes, n)` 是任意轴子集的实数变换（与 numpy 的 `rfftn(a, axes=…)` 一致）：列表里**最后一个**轴是半谱轴，其余轴做完整复数变换；
-  `irfftn_axes` 在最后一个列出的轴上做 Hermitian 还原，`n` 是该轴的原长度（缺省 `2(m − 1)`）。列表为空、轴越界或重复是 `E0802`。
+  `irfftn_axes` 在最后一个列出的轴上做 Hermitian 还原，`n` 是该轴的原长度，缺省规则与 `irfftn` 相同。列表为空、轴越界或重复时返回 `E0802`。
 - `fftshift`/`ifftshift` 把零频率移到中间（每个被移位的轴循环平移 `⌊n/2⌋`，逆操作反向），对任意元素类型成立；`*_axis` 形式只移一个轴。
 
 ```
@@ -4853,7 +4852,7 @@ uncertainty : Measurement<d> -> Real[d]
 ## 8.15 Complex
 
 ```
-complex   : (Real[1], Real[1]) -> Complex[1]
+complex   : (Real[d], Real[d]) -> Complex[d]
 re im     : Complex[d] -> Real[d]
 conj      : Complex[d] -> Complex[d]
 magnitude : Complex[d] -> Real[d]
@@ -4863,6 +4862,8 @@ complex_exp  : Complex[1] -> Complex[1]
 complex_ln   : Complex[1] -> Complex[1]
 complex_sin cos : Complex[1] -> Complex[1]
 ```
+
+`complex(re, im)` 的实部和虚部须有相同的量纲。结果保留该量纲，例如 `complex(3 m, 400 cm)` 的模为 `5 m`。
 
 `abs` 只用于实数；复数的模用 `magnitude`，避免 `abs : Complex[d] ->
 Real[d]` 与 `abs : Scalar<ρ,d> -> Scalar<ρ,d>` 冲突。`complex_sqrt` 的结果
@@ -5390,8 +5391,9 @@ RSSN 拥有数值算法，包括精确整数/有理数、复数、张量收缩�
 - `features.jit_branch = false`：含 `if`/`match` 的函数不 JIT；
 - `features.jit_index = false`：含张量索引的函数不 JIT。
 
-满足门控后，还需：函数只含 `Float` 标量、算术、初等函数（按 flag 允许 `if`/索引）；被调用超过阈值（默认 1000 次）
-或显式 `@jit`；输入/输出类型固定（无符号、无 `Dyn`、无记录/变体）。
+默认 Core IR 策略会在符合条件的函数进入 2,000 次后尝试原生编译。候选函数必须是纯函数、无捕获，且经过静态
+检查，参数与返回值均为固定的无量纲 `Float`、`Bool` 或 `Int`。显式 `@jit` 可以跳过预热；`--backend ir`
+只尝试显式标注的函数，`--backend ast` 使用参考解释器。带取消检查的执行走解释器。
 
 ### 9.6.2 流程
 
@@ -5416,8 +5418,9 @@ RSSN 拥有数值算法，包括精确整数/有理数、复数、张量收缩�
 - JIT 结果与解释器 MUST 逐位一致；不能保证一致的情形 MUST bail，不一致是 bug。
 - `map_floats`（设备接缝）仍用直线 tape 降级，因为 GPU 需要无控制流的程序。
 
-可选构建：`cargo build -p aevia-cli --features jit` 启用 RSSN 的 Cranelift 后端（需 Rust 1.100+）；默认关闭，
-`@jit` 报 `E1001`。参考测试 `tests/jit_native.aev`。
+默认构建包含 Cranelift、wgpu 与 NumPy `.npy` 支持。用 `aevia devices` 查看当前构建和设备。
+精简构建可使用 `cargo build -p aevia-cli --no-default-features`。此时普通函数仍可解释执行，
+显式 `@jit` 报 `E1001("core.jit")`。参考测试 `tests/jit_native.aev`。
 
 ### 9.6.4 设备目标
 
@@ -5863,7 +5866,7 @@ let answer = s.compute(diff(sin(x) * cos(x), x), &Config::new())?;
 - `Config` 指定规则集、目标相位（`Symbolic`/`Numeric`）、绑定、假设、预算、量纲模式、量纲假设、自定义基量纲。
 - `compute` 把请求复制到模板图的克隆中，运行 e-graph 重写，抽取答案，再导入回会话。`Answer` 含 `term`、
   `value`、`error`、`reduced`、`dimension`、`diagnostics`、`report`。
-- `Term::eval(bindings)` 不重写，直接数值求值；`Term::compile(inputs)` 编译闭式（`jit` feature 用 Cranelift）；
+- `Term::eval(bindings)` 直接数值求值。`Term::compile(inputs)` 使用当前 RSSN 后端编译闭式；
   `Term::as_tensor()` 把嵌套 `list` 项转成 `(shape, Vec<f64>)`；`to_latex()`/`to_typst()`/`to_pretty()` 排版。
 - `sim::scenario::run(name, json)` 运行仿真；`sim::scenario::SCENARIOS` 是场景名的唯一来源（当前 29 个）。
 - `Session::register_unit(UnitDef)` 注册单位；`Session::manifest()` 用 `KernelManifest::build_with_units`，
@@ -6157,8 +6160,22 @@ pub fn kernel() -> Rc<Kernel>;   // 当前线程的会话，首次使用时创�
 
 ### 10.6.4 JIT
 
-`Term::compile` 把闭式 `Float` 表达式编译成函数；Aevia 的热点函数走这条路径。`TieredBackend` 先解释、后台编译；JIT 失败回退
-解释器，不改变语义。默认构建 `features.jit = false`，`@jit` 必须读 `Features`，否则报 `E1001("core.jit")`。
+RSSN 的 `Term::compile` 将闭式 `Float` 表达式编译成函数。`TieredBackend` 先解释执行，
+可在后台编译。Aevia 将满足条件的 Core IR 标量函数降级到 RSSN LIR，经预热后使用
+Cranelift 编译，也可用 `@jit` 主动请求。进入本机代码前，调用必须经过验证且具有受支持的
+具体标量表示。含副作用的函数、不支持的程序和编译失败的情况继续由解释器执行。
+
+本机工具链默认启用 Cranelift、wgpu 和 RSSN 的 NumPy IO 功能。不支持本机 JIT 的构建中，
+显式使用 `@jit` 会报告 `E1001("core.jit")`。
+
+用 `aevia devices` 查看当前和可用的 RSSN 后端。`--rssn-backend <name>` 设置进程级
+RSSN 后端，REPL 的 `:rssn-backend [name]` 提供同样的选择。默认的 `auto` 在运行时
+根据可用能力选择宿主执行路径。Aevia 自身的求值器和矩阵卸载策略由 `--backend` 独立控制。
+
+例如，`aevia --rssn-backend cpu-parallel test examples/native_backend.aev` 会为示例中的
+RSSN 编译选择并行 CPU 后端。源程序可用 `Rssn.num_backend_named` 和
+`Rssn.num_backend_compile` 为单个 RSSN 程序选择后端。源程序选择或使用 RSSN GPU 后端
+需要 `gpu` 能力。设置进程默认值时，可用命令行选项或 REPL 命令。
 
 ### 10.6.5 设备与数据并行执行
 
@@ -6172,8 +6189,14 @@ RSSN 设备层提供缓冲区、数值内核 IR、CPU 参考及并行执行器�
 Aevia 解释器的 CPU 批量路径接受 §9.6.1 所述纯标量子集。设备枚举、启动融合和显式
 GPU 缓冲区传输由 RSSN 宿主 API 提供。
 
-RSSN GPU 后端用两个 F32 分量模拟 F64 缓冲区。要求 IEEE F64 结果的程序使用 CPU
-后端。宿主负责传输，并在装入内核前检查设备能力。
+对 `@` 的大型稠密 `Float` 矩阵乘法，Aevia 可自动选择 RSSN 注册表中满足条件且支持原生 F64 的硬件 GPU。
+运行时需要 `gpu` 能力。张量保留在宿主，乘法卸载时上传操作数并下载结果。
+`--backend gpu` 也会尝试对较小的乘法和 wgpu 能够精确计算的子集使用 GPU。不支持的任务或设备失败时由 CPU 计算。
+
+RSSN 的 wgpu 后端用两个 F32 分量模拟 F64 缓冲区。只有当输入是可精确表示的整数
+且部分和的绝对值不超过 2^24 时，Aevia 才能使用其 F32 内核，确保乘积和累加无需舍入。
+可能出现负零乘积的输入仍在宿主上计算。
+一般的 `Float` 矩阵乘法由宿主以 binary64 计算，也可由提供原生 binary64 的设备执行。
 
 ## 10.7 错误映射
 
@@ -6976,7 +6999,7 @@ Rssn.Units           : Tensor<1, String>     # 单位名；单位值在生成的
 
 - `Rssn.call` 是 `Rssn.dynamic` 的别名，只按短名/别名查找；短名歧义报 `E1002`。
 - `Rssn.call_key` “不解析、直接执行”：收 name + `signature_hash`（32 hex 字符），合起来是 `OpKey` 的可写形式；全零表示该算子没有声明重载。key 与当前 manifest 不符报
-  `E1005`（提示重新生成模块）；kernel 侧参数偏离钉住签名时报 `UnknownOp`，在 Aevia 边界变成错误值。
+  `E1005`，并提示重新生成模块。对于有效的 key，`Rssn.call_key` 报告预期参数个数或首个类型不匹配的参数。`Rssn.call_ho_key` 可指出回调标量结果的具体量纲冲突。两种调用均以错误值返回诊断。
 - `Rssn.resolve_overload` 暴露运行时选择结果，供缓存/诊断用：成功返回 `"rule_set.name@signature_hash"`；并列与“没有签名接受”都报 `OpError::Ambiguous`。`Rssn.overloads` 返回每条
   overload 的渲染签名。
 - 用 `to_value(x)` 包装参数，再用 `from_value<T>(v)` 恢复静态类型。`Rssn.dynamic` 支持标准算子和插件算子，包括未生成类型化包装的入口。若图后端结果使用推导签名，且 `Same(index)` 指定的参数已知为无量纲，适配器可据此认定结果无量纲。类型化转换同时检查该证据与结果的表示和形状。
@@ -7263,9 +7286,9 @@ exports = ["Entropy"]
 
 ```
 core.dynamic_call
-core.jit                    # false：默认构建无 jit feature
-core.jit_branch             # false（同上）
-core.jit_index              # false（同上）
+core.jit                    # 由 jit 功能启用
+core.jit_branch             # 由 jit 功能启用
+core.jit_index              # 由 jit 功能启用
 core.parallel_symbolic
 core.higher_order
 core.structured_results
@@ -7280,14 +7303,14 @@ dim.affine_units
 dim.user_base_dimensions
 ```
 
-默认构建 `Rssn.Capabilities` 实际列出十二行（除 `jit*` 三行与 `plugin.cdylib` 外全部）。另有**规范声明、但 manifest 没有对应 `Features` 字段**的名字，可出现在诊断里，
-`Rssn.Capabilities` 不会列出：`core.symbolic`、`core.numeric`、`core.tensor`、`core.linalg`、`core.ode`、`core.pde`、`core.fft`、`core.stats`、`core.units`、`core.assume.general`、
+本机工具链默认在 `Rssn.Capabilities` 中列出 `jit*` 三行。未启用 `jit` 的精简构建省略这些行。
+一些没有对应能力表条目的名字也可出现在诊断中：`core.symbolic`、`core.numeric`、`core.tensor`、`core.linalg`、`core.ode`、`core.pde`、`core.fft`、`core.stats`、`core.units`、`core.assume.general`、
 `core.gpu`、`core.distributed`、`io.binary`。
 
 `storage.sparse`（§13.9.5/§8.4.1）是 Aevia 自己的存储类，已启用，不由 manifest 的 `Features` 发布，所以不出现在 `Rssn.Capabilities` 里。
 
 Aevia 编译器在类型检查后检查 capability；缺失时：静态可知（如 `@jit` 目标）→ 编译期 `E1001`；动态调用 → 运行时 `OpError.Unsupported`，Aevia 转成 `E1001`。
-**不删语言特性**：GPU 未实现时 `on(Gpu(0), ...)` 仍类型正确，运行时报 `E1001("core.gpu")`。
+**不删语言特性**：若 `on(Gpu(0), ...)` 请求的显式 GPU 放置不可用，代码仍类型正确，运行时报 `E1001("core.gpu")`。
 
 ---
 

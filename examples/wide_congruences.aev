@@ -1,0 +1,20 @@
+## Solve compatible non-coprime congruences with a period wider than 128 bits.
+import Rssn_NumberTheory as Number
+
+let scale = 1361129467683753853853498429727072845824
+
+let solution = Number.crt_bigint([scale - 1, 3], [scale, 6])
+
+fn main(): IO Unit = do
+    println("Least nonnegative solution and period: {solution}")
+    println("Inconsistent system: {Number.crt_bigint([0, 1], [4, 6])}")
+
+test "wide generalized CRT uses the least common multiple" =
+    match solution with
+    | Ok(result) -> result.residue == scale - 1 && result.modulus == 3 * scale
+    | Err(_) -> false
+
+test "inconsistent congruences return a typed error" =
+    match Number.crt_bigint([0, 1], [4, 6]) with
+    | Err(_) -> true
+    | Ok(_) -> false

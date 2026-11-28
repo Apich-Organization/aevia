@@ -65,6 +65,54 @@ and both correlations are dimensionless.
 `aevia rssn --describe num_signal_autocovariance` displays the documentation,
 overloads, and Aevia binding names from the running kernel.
 
+`Rssn_numerical_vector.num_signal_filtfilt(b, a, samples)` applies a
+dimensionless filter forward and backward with odd-reflected edges. It
+preserves the length and units of `samples`; invalid coefficients or an
+undefined steady state produce a domain error.
+[Pressure example](zero_phase_filter.aev)
+
+Use `Rssn_numerical_vector.num_cauchy_sharp_root_bound` for a complex
+coefficient vector in ascending order. For strictly positive real
+coefficients, `num_enestrom_kakeya_bounds` returns a record with `lower`
+and `upper` radii. The coordinate is dimensionless, so any common
+coefficient units cancel. `Rssn_numerical_special` provides the three
+Koebe bounds for the unit disk.
+[Root bounds example](polynomial_root_bounds.aev)
+
+Use `Rssn_numerical_special.num_mp_real_round` to create a dimensionless
+`{mantissa, exponent, precision}` record with exact integer fields.
+Compare records exactly using `num_mp_real_compare`. Addition,
+subtraction and multiplication each take a result precision in bits
+and a rounding mode, such as `"nearest"` (ties to even) or `"up"`.
+[Exact dyadic example](dyadic_real.aev)
+
+Use `Rssn_FiniteField.poly_mul_ntt_mod(a, b, p)` for exact coefficient
+convolution modulo an odd prime. Its transform length is the next power
+of two of the product length and must divide `p - 1`.
+`Rssn_NumberTheory.extended_gcd_u64` returns named Bézout coefficients.
+[Modular polynomial example](modular_polynomials.aev)
+
+`num_timeseries_kalman_filter` and `num_timeseries_kalman_smooth` accept
+linear state-space models whose states share one dimension and whose
+observations share another. The filter returns state means, covariance
+matrices and log likelihood. Its final argument sets the positive
+observation reference scale for the log likelihood. The smoother returns
+one state mean per observation. The same module provides
+`num_timeseries_integrate` to undo repeated first differences.
+Use `num_timeseries_rolling_moments(samples, window, ddof)` for complete
+windows of a measured series. It returns `mean` in the sample units and
+`variance` in squared sample units. Pass `ddof=0` for population variance
+or `ddof=1` for sample variance with a window of at least two samples.
+[Measured tracking example](kalman_tracking.aev)
+
+Use `Rssn_numerical_matrix.num_control_c2d_zoh(a, b, c, d, dt)`
+to discretise a linear state-space model with a measured sample period.
+Pass the returned record directly to
+`num_control_simulate_discrete(model, x0, inputs)`. For a nonuniform
+time grid, use `num_control_simulate_continuous(a, b, c, d, x0, inputs, times)`.
+The output starts with the observation of the initial state, including
+the direct input term. [Measured simulation example](measured_state_space.aev)
+
 `num_native_irfft_plan_new` prepares an inverse real FFT for a fixed real
 output length. Reuse the plan for successive spectra with
 `num_native_irfft_plan_apply`, which preserves the spectrum's physical
@@ -844,16 +892,16 @@ describes each specialization and its finite shape/work bounds; a Rust generic
 signature does not imply support for arbitrary Aevia types or dimensions.
 Mutable slice/storage interfaces return or update checked owning values; raw
 pointers and borrowed Rust layouts are not language values. JIT/GPU operations
-report `Unsupported` when their RSSN feature is disabled. Ordinary examples
-use default features. Optional backend and NPY file adapters can be compiled
-from the normal CLI with:
+report `Unsupported` when their RSSN feature is disabled. Default builds include Cranelift, wgpu and NumPy file support. Run the native
+execution examples with the regular CLI.
 
 ```sh
-cargo run -p aevia-cli --features jit,gpu-wgpu,npy -- test examples/native_execution.aev
+cargo run -p aevia-cli -- test examples/native_execution.aev
 ```
 
-`npy` enables NPY file support. Backend flags enable the corresponding adapters;
-actual backend and GPU device availability are checked separately at runtime.
+Run `aevia devices` to see available RSSN backend selectors.
+[The measured-backend example](native_backend.aev) uses the active selector. Run
+it with `--rssn-backend cpu` or `--rssn-backend cranelift` to compare execution.
 
 `object_binding!` derives schemas, codecs, arity and registration from typed
 adapter declarations. Source-derived scalar/record bindings use reviewed unit

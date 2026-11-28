@@ -106,7 +106,7 @@ Integrates dy/dt = f(t, y) and returns the state at each requested time: odeint(
 
 **Signature:** `odeint : (((Float[T], s) -> RateOf<s>), s, Tensor<1, Float[T]>) -> Tensor<1, s>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `odeint : (Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** the result has the dimension of argument 5

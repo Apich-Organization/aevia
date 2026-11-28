@@ -219,7 +219,7 @@ Sample skewness of a vector: positive when the long tail is on the right.
 
 **Signature:** `skewness : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,1>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `skewness : (Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** the result is dimensionless
@@ -242,7 +242,7 @@ Computes sample standard deviation in the elements’ dimension.
 
 **Signature:** `std : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `std : (Dyn<term>) -> Dyn<term>`
 
 **Dimensions:** the result has the dimension of argument 1

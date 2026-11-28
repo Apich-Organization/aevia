@@ -690,8 +690,8 @@ chebyshev_fit : (Tensor<1, Scalar<ρ,1>>, Tensor<1, Scalar<ρ,e>>, Int) -> Tenso
 
 - `fft2`/`ifft2` transform the last two axes; `fftn`/`ifftn` all axes; `fft_axis(t, k)` one axis; `fftn_axes(t, axes)` an arbitrary list. Axes count from 0 and negative values count from the end; an out-of-range or duplicate axis is `E0802`.
 - Normalisation uses the total number of transformed points `N` (the product of the transformed axis lengths): `Backward` is 1 forward and `1/N` inverse; `Forward` is `1/N` forward and 1 inverse; `Unitary` is `1/√N` both ways.
-- `rfft`/`rfft2`/`rfftn` take real input and keep only the `n/2 + 1` non-redundant frequencies along the last transformed axis; `irfft`/`irfft2`/`irfftn` rebuild the real tensor from the half spectrum, with the original length defaulting to `2(m − 1)` (even); odd lengths are given explicitly by the form taking an `Int`; a length incompatible with `m` is `E0802`.
-- `rfftn_axes(t, axes)`/`irfftn_axes(s, axes)`/`irfftn_axes(s, axes, n)` are real transforms over any subset of axes (matching numpy's `rfftn(a, axes=…)`): the **last** axis in the list is the half-spectrum axis and the others get full complex transforms; `irfftn_axes` does the Hermitian reconstruction on the last listed axis, with `n` the original length of that axis (default `2(m − 1)`). An empty list, or an out-of-range or duplicate axis, is `E0802`.
+- `rfft`/`rfft2`/`rfftn` take real input and keep only the `n/2 + 1` non-redundant frequencies along the last transformed axis. Their inverse forms rebuild the real tensor from its `m` bins along that axis. A single bin defaults to one sample. With more bins, the original length defaults to the even length `2(m − 1)`. Pass an explicit `Int` for an odd length. A length incompatible with `m` is `E0802`.
+- `rfftn_axes(t, axes)`/`irfftn_axes(s, axes)`/`irfftn_axes(s, axes, n)` are real transforms over any subset of axes (matching numpy's `rfftn(a, axes=…)`). The **last** axis in the list is the half-spectrum axis and the others get full complex transforms. `irfftn_axes` does the Hermitian reconstruction on the last listed axis, with `n` the original length of that axis and the same default as `irfftn`. An empty list, or an out-of-range or duplicate axis, is `E0802`.
 - `fftshift`/`ifftshift` move the zero frequency to the middle (each shifted axis rotates cyclically by `⌊n/2⌋`, the inverse the other way) and work for any element type; the `*_axis` forms shift a single axis.
 
 ```
@@ -1176,7 +1176,7 @@ Correlated errors need a covariance matrix, which the core library does not prov
 ## 8.15 Complex
 
 ```
-complex   : (Real[1], Real[1]) -> Complex[1]
+complex   : (Real[d], Real[d]) -> Complex[d]
 re im     : Complex[d] -> Real[d]
 conj      : Complex[d] -> Complex[d]
 magnitude : Complex[d] -> Real[d]
@@ -1186,6 +1186,8 @@ complex_exp  : Complex[1] -> Complex[1]
 complex_ln   : Complex[1] -> Complex[1]
 complex_sin cos : Complex[1] -> Complex[1]
 ```
+
+`complex(re, im)` requires the real and imaginary parts to have the same dimension. The result keeps that dimension. For example, the magnitude of `complex(3 m, 400 cm)` is `5 m`.
 
 `abs` is for real numbers only; the modulus of a complex number is `magnitude`, which avoids a clash between `abs : Complex[d] -> Real[d]` and `abs : Scalar<ρ,d> -> Scalar<ρ,d>`. The result dimension of `complex_sqrt` is `d^(1/2)`; in type display and diagnostics, the exponent of a dimension variable keeps its subscript (`:type complex_sqrt` → `Complex[d0] -> Complex[d0^(1/2)]`, never collapsing to `d0^1`).
 

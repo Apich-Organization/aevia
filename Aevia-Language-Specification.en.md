@@ -4642,8 +4642,8 @@ chebyshev_fit : (Tensor<1, Scalar<ρ,1>>, Tensor<1, Scalar<ρ,e>>, Int) -> Tenso
 
 - `fft2`/`ifft2` transform the last two axes; `fftn`/`ifftn` all axes; `fft_axis(t, k)` one axis; `fftn_axes(t, axes)` an arbitrary list. Axes count from 0 and negative values count from the end; an out-of-range or duplicate axis is `E0802`.
 - Normalisation uses the total number of transformed points `N` (the product of the transformed axis lengths): `Backward` is 1 forward and `1/N` inverse; `Forward` is `1/N` forward and 1 inverse; `Unitary` is `1/√N` both ways.
-- `rfft`/`rfft2`/`rfftn` take real input and keep only the `n/2 + 1` non-redundant frequencies along the last transformed axis; `irfft`/`irfft2`/`irfftn` rebuild the real tensor from the half spectrum, with the original length defaulting to `2(m − 1)` (even); odd lengths are given explicitly by the form taking an `Int`; a length incompatible with `m` is `E0802`.
-- `rfftn_axes(t, axes)`/`irfftn_axes(s, axes)`/`irfftn_axes(s, axes, n)` are real transforms over any subset of axes (matching numpy's `rfftn(a, axes=…)`): the **last** axis in the list is the half-spectrum axis and the others get full complex transforms; `irfftn_axes` does the Hermitian reconstruction on the last listed axis, with `n` the original length of that axis (default `2(m − 1)`). An empty list, or an out-of-range or duplicate axis, is `E0802`.
+- `rfft`/`rfft2`/`rfftn` take real input and keep only the `n/2 + 1` non-redundant frequencies along the last transformed axis. Their inverse forms rebuild the real tensor from its `m` bins along that axis. A single bin defaults to one sample. With more bins, the original length defaults to the even length `2(m − 1)`. Pass an explicit `Int` for an odd length. A length incompatible with `m` is `E0802`.
+- `rfftn_axes(t, axes)`/`irfftn_axes(s, axes)`/`irfftn_axes(s, axes, n)` are real transforms over any subset of axes (matching numpy's `rfftn(a, axes=…)`). The **last** axis in the list is the half-spectrum axis and the others get full complex transforms. `irfftn_axes` does the Hermitian reconstruction on the last listed axis, with `n` the original length of that axis and the same default as `irfftn`. An empty list, or an out-of-range or duplicate axis, is `E0802`.
 - `fftshift`/`ifftshift` move the zero frequency to the middle (each shifted axis rotates cyclically by `⌊n/2⌋`, the inverse the other way) and work for any element type; the `*_axis` forms shift a single axis.
 
 ```
@@ -5128,7 +5128,7 @@ Correlated errors need a covariance matrix, which the core library does not prov
 ## 8.15 Complex
 
 ```
-complex   : (Real[1], Real[1]) -> Complex[1]
+complex   : (Real[d], Real[d]) -> Complex[d]
 re im     : Complex[d] -> Real[d]
 conj      : Complex[d] -> Complex[d]
 magnitude : Complex[d] -> Real[d]
@@ -5138,6 +5138,8 @@ complex_exp  : Complex[1] -> Complex[1]
 complex_ln   : Complex[1] -> Complex[1]
 complex_sin cos : Complex[1] -> Complex[1]
 ```
+
+`complex(re, im)` requires the real and imaginary parts to have the same dimension. The result keeps that dimension. For example, the magnitude of `complex(3 m, 400 cm)` is `5 m`.
 
 `abs` is for real numbers only; the modulus of a complex number is `magnitude`, which avoids a clash between `abs : Complex[d] -> Real[d]` and `abs : Scalar<ρ,d> -> Scalar<ρ,d>`. The result dimension of `complex_sqrt` is `d^(1/2)`; in type display and diagnostics, the exponent of a dimension variable keeps its subscript (`:type complex_sqrt` → `Complex[d0] -> Complex[d0^(1/2)]`, never collapsing to `d0^1`).
 
@@ -5682,10 +5684,11 @@ The manifest's `Features` are read first:
 - `features.jit_branch = false`: a function containing `if`/`match` is not JIT-compiled;
 - `features.jit_index = false`: a function containing tensor indexing is not JIT-compiled.
 
-Past the gates the function must also: contain only `Float` scalars, arithmetic and elementary
-functions (with `if`/indexing as the flags allow); be called more than a threshold (default
-1000) times or carry an explicit `@jit`; and have fixed input and output types (no symbols,
-no `Dyn`, no records or variants).
+By default the Core IR evaluator considers native compilation after 2,000 entries into an
+eligible function. The function must be pure, capture-free and statically checked, with
+concrete dimensionless `Float`, `Bool` or `Int` parameters and result. An explicit `@jit` skips
+warm-up. `--backend ir` considers only explicit annotations and `--backend ast` uses the
+reference interpreter. Cancellable execution uses the interpreter.
 
 ### 9.6.2 Procedure
 
@@ -5723,9 +5726,11 @@ no `Dyn`, no records or variants).
 - `map_floats` (the device seam) still lowers to a straight-line tape, because a GPU needs a
   program without control flow.
 
-Optional build: `cargo build -p aevia-cli --features jit` enables RSSN's Cranelift backend
-(Rust 1.100 or newer). It is off by default, and `@jit` is then `E1001`. Reference test:
-`tests/jit_native.aev`.
+Default builds include Cranelift, wgpu and NumPy `.npy` support. Run `aevia devices` to inspect
+the build and detected devices. To make a lean build, run
+`cargo build -p aevia-cli --no-default-features`. Ordinary functions still run in the
+interpreter in that build. An explicit `@jit` reports `E1001("core.jit")`. The native test
+cases live in `tests/jit_native.aev`.
 
 ### 9.6.4 Device targets
 
@@ -6301,7 +6306,7 @@ let answer = s.compute(diff(sin(x) * cos(x), x), &Config::new())?;
 - `Session` owns a hash-consed term graph; `Term<'s>` is a handle with a lifetime.
 - `Config` specifies rule sets, the target phase (`Symbolic`/`Numeric`), bindings, assumptions, budgets, the dimension mode, dimension assumptions and custom base dimensions.
 - `compute` copies the request into a clone of the template graph, runs e-graph rewriting, extracts the answer and imports it back into the session. `Answer` holds `term`, `value`, `error`, `reduced`, `dimension`, `diagnostics` and `report`.
-- `Term::eval(bindings)` evaluates numerically without rewriting; `Term::compile(inputs)` compiles a closed form (the `jit` feature uses Cranelift); `Term::as_tensor()` turns nested `list` terms into `(shape, Vec<f64>)`; `to_latex()`/`to_typst()`/`to_pretty()` typeset.
+- `Term::eval(bindings)` evaluates numerically without rewriting; `Term::compile(inputs)` compiles a closed form with the active RSSN backend; `Term::as_tensor()` turns nested `list` terms into `(shape, Vec<f64>)`; `to_latex()`/`to_typst()`/`to_pretty()` typeset.
 - `sim::scenario::run(name, json)` runs a simulation; `sim::scenario::SCENARIOS` is the only source of scenario names (29 at present).
 - `Session::register_unit(UnitDef)` registers a unit; `Session::manifest()` uses `KernelManifest::build_with_units`, so session-private units appear in that session's manifest.
 - SDE: `rules::sde` exposes the callback-free `sde_wiener`/`sde_levy_areas` and the scheme metadata `sde_scheme_info(name) -> Tensor<1, Real>` as manifest operators (`features.sde`, capability `core.sde`). The solve loop needs host callbacks (`&Fn + Sync`) and is not in the manifest; Aevia's `sdeint_diag`/`sdeint_general` call `kernels::sde` on the host side.
@@ -6530,7 +6535,29 @@ A `Term<'s>` is borrowed only during a `compute` call and converted to a `u32` i
 
 ### 10.6.4 JIT
 
-`Term::compile` compiles a closed `Float` expression into a function; Aevia's hot functions take this path. `TieredBackend` interprets first and compiles in the background; if the JIT fails it falls back to the interpreter with no change of semantics. The default build has `features.jit = false`, and `@jit` MUST read `Features`, otherwise it reports `E1001("core.jit")`.
+RSSN's `Term::compile` compiles a closed `Float` expression into a function. Its
+`TieredBackend` interprets first and can compile in the background. Aevia lowers
+eligible checked Core IR scalar functions to RSSN's LIR and compiles it with
+Cranelift after warm-up, or on request with `@jit`. Native execution requires a
+verified concrete activation with supported scalar representations. Effects,
+unsupported programs and failed compilation keep the interpreter path.
+
+The native toolchain enables Cranelift, wgpu and RSSN's NumPy I/O feature by
+default. An explicit `@jit` in a build with no native JIT support reports
+`E1001("core.jit")`.
+
+Use `aevia devices` to inspect the active and available RSSN selectors.
+`--rssn-backend <name>` sets the process-wide RSSN backend, and the REPL exposes
+the same selection as `:rssn-backend [name]`. With `auto`, RSSN selects the
+available host execution path at runtime. Aevia controls its own evaluator and
+matrix offload policy independently via `--backend`.
+
+For example, `aevia --rssn-backend cpu-parallel test examples/native_backend.aev`
+uses the parallel CPU backend for RSSN compilation in the example. Source
+code can select a backend for an individual RSSN program with
+`Rssn.num_backend_named` and `Rssn.num_backend_compile`. Selecting or using an
+RSSN GPU backend in source code requires the `gpu` capability. To set the
+process default, use the CLI option or the REPL command.
 
 ### 10.6.5 Devices and data-parallel execution
 
@@ -6546,9 +6573,19 @@ evaluation, array operations, and fixed-step ensembles. The Aevia interpreter's 
 batch path accepts the pure scalar subset described in §9.6.1. Device enumeration,
 launch fusion and explicit GPU buffer transfers are RSSN host APIs.
 
-The RSSN GPU backend represents its emulated F64 buffers as two F32 parts. Programs
-requiring IEEE F64 results use the CPU backend. A host controls transfers and checks
-device capabilities before loading a kernel.
+For large dense `Float` matrix products on the `@` path, Aevia's automatic
+policy can select a compatible hardware GPU with native F64 in the RSSN registry.
+The `gpu` capability must be available. Aevia keeps tensors on the host and uploads and
+downloads the operands and result for each offloaded product. `--backend gpu`
+also considers smaller products and the exact subset supported by wgpu. The CPU
+path handles unsupported work and device failures.
+
+The RSSN wgpu backend represents emulated F64 buffers as two F32 parts. Aevia
+can use its F32 kernel only when all inputs are exactly representable integers
+and the magnitude of any partial sum is bounded by 2^24, so rounding cannot
+change the products or accumulated result. Inputs that can create negative zero
+products use the host path. General `Float` products retain
+binary64 arithmetic on the host unless the device offers it directly.
 
 ## 10.7 Error mapping
 
@@ -7307,7 +7344,7 @@ Rssn.Units           : Tensor<1, String>     # unit names; values are in the gen
 ```
 
 - `Rssn.call` is an alias of `Rssn.dynamic` and looks up only by short name/alias; an ambiguous short name is `E1002`.
-- `Rssn.call_key` "runs without resolving": it takes a name + `signature_hash` (32 hex characters), which together are the writable form of an `OpKey`; all zeros means the operator has no declared overload. A key that does not match the current manifest is `E1005` (regenerate the module); an argument that departs from the pinned signature on the kernel side is `UnknownOp`, which becomes an error value at the Aevia boundary.
+- `Rssn.call_key` "runs without resolving": it takes a name + `signature_hash` (32 hex characters), which together are the writable form of an `OpKey`; all zeros means the operator has no declared overload. A key that does not match the current manifest returns `E1005` with guidance to regenerate the module. For a live key, `Rssn.call_key` reports the expected argument count or the first mismatched argument. `Rssn.call_ho_key` can identify a concrete dimension mismatch in a callback’s scalar result. Both calls return these diagnostics as error values.
 - `Rssn.resolve_overload` exposes the run-time selection for caching and diagnostics: on success it returns `"rule_set.name@signature_hash"`; both a tie and "no signature accepts" are `OpError::Ambiguous`. `Rssn.overloads` returns the rendered signature of every overload.
 - Wrap arguments with `to_value(x)` and recover a static result with `from_value<T>(v)`. `Rssn.dynamic` supports standard and plugin operators, including entries without a generated typed wrapper. For a graph result with a derived signature, a `Same(index)` dimension rule supplies dimensionless evidence when the designated argument is known to be dimensionless. A typed conversion checks that evidence together with the result representation and shape.
 - `type_rep<T>()` keeps the concrete type resolved by the checker; it is an opaque value that an ordinary record cannot forge. After the dynamic call, `Rssn.typed` checks representation, shape and dimensions against that witness; a mismatch or missing evidence returns `Err(OpError)`. A successful result is still a `Value`, validated and converted through `from_value<T>`; a generic not made concrete by a run-time type dictionary cannot produce a `TypeRep`.
@@ -7569,9 +7606,9 @@ Backend abilities are described by capability names. **The only source of names 
 
 ```
 core.dynamic_call
-core.jit                    # false: the default build has no jit feature
-core.jit_branch             # false (as above)
-core.jit_index              # false (as above)
+core.jit                    # enabled with the jit feature
+core.jit_branch             # enabled with the jit feature
+core.jit_index              # enabled with the jit feature
 core.parallel_symbolic
 core.higher_order
 core.structured_results
@@ -7590,7 +7627,7 @@ The default build's `Rssn.Capabilities` actually lists twelve rows (all except t
 
 `storage.sparse` (§13.9.5/§8.4.1) is Aevia's own storage class, is enabled, and is not published by the manifest's `Features`, so it does not appear in `Rssn.Capabilities`.
 
-After type checking the Aevia compiler checks capabilities; when one is missing: statically known (such as a `@jit` target) → `E1001` at compile time; a dynamic call → `OpError.Unsupported` at run time, which Aevia turns into `E1001`. **No language feature is removed**: when the GPU is unimplemented, `on(Gpu(0), ...)` is still well-typed and reports `E1001("core.gpu")` at run time.
+After type checking the Aevia compiler checks capabilities; when one is missing: statically known (such as a `@jit` target) → `E1001` at compile time; a dynamic call → `OpError.Unsupported` at run time, which Aevia turns into `E1001`. **No language feature is removed**: a request for unavailable explicit GPU placement, such as `on(Gpu(0), ...)`, is well-typed and reports `E1001("core.gpu")` at run time.
 
 ---
 

@@ -204,7 +204,7 @@ Rounds up to the nearest whole number, keeping the type and dimension: ceil(-2.2
 
 **Signature:** `ceil : Scalar<ρ,d> -> Scalar<ρ,d>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `ceil : (Real) -> Real`
 - `ceil : (Dyn<term>) -> Dyn<term>`
 
@@ -616,7 +616,7 @@ Rounds down to the nearest whole number, keeping the type and dimension: floor(-
 
 **Signature:** `floor : Scalar<ρ,d> -> Scalar<ρ,d>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `floor : (Real) -> Real`
 - `floor : (Dyn<term>) -> Dyn<term>`
 
@@ -1453,7 +1453,7 @@ Rounds to the nearest whole number, with halves going away from zero (round(2.5)
 
 **Signature:** `round : (Scalar<ρ,d>, Int) -> Scalar<ρ,d>`
 
-**Kernel signature** (derived):
+**Kernel signature** (overlay):
 - `round : (Real) -> Real`
 - `round : (Dyn<term>) -> Dyn<term>`
 
