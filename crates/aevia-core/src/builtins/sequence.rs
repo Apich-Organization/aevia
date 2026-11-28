@@ -305,9 +305,9 @@ pub(super) fn sort_axis(
 }
 
 /// Join two tensors along their first axis.
-#[expect(
+#[allow(
     clippy::single_call_fn,
-    reason = "keeps shape and allocation checks out of the dispatcher"
+    reason = "keeps concatenation checks out of the dispatcher and available to direct tests"
 )]
 pub(super) fn concat(
     left: &TensorData,

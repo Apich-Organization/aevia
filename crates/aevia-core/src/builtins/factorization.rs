@@ -119,9 +119,9 @@ fn real_entries<'a>(
     Ok(Cow::Owned(values))
 }
 
-#[expect(
+#[allow(
     clippy::single_call_fn,
-    reason = "directly tests ambient eligibility without starting a numerical factorization"
+    reason = "production checks eligibility during elimination while tests check it independently"
 )]
 fn use_ambient_workers(interp: &Interp) -> bool {
     interp.on_worker
@@ -159,17 +159,11 @@ fn eliminate(
     let mut determinant = BigRational::one();
     for column in 0..rows.len() {
         interp.check_cancelled()?;
-        let Some((offset, _)) = rows
+        let Some((pivot_index, _)) = rows
             .iter()
-            .skip(column)
             .enumerate()
+            .skip(column)
             .find(|(_, row)| row.get(column).is_some_and(|entry| !entry.is_zero()))
-        else {
-            return Ok(None);
-        };
-        let Some(pivot_index) = column
-            .checked_add(offset)
-            .filter(|&index| index < rows.len())
         else {
             return Ok(None);
         };
@@ -249,7 +243,10 @@ fn eliminate(
     Ok(Some(determinant))
 }
 
-#[expect(clippy::single_call_fn, reason = "the determinant dispatches here")]
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps determinant handling out of the dispatcher and available to direct tests"
+)]
 pub(super) fn determinant(
     interp: &Interp,
     tensor: &TensorData,
@@ -272,7 +269,10 @@ pub(super) fn determinant(
     Ok(Value::Num(NumVal::float(value, dim)))
 }
 
-#[expect(clippy::single_call_fn, reason = "the inverse dispatches here")]
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps inverse handling out of the dispatcher and available to direct tests"
+)]
 pub(super) fn inverse(
     interp: &Interp,
     tensor: &TensorData,
@@ -314,9 +314,9 @@ pub(super) fn inverse(
     )
 }
 
-#[expect(
+#[allow(
     clippy::single_call_fn,
-    reason = "the square system solver dispatches here"
+    reason = "keeps square-system handling out of the dispatcher and available to direct tests"
 )]
 pub(super) fn solve(
     interp: &Interp,

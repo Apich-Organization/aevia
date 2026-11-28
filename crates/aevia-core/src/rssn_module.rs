@@ -1806,7 +1806,7 @@ fn call_ho_with_interp(
         key.as_ref().map_or_else(
             || aevia_rssn::kernel().call_ho_scoped_native(&name, &converted, &witnesses.0, handles),
             |key| {
-                aevia_rssn::kernel().call_ho_scoped_key_native(
+                aevia_rssn::kernel().call_ho_scoped_key_native_diagnosed(
                     key,
                     &converted,
                     &witnesses.0,
@@ -1929,7 +1929,7 @@ fn call_key(
         let converted = prepare_native_arguments(&values)?;
         let mut witnesses = WitnessScratchGuard::with_capacity(values.len());
         fill_host_witnesses(&values, &mut witnesses.0);
-        kernel.call_key_with_native_arguments(&key, &converted, &witnesses.0)
+        kernel.call_key_with_native_arguments_diagnosed(&key, &converted, &witnesses.0)
     } else {
         use aevia_rssn::witness::DimensionWitness as W;
         let mut converted = ValScratchGuard::with_capacity(values.len());
@@ -1951,7 +1951,7 @@ fn call_key(
             )));
         }
         kernel
-            .call_key(&key, &converted.0)
+            .call_key_diagnosed(&key, &converted.0)
             .map(|value| (value, W::Unknown))
     };
     match result {
@@ -2168,6 +2168,7 @@ pub fn member(name: &str) -> Value {
     }
     let owned = name.to_string();
     Value::Native(Rc::new(NativeFn(Box::new(move |interp, args, span| {
+        let _backend = interp.rssn_source_access();
         if owned == "invoke" {
             let expected = interp.resolved_expr_type(span);
             invoke(&args, span, expected.as_ref())
@@ -3683,7 +3684,7 @@ mod nested_erased_value_tests {
                 Dim::one(),
                 None,
             ));
-            let slice = Rc::new(dense.tail_view(1).unwrap());
+            let slice = dense.tail_view(1).unwrap();
             let reversed = Rc::new(dense.reversed_view(0).unwrap());
 
             for (tensor, expect_val) in [
@@ -3713,7 +3714,9 @@ mod nested_erased_value_tests {
             Dim::one(),
             None,
         )));
-        let err = prepare_checked_arguments(&[malformed], Some(entry)).unwrap_err();
+        let Err(err) = prepare_checked_arguments(&[malformed], Some(entry)) else {
+            panic!("expected malformed tensor arguments to be rejected");
+        };
         assert_eq!(err.code, "E0809");
     }
 }

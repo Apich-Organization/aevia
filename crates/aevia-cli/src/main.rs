@@ -107,7 +107,7 @@ struct Options {
 /// The `--backend` setting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BackendChoice {
-    /// Default adaptive execution (Core IR + SIMD + parallel host workers).
+    /// Default adaptive execution (Core IR, native acceleration and host workers).
     Auto,
     /// Core IR interpreter.
     Ir,
@@ -117,7 +117,7 @@ enum BackendChoice {
     Cpu,
     /// Multi-threaded CPU execution.
     CpuParallel,
-    /// Prefer GPU device offload when a GPU adapter is registered.
+    /// Prefer GPU device offload when the calculation can retain Float precision.
     Gpu,
 }
 
@@ -175,13 +175,24 @@ impl Default for Options {
 }
 
 impl Options {
+    fn effective_jobs(self) -> usize {
+        self.jobs.unwrap_or_else(|| {
+            if self.backend == BackendChoice::Cpu {
+                1
+            } else {
+                aevia_core::parallel::default_jobs()
+            }
+        })
+    }
+
     /// Splits `args` into options and the command line that follows.
     #[allow(
         clippy::single_call_fn,
         reason = "parses global options before creating the interpreter thread"
     )]
-    fn parse(args: &[String]) -> Result<(Self, Vec<String>), String> {
+    fn parse(args: &[String]) -> Result<(Self, Vec<String>, Option<String>), String> {
         let mut options = Self::default();
+        let mut rssn_backend = None;
         let mut rest = Vec::new();
         let mut index = 0;
         while let Some(argument) = args.get(index) {
@@ -267,11 +278,12 @@ impl Options {
                         )
                     })?;
                 },
+                | "--rssn-backend" => rssn_backend = Some(take("--rssn-backend", &mut index)?),
                 | _ => rest.push(arg),
             }
             index = index.saturating_add(1);
         }
-        Ok((options, rest))
+        Ok((options, rest, rssn_backend))
     }
 }
 
@@ -286,7 +298,7 @@ fn main() -> ExitCode {
     {
         return toolchain::run(args);
     }
-    let (options, args) = match Options::parse(&raw) {
+    let (options, args, rssn_backend) = match Options::parse(&raw) {
         | Ok(parsed) => parsed,
         | Err(message) => {
             eprintln!("aevia: {message}");
@@ -302,7 +314,7 @@ fn main() -> ExitCode {
         .stack_size(stack)
         .spawn(move || {
             aevia_core::install_stack_budget(stack);
-            run_cli(options, &args)
+            run_cli(options, &args, rssn_backend.as_deref())
         });
     match worker {
         | Ok(handle) => handle.join().unwrap_or_else(|_| ExitCode::from(101)),
@@ -323,36 +335,32 @@ fn style(options: Options) -> Style {
     }
 }
 
-/// Applies the command-line options to an interpreter.
-fn apply_options(
+/// Apply executor, acceleration and capability preferences consistently.
+fn apply_execution_options(
     interp: &mut Interp,
     options: Options,
 ) {
-    interp.optimize_ir = options.release;
-    if options.release {
-        interp.mode = aevia_core::Mode::Ir;
-    }
-    match options.backend {
-        | BackendChoice::Auto => {},
-        | BackendChoice::Ir => interp.mode = aevia_core::Mode::Ir,
-        | BackendChoice::Ast => {
-            interp.mode = aevia_core::Mode::Ast;
-            interp.optimize_ir = false;
-        },
-        | BackendChoice::Cpu => interp.set_jobs(1),
-        | BackendChoice::CpuParallel => {
-            if options.jobs.is_none() {
-                interp.set_jobs(aevia_core::parallel::default_jobs());
-            }
-        },
-        | BackendChoice::Gpu => {
-            if !aevia_rssn::device::has_gpu() {
-                eprintln!(
-                    "aevia: `--backend gpu` requested, but no GPU device is registered in this build; falling back to CPU parallel execution"
-                );
-            }
-        },
-    }
+    use aevia_core::JitPolicy;
+    use aevia_core::Mode;
+    use aevia_rssn::device::MatmulPolicy;
+
+    interp.mode = match options.backend {
+        | BackendChoice::Ast => Mode::Ast,
+        | BackendChoice::Ir => Mode::Ir,
+        | _ if options.release => Mode::Ir,
+        | _ => Mode::from_environment(),
+    };
+    interp.optimize_ir = options.release && interp.mode == Mode::Ir;
+    interp.jit_policy = match options.backend {
+        | BackendChoice::Ast | BackendChoice::Ir => JitPolicy::Annotated,
+        | _ => JitPolicy::Automatic,
+    };
+    interp.matmul_policy = match options.backend {
+        | BackendChoice::Auto => MatmulPolicy::Auto,
+        | BackendChoice::Gpu => MatmulPolicy::PreferGpu,
+        | _ => MatmulPolicy::Cpu,
+    };
+    interp.set_jobs(options.effective_jobs());
     if let Some(budget) = options.budget {
         interp.max_tail_calls = budget;
         interp.max_io_steps = budget;
@@ -360,8 +368,35 @@ fn apply_options(
     if let Some(caps) = options.caps {
         interp.capabilities = caps;
     }
-    if let Some(jobs) = options.jobs {
-        interp.set_jobs(jobs);
+}
+
+/// Selects the RSSN numeric backend for this CLI process, including worker threads.
+fn select_rssn_backend(
+    name: &str,
+    options: Options,
+) -> Result<String, String> {
+    if options
+        .caps
+        .is_some_and(|caps| caps & aevia_core::value::caps::GPU == 0)
+        && (name == "gpu" || name.starts_with("gpu:"))
+    {
+        return Err("an RSSN GPU backend requires the `gpu` capability".to_string());
+    }
+    aevia_rssn::backend::select_default(name).map_err(|error| error.to_string())
+}
+
+/// Applies the command-line options to an interpreter on the CLI thread.
+fn apply_options(
+    interp: &mut Interp,
+    options: Options,
+) {
+    apply_execution_options(interp, options);
+    if options.backend == BackendChoice::Gpu {
+        if interp.capabilities & aevia_core::value::caps::GPU == 0 {
+            eprintln!("aevia: `--backend gpu` requires the `gpu` capability; using CPU execution");
+        } else if !aevia_rssn::device::has_gpu() {
+            eprintln!("aevia: `--backend gpu` found no registered RSSN GPU; using CPU execution");
+        }
     }
     // The CLI thread declared its stack (`install_stack_budget`), so non-tail
     // recursion is bounded by the stack that is actually left; the fixed
@@ -377,9 +412,16 @@ fn apply_options(
 fn run_cli(
     options: Options,
     args: &[String],
+    rssn_backend: Option<&str>,
 ) -> ExitCode {
     if let Some(code) = help::route(args) {
         return code;
+    }
+    if let Some(name) = rssn_backend
+        && let Err(message) = select_rssn_backend(name, options)
+    {
+        eprintln!("aevia: --rssn-backend: {message}");
+        return ExitCode::from(2);
     }
     if options.locked
         && let Err(code) = locked_precheck(args)
@@ -577,6 +619,22 @@ fn print_devices_summary() {
     println!("  Policy:      {mode:?}");
     println!("  Cranelift:   {jit}");
     println!("  GPU (wgpu):  {gpu_build}");
+    println!(
+        "  RSSN NumPy:  {}",
+        if cfg!(feature = "npy") {
+            "enabled"
+        } else {
+            "disabled (rebuild with `--features npy`)"
+        }
+    );
+    println!(
+        "  RSSN backend: {}",
+        aevia_rssn::backend::current().selector()
+    );
+    println!(
+        "  RSSN choices: {}",
+        aevia_rssn::backend::available().join(", ")
+    );
     println!("Registered RSSN devices:");
     for dev in aevia_rssn::device::available() {
         let dtypes: Vec<&str> = dev
@@ -665,7 +723,7 @@ fn completions_command(args: &[String]) -> ExitCode {
              \x20           return 0\n\
              \x20           ;;\n\
              \x20       run|check|test)\n\
-             \x20           COMPREPLY=( $(compgen -W \"--relax-result --no-cache --backend --jobs --help\" -f -- \"$cur\") )\n\
+             \x20           COMPREPLY=( $(compgen -W \"--relax-result --no-cache --backend --rssn-backend --jobs --help\" -f -- \"$cur\") )\n\
              \x20           return 0\n\
              \x20           ;;\n\
              \x20   esac\n\
@@ -970,17 +1028,11 @@ fn run_command(
         interp.set_replica(std::sync::Arc::new(move || {
             let entry = replica_program.entry().ok_or("no module produced")?;
             let mut replica = Interp::new(&entry.checked);
-            replica.optimize_ir = options.release;
-            if options.release {
-                replica.mode = aevia_core::Mode::Ir;
-            }
-            if let Some(budget) = options.budget {
-                replica.max_tail_calls = budget;
-                replica.max_io_steps = budget;
-            }
-            if let Some(caps) = options.caps {
-                replica.capabilities = caps;
-            }
+            apply_execution_options(&mut replica, options);
+            // Replica initialization runs within the host worker's budget.
+            replica.set_jobs(1);
+            replica.jit_policy = aevia_core::JitPolicy::Annotated;
+            replica.matmul_policy = aevia_rssn::device::MatmulPolicy::Cpu;
             replica.set_args(program_args.clone());
             let diagnostics = driver::run_modules(&mut replica, &replica_program);
             if diagnostics.has_errors() {
@@ -1070,15 +1122,7 @@ fn example_path(name: &str) -> Result<PathBuf, ExitCode> {
     Err(ExitCode::from(2))
 }
 
-/// Loads a program and reports the diagnostics that stop it.
-fn load_program(
-    path: &Path,
-    style: Style,
-) -> Result<Program, ExitCode> {
-    load_program_with(path, style, false)
-}
-
-/// [`load_program`] with the per-module `.aevi` cache switched on or off.
+/// Loads a program with optional per-module caching and reports diagnostics.
 fn load_program_with(
     path: &Path,
     style: Style,
@@ -1740,6 +1784,16 @@ fn rssn_command(args: &[String]) -> ExitCode {
     if let Err(error) = aevia_rssn::check_compatibility(registry) {
         eprintln!("aevia rssn: {error}");
         return ExitCode::from(1);
+    }
+    if let Some((flag, rest)) = args.split_first()
+        && flag == "--manifest-json"
+    {
+        if !rest.is_empty() {
+            eprintln!("aevia rssn: --manifest-json must be used alone");
+            return ExitCode::from(2);
+        }
+        println!("{}", aevia_rssn::kernel::kernel().manifest().to_json());
+        return ExitCode::SUCCESS;
     }
     if let Some((flag, rest)) = args.split_first()
         && flag == "--describe"
@@ -2633,10 +2687,7 @@ fn handle_repl_command(
                     "backend: {} (release={}, jobs={})\nAvailable: auto, ir, ast, cpu, cpu-parallel, gpu",
                     session.options.backend.as_str(),
                     session.options.release,
-                    session
-                        .options
-                        .jobs
-                        .unwrap_or_else(aevia_core::parallel::default_jobs),
+                    session.options.effective_jobs(),
                 );
             } else if let Some(choice) = BackendChoice::parse(argument) {
                 session.options.backend = choice;
@@ -2651,19 +2702,33 @@ fn handle_repl_command(
                 session.command_failed = true;
             }
         },
+        | "rssn-backend" => {
+            if argument.is_empty() {
+                println!(
+                    "RSSN backend: {}\nAvailable: {}",
+                    aevia_rssn::backend::current().selector(),
+                    aevia_rssn::backend::available().join(", ")
+                );
+            } else {
+                match select_rssn_backend(argument, session.options) {
+                    | Ok(name) => println!("RSSN backend: {name}"),
+                    | Err(message) => {
+                        eprintln!("aevia: :rssn-backend: {message}");
+                        session.command_failed = true;
+                    },
+                }
+            }
+        },
         | "jobs" => {
             if argument.is_empty() {
-                let active = session
-                    .options
-                    .jobs
-                    .unwrap_or_else(aevia_core::parallel::default_jobs);
+                let active = session.options.effective_jobs();
                 println!(
                     "jobs: {active} (default: {})",
                     aevia_core::parallel::default_jobs()
                 );
             } else if argument == "auto" {
                 session.options.jobs = None;
-                let default_workers = aevia_core::parallel::default_jobs();
+                let default_workers = session.options.effective_jobs();
                 if let Some(interp) = session.interp.as_mut() {
                     interp.set_jobs(default_workers);
                 }
@@ -2880,10 +2945,45 @@ fn handle_repl_command(
         },
         | other => {
             const KNOWN_REPL_COMMANDS: &[&str] = &[
-                "help", "h", "?", "quit", "q", "exit", "reset", "doc", "apropos", "format",
-                "backend", "jobs", "devices", "run", "show", "print", "repr", "pretty", "pprint",
-                "latex", "typst", "source", "imports", "bindings", "vars", "save", "dims", "units",
-                "type", "t", "ast", "core", "time", "load", "l", "paste", "end", "cancel",
+                "help",
+                "h",
+                "?",
+                "quit",
+                "q",
+                "exit",
+                "reset",
+                "doc",
+                "apropos",
+                "format",
+                "backend",
+                "rssn-backend",
+                "jobs",
+                "devices",
+                "run",
+                "show",
+                "print",
+                "repr",
+                "pretty",
+                "pprint",
+                "latex",
+                "typst",
+                "source",
+                "imports",
+                "bindings",
+                "vars",
+                "save",
+                "dims",
+                "units",
+                "type",
+                "t",
+                "ast",
+                "core",
+                "time",
+                "load",
+                "l",
+                "paste",
+                "end",
+                "cancel",
             ];
             if let Some(suggestion) =
                 aevia_types::check::closest_name(other, KNOWN_REPL_COMMANDS.iter().copied())
@@ -2952,6 +3052,7 @@ fn repl_item_help(
                     | "print"
                     | "format"
                     | "backend"
+                    | "rssn-backend"
                     | "jobs"
                     | "devices"
                     | "doc"
@@ -3035,7 +3136,8 @@ Session commands:
   :pretty EXPR   print two-dimensional mathematics (:pprint alias)
   :repr EXPR     render source representation; :print EXPR renders human text
   :format NAME   set normal result format: show, repr, pretty, latex, typst
-  :backend [B]   show or switch execution backend: auto, ir, ast, cpu, cpu-parallel, gpu
+  :backend [B]   show or switch Aevia execution: auto, ir, ast, cpu, cpu-parallel, gpu
+  :rssn-backend [B]  show or switch RSSN numeric expression compilation
   :jobs [N|auto] show or set parallel worker thread budget
   :devices       inspect CPU SIMD, JIT, and registered RSSN/GPU devices
   :help ITEM     signature, documentation, and examples for a function/type/unit
@@ -3104,9 +3206,9 @@ Numbers are exact by default. Use approx(EXPR) when you want a numerical result.
                 "usage: :{topic} EXPRESSION\nExample: :{topic} 1 + 2\n:ast parses; :core also type-checks; :time evaluates once using :format's output mode."
             );
         },
-        | "backend" | "jobs" | "devices" => {
+        | "backend" | "rssn-backend" | "jobs" | "devices" => {
             println!(
-                "Execution controls:\n  :backend [auto|ir|ast|cpu|cpu-parallel|gpu]  inspect or switch execution backend\n  :jobs [N|auto]                               inspect or set parallel worker budget\n  :devices                                     inspect CPU SIMD, JIT, and registered RSSN/GPU devices"
+                "Execution controls:\n  :backend [auto|ir|ast|cpu|cpu-parallel|gpu]  inspect or switch execution backend\n  :rssn-backend [NAME]                         inspect or switch RSSN numeric expression compilation\n  :jobs [N|auto]                               inspect or set parallel worker budget\n  :devices                                     inspect CPU SIMD, JIT, and registered RSSN/GPU devices"
             );
         },
         | "imports" | "import" | "open" => {
@@ -3698,15 +3800,54 @@ mod tests {
     }
 
     #[test]
+    fn backend_switch_restores_evaluator_and_worker_defaults() {
+        use aevia_core::JitPolicy;
+        use aevia_core::Mode;
+        use aevia_rssn::device::MatmulPolicy;
+
+        let mut interp = Interp::new(&aevia_types::CheckedModule::default());
+        let mut options = Options {
+            backend: BackendChoice::Ast,
+            release: true,
+            ..Options::default()
+        };
+        apply_execution_options(&mut interp, options);
+        assert_eq!(interp.mode, Mode::Ast);
+        assert!(!interp.optimize_ir);
+        assert_eq!(interp.jit_policy, JitPolicy::Annotated);
+        assert_eq!(interp.matmul_policy, MatmulPolicy::Cpu);
+
+        options.backend = BackendChoice::Cpu;
+        apply_execution_options(&mut interp, options);
+        assert_eq!(options.effective_jobs(), 1);
+        assert_eq!(interp.mode, Mode::Ir);
+        assert!(interp.optimize_ir);
+        assert_eq!(interp.jit_policy, JitPolicy::Automatic);
+        assert_eq!(interp.matmul_policy, MatmulPolicy::Cpu);
+
+        options.backend = BackendChoice::Gpu;
+        apply_execution_options(&mut interp, options);
+        assert_eq!(interp.matmul_policy, MatmulPolicy::PreferGpu);
+
+        options.backend = BackendChoice::Auto;
+        apply_execution_options(&mut interp, options);
+        assert_eq!(
+            options.effective_jobs(),
+            aevia_core::parallel::default_jobs()
+        );
+        assert_eq!(interp.matmul_policy, MatmulPolicy::Auto);
+    }
+
+    #[test]
     fn options_are_taken_from_anywhere_on_the_line() {
         // Both spellings have to work: a user who puts the flag after the
         // command is not making a mistake.
-        let (before, rest) =
+        let (before, rest, _) =
             Options::parse(&args(&["--budget", "10", "run", "a.aev"])).expect("parses");
         assert_eq!(before.budget, Some(10));
         assert_eq!(rest, args(&["run", "a.aev"]));
 
-        let (after, rest) =
+        let (after, rest, _) =
             Options::parse(&args(&["run", "--budget=10", "a.aev"])).expect("parses");
         assert_eq!(after.budget, Some(10));
         assert_eq!(rest, args(&["run", "a.aev"]));
@@ -3830,7 +3971,7 @@ mod tests {
 
     #[test]
     fn release_and_worker_flags_are_parsed() {
-        let (options, rest) =
+        let (options, rest, _) =
             Options::parse(&args(&["--release", "--jobs", "4", "--locked", "check"]))
                 .expect("parses");
         assert!(options.release);
@@ -3840,7 +3981,8 @@ mod tests {
         // A job count of zero is a mistake, not a request for the default.
         assert!(Options::parse(&args(&["--jobs", "0", "check"])).is_err());
         // Flags that take no value do not swallow the command.
-        let (options, rest) = Options::parse(&args(&["--locked", "run", "a.aev"])).expect("parses");
+        let (options, rest, _) =
+            Options::parse(&args(&["--locked", "run", "a.aev"])).expect("parses");
         assert!(options.locked);
         assert_eq!(rest, args(&["run", "a.aev"]));
     }

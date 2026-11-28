@@ -69,6 +69,37 @@ fn code(output: &Output) -> i32 {
 }
 
 #[test]
+fn rssn_backend_selectors_are_available_from_the_cli() {
+    let scratch = Scratch::new("rssn-backend");
+    for name in ["interpreter", "cpu", "cpu-parallel"] {
+        let output = aevia(scratch.path(), &["devices", "--rssn-backend", name]);
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+        assert!(stdout(&output).contains(&format!("RSSN backend: {name}\n")));
+    }
+    let output = aevia(scratch.path(), &["--rssn-backend=auto", "devices"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let devices = stdout(&output);
+    assert!(devices.contains("RSSN choices: auto, interpreter"));
+    if devices
+        .lines()
+        .any(|line| line.contains("RSSN choices:") && line.contains("cranelift"))
+    {
+        let output = aevia(scratch.path(), &["--rssn-backend=jit", "devices"]);
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+        assert!(stdout(&output).contains("RSSN backend: cranelift\n"));
+    }
+    let denied = aevia(
+        scratch.path(),
+        &["--caps=", "--rssn-backend=gpu", "devices"],
+    );
+    assert_eq!(code(&denied), 2);
+    assert!(stderr(&denied).contains("requires the `gpu` capability"));
+    let invalid = aevia(scratch.path(), &["devices", "--rssn-backend=bogus"]);
+    assert_eq!(code(&invalid), 2);
+    assert!(stderr(&invalid).contains("backend `bogus` is unavailable"));
+}
+
+#[test]
 fn run_workers_use_the_checked_import_revision() {
     let scratch = Scratch::new("worker-source-revision");
     let original = "fn value(_i: Int): Int = 1\n";
@@ -609,6 +640,27 @@ fn rssn_describe_reports_operator_docs_and_callable_binding() {
     assert!(stderr(&unknown).contains("unknown operator `no_such_operator`"));
     let missing = aevia(scratch.path(), &["rssn", "--describe"]);
     assert_eq!(code(&missing), 2);
+}
+
+#[test]
+fn rssn_manifest_json_matches_the_linked_kernel() {
+    let scratch = Scratch::new("rssn-manifest-json");
+    let output = aevia(scratch.path(), &["rssn", "--manifest-json"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let exported: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("one plain JSON document");
+    let linked = aevia_rssn::kernel::kernel().manifest();
+    let expected: serde_json::Value =
+        serde_json::from_str(&linked.to_json()).expect("canonical RSSN manifest");
+    assert!(
+        exported == expected,
+        "the CLI must export the linked manifest"
+    );
+
+    let mixed = aevia(scratch.path(), &["rssn", "--manifest-json", "--audit"]);
+    assert_eq!(code(&mixed), 2);
+    assert!(mixed.stdout.is_empty());
+    assert!(stderr(&mixed).contains("--manifest-json must be used alone"));
 }
 
 #[test]

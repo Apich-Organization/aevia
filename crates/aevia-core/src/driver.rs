@@ -793,9 +793,10 @@ pub fn load_all_with_roots(
     load_all_with_roots_and_disk_cache(entries, roots, options, None)
 }
 
-/// Loads every file in `entries` together, optionally consulting and updating
-/// an on-disk `.aevi` cache so multi-entry commands (`aevia check --all`,
-/// `aevia lint --all`) share both the in-process graph and cached modules.
+/// Loads all entry files together using a shared in-process graph.
+///
+/// Supplying an on-disk `.aevi` cache lets commands such as `aevia check --all`
+/// and `aevia lint --all` reuse and update cached modules.
 #[must_use]
 pub fn load_all_with_roots_and_disk_cache(
     entries: &[PathBuf],

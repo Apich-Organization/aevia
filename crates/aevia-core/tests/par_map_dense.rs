@@ -107,9 +107,10 @@ fn main(): IO Unit = do
 
 #[test]
 fn cancellation_after_dispatch_interrupts_instead_of_rerunning() {
+    // Floor uses the evaluator replicas exercised by the cancellation hook.
     const PROGRAM: &str = r#"fn main(): IO Unit = do
     let xs = linspace(-128.0, 128.0, 257)
-    let mapped = par_map(abs, xs)
+    let mapped = par_map(floor, xs)
     println(mapped[3])
 "#;
     for mode in [Mode::Ast, Mode::Ir] {

@@ -267,61 +267,7 @@ impl TensorData {
             return None;
         }
         if self.shape == right.shape {
-            let (data, dim) = match op {
-                | BinOp::Add => {
-                    (
-                        aevia_rssn::simd_binary_f64_in_mode(
-                            aevia_rssn::SimdBinaryOp::Add,
-                            &left_data,
-                            &right_data,
-                            mode,
-                        ),
-                        self.dim.clone(),
-                    )
-                },
-                | BinOp::Sub => {
-                    (
-                        aevia_rssn::simd_binary_f64_in_mode(
-                            aevia_rssn::SimdBinaryOp::Sub,
-                            &left_data,
-                            &right_data,
-                            mode,
-                        ),
-                        self.dim.clone(),
-                    )
-                },
-                | BinOp::Mul => {
-                    (
-                        aevia_rssn::simd_binary_f64_in_mode(
-                            aevia_rssn::SimdBinaryOp::Mul,
-                            &left_data,
-                            &right_data,
-                            mode,
-                        ),
-                        self.dim.mul(&right.dim),
-                    )
-                },
-                | BinOp::Div => {
-                    (
-                        zip_map(&left_data, &right_data, mode, |a, b| a / b),
-                        self.dim.div(&right.dim),
-                    )
-                },
-                | BinOp::Pow => {
-                    let (&first, rest) = right_data.split_first()?;
-                    if rest.iter().any(|value| !value.is_finite()) {
-                        return None;
-                    }
-                    // The first exponent determines the resulting element dimension.
-                    let exponent = BigRational::from_float(first)?;
-                    (
-                        zip_map(&left_data, &right_data, mode, f64::powf),
-                        self.dim.pow(&exponent),
-                    )
-                },
-                | _ => return None,
-            };
-            return Some(Self::dense_result(self.shape.clone(), data, dim));
+            return self.dense_binary_equal_shape(op, right, &left_data, &right_data, mode);
         }
 
         let (out_shape, left_strides, right_strides, count) =
@@ -411,6 +357,75 @@ impl TensorData {
             | _ => return None,
         };
         Some(Self::dense_result(out_shape, data, dim))
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "keeps the equal-shape SIMD path separate from broadcast traversal"
+    )]
+    fn dense_binary_equal_shape(
+        &self,
+        op: BinOp,
+        right: &Self,
+        left_data: &[f64],
+        right_data: &[f64],
+        mode: aevia_rssn::execution::ExecutionMode,
+    ) -> Option<Value> {
+        let (data, dim) = match op {
+            | BinOp::Add => {
+                (
+                    aevia_rssn::simd_binary_f64_in_mode(
+                        aevia_rssn::SimdBinaryOp::Add,
+                        left_data,
+                        right_data,
+                        mode,
+                    ),
+                    self.dim.clone(),
+                )
+            },
+            | BinOp::Sub => {
+                (
+                    aevia_rssn::simd_binary_f64_in_mode(
+                        aevia_rssn::SimdBinaryOp::Sub,
+                        left_data,
+                        right_data,
+                        mode,
+                    ),
+                    self.dim.clone(),
+                )
+            },
+            | BinOp::Mul => {
+                (
+                    aevia_rssn::simd_binary_f64_in_mode(
+                        aevia_rssn::SimdBinaryOp::Mul,
+                        left_data,
+                        right_data,
+                        mode,
+                    ),
+                    self.dim.mul(&right.dim),
+                )
+            },
+            | BinOp::Div => {
+                (
+                    zip_map(left_data, right_data, mode, |a, b| a / b),
+                    self.dim.div(&right.dim),
+                )
+            },
+            | BinOp::Pow => {
+                let (&first, rest) = right_data.split_first()?;
+                if rest.iter().any(|value| !value.is_finite()) {
+                    return None;
+                }
+                // The first exponent determines the resulting element dimension.
+                let exponent = BigRational::from_float(first)?;
+                (
+                    zip_map(left_data, right_data, mode, f64::powf),
+                    self.dim.pow(&exponent),
+                )
+            },
+            | _ => return None,
+        };
+        Some(Self::dense_result(self.shape.clone(), data, dim))
     }
 
     /// Elementwise `op` between an `f64` tensor and a `Float` scalar.
@@ -602,6 +617,15 @@ impl TensorData {
         right: &Self,
         mode: aevia_rssn::execution::ExecutionMode,
     ) -> Option<Value> {
+        self.dense_matmul_with_policy(right, mode, aevia_rssn::device::MatmulPolicy::Cpu)
+    }
+
+    pub(crate) fn dense_matmul_with_policy(
+        &self,
+        right: &Self,
+        mode: aevia_rssn::execution::ExecutionMode,
+        policy: aevia_rssn::device::MatmulPolicy,
+    ) -> Option<Value> {
         let (rows, inner, right_inner, cols, shape) =
             match (self.shape.as_slice(), right.shape.as_slice()) {
                 | (&[rows, inner], &[right_inner, cols]) => {
@@ -623,11 +647,29 @@ impl TensorData {
             let dot = aevia_rssn::par_dot_f64_in_mode(&left_data, &right_data, mode);
             return Some(Value::Num(NumVal::float(dot, dim)));
         }
+        if let Some(data) =
+            aevia_rssn::device::try_gpu_matmul(policy, &left_data, &right_data, rows, inner, cols)
+        {
+            return Some(Self::dense_result(shape, data, dim));
+        }
         let legacy =
             || aevia_std::linalg::legacy::matmul(rows, inner, cols, &left_data, &right_data);
         let data = if shape.len() == 2 || rows.saturating_mul(inner).saturating_mul(cols) >= 4_096 {
-            aevia_std::linalg::matmul(rows, inner, cols, &left_data, &right_data)
-                .unwrap_or_else(|_| legacy())
+            let product = || aevia_std::linalg::matmul(rows, inner, cols, &left_data, &right_data);
+            // RSSN's dense host product starts considering workers at this
+            // size. Avoid entering a scoped pool for small products.
+            let product = if count.saturating_mul(inner) >= 4_000_000 {
+                use aevia_rssn::execution::ExecutionMode;
+                let limit = match mode {
+                    | ExecutionMode::Auto => None,
+                    | ExecutionMode::Serial => Some(1),
+                    | ExecutionMode::Parallel(limit) => Some(limit),
+                };
+                aevia_rssn::execution::with_scoped_pool(limit, product)
+            } else {
+                product()
+            };
+            product.unwrap_or_else(|_| legacy())
         } else {
             legacy()
         };

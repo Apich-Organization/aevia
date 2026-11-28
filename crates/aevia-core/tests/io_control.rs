@@ -336,9 +336,57 @@ fn missing(): IO (Result<String, IOError>) = do
 }
 
 #[test]
+fn postfix_try_propagates_the_genuine_kernel_error_payload() {
+    let compilation = checked(
+        r#"fn read(value: Value): Result<Int, OpError> =
+    from_value<Int>(value)
+fn positive(value: Value): Result<Bool, OpError> =
+    let n = read(value)?
+    Ok(n > 0)
+fn is_error<A>(candidate: Result<A, OpError>): Bool =
+    match candidate with
+    | Err(_) -> true
+    | Ok(_) -> false
+let original = read(to_value("invalid input"))
+let propagated = positive(to_value("invalid input"))
+let success = positive(to_value(5))
+let generic = is_error(propagated)
+"#,
+    );
+    for mode in [Mode::Ast, Mode::Ir] {
+        let mut interp = installed(&compilation, mode);
+        let original = interp.eval_toplevel("original").unwrap();
+        let propagated = interp.eval_toplevel("propagated").unwrap();
+        let (Value::Variant(original), Value::Variant(propagated)) = (original, propagated) else {
+            panic!("expected Result values in {mode:?}");
+        };
+        assert_eq!(original.name, "Err");
+        assert_eq!(propagated.name, "Err");
+        let ([Value::KernelError(original)], [Value::KernelError(propagated)]) =
+            (original.fields.as_slice(), propagated.fields.as_slice())
+        else {
+            panic!("expected genuine kernel errors in {mode:?}");
+        };
+        assert_eq!(propagated.code, original.code);
+        assert_eq!(propagated.message, original.message);
+        let success = interp.eval_toplevel("success").unwrap();
+        variant(&success, "Ok");
+        let Value::Variant(success) = success else {
+            unreachable!()
+        };
+        assert!(matches!(success.fields.as_slice(), [Value::Bool(true)]));
+        assert!(matches!(
+            interp.eval_toplevel("generic").unwrap(),
+            Value::Bool(true)
+        ));
+    }
+}
+
+#[test]
 fn legacy_exception_never_authenticates_wrong_concrete_or_source_nominal_errors() {
     for source in [
         "fn pass(value: Result<Int, Int>): Result<String, Int> =\n    let n = value?\n    Ok(show(n))\n",
+        "fn pass(value: Result<Int, OpError>): Result<String, OpError> =\n    let n = value?\n    Ok(show(n))\n",
         "type ParseError = | ParseError(Int)\nfn pass(value: Result<Int, ParseError>): Result<String, ParseError> =\n    let n = value?\n    Ok(show(n))\n",
     ] {
         let compilation = checked(source);
@@ -373,4 +421,37 @@ fn run_returns_the_compile_error_after_an_earlier_warning() {
     assert_eq!(first.severity, aevia_syntax::Severity::Warning);
     let error = aevia_core::run(source, "diagnostic.aev").unwrap_err();
     assert_eq!(error.severity, aevia_syntax::Severity::Error);
+}
+
+
+#[test]
+fn kernel_errors_cannot_impersonate_a_source_type_with_the_same_name() {
+    let compilation = checked(
+        r#"type OpError = | OpError(Int)
+fn pass(x: Result<Int, OpError>): Result<Bool, OpError> =
+    let n = x?
+    Ok(n > 0)
+"#,
+    );
+    let forged = || {
+        aevia_core::value::make_variant(
+            aevia_types::adt::RESULT_ID,
+            1,
+            "Err",
+            vec![Value::KernelError(Rc::new(
+                aevia_core::value::KernelErrorValue {
+                    code: "E1001".into(),
+                    message: "not a source constructor".into(),
+                },
+            ))],
+        )
+    };
+    for mode in [Mode::Ast, Mode::Ir] {
+        let mut interp = installed(&compilation, mode);
+        let f = interp.eval_toplevel("pass").unwrap();
+        let error = interp
+            .apply(f, vec![forged()], Span::default())
+            .unwrap_err();
+        assert_eq!(error.code, "E0302", "{mode:?}");
+    }
 }

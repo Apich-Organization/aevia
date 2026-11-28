@@ -661,6 +661,7 @@ where
         Rc::new(Function {
             name: Rc::from(state.name),
             jit,
+            native_calls: std::cell::Cell::new(0),
             params: patterns,
             body: Rc::new(body_block),
             captures: state.captures,

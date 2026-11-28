@@ -70,6 +70,8 @@ test "rfftn and irfftn over rank 3" = shape(rfftn(cube)) == [2, 2, 2] && near3(i
 
 test "irfft takes an explicit length for odd signals" = near1(irfft(rfft([1.0, 2.0, 3.0, 4.0, 5.0]), 5), [1.0, 2.0, 3.0, 4.0, 5.0]) && near1(irfft(rfft([1.0, 2.0, 3.0, 4.0])), [1.0, 2.0, 3.0, 4.0])
 
+test "one frequency bin implies one sample" = near1(irfft(rfft([3.0])), [3.0]) && near2(irfft2(rfft2([[1.0], [2.0]])), [[1.0], [2.0]])
+
 test "reordered real axes keep shape and sample units" =
     let samples = map(fn x => x * 1.0 m, grid)
     let spectrum = rfftn_axes(samples, [1, 0])
@@ -82,6 +84,12 @@ test "fftshift moves zero frequency to the middle" = fftshift([0, 1, 2, 3, 4, 5]
 test "ifftshift undoes fftshift" = ifftshift(fftshift([0, 1, 2, 3, 4])) == [0, 1, 2, 3, 4] && ifftshift(fftshift([[1, 2, 3], [4, 5, 6]])) == [[1, 2, 3], [4, 5, 6]]
 
 test "fftshift on a matrix shifts every axis, the _axis form one" = fftshift([[1, 2], [3, 4]]) == [[4, 3], [2, 1]] && fftshift_axis([[1, 2], [3, 4]], 0) == [[3, 4], [1, 2]] && ifftshift_axis([[1, 2, 3], [4, 5, 6]], 1) == [[2, 3, 1], [5, 6, 4]]
+
+test "fftshift respects the logical order of a strided Float view" = fftshift_axis(transpose([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]), 0) == [[3.0, 6.0], [1.0, 4.0], [2.0, 5.0]]
+
+test "fftshift preserves dimensions and display units" = show(fftshift([1.0 cm, 2.0 cm, 3.0 cm])) == show([3.0 cm, 1.0 cm, 2.0 cm])
+
+test "fftshift retains exact and boxed values" = fftshift([9007199254740993, 2, 3]) == [3, 9007199254740993, 2] && fftshift(["one", "two", "three"]) == ["three", "one", "two"]
 
 test "fftshift of fftfreq is increasing" = near1(fftshift(fftfreq(4, 1.0)), [-0.5, -0.25, 0.0, 0.25])
 

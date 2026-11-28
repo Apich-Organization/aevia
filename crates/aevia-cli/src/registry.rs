@@ -261,7 +261,9 @@ pub fn docs(args: &[String]) -> ExitCode {
             eprintln!("aevia docs: --download describes a hosted page; drop it with --local");
             return ExitCode::from(2);
         }
-        let path = match local_documentation(section, language) {
+        let path = match local_docs_root()
+            .and_then(|root| local_documentation_in(&root, section, language))
+        {
             | Ok(path) => path,
             | Err(message) => {
                 eprintln!("aevia docs: {message}");
@@ -302,6 +304,10 @@ pub fn docs(args: &[String]) -> ExitCode {
 /// Checked in order: `AEVIA_DOCS`, `AEVIA_DOCS_HOME`, `$AEVIA_HOME/docs`, the
 /// installed toolchain's `share/doc`, and finally a source checkout (a
 /// directory holding both `spec/` and `platform/stdlib-docs/`).
+#[allow(
+    clippy::single_call_fn,
+    reason = "keeps local documentation discovery separate from document selection"
+)]
 fn local_docs_root() -> Result<PathBuf, String> {
     for key in ["AEVIA_DOCS", "AEVIA_DOCS_HOME"] {
         if let Some(dir) = std::env::var_os(key) {
@@ -344,15 +350,11 @@ fn local_docs_root() -> Result<PathBuf, String> {
     )
 }
 
-/// Resolves one local document against the ambient documentation root.
-fn local_documentation(
-    section: Option<&str>,
-    language: Option<&str>,
-) -> Result<PathBuf, String> {
-    local_documentation_in(&local_docs_root()?, section, language)
-}
-
 /// Resolves one local document under `root`.
+#[allow(
+    clippy::single_call_fn,
+    reason = "allows tests to resolve documents from a supplied checkout"
+)]
 fn local_documentation_in(
     root: &std::path::Path,
     section: Option<&str>,

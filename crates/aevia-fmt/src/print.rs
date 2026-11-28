@@ -741,7 +741,14 @@ impl Printer {
                 } else {
                     (prec, prec.saturating_add(1))
                 };
-                self.expr(left, Ctx::operand(left_prec));
+                if *op == BinOp::Pow && matches!(left.kind, ExprKind::Quantity { .. }) {
+                    // A caret after a unit is parsed as its exponent, even with spaces.
+                    self.push("(");
+                    self.expr(left, Ctx::bracketed());
+                    self.push(")");
+                } else {
+                    self.expr(left, Ctx::operand(left_prec));
+                }
                 let separator = format!(" {} ", op.as_str());
                 self.push(&separator);
                 self.expr(right, Ctx::operand(right_prec));

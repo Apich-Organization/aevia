@@ -215,8 +215,11 @@ fn ignore(left: Real[1], right: Real[1]): Real[1] = 1
         let local = Term::Sym("probe_x".to_string());
         let stale = Term::foreign(Sym::new(u64::MAX, 0), "stale");
         let expected = stale.try_free_symbols().unwrap_err();
-        let mut call =
-            |left, right| interp.apply(operator.clone(), vec![left, right], Span::default());
+        let mut call = |left, right| {
+            interp
+                .apply(operator.clone(), vec![left, right], Span::default())
+                .map_err(Box::new)
+        };
 
         assert_eq!(
             call(number.clone(), number.clone()).unwrap().as_f64(),

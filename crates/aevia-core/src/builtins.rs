@@ -88,6 +88,7 @@ pub fn call_typed(
     args: Vec<Value>,
     span: Span,
 ) -> Result<Value, EvalError> {
+    let _backend = interp.rssn_source_access();
     let _cancellation = interp.cancellation_scope();
     interp.check_cancelled().map_err(|error| error.at(span))?;
     let result = call_typed_inner(interp, name, types, args, span);
@@ -274,6 +275,7 @@ pub fn call(
     args: Vec<Value>,
     span: Span,
 ) -> Result<Value, EvalError> {
+    let _backend = interp.rssn_source_access();
     let _cancellation = interp.cancellation_scope();
     interp.check_cancelled().map_err(|error| error.at(span))?;
     let result = call_inner(interp, name, &args, span);
@@ -1409,15 +1411,16 @@ fn call_inner(
         | B::Centroid => {
             let tensor = expect_tensor(args, 0, name, span)?;
             let count = tensor.storage.len();
-            let total = if let Some(data) = tensor.dense_flat() {
-                data.iter().copied().sum::<f64>()
-            } else {
-                tensor
-                    .elements()
-                    .iter()
-                    .map(|element| element.as_f64().unwrap_or(f64::NAN))
-                    .sum::<f64>()
-            };
+            let total = tensor.dense_flat().map_or_else(
+                || {
+                    tensor
+                        .elements()
+                        .iter()
+                        .map(|element| element.as_f64().unwrap_or(f64::NAN))
+                        .sum::<f64>()
+                },
+                |data| data.iter().copied().sum::<f64>(),
+            );
             Ok(Value::Num(NumVal::float(
                 total / count.max(1) as f64,
                 tensor.dim.clone(),
@@ -2674,11 +2677,23 @@ fn call_inner(
 
         // ----- §8.15 complex ----------------------------------------------
         | B::Complex => {
-            let re = expect_float(args, 0, name, span)?;
-            let im = expect_float(args, 1, name, span)?;
+            let re = expect_num(args, 0, name, span)?;
+            let im = expect_num(args, 1, name, span)?;
+            if re.dim != im.dim {
+                return Err(EvalError::new(
+                    "E0401",
+                    "the real and imaginary parts must share a dimension",
+                )
+                .at(span));
+            }
+            let (Some(real), Some(imaginary)) = (re.to_f64(), im.to_f64()) else {
+                return Err(
+                    EvalError::new("E0806", "`complex` expects concrete real parts").at(span),
+                );
+            };
             Ok(Value::Num(NumVal {
-                kind: NumKind::Complex(re, im),
-                dim: Dim::one(),
+                kind: NumKind::Complex(real, imaginary),
+                dim: re.dim,
                 display: None,
             }))
         },
@@ -3924,6 +3939,8 @@ fn call_inner(
                 expect_exact_int(args, length_at, name, span)?
                     .to_usize()
                     .ok_or_else(invalid_length)?
+            } else if bins == 1 {
+                1
             } else {
                 bins.saturating_sub(1)
                     .checked_mul(2)
@@ -3947,11 +3964,28 @@ fn call_inner(
             if len != tensor.storage.len() {
                 return Err(EvalError::new("E0802", "tensor shape and storage disagree").at(span));
             }
-            let permutation =
-                aevia_std::fft::shift_permutation(&tensor.shape, &axes, name.starts_with('i'))
-                    .map_err(|message| {
-                        EvalError::new("E0802", format!("`{name}`: {message}")).at(span)
-                    })?;
+            let inverse = name.starts_with('i');
+            let shift_error =
+                |message| EvalError::new("E0802", format!("`{name}`: {message}")).at(span);
+            if let Some(data) = tensor.dense_flat() {
+                let mut shifted = data.into_owned();
+                rssn::kernels::fft::shift_axes_in_place(
+                    &mut shifted,
+                    &tensor.shape,
+                    &axes,
+                    inverse,
+                )
+                .map_err(shift_error)?;
+                return Ok(Value::Tensor(Rc::new(TensorData {
+                    shape: tensor.shape.clone(),
+                    storage: Storage::Dense(Rc::new(shifted)),
+                    dim: tensor.dim.clone(),
+                    display: tensor.display.clone(),
+                    verified_element: tensor.verified_element.clone(),
+                })));
+            }
+            let permutation = aevia_std::fft::shift_permutation(&tensor.shape, &axes, inverse)
+                .map_err(shift_error)?;
             let shifted = permutation
                 .into_iter()
                 .map(|index| {
@@ -6864,6 +6898,12 @@ fn gif_animation_from_value(value: &Value) -> Result<rssn::io::GifAnimation, Str
 ///
 /// `E0302` when an element is not a number.
 fn complex_values(tensor: &TensorData) -> Result<Vec<aevia_std::Complex>, EvalError> {
+    if let Some(data) = tensor.dense_flat() {
+        return Ok(data
+            .iter()
+            .map(|&sample| aevia_std::Complex::new(sample, 0.0))
+            .collect());
+    }
     let mut out = Vec::with_capacity(tensor.storage.len());
     for element in tensor.elements() {
         let Some(num) = element.as_num() else {
@@ -9718,6 +9758,7 @@ fn dense_builtin_map(
     tensor: &TensorData,
     mode: aevia_rssn::execution::ExecutionMode,
 ) -> Option<Value> {
+    const GRAIN: usize = 16_384;
     let Value::Ctor(ctor) = function else {
         return None;
     };
@@ -9728,7 +9769,6 @@ fn dense_builtin_map(
     if values.is_empty() {
         return None;
     }
-    const GRAIN: usize = 16_384;
     if ctor.name == "abs" {
         let out = aevia_rssn::par_map_f64_slice(&values, GRAIN, mode, f64::abs);
         return Some(float_tensor(tensor.shape.clone(), out, tensor.dim.clone()));

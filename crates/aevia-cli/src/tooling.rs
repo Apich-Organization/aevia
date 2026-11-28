@@ -5,7 +5,7 @@ mod stdlib_locale;
 
 use crate::Options;
 use crate::apply_options;
-use crate::load_program;
+use crate::load_program_with;
 use crate::report;
 use crate::style;
 use aevia_core::Interp;
@@ -37,6 +37,12 @@ pub fn fmt(
     _options: Options,
     args: &[String],
 ) -> ExitCode {
+    enum FormatOutcome {
+        Unchanged,
+        Formatted(String),
+        ReadError(String),
+        FormatError(String),
+    }
     let mut check = false;
     let mut files: Vec<String> = Vec::new();
     for arg in args {
@@ -53,12 +59,6 @@ pub fn fmt(
         | Ok(paths) => paths,
         | Err(code) => return code,
     };
-    enum FormatOutcome {
-        Unchanged,
-        Formatted(String),
-        ReadError(String),
-        FormatError(String),
-    }
     let mut outcomes: Vec<(usize, FormatOutcome)> = (0..paths.len())
         .map(|index| (index, FormatOutcome::Unchanged))
         .collect();
@@ -723,7 +723,7 @@ fn measure_benchmarks(
     let mut rows: Vec<Row> = Vec::new();
     let mut failed = false;
     for path in &paths {
-        let program = match load_program(path, style(options)) {
+        let program = match load_program_with(path, style(options), false) {
             | Ok(program) => program,
             | Err(code) => return Err(code),
         };

@@ -155,7 +155,7 @@ Math.Special	lgamma	计算 `gamma(x)` 绝对值的自然对数，结果无量纲
 Math.Special	y1	计算一阶第二类贝塞尔函数 `Y₁(x)`，即 `bessel_y1`。
 Math.Special	zeta	计算黎曼 ζ 函数，输入和结果均无量纲。例如 `zeta(2)` 等于 `pi^2/6`，在 `1` 处有极点。
 Math.Complex	arg	计算复数的辐角，弧度范围为 `(-pi, pi]`，所得角度无量纲。
-Math.Complex	complex	用 `re` 和 `im` 分别作为实部和虚部构造复数。
+Math.Complex	complex	使用具有共同量纲的实部和虚部构造复数。
 Math.Complex	complex_exp	计算无量纲复数 `z` 的复指数 `e^z`。
 Math.Complex	complex_ln	计算无量纲复数自然对数的主值，结果的虚部位于 `(-pi, pi]`。
 Math.Complex	complex_sin	计算无量纲复数的正弦。

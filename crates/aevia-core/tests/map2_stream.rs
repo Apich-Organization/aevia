@@ -106,6 +106,10 @@ fn unchecked_host_buffers_keep_filter_then_zip_order() {
     };
     let left = as_tensor(vec![integer(10), half.clone(), integer(20)]);
     let right = as_tensor(vec![half, integer(1), integer(2)]);
+    #[allow(
+        clippy::result_large_err,
+        reason = "NativeFn uses the shared evaluator error"
+    )]
     let pair = Value::Native(Rc::new(NativeFn(Box::new(|_, args, _| {
         Ok(Value::string(format!(
             "{}+{}",

@@ -15,13 +15,14 @@
 //!   record update, guards, tensor patterns, block-local recursion, instance
 //!   dispatch, `?` in a `do` block, the error codes).
 //!
-//! A program whose two AST runs differ is skipped as nondeterministic
-//! (`time_now`), and a program that does not compile is skipped: the two paths
-//! share the front end, so a compile error is not evidence about either
-//! evaluator.
+//! Both paths use the same checked program. Each path starts a fresh
+//! interpreter and an empty working directory for each run. The corpus worker
+//! has its own process. A program that does not compile or produces different
+//! results on repeated runs of either evaluator is skipped.
 
 #![allow(clippy::result_large_err)]
 
+use aevia_core::Compilation;
 use aevia_core::Interp;
 use aevia_core::Mode;
 use aevia_core::compile;
@@ -29,6 +30,10 @@ use aevia_core::driver;
 use aevia_core::value;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
+use std::process::Stdio;
+
+const WORKER_SCRATCH: &str = "AEVIA_IR_PARITY_WORKER_SCRATCH";
 
 /// What one run of one program produced.
 #[derive(Clone, Debug, PartialEq)]
@@ -71,10 +76,9 @@ enum Comparison {
 }
 
 fn run_source(
-    source: &str,
+    compilation: &Compilation,
     mode: Mode,
 ) -> Result<Outcome, String> {
-    let compilation = compile("parity.aev", source);
     if compilation.diagnostics.has_errors() {
         return Err(compilation
             .diagnostics
@@ -84,7 +88,7 @@ fn run_source(
             .collect::<Vec<_>>()
             .join(","));
     }
-    let Some(module) = compilation.module.clone() else {
+    let Some(module) = compilation.module.as_ref() else {
         return Err("E0608".to_string());
     };
     let mut interp = Interp::new(&compilation.checked)
@@ -97,7 +101,7 @@ fn run_source(
     // per run. The AST path stops on depth, the IR on this budget, and both
     // report E0805 — which is what the comparison is asserting.
     interp.max_tail_calls = 10_000;
-    let loaded = interp.load(&module);
+    let loaded = interp.load(module);
     let error = if loaded.has_errors() {
         loaded.items.first().map(|item| item.code.clone())
     } else {
@@ -107,7 +111,7 @@ fn run_source(
         }
     };
     let mut values = Vec::new();
-    for name in aevia_core::top_level_names(&module) {
+    for name in aevia_core::top_level_names(module) {
         if let Ok(bound) = interp.eval_toplevel(&name) {
             values.push((name, value::repr(&bound)));
         }
@@ -120,10 +124,9 @@ fn run_source(
 }
 
 fn run_file(
-    path: &Path,
+    program: &driver::Program,
     mode: Mode,
 ) -> Result<Outcome, String> {
-    let program = driver::load(path);
     if program.diagnostics.has_errors() {
         return Err(program
             .diagnostics
@@ -136,10 +139,9 @@ fn run_file(
     let Some(entry) = program.entry() else {
         return Err("E0608".to_string());
     };
-    let checked = entry.checked.clone();
     let names = aevia_core::top_level_names(&entry.module);
-    let mut interp = Interp::new(&checked).with_buffer().with_mode(mode);
-    let loaded = driver::run_modules(&mut interp, &program);
+    let mut interp = Interp::new(&entry.checked).with_buffer().with_mode(mode);
+    let loaded = driver::run_modules(&mut interp, program);
     let error = if loaded.has_errors() {
         loaded.items.first().map(|item| item.code.clone())
     } else {
@@ -171,8 +173,32 @@ fn trace_parity(message: std::fmt::Arguments<'_>) {
     }
 }
 
-fn compare(run: impl Fn(Mode) -> Result<Outcome, String>) -> Comparison {
+/// The worker runs only the corpus test. Each evaluation gets the same
+/// relative paths in a newly created directory.
+fn in_empty_directory<T>(
+    scratch: &Path,
+    run: impl FnOnce() -> T,
+) -> T {
+    let previous = std::env::current_dir().expect("read the corpus working directory");
+    let directory = scratch.join("run");
+    std::fs::create_dir(&directory).expect("create an empty run directory");
+    std::env::set_current_dir(&directory).expect("enter the run directory");
+    let outcome = run();
+    std::env::set_current_dir(previous).expect("restore the corpus working directory");
+    std::fs::remove_dir_all(&directory).expect("remove the run directory");
+    outcome
+}
+
+fn compare<T>(
+    scratch: &Path,
+    prepare: impl FnOnce() -> T,
+    execute: impl Fn(&T, Mode) -> Result<Outcome, String>,
+) -> Comparison {
     trace_parity(format_args!("AST first"));
+    let checked = prepare();
+    // Only the frontend snapshot is shared. Each execution initializes
+    // a fresh interpreter and reruns module loading or IR lowering.
+    let run = |mode| in_empty_directory(scratch, || execute(&checked, mode));
     let first = match run(Mode::Ast) {
         | Ok(outcome) => outcome,
         | Err(codes) => return Comparison::Skip(Skipped::Compile(codes)),
@@ -500,11 +526,49 @@ fn with_cli_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) 
 
 #[test]
 fn the_two_evaluators_agree_on_every_program_we_have() {
-    with_cli_stack(compare_corpus);
+    if let Some(scratch) = std::env::var_os(WORKER_SCRATCH) {
+        with_cli_stack(move || compare_corpus(Path::new(&scratch)));
+        return;
+    }
+
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the system clock is after the epoch")
+        .as_nanos();
+    let scratch =
+        std::env::temp_dir().join(format!("aevia-ir-parity-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&scratch).expect("create parity scratch directory");
+    let scratch = scratch
+        .canonicalize()
+        .expect("resolve parity scratch directory");
+    // Only this child changes directory. The incremental session test can run
+    // concurrently in the original process.
+    let mut worker = Command::new(std::env::current_exe().expect("find the parity test binary"));
+    worker.args([
+        "--exact",
+        "the_two_evaluators_agree_on_every_program_we_have",
+        "--nocapture",
+    ]);
+    worker.env(WORKER_SCRATCH, &scratch).stdin(Stdio::inherit());
+    if std::env::var_os("AEVIA_PARITY_TRACE").is_some() {
+        worker.stderr(Stdio::inherit());
+    }
+    let output = worker.output();
+    std::fs::remove_dir_all(&scratch).expect("remove parity scratch directory");
+    let output = output.expect("run the parity worker");
+    eprint!("{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "parity worker exited with {}:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout)
+    );
 }
 
-fn compare_corpus() {
-    let root = workspace();
+fn compare_corpus(scratch: &Path) {
+    let root = workspace()
+        .canonicalize()
+        .expect("resolve the workspace root");
     let mut agreed = 0usize;
     let mut skipped = Vec::new();
     let mut differed = Vec::new();
@@ -520,7 +584,7 @@ fn compare_corpus() {
     for path in &files {
         programs += 1;
         trace_parity(format_args!("file {}", path.display()));
-        match compare(|mode| run_file(path, mode)) {
+        match compare(scratch, || driver::load(path), run_file) {
             | Comparison::Agree => agreed += 1,
             | Comparison::Skip(reason) => {
                 skipped.push((path.display().to_string(), reason));
@@ -562,7 +626,7 @@ fn compare_corpus() {
             path.display(),
             source.lines().next().unwrap_or("")
         ));
-        match compare(|mode| run_source(source, mode)) {
+        match compare(scratch, || compile("parity.aev", source), run_source) {
             | Comparison::Agree => agreed += 1,
             | Comparison::Skip(reason) => {
                 skipped.push((
@@ -586,7 +650,7 @@ fn compare_corpus() {
             "curated {:?}",
             source.lines().next().unwrap_or("")
         ));
-        match compare(|mode| run_source(source, mode)) {
+        match compare(scratch, || compile("parity.aev", source), run_source) {
             | Comparison::Agree => agreed += 1,
             | Comparison::Skip(reason) => skipped.push(((*source).to_string(), reason)),
             | Comparison::Differ { ast, ir } => differed.push(((*source).to_string(), ast, ir)),

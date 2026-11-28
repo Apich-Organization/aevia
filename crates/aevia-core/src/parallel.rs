@@ -1025,6 +1025,8 @@ fn with_worker<T>(
     capabilities: u8,
     job: impl FnOnce(&mut Interp, &OnceCell<ReplicaIndex>) -> Option<T>,
 ) -> Option<T> {
+    let _backend =
+        aevia_rssn::backend::restrict_to_source(capabilities & crate::value::caps::GPU != 0);
     let _cancellation_scope = crate::cancellation::enter_optional(cancellation.cloned());
     if cancellation.is_some_and(crate::CancellationToken::is_cancelled) {
         return None;
@@ -1287,6 +1289,14 @@ fn reduce_worker_batch(
 }
 
 impl Interp {
+    fn worker_capabilities(&self) -> u8 {
+        if aevia_rssn::backend::gpu_allowed() {
+            self.capabilities
+        } else {
+            self.capabilities & !crate::value::caps::GPU
+        }
+    }
+
     /// Installs the factory workers build their replicas with (see
     /// [`Replica`]). Parallel evaluation of Aevia closures uses this factory.
     pub fn set_replica(
@@ -1351,7 +1361,7 @@ impl Interp {
                 .saturating_mul(MAP_BATCHES_PER_WORKER),
         );
         let cancellation = self.cancellation_token().map(|token| token.child());
-        let capabilities = self.capabilities;
+        let capabilities = self.worker_capabilities();
         let results: Option<Vec<MappedBatch>> = pool.install(|| {
             use rayon::prelude::*;
             inputs
@@ -1404,7 +1414,7 @@ impl Interp {
                 .saturating_mul(MAP_BATCHES_PER_WORKER),
         );
         let cancellation = self.cancellation_token().map(|token| token.child());
-        let capabilities = self.capabilities;
+        let capabilities = self.worker_capabilities();
         // `install` joins the workers before the caller's immutable slice and
         // scalar metadata leave scope. No interpreter-owned Rc crosses threads.
         let results: Option<Vec<MappedBatch>> = pool.install(|| {
@@ -1455,7 +1465,7 @@ impl Interp {
                 .saturating_mul(MAP_BATCHES_PER_WORKER),
         );
         let cancellation = self.cancellation_token().map(|token| token.child());
-        let capabilities = self.capabilities;
+        let capabilities = self.worker_capabilities();
         let results: Option<Vec<MappedBatch>> = pool.install(|| {
             use rayon::prelude::*;
             (0..count.div_ceil(batch_size))
@@ -1647,7 +1657,7 @@ impl Interp {
         );
         let batch_size = blocks_per_batch.saturating_mul(REDUCE_BLOCK_SIZE);
         let cancellation = self.cancellation_token().map(|token| token.child());
-        let capabilities = self.capabilities;
+        let capabilities = self.worker_capabilities();
         let results: Option<Vec<Vec<Transfer>>> = pool.install(|| {
             use rayon::iter::Either;
             use rayon::prelude::*;
@@ -1732,7 +1742,7 @@ impl Interp {
             let (sender, receiver) = std::sync::mpsc::channel();
             let cancellation = self.cancellation_token().map(|token| token.child());
             let task_cancellation = cancellation.clone();
-            let capabilities = self.capabilities;
+            let capabilities = self.worker_capabilities();
             pool.spawn(move || {
                 let outcome = with_worker(
                     &replica,

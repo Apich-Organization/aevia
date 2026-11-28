@@ -3833,10 +3833,15 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
 
         // ----- §8.15 complex ----------------------------------------------
         | "complex" => {
-            vec![Scheme::mono(func(
-                vec![Type::real(one()), Type::real(one())],
-                Type::complex(one()),
-            ))]
+            vec![scheme(
+                0,
+                1,
+                0,
+                func(
+                    vec![Type::real(dim_var(0)), Type::real(dim_var(0))],
+                    Type::complex(dim_var(0)),
+                ),
+            )]
         },
         | "re" | "im" | "magnitude" => {
             vec![scheme(

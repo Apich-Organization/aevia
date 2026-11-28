@@ -113,6 +113,8 @@ pub struct Function {
     pub name: Rc<str>,
     /// Whether the source requested JIT compilation.
     pub jit: bool,
+    /// Warm-up count for automatic native execution on this thread.
+    pub native_calls: std::cell::Cell<u16>,
     /// The parameter patterns, in order.
     pub params: Vec<Pattern>,
     /// The body.

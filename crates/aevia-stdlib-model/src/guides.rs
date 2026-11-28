@@ -551,8 +551,8 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         name: "complex",
-        description: "complex(re, im) builds a complex number from its real and imaginary parts.",
-        example: "complex(1, 2)",
+        description: "Builds a complex number from real and imaginary parts with a common dimension.",
+        example: "complex(3 m, 400 cm)",
     },
     Guide {
         name: "complex_cos",

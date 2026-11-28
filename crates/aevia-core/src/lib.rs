@@ -97,6 +97,7 @@ use value::Value;
 pub use cancellation::CancellationToken;
 pub use eval::EvalError;
 pub use eval::Interp;
+pub use eval::JitPolicy;
 pub use eval::Mode;
 pub use eval::Output;
 pub use eval::install_stack_budget;
@@ -1011,6 +1012,9 @@ pub fn run(
     interp.set_replica(std::sync::Arc::new(move || {
         let (module, checked) = replica_program.as_ref();
         let mut replica = Interp::new(checked).with_buffer();
+        replica.set_jobs(1);
+        replica.jit_policy = JitPolicy::Annotated;
+        replica.matmul_policy = aevia_rssn::device::MatmulPolicy::Cpu;
         if replica.load(module).has_errors() {
             return Err("the program's top level failed on a worker".to_string());
         }

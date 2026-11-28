@@ -1135,6 +1135,23 @@ fn wildcard_matches(
     pattern.all(|character| character == '*')
 }
 
+fn collect(
+    dir: &Path,
+    out: &mut Vec<PathBuf>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect(&path, out);
+        } else if path.extension().is_some_and(|extension| extension == "aev") {
+            out.push(path);
+        }
+    }
+}
+
 #[cfg(test)]
 mod glob_tests {
     use super::expand_globs;
@@ -1311,23 +1328,6 @@ mod glob_tests {
                     "{pattern:?} against {name:?}"
                 );
             }
-        }
-    }
-}
-
-fn collect(
-    dir: &Path,
-    out: &mut Vec<PathBuf>,
-) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect(&path, out);
-        } else if path.extension().is_some_and(|extension| extension == "aev") {
-            out.push(path);
         }
     }
 }

@@ -92,6 +92,11 @@ pub fn capture(
         return None;
     }
     let node = match (value, schema) {
+        | (Value::KernelError(_), ty) if *ty == aevia_types::builtins::op_error_type() => {
+            // The opaque payload has an exact runtime type. The wire encoder
+            // still controls whether an error can cross the kernel boundary.
+            HostWitnessNode::Scalar
+        },
         | (Value::KernelValue(v), ty)
             if aevia_types::adt::is_native_ad_var_type(ty)
                 && crate::value::is_native_ad_var_payload(&v.payload) =>

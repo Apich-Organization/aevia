@@ -1,0 +1,14 @@
+## The real and imaginary parts share one physical dimension.
+import Math.Complex as ComplexMath
+
+let z = complex(3 m, 400 cm)
+
+let w = ComplexMath.complex(3 kg, 4 kg)
+
+test "complex parts use the common dimension and coherent scale" = approx_eq(re(z), 3.0 m, 1e-12 m) && approx_eq(im(z), 4.0 m, 1e-12 m) && approx_eq(magnitude(z), 5.0 m, 1e-12 m)
+
+test "the Math.Complex import keeps the same dimension" = approx_eq(magnitude(w), 5.0 kg, 1e-12 kg)
+
+test "dimensionless complex construction still works" = approx_eq(magnitude(complex(3, 4)), 5.0, 1e-12)
+
+test "complex rejects unequal dimensions" = compile_fail("let z = complex(3 m, 4 s)")

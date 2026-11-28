@@ -4,6 +4,8 @@ use aevia_core::Mode;
 use aevia_core::driver;
 use aevia_core::value::Value;
 use aevia_syntax::DeclKind;
+use aevia_syntax::Severity;
+use aevia_syntax::Span;
 
 #[test]
 fn adaptive_sde_examples_keep_dimensions_rejection_and_reproducible_noise() {
@@ -54,27 +56,42 @@ fn adaptive_sde_examples_keep_dimensions_rejection_and_reproducible_noise() {
             }
             // The generated jump facade binds mark extent independently from
             // the state, so a mismatched exact mark callback fails in checking.
-            let source = include_str!("../../../examples/sde_adaptive_jump.aev").replace(
-                "[1.0, 1.0], drift, diffusion, jump)",
-                "[1.0], drift, diffusion, jump)",
-            );
+            let invalid_arguments = "[1.0], drift, diffusion, jump)";
+            let source = include_str!("../../../examples/sde_adaptive_jump.aev")
+                .replace("[1.0, 1.0], drift, diffusion, jump)", invalid_arguments);
+            let callback_start = source.find(invalid_arguments).expect("mutated jump call")
+                + invalid_arguments.len()
+                - "jump)".len();
             let invalid_path = std::env::temp_dir()
                 .join(format!("aevia-sde-mark-extent-{}.aev", std::process::id()));
-            std::fs::write(&invalid_path, source).unwrap();
+            std::fs::write(&invalid_path, &source).unwrap();
             let invalid = driver::load(&invalid_path);
             std::fs::remove_file(&invalid_path).unwrap();
-            assert!(
-                invalid.diagnostics.has_errors(),
-                "a one-element mark must reject a two-element callback domain"
+            let mut errors = invalid
+                .diagnostics
+                .items
+                .iter()
+                .filter(|item| item.severity == Severity::Error);
+            let diagnostic = errors.next().expect("mark extent mismatch");
+            assert!(errors.next().is_none(), "{:?}", invalid.diagnostics.items);
+            assert_eq!(diagnostic.code, "E0302");
+            assert_eq!(
+                diagnostic.message,
+                "type-level equation has no solution: 2 = 1"
             );
-            assert!(
-                invalid
-                    .diagnostics
-                    .items
-                    .iter()
-                    .any(|item| item.message.contains("shape")),
-                "expected a mark shape diagnostic: {:?}",
-                invalid.diagnostics.items
+            let diagnostic_source = invalid
+                .sources
+                .file(diagnostic.span.file)
+                .expect("diagnostic source");
+            assert_eq!(diagnostic_source.text, source);
+            // The conflicting extent is detected while checking the `jump` callback.
+            assert_eq!(
+                diagnostic.span,
+                Span::new(
+                    diagnostic.span.file,
+                    callback_start,
+                    callback_start + "jump".len()
+                )
             );
         })
         .unwrap()

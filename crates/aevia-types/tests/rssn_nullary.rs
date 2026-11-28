@@ -1,4 +1,4 @@
-//! A nullary derived constant keeps its kernel term and raw overload keys.
+//! Nullary constants retain their kernel terms and raw overload keys.
 
 use aevia_rssn::SigType;
 use aevia_rssn::Source;
@@ -76,11 +76,11 @@ fn physical_and_nonmetric_constants_preserve_their_kernel_boundary() {
 }
 
 #[test]
-fn bridge_lookup_and_checker_use_the_same_key_for_every_derived_pair() {
+fn bridge_lookup_and_checker_agree_for_derived_and_overlay_pairs() {
     let registry = aevia_rssn::registry();
     let mut names = Vec::new();
     for entry in registry.ops().filter(|entry| {
-        entry.source == Source::Derived
+        matches!(entry.source, Source::Derived | Source::Overlay)
             && entry.arity == (0, Some(0))
             && matches!(entry.signatures.as_slice(), [scalar, symbolic]
                 if matches!(scalar.ret, SigType::Real | SigType::Bool) && symbolic.ret == SigType::Dyn)
@@ -90,6 +90,10 @@ fn bridge_lookup_and_checker_use_the_same_key_for_every_derived_pair() {
             continue;
         }
         names.push(entry.name.as_str());
+        assert!(entry.witnesses.is_empty(), "{}", entry.name);
+        if entry.source == Source::Overlay {
+            assert_eq!(entry.witnessed, [0, 1], "{}", entry.name);
+        }
         assert_eq!(
             resolve(entry, &[]),
             Resolution::Unique {
@@ -108,31 +112,61 @@ fn bridge_lookup_and_checker_use_the_same_key_for_every_derived_pair() {
 }
 
 #[test]
-fn explicit_and_variadic_ties_are_still_reported() {
+fn nullary_term_preference_preserves_the_other_ambiguities() {
     let mut entry = aevia_rssn::registry().op("oo").unwrap().clone();
-    entry.source = Source::Declared;
     let tie = Resolution::Ambiguous {
         candidates: vec![0, 1],
     };
-    assert_eq!(resolve(&entry, &[]), tie);
-    entry.source = Source::Derived;
-    entry.arity = (0, None);
-    assert_eq!(resolve(&entry, &[]), tie);
-    entry.arity = (0, Some(0));
+    let assert_ambiguous = |entry: &aevia_rssn::OpEntry| {
+        assert_eq!(entry.derived_nullary_term_index(), None);
+        assert_eq!(resolve(entry, &[]), tie);
+        assert_eq!(entry.resolve_by_type(&[]).unwrap_err().code, "E1002");
+    };
+
+    entry.source = Source::Declared;
+    assert_ambiguous(&entry);
+
+    let overlay_indices = std::mem::take(&mut entry.witnessed);
+    entry.source = Source::Overlay;
+    assert_ambiguous(&entry);
+
+    for source in [Source::Derived, Source::Overlay] {
+        entry.source = source;
+        if source == Source::Overlay {
+            entry.witnessed.clone_from(&overlay_indices);
+        }
+        assert_eq!(entry.derived_nullary_term_index(), Some(1));
+
+        entry.arity = (0, None);
+        assert_ambiguous(&entry);
+        entry.arity = (0, Some(0));
+
+        entry.witnesses.push(("oo()".into(), "Term".into()));
+        assert_ambiguous(&entry);
+        entry.witnesses.clear();
+
+        entry.witnessed.push(0);
+        assert_ambiguous(&entry);
+        let _ = entry.witnessed.pop();
+    }
+
+    entry.raw.push(entry.raw[0].clone());
     entry.signatures.push(entry.signatures[0].clone());
+    assert_eq!(entry.derived_nullary_term_index(), None);
     assert_eq!(
         resolve(&entry, &[]),
         Resolution::Ambiguous {
             candidates: vec![0, 1, 2],
         }
     );
+    assert_eq!(entry.resolve_by_type(&[]).unwrap_err().code, "E1002");
 }
 
 #[test]
 fn dynamic_resolution_and_both_explicit_keys_keep_their_behavior() {
     let kernel = aevia_rssn::kernel();
     let registry = aevia_rssn::registry();
-    for name in ["oo", "pi", "c_0", "true"] {
+    for name in ["oo", "pi", "E", "euler_gamma", "c_0", "true"] {
         let entry = registry.op(name).unwrap();
         assert_eq!(entry.keys.len(), 2);
         assert_eq!(kernel.resolve(name, &[]).unwrap_err().code, "E1002");

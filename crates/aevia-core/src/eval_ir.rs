@@ -115,6 +115,7 @@ pub fn eval_top(
     nslots: u32,
     scope: &Rc<Scope>,
 ) -> Result<Value, EvalError> {
+    let _backend = interp.rssn_source_access();
     let _cancellation = interp.cancellation_scope();
     interp.check_cancelled()?;
     let previous = interp.enter_scope(scope)?;
@@ -157,6 +158,7 @@ pub(crate) fn run_closure(
     span: Span,
     instance: Option<Rc<crate::generics::FunctionProof>>,
 ) -> Result<Value, EvalError> {
+    let _backend = interp.rssn_source_access();
     let _cancellation = interp.cancellation_scope();
     interp.check_cancelled().map_err(|error| error.at(span))?;
     let (ClosureBody::Ir(first), ClosureEnv::Ir(first_env)) = (&closure.body, &closure.env) else {
@@ -204,7 +206,16 @@ pub(crate) fn run_closure(
         }
         interp.bindings.clone_from(&bindings);
         #[cfg(feature = "jit")]
-        let compiled_flow = if function.jit && interp.cancellation.is_none() {
+        let compiled_flow = if interp.cancellation.is_none()
+            && (function.jit
+                || (interp.jit_policy == crate::JitPolicy::Automatic
+                    && !interp.on_worker
+                    && !interp.folding_constant.get()
+                    && current_instance
+                        .as_ref()
+                        .is_some_and(|proof| proof.verified)
+                    && crate::jit::is_hot(&function)))
+        {
             // A cancellable activation needs the interpreter's checkpoints.
             // Host calls can pass values that differ from a source signature.
             // Native specialization is permitted only by an authenticated,

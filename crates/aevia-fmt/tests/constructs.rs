@@ -152,6 +152,18 @@ fn every_expression_form() {
 }
 
 #[test]
+fn quantity_powers_keep_the_base_grouped() {
+    for source in [
+        "let a = (2 m) ^ 2\n",
+        "let a = (2 J*s) ^ -2\n",
+        "let a = ((2 m) ^ 2) ^ 3\n",
+        "let a = 2 m^2\n",
+    ] {
+        assert_eq!(round_trip(source), source);
+    }
+}
+
+#[test]
 fn the_pipe_operators_are_written_as_the_call_they_are() {
     // `x |> f` is sugar for `f(x)`: the parser builds the call, so the tree
     // cannot tell the two apart and the formatter writes the call. This is a

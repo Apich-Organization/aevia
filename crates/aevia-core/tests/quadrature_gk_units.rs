@@ -80,6 +80,10 @@ let reversed = quadrature(density, 1.0 m, 0.0 m)
 }
 
 #[test]
+#[allow(
+    clippy::result_large_err,
+    reason = "native callbacks use the shared evaluator error"
+)]
 fn quadrature_host_callbacks_preserve_node_order_and_stop_at_the_first_error() {
     let compilation = compile("quadrature_host.aev", "");
     let mut interp = Interp::new(&compilation.checked);

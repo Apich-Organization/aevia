@@ -27,7 +27,7 @@ pub const CAPACITY: usize = 4;
 
 struct CacheEntry {
     path: PathBuf,
-    resolution: String,
+    roots: Roots,
     program: Rc<Program>,
     checks: Rc<RefCell<CheckCache>>,
     query_index: OnceCell<Rc<ProgramQueryIndex>>,
@@ -165,12 +165,9 @@ impl AnalysisCache {
         overlays: &SourceOverlays,
     ) -> Rc<Program> {
         let roots = roots_for(path);
-        // Roots contains ordered, process-local source-resolution data and
-        // nominal owners; retain it exactly rather than accepting hash collisions.
-        let resolution = format!("{roots:?}");
         if let Some(index) = self.entries.iter().position(|entry| {
             entry.path == path
-                && entry.resolution == resolution
+                && entry.roots == roots
                 && !entry.program.dependencies.is_empty()
                 && entry
                     .program
@@ -187,11 +184,11 @@ impl AnalysisCache {
         let checks = self
             .entries
             .iter()
-            .find(|entry| entry.path == path && entry.resolution == resolution)
+            .find(|entry| entry.path == path && entry.roots == roots)
             .map_or_else(Rc::default, |entry| Rc::clone(&entry.checks));
         let (program, _) = driver::load_incremental(
             path,
-            roots,
+            roots.clone(),
             overlays,
             &aevia_types::check::CheckOptions::default(),
             &checks,
@@ -208,7 +205,7 @@ impl AnalysisCache {
         {
             self.entries.push(CacheEntry {
                 path: path.to_path_buf(),
-                resolution,
+                roots,
                 program: program.clone(),
                 checks,
                 query_index: OnceCell::new(),

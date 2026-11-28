@@ -59,6 +59,7 @@ use aevia_dim::Dim;
 use aevia_dim::DimEnv;
 use aevia_dim::UnitDef;
 use aevia_dim::UnitTable;
+use aevia_rssn::device::MatmulPolicy;
 use aevia_syntax::Diagnostic;
 use aevia_syntax::Span;
 use aevia_syntax::ast::BinOp;
@@ -465,6 +466,27 @@ pub enum Mode {
     Ir,
 }
 
+impl Mode {
+    /// The default source evaluator, honoring `AEVIA_EVAL=ast`.
+    #[must_use]
+    pub fn from_environment() -> Self {
+        if std::env::var("AEVIA_EVAL").as_deref() == Ok("ast") {
+            Self::Ast
+        } else {
+            Self::Ir
+        }
+    }
+}
+
+/// How checked Core IR functions become candidates for native compilation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JitPolicy {
+    /// Consider hot scalar functions and explicit `@jit` requests.
+    Automatic,
+    /// Consider only functions annotated with `@jit`.
+    Annotated,
+}
+
 /// `E0802` naming the first coordinate outside the shape.
 ///
 /// "index out of range" alone sent the reader looking for which of several
@@ -658,6 +680,11 @@ pub struct Interp {
     /// modules and incremental declarations. Runtime checks, numeric
     /// representations and resource budgets are preserved.
     pub optimize_ir: bool,
+    /// Selection policy for native scalar execution in builds with JIT.
+    pub jit_policy: JitPolicy,
+    /// Device preference for dense matrix products. The `gpu` runtime
+    /// capability is required before a program can dispatch off the host.
+    pub matmul_policy: MatmulPolicy,
     /// Cooperative foreground/worker interruption, installed by the host.
     pub(crate) cancellation: Option<crate::CancellationToken>,
     /// Optional terminal-aware reader for program IO.
@@ -993,12 +1020,10 @@ impl Interp {
             max_io_steps: 100_000_000,
             max_io_depth: 2048,
             max_nodes: 16_384,
-            mode: if std::env::var("AEVIA_EVAL").as_deref() == Ok("ast") {
-                Mode::Ast
-            } else {
-                Mode::Ir
-            },
+            mode: Mode::from_environment(),
             optimize_ir: false,
+            jit_policy: JitPolicy::Automatic,
+            matmul_policy: MatmulPolicy::Auto,
             cancellation: crate::cancellation::inherited_token(),
             line_reader: None,
             debugger: None,
@@ -1692,6 +1717,7 @@ impl Interp {
         env: &Rc<Scope>,
         escaping: bool,
     ) -> Result<Value, EvalError> {
+        let _backend = self.rssn_source_access();
         let _cancellation = self.cancellation_scope();
         self.check_cancelled()
             .map_err(|error| error.at(expr.span))?;
@@ -3891,6 +3917,19 @@ impl Interp {
         Ok(build_tensor(elements, shape, dim))
     }
 
+    fn matmul_device_policy(&self) -> MatmulPolicy {
+        if self.capabilities & value::caps::GPU != 0
+            && !self.on_worker
+            && !self.folding_constant.get()
+            && (self.matmul_policy == MatmulPolicy::PreferGpu
+                || (self.mode == Mode::Ir && self.cancellation.is_none()))
+        {
+            self.matmul_policy
+        } else {
+            MatmulPolicy::Cpu
+        }
+    }
+
     fn matmul(
         &mut self,
         left: &Value,
@@ -3900,7 +3939,10 @@ impl Interp {
         let (Value::Tensor(a), Value::Tensor(b)) = (left, right) else {
             return Err(EvalError::new("E0302", "`@` expects two tensors").at(span));
         };
-        if let Some(value) = a.dense_matmul_in_mode(b, self.execution_mode()) {
+        if let Some(value) =
+            a.dense_matmul_with_policy(b, self.execution_mode(), self.matmul_device_policy())
+        {
+            self.check_cancelled().map_err(|error| error.at(span))?;
             return Ok(value);
         }
         let (rows, inner, other_inner, cols, output_shape, label) =
@@ -4619,6 +4661,7 @@ impl Interp {
         span: Span,
         instance: Option<Rc<crate::generics::FunctionProof>>,
     ) -> Result<Value, EvalError> {
+        let _backend = self.rssn_source_access();
         let _cancellation = self.cancellation_scope();
         self.check_cancelled().map_err(|error| error.at(span))?;
         // §9.3.2: the depth limit counts *calls*, not AST nodes. Counting nodes
@@ -4888,6 +4931,10 @@ impl Interp {
         crate::builtins::call(self, name, args, span)
     }
 
+    pub(crate) fn rssn_source_access(&self) -> aevia_rssn::backend::SourceAccess {
+        aevia_rssn::backend::restrict_to_source(self.capabilities & value::caps::GPU != 0)
+    }
+
     /// Executes a `Rssn.<op>` call with the overload the checker pinned.
     ///
     /// There is no fallback: resolving again here would let the
@@ -4899,6 +4946,7 @@ impl Interp {
         span: Span,
         values: Vec<Value>,
     ) -> Result<Value, EvalError> {
+        let _backend = self.rssn_source_access();
         let Some(key) = self.context.evidence.rssn_calls.get(&span).cloned() else {
             return Err(EvalError::new(
                 "E1005",
@@ -5422,6 +5470,7 @@ impl Interp {
         &mut self,
         action: &Rc<IoAction>,
     ) -> Result<Value, EvalError> {
+        let _backend = self.rssn_source_access();
         let _cancellation = self.cancellation_scope();
         self.check_cancelled()?;
         // A failure inside a `with_cap` block must not leave the session

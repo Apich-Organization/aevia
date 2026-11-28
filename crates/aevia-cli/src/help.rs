@@ -4,7 +4,8 @@ use std::process::ExitCode;
 
 const GLOBAL: &str = "Global options for language commands (before or after the command):
   --release          Enable optimized execution while retaining runtime checks
-  --backend NAME     Execution backend: auto, ir, ast, cpu, cpu-parallel, gpu
+  --backend NAME     Execution backend: auto (default), ir, ast, cpu, cpu-parallel, gpu
+  --rssn-backend NAME  RSSN expression compiler (see aevia devices)
   --jobs N           Parallel worker limit (AEVIA_JOBS, RAYON_NUM_THREADS, or available CPUs)
   --max-stack MiB    Interpreter stack size (default: 1024 MiB)
   --budget STEPS     Limit tail calls and IO execution steps (E0805 on exhaustion)
@@ -113,10 +114,10 @@ fn show(command: Option<&str>) -> ExitCode {
             "aevia debug — serve the Aevia debug adapter over standard IO\n\nUsage:\n  aevia debug [--stdio]\n\nConfigure an editor to start this command for a Debug Adapter Protocol session.\nA launch request names a saved Aevia source file and can supply program arguments\nand input lines. Put breakpoints on expressions and inspect lexical bindings\nwhile execution is stopped."
         },
         | "rssn" => {
-            "aevia rssn — inspect and generate scientific kernel bindings\n\nUsage:\n  aevia rssn [--audit]\n  aevia rssn --describe OPERATOR\n  aevia rssn --emit --out DIR [--namespaces] [--audit]\n\nOptions:\n  --audit             Report typed and dynamic binding coverage\n  --describe NAME     Show one operator's docs, signatures, and Aevia bindings\n  --emit              Generate the Rssn module (requires an output directory)\n  --out DIR           Select a destination and generate bindings there\n  --namespaces        Generate split namespace modules with --emit --out DIR\n\nWith no options, report the kernel version, manifest, and available operations.\nUse an exact kernel operator name or qualify it with its rule set.\n\nExamples:\n  aevia rssn --audit\n  aevia rssn --describe num_signal_autocovariance\n  aevia rssn --emit --out generated --namespaces"
+            "aevia rssn — inspect and generate scientific kernel bindings\n\nUsage:\n  aevia rssn [--audit]\n  aevia rssn --describe OPERATOR\n  aevia rssn --manifest-json\n  aevia rssn --emit --out DIR [--namespaces] [--audit]\n\nOptions:\n  --audit             Report typed and dynamic binding coverage\n  --describe NAME     Show one operator's docs, signatures, and Aevia bindings\n  --manifest-json     Write the linked kernel's complete RSSN manifest as JSON\n  --emit              Generate the Rssn module (requires an output directory)\n  --out DIR           Select a destination and generate bindings there\n  --namespaces        Generate split namespace modules with --emit --out DIR\n\nWith no options, report the kernel version, manifest, and available operations.\nUse an exact kernel operator name or qualify it with its rule set.\n\nExamples:\n  aevia rssn --audit\n  aevia rssn --describe num_signal_autocovariance\n  aevia rssn --manifest-json > manifest.json\n  aevia rssn --emit --out generated --namespaces"
         },
         | "devices" => {
-            "aevia devices — inspect CPU SIMD, JIT, and registered RSSN/GPU devices\n\nUsage:\n  aevia devices\n\nReports host CPU threads, runtime-detected SIMD ISA, execution policy,\nCranelift JIT and wgpu GPU build status, and every registered RSSN device."
+            "aevia devices — inspect CPU SIMD, JIT, and registered RSSN/GPU devices\n\nUsage:\n  aevia devices\n\nReports host CPU threads, runtime-detected SIMD ISA, execution policy,\nCranelift, wgpu and NumPy build features, and every registered RSSN device."
         },
         | "publish" => {
             "aevia publish — validate, sign, and upload the current package\n\nUsage:\n  aevia publish [--dry-run] [--no-verify] [--owner HANDLE] [REGISTRY_OPTIONS]\n\nOptions:\n  --dry-run       Prepare and validate without signing or uploading\n  --no-verify     Skip the local source verification checks\n  --owner HANDLE Publish under a registry namespace you manage\n  --registry URL Select the registry (or set AEVIA_REGISTRY)\n\nRequires the aevia-pkg registry client and a configured signing identity.\n\nExample:\n  aevia publish --dry-run"

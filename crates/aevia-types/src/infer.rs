@@ -356,6 +356,8 @@ pub struct Infer {
     numeric_peak: usize,
     #[cfg(test)]
     numeric_work: std::cell::Cell<usize>,
+    #[cfg(test)]
+    numeric_projections: std::cell::Cell<usize>,
     composite_literals: HashSet<u32>,
     numeric_universals: HashSet<u32>,
     numeric_errors: Vec<String>,
@@ -408,6 +410,8 @@ impl Infer {
             numeric_peak: 0,
             #[cfg(test)]
             numeric_work: std::cell::Cell::new(0),
+            #[cfg(test)]
+            numeric_projections: std::cell::Cell::new(0),
             composite_literals: HashSet::new(),
             numeric_universals: HashSet::new(),
             numeric_errors: Vec::new(),
@@ -674,8 +678,12 @@ impl Infer {
     ) -> Vec<NumericConstraint> {
         let component = self.numeric.project(roots);
         #[cfg(test)]
-        self.numeric_work
-            .set(self.numeric_work.get() + component.len());
+        {
+            self.numeric_work
+                .set(self.numeric_work.get() + component.len());
+            self.numeric_projections
+                .set(self.numeric_projections.get().saturating_add(1));
+        }
         component
             .into_iter()
             .filter_map(|id| self.numeric.get(id))
@@ -2244,7 +2252,7 @@ impl Infer {
         {
             return self.propagate_numeric();
         }
-        let mut memo = UnifyMemo::new();
+        let mut memo = UnifyMemo::default();
         self.unify_pair_rec(&mut memo, left, right, 0)?;
         self.propagate_numeric()?;
         self.unified_vars.extend(memo.verified_var_pairs);
@@ -2376,7 +2384,7 @@ impl Infer {
         memo: &mut UnifyMemo,
         id_l: u32,
         id_r: u32,
-    ) -> Result<Option<(Arc<Type>, Arc<Type>)>, UnifyError> {
+    ) -> Result<Option<BoundTypePair>, UnifyError> {
         let (root_l, opt_arc_l) = self.follow_type_arc(id_l);
         let (root_r, opt_arc_r) = self.follow_type_arc(id_r);
         if root_l == root_r {
@@ -2527,7 +2535,7 @@ impl Infer {
         left: &Type,
         right: &Type,
     ) -> Result<(), UnifyError> {
-        let mut work = vec![(memo.to_flat_side(left), memo.to_flat_side(right))];
+        let mut work = vec![(memo.flatten_side(left), memo.flatten_side(right))];
         while let Some((raw_l, raw_r)) = work.pop() {
             let side_l = memo.unwrap_flat_var(raw_l);
             let side_r = memo.unwrap_flat_var(raw_r);
@@ -2535,8 +2543,8 @@ impl Infer {
                 | (FlatSide::Var(id_l), FlatSide::Var(id_r)) => {
                     if let Some((arc_l, arc_r)) = self.unify_var_pair(memo, id_l, id_r)? {
                         work.push((
-                            memo.to_flat_side(arc_l.as_ref()),
-                            memo.to_flat_side(arc_r.as_ref()),
+                            memo.flatten_side(arc_l.as_ref()),
+                            memo.flatten_side(arc_r.as_ref()),
                         ));
                     }
                 },
@@ -2555,7 +2563,7 @@ impl Infer {
                             {
                                 continue;
                             }
-                            work.push((memo.to_flat_side(arc.as_ref()), FlatSide::Node(tree, idx)));
+                            work.push((memo.flatten_side(arc.as_ref()), FlatSide::Node(tree, idx)));
                         },
                         | None => {
                             let ty = unflatten_type(&tree, idx);
@@ -2578,7 +2586,7 @@ impl Infer {
                             {
                                 continue;
                             }
-                            work.push((FlatSide::Node(tree, idx), memo.to_flat_side(arc.as_ref())));
+                            work.push((FlatSide::Node(tree, idx), memo.flatten_side(arc.as_ref())));
                         },
                         | None => {
                             let ty = unflatten_type(&tree, idx);
@@ -3060,9 +3068,9 @@ impl Infer {
             }
         }
         let level = self.levels.get(&id).copied().unwrap_or(0);
-        let mut numeric_roots = HashSet::new();
-        self.lower_levels_iter(Occurrence::Type(ty), level, Some(&mut numeric_roots));
-        if !numeric_roots.is_empty() {
+        let mut numeric_roots = (self.numeric.len() != 0).then(HashSet::new);
+        self.lower_levels_iter(Occurrence::Type(ty), level, numeric_roots.as_mut());
+        if let Some(numeric_roots) = numeric_roots.filter(|roots| !roots.is_empty()) {
             let constraints = self.numeric_component(numeric_roots);
             for constraint in constraints {
                 for related in constraint.types() {
@@ -3138,6 +3146,10 @@ impl Infer {
     #[allow(
         clippy::cognitive_complexity,
         reason = "iterative DAG-safe level lowering across Type, Row, Rep, Dim and Nat tables"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "keeps the iterative traversal and its shared visited sets together"
     )]
     fn lower_levels_iter(
         &mut self,
@@ -4558,6 +4570,8 @@ enum NodeKey {
     Ptr(usize),
 }
 
+type BoundTypePair = (Arc<Type>, Arc<Type>);
+
 #[derive(Default)]
 struct UnifyMemo {
     visited: HashSet<(NodeKey, NodeKey)>,
@@ -4567,11 +4581,7 @@ struct UnifyMemo {
 }
 
 impl UnifyMemo {
-    fn new() -> Self {
-        Self::default()
-    }
-
-    fn to_flat_side(
+    fn flatten_side(
         &mut self,
         ty: &Type,
     ) -> FlatSide {
@@ -5529,6 +5539,35 @@ mod tests {
     }
 
     #[test]
+    fn lowering_projects_numeric_roots_only_when_facts_are_active() {
+        for connected in [false, true] {
+            let mut infer = Infer::new();
+            let outer = infer.fresh_type();
+            infer.enter_level();
+            let input = infer.fresh_rep();
+            let output = if connected {
+                infer.divide_representation(input).unwrap()
+            } else {
+                infer.fresh_rep()
+            };
+            let (Rep::Var(input_id), Rep::Var(output_id)) = (input, output) else {
+                panic!("both test representations should remain polymorphic");
+            };
+            assert_eq!(infer.numeric_constraint_count(), usize::from(connected));
+            infer.leave_level();
+            let tensor = Type::tensor_rank(1, Type::Scalar(output, Dim::one()));
+            infer.unify(&outer, &tensor).unwrap();
+
+            assert_eq!(infer.rep_levels.get(&output_id), Some(&0));
+            assert_eq!(
+                infer.rep_levels.get(&input_id),
+                Some(&u32::from(!connected))
+            );
+            assert_eq!(infer.numeric_projections.get(), usize::from(connected));
+        }
+    }
+
+    #[test]
     fn type_alias_to_a_scalar_reindexes_the_literal_domain() {
         let mut infer = Infer::new();
         let literal = infer.fresh_type();
@@ -5634,7 +5673,7 @@ mod tests {
         for step in 0..depth {
             let extent = (step % 4) + 1;
             current = Type::Tensor {
-                shape: Shape::Refined(vec![Some(Nat::Lit(extent as u64))]),
+                shape: Shape::Refined(vec![Some(Nat::Lit(extent))]),
                 elem: Box::new(current),
             };
         }
@@ -5683,7 +5722,7 @@ mod tests {
         let mut head_a = Type::float(Dim::one());
         let mut head_b = Type::float(Dim::one());
         for step in 0..4096 {
-            let extent = Some(Nat::Lit(((step % 3) + 2) as u64));
+            let extent = Some(Nat::Lit((step % 3) + 2));
             let va = infer.fresh_type();
             let vb = infer.fresh_type();
             infer
@@ -5713,7 +5752,7 @@ mod tests {
         let monolithic = build_deep_tensor(4096, Type::float(Dim::one()));
         let mut mixed = Type::float(Dim::one());
         for step in 0..4096 {
-            let extent = Some(Nat::Lit(((step % 4) + 1) as u64));
+            let extent = Some(Nat::Lit((step % 4) + 1));
             let v = infer.fresh_type();
             infer
                 .unify(

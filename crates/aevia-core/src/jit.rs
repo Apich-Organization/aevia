@@ -1,4 +1,4 @@
-//! Native code for `@jit` functions.
+//! Native code for checked hot scalar functions and `@jit` functions.
 //!
 //! Pure `Float`/`Int`/`Bool` functions are lowered to RSSN's LIR (a typed
 //! register machine with real branches, loops and calls) and compiled with
@@ -956,7 +956,7 @@ fn compile_native(
     expected_result: Kind,
     builtin: BuiltinCheck<'_>,
 ) -> Option<Native> {
-    if !function.jit || !function.captures.is_empty() || parameters.len() != function.params.len() {
+    if !function.captures.is_empty() || parameters.len() != function.params.len() {
         return None;
     }
     let (entry, sites, loops, used) = lower_form(
@@ -1122,6 +1122,27 @@ fn cached_native(
     })
 }
 
+/// Count warm-up entries before the checked native specialization path.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "keeps the native warm-up in the JIT module"
+    )
+)]
+pub fn is_hot(function: &Function) -> bool {
+    const WARMUP_CALLS: u16 = 2_000;
+    if !function.captures.is_empty() {
+        return false;
+    }
+    let calls = function.native_calls.get();
+    if calls >= WARMUP_CALLS {
+        return true;
+    }
+    function.native_calls.set(calls.saturating_add(1));
+    false
+}
+
 /// Resolve numeric literals under the actual activation before consulting the
 /// machine-code cache. Failure is a normal interpreter fallback and never
 /// inserts a negative cache entry for a different specialization.
@@ -1175,7 +1196,7 @@ pub fn specialization<T: Into<Lit>>(
         }
         Some(())
     }
-    if !function.jit || !function.captures.is_empty() {
+    if !function.captures.is_empty() {
         return None;
     }
     let mut literals = Vec::new();
@@ -1232,7 +1253,7 @@ pub fn run_with(
     mut ask: impl FnMut(Ask<'_>) -> bool,
 ) -> Option<Outcome> {
     use aevia_rssn::jit::lir::Value as V;
-    if !function.jit || args.len() != function.params.len() {
+    if args.len() != function.params.len() {
         return None;
     }
     let plain = |num: &NumVal| num.dim == Dim::one() && num.display.is_none();
@@ -1369,6 +1390,7 @@ mod tests {
         Rc::new(Function {
             name: Rc::from("dynamic_literal"),
             jit: true,
+            native_calls: std::cell::Cell::new(0),
             params: vec![Pattern::Bind { slot: 0, inner: None }],
             body: Rc::new(Block {
                 stmts: vec![
@@ -1455,6 +1477,7 @@ fn f(x: Float): Float = if x > 0.0 then x * 2.0 else 0.0 - x
         let function = Rc::new(Function {
             name: Rc::from("signed_zero"),
             jit: true,
+            native_calls: std::cell::Cell::new(0),
             params: vec![],
             body: Rc::new(Block {
                 stmts: vec![Stmt::Let(aevia_ir::Let {
@@ -1548,6 +1571,34 @@ fn f(x: Float): Float = if x > 0.0 then x * 2.0 else 0.0 - x
                     .any(|(_, bits)| *bits == Lit::F(1.0_f64.to_bits()))
             }));
         });
+    }
+
+    #[test]
+    fn automatic_native_execution_compiles_verified_hot_source_calls() {
+        NATIVE_LOOPS.with(|count| count.set(0));
+        let source = "fn sum(n: Float, acc: Float): Float = if n <= 0.0 then acc else sum(n - 1.0, acc + 0.5)\nlet result = sum(3000.0, 0.0)\n";
+        let compilation = compile_source("hot-source.aev", source);
+        assert!(
+            !compilation.diagnostics.has_errors(),
+            "{:?}",
+            compilation.diagnostics.items
+        );
+        let module = compilation.module.as_ref().unwrap();
+        for automatic in [false, true] {
+            let mut interp = crate::Interp::new(&compilation.checked).with_mode(crate::Mode::Ir);
+            interp.jit_policy = if automatic {
+                crate::JitPolicy::Automatic
+            } else {
+                crate::JitPolicy::Annotated
+            };
+            let diagnostics = interp.load(module);
+            assert!(!diagnostics.has_errors(), "{:?}", diagnostics.items);
+            assert_eq!(
+                interp.eval_toplevel("result").unwrap().as_f64(),
+                Some(1500.0)
+            );
+            assert_eq!(NATIVE_LOOPS.with(|count| count.get()) > 0, automatic);
+        }
     }
 
     #[test]

@@ -16,6 +16,7 @@
 #![allow(unsafe_code)]
 
 use aevia_core::Interp;
+use aevia_core::JitPolicy;
 use aevia_core::Mode;
 use aevia_core::compile;
 use aevia_core::value::NumVal;
@@ -125,8 +126,7 @@ fn interpreter(source: &str) -> Interp {
 const TAIL: &str = r#"fn count(n: Int, acc: Int): Int =
     if n == 0 then acc else count(n - 1, acc + 1)
 
-fn main(): IO Unit = do
-    println(count(1000, 0))
+fn run_count(n: Int): Int = count(n, 0)
 "#;
 
 const HOT: &str = r#"let xs = zeros(2000)
@@ -144,20 +144,35 @@ fn main_program(interp: &mut Interp) {
 /// regression is visible as a number rather than as a slow test.
 #[test]
 fn the_hot_paths_allocate_within_their_budget() {
-    // --- tail loop: a trampoline step should not allocate per step ----------
-    let mut tail = interpreter(TAIL);
-    main_program(&mut tail); // warm up
-    let (tail_allocations, _) = allocations(|| main_program(&mut tail));
-    let tail_per_step = tail_allocations as f64 / 1_000.0;
-    eprintln!("allocations: tail loop {tail_allocations} total, {tail_per_step:.3}/step");
-    // One `Vec<Value>` per tail call (the evaluated argument list) is the only
-    // remaining per-step allocation; the frame buffer itself is reused. The
-    // gate pins that: a regression that clones frames or names per step shows up
-    // immediately.
-    assert!(
-        tail_per_step < 1.05,
-        "a tail step allocates only its argument list (was {tail_per_step:.3})"
-    );
+    // The trampoline reuses its frame and argument buffers. Warm the automatic
+    // policy beyond the compilation threshold so the native compiler's one-time
+    // work stays outside the steady-state allocation measurement.
+    for (policy, label, warmup_runs) in [
+        (JitPolicy::Annotated, "interpreted", 1),
+        #[cfg(feature = "jit")]
+        (JitPolicy::Automatic, "automatic JIT", 3),
+    ] {
+        let mut tail = interpreter(TAIL);
+        tail.jit_policy = policy;
+        let function = tail.eval_toplevel("run_count").expect("run_count exists");
+        let mut run_count = || {
+            tail.apply(function.clone(), vec![Value::int(1_000)], Span::default())
+                .expect("tail loop runs")
+        };
+        for _ in 0..warmup_runs {
+            assert_eq!(run_count().as_f64(), Some(1_000.0));
+        }
+        let (tail_allocations, result) = allocations(run_count);
+        assert_eq!(result.as_f64(), Some(1_000.0));
+        let tail_per_step = tail_allocations as f64 / 1_000.0;
+        eprintln!(
+            "allocations: {label} tail loop {tail_allocations} total, {tail_per_step:.3}/step"
+        );
+        assert!(
+            tail_per_step < 1.05,
+            "the {label} tail loop exceeded its argument allocation budget ({tail_per_step:.3}/step)"
+        );
+    }
 
     // --- map: a closure call per element ------------------------------------
     let mut hot = interpreter(HOT);
