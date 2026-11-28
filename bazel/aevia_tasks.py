@@ -2,6 +2,7 @@
 
 import argparse
 from contextlib import redirect_stdout
+from datetime import date
 import hashlib
 import json
 import os
@@ -126,11 +127,14 @@ def run_domain_plan(build, cli):
                        f"tests/domain_{suite}.aev"])
 
 
-def release_smoke(build, directory):
+def release_smoke(build, directory, *, expected_version=None):
     build.assert_native()
     cli, lsp = bins(build, directory)
     suffix = cli.suffix
-    build.run([cli, "--version"])
+    version = build.run([cli, "--version"], capture_output=True, text=True).stdout.strip()
+    if expected_version is not None and version != f"aevia {expected_version}":
+        raise ValueError(f"Expected packaged CLI version {expected_version}, got {version!r}")
+    print(version)
     build.run([directory / ("aevia-pkg" + suffix), "--version"])
     flags = ["--require-default-backends"]
     if build.target.endswith("-linux-gnu"):
@@ -161,17 +165,23 @@ _RELEASE_FILES = (
 _RELEASE_GUIDES = ("BAZEL.md", "BAZEL.zh-CN.md")
 
 
-def verify_release_archive(build, archive, *, require_guides=False):
-    flags = ["--require-build-guides"] if require_guides else []
+def verify_release_archive(build, archive, *, require_guides=False, rssn_commit=None, expected_version=None):
+    flags = ["--expected-target", build.target]
+    if require_guides:
+        flags.append("--require-build-guides")
+    if rssn_commit is not None:
+        flags.extend(("--expected-rssn-commit", rssn_commit))
     build.python("scripts/check_release_archive.py", archive, *flags)
+    name = archive.stem if archive.suffix == ".zip" else archive.name.removesuffix(".tar.gz")
+    distribution = name.removeprefix("aevia-").removesuffix(f"-{build.target}")
+    if expected_version is None and not distribution.startswith("nightly-"):
+        expected_version = distribution
     with tempfile.TemporaryDirectory(prefix="aevia-extract-", dir=build.scratch) as temp:
         if archive.suffix == ".zip":
             shutil.unpack_archive(archive, temp)
-            name = archive.stem
         else:
             shutil.unpack_archive(archive, temp, filter="data")
-            name = archive.name.removesuffix(".tar.gz")
-        release_smoke(build, Path(temp) / name)
+        release_smoke(build, Path(temp) / name, expected_version=expected_version)
 
 
 def resolve_commit(build, checkout, revision):
@@ -227,6 +237,20 @@ def verify_linux_release_abi(build, binaries):
             raise ValueError(f"{binary.name} requires {names}. Build the Linux release with the Ubuntu 24.04 ABI")
 
 
+def verify_release_distribution(build, commit, distribution):
+    manifest = build.run(["git", "show", f"{commit}:Cargo.toml"], cwd=build.workspace,
+                         capture_output=True, text=True).stdout
+    version = tomllib.loads(manifest)["workspace"]["package"]["version"]
+    if distribution.startswith("nightly-"):
+        try:
+            date.fromisoformat(distribution.removeprefix("nightly-"))
+        except ValueError as error:
+            raise ValueError(f"{distribution} must contain a valid calendar date") from error
+    elif distribution != version:
+        raise ValueError(f"Distribution {distribution} must match the Aevia version {version} at {commit}")
+    return version
+
+
 def package_release(build, args, *, from_binaries=False):
     build.assert_native()
     parser = argparse.ArgumentParser(description="Package and verify a native Aevia distribution")
@@ -244,6 +268,7 @@ def package_release(build, args, *, from_binaries=False):
         parser.error("--rssn-commit must be a 40-character Git commit")
     cwd = Path(os.getenv("BUILD_WORKING_DIRECTORY", str(build.workspace)))
     commit = resolve_commit(build, build.workspace, options.source_commit)
+    version = verify_release_distribution(build, commit, options.distribution)
     if from_binaries:
         toolchain = (cwd / options.toolchain_bin).resolve()
         platform = (cwd / options.platform_bin).resolve()
@@ -291,7 +316,8 @@ def package_release(build, args, *, from_binaries=False):
             digest = hashlib.file_digest(stream, "sha256").hexdigest()
         checksum = archive.with_name(archive.name + ".sha256")
         checksum.write_text(f"{digest}  {archive.name}\n", encoding="ascii", newline="\n")
-        verify_release_archive(build, archive, require_guides=not from_binaries)
+        verify_release_archive(build, archive, require_guides=not from_binaries,
+                               rssn_commit=options.rssn_commit, expected_version=version)
         if ship_registry:
             registry_out = out / "registry"
             registry_out.mkdir(exist_ok=True)
@@ -627,10 +653,16 @@ def dispatch(build, workflow, args):
         source = parser.add_mutually_exclusive_group(required=True)
         source.add_argument("--archive", type=Path)
         source.add_argument("--bin-dir", type=Path)
+        parser.add_argument("--rssn-commit", help="expected RSSN source commit for the archive")
         inputs = parser.parse_args(args)
+        if inputs.rssn_commit is not None:
+            if inputs.archive is None:
+                parser.error("--rssn-commit requires --archive")
+            if not re.fullmatch(r"[0-9a-f]{40}", inputs.rssn_commit):
+                parser.error("--rssn-commit must be a 40-character Git commit")
         cwd = Path(os.getenv("BUILD_WORKING_DIRECTORY", str(build.workspace)))
         if inputs.archive:
-            verify_release_archive(build, (cwd / inputs.archive).resolve())
+            verify_release_archive(build, (cwd / inputs.archive).resolve(), rssn_commit=inputs.rssn_commit)
         else:
             release_smoke(build, (cwd / inputs.bin_dir).resolve())
     elif workflow in ("benchmark", "benchmark-ci"):

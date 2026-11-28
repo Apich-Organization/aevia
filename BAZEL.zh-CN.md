@@ -74,15 +74,18 @@ bazel run --config=release-max //:package_release -- \
   --distribution 0.1.0-beta.1 --rssn-commit "$(git -C ../rssn rev-parse HEAD)"
 ```
 
-Bazel 在构建发布二进制文件前运行 RSSN 的 LLVM 流水线探针。此发布目标启用 Aevia 和 RSSN 的全部特性、LLVM 优化插件、通用 CPU 参数、fat LTO 和单个 CGU。目标在 `dist/` 生成并验证发行包与校验文件，运行包内的 CLI 和 LSP，并检查 NumPy `.npy` 读写、Cranelift JIT、AST 和 IR。Linux 需要 `mesa-vulkan-drivers` 提供 Lavapipe，以验证 wgpu 适配器。CI 使用同一个发布目标，并从干净的 Aevia 和 RSSN 工作树构建。打包时检查指定的提交，并核对各二进制构建使用的源码快照与打包输入。发布镜像使用的 Linux x86-64 registry 二进制文件位于 `dist/registry/`。
+Bazel 在构建发布二进制文件前运行 RSSN 的 LLVM 流水线探针。此发布目标启用 Aevia 和 RSSN 的全部特性、LLVM 优化插件、通用 CPU 参数、fat LTO 和单个 CGU。目标在 `dist/` 生成并验证发行包与校验文件，运行包内的 CLI 和 LSP，并检查 NumPy `.npy` 读写、Cranelift JIT、AST 和 IR。Linux 需要 `mesa-vulkan-drivers` 提供 Lavapipe，以验证 wgpu 适配器。CI 使用同一个发布目标，并从干净的 Aevia 和 RSSN 工作树构建。打包时检查指定的提交，并核对各二进制构建使用的源码快照与打包输入。版本化发行包的版本须与选定的 Aevia 提交一致，夜间构建使用有效的日历日期命名。两种发行包均检查包内 CLI 版本和记录的 RSSN 提交。发布镜像使用的 Linux x86-64 registry 二进制文件位于 `dist/registry/`。
 
 `bazel/rssn_suites.bzl` 统一定义 `//:contracts_test` 和发布冒烟测试所用的 RSSN 用例。每个入选用例都在 AST 和 IR 下运行。两个打包目标和 `//:release_smoke` 共用发布用例清单。
 
 Linux 发布运行器使用 Ubuntu 24.04。打包目标通过 `readelf` 检查发布的二进制文件所需的 glibc 版本，要求 2.39 或更早。
 
-只需 CLI 和 LSP 时可构建 `//:toolchain`，只需 registry 客户端时可构建 `//:platform_cli`。可用 `bazel run //:release_smoke -- --archive /path/to/aevia.tar.gz` 复验发行包。`//:package_release_from_binaries` 接收 `--toolchain-bin` 和 `--platform-bin`，对现有二进制文件运行相同的打包和验证步骤。发布构建需要与 `rustc -vV` 完全匹配的宿主 LLVM SDK，可用 `--repo_env=RSSN_LLVM_CONFIG=/path/to/llvm-config` 指定。
+只需 CLI 和 LSP 时可构建 `//:toolchain`，只需 registry 客户端时可构建 `//:platform_cli`。可在发行包的目标平台上用 `bazel run //:release_smoke -- --archive /path/to/aevia.tar.gz` 复验发行包，并可传入 `--rssn-commit SHA` 核对包内记录的 RSSN 提交。`//:package_release_from_binaries` 接收 `--toolchain-bin` 和 `--platform-bin`，可用现有二进制文件测试打包流程。调用该目标时须提供二进制文件所用的源码提交。需要验证构建凭据的发行包请使用 `//:package_release`。发布构建需要与 `rustc -vV` 完全匹配的宿主 LLVM SDK，可用 `--repo_env=RSSN_LLVM_CONFIG=/path/to/llvm-config` 指定。
 
 Windows 构建机还需用 `--repo_env=RSSN_LLVM_IMPORT_LIBRARY` 指定宿主 LLVM C++ API 的导入库。需要选用兼容工具链时，可传入 `--repo_env=RUSTC` 与 `--repo_env=CARGO`。CI 可通过 `RSSN_RELEASE_LLVM_CONFIGS`、`RSSN_RELEASE_LLVM_IMPORT_LIBRARIES`、`RSSN_RELEASE_RUSTCS` 和 `RSSN_RELEASE_CARGOS` 按 Rust 目标三元组配置路径。
+发布 CI 会在没有显式 SDK 路径时通过 RSSN Bazel 模块下载并校验 Linux x86-64、Linux Arm64 和
+macOS Arm64 的 LLVM 23.1.5 SDK。Windows 和 Intel macOS 需要配置匹配的工具链，也可用
+`RSSN_RELEASE_RUNNERS` JSON 映射按 Rust 三元组选择已配置的运行器。
 
 `--config=release` 使用 ThinLTO 和 16 个 CGU。发布工作流使用 `--config=release-max` 启用 fat LTO 和单 CGU。`--config=release-local` 用于测量关闭 LLVM 插件和 LTO 的 O3 构建。通过 `--define=rust_target=<目标三元组>` 和 `--repo_env=RSSN_TARGET_ENV=/absolute/path/to/toolchains.json` 为交叉编译配置目标链接器、SDK 和 C 工具链。Rust 测试可通过配置的 Cargo target runner 执行。安装器和协议测试需在可原生运行对应产物的平台上运行。
 

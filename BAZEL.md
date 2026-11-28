@@ -82,10 +82,11 @@ generic CPU flags, fat LTO and one codegen unit. It creates and checks the archi
 and checksum under `dist/`. It runs the packaged CLI and LSP, checks NumPy `.npy`
 I/O and the Cranelift JIT, and exercises the AST and IR backends. The Linux smoke
 uses Mesa Lavapipe from `mesa-vulkan-drivers` to exercise a wgpu adapter. CI uses
-this release target with clean Aevia and RSSN checkouts. Packaging verifies the
-requested commits and compares the source snapshot of each binary build with
-the packaging inputs. The Linux x86-64 registry binary used for the published image
-is written to `dist/registry/`.
+this release target with clean Aevia and RSSN checkouts. Packaging verifies the requested commits and compares the source snapshot of
+each binary build with the packaging inputs. A versioned archive must use the
+version in the selected Aevia commit. Nightly archives use a calendar date.
+Both verify the packaged CLI's version and the archive's RSSN commit. The Linux
+x86-64 registry binary used for the published image is written to `dist/registry/`.
 
 The shared `bazel/rssn_suites.bzl` plan selects which RSSN fixtures run in `//:contracts_test` and which also run against release binaries. The plan runs each selected fixture under AST and IR. Both packaging targets and `//:release_smoke` use the same release fixture list.
 
@@ -93,10 +94,13 @@ Linux release runners use Ubuntu 24.04. The packaging target runs `readelf`
 and checks that the shipped binaries require glibc 2.39 or earlier.
 
 Build `//:toolchain` for the CLI and LSP alone, or `//:platform_cli` for the
-registry client. Recheck an archive with `bazel run //:release_smoke -- --archive
-/path/to/aevia.tar.gz`. `//:package_release_from_binaries` takes `--toolchain-bin`
-and `--platform-bin` to exercise the same packaging and verification with existing
-binaries. Releases require a host LLVM SDK matching `rustc -vV`. Pass
+registry client. Recheck an archive on its target with `bazel run
+//:release_smoke -- --archive /path/to/aevia.tar.gz`. Pass `--rssn-commit SHA`
+to check the bundled RSSN revision against a known commit.
+`//:package_release_from_binaries` takes `--toolchain-bin` and `--platform-bin`
+for testing existing binaries. Supply their source commits when invoking that
+target. For a release with verified build receipts, use `//:package_release`.
+Releases require a host LLVM SDK matching `rustc -vV`. Pass
 `--repo_env=RSSN_LLVM_CONFIG=/path/to/llvm-config` to select it explicitly.
 
 Windows build hosts also require `--repo_env=RSSN_LLVM_IMPORT_LIBRARY` to point
@@ -104,7 +108,11 @@ to the import library for the host LLVM C++ API. Set `--repo_env=RUSTC` and
 `--repo_env=CARGO` to select a compatible toolchain when needed. CI accepts
 target-specific paths through `RSSN_RELEASE_LLVM_CONFIGS`,
 `RSSN_RELEASE_LLVM_IMPORT_LIBRARIES`, `RSSN_RELEASE_RUSTCS` and
-`RSSN_RELEASE_CARGOS`, keyed by Rust target triple.
+`RSSN_RELEASE_CARGOS`, keyed by Rust target triple. For Linux x86-64, Linux Arm64 and
+macOS Arm64, release CI asks the RSSN Bazel module to fetch the checksum-pinned
+LLVM 23.1.5 SDK when no explicit path is configured. For Windows and Intel
+macOS, configure the matching toolchain and optionally select a prepared runner
+through the `RSSN_RELEASE_RUNNERS` JSON map keyed by Rust target triple.
 
 `--config=release` uses ThinLTO and 16 codegen units. The release workflow uses
 `--config=release-max` for fat LTO and one codegen unit. Use
