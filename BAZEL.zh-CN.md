@@ -30,7 +30,9 @@ bazel test --override_module=rssn=/work/rssn-worktree //:joint_test
 | `bazel run //:benchmark -- startup-phases` | 使用测试构建，报告空 Aevia 程序各启动阶段的耗时中位数 |
 | `bazel run //:benchmark -- tail-call\|dense-tensors\|dense-matmul` | 运行尾调用、稠密与装箱张量或语言层矩阵乘法计时 |
 | `bazel run //:benchmark -- dense-axis\|dense-minmax` | 使用测试构建，比较稠密和装箱张量的按轴求和或全张量最小值耗时 |
+| `bazel run //:benchmark -- cli` | 检查 CLI 的 `@bench` 与错误报告 |
 | `bazel run --config=release-local //:aevia -- bench program.aev` | 用优化构建的 CLI 测量以 `@bench` 标注的程序 |
+| `bazel run //:benchmark_ci` / `bazel run //:benchmark_ci -- --full` | 运行 CI 冒烟检查或完整基准组 |
 | `bazel run //:profile -- run program.aev` | 在 x86-64 Windows 上使用保留调试符号的 CLI 进行采样。MSVC 构建会提供同目录的 PDB |
 | `bazel run //:check` | 检查 Rust 工作区，省去测试可执行文件的链接 |
 | `bazel run //:fmt` / `bazel test //:fmt_test` | 用 nightly Rustfmt 格式化两个工作区，或验证格式 |
@@ -58,6 +60,9 @@ bazel test --override_module=rssn=/work/rssn-worktree //:joint_test
 | `bazel run //:refresh_kernel` | 按顺序刷新 RSSN 生成代码、Aevia API 清单、标准库源和覆盖报告 |
 | `bazel run //:refresh_stdlib` / `bazel run //:refresh_spec` | 分别刷新标准库源或规格文档 |
 | `bazel run //:refresh_stdlib_reference` | 验证双语参考内容并更新入库页面和 JSON。传入 `-- --check` 校验现有文件，或用 `-- --aevia /path/to/aevia` 复用由配套源码构建的本机 CLI。 |
+
+Linux 基准任务默认检查尾调用和 CLI。手动触发 CI 时启用 `full_benchmarks`，
+即可运行完整基准组。耗时会写入任务日志。
 
 运行平台数据库测试时，请设置 `AEVIA_TEST_DATABASE_URL` 指向可供测试的数据源。测试自行建立临时 GPG 密钥。编辑器目标根据所选测试使用 Node.js、PyYAML、Vim、Emacs、Helix、`ksyntaxhighlighter6` 或 `tree-sitter`。Zed WASI 测试需要 `wasm32-wasip2` 和 Clippy。打包需要 npm、Java 21 和 Gradle。RSSN 的 header、manifest、witness 和绑定更新目标也可以从 Aevia 使用，例如 `bazel run @rssn//:refresh_witness` 或 `bazel build @rssn//:manifest`。更新命令只在生成成功后发布指定文件，并会检查生成期间是否有人改动同一文件。
 

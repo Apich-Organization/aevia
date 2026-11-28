@@ -439,11 +439,13 @@ scientific_run(
         project = "aevia",
         rssn = "@rssn//:sources",
         tags = ["manual"],
-        workflow = name,
+        workflow = workflow,
     )
-    for name, data in [
-        ("benchmark", []),
+    for name, workflow, data in [
+        ("benchmark", "benchmark", []),
+        ("benchmark_ci", "benchmark-ci", []),
         (
+            "profile",
             "profile",
             [":toolchain_profiling"],
         ),

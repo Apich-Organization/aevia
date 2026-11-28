@@ -537,32 +537,44 @@ def refresh_stdlib_reference(build, args):
             build.python("tools/check_stdlib_docs.py", "--aevia", cli, "--write")
 
 
-def benchmark(build, args):
-    workloads = {
-        "interp": ["bench", "-p", "aevia-core", "--bench", "interp"],
-        "matmul": ["run", "-p", "aevia-std", "--release", "--example", "matmul_bench"],
-        "startup": ["run", "-p", "aevia-rssn", "--profile", "profiling", "--example", "startup"],
-        "startup-phases": ["test", "-p", "aevia-core", "--test", "startup",
-                           "--", "--nocapture", "--exact", "startup_phases_are_profiled"],
-        "tail-call": ["test", "-p", "aevia-core", "--test", "ir_tail",
-                      "--", "--ignored", "--nocapture", "--exact", "bench_tail_call_step"],
-        "dense-tensors": ["test", "--release", "-p", "aevia-core", "--test", "tensors_dense",
-                          "--", "--ignored", "--nocapture", "--exact", "bench_dense_vs_boxed_100k"],
-        "dense-matmul": ["test", "--release", "-p", "aevia-core", "--test", "tensors_dense",
-                         "--", "--ignored", "--nocapture", "--exact", "bench_matmul_256"],
-        "dense-axis": ["test", "-p", "aevia-core", "--test", "reductions_axis",
-                       "--", "--nocapture", "--exact", "the_dense_axis_path_does_not_box_per_element"],
-        "dense-minmax": ["test", "-p", "aevia-core", "--test", "reductions_minmax",
-                         "--", "--nocapture", "--exact", "the_dense_scan_is_the_fast_path"],
-    }
-    parser = argparse.ArgumentParser(description="Run an Aevia performance benchmark")
-    parser.add_argument("workload", choices=tuple(workloads))
-    options = parser.parse_args(args)
+_BENCHMARK_COMMANDS = {
+    "interp": ["bench", "-p", "aevia-core", "--bench", "interp"],
+    "matmul": ["run", "-p", "aevia-std", "--release", "--example", "matmul_bench"],
+    "startup": ["run", "-p", "aevia-rssn", "--profile", "profiling", "--example", "startup"],
+    "startup-phases": ["test", "-p", "aevia-core", "--test", "startup",
+                       "--", "--nocapture", "--exact", "startup_phases_are_profiled"],
+    "tail-call": ["test", "-p", "aevia-core", "--test", "ir_tail",
+                  "--", "--ignored", "--nocapture", "--exact", "bench_tail_call_step"],
+    "dense-tensors": ["test", "--release", "-p", "aevia-core", "--test", "tensors_dense",
+                      "--", "--ignored", "--nocapture", "--exact", "bench_dense_vs_boxed_100k"],
+    "dense-matmul": ["test", "--release", "-p", "aevia-core", "--test", "tensors_dense",
+                     "--", "--ignored", "--nocapture", "--exact", "bench_matmul_256"],
+    "dense-axis": ["test", "-p", "aevia-core", "--test", "reductions_axis",
+                   "--", "--nocapture", "--exact", "the_dense_axis_path_does_not_box_per_element"],
+    "dense-minmax": ["test", "-p", "aevia-core", "--test", "reductions_minmax",
+                     "--", "--nocapture", "--exact", "the_dense_scan_is_the_fast_path"],
+    "cli": ["test", "-p", "aevia-cli", "--test", "cli", "--", "--exact",
+            "bench_times_bench_functions_and_reports_failures"],
+}
+_BENCHMARK_SMOKE = ("tail-call", "cli")
+
+
+def benchmark(build, args, *, ci=False):
+    parser = argparse.ArgumentParser(description="Run Aevia performance benchmarks")
+    if ci:
+        parser.add_argument("--full", action="store_true", help="run every workload")
+        options = parser.parse_args(args)
+        workloads = _BENCHMARK_COMMANDS if options.full else _BENCHMARK_SMOKE
+    else:
+        parser.add_argument("workload", choices=tuple(_BENCHMARK_COMMANDS))
+        workloads = (parser.parse_args(args).workload,)
     build.assert_runnable()
-    env = None
-    if options.workload == "dense-matmul":
-        env = {"RAYON_NUM_THREADS": build.env.get("RAYON_NUM_THREADS", "2")}
-    build.cargo(workloads[options.workload], env=env)
+    for workload in workloads:
+        print(f"Aevia benchmark {workload}", flush=True)
+        env = None
+        if workload == "dense-matmul":
+            env = {"RAYON_NUM_THREADS": build.env.get("RAYON_NUM_THREADS", "2")}
+        build.cargo(_BENCHMARK_COMMANDS[workload], env=env)
 
 
 def profile(build, args):
@@ -610,8 +622,8 @@ def dispatch(build, workflow, args):
             verify_release_archive(build, (cwd / inputs.archive).resolve())
         else:
             release_smoke(build, (cwd / inputs.bin_dir).resolve())
-    elif workflow == "benchmark":
-        benchmark(build, args)
+    elif workflow in ("benchmark", "benchmark-ci"):
+        benchmark(build, args, ci=workflow == "benchmark-ci")
     elif workflow == "profile":
         profile(build, args)
     elif workflow == "check":

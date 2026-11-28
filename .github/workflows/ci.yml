@@ -1,5 +1,5 @@
 # Continuous integration. The same structure is used by the rssn repository:
-# fmt -> clippy -> test (matrix) -> contracts -> docs, summarised by one
+# Format, lint, test, benchmark, contract and documentation jobs share a
 # `ci-success` job so branch protection needs a single required check.
 #
 # Layout of the runner workspace
@@ -24,6 +24,10 @@ name: CI
         description: RSSN branch, tag or commit for this run
         type: string
         required: false
+      full_benchmarks:
+        description: Run every benchmark workload
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       rssn_commit:
@@ -180,6 +184,35 @@ jobs:
       - name: Lint the Windows sampling profiler
         if: runner.os == 'Windows'
         run: bazel test //:profiler_clippy_test
+
+  benchmark:
+    needs: kernel-revision
+    name: benchmarks (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: aevia
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: Apich-Organization/rssn
+          ref: ${{ needs.kernel-revision.outputs.commit }}
+          path: rssn
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+        with:
+          module-root: aevia
+          bazelisk-cache: true
+          repository-cache: true
+      - name: System dependencies
+        run: sudo apt-get update && sudo apt-get install -y fontconfig libfontconfig1-dev
+      - name: Run benchmark workloads
+        run: bazel run //:benchmark_ci -- ${{ inputs.full_benchmarks && '--full' || '' }}
 
   platform:
     needs: kernel-revision
@@ -371,7 +404,7 @@ jobs:
   ci-success:
     name: CI success
     if: always()
-    needs: [kernel-revision, fmt, clippy, test, platform, contracts, docs, platform-image, editors, editor-packages]
+    needs: [kernel-revision, fmt, clippy, test, benchmark, platform, contracts, docs, platform-image, editors, editor-packages]
     runs-on: ubuntu-latest
     steps:
       - name: Require every job to have succeeded

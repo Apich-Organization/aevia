@@ -31,7 +31,9 @@ bazel test --override_module=rssn=/work/rssn-worktree //:joint_test
 | `bazel run //:benchmark -- startup-phases` | Report per-phase median times for starting an empty Aevia program in the test profile |
 | `bazel run //:benchmark -- tail-call\|dense-tensors\|dense-matmul` | Run the dedicated tail-call, boxed/dense tensor, or language matrix-product timing harness |
 | `bazel run //:benchmark -- dense-axis\|dense-minmax` | Compare dense and boxed storage for axis sums or full-tensor minima in the test profile |
+| `bazel run //:benchmark -- cli` | Exercise the `@bench` CLI and its error reporting |
 | `bazel run --config=release-local //:aevia -- bench program.aev` | Measure user programs annotated with `@bench` using an optimized CLI |
+| `bazel run //:benchmark_ci` / `bazel run //:benchmark_ci -- --full` | Run the CI smoke checks or every benchmark workload |
 | `bazel run //:profile -- run program.aev` | Sample an Aevia command on x86-64 Windows with an unstripped CLI and, on MSVC, an adjacent PDB |
 | `bazel run //:check` | Check the Rust workspace without linking test binaries |
 | `bazel run //:fmt` / `bazel test //:fmt_test` | Format both workspaces with nightly Rustfmt, or check formatting |
@@ -59,6 +61,10 @@ bazel test --override_module=rssn=/work/rssn-worktree //:joint_test
 | `bazel run //:refresh_kernel` | Refresh RSSN generators, the Aevia API inventory, stdlib sources and coverage |
 | `bazel run //:refresh_stdlib` / `bazel run //:refresh_spec` | Refresh stdlib sources or specification documents |
 | `bazel run //:refresh_stdlib_reference` | Validate both reference editions and refresh the checked-in pages and JSON. Pass `-- --check` to verify them or `-- --aevia /path/to/aevia` to reuse a native CLI from the paired source. |
+
+The Linux benchmark job runs the tail-call and CLI smoke workloads. Enable
+`full_benchmarks` when dispatching CI to run the full suite. The job records
+timings in its log.
 
 Set `AEVIA_TEST_DATABASE_URL` to a database suitable for testing. The suite creates a disposable GnuPG key. Depending on the suite, editor tests use Node.js, PyYAML, Vim, Emacs, Helix, `ksyntaxhighlighter6` or `tree-sitter`. The Zed WASI target requires Clippy and `wasm32-wasip2`. Editor packaging needs npm, Java 21 and Gradle. RSSN header, manifest, witness and binding tasks can also run from Aevia, for example `bazel run @rssn//:refresh_witness` and `bazel build @rssn//:manifest`. Refresh targets publish only the selected generated paths after generation succeeds and check for concurrent edits before replacing them.
 
