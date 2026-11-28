@@ -1,0 +1,35 @@
+import Rssn_numerical_callback as Numeric
+import Rssn_Special as Special
+
+fn circle(t: Float): Complex = complex(to_real(cos(t)), to_real(sin(t)))
+fn tangent(t: Float): Complex = complex(to_real(-sin(t)), to_real(cos(t)))
+let center = complex(0.0, 0.0)
+let point = complex(0.3, -0.2)
+let inverse_two_pi = 0.15915494309189535
+let inverse_pi = 0.3183098861837907
+
+test "prepared Szegő quadrature is reusable across all three evaluators" =
+    match Numeric.num_conformal_szego_prepare_checked_typed(center, 64, 128, circle, tangent) with
+    | Ok(model) ->
+        match (Special.szego_evaluate(model, point), Special.szego_evaluate_bergman(model, point), Special.szego_evaluate_map(model, point)) with
+        | (Ok(s), Ok(k), Ok(v)) ->
+            let estimators = approx_eq(re(s), inverse_two_pi, 1e-12) && approx_eq(re(k), inverse_pi, 1e-12)
+            let map = approx_eq(re(v.mapped), 0.3, 1e-12) && approx_eq(im(v.mapped), -0.2, 1e-12)
+            estimators && map
+        | _ -> false
+    | Err(_) -> false
+
+test "one-shot Szegő map matches the unit disk and checks callback budget" =
+    let insufficient = Numeric.num_conformal_szego_map_checked_typed(center, point, 64, 127, circle, tangent)
+    match (Numeric.num_conformal_szego_map_checked_typed(center, point, 64, 128, circle, tangent), insufficient) with
+    | (Ok(v), Err(_)) -> approx_eq(re(v.mapped), 0.3, 1e-12) && approx_eq(im(v.mapped), -0.2, 1e-12)
+    | _ -> false
+
+test "explicit sampled boundary uses the same portable quadrature record" =
+    let grid = linspace(0.0, 6.086835766330224, 32)
+    match Special.szego_prepare_sampled(map(circle, grid), map(tangent, grid), center) with
+    | Ok(model) ->
+        match Special.szego_evaluate(model, point) with
+        | Ok(s) -> approx_eq(re(s), inverse_two_pi, 1e-12)
+        | Err(_) -> false
+    | Err(_) -> false

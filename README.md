@@ -93,9 +93,9 @@ bazel build //:toolchain //:platform_cli
 bazel test //:rust_all_features_test
 ```
 
-The platform has a separate Cargo workspace and a [deployment guide](platform/docs/DEPLOY.md). Run `bazel test //:joint_all_features_test` to test the language workspace and the selected RSSN checkout together. For a focused check, pass a named test target with `--test_arg=--test --test_arg=allocations`. `cargo +nightly fmt --all --check` checks the language workspace's formatting.
+The platform has a separate Cargo workspace and a [deployment guide](platform/docs/DEPLOY.md). Run `bazel test //:joint_all_features_test` to test the language workspace and the selected RSSN checkout together. For a focused check, pass a named test target with `--test_arg=--test --test_arg=allocations`. `bazel test //:fmt_test` checks formatting in both workspaces.
 
-Run `bazel run //:refresh_spec` with Pandoc to generate the standalone specification, and `bazel run //:refresh_stdlib` to generate the standard library sources. `bazel run //:aevia -- doc --stdlib --json` writes the reference pages and their JSON index. Use `--lang en` for the checked-in reference or `--lang zh` for the Chinese pages. [Bilingual reference check](tools/check_stdlib_docs.py)
+Run `bazel run //:refresh_spec` with Pandoc to generate the standalone specification, and `bazel run //:refresh_stdlib` to generate the standard library sources. `bazel run //:refresh_stdlib_reference` updates the checked-in English reference and its bilingual JSON index after validating both editions. Add `-- --check` to verify the reference. Use `bazel run //:aevia -- doc --stdlib --lang zh` to render Chinese pages separately.
 
 ## License
 

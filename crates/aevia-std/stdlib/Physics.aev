@@ -1,6 +1,6 @@
 ## The `Physics` module of §8.20.
 # Generated standard library; do not edit.
-# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Regenerate with `bazel run //:refresh_stdlib`.
 module Physics
 
 ## Runs a named simulation scenario of the scientific kernel (for example "ising") from JSON parameters and returns its JSON result, or Err(SimError) for an unknown scenario or bad parameters.

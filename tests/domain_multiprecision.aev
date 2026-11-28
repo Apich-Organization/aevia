@@ -12,6 +12,21 @@ fn fails<A>(result: Result<A, OpError>): Bool =
     | Err(_) -> true
     | Ok(_) -> false
 
+test "dyadic exponential includes values lost in midpoint rounding" =
+    let near_e: MP.Dyadic = { mantissa = 87, exponent = -5, precision = 7 }
+    match MP.exp_dyadic(one, 4) with
+    | Ok(value) ->
+        match MP.ball_endpoints(value, 64) with
+        | Ok(ends) -> MP.compare_dyadic(ends.lower, near_e) == Ok(-1) && MP.compare_dyadic(ends.upper, near_e) == Ok(1)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "interval exponential encloses an exact point and rejects invalid precision" =
+    let point: MP.DyadicBall = { midpoint = zero, radius = zero }
+    match MP.one_dyadic(16) with
+    | Ok(expected) -> MP.exp_ball(point, 16) == Ok({ midpoint = expected, radius = { mantissa = 0, exponent = 0, precision = 16 } }) && fails(MP.exp_dyadic(one, 0))
+    | Err(_) -> false
+
 test "existing dyadic arithmetic preserves a wide mantissa through the curated domain" =
     let wide = 18446744073709551617
     match MP.round_dyadic(wide, 0, 65, "nearest") with
@@ -60,3 +75,53 @@ test "malformed records and invalid requests return typed errors" =
     let malformed: MP.Dyadic = { mantissa = 0, exponent = 1, precision = 16 }
     let negative: MP.Dyadic = { mantissa = -1, exponent = 0, precision = 1 }
     fails(MP.point_ball(malformed)) && fails(MP.sqrt_dyadic(negative, 8, "nearest")) && fails(MP.make_ball(one, negative))
+
+test "dyadic constructors keep exact integers and convert finite floats" =
+    let wide = 18446744073709551617
+    match MP.dyadic_from_int(wide, 65, "nearest") with
+    | Ok(x) ->
+        let constants = MP.zero_dyadic(10) == Ok({ mantissa = 0, exponent = 0, precision = 10 }) && MP.one_dyadic(8) == Ok({ mantissa = 128, exponent = -7, precision = 8 })
+        let signed = MP.dyadic_from_i64(-11, 3) == Ok({ mantissa = -6, exponent = 1, precision = 3 })
+        let binary64 = MP.dyadic_from_float(0.5, 2) == Ok({ mantissa = 2, exponent = -2, precision = 2 }) && MP.dyadic_to_float({ mantissa = 3, exponent = -2, precision = 2 }) == Ok(0.75)
+        x.mantissa == wide && MP.dyadic_sign(x) == Ok(1) && constants && signed && binary64
+    | Err(_) -> false
+
+test "interval operations preserve enclosing endpoints" =
+    let half: MP.Dyadic = { mantissa = 1, exponent = -1, precision = 1 }
+    let left: MP.DyadicBall = { midpoint = one, radius = half }
+    let right: MP.DyadicBall = { midpoint = two, radius = half }
+    match MP.add_balls(left, right, 8) with
+    | Ok(sum) ->
+        match MP.subtract_balls(sum, right, 8) with
+        | Ok(difference) ->
+            match MP.multiply_balls(difference, right, 8) with
+            | Ok(product) ->
+                match MP.ball_endpoints(product, 8) with
+                | Ok(ends) -> MP.compare_dyadic(ends.lower, zero) == Ok(-1) && MP.compare_dyadic(ends.upper, three) == Ok(1)
+                | Err(_) -> false
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "complex rectangle division preserves nonzero real intervals" =
+    let nine: MP.Dyadic = { mantissa = 9, exponent = 0, precision = 4 }
+    match MP.lift_real_ball({ midpoint = two, radius = one }) with
+    | Ok(rectangle) ->
+        match MP.complex_rectangle_norm_squared(rectangle, 64) with
+        | Ok(norm) ->
+            match MP.ball_endpoints(norm, 64) with
+            | Ok(ends) -> MP.compare_dyadic(ends.lower, one) == Ok(0) && MP.compare_dyadic(ends.upper, nine) == Ok(0) && !fails(MP.reciprocal_complex_rectangle(rectangle, 4))
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "complex rectangle powers and singularities return typed results" =
+    match MP.imaginary_unit_rectangle(16) with
+    | Ok(i) ->
+        match MP.one_complex_rectangle(16) with
+        | Ok(real_one) ->
+            match MP.zero_complex_rectangle(16) with
+            | Ok(origin) -> MP.power_complex_rectangle(i, 2, 16) == MP.negate_complex_rectangle(real_one) && fails(MP.reciprocal_complex_rectangle(origin, 16))
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false

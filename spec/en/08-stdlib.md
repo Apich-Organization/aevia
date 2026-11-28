@@ -1100,6 +1100,12 @@ Supply a concrete natural number for the `read_npy` rank, as in `read_npy<2>(pat
 
 NPY supports NPY 1.0/2.0/3.0, little- and big-endian float32/float64, C and Fortran order (Fortran input is converted to row-major storage; output is little-endian float64, C order); `read_npy<n>` stores and verifies a concrete rank, `write_npy` accepts dimensionless `Float` tensors of any rank; an unresolved generic rank is `E0304`. IO error codes: missing file `E0901`, invalid argument `E0902`, corrupt/truncated/rank mismatch/size overflow `E0903`, unsupported format, dtype or extension `E0904`, failed plot write `E0905`; NPY errors are returned as `Err(DataError)` after the IO action runs.
 
+The native toolchain enables RSSN's `npy` feature by default. The portable
+Aevia `Data` reader and writer are also available in the minimal CLI. Both file
+actions require `fs`. For a measured array, record the unit alongside the
+array and apply it as an explicit conversion after reading the dimensionless
+values.
+
 ## 8.12 Plot
 
 ```
@@ -1343,7 +1349,7 @@ Conventions and limits:
 - **Dimension-independent, named by dimension count / rank.** `heat_fd`, `wave_fd`, `poisson_fd`, `advect_fd` do not distinguish dimensions in the kernel: the spatial dimension is the nesting depth of the field data (a list is 1-D, a list of lists 2-D, three levels 3-D; the domain is the unit interval/square/cube). An Aevia signature has exactly one literal rank, so one kernel operator carries **several signatures, each with its own name**: the unsuffixed name is the 1-D form (`poisson_fd(f: Tensor<1, Float>, boundary: Float)`), and `_2d`/`_3d` take `Tensor<2, Float>`/`Tensor<3, Float>` fields (`heat_fd_2d`, `wave_fd_3d`, `advect_fd_3d` …) with answers of the same shape as the field; the advection velocity is still a `Tensor<1, Float>` with one component per spatial dimension. Rank-polymorphic tensor operators are named by rank likewise: `tensor_norm_<r>`, `tensor_inner_<r>` (r = 1..4) and `tensordot_<ra>_<rb>_<k>` (contracts k axes, `axes_a`/`axes_b: Tensor<1, Int>` 0-based, result rank ra + rb − 2k, `Float` for 0; result rank at most 4). The decompositions `hosvd_<r>`, `hooi_<r>`, `cp_als_<r>`, `tt_svd_<r>`, `tt_dense_<r>` (r = 2, 3, 4) return the records `Hosvd<r>`, `Hooi<r>`, `CpFit`, `TensorTrain` (factor tables are `Tensor<1, Tensor<2, Float>>`), and mixed lists are taken apart by the list accessor `from_value<Tensor<1, Value>>` and decoded part by part (§10.3.8). Symbolic PDEs have a single name: `solve_heat_equation`, `solve_wave_equation`, `solve_laplace_equation`, `solve_poisson_equation` (the dimension comes from the equation's variables; the old `_1d`/`_2d`/`_3d` are aliases); the affine transforms `translation`, `scaling`, `shear`, `reflection`, `rotation` are the same, filed under `Rssn_Graphics`.
 - Ragged inputs (adjacency lists, polynomial systems with different term counts) have no literal syntax; build a `Tensor<1, Tensor<1, Float>>` with `map(f, range(0, n))`.
 
-End-to-end examples and closed-form checks: `tests/domain_numeric.aev` (`mad([1,2,3,4,100]) = 1`, `ifft(fft(x)) = x`, wavelet round trips, `poisson_fd` of `-u'' = 1` giving `x(1-x)/2`, the `exp(-π²t)` decay of `heat_fd`, `tensordot_2_2_1` against a hand-computed matrix product, reconstruction by `hosvd_3`/`tt_svd_3`, `ode_solve` of `y' = -2y` giving `e^-2`, `lambert_w_complex(1,0,0) = 0.5671…`, and others), run with `cargo test -p aevia-rssn --test aev_suites`.
+End-to-end examples and closed-form checks: `tests/domain_numeric.aev` (`mad([1,2,3,4,100]) = 1`, `ifft(fft(x)) = x`, wavelet round trips, `poisson_fd` of `-u'' = 1` giving `x(1-x)/2`, the `exp(-π²t)` decay of `heat_fd`, `tensordot_2_2_1` against a hand-computed matrix product, reconstruction by `hosvd_3`/`tt_svd_3`, `ode_solve` of `y' = -2y` giving `e^-2`, `lambert_w_complex(1,0,0) = 0.5671…`, and others), run with `bazel run //:aevia -- test --no-cache tests/domain_numeric.aev`.
 
 ### 8.19.2 Native numerical models
 

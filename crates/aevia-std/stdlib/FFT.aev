@@ -1,6 +1,6 @@
 ## The `FFT` module of §8.20.
 # Generated standard library; do not edit.
-# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Regenerate with `bazel run //:refresh_stdlib`.
 module FFT
 
 ## Chooses how a Fourier transform is scaled: Backward leaves the forward transform unscaled and divides the inverse by the number of points (the default of fft and ifft), Forward divides the forward transform instead, and Unitary divides both by the square root of the number of points so that the transform preserves energy.

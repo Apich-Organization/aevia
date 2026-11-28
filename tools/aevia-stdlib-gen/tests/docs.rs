@@ -41,7 +41,7 @@ fn the_generator_notice_is_not_documentation() -> Result<(), Box<dyn std::error:
                     let doc = doc.trim().to_ascii_lowercase();
                     doc.starts_with("generated standard library")
                         || doc.starts_with("generated from the rssn kernel manifest")
-                        || doc.contains("cargo run -p aevia-stdlib-gen")
+                        || doc.contains("bazel run //:refresh_stdlib")
                         || (doc.starts_with("rssn ") && doc.contains(", api "))
                 }),
             "{name}: the notice must be a plain `#` comment, not a `##` doc line"

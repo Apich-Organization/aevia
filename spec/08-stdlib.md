@@ -1302,6 +1302,10 @@ type ColumnInfo = { name: String, dtype: String, unit: Option<String> }
 NPY 支持 1.0/2.0/3.0、小端与大端 float32/float64、C 与 Fortran 排列（Fortran 输入转换为行优先存储；写出用小端 float64、C 排列）；`read_npy<n>` 保存并验证具体秩，`write_npy` 接受任意秩的无量纲 `Float` 张量；未具体化的泛型秩报 `E0304`。
 IO 错误码：文件不存在 `E0901`，非法参数 `E0902`，损坏/截断/秩不匹配/大小溢出 `E0903`，不支持的格式、dtype 或扩展名 `E0904`，绘图写出失败 `E0905`；NPY 错误在 IO 动作执行后作为 `Err(DataError)` 返回。
 
+本机工具链默认启用 RSSN 的 `npy` 特性。精简 CLI 也提供 Aevia `Data` 的可移植读写接口。
+两个文件动作都需要 `fs` 能力。处理测量数组时，可把单位另存为元数据，再将载入的无量纲值
+按该单位显式转换。
+
 ## 8.12 Plot
 
 ```
@@ -1593,7 +1597,7 @@ Aevia 把它们归入 `Rssn_Numeric`，其中每个算子都有手写的 typed �
   `Tensor<1, Tensor<1, Float>>`。
 
 端到端示例与封闭形式核对：`tests/domain_numeric.aev`（`mad([1,2,3,4,100]) = 1`、`ifft(fft(x)) = x`、小波往返、`poisson_fd` 的 `-u'' = 1` 得 `x(1-x)/2`、`heat_fd` 的 `exp(-π²t)` 衰减、
-`tensordot_2_2_1` 对手算矩阵乘、`hosvd_3`/`tt_svd_3` 的重构、`ode_solve` 的 `y' = -2y` 得 `e^-2`、`lambert_w_complex(1,0,0) = 0.5671…` 等），由 `cargo test -p aevia-rssn --test aev_suites` 运行。
+`tensordot_2_2_1` 对手算矩阵乘、`hosvd_3`/`tt_svd_3` 的重构、`ode_solve` 的 `y' = -2y` 得 `e^-2`、`lambert_w_complex(1,0,0) = 0.5671…` 等），可运行 `bazel run //:aevia -- test --no-cache tests/domain_numeric.aev` 验证。
 
 ### 8.19.2 原生数值模型
 

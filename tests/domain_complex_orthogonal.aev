@@ -1,0 +1,43 @@
+## Exact integer orders and dimensionless complex arguments.
+import Rssn_Special as Special
+
+let z = complex(0.25, -0.5)
+
+let one = complex(1.0, 0.0)
+
+let zero = complex(0.0, 0.0)
+
+test "the Chebyshev pair shares the polynomial recurrence" =
+    match (Special.complex_chebyshev_t(2, z), Special.complex_chebyshev_u(2, z)) with
+    | (Ok(t), Ok(u)) -> approx_eq(magnitude(u - t - complex(2.0, 0.0) * z * z), 0.0, 1e-12)
+    | _ -> false
+
+test "Jacobi includes finite limits at degenerate recurrence parameters" =
+    let minus_one = complex(-1.0, 0.0)
+    match Special.complex_jacobi_p(2, minus_one, minus_one, z) with
+    | Ok(p) -> approx_eq(magnitude(p - (z * z - one) * complex(0.25, 0.0)), 0.0, 1e-12)
+    | Err(_) -> false
+
+test "normalized harmonics remain finite at high order" =
+    let theta = complex(1.5707963267948966, 0.0)
+    match (Special.complex_spherical_harmonic(256, 256, theta, zero), Special.complex_spherical_harmonic(256, -256, theta, zero)) with
+    | (Ok(pos), Ok(neg)) -> approx_eq(magnitude(pos - neg), 0.0, 1e-12) && approx_eq(magnitude(pos), 1.199500027289952, 1e-12)
+    | _ -> false
+
+test "oversized orders and measured arguments return errors" =
+    let measured = complex(2.0 m, 1.0 m)
+    let oversized = Special.complex_legendre_p(4097, z)
+    let units = Rssn.dynamic("num_special_complex_legendre_p", [to_value(2), to_value(measured)])
+    is_err(oversized) && is_err(units)
+
+test "complex Bernoulli and Euler polynomials share cached coefficients" =
+    match (Special.complex_bernoulli(20, zero), Special.complex_euler(2, z)) with
+    | (Ok(b), Ok(e)) -> approx_eq(re(b), -174611.0 / 330.0, 1e-12) && approx_eq(magnitude(e - (z * z - z)), 0.0, 1e-12)
+    | _ -> false
+
+test "Fresnel fields, Clausen parity, and log Barnes zeros are visible" =
+    let angle = complex(1.5707963267948966, 0.0)
+    let pole = Special.complex_log_barnes_g(zero)
+    match (Special.complex_fresnel_auxiliary(zero), Special.complex_clausen(2, angle)) with
+    | (Ok(pair), Ok(c)) -> approx_eq(re(pair.f), 0.5, 1e-12) && approx_eq(re(pair.g), 0.5, 1e-12) && approx_eq(re(c), 0.915965594177219, 1e-12) && is_err(pole)
+    | _ -> false

@@ -1,6 +1,6 @@
 ## The generated `Rssn_Combinatorics` module: counting functions and 0-based
 ## permutations (the kernel 1-based lists never reach user code).
-## Run with: cargo run -p aevia-cli -- test tests/domain_combinatorics.aev
+## Run with: bazel run //:aevia -- test tests/domain_combinatorics.aev
 import Rssn_Combinatorics as C
 
 fn int_is(r: Result<Int, OpError>, expected: Int): Bool =

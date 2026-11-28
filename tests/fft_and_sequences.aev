@@ -1,5 +1,5 @@
 ## The FFT family at every rank, and the first-axis sequence operations at rank >= 2.
-## Run with: cargo run -p aevia-cli -- test tests/fft_and_sequences.aev
+## Run with: bazel run //:aevia -- test tests/fft_and_sequences.aev
 import FFT { Backward, Forward, Unitary }
 
 fn fl(x: Real): Float = unwrap_or(to_float(x), nan)

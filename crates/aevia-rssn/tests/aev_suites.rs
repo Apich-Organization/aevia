@@ -6,7 +6,7 @@
 //! `test "..." = <Bool>` blocks. This target loads each one through the real
 //! driver, so a wrapper that does not type-check, a conversion that does not
 //! decode, or a kernel behaviour change all fail here, not only under
-//! `cargo run -p aevia-cli -- test`.
+//! `bazel run //:aevia -- test`.
 
 use aevia_core::Interp;
 use aevia_core::driver;

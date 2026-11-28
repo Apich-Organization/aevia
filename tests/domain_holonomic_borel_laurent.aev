@@ -1,0 +1,32 @@
+import Rssn_Special as Special
+import Rssn_numerical_callback as Callback
+
+let zero = complex(0.0, 0.0)
+let one = complex(1.0, 0.0)
+let imaginary_unit = complex(0.0, 1.0)
+
+fn laurent_sample(z: Complex[Length]): Complex[Time] =
+    let x = z / complex(2.0 m, 0.0 m)
+    complex(3.0 s, 0.0 s) * (one / x + x * x)
+
+test "holonomic continuation refines a long segment and exposes model order" =
+    let equation = [[-one], [one]]
+    match Special.continue_holonomic(equation, [zero, complex(30.0, 0.0)], [one], 24) with
+    | Ok(state) -> Special.holonomic_order(equation) == Ok(1) && approx_eq(re(state[0]) / exp(30.0), 1.0, 1e-10)
+    | Err(_) -> false
+
+test "logarithmic monodromy adds two pi i to the constant component" =
+    let equation = [[zero, zero], [one, zero], [zero, one]]
+    match Special.holonomic_monodromy(equation, [one, imaginary_unit, -one, -imaginary_unit], 32) with
+    | Ok(matrix) -> shape(matrix) == [2, 2] && approx_eq(im(matrix[0, 1]), 6.283185307179586, 1e-11) && approx_eq(re(matrix[1, 1]), 1.0, 1e-11)
+    | Err(_) -> false
+
+test "Borel–Padé takes the upper lateral limit at a positive-axis pole" =
+    match Special.borel_pade_complex([one, one], complex(0.5,0.0), 0, 1) with
+    | Ok(value) -> approx_eq(re(value), 1.3409654195801466, 2e-11) && approx_eq(im(value), 0.8503366631752727, 2e-11)
+    | Err(_) -> false
+
+test "Laurent coefficients share the amplitude units in the normalized coordinate" =
+    match Callback.num_continuation_laurent_fft_typed(complex(0.0 m, 0.0 m), 2.0 m, 1, 2, 64, 64, laurent_sample) with
+    | Ok(report) -> report.first_power == -1 && report.evaluations == 64 && approx_eq(re(report.coefficients[0]) / (1.0 s), 3.0, 1e-11) && approx_eq(re(report.coefficients[3]) / (1.0 s), 3.0, 1e-11)
+    | Err(_) -> false

@@ -1,6 +1,6 @@
 ## The `Optimize` module of §8.20.
 # Generated standard library; do not edit.
-# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Regenerate with `bazel run //:refresh_stdlib`.
 module Optimize
 
 ## least_squares(residuals, x0) finds the parameters x that minimise the sum of squares of the vector-valued residual function, starting from x0.

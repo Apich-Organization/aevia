@@ -1,0 +1,38 @@
+## Certified Riemann zeta and polylogarithm on dyadic rectangles.
+import Rssn_Multiprecision as MP
+
+let zero: MP.Dyadic = { mantissa = 0, exponent = 0, precision = 1 }
+
+let one: MP.Dyadic = { mantissa = 1, exponent = 0, precision = 1 }
+
+let two: MP.Dyadic = { mantissa = 1, exponent = 1, precision = 1 }
+
+let negative_two: MP.Dyadic = { mantissa = -1, exponent = 1, precision = 1 }
+
+let half: MP.Dyadic = { mantissa = 1, exponent = -1, precision = 1 }
+
+let zero_ball: MP.DyadicBall = { midpoint = zero, radius = zero }
+
+fn real_point(x: MP.Dyadic): MP.DyadicRectangle =
+    { real = { midpoint = x, radius = zero }, imag = zero_ball }
+
+test "zeta at a negative even integer is exactly zero" =
+    MP.riemann_zeta_complex_rectangle(real_point(negative_two), 1) == Ok(real_point(zero))
+
+test "zeta at two has a positive nonzero real enclosure" =
+    match MP.riemann_zeta_complex_rectangle(real_point(two), 128) with
+    | Err(_) -> false
+    | Ok(value) -> value.real.midpoint.mantissa > 0 && value.real.radius.mantissa > 0 && value.imag.radius.mantissa == 0
+
+test "zeta reports the pole at one" =
+    match MP.riemann_zeta_complex_rectangle(real_point(one), 96) with
+    | Err(_) -> true
+    | Ok(_) -> false
+
+test "order-zero polylog at one half is exactly one" =
+    MP.polylog_complex_rectangle(real_point(half), real_point(zero), 1) == Ok(real_point(one))
+
+test "polylog rejects an argument on the unit circle" =
+    match MP.polylog_complex_rectangle(real_point(one), real_point(two), 96) with
+    | Err(_) -> true
+    | Ok(_) -> false

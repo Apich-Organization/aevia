@@ -1,5 +1,5 @@
 ## Explicit adapters for opaque native Rust APIs.
-## Run: cargo run -p aevia-cli -- test examples/portable_models.aev
+## Run: bazel run //:aevia -- test examples/portable_models.aev
 import Rssn_numerical_vector as V
 
 ## Opaque models use the generated checked Value interface. Their immutable,

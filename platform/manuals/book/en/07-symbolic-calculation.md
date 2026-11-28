@@ -25,6 +25,36 @@ The exact position at four seconds is 32 m. The derivative runs from 2 m/s at ze
 
 When differentiating with units, the result has the output dimension divided by the input dimension. Integration multiplies the dimensions. Track dimensions at the boundary of each transformation so that a change to the model stays visible.
 
+## Find an RSSN operator and call it with a checked function
+
+Run `aevia rssn --describe num_native_par_map_slice` to see the linked signature,
+dimension rule and available bindings. `Rssn.call_ho` receives ordinary values and
+checked callbacks in separate lists. Keep each list in its order within the
+signature. This example supplies the measured vector and the two integer
+controls as ordinary values. The callback transforms a distance into a time.
+
+```aevia,run
+fn round_trip_time(distance: Float[Length]): Float[Time] =
+    (distance / 1.0 m) * 2.0 s
+
+fn round_trip_times(): Result<Tensor<1, Float[Time]>, OpError> =
+    let ordinary = [to_value([1.0 m, 2.0 m, 3.0 m]), to_value(1), to_value(3)]
+    match Rssn.call_ho("num_native_par_map_slice", ordinary, [to_callback(round_trip_time)]) with
+    | Ok(value) -> from_value<Tensor<1, Float[Time]>>(value)
+    | Err(error) -> Err(error)
+
+test "the returned values retain order and time units" =
+    round_trip_times() == Ok([2.0 s, 4.0 s, 6.0 s])
+
+fn main(): IO Unit = do
+    println(round_trip_times())
+```
+
+`from_value` checks the returned tensor's rank, element type and dimension.
+The callback runs synchronously and its handle belongs to this call. Use
+`aevia rssn --audit` to explore the coverage of the linked build, or emit its
+modules with `aevia rssn --emit --out generated --namespaces`.
+
 ## Change the experiment
 
 Replace the constant acceleration term with a cubic term representing a constant jerk. Choose its units to make position a length again. Predict the derivative's dimensions and its value at 0 s before running the modified example.

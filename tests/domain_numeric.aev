@@ -3,7 +3,7 @@
 ## finite-difference solvers, Krylov solves, low rank, sampled functions, complex
 ## special functions and the operators over expressions (initial-value problems,
 ## fixed points, minimisation). Every answer is checked against a closed form.
-## Run with: cargo run -p aevia-cli -- test tests/domain_numeric.aev
+## Run with: bazel run //:aevia -- test tests/domain_numeric.aev
 import Rssn_Numeric as N
 
 fn close(r: Result<Float, OpError>, expected: Float, tol: Float): Bool =

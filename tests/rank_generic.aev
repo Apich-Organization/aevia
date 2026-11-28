@@ -1,6 +1,6 @@
 ## Rank-generic built-ins at ranks above 4, the first-axis sequence family
 ## (fold, sort, zip, enumerate, ...) and the real axes-subset transforms.
-## Run with: cargo run -p aevia-cli -- test tests/rank_generic.aev
+## Run with: bazel run //:aevia -- test tests/rank_generic.aev
 fn fl(x: Real): Float = unwrap_or(to_float(x), nan)
 
 fn near1(a: Tensor<1, Float>, b: Tensor<1, Float>): Bool = norm(zip_with(fn (x, y) => x - y, a, b)) < 1e-9

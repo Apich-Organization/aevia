@@ -58,18 +58,20 @@ workspaces.
 和 `aevia.cli.path`。扩展在受信任的工作区中启动。
 
 Download `aevia-<version>.vsix` from the release assets or extract it from the
-`aevia-editor-extensions` artifact of a [CI run][ci]. To build from source with
-Node.js 22 or later, run `npm ci --ignore-scripts` and `npm run package` in
-`editors/vscode`. Open **Extensions: Install from VSIX** and select the file.
+`aevia-editor-extensions` artifact of a [CI run][ci]. For a source build, install
+Node.js 22 or later and run `bazel run //:editor_packages -- --editor vscode`
+from the repository root. Open **Extensions: Install from VSIX** and select the
+`.vsix` in `dist/editor-extensions`.
 
 从发布附件下载 `aevia-<版本>.vsix`，或从 [CI 运行][ci]的
-`aevia-editor-extensions` 构建产物中解压该文件。若要从源码构建，请使用
-Node.js 22 或更新版本，在 `editors/vscode` 中运行 `npm ci --ignore-scripts`
-和 `npm run package`。打开 **Extensions: Install from VSIX** 并选择该文件。
+`aevia-editor-extensions` 构建产物中解压该文件。若要从源码构建，请安装
+Node.js 22 或更新版本，并在仓库根目录运行
+`bazel run //:editor_packages -- --editor vscode`。打开
+**Extensions: Install from VSIX** 并选择 `dist/editor-extensions` 中的 `.vsix`。
 
-After installing dependencies, run `npm test` in `editors/vscode` to verify the
-extension commands and TextMate highlighting.
+Run `bazel test //:editor_vscode_test` to verify the extension commands and
+TextMate highlighting.
 
-安装依赖后，在 `editors/vscode` 中运行 `npm test`，验证扩展命令和 TextMate 高亮。
+运行 `bazel test //:editor_vscode_test` 验证扩展命令和 TextMate 高亮。
 
 [ci]: https://github.com/Apich-Organization/aevia/actions/workflows/ci.yml

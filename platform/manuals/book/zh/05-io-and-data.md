@@ -21,6 +21,11 @@ fn main(): IO Unit = do
 
 本地文件动作用 `fs` 能力。用 `aevia --caps fs run path/to/program.aev` 试运行仅授予文件能力的程序。多个能力名用逗号分隔。`with_cap` 缩小一个动作作用域的权限。执行不可信程序时使用进程沙箱。
 
+与 NumPy 交换数组时，使用本地 `.npy` 文件并显式指定秩，例如
+`read_npy<2>("readings.npy")`。读取器接受 C 或 Fortran 顺序的 float32 和 float64 数组，
+`write_npy` 写出小端、C 顺序的 float64 数组。将测量单位保存在配套元数据中，读出无量纲值
+后显式换算。标准本机工具链已启用 RSSN 的 NumPy 特性，精简构建也提供 `Data` 文件操作。
+
 ## 分开计算结果与输出方式
 
 让模型层返回结构化结果，例如 `{ value = estimate, samples = n }`。可以在 `main` 中用 `println` 输出，也可以用标准库生成数据集。批量计算时，保留每个失败结果的输入标识。能够指明无效文件或列的诊断比笼统的失败提示更便于处理。

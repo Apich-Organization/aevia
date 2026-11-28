@@ -1,5 +1,5 @@
 # Continuous integration. The same structure is used by the rssn repository:
-# fmt -> clippy -> test (matrix) -> contracts -> docs, summarised by one
+# Format, lint, test, benchmark, contract and documentation jobs share a
 # `ci-success` job so branch protection needs a single required check.
 #
 # Layout of the runner workspace
@@ -7,7 +7,7 @@
 # `aevia-rssn` links the kernel by path (`../../../rssn` from its crate), so the
 # two repositories are checked out side by side: `$GITHUB_WORKSPACE/aevia` and
 # `$GITHUB_WORKSPACE/rssn`. The kernel revision is the repository variable
-# RSSN_REF (default `v0.3`); set it to build against a branch or a tag.
+# RSSN_REF (default `v0.3`). Manual runs may select a branch, tag or SHA.
 #
 # `platform/` is a separate Cargo workspace that depends on the language crates
 # by path (`../crates/aevia-doc`), so the same checkout serves it.
@@ -19,6 +19,15 @@ name: CI
     branches: [main, v0.1]
   pull_request:
   workflow_dispatch:
+    inputs:
+      rssn_ref:
+        description: RSSN branch, tag or commit for this run
+        type: string
+        required: false
+      full_benchmarks:
+        description: Run every benchmark workload
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       rssn_commit:
@@ -54,7 +63,7 @@ jobs:
         with:
           persist-credentials: false
           repository: Apich-Organization/rssn
-          ref: ${{ inputs.rssn_commit || vars.RSSN_REF || 'v0.3' }}
+          ref: ${{ inputs.rssn_commit || inputs.rssn_ref || vars.RSSN_REF || 'v0.3' }}
           path: rssn
       - id: pin
         working-directory: rssn
@@ -80,12 +89,12 @@ jobs:
         with:
           toolchain: nightly
           components: rustfmt
-      - run: cargo +nightly fmt --all --check
-      - run: cargo +nightly fmt --all --check
-        working-directory: aevia/platform
-      - name: Build platform API documentation
-        run: cargo doc --locked --workspace --all-features --no-deps
-        working-directory: aevia/platform
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+        with:
+          module-root: aevia
+          bazelisk-cache: true
+          repository-cache: true
+      - run: bazel test //:fmt_test //:platform_rustdoc_test
 
   clippy:
     needs: kernel-revision
@@ -174,7 +183,36 @@ jobs:
           bazel test --test_env=_LINK_ :toolchain_test
       - name: Lint the Windows sampling profiler
         if: runner.os == 'Windows'
-        run: cargo clippy --locked -p aevia-prof --all-targets -- -D warnings
+        run: bazel test //:profiler_clippy_test
+
+  benchmark:
+    needs: kernel-revision
+    name: benchmarks (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: aevia
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: Apich-Organization/rssn
+          ref: ${{ needs.kernel-revision.outputs.commit }}
+          path: rssn
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+        with:
+          module-root: aevia
+          bazelisk-cache: true
+          repository-cache: true
+      - name: System dependencies
+        run: sudo apt-get update && sudo apt-get install -y fontconfig libfontconfig1-dev
+      - name: Run benchmark workloads
+        run: bazel run //:benchmark_ci -- ${{ inputs.full_benchmarks && '--full' || '' }}
 
   platform:
     needs: kernel-revision
@@ -262,18 +300,10 @@ jobs:
           bazelisk-cache: true
           repository-cache: true
       - name: Verify contracts, documentation and editor protocols
-        run: bazel test //:contracts_test //:editor_protocol_test //:release_inputs_test
-      - name: Run the playground image with Podman
-        shell: bash
-        run: |
-          command -v podman >/dev/null || sudo apt-get install -y podman
-          sh platform/infra/build-playground.sh bazel-bin/toolchain/bin/aevia localhost/aevia-playground:ci
-          printf 'fn main(): IO Unit = do\n    println("playground ready")\n' |
-            podman run --rm -i --network=none --read-only --cap-drop=ALL \
-              --security-opt=no-new-privileges --tmpfs=/work:rw,nodev,nosuid,noexec,mode=1777 \
-              --workdir=/work --entrypoint=/bin/sh localhost/aevia-playground:ci \
-              -ec 'cat > main.aev; aevia --max-stack 16 --budget 100000 --jobs 1 --caps= run main.aev' |
-            grep -Fx 'playground ready'
+        run: bazel test //:contracts_test //:rssn_api_audit_test //:editor_protocol_test //:release_inputs_test
+      - name: Install Podman for the playground image smoke test
+        run: command -v podman >/dev/null || sudo apt-get install -y podman
+      - run: bazel test //:playground_image_test
 
   editors:
     needs: kernel-revision
@@ -306,8 +336,7 @@ jobs:
           module-root: aevia
           bazelisk-cache: true
           repository-cache: true
-      - name: Editor runtime, configuration and WebAssembly tests
-        run: bazel test --repo_env=PYTHON=/usr/bin/python3 //:editor_config_test //:editor_zed_wasm_test
+      - run: bazel test --repo_env=PYTHON=/usr/bin/python3 //:editor_config_test //:editor_zed_wasm_test
 
   editor-packages:
     needs: kernel-revision
@@ -339,7 +368,12 @@ jobs:
           workspaces: aevia
       - name: System dependencies
         run: sudo apt-get update && sudo apt-get install -y fontconfig libfontconfig1-dev
-      - run: cargo doc --locked --workspace --no-deps
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+        with:
+          module-root: aevia
+          bazelisk-cache: true
+          repository-cache: true
+      - run: bazel test //:rustdoc_test
 
   platform-image:
     needs: kernel-revision
@@ -353,10 +387,10 @@ jobs:
           path: aevia
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           repository: Apich-Organization/rssn
           ref: ${{ needs.kernel-revision.outputs.commit }}
           path: rssn
-          persist-credentials: false
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -365,13 +399,12 @@ jobs:
           module-root: aevia
           bazelisk-cache: true
           repository-cache: true
-      - name: Build and smoke-test the registry image
-        run: bazel run //:registry_image_test -- --tag aevia-registry:ci
+      - run: bazel test //:registry_image_test
 
   ci-success:
     name: CI success
     if: always()
-    needs: [kernel-revision, fmt, clippy, test, platform, contracts, docs, platform-image, editors, editor-packages]
+    needs: [kernel-revision, fmt, clippy, test, benchmark, platform, contracts, docs, platform-image, editors, editor-packages]
     runs-on: ubuntu-latest
     steps:
       - name: Require every job to have succeeded

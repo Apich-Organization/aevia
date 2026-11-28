@@ -5106,6 +5106,9 @@ impl Interp {
                     | aevia_types::Type::Scalar(Rep::Float, dim) => {
                         Some((Storage::Dense(Rc::new(Vec::new())), dim.clone()))
                     },
+                    | aevia_types::Type::Scalar(Rep::Complex, dim) => {
+                        Some((Storage::Boxed(Vec::new()), dim.clone()))
+                    },
                     | aevia_types::Type::Bool => Some((Storage::Bool(Vec::new()), Dim::one())),
                     | _ => None,
                 };

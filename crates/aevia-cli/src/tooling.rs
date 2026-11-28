@@ -524,8 +524,8 @@ pub fn bench(
         // the Rust interpreter binary.
         eprintln!(
             "aevia bench: note: this is a debug build; the timings are not representative. \
-             Build with `cargo build --release` for comparable numbers (§9.9's `--release` flag \
-             does not change the build)."
+             Build with `bazel build --config=release-max //:toolchain` for comparable numbers. \
+             The CLI's `--release` flag optimizes the program's IR (§9.9)."
         );
     }
     let (rows, failed) = match measure_benchmarks(options, &args) {
@@ -547,9 +547,8 @@ pub fn bench(
          to the Core IR run on the IR evaluator); not a separate benchmark harness"
     );
     println!(
-        "protocol: compare only release builds (`cargo build --release`), on the same machine, \
-         with the same `--release` IR optimization setting, from the median of N iterations; timings include interpreter allocation but allocations \
-         are not counted"
+        "protocol: compare the median of N iterations for release builds on the same machine \
+         with the same `--release` IR optimization setting. Timings include interpreter allocation."
     );
     if let Some(path) = &args.save_baseline_path {
         match save_baseline(path, &rows, args.iterations, args.warmup, options.release) {

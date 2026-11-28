@@ -1,6 +1,6 @@
 ## The `Solve` module of §8.20.
 # Generated standard library; do not edit.
-# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Regenerate with `bazel run //:refresh_stdlib`.
 module Solve
 
 ## Solves A x = b for x, returning a Result; a singular or non-square system gives Err(LinAlgError).

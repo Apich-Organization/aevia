@@ -1,0 +1,39 @@
+## Typed normalized PID trajectories and ERA identification.
+import Rssn_Control as Control
+
+fn fails<T>(result: Result<T, OpError>): Bool =
+    match result with
+    | Err(_) -> true
+    | Ok(_) -> false
+
+test "sampled PID uses the optional derivative filter" =
+    let gains = { kp = 0.0, ki = 0.0, kd = 1.0, filter_time = Some(1.0) }
+    Control.simulate_pid(gains, [0.0, 1.0, 1.0], 1.0, None) == Ok([0.0, 0.5, 0.25])
+
+test "saturated negative integral gain does not wind up" =
+    let gains = { kp = -2.0, ki = -1.0, kd = 0.0, filter_time = None }
+    let bounds = Some({ low = -1.0, high = 1.0 })
+    let swapped = Some({ low = 1.0, high = -1.0 })
+    (Control.simulate_pid(gains, [1.0, 1.0, 0.0], 1.0, bounds) == Ok([-1.0, -1.0, 0.0])
+        && fails(Control.simulate_pid(gains, [1.0], 1.0, swapped)))
+
+test "PID plant response accepts the prepared transfer type" =
+    match Control.transfer_new_proper([1.0], [1.0, 1.0]) with
+    | Ok(plant) ->
+        let gains = { kp = 1.0, ki = 0.0, kd = 0.0, filter_time = None }
+        match Control.pid_response(gains, plant, [0.0, 0.01], 1.0) with
+        | Ok(response) -> approx_eq(response[1], 1.0 - exp(-0.01), 1e-10) && Control.release_transfer(plant) == Ok(true)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "ERA fits a one-state impulse law from sample-by-output data" =
+    let observations = [[0.0], [1.0], [0.5], [0.25], [0.125]]
+    match Control.identify_era(observations, [1.0, 0.0, 0.0, 0.0, 0.0], 1) with
+    | Ok(model) ->
+        match (Control.era_matrices(model), Control.impulse_response(model, 4)) with
+        | (Ok(fit), Ok(response)) ->
+            (fit.order == 1 && approx_eq(response[2][0], 0.5, 1e-12)
+                && Control.release_era(model) == Ok(true)
+                && fails(Control.impulse_response(model, 1)))
+        | _ -> false
+    | Err(_) -> false

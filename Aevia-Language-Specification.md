@@ -4768,6 +4768,10 @@ type ColumnInfo = { name: String, dtype: String, unit: Option<String> }
 NPY 支持 1.0/2.0/3.0、小端与大端 float32/float64、C 与 Fortran 排列（Fortran 输入转换为行优先存储；写出用小端 float64、C 排列）；`read_npy<n>` 保存并验证具体秩，`write_npy` 接受任意秩的无量纲 `Float` 张量；未具体化的泛型秩报 `E0304`。
 IO 错误码：文件不存在 `E0901`，非法参数 `E0902`，损坏/截断/秩不匹配/大小溢出 `E0903`，不支持的格式、dtype 或扩展名 `E0904`，绘图写出失败 `E0905`；NPY 错误在 IO 动作执行后作为 `Err(DataError)` 返回。
 
+本机工具链默认启用 RSSN 的 `npy` 特性。精简 CLI 也提供 Aevia `Data` 的可移植读写接口。
+两个文件动作都需要 `fs` 能力。处理测量数组时，可把单位另存为元数据，再将载入的无量纲值
+按该单位显式转换。
+
 ## 8.12 Plot
 
 ```
@@ -5059,7 +5063,7 @@ Aevia 把它们归入 `Rssn_Numeric`，其中每个算子都有手写的 typed �
   `Tensor<1, Tensor<1, Float>>`。
 
 端到端示例与封闭形式核对：`tests/domain_numeric.aev`（`mad([1,2,3,4,100]) = 1`、`ifft(fft(x)) = x`、小波往返、`poisson_fd` 的 `-u'' = 1` 得 `x(1-x)/2`、`heat_fd` 的 `exp(-π²t)` 衰减、
-`tensordot_2_2_1` 对手算矩阵乘、`hosvd_3`/`tt_svd_3` 的重构、`ode_solve` 的 `y' = -2y` 得 `e^-2`、`lambert_w_complex(1,0,0) = 0.5671…` 等），由 `cargo test -p aevia-rssn --test aev_suites` 运行。
+`tensordot_2_2_1` 对手算矩阵乘、`hosvd_3`/`tt_svd_3` 的重构、`ode_solve` 的 `y' = -2y` 得 `e^-2`、`lambert_w_complex(1,0,0) = 0.5671…` 等），可运行 `bazel run //:aevia -- test --no-cache tests/domain_numeric.aev` 验证。
 
 ### 8.19.2 原生数值模型
 
@@ -5419,7 +5423,7 @@ RSSN 拥有数值算法，包括精确整数/有理数、复数、张量收缩�
 - `map_floats`（设备接缝）仍用直线 tape 降级，因为 GPU 需要无控制流的程序。
 
 默认构建包含 Cranelift、wgpu 与 NumPy `.npy` 支持。用 `aevia devices` 查看当前构建和设备。
-精简构建可使用 `cargo build -p aevia-cli --no-default-features`。此时普通函数仍可解释执行，
+使用 `bazel build //:toolchain_minimal` 构建精简 CLI。普通函数仍可解释执行，
 显式 `@jit` 报 `E1001("core.jit")`。参考测试 `tests/jit_native.aev`。
 
 ### 9.6.4 设备目标
@@ -5611,6 +5615,7 @@ aevia --version
 | `--budget STEPS` | 尾调用/IO 步骤预算，超出 `E0805`（默认 100,000,000；不是秒，§9.3.4） |
 | `--caps LIST` | 只授予这些 capability：`fs,net,env,rand,gpu`（空列表 = 全部沙箱；默认全部，§9.14） |
 | `--backend NAME` | 选择执行后端：`auto`、`ir`、`ast`、`cpu`、`cpu-parallel` 或 `gpu` |
+| `--rssn-backend NAME` | 为进程选择 RSSN 表达式执行后端。运行 `aevia devices` 查看可用值，见 §10.6.4。 |
 | `--jobs N` | 并行求值的工作线程数（§9.7.2） |
 | `--color auto\|always\|never` | CLI 与 REPL 着色；自动模式遵循终端支持与 `NO_COLOR` |
 | `--locked` | 拒绝改写过期的 `aevia.lock`（`update`/`add`/…） |
@@ -5767,7 +5772,8 @@ CLI 的 `check`（含 `--all`）、`run`、`lint`（含 `--all`）、`test` 和 
 - 编译失败测试：`compile_fail("<source>") : String -> Bool` 在隔离环境（无导入、仅 Prelude）编译片段，至少一个错误时为
   `true`；它**不**检查错误码，错误码由 doctest 的 `compile_fail EXXXX` 断言。
 - 黄金测试：REPL 输出/错误信息快照。
-- 基准：`bench` 声明；每项报告 N 次迭代的中位数、均值与 95% 置信区间（默认 N=100，`--iterations`/`--warmup`）。
+- 基准：`@bench` 声明；每项报告 N 次迭代的中位数、均值与 95% 置信区间（默认 N=100，`--iterations`/`--warmup`）。
+  从源码工作区运行 `bazel run --config=release-max //:aevia -- bench workload.aev`。
   `--save-baseline FILE` 写 JSON（`format=1`、`tool`/`version`、`profile=debug|release`、`optimized_ir=true|false`、`iterations`、`warmup`、每项
   `median_ns`/`mean_ns`/`ci_ns`）；`--compare-baseline FILE --threshold RATIO`（默认 0.05，可写 `5%`）按中位数比较，
   超出阈值报 `REGRESSION` 并退出 1；profile 不一致退出 2；只在一侧出现的 workload 被报告但不计为回归。协议：只比较
@@ -6054,8 +6060,8 @@ rssn 的场景目录（`rssn::sim::schema`）在导入时生成（§8.17）。`i
   `List/NonMetric/Compare/Angle` 规则，会让裸数结果携带 `Scalar(1)` 证据；其余规则（`Same`、`Sum`、`Custom`…）不被信任。
   `list(...)` 项结果在可信时被读回成张量（等长行合并成高阶张量，不等长保留为张量的张量）。
 - **运行期生成。** 模块在解析 `import Rssn_NumberTheory` 时由 live manifest 渲染（`codegen::namespace_source`），不提交
-  生成源，因此不与所链接的 kernel 漂移。提交的只有 overlay 与覆盖报告 `tools/rssn-api-audit/RSSN-COVERAGE.md`；
-  `cargo test -p aevia-rssn --test domains` 重新生成并比对（`AEVIA_BLESS=1` 重写）。
+  生成源，因此不与所链接的内核漂移。`bazel test //:contracts_test` 检查提交的 overlay 和覆盖报告
+  `tools/rssn-api-audit/RSSN-COVERAGE.md`。修改契约后，用 `bazel run //:refresh_kernel` 重新生成提交的产物。
 
 **`Rssn_Numeric`。** rssn 的 `numeric` 规则集（稳健统计、窗与谱、小波、Krylov/稀疏/低秩/张量分解、维度无关的有限差分求解器、
 复变特殊函数、表达式算子）全部有 `sig`，没有一个留在 dynamic 档；用户接口与示例见 §8.19.1。规则：
@@ -6168,14 +6174,21 @@ Cranelift 编译，也可用 `@jit` 主动请求。进入本机代码前，调�
 本机工具链默认启用 Cranelift、wgpu 和 RSSN 的 NumPy IO 功能。不支持本机 JIT 的构建中，
 显式使用 `@jit` 会报告 `E1001("core.jit")`。
 
-用 `aevia devices` 查看当前和可用的 RSSN 后端。`--rssn-backend <name>` 设置进程级
-RSSN 后端，REPL 的 `:rssn-backend [name]` 提供同样的选择。默认的 `auto` 在运行时
-根据可用能力选择宿主执行路径。Aevia 自身的求值器和矩阵卸载策略由 `--backend` 独立控制。
+用 `aevia devices` 查看当前构建启用的功能、当前 RSSN 后端及可用选项。
+`--rssn-backend NAME` 设置进程默认值。在 REPL 中用 `:rssn-backend` 查看，
+用 `:rssn-backend auto` 恢复自动选择。Aevia 自身的求值器和矩阵卸载策略由
+`--backend` 独立控制。
+
+在支持 Cranelift 的宿主上，RSSN 的 `auto` 先通过 CPU 指令带求值，再在后台编译热点表达式。
+其他宿主使用解释器。`interpreter` 选择指令带，`cpu` 和 `cpu-parallel` 显式选择 CPU 设备，
+`tiered` 和 `cranelift` 在支持的平台上选择编译路径。`jit` 是 `cranelift` 的别名。
+用可用的设备 ID 选择特定 GPU，或用 `gpu` 选择发现的第一个 wgpu 适配器。
+显式指定的 `--rssn-backend` 不可用时，命令以状态 2 退出。
 
 例如，`aevia --rssn-backend cpu-parallel test examples/native_backend.aev` 会为示例中的
-RSSN 编译选择并行 CPU 后端。源程序可用 `Rssn.num_backend_named` 和
-`Rssn.num_backend_compile` 为单个 RSSN 程序选择后端。源程序选择或使用 RSSN GPU 后端
-需要 `gpu` 能力。设置进程默认值时，可用命令行选项或 REPL 命令。
+RSSN 编译选择并行 CPU 后端。源程序可用清单声明的 `num_backend_named` 和
+`num_backend_compile` 算子为单个程序选择后端。从源码探测、选择或使用 GPU 后端需要
+`gpu` 能力，在收紧权限的 `with_cap` 作用域中复用 GPU 句柄或已编译的 GPU 程序也需要此能力。
 
 ### 10.6.5 设备与数据并行执行
 
@@ -6229,8 +6242,13 @@ RSSN 的 wgpu 后端用两个 F32 分量模拟 F64 缓冲区。只有当输入�
 
 ### 10.8.1 兼容性与验证
 
-使用 `aevia rssn --audit` 查看所链接内核的签名及能力。一致性测试比较源码声明与已检查
-适配器，覆盖结构化值与单位，并将编译求值与参考路径对照。运行时预算与符号预算分别
+使用 `aevia rssn --audit` 查看所链接内核的绑定覆盖。用 `aevia rssn --describe OPERATOR`
+查询单个算子的签名、量纲规则和可调用绑定。`aevia rssn --emit --out generated --namespaces`
+导出对应构建的模块。对于有受验证的类型化回调封装的声明，可使用导出签名。显式高阶调用
+`Rssn.call_ho` 分别接收普通参数列表和由 `to_callback` 封装的闭包列表，两组内部都保持签名
+顺序（§8.19）。
+
+一致性测试比较源码声明与已检查适配器，覆盖结构化值与单位，并将编译求值与参考路径对照。运行时预算与符号预算分别
 设定（§6.9.1）。本机求值器无法执行某条受支持的路径时，可回到解释器。
 
 ## 10.9 一个端到端的调用链

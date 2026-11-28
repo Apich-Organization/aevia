@@ -1,5 +1,5 @@
 ## Portable native Matrix, Polynomial, and approximation objects.
-## Run: cargo run -p aevia-cli -- test examples/native_algebra_models.aev
+## Run: bazel run //:aevia -- test examples/native_algebra_models.aev
 import Rssn_numerical_matrix as M
 
 import Rssn_numerical_vector as V

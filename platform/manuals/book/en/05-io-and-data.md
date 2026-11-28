@@ -21,6 +21,14 @@ For a local CSV or JSON analysis, first read the module documentation in [Data](
 
 The execution capability for local file actions is `fs`. To try a script with only file capability, use `aevia --caps fs run path/to/program.aev`. Multiple capability names are comma-separated. `with_cap` narrows permissions in a scoped action. Use a process sandbox when running untrusted programs.
 
+To exchange an array with NumPy, use a local `.npy` file and specify its rank,
+for example `read_npy<2>("readings.npy")`. The reader accepts float32 and
+float64 arrays in C or Fortran order. `write_npy` produces a little-endian
+float64 array in C order. Keep measurement units in accompanying metadata and
+apply the conversion explicitly after reading the dimensionless values. The
+standard native toolchain includes RSSN's NumPy feature, and the `Data` file
+functions also work in a minimal build.
+
 ## Separate results from presentation
 
 Return a structured result from the model layer, such as `{ value = estimate, samples = n }`. Present it with `println` in `main`, or produce a dataset with the standard library. When a pipeline evaluates many inputs, preserve the originating label for each error. A message that identifies the invalid file or column is more actionable than a general failure.

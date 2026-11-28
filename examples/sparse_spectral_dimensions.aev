@@ -1,4 +1,4 @@
-## Run: cargo run -p aevia-cli -- test examples/sparse_spectral_dimensions.aev
+## Run: bazel run //:aevia -- test examples/sparse_spectral_dimensions.aev
 ## Eigenvalues/residuals retain operator units; normalized eigenvectors do not.
 import Rssn_numerical_matrix as M
 

@@ -1,6 +1,6 @@
 ## The `Calculus` module of §8.20.
 # Generated standard library; do not edit.
-# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Regenerate with `bazel run //:refresh_stdlib`.
 module Calculus
 
 ## antiderivative(f) returns a symbolic antiderivative as a function, with the constant of integration taken as zero.

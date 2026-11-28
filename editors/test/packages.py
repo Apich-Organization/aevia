@@ -1,8 +1,8 @@
 """Check the runtime files shipped in the VS Code and JetBrains archives."""
 
+import argparse
 import io
 import json
-import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from zipfile import ZipFile
@@ -56,9 +56,14 @@ def verify_jetbrains(path):
 
 
 if __name__ == "__main__":
-    directory = Path(sys.argv[1])
-    vsix = single_file(directory.iterdir(), "*.vsix")
-    jetbrains = single_file(directory.iterdir(), "*.zip")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("directory", type=Path)
+    parser.add_argument("--editor", choices=("all", "vscode"), default="all")
+    options = parser.parse_args()
+    vsix = single_file(options.directory.iterdir(), "*.vsix")
     verify_vsix(vsix)
-    verify_jetbrains(jetbrains)
-    print(f"Verified {vsix.name} and {jetbrains.name}")
+    print(f"Verified {vsix.name}")
+    if options.editor == "all":
+        jetbrains = single_file(options.directory.iterdir(), "*.zip")
+        verify_jetbrains(jetbrains)
+        print(f"Verified {jetbrains.name}")

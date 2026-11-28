@@ -1,5 +1,5 @@
 ## Physical numerical computing through generated RSSN contracts.
-## Run: cargo run -p aevia-cli -- test examples/dimensioned_numerics.aev
+## Run: bazel run //:aevia -- test examples/dimensioned_numerics.aev
 import Rssn_numerical_vector as V
 
 import Rssn_numerical_matrix as M

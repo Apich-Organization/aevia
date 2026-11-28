@@ -3,7 +3,7 @@
 //! Run it in release, because the question is what a user waits for:
 //!
 //! ```console
-//! CARGO_BUILD_JOBS=4 cargo run -p aevia-std --release --example matmul_bench
+//! bazel run //:benchmark -- matmul
 //! ```
 //!
 //! The benchmark compares the sequential [`aevia_std::linalg::legacy::matmul`]

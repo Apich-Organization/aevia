@@ -1,0 +1,23 @@
+## Principal root and checked powers for complex dyadic rectangles.
+import Rssn_Multiprecision as MP
+
+let zero: MP.Dyadic = { mantissa = 0, exponent = 0, precision = 1 }
+
+let one: MP.Dyadic = { mantissa = 1, exponent = 0, precision = 1 }
+
+let two: MP.Dyadic = { mantissa = 1, exponent = 1, precision = 1 }
+
+let neg_four: MP.Dyadic = { mantissa = -1, exponent = 2, precision = 1 }
+
+let huge: MP.Dyadic = { mantissa = 4611686018427387904, exponent = 2, precision = 63 }
+
+fn rectangle(real: MP.Dyadic, imag: MP.Dyadic): MP.DyadicRectangle = { real = { midpoint = real, radius = zero }, imag = { midpoint = imag, radius = zero } }
+
+test "the principal square root selects the upper branch on the negative real axis" = MP.sqrt_complex_rectangle(rectangle(neg_four, zero), 1) == Ok(rectangle(zero, two))
+
+test "an exact integer exponent outside i64 returns a domain error" =
+    match MP.principal_power_complex_rectangle(rectangle(two, zero), rectangle(huge, zero), 16) with
+    | Err(_) -> true
+    | Ok(_) -> false
+
+test "zero exponent gives an exact multiplicative identity on the cut" = MP.principal_power_complex_rectangle(rectangle(neg_four, zero), rectangle(zero, zero), 1) == Ok(rectangle(one, zero))

@@ -679,7 +679,7 @@ fn render_module(
         out,
         "## The `{}` module of §8.20.\n\
          # Generated standard library; do not edit.\n\
-         # Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.\n\
+         # Regenerate with `bazel run //:refresh_stdlib`.\n\
          module {}\n\n",
         module.path,
         module.path.replace('/', ".")

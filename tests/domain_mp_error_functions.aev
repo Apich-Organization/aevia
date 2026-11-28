@@ -1,0 +1,31 @@
+## Certified complex error functions on dyadic rectangles.
+import Rssn_Multiprecision as MP
+
+let zero: MP.Dyadic = { mantissa = 0, exponent = 0, precision = 1 }
+
+let one: MP.Dyadic = { mantissa = 1, exponent = 0, precision = 1 }
+
+let twenty: MP.Dyadic = { mantissa = 5, exponent = 2, precision = 3 }
+
+let zero_ball: MP.DyadicBall = { midpoint = zero, radius = zero }
+
+let one_ball: MP.DyadicBall = { midpoint = one, radius = zero }
+
+let origin: MP.DyadicRectangle = { real = zero_ball, imag = zero_ball }
+
+let point_one: MP.DyadicRectangle = { real = one_ball, imag = zero_ball }
+
+let point_twenty: MP.DyadicRectangle = { real = { midpoint = twenty, radius = zero }, imag = zero_ball }
+
+test "erf and erfc keep exact origin values" =
+    MP.erf_complex_rectangle(origin, 1) == Ok(origin) && MP.erfc_complex_rectangle(origin, 1) == Ok(point_one)
+
+test "erfc of a large positive real point retains its nonzero tail" =
+    match MP.erfc_complex_rectangle(point_twenty, 128) with
+    | Err(_) -> false
+    | Ok(value) -> value.real.midpoint.mantissa > 0 && value.real.midpoint.exponent < -550 && value.imag.midpoint.mantissa == 0 && value.imag.radius.mantissa == 0
+
+test "invalid precision returns an operator error" =
+    match MP.erf_complex_rectangle(origin, 0) with
+    | Err(_) -> true
+    | Ok(_) -> false

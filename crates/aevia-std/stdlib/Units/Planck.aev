@@ -1,5 +1,5 @@
 # Generated from the RSSN kernel manifest.
-# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Regenerate with `bazel run //:refresh_stdlib`.
 # RSSN 3.0.0-beta.1, API 2
 ## Physical constants in Planck units: c = hbar = G = k_B = 4 pi epsilon_0 = 1 (Gaussian charge); mechanical, thermal and electromagnetic quantities are pure numbers.
 ##

@@ -5052,6 +5052,12 @@ Supply a concrete natural number for the `read_npy` rank, as in `read_npy<2>(pat
 
 NPY supports NPY 1.0/2.0/3.0, little- and big-endian float32/float64, C and Fortran order (Fortran input is converted to row-major storage; output is little-endian float64, C order); `read_npy<n>` stores and verifies a concrete rank, `write_npy` accepts dimensionless `Float` tensors of any rank; an unresolved generic rank is `E0304`. IO error codes: missing file `E0901`, invalid argument `E0902`, corrupt/truncated/rank mismatch/size overflow `E0903`, unsupported format, dtype or extension `E0904`, failed plot write `E0905`; NPY errors are returned as `Err(DataError)` after the IO action runs.
 
+The native toolchain enables RSSN's `npy` feature by default. The portable
+Aevia `Data` reader and writer are also available in the minimal CLI. Both file
+actions require `fs`. For a measured array, record the unit alongside the
+array and apply it as an explicit conversion after reading the dimensionless
+values.
+
 ## 8.12 Plot
 
 ```
@@ -5295,7 +5301,7 @@ Conventions and limits:
 - **Dimension-independent, named by dimension count / rank.** `heat_fd`, `wave_fd`, `poisson_fd`, `advect_fd` do not distinguish dimensions in the kernel: the spatial dimension is the nesting depth of the field data (a list is 1-D, a list of lists 2-D, three levels 3-D; the domain is the unit interval/square/cube). An Aevia signature has exactly one literal rank, so one kernel operator carries **several signatures, each with its own name**: the unsuffixed name is the 1-D form (`poisson_fd(f: Tensor<1, Float>, boundary: Float)`), and `_2d`/`_3d` take `Tensor<2, Float>`/`Tensor<3, Float>` fields (`heat_fd_2d`, `wave_fd_3d`, `advect_fd_3d` …) with answers of the same shape as the field; the advection velocity is still a `Tensor<1, Float>` with one component per spatial dimension. Rank-polymorphic tensor operators are named by rank likewise: `tensor_norm_<r>`, `tensor_inner_<r>` (r = 1..4) and `tensordot_<ra>_<rb>_<k>` (contracts k axes, `axes_a`/`axes_b: Tensor<1, Int>` 0-based, result rank ra + rb − 2k, `Float` for 0; result rank at most 4). The decompositions `hosvd_<r>`, `hooi_<r>`, `cp_als_<r>`, `tt_svd_<r>`, `tt_dense_<r>` (r = 2, 3, 4) return the records `Hosvd<r>`, `Hooi<r>`, `CpFit`, `TensorTrain` (factor tables are `Tensor<1, Tensor<2, Float>>`), and mixed lists are taken apart by the list accessor `from_value<Tensor<1, Value>>` and decoded part by part (§10.3.8). Symbolic PDEs have a single name: `solve_heat_equation`, `solve_wave_equation`, `solve_laplace_equation`, `solve_poisson_equation` (the dimension comes from the equation's variables; the old `_1d`/`_2d`/`_3d` are aliases); the affine transforms `translation`, `scaling`, `shear`, `reflection`, `rotation` are the same, filed under `Rssn_Graphics`.
 - Ragged inputs (adjacency lists, polynomial systems with different term counts) have no literal syntax; build a `Tensor<1, Tensor<1, Float>>` with `map(f, range(0, n))`.
 
-End-to-end examples and closed-form checks: `tests/domain_numeric.aev` (`mad([1,2,3,4,100]) = 1`, `ifft(fft(x)) = x`, wavelet round trips, `poisson_fd` of `-u'' = 1` giving `x(1-x)/2`, the `exp(-π²t)` decay of `heat_fd`, `tensordot_2_2_1` against a hand-computed matrix product, reconstruction by `hosvd_3`/`tt_svd_3`, `ode_solve` of `y' = -2y` giving `e^-2`, `lambert_w_complex(1,0,0) = 0.5671…`, and others), run with `cargo test -p aevia-rssn --test aev_suites`.
+End-to-end examples and closed-form checks: `tests/domain_numeric.aev` (`mad([1,2,3,4,100]) = 1`, `ifft(fft(x)) = x`, wavelet round trips, `poisson_fd` of `-u'' = 1` giving `x(1-x)/2`, the `exp(-π²t)` decay of `heat_fd`, `tensordot_2_2_1` against a hand-computed matrix product, reconstruction by `hosvd_3`/`tt_svd_3`, `ode_solve` of `y' = -2y` giving `e^-2`, `lambert_w_complex(1,0,0) = 0.5671…`, and others), run with `bazel run //:aevia -- test --no-cache tests/domain_numeric.aev`.
 
 ### 8.19.2 Native numerical models
 
@@ -5727,9 +5733,8 @@ reference interpreter. Cancellable execution uses the interpreter.
   program without control flow.
 
 Default builds include Cranelift, wgpu and NumPy `.npy` support. Run `aevia devices` to inspect
-the build and detected devices. To make a lean build, run
-`cargo build -p aevia-cli --no-default-features`. Ordinary functions still run in the
-interpreter in that build. An explicit `@jit` reports `E1001("core.jit")`. The native test
+the build and detected devices. `bazel build //:toolchain_minimal` builds a CLI
+that runs ordinary functions in the interpreter. An explicit `@jit` reports `E1001("core.jit")`. The native test
 cases live in `tests/jit_native.aev`.
 
 ### 9.6.4 Device targets
@@ -5987,6 +5992,7 @@ Global flags (before the program-argument separator `--`):
 | `--budget STEPS` | tail-call/IO step budget before `E0805` (default 100,000,000; not seconds, §9.3.4) |
 | `--caps LIST` | grant only these capabilities: `fs,net,env,rand,gpu` (empty list = sandbox everything; default all, §9.14) |
 | `--backend NAME` | select execution backend: `auto`, `ir`, `ast`, `cpu`, `cpu-parallel`, or `gpu` |
+| `--rssn-backend NAME` | select RSSN expression execution for the process. Run `aevia devices` to see selectors. See §10.6.4. |
 | `--jobs N` | worker threads for parallel evaluation (§9.7.2) |
 | `--color auto\|always\|never` | CLI and REPL colouring; automatic mode honors terminal support and `NO_COLOR` |
 | `--locked` | refuse to rewrite an out-of-date `aevia.lock` (`update`/`add`/…) |
@@ -6209,8 +6215,9 @@ The four-revision retention applies per module name.
   error; it does **not** check the error code, which the doctest marker `compile_fail EXXXX`
   asserts.
 - Golden tests: snapshots of REPL output and error messages.
-- Benchmarks: `bench` declarations; each reports the median, mean and 95% confidence interval of
-  N iterations (default N=100; `--iterations`/`--warmup`). `--save-baseline FILE` writes JSON
+- Benchmarks use `@bench` declarations and report the median, mean and 95% confidence interval of
+  N iterations (default N=100; `--iterations`/`--warmup`). From the source workspace, run
+  `bazel run --config=release-max //:aevia -- bench workload.aev`. `--save-baseline FILE` writes JSON
   (`format=1`, `tool`/`version`, `profile=debug|release`, `optimized_ir=true|false`, `iterations`, `warmup`, and per item
   `median_ns`/`mean_ns`/`ci_ns`); `--compare-baseline FILE --threshold RATIO` (default 0.05, may
   be written `5%`) compares medians and, above the threshold, reports `REGRESSION` and exits 1; a
@@ -6446,7 +6453,7 @@ The flat `Rssn.<op>` and the per-rule-set `Rssn_<rule_set>` follow the **kernel'
 - **Error channel.** A kernel failure is `Err(OpError)`; a graph-backend operator whose argument leaves its domain returns an unreduced call term (`invmod(6, 15)`), which `from_value` reports as a `TypeMismatch` carrying the text of that term.
 - **Diagnostic channel: why it did not reduce.** When a numeric operator rejects its arguments (shape mismatch, axis out of range, singular system, incompatible Neumann data, …) the kernel leaves only the unreduced call term. `Session::explain(term)` (`rssn::kernel::{Diag, DiagKind}`) replays the operator's evaluator on the calling thread and returns `Diag { op, arg, kind, message }`. When the result is exactly the operator's own unreduced call and `kind` is not `Symbolic`, the bridge (`Kernel::call_with_witnesses`, `call_key`, `call_key_with_witnesses`) returns `KernelError::from_diag`, with the stable code `rssn.diag.<kind>` (`arity`, `shape`, `domain`, `singular`, `incompatible`, `not_converged`, `unsupported`, `symbolic`, `unspecified`). `Rssn.dynamic` writes it in user form — function name, parameter name, position — inside `Err`: ``Err(rssn.diag.domain: tensordot_2_2_1: argument `axes_a` (#3): an axis is past the rank of the first tensor (rank 2): [2])``. Parameter names come from the overlay's `sig`; witnessed/dynamic wrappers give only a position (`argument #3`). `OpError` stays an opaque type: `"{e}"` gives `code: message`, and no constructor or `Rssn.*` member was added. At a **throwing** site (a typed call `Rssn.<op>(..)`) the same finding is `E0807` with the stable code in a note. Only operators of `rules::numeric::TABLES` record reasons.
 - **Dimension evidence.** `sig` also declares "this operator is a pure function of dimensionless arguments"; rules the kernel declares `Dimensionless`, and `List/NonMetric/Compare/Angle` rules when the arguments are known to be dimensionless, give bare-number results `Scalar(1)` evidence; other rules (`Same`, `Sum`, `Custom`, …) are not trusted. A `list(...)` term result is read back as a tensor when trusted (equal-length rows merge into a higher-rank tensor; unequal ones stay a tensor of tensors).
-- **Generated at run time.** A module is rendered from the live manifest when `import Rssn_NumberTheory` is resolved (`codegen::namespace_source`), and no generated source is committed, so it cannot drift from the linked kernel. Only the overlay and the coverage report `tools/rssn-api-audit/RSSN-COVERAGE.md` are committed; `cargo test -p aevia-rssn --test domains` regenerates and compares them (`AEVIA_BLESS=1` rewrites).
+- **Generated at run time.** A module is rendered from the live manifest when `import Rssn_NumberTheory` is resolved (`codegen::namespace_source`), and no generated source is committed, so it cannot drift from the linked kernel. The committed overlay and coverage report `tools/rssn-api-audit/RSSN-COVERAGE.md` are checked by `bazel test //:contracts_test`. Use `bazel run //:refresh_kernel` to regenerate the checked-in artifacts after changing the contract.
 
 **`Rssn_Numeric`.** rssn's `numeric` rule set (robust statistics, windows and spectra, wavelets, Krylov/sparse/low-rank/tensor decompositions, dimension-independent finite-difference solvers, complex special functions, expression operators) all have a `sig`, and none stays in the dynamic tier; user-facing interface and examples are in §8.19.1. The rules:
 
@@ -6546,18 +6553,27 @@ The native toolchain enables Cranelift, wgpu and RSSN's NumPy I/O feature by
 default. An explicit `@jit` in a build with no native JIT support reports
 `E1001("core.jit")`.
 
-Use `aevia devices` to inspect the active and available RSSN selectors.
-`--rssn-backend <name>` sets the process-wide RSSN backend, and the REPL exposes
-the same selection as `:rssn-backend [name]`. With `auto`, RSSN selects the
-available host execution path at runtime. Aevia controls its own evaluator and
-matrix offload policy independently via `--backend`.
+Use `aevia devices` to inspect the linked features, current RSSN backend and
+available selectors. `--rssn-backend NAME` sets the process default. In the
+REPL, enter `:rssn-backend` to inspect it and `:rssn-backend auto` to restore
+automatic selection. Aevia controls its own evaluator and matrix offload
+policy independently with `--backend`.
+
+On a host with Cranelift support, RSSN `auto` starts with the CPU tape and
+compiles hot expressions in the background. Other hosts use the interpreter.
+`interpreter` selects the tape path, `cpu` and `cpu-parallel` select explicit
+CPU devices, and `tiered` and `cranelift` select compiled paths where supported.
+`jit` is an alias for `cranelift`. Use an available device ID for a specific GPU,
+or `gpu` for the first discovered wgpu adapter. An unavailable explicit
+`--rssn-backend` selection exits with status 2.
 
 For example, `aevia --rssn-backend cpu-parallel test examples/native_backend.aev`
 uses the parallel CPU backend for RSSN compilation in the example. Source
-code can select a backend for an individual RSSN program with
-`Rssn.num_backend_named` and `Rssn.num_backend_compile`. Selecting or using an
-RSSN GPU backend in source code requires the `gpu` capability. To set the
-process default, use the CLI option or the REPL command.
+code can select a backend for an individual program through the declared
+`num_backend_named` and `num_backend_compile` operators. The `gpu` capability
+is required to discover, select or use a GPU backend from source, including
+when a GPU handle or compiled GPU program is reused in a narrower `with_cap`
+scope.
 
 ### 10.6.5 Devices and data-parallel execution
 
@@ -6625,10 +6641,17 @@ binary64 arithmetic on the host unless the device offers it directly.
 
 ### 10.8.1 Compatibility and validation
 
-Use `aevia rssn --audit` to report the signatures and capabilities provided by the
-linked kernel. Conformance tests compare source declarations and checked adapters,
-exercise structured values and units, and verify the compiled evaluator against
-the reference path. Runtime and symbolic budgets are separate (§6.9.1). Native
+Use `aevia rssn --audit` to inspect binding coverage for the linked kernel.
+Use `aevia rssn --describe OPERATOR` for one operator's signatures, dimension
+rule and callable bindings. `aevia rssn --emit --out generated --namespaces`
+writes the modules for that build. When a declaration has a verified typed
+callback facade, use its emitted signature. For an explicit higher-order call,
+`Rssn.call_ho` groups ordinary arguments and `to_callback` closures into separate
+lists while retaining the signature's order within each list (§8.19).
+
+Conformance tests compare source declarations and checked adapters, exercise
+structured values and units, and verify the compiled evaluator against the
+reference path. Runtime and symbolic budgets are separate (§6.9.1). Native
 evaluators that cannot execute a supported code path can return to the interpreter.
 
 ## 10.9 An end-to-end call chain

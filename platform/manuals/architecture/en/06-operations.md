@@ -4,7 +4,12 @@ The production layout comprises a public reverse proxy, a private registry appli
 
 ## Build and configure
 
-Build the registry image from the platform context and the sibling language-crate context. The reduced workspace manifest used in the image is checked for drift against the actual compiler workspace. The application uses a database URL, a secret used to verify sessions, a public base URL, and explicit paths for archive data and document mounts. See the [deployment runbook](https://github.com/Apich-Organization/aevia/blob/v0.1/platform/docs/DEPLOY.md) for environment variables, Compose, Quadlet and backup commands.
+Bazel builds `//:registry_server` and packages it with `//:registry_image`.
+Use `//:registry_image_from_binary` when deploying an existing registry binary
+from a paired release. The container builds from the supplied executable and
+Compose starts the tagged image. The application uses a database URL, a
+secret used to verify sessions, a public base URL, and explicit paths for
+archive data and document mounts. [Deployment runbook](https://github.com/Apich-Organization/aevia/blob/main/platform/docs/DEPLOY.md)
 
 ## Roll out and check
 
@@ -34,4 +39,4 @@ An independent watcher for each source runs filesystem work off the async reques
 
 ## Acceptance tests for a deployment
 
-Verify HTTPS and a live package query. Read matching chapters in both languages and check the standalone HTML download. Fetch `/llms.txt`, a linked Markdown chapter and `/stdlib/catalog.json`. Confirm that sitemap URLs and canonical links point to the configured public origin. Replace content in a staging deployment and verify recovery after invalid input. If the runner is enabled, test a successful program, a failing program and a timeout. Use the [deployment runbook](https://github.com/Apich-Organization/aevia/blob/v0.1/platform/docs/DEPLOY.md) for commands and restoration. `main.rs`, `config.rs`, `reload.rs` and `state.rs` are the runtime entry points.
+Verify HTTPS and a live package query. Read matching chapters in both languages and check the standalone HTML download. Fetch `/llms.txt`, a linked Markdown chapter and `/stdlib/catalog.json`. Confirm that sitemap URLs and canonical links point to the configured public origin. Replace content in a staging deployment and verify recovery after invalid input. If the runner is enabled, test a successful program, a failing program and a timeout. Use the [deployment runbook](https://github.com/Apich-Organization/aevia/blob/main/platform/docs/DEPLOY.md) for commands and restoration. `main.rs`, `config.rs`, `reload.rs` and `state.rs` are the runtime entry points.

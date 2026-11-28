@@ -236,8 +236,8 @@ rssn 的场景目录（`rssn::sim::schema`）在导入时生成（§8.17）。`i
   `List/NonMetric/Compare/Angle` 规则，会让裸数结果携带 `Scalar(1)` 证据；其余规则（`Same`、`Sum`、`Custom`…）不被信任。
   `list(...)` 项结果在可信时被读回成张量（等长行合并成高阶张量，不等长保留为张量的张量）。
 - **运行期生成。** 模块在解析 `import Rssn_NumberTheory` 时由 live manifest 渲染（`codegen::namespace_source`），不提交
-  生成源，因此不与所链接的 kernel 漂移。提交的只有 overlay 与覆盖报告 `tools/rssn-api-audit/RSSN-COVERAGE.md`；
-  `cargo test -p aevia-rssn --test domains` 重新生成并比对（`AEVIA_BLESS=1` 重写）。
+  生成源，因此不与所链接的内核漂移。`bazel test //:contracts_test` 检查提交的 overlay 和覆盖报告
+  `tools/rssn-api-audit/RSSN-COVERAGE.md`。修改契约后，用 `bazel run //:refresh_kernel` 重新生成提交的产物。
 
 **`Rssn_Numeric`。** rssn 的 `numeric` 规则集（稳健统计、窗与谱、小波、Krylov/稀疏/低秩/张量分解、维度无关的有限差分求解器、
 复变特殊函数、表达式算子）全部有 `sig`，没有一个留在 dynamic 档；用户接口与示例见 §8.19.1。规则：
@@ -350,14 +350,21 @@ Cranelift 编译，也可用 `@jit` 主动请求。进入本机代码前，调�
 本机工具链默认启用 Cranelift、wgpu 和 RSSN 的 NumPy IO 功能。不支持本机 JIT 的构建中，
 显式使用 `@jit` 会报告 `E1001("core.jit")`。
 
-用 `aevia devices` 查看当前和可用的 RSSN 后端。`--rssn-backend <name>` 设置进程级
-RSSN 后端，REPL 的 `:rssn-backend [name]` 提供同样的选择。默认的 `auto` 在运行时
-根据可用能力选择宿主执行路径。Aevia 自身的求值器和矩阵卸载策略由 `--backend` 独立控制。
+用 `aevia devices` 查看当前构建启用的功能、当前 RSSN 后端及可用选项。
+`--rssn-backend NAME` 设置进程默认值。在 REPL 中用 `:rssn-backend` 查看，
+用 `:rssn-backend auto` 恢复自动选择。Aevia 自身的求值器和矩阵卸载策略由
+`--backend` 独立控制。
+
+在支持 Cranelift 的宿主上，RSSN 的 `auto` 先通过 CPU 指令带求值，再在后台编译热点表达式。
+其他宿主使用解释器。`interpreter` 选择指令带，`cpu` 和 `cpu-parallel` 显式选择 CPU 设备，
+`tiered` 和 `cranelift` 在支持的平台上选择编译路径。`jit` 是 `cranelift` 的别名。
+用可用的设备 ID 选择特定 GPU，或用 `gpu` 选择发现的第一个 wgpu 适配器。
+显式指定的 `--rssn-backend` 不可用时，命令以状态 2 退出。
 
 例如，`aevia --rssn-backend cpu-parallel test examples/native_backend.aev` 会为示例中的
-RSSN 编译选择并行 CPU 后端。源程序可用 `Rssn.num_backend_named` 和
-`Rssn.num_backend_compile` 为单个 RSSN 程序选择后端。源程序选择或使用 RSSN GPU 后端
-需要 `gpu` 能力。设置进程默认值时，可用命令行选项或 REPL 命令。
+RSSN 编译选择并行 CPU 后端。源程序可用清单声明的 `num_backend_named` 和
+`num_backend_compile` 算子为单个程序选择后端。从源码探测、选择或使用 GPU 后端需要
+`gpu` 能力，在收紧权限的 `with_cap` 作用域中复用 GPU 句柄或已编译的 GPU 程序也需要此能力。
 
 ### 10.6.5 设备与数据并行执行
 
@@ -411,8 +418,13 @@ RSSN 的 wgpu 后端用两个 F32 分量模拟 F64 缓冲区。只有当输入�
 
 ### 10.8.1 兼容性与验证
 
-使用 `aevia rssn --audit` 查看所链接内核的签名及能力。一致性测试比较源码声明与已检查
-适配器，覆盖结构化值与单位，并将编译求值与参考路径对照。运行时预算与符号预算分别
+使用 `aevia rssn --audit` 查看所链接内核的绑定覆盖。用 `aevia rssn --describe OPERATOR`
+查询单个算子的签名、量纲规则和可调用绑定。`aevia rssn --emit --out generated --namespaces`
+导出对应构建的模块。对于有受验证的类型化回调封装的声明，可使用导出签名。显式高阶调用
+`Rssn.call_ho` 分别接收普通参数列表和由 `to_callback` 封装的闭包列表，两组内部都保持签名
+顺序（§8.19）。
+
+一致性测试比较源码声明与已检查适配器，覆盖结构化值与单位，并将编译求值与参考路径对照。运行时预算与符号预算分别
 设定（§6.9.1）。本机求值器无法执行某条受支持的路径时，可回到解释器。
 
 ## 10.9 一个端到端的调用链

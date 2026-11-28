@@ -64,7 +64,7 @@ def check_edition(directory, language, modules, wanted):
     return declarations
 
 
-def verify(binary, output):
+def verify(binary, output, *, write=False):
     en, zh = output / "en", output / "zh"
     english = render(binary, en, "en")
     chinese = render(binary, zh, "zh")
@@ -84,18 +84,29 @@ def verify(binary, output):
               for directory, language, modules in [(en, "en", en_modules), (zh, "zh", zh_modules)]]
     require(counts[0] == counts[1], "the editions have different declaration counts")
     print(f"Verified {len(paths)} modules and {counts[0]} rendered declarations in each edition.", flush=True)
-    require({path.name for path in REFERENCE.iterdir()} == wanted, "the versioned reference has missing or extra files")
-    changed = sorted(name for name in wanted if (en / name).read_bytes() != (REFERENCE / name).read_bytes())
-    require(not changed, f"the versioned reference needs regeneration: {', '.join(changed)}")
+    actual = {path.name for path in REFERENCE.iterdir()} if REFERENCE.is_dir() else set()
+    require(not actual - wanted, f"remove obsolete versioned reference files: {', '.join(sorted(actual - wanted))}")
+    changed = []
+    for name in sorted(wanted):
+        destination = REFERENCE / name
+        content = (en / name).read_bytes()
+        if name not in actual or destination.read_bytes() != content:
+            changed.append(name)
+            if write:
+                REFERENCE.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(content)
+    if not write:
+        require(not changed, f"the versioned reference needs regeneration: {', '.join(changed)}")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--aevia", required=True, type=Path, help="path to a built aevia executable")
+    parser.add_argument("--write", action="store_true", help="update the English reference after verifying both editions")
     args = parser.parse_args()
     try:
         with tempfile.TemporaryDirectory(prefix="aevia-stdlib-docs-") as directory:
-            verify(args.aevia.resolve(), Path(directory))
+            verify(args.aevia.resolve(), Path(directory), write=args.write)
     except (OSError, ValueError, subprocess.TimeoutExpired) as error:
         raise SystemExit(str(error)) from error
 

@@ -1,5 +1,5 @@
 # Generated from the RSSN kernel manifest.
-# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Regenerate with `bazel run //:refresh_stdlib`.
 # RSSN 3.0.0-beta.1, API 2
 ## Physical constants in particle-physics natural units: c = hbar = k_B = epsilon_0 = 1 (Heaviside-Lorentz); every mechanical, thermal and electromagnetic dimension is a power of energy.
 ##

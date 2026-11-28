@@ -1,0 +1,30 @@
+## Certified modulus, exponential and principal logarithm of complex dyadic rectangles.
+import Rssn_Multiprecision as MP
+
+let zero: MP.Dyadic = { mantissa = 0, exponent = 0, precision = 1 }
+
+let one: MP.Dyadic = { mantissa = 1, exponent = 0, precision = 1 }
+
+let point_zero: MP.DyadicBall = { midpoint = zero, radius = zero }
+
+let point_one: MP.DyadicBall = { midpoint = one, radius = zero }
+
+test "the exponential maps the origin exactly to one" = MP.exp_complex_rectangle({ real = point_zero, imag = point_zero }, 1) == Ok({ real = point_one, imag = point_zero })
+
+let three: MP.Dyadic = { mantissa = 3, exponent = 0, precision = 2 }
+
+let four: MP.Dyadic = { mantissa = 1, exponent = 2, precision = 1 }
+
+let five: MP.Dyadic = { mantissa = 5, exponent = 0, precision = 3 }
+
+let zero_at_three: MP.Dyadic = { mantissa = 0, exponent = 0, precision = 3 }
+
+test "the modulus of 3 + 4i is exactly five" = MP.complex_rectangle_modulus({ real = { midpoint = three, radius = zero }, imag = { midpoint = four, radius = zero } }, 3) == Ok({ midpoint = five, radius = zero_at_three })
+
+test "the principal logarithm accepts separated rectangles and rejects the origin" =
+    match MP.ln_complex_rectangle({ real = { midpoint = zero, radius = one }, imag = point_one }, 32) with
+    | Ok(_) ->
+        match MP.ln_complex_rectangle({ real = point_zero, imag = point_zero }, 32) with
+        | Err(_) -> true
+        | Ok(_) -> false
+    | Err(_) -> false

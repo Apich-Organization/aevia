@@ -581,6 +581,7 @@ fn callback_parameters_supported(params: &[crate::registry::SigType]) -> bool {
                     .iter()
                     .all(|(name, ty)| names.insert(name) && schema(ty))
             },
+            | S::Variant(cases) => crate::registry::option_payload(cases).is_some_and(schema),
             | _ => false,
         }
     }
@@ -651,6 +652,9 @@ fn callback_raw_parameters_supported(params: &[TypeExpr]) -> bool {
                 fields
                     .iter()
                     .all(|(name, ty)| names.insert(name) && schema(ty))
+            },
+            | TypeExpr::Variant(cases) => {
+                crate::registry::option_payload(cases).is_some_and(schema)
             },
             | _ => false,
         }

@@ -20,6 +20,28 @@ ${EDITOR:-vi} .env
 ./deploy.sh logs registry
 ```
 
+Run source builds from a checkout whose RSSN sibling is available to Bazel.
+`./deploy.sh build` forwards the registry image build to Bazel. On a first
+`./deploy.sh up` with no local registry image, it builds that image through the
+same target before starting Compose. It also builds the local PostgreSQL image
+when needed through `bazel run //:postgres_image`. From the Aevia repository root, the
+underlying commands are as follows.
+
+```sh
+bazel run //:registry_image -- --tag localhost/aevia/registry:0.1.0
+bazel build //:registry_server
+bazel run //:registry_image_from_binary -- \
+  --binary bazel-bin/registry_server/bin/aevia-registry \
+  --tag localhost/aevia/registry:0.1.0
+```
+
+The first command builds and images the registry in one step. The last
+command packages a supplied registry executable, such as the output of the
+preceding Bazel build. Both image targets default to Podman and accept
+`--engine docker` and repeated `--tag` flags. Compose starts the resulting
+`localhost/aevia/registry:0.1.0` image with the configured database and content
+mounts.
+
 Set `AEVIA_DOMAIN` to the public DNS name and `AEVIA_BASE_URL` to the matching HTTPS origin. Set `AEVIA_ACME_EMAIL` to a monitored address. Keep `db` as the database hostname in Compose. The registry’s internal listener is also available at `127.0.0.1:8080` on the host.
 
 Caddy is the only public listener. It manages TLS, sets HSTS and compresses responses. The registry applies browser security policies directly. Caddy replaces `X-Forwarded-For` before forwarding to the private service for rate limiting. Keep `AEVIA_TRUST_PROXY=true` only when requests go through a proxy you control that replaces this header. Use the [Quadlet units](../infra/quadlet/README.md) when systemd should manage the containers directly.
@@ -93,15 +115,16 @@ Stage related files together and rotate the mount's directory entries atomically
 
 ## Enable book execution
 
-Run `aevia-playground` on a dedicated Linux host or dedicated rootless Podman account with cgroup v2 and a subordinate UID/GID range. Build or install the Linux `aevia` executable for that host architecture. From the checkout root, build the worker and a local image containing the matching CLI.
+Run `aevia-playground` on a dedicated Linux host or dedicated rootless Podman account with cgroup v2 and a subordinate UID/GID range. From the checkout root, build the worker and a local image containing the CLI for that host architecture.
 
 ```sh
-cargo build --locked --release --manifest-path platform/Cargo.toml \
-    -p aevia-registry-server --bin aevia-playground
-sh platform/infra/build-playground.sh target/release/aevia localhost/aevia/playground:release
+bazel build --config=release //:platform_binaries
+bazel run //:playground_image -- --tag localhost/aevia/playground:release
 ```
 
-Install `platform/target/release/aevia-playground` at `~/.local/bin/aevia-playground` for the worker account. Set these values in `~/.config/aevia/playground.env`, mode `0600`.
+To package a matching existing CLI, use `bazel run //:playground_image_from_binary -- --aevia /path/to/aevia --tag localhost/aevia/playground:release`.
+
+Install `bazel-bin/platform_binaries/bin/aevia-playground` at `~/.local/bin/aevia-playground` for the worker account. Set these values in `~/.config/aevia/playground.env`, mode `0600`.
 
 ```dotenv
 AEVIA_PLAYGROUND_BIND=127.0.0.1:9081

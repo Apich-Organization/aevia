@@ -169,6 +169,12 @@ def verify_stdlib_tree(modules: list[dict]) -> None:
     print(f"checked the bilingual tree of {len(modules)} embedded library modules")
 
 
+def documented_operator_exists(name: str, operators: set[str]) -> bool:
+    # A generated higher-order facade uses the kernel operator's name with a
+    # typed suffix. The published catalogue lists the canonical kernel name.
+    return name in operators or name.removesuffix("_typed") in operators
+
+
 def verify_numerical_guides(operators: set[str]) -> None:
     guides = (ROOT / "examples/NUMERICAL_GUIDE.md", ROOT / "examples/NUMERICAL_GUIDE.zh-CN.md")
     english, chinese = (
@@ -177,7 +183,7 @@ def verify_numerical_guides(operators: set[str]) -> None:
     if english != chinese:
         raise ValueError(f"numerical guide operators differ: English only {sorted(english - chinese)}, "
                          f"Chinese only {sorted(chinese - english)}")
-    missing = english - operators
+    missing = {name for name in english if not documented_operator_exists(name, operators)}
     if missing:
         raise ValueError(f"numerical guides name operators absent from the generated reference: {sorted(missing)}")
     print(f"checked {len(english)} bilingual numerical guide operator names")
@@ -191,8 +197,7 @@ def verify_documented_operators(operators: set[str], paths: list[Path]) -> None:
             if path.suffix == ".md":
                 names.extend(NUMERICAL_OPERATOR.findall(text))
             for name in names:
-                # Generated higher-order facades use the kernel name plus _typed.
-                if name not in operators and name.removesuffix("_typed") not in operators:
+                if not documented_operator_exists(name, operators):
                     raise ValueError(f"{path}:{line} names unknown numerical operator {name}")
                 seen.add(name)
     print(f"checked {len(seen)} numerical operator references across {len(paths)} documentation and example sources")

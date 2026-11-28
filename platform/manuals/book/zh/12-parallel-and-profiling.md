@@ -40,29 +40,33 @@ aevia --rssn-backend cpu-parallel run candidates.aev
 以及 wgpu 能在其精度和范围内精确计算的整数值 `Float` 乘法。没有设备、未授予 `gpu` 能力或运算不符合条件时，由 CPU 计算。`cpu-parallel` 在宿主上按工作线程设置运行。
 `ir` 和 `ast` 分别选择用于对照的解释器。在 REPL 中，切换解释器会影响后续求值和新定义。
 
-`--rssn-backend` 为可移植表达式和本机内核选择进程级 RSSN 后端。`aevia devices` 列出
-当前和可用的 RSSN 后端。在 REPL 中，用 `:rssn-backend` 查看，用 `:rssn-backend auto`
-恢复自动选择。`--backend` 独立控制 Aevia 的求值器和矩阵运算路由。
+`--rssn-backend` 为可移植表达式的编译选择进程级 RSSN 后端。其 `auto` 设置先使用 CPU
+指令带，在支持 Cranelift 的宿主上可在后台编译热点表达式，其他宿主使用解释器。
+`aevia devices` 列出可用后端和当前选择。在 REPL 中用 `:rssn-backend` 查看，
+用 `:rssn-backend auto` 恢复自动选择。`--backend` 独立控制 Aevia 的求值器和矩阵运算路由。
 
 RSSN 的进程默认后端由 CLI 或嵌入应用控制。Aevia 源码可以为单次编译选择后端句柄。
 探测或执行 GPU 运算需要 `gpu` 能力，在收紧权限的 `with_cap` 块内使用先前创建的 GPU 句柄或编译程序时也是如此。
 
-使用 `cargo build -p aevia-cli --no-default-features` 可构建不链接 RSSN 可选 JIT、wgpu 和 NumPy 功能的精简 CLI。
+运行 `bazel build //:toolchain_minimal` 构建省去 RSSN 可选 JIT、wgpu 和 NumPy 集成的精简
+CLI。可执行文件位于 `bazel-bin/toolchain_minimal/bin/aevia`，Windows 上带 `.exe` 后缀。
 
 ## 测量需要比较的部分
 
-把文件和终端 IO 与待测计算分开。使用固定样本、预热和多次重复运行，并保持线程与优化设置一致。比较耗时前先验证各配置的结果。`aevia bench --help` 说明基准声明和基线文件的格式。
+把文件和终端 IO 与待测计算分开。使用固定样本、预热和多次重复运行，并保持线程与优化设置一致。比较耗时前先验证各配置的结果。在仓库中运行
+`bazel run --config=release-max //:aevia -- bench workloads.aev`，测量 Aevia 文件中的
+`@bench` 函数。用 `bazel run //:aevia -- bench --help` 查看基线选项。
 
 优化构建工具链和 CLI 的 `--release` 选项作用在不同阶段。构建设置影响解释器二进制文件，CLI 选项开启对已检查程序的优化。分享测量结果时，一并记录这两组设置和启用的后端功能。
 
 ## 在 Windows 上采样
 
-开发工具 `aevia-prof` 可以在 x86-64 Windows 上采样子进程，无需管理员权限。用 `profiling` 配置构建可执行文件以保留调试符号，再从仓库根目录用 PowerShell 运行采样器。
+开发工具 `aevia-prof` 可以在 x86-64 Windows 上采样子进程，无需管理员权限。在仓库
+根目录通过 Bazel 运行采样器，传入平常使用的 CLI 参数。Bazel 会构建采样器和带性能分析符号的 CLI。
 
 ```powershell
-cargo build --profile profiling -p aevia-cli
 $env:AEVIA_PROF_FOLDED = "candidates.folded"
-cargo run -p aevia-prof --release -- target\profiling\aevia.exe run candidates.aev
+bazel run //:profile -- run candidates.aev
 Remove-Item Env:AEVIA_PROF_FOLDED
 ```
 

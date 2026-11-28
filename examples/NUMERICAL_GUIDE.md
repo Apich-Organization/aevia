@@ -3,7 +3,7 @@
 Run an example's executable assertions with:
 
 ```sh
-cargo run -p aevia-cli -- test examples/dimensioned_numerics.aev
+bazel run //:aevia -- test examples/dimensioned_numerics.aev
 ```
 
 The examples call RSSN kernels through Aevia's generated modules. Physical
@@ -16,6 +16,7 @@ physical dimensions.
 | `dimensioned_numerics.aev` | PCHIP, normalized polynomial fitting, OLS with velocity coefficients, Schur/matrix square roots, physical reverse AD, Romberg and scaled L-BFGS |
 | `physical_functions.aev` | Generated SI physics contracts, sampled functional inner products/norms/projection and copied-input percentile |
 | `option_numerics.aev` | Native typed Option bandwidths, statistical result fields and geometric intersections with units |
+| `complex_coordinate_maps.aev` | Dimensionless stereographic coordinates, finite inverse projection and both inverse Joukowsky branches |
 | `native_autodiff.aev` | Native Dual callbacks and scoped reverse tapes, physical derivatives, shared work budgets and reference-scale invariance |
 | `native_backend.aev` | Session-owned interpreter compilation, mixed physical reference scales, measured columns and unit rejection |
 | `native_algebra_models.aev` | Portable Float/exact matrices, normalized polynomial calculus, spline/Chebyshev methods, native factors and checked approximation callbacks |
@@ -53,6 +54,25 @@ checked `Value` interface and `from_value<T>` for explicit recovery.
 Exact native zero-argument operations use `f()` and return `Result`; importing
 their module does not run constructors or probe optional backends.
 
+`Rssn_Special.riemann_sphere_project` returns a record with `x`, `y` and `z`
+fields. `riemann_sphere_unproject` takes those coordinates and returns
+`Ok(None)` at the north pole and `Err` for a point off the unit sphere.
+`joukowsky_inverse` returns `plus` and `minus` branches ordered by the
+principal square root. The maps take dimensionless complex coordinates.
+`cayley_transform` is the Möbius map on the complex plane with its pole at
+`-i`. Use `uhp_to_disk` for the checked open hyperbolic chart.
+
+`Rssn_Special.complex_jacobi_p` and the `complex_*` orthogonal polynomial
+functions take dimensionless parameters and points with integer degrees
+from 0 through 4096. `complex_spherical_harmonic` takes integer order
+and the colatitude and azimuth in radians. These functions return
+`Result<Complex, OpError>`. [Runnable example](complex_special_functions.aev)
+
+The same module provides Weierstrass sigma and zeta for two complex
+half-periods. Sigma is zero at lattice points and zeta returns a pole error.
+The implementation reduces the lattice basis, caches theta coefficients, and
+restores the quasiperiodic terms for points outside the centered cell.
+
 `Rssn_numerical_vector` exposes `num_signal_hilbert`,
 `num_signal_analytic_signal`, `num_signal_analytic_envelope`, and
 `num_signal_zoom_fft`. The same module provides biased autocovariance
@@ -64,6 +84,14 @@ and both correlations are dimensionless.
 
 `aevia rssn --describe num_signal_autocovariance` displays the documentation,
 overloads, and Aevia binding names from the running kernel.
+
+For an explicit complex branch cut, import `Rssn_Special` and call
+`arg_branch(z, theta0)`, `log_cut(z, theta0)`, `sqrt_cut(z, theta0)`, or
+`pow_cut(z, w, theta0)`. The angle is in radians. On the cut, the argument
+takes the upper endpoint of `(theta0, theta0 + 2π]`. The logarithm and power
+return a domain error at zero. The square root accepts physical quantities.
+For example, `sqrt_cut(complex(4.0 m^2, 0.0 m^2), 0.0)` returns a complex
+length with a real part of approximately `-2.0 m`.
 
 `Rssn_numerical_vector.num_signal_filtfilt(b, a, samples)` applies a
 dimensionless filter forward and backward with odd-reflected edges. It
@@ -84,13 +112,159 @@ Use `Rssn_numerical_special.num_mp_real_round` to create a dimensionless
 Compare records exactly using `num_mp_real_compare`. Addition,
 subtraction and multiplication each take a result precision in bits
 and a rounding mode, such as `"nearest"` (ties to even) or `"up"`.
+For a certified exponential, use `Rssn_Multiprecision.exp_dyadic(value, precision)`
+for an exact input or `exp_ball(interval, precision)` for a closed interval.
+Both return a dyadic midpoint and an outward radius in a typed `Result`.
+
+The typed `Rssn_Multiprecision` facade exposes `dyadic_from_int` with explicit
+rounding and `dyadic_from_float` and `dyadic_to_float` for finite binary64
+exchange. `add_balls`, `subtract_balls` and `multiply_balls` round outward
+and keep a portable midpoint and radius.
 [Exact dyadic example](dyadic_real.aev)
+
+For complex intervals, `Rssn_Multiprecision.DyadicRectangle` uses the same
+exact dyadic balls as its `real` and `imag` fields. Use
+`make_complex_rectangle(real, imag)` to combine two balls or
+`lift_real_ball(real)` for a real interval. For a lifted interval
+`[1, 3]`, `complex_rectangle_norm_squared(rectangle, 64)` encloses
+`[1, 9]` and `reciprocal_complex_rectangle(rectangle, 64)` encloses its
+reciprocal. The operations return `Result` for invalid records,
+precision bounds and division through the origin.
 
 Use `Rssn_FiniteField.poly_mul_ntt_mod(a, b, p)` for exact coefficient
 convolution modulo an odd prime. Its transform length is the next power
 of two of the product length and must divide `p - 1`.
 `Rssn_NumberTheory.extended_gcd_u64` returns named Bézout coefficients.
 [Modular polynomial example](modular_polynomials.aev)
+
+`Rssn_Numeric.CsrMatrix` carries ordinary CSR row pointers, zero-based
+column indices and measured entries. Use `csr_transpose`,
+`csr_matmul_dense` and `csr_matmul_sparse` for rectangular matrices.
+For least squares use `csr_lsqr` with a damping value in the matrix entry
+dimension. Set it to zero for the undamped solve. The solution retains
+right-hand-side units divided by matrix entry units.
+[Structural CSR fixture](../tests/domain_krylov_csr.aev)
+
+
+For a censored sample, `Rssn_Statistics.kaplan_meier(time, event, confidence)`
+returns event times, risk counts, survival probabilities and confidence
+bounds. Pass the record to `median_survival` to obtain an optional value
+in the same time dimension. `fit_cox` accepts dimensionless covariates and
+the `"breslow"` or `"efron"` tie method. Pass its fitted record to
+`predict_cox` for relative hazards.
+[Survival models fixture](../tests/domain_survival_models.aev)
+
+
+For repeated transforms, obtain a plan with `Rssn_FiniteField.ntt_plan(p, length)`.
+Pass its result to `ntt_transform(values, plan, false)` for the forward
+transform and use `true` for the normalized inverse. Values are ordinary
+integer residues. The same plan can be serialized as its modulus and
+length. The [NTT fixture](../tests/domain_finite_field_ntt.aev) checks
+the exact spectrum and inversion with the Goldilocks prime.
+
+`Rssn_Multiprecision.named_dyadic_constant("pi", 64)` returns a certified
+nearest-even dyadic. Use `enclose_dyadic_constant("pi", 64)` to keep the
+rounding error in the result or `floor_pi_times_power_of_two(8)` for
+the exact integer 804. `dyadic_constant_names()` lists the supported names.
+
+Use `Rssn_Multiprecision.ln_dyadic`, `log2_dyadic`, `log10_dyadic`
+and `exp2_dyadic` for exact dyadic inputs. For existing closed intervals,
+use `ln_ball`, `log2_ball`, `log10_ball` or `exp2_ball`.
+All return outward enclosures. A logarithm requires a strictly positive
+input. `scale_decimal_dyadic_in` rounds an exact product by a power of ten
+in the chosen direction.
+
+Use `Rssn_Multiprecision.sin_cos_dyadic(angle, precision)` to compute
+both outward enclosures in one reduction. Angles are in radians.
+`sin_ball`, `cos_ball` and `tan_ball` take a closed dyadic interval.
+`tan_ball` returns an error when the cosine enclosure includes zero.
+
+Use `Rssn_Multiprecision.sinh_dyadic`, `cosh_dyadic` or
+`tanh_dyadic` for an exact real input. Their `sinh_ball`, `cosh_ball`
+and `tanh_ball` variants enclose the image of a closed dyadic interval.
+For `cosh_ball`, a zero crossing includes the exact minimum of one.
+
+Use `Rssn_Multiprecision.atan2_dyadic(y, x, precision)` for a principal
+angle or `atan2_ball` for a closed coordinate rectangle. A rectangle that
+contains the origin or touches the negative real cut from above or below
+returns a domain error. `dyadic_rectangle_argument` uses the same corner
+bounds for a complex rectangle and excludes the non-positive real axis.
+
+Use `Rssn_Multiprecision.asin_dyadic` or `acos_dyadic` for exact
+inputs, and `asin_ball` or `acos_ball` for closed intervals. Both
+domain endpoints are accepted. An interval outside [-1, 1] returns a
+domain error.
+
+Use `Rssn_Multiprecision.powi_dyadic(base, exponent, precision)` for a
+signed integer exponent and `power_dyadic_ratio(base, numerator, denominator, precision)`
+for an exact rational exponent. For example, raising −8 to 2/6 encloses
+−2 because the reduced denominator is three. The interval variants check
+the domain over the entire input interval.
+
+Use `Rssn_Multiprecision.complex_rectangle_modulus` for the range of
+magnitudes in a closed dyadic rectangle. `exp_complex_rectangle` and
+`ln_complex_rectangle` return closed dyadic rectangles. The exponential
+requires an imaginary midpoint within ±2^20 radians. The principal
+logarithm returns a domain error if the input meets the non-positive
+real axis. See [the complex rectangle example](../tests/domain_mp_complex_exp_log.aev)
+for exact records and error handling.
+
+The same type is accepted by `sin_complex_rectangle`, `cos_complex_rectangle`,
+`tan_complex_rectangle` and the corresponding `sinh`, `cosh` and `tanh`
+variants. For an imaginary-axis input `iy`, `tan_complex_rectangle` returns
+a rectangle on the imaginary axis enclosing `i * tanh(y)`. This also works
+for large finite `y`. The [trigonometry fixture](../tests/domain_mp_complex_trigonometry.aev)
+shows the exact record syntax.
+
+For principal roots, use `sqrt_complex_rectangle`. The square root of −4
+is 2i. `principal_power_complex_rectangle` takes a separate exponent
+rectangle and recognizes exact signed 64-bit integer point exponents.
+Its general logarithmic route requires the base rectangle to avoid the
+non-positive real axis. See [the root and power fixture](../tests/domain_mp_complex_root_power.aev).
+
+Use `Rssn_Multiprecision.asin_complex_rectangle` and its five companion
+inverse functions for principal inverse values. For instance, both
+`acos_complex_rectangle(point_one, 32)` and
+`acosh_complex_rectangle(point_one, 32)` enclose zero. Atan returns
+`Err` at the imaginary unit. See the
+[complex inverse fixture](../tests/domain_mp_complex_inverse.aev).
+
+To carry exact bounds through a calculation, use
+`Rssn_Multiprecision.enclose_expression("sqrt(81) + hypot(3, 4) + cbrt(-8)", 24)`.
+It returns a dyadic midpoint and radius. For a function with a known global
+Lipschitz bound on your input interval, use `widen_ball_lipschitz` with
+the exact mapped midpoint and the nonnegative bound. The
+[enclosure fixture](../tests/domain_mp_enclosures.aev) shows both calls and
+their domain errors.
+
+The certified `erf_complex_rectangle` and `erfc_complex_rectangle`
+operators evaluate the complex error functions over dyadic rectangles.
+For example, `erfc_complex_rectangle(point_twenty, 128)` keeps the
+small nonzero tail at the real point 20. The
+[error-function fixture](../tests/domain_mp_error_functions.aev) builds
+the input rectangle and checks the returned dyadic enclosure.
+
+Use `Rssn_Multiprecision.bessel_j_complex_rectangle(value, order, 128)`
+for principal Bessel J. Exact integer order permits a negative real
+argument. A noninteger order uses the principal branch and returns
+`Err` for a rectangle that meets the non-positive real cut. The
+[Bessel fixture](../tests/domain_mp_bessel.aev) shows the origin limits,
+branch checks and typed dyadic inputs.
+
+The same module provides `gamma_complex_rectangle`,
+`log_gamma_complex_rectangle` and `digamma_complex_rectangle`. Gamma
+and digamma accept negative real arguments between poles. Log-gamma uses
+the analytic branch real on positive arguments and returns `Err` on
+the non-positive real cut. See the
+[gamma-family fixture](../tests/domain_mp_gamma_family.aev) for exact
+factorials, the branch cut and pole errors.
+
+Use `riemann_zeta_complex_rectangle(order, 128)` across the critical
+strip and into the supported left half-plane. For polylogarithms, pass a
+complete dyadic rectangle strictly inside the unit disk to
+`polylog_complex_rectangle(value, order, 128)`. The returned radius
+accounts for the operand ranges and the bounded series tail. See the
+[Dirichlet-function fixture](../tests/domain_mp_dirichlet.aev).
 
 `num_timeseries_kalman_filter` and `num_timeseries_kalman_smooth` accept
 linear state-space models whose states share one dimension and whose
@@ -113,6 +287,35 @@ time grid, use `num_control_simulate_continuous(a, b, c, d, x0, inputs, times)`.
 The output starts with the observation of the initial state, including
 the direct input term. [Measured simulation example](measured_state_space.aev)
 
+Pass the same portable record to `num_control_discrete_n_states`,
+`num_control_discrete_n_inputs` and `num_control_discrete_n_outputs`
+to query its extents. `num_control_discrete_poles` returns complex eigenvalues,
+and `num_control_discrete_is_stable` checks for poles strictly inside the
+unit circle. The controllability and observability matrices retain the
+units of `b` and `c`, respectively. These diagnostics require a discrete
+model, whose state matrix `a` is dimensionless.
+
+For dimensionless complex Taylor data, `Rssn_Special.pade_complex` returns
+the numerator and denominator as a record. Reuse it with
+`Rssn_Special.eval_pade_complex` to evaluate at several complex points.
+`recenter_taylor_complex` moves a Taylor polynomial through a sequence of
+centers, and `wynn_epsilon_complex` accelerates a sequence of partial sums.
+[Runnable continuation tests](../tests/domain_analytic_continuation.aev)
+
+`Rssn_Special.holonomic_order`, `continue_holonomic` and `holonomic_monodromy`
+accept dimensionless polynomial coefficient rows in ascending powers. Row
+`j` multiplies the `j`th derivative, and the initial state lists derivatives
+starting with the function value. Supply a closed path for monodromy.
+`borel_pade_complex` uses a deterministic upper lateral integral when its
+rational Borel transform has a pole on the positive integration axis.
+
+`num_continuation_laurent_fft` accepts a complex callback, a center and a
+positive radius of the same dimension, negative and positive orders, a
+sample count and an evaluation budget. Its coefficients use the local
+variable `(z - center) / radius`, retain the callback's output units and
+start at `first_power`. The record reports the radius and samples used.
+[Runnable examples](../tests/domain_holonomic_borel_laurent.aev)
+
 `num_native_irfft_plan_new` prepares an inverse real FFT for a fixed real
 output length. Reuse the plan for successive spectra with
 `num_native_irfft_plan_apply`, which preserves the spectrum's physical
@@ -120,6 +323,17 @@ dimension. `num_native_irfft_plan_output_len` reports the real sample
 count, and `num_native_irfft_plan_spectrum_len` reports the required number
 of nonnegative frequency bins. For example, both four and five real
 samples require three bins. [Runnable example](native_kernel_families.aev)
+
+`Rssn_Optimizer.solve_linear_program` minimizes a linear objective with finite
+lower bounds and optional upper bounds. Use `upper_present` to select which
+upper entries apply. Use `Le`, `Ge` or `Eq` for each constraint row. If the
+coordinate, objective and constraint dimensions are D, E and C, objective
+coefficients have dimension E/D, constraint coefficients have C/D, and
+right-hand sides have C. Provide positive references with dimensions D,
+E and C. The result carries the status, measured coordinates and optional
+objective. `simplex_budgeted` assumes nonnegative variables and accepts
+`Dantzig`, `SteepestEdge` or `Bland` pricing with a shared pivot budget for
+both phases. [Runnable LP examples](../tests/domain_linear_programming.aev)
 
 `num_stats_simple_linear_regression` accepts predictor and response tensors
 with independent dimensions. The slope has response units divided by
@@ -133,6 +347,14 @@ coefficients in the divisor and reports a zero divisor as an error.
 Quotient coefficients have dividend units divided by divisor units, and
 the remainder coefficients retain dividend units.
 [Runnable example](native_algebra_models.aev)
+
+`Rssn_ComplexPolynomial` takes dimensionless complex coefficients in ascending order. `durand_kerner` and `aberth_ehrlich` return one candidate per degree with individual relative backward errors and the largest difference in the reconstructed normalized coefficients. For a nonzero constant the candidate tensor is empty. `laguerre` takes a complex seed and returns an optional candidate and its residual. The zero polynomial and nonconvergence return errors. Backward error quantifies the polynomial perturbation near the supplied candidate. A repeated or ill-conditioned root can have appreciable coordinate error even when this residual is small.
+
+`Rssn_RiemannHilbert` uses fixed two-by-two complex tensors. Matrix addition and subtraction require matching entry dimensions. Products multiply the dimensions, inverses carry reciprocal units, and the Frobenius norm retains the original units. `evaluate` reuses a dimensionless collocation record containing increasing nodes in `(-1, 1)`, positive quadrature weights, and an `n × 2 × 2` tensor of jump densities. Evaluation accepts complex points off the closed arc `[-1, 1]`. `Rssn_numerical_callback.num_riemann_hilbert_solve_typed` builds this record from a dimensionless matrix jump callback. It checks the identity at the two endpoints and returns the actual number of callback evaluations.
+
+The scalar `num_riemann_hilbert_cauchy_checked_typed`, `num_riemann_hilbert_plemelj_checked_typed` and `num_riemann_hilbert_factor_checked_typed` report absolute error estimates, termination and callback counts. Cauchy and Plemelj preserve the density dimension. Factorization samples the continuous jump phase from its principal value at `-1` and reports the error both before and after exponentiation. `num_complex_cauchy_fft_derivatives_checked_typed` uses powers of the local coordinate `(z - center) / radius`, so its derivative tensor retains a common output dimension. The doubled sampling grid gives an empirical error estimate.
+
+For a measured contour and analytic callbacks, `Rssn_numerical_callback` exposes `num_complex_root_circle_moments_typed`, `num_complex_root_circle_winding_typed` and `num_complex_root_circle_rouche_samples_typed`. The moments are powers of `(z - center) / radius`; the result records the difference between the two sampling grids. Winding requires both grids to approach the same integer. Rouché reports the strict inequality at the sampled points. The callbacks receive coherent coordinates, and the record gives the actual callback count.
 
 `num_native_categorical_new` prepares finite nonnegative relative weights.
 Reuse the table with one session random stream or several. The
@@ -202,6 +424,17 @@ destination by XOR. Both use the same GF(256) polynomial as Reed–Solomon.
 value per available order of the Levin transform. Terms can share a physical
 dimension. Use the exact variant names `U`, `T`, or `V`. An infinite value
 marks an unavailable or unbounded condition number.
+
+`Rssn_ComplexDynamics` uses the dimensionless quadratic map `z² + c`.
+The escape functions report the crossing step, an `escaped` flag and an
+optional potential estimate. Budget exhaustion leaves the potential absent.
+`quadratic_orbit` includes the starting point. `quadratic_multiplier` checks
+the requested orbit closure before reporting its numerical class, and
+`quadratic_periodic_points` returns candidates and residuals for the requested
+primitive period. `external_ray` takes its angle in turns and returns a point
+with a relative Böttcher-coordinate residual.
+
+For user-defined maps, `Rssn_numerical_callback.num_complex_dynamics_newton_basin_checked_typed` accepts the map and its derivative with explicit coordinate and residual scales. A singular derivative or an exhausted iteration count yields `root = None`. An exhausted callback budget yields an error. `num_complex_dynamics_koenigs_checked_typed` checks fixed-point closure and returns a truncated coordinate estimate, the measured closure error, and actual work counts.
 
 `num_analysis_ode_fixed_final` evaluates a retained native RHS tape on a
 fixed grid and returns the final state with each component's physical units.
@@ -551,12 +784,153 @@ without advancing the sequence. `num_analysis_sobol_seek` changes the
 position of a retained generator. The next draw advances by one, and the
 largest index wraps to the origin. [Runnable example](native_discrete_objects.aev)
 
+
+The checked complex stencils in `Rssn_numerical_callback` derive both
+Wirtinger estimates, Cauchy–Riemann and conformality diagnostics, a Cartesian
+Laplacian, local magnification and rotation, polar residuals, or a complex-step
+derivative. The Cartesian coordinate step has the input dimension. The polar
+stencil takes separate radial and dimensionless angular steps. Results carry
+the derivative dimensions, and the real analytic complex step samples once.
+The first-order Cartesian routines share four samples. A collapsed rounded
+step or exhausted callback budget returns an error.
+[Runnable tests](../tests/domain_conformal_stencil.aev).
+
+Use `Rssn_Univalent` for coefficient and derivative diagnostics on the normalized
+unit disk. Supply Taylor coefficients in ascending order beginning with the
+constant term. The Grunsky matrix and its test vector use complex tensors.
+Bieberbach, Grunsky and Becker evaluate finite numerical conditions. Loewner
+advances one radial step for a fixed driving angle in radians.
+[Runnable tests](../tests/domain_univalent.aev).
+
+The typed numerical callbacks also estimate the Schwarzian derivative on one
+64-sample circle and run sampled Nehari, starlikeness, or convexity diagnostics.
+The Schwarzian result has inverse coordinate-squared units. These finite
+diagnostics carry explicit callback budgets and can reject poorly resolved inputs.
+[Runnable tests](../tests/domain_univalent_sampled.aev).
+
+The conformal kernels in `Rssn_Special` fit a homogeneous Möbius record from
+three point pairs, evaluate a Bergman expansion from zero-padded coefficient
+rows, and evaluate a prepared Schwarz–Christoffel map inside the upper
+half-plane. The checked integral returns convergence, absolute error, and
+sample count for the requested tolerance and panel budget.
+[Runnable tests](../tests/domain_conformal_kernels.aev).
+
+Prepare a Szegő quadrature once and reuse its boundary points, Cauchy weights,
+and center for the Szegő kernel, Bergman kernel, and Riemann-map evaluations.
+The checked map from the center follows a straight path inside the sampled
+boundary. The two callback variants take explicit sample and callback budgets.
+[Runnable tests](../tests/domain_conformal_szego.aev).
+
+The Riemann covering helpers report packed ramification cycles and zero-based
+sheet permutations for normalized algebraic curves. The local infinity loop
+uses the coordinate `1/z`. For numerical monodromy, coefficients index powers of
+`w` by row and powers of `z` by column, and the last path vertex connects to the
+first. A path touching an unresolved branch point returns an error. The
+measured branch-jump callback separately takes its normal angle and step.
+[Runnable tests](../tests/domain_riemann_covering.aev).
+
+For reproducible circular sampling, use
+`num_contour_residue_infinity_fixed_typed` with a requested sample count and
+callback budget that covers the minimum of 32 nodes. The adaptive contour,
+principal-value and residue methods also return an absolute error estimate
+and convergence flag. Their two components reuse complex callback samples.
+[Runnable tests](../tests/domain_contour_compatibility.aev).
+
+`Rssn_Contour` builds open and closed paths in one coordinate dimension.
+Each segment has entries in `starts` and `ends`. The zero-based
+`arc_segments` indices identify arcs, with matching entries in `arc_centers`,
+`arc_radii`, `theta_start` and `theta_end`. Angles are bare radians and the
+sign of an arc's sweep gives its orientation. `bromwich` and `hankel` set
+`closed` to `false`. `indented_semicircle` requires room for every specified
+pole and builds its geometry in a unit-radius frame before restoring units.
+
+
+`Rssn_Contour.deform` constructs an open path between two measured complex
+endpoints. Pass vectors of poles and ray origins, a positive pole clearance,
+and one angle in bare radians per ray origin. Up to 64 poles and rays are
+allowed in total. A path crossing a ray can travel around the branch point
+on the same sheet. If the bounded construction cannot verify clearance or
+disjointness, the result is an error. Use the generated
+`Rssn_numerical_callback.num_contour_integrate_deformed_checked_typed` to
+construct and integrate in one call, or reuse the returned path.
+[Runnable tests](../tests/domain_contour_deformation.aev).
+
+`Rssn_numerical_callback.num_contour_integrate_checked_typed` takes one of
+these paths, coordinate and value reference scales, an absolute tolerance,
+a panel limit per component and a total callback limit. The final argument
+is a complex-valued callback. The result contains `value`, an estimated
+absolute `error`, `evaluations` and `converged`. Panel exhaustion can return
+a finite estimate with `converged = false`. Callback failures, nonfinite
+samples and exhausting the separate host callback limit produce errors.
+
 `num_analysis_levin_plan_new` prepares nodes and weights for a fixed phase,
 its derivative and the frequency. `num_analysis_levin_plan_nodes` returns
 the physical nodes. Use `num_analysis_levin_plan_integrate_samples` for
 samples in that order, or `num_analysis_levin_plan_integrate` for a compiled
 amplitude. The complex result has amplitude units times coordinate units.
 [Runnable example](physical_functions.aev)
+
+`Rssn_Special` provides principal-branch Bessel `J` and `I` with complex
+orders, Anger `J` and Weber `E` with real orders, and Kelvin functions with
+named `ber`, `bei`, `ker` and `kei` fields. All arguments are dimensionless.
+The exponential integral `E_n` and principal Legendre `Q_n` accept integers
+from 0 to 4096. A signed imaginary zero selects the boundary value of
+the cut. Singular and nonfinite evaluations report an error.
+
+The typed complex root callbacks in `Rssn_numerical_callback` accept a
+measured coordinate reference and an independent residual reference.
+`num_complex_root_muller_typed` takes three guesses. The Halley variant
+takes one guess and callbacks for the residual and both coordinate
+derivatives. Homotopy follows a known zero from dimensionless time 0 to 1
+using coordinate and time derivatives. A successful result includes the
+root in the input coordinate units and the actual callback evaluation count.
+
+`num_complex_root_delves_lyness_typed` estimates the zeros of a pole-free
+function inside a circle from sampled function values and first derivatives.
+Its radius serves as the coordinate reference. The returned roots retain
+the circle's units. For a verified enclosure, use the whole-disk certification
+operators.
+
+The `num_saddle_*_typed` operators in `Rssn_numerical_callback` share
+a physical saddle record. `num_saddle_find_typed` takes a complex guess,
+coordinate reference, normalized slope tolerance and callback budget.
+The phase is dimensionless, with first and second derivatives in inverse
+coordinate units. The leading term, order-two correction and traced
+integral return amplitude times coordinate units. For order two, the phase
+and amplitude must be analytic on a disk with radius one tenth of the
+coordinate reference. The traced integral takes a measured half length
+and an absolute tolerance in the output units.
+
+`Rssn_ComplexDisk` represents a closed Euclidean disk as `[real, imag, radius]`.
+The coordinates and radius share one physical dimension. `make` takes a
+complex center and a nonnegative radius, and `point` creates a zero-radius
+disk from its real and imaginary coordinates. `contains` treats uncertain
+boundary membership as possible, while `inside_strictly` certifies inclusion.
+`mul` and `divide` combine the units of the operands. `divide` returns
+`Ok(None)` if the denominator disk cannot be separated from zero.
+
+Use `variable` or `constant` to start a dimensionless first-order disk jet.
+Its `value` and `derivative` fields are both enclosing disks. The `jet_*`
+functions compose arithmetic and propagate the first derivative. `matvec`,
+`matmul` and `solve` use disk coordinates on the last axis. `solve` returns
+`Ok(None)` if it cannot certify a solution enclosure.
+
+The elementary disk jet functions enclose both the principal value and its
+first derivative. For example, `jet_acosh` uses the two principal square
+roots of `z - 1` and `z + 1` separately in the derivative. A branch cut or
+an enclosure that cannot be certified yields `Ok(None)` for the optional
+jet functions. `sec`, `csc`, `cot`, `sech`, `csch` and `coth` likewise
+return `Ok(None)` when their denominator cannot be separated from zero.
+The elementary exponential evaluation uses a bounded reduction; its input
+disk must have modulus at most `2^20` to obtain a finite enclosure.
+
+The `erf`, `gamma`, `log_gamma` and `bessel_j` functions enclose
+the whole normalized disk. A pole, branch cut or unsupported finite
+range can yield `Ok(None)`. For proof-producing workflows, use the typed
+`num_complex_disk_certify_*_typed` operators in `Rssn_numerical_callback`.
+Their callbacks must enclose the whole disk or box. The scalar Krawczyk
+test needs two calls, the system test needs three, and the Rouché test
+needs two evaluations per arc.
 
 `num_native_ball_values_and_jacobian_at_terms` computes a polynomial system's
 values and Jacobian together at a point. `num_native_ball_eval_value_and_jacobian_terms`
@@ -878,12 +1252,87 @@ noise discretization; exhausting its finest resolution returns an error rather
 than accepting an inaccurate step or drawing replacement noise. Lévy methods
 only offer Brownian higher-order corrections when alpha equals two.
 
+The [numerical transforms fixture](../tests/domain_numerical_transforms.aev)
+uses checked Mellin, Hilbert and inverse Laplace callbacks from
+`Rssn_numerical_callback`, and Borel and Meijer G from
+`Rssn_NumericalTransforms`. Supply dimensionless coordinates and an
+absolute tolerance in the callback output unit. Finite quadrature errors
+exclude omitted tails, and inverse Laplace errors compare two resolutions.
+
+## Analyze a prepared SISO transfer
+
+`Rssn_Control` takes coefficient vectors in descending powers and uses a
+common normalized time and frequency scale. The same model can be evaluated,
+combined with another model, or passed to step and margin analysis. A proper
+model is required for a step response. Release the model after its final use.
+
+```aevia
+import Rssn_Control as Control
+
+test "stable first-order transfer" =
+    match Control.transfer_new_proper([2.0], [1.0, 1.0]) with
+    | Ok(model) -> Control.is_stable(model) == Ok(true) && Control.release_transfer(model) == Ok(true)
+    | Err(_) -> false
+```
+
+[Transfer-function examples and checks](../tests/domain_control_transfer.aev)
+
+`Rssn_Control.simulate_pid` works on normalized errors, a positive sample
+interval, and optional output limits. `pid_response` uses a prepared proper
+transfer model. For discrete identification, pass an input vector and a
+sample-by-output tensor to `identify_era`. Use `era_matrices` to inspect the
+result or `impulse_response` to sample it. [PID and ERA tests](../tests/domain_control_trajectories.aev)
+
+`Rssn_Control.prepare_mpc` builds a bounded discrete plan. A
+`mpc_closed_loop` call returns the initial state and successive controlled
+states. Keep the plan for additional trajectories and call `release_mpc`
+when finished. [MPC examples and checks](../tests/domain_control_mpc.aev)
+
+## Exact decimal exchange
+
+Parse base-ten text with `Rssn_Multiprecision.decimal_to_dyadic(text, precision)`.
+For example, parsing `"1.25000000001"` to two binary bits yields exactly
+`1.5`. Use `dyadic_to_decimal(value, digits)` to write it back or
+`round_decimal_text(text, digits, "nearest")` for a decimal-to-decimal
+rounding such as `"1.3"` at two significant digits. To retain the exact
+input in an interval, compose `enclose_decimal` with `format_decimal_ball`.
+
+### Prepared objectives and scalar root searches
+
+Use `Rssn_Optimizer.sqp_solve` for a normalized sparse nonlinear program.
+The evaluation callback returns a named packet with the objective,
+gradient, constraints and Jacobian. A separate callback forms the
+upper-triangular Lagrangian Hessian from the current point and multipliers.
+Use zero-based sparse triplets. Values are dimensionless normalized
+coordinates and equality rows precede `g(x) <= 0` rows. The returned
+multipliers and KKT residual make it possible to inspect the solve.
+The callback interface takes up to 128 coordinates and 128 constraints,
+with up to 16,384 triplets in each sparse record.
+[Typed SQP fixture](../tests/domain_sparse_sqp.aev)
+
+`Rssn_Optimizer` prepares built-in objective functions, normalized tapes
+and regression models for repeated runs. An immutable tape uses unit-scale
+references and an explicit output slot. `prepare_checked` reports nonfinite
+tape evaluations as errors. A prepared problem can own a box, reuse its
+objective with new bounds, and evaluate its cost and gradient at a
+normalized point. `minimize` takes a solver name, an initial point, and
+explicit iteration, evaluation and seed controls. The result reports the
+best point, cost, native termination and evaluation count.
+
+`regression_problem` uses the stored normalization of the predictor and
+response. For physical residuals, pass coefficients and a response-dimension
+reference to `residuals`. The result contains fitted minus observed responses
+in coherent units. The typed root calls in `Rssn_numerical_vector` accept
+scalar callbacks, an ordered bracket, a positive tolerance, and evaluation
+limits. Newton and Halley can use a supplied derivative. See the
+[prepared optimizer examples](../tests/domain_optimizer.aev).
+
 The source API inventory and callable-manifest report are separate:
 `tools/rssn-api-audit/inventory.tsv` records public Rust APIs, declared adapters
 and resolved aliases;
 `tools/rssn-api-audit/RSSN-COVERAGE.md` records language reachability. A Rust
 helper is not counted as callable merely because it appears in the inventory.
-Regenerate contracts, adapters and inventories with `tools/sync-kernel.sh`.
+Regenerate contracts, adapters and inventories with `bazel run //:refresh_kernel`.
 
 Native generic and opaque interfaces use explicit specializations: Float/exact
 matrices, constant dimensions, sampled initializers, finite provider recipes,
@@ -896,16 +1345,146 @@ report `Unsupported` when their RSSN feature is disabled. Default builds include
 execution examples with the regular CLI.
 
 ```sh
-cargo run -p aevia-cli -- test examples/native_execution.aev
+bazel run //:aevia -- test examples/native_execution.aev
 ```
+
+## Triangulate a measured planar domain
+
+`Rssn_Meshgen.advancing_front` fills a simple polygon using a target edge
+spacing. `Rssn_Meshgen.constrained_delaunay` keeps zero-based segment endpoint
+pairs as chains of triangulation edges. Crossing constraints can introduce
+additional vertices. Both operations take a positive reference length close
+to the coordinate extent and an explicit output-vertex budget between 3 and
+4096. The output includes measured coordinate pairs and zero-based triangle
+triples. [Planar meshing examples and checks](../tests/domain_planar_meshgen.aev)
+
+## Work with a measured CAD mesh
+
+`Rssn_Cad.mesh_new` takes a three-column tensor of lengths and a three-column
+tensor of zero-based triangle indices. `signed_volume` returns a measured
+volume for a closed consistently wound surface. Pass a unit length when
+reading or writing in-memory STL, and weld the result before checking its
+adjacency. [CAD mesh examples and checks](../tests/domain_cad_mesh.aev)
+`read_step_text` takes planar STEP solids with straight edges and returns one
+measured handle per solid using the coordinate units declared in the text.
+To load a file in Aevia, call `read_file(path)` with file-read access and pass
+the returned text to `Rssn_Cad.read_step_text`. Language bindings can read the
+file with their host APIs and pass the text to `num_cad_step_read_text`.
+
+## Reuse a measured grid or integrate a compiled function
+
+`Rssn_Interpolation.prepare_bilinear(xs, ys, cells)` retains a rectilinear
+grid. Pass strictly increasing axes and a cell tensor with shape `[len(ys),
+len(xs)]`. The two axes and the cells may use independent units.
+`interpolate(grid, x, y, cell_unit)` clamps coordinates outside the
+sampled range and returns a value in the cell dimension. Reuse the handle for
+later queries. [Measured grid example](../tests/domain_interpolation.aev)
+
+`Rssn_ParallelQuadrature.gauss_legendre` and `clenshaw_curtis` integrate a
+compiled scalar function over measured bounds. The integrand witness supplies
+the integrand dimension and the result has the product of both dimensions.
+The compiled function's work budget must cover the quadrature samples.
+`sum_compensated` keeps the vector's dimension and uses a deterministic
+compensated sum. [Fixed quadrature examples](../tests/domain_parallel_quadrature.aev)
 
 Run `aevia devices` to see available RSSN backend selectors.
 [The measured-backend example](native_backend.aev) uses the active selector. Run
 it with `--rssn-backend cpu` or `--rssn-backend cranelift` to compare execution.
 
+Use `Rssn_Multiprecision.cbrt_dyadic(value, precision, rounding)` to round a
+real cube root in a chosen direction. `cbrt_dyadic_enclosure`,
+`hypot_dyadic_enclosure` and `sqrt_ball` return outward dyadic balls.
+`dyadic_limits()` reports the supported precisions and binary exponents.
+
 `object_binding!` derives schemas, codecs, arity and registration from typed
 adapter declarations. Source-derived scalar/record bindings use reviewed unit
-policies. `cargo run -p rssn-api-audit -- --verify` checks the inventory snapshot
+policies. `bazel test //:rssn_api_audit_test` checks the inventory snapshot
 and callable coverage from one scan. A re-export inherits coverage when Rust
 source resolution proves it is the same public item. The inventory also records
 macro and re-export fingerprints for review.
+
+## Reuse an exact modular reducer
+
+`Rssn_Modular` exposes typed prepared reducers for unsigned machine-word
+arithmetic. Use Barrett when the modulus can be even and Montgomery to compose
+operations on encoded residues under an odd modulus. Inputs and outputs are
+exact Aevia integers. Release a plan after its final use to free its session
+slot.
+
+```aevia
+import Rssn_Modular as Mod
+
+test "multiply modulo a composite" =
+    match Mod.barrett_new(12) with
+    | Ok(plan) ->
+        let product = Mod.barrett_mul(plan, 7, 7)
+        product == Ok(1) && Mod.release_barrett(plan) == Ok(true)
+    | Err(_) -> false
+```
+
+The domain suite also exercises 128-bit reduction and failures for stale handles
+or noncanonical encoded residues. [Modular reducer tests](../tests/domain_modular.aev)
+
+### Markov chain Monte Carlo
+
+`Rssn_Mcmc` provides explicitly seeded PCG32 streams and convergence
+diagnostics. Pass one measured chain to `autocorrelation`,
+`effective_sample_size` or `geweke`. Pass a tensor with one chain per row to
+`split_rhat`. The rows must share a physical dimension. All diagnostics
+return dimensionless values. Release a deterministic stream with
+`Rssn_Mcmc.release` when it is no longer needed.
+
+For sampling, use the typed `num_mcmc_*_typed` entry points in
+`Rssn_numerical_stats`. They take normalized coordinates, a seed and a
+bounded draws/burn-in/thinning configuration. Supply a target expressed in
+log-density units to Metropolis–Hastings, its gradient to Hamiltonian Monte
+Carlo, or a coordinate callback to Gibbs. The Gibbs callback receives the
+zero-based coordinate index, the current state and a uniform draw. Samples
+are returned by row alongside proposal and acceptance counts. Gibbs returns
+an empty log tensor unless it receives a joint log target. See the
+[deterministic regression examples](../tests/domain_mcmc.aev).
+
+Rssn_Statrs.prepare takes a distribution name and its exact parameter count. Use the same prepared handle for densities, moments, and tail queries. The sf method evaluates the upper tail directly. Release a handle with release_distribution.
+
+
+## Exact sparse matrices and prepared prime fields
+
+`Rssn_SparseExact.field` validates an unsigned 64-bit prime once for a
+session-owned field. Reuse the field for arithmetic, reduction and batched
+inversion. A denominator divisible by the prime makes `reduce_matrix`
+return `None`. The same applies to a zero residue in `batch_inverse`.
+`reducer` returns an independent `Rssn_Modular` Barrett handle.
+
+`rational_rref` and `prime_rref` return a reduced sparse matrix and its
+zero-based pivot columns. `rcm_order` returns both directions of the
+cached ordering for a square pattern. For `solve_dixon_multi`, place one
+right-hand side per row. Solutions keep this row convention and exact
+rational coefficients. A singular system returns `None`. See the
+[sparse exact examples](../tests/domain_sparse_exact.aev).
+
+The five `Rssn_Special.complex_carlson_*` calls work with dimensionless complex
+arguments. For example, use `complex_carlson_rj(x, y, z, p)` with nonnegative
+real parts for `x`, `y` and `z`, and a positive real part for `p`. When `p`
+equals one of the first three arguments, the corresponding `R_D` uses the
+same branch. Singular arguments return `Err`. `R_G(x, 0, 0)` is finite and
+equals half the principal square root of `x`.
+
+Use `Rssn_Special.to_polar` and `from_polar` with measured complex
+coordinates. The radius has the coordinate dimension, and the principal angle
+is in radians. `complex_abs_squared` squares the coordinate dimension.
+`unwrap_phase` accepts measured samples away from zero. With dimensionless
+samples, `continue_complex_root` follows the selected root branch as the path
+winds around zero. Sample closely enough that the phase changes by less than
+π between adjacent samples.
+
+`Rssn_Special.barycentric_interpolate` accepts measured abscissas and
+ordinates. Repeated queries on the same small grid reuse the node weights
+without retaining the ordinates. For dimensionless polynomials in descending
+coefficient order, `polynomial_power` uses an integer exponent and
+`polynomial_gcd` uses a relative coefficient tolerance.
+
+`Rssn_Statistics.fit_glm` takes dimensionless samples, a family and link,
+optional observation weights, and explicit iteration and tolerance controls.
+It returns named fit diagnostics and stores the link in the model.
+`predict_glm(model, rows)` reuses that link for response means. Give both
+operations design rows without an intercept column.

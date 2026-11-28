@@ -1,0 +1,18 @@
+import Rssn_Special as Special
+
+let zero = complex(0.0, 0.0)
+
+let one = complex(1.0, 0.0)
+
+test "disk automorphism records feed the projective classification and fixed point APIs" =
+    match Special.disk_automorphism(zero, 1.5707963267948966) with
+    | Ok(map) ->
+        match (Special.classify_mobius(map), Special.mobius_fixed_points(map)) with
+        | (Ok(kind), Ok(result)) -> kind == "elliptic" && !result.all && length(result.points) == 1
+        | _ -> false
+    | Err(_) -> false
+
+test "the kernel at the center of the unit disk is inverse pi" =
+    match Special.bergman_kernel_disk(zero, zero) with
+    | Ok(result) -> approx_eq(re(result), 1.0 / 3.141592653589793, 1e-12) && is_err(Special.bergman_kernel_disk(one, zero))
+    | Err(_) -> false

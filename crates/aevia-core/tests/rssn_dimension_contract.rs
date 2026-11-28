@@ -137,3 +137,43 @@ fn empty_tensor_representation_is_evidence_not_guessed_from_parameter() {
     .expect("proven Float tensor");
     assert_eq!(result.as_f64(), Some(0.0));
 }
+
+#[test]
+fn checked_empty_complex_literals_keep_their_units_and_element_witness() {
+    let source = r#"
+let empty: Tensor<1, Complex[Length]> = []
+let roundtrip = match from_value<Tensor<1, Complex[Length]>>(to_value(empty)) with
+    | Ok(_) -> true
+    | Err(_) -> false
+"#;
+    let compilation = compile("empty-complex-dimensions.aev", source);
+    assert!(
+        !compilation.diagnostics.has_errors(),
+        "{:?}",
+        compilation.diagnostics.items
+    );
+    let module = compilation.module.expect("module");
+    for mode in [Mode::Ast, Mode::Ir] {
+        let mut interp = Interp::new(&compilation.checked).with_mode(mode);
+        let diagnostics = interp.load(&module);
+        assert!(
+            !diagnostics.has_errors(),
+            "{mode:?}: {:?}",
+            diagnostics.items
+        );
+        let empty = interp.eval_toplevel("empty").expect("typed literal");
+        assert!(
+            matches!(&empty, Value::Tensor(tensor) if tensor.shape == [0]),
+            "{mode:?}"
+        );
+        assert_eq!(
+            aevia_core::value::value_dim(&empty),
+            Dim::base("Length"),
+            "{mode:?}",
+        );
+        let result = interp
+            .eval_toplevel("roundtrip")
+            .expect("round-trip result");
+        assert!(matches!(result, Value::Bool(true)), "{mode:?}: {result:?}");
+    }
+}

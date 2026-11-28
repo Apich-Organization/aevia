@@ -1,0 +1,25 @@
+import Rssn_Optimizer as LP
+
+test "bounded LP returns a measured optimum with a negative lower bound" =
+    match LP.solve_linear_program([-1.0 N, -2.0 N], [[1.0, 1.0]], ["Le"], [2.0 m], 2.0 m, 5.0 J, 4.0 m,
+        [-2.0 m, 0.0 m], [1.0 m, 3.0 m], [true, true], 20) with
+    | Ok(solution) ->
+        match (solution.value, solution.iterations) with
+        | (Some(value), Some(pivots)) -> solution.status == "Optimal" && approx_eq(solution.x[0], -1.0 m, 1e-9 m) && approx_eq(solution.x[1], 3.0 m, 1e-9 m) && approx_eq(value, -5.0 J, 1e-9 J) && pivots > 0
+        | _ -> false
+    | Err(_) -> false
+
+test "simplex charges Phase I basis cleanup to the pivot budget" =
+    let stopped = LP.simplex_budgeted([0.0], [[-1.0]], ["Eq"], [0.0], "Bland", 1.0, 1.0, 1.0, 0)
+    match LP.simplex_budgeted([0.0], [[-1.0]], ["Eq"], [0.0], "Bland", 1.0, 1.0, 1.0, 1) with
+    | Ok(solution) -> is_err(stopped) && solution.status == "Optimal" && solution.iterations == Some(1)
+    | Err(_) -> false
+
+test "bounded LP retains status without a fabricated objective" =
+    let unbounded = LP.solve_linear_program([-1.0 N], [[0.0]], ["Le"], [0.0 m], 1.0 m, 1.0 J, 1.0 m,
+        [0.0 m], [0.0 m], [false], 20)
+    let impossible = LP.solve_linear_program([-1.0 N], [[0.0]], ["Le"], [0.0 m], 1.0 m, 1.0 J, 1.0 m,
+        [1.0 m], [0.0 m], [true], 20)
+    match (unbounded, impossible) with
+    | (Ok(a), Ok(b)) -> a.status == "Unbounded" && b.status == "Infeasible" && shape(a.x) == [0] && shape(b.x) == [0] && a.value == None && b.value == None
+    | _ -> false

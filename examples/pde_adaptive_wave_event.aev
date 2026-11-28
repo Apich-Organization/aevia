@@ -1,4 +1,4 @@
-## Run: cargo run -p aevia-cli -- test examples/pde_adaptive_wave_event.aev
+## Run: bazel run //:aevia -- test examples/pde_adaptive_wave_event.aev
 ## These assertions control temporal error on a fixed spatial discretization.
 import Rssn_numerical_callback as N
 

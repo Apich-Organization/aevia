@@ -1,4 +1,4 @@
-## Run: cargo run -p aevia-cli -- test examples/native_mechanics.aev
+## Run: bazel run //:aevia -- test examples/native_mechanics.aev
 ## Explicit mechanical references keep stresses and rotation angles distinct.
 import Rssn_numerical_vector as N
 

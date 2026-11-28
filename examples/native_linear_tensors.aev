@@ -1,4 +1,4 @@
-## Run: cargo run -p aevia-cli -- test examples/native_linear_tensors.aev
+## Run: bazel run //:aevia -- test examples/native_linear_tensors.aev
 ## Normalized samples and physical references stay separate in native tensor models.
 import Rssn_numerical_matrix as N
 

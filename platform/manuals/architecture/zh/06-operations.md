@@ -4,7 +4,10 @@
 
 ## 构建与配置
 
-从平台目录和相邻的语言 crate 上下文构建注册表镜像。镜像使用精简的工作区清单，并检查其与实际编译器工作区是否漂移。应用需要数据库地址、用于验证会话的密钥、公开站点地址、归档目录和文档挂载目录。环境变量、Compose、Quadlet 及备份命令见[部署手册](https://github.com/Apich-Organization/aevia/blob/v0.1/platform/docs/DEPLOY.md)。
+Bazel 构建 `//:registry_server`，并用 `//:registry_image` 打包镜像。部署配套发布中已有的
+注册中心二进制时，可用 `//:registry_image_from_binary`。容器使用传入的可执行文件，Compose
+启动带标签的镜像。应用需要数据库 URL、用于校验会话的密钥、公网基础 URL，以及归档数据和
+文档挂载的显式路径。[部署手册](https://github.com/Apich-Organization/aevia/blob/main/platform/docs/DEPLOY.zh.md)
 
 ## 发布与检查
 

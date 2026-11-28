@@ -353,9 +353,8 @@ reference interpreter. Cancellable execution uses the interpreter.
   program without control flow.
 
 Default builds include Cranelift, wgpu and NumPy `.npy` support. Run `aevia devices` to inspect
-the build and detected devices. To make a lean build, run
-`cargo build -p aevia-cli --no-default-features`. Ordinary functions still run in the
-interpreter in that build. An explicit `@jit` reports `E1001("core.jit")`. The native test
+the build and detected devices. `bazel build //:toolchain_minimal` builds a CLI
+that runs ordinary functions in the interpreter. An explicit `@jit` reports `E1001("core.jit")`. The native test
 cases live in `tests/jit_native.aev`.
 
 ### 9.6.4 Device targets
@@ -613,6 +612,7 @@ Global flags (before the program-argument separator `--`):
 | `--budget STEPS` | tail-call/IO step budget before `E0805` (default 100,000,000; not seconds, §9.3.4) |
 | `--caps LIST` | grant only these capabilities: `fs,net,env,rand,gpu` (empty list = sandbox everything; default all, §9.14) |
 | `--backend NAME` | select execution backend: `auto`, `ir`, `ast`, `cpu`, `cpu-parallel`, or `gpu` |
+| `--rssn-backend NAME` | select RSSN expression execution for the process. Run `aevia devices` to see selectors. See §10.6.4. |
 | `--jobs N` | worker threads for parallel evaluation (§9.7.2) |
 | `--color auto\|always\|never` | CLI and REPL colouring; automatic mode honors terminal support and `NO_COLOR` |
 | `--locked` | refuse to rewrite an out-of-date `aevia.lock` (`update`/`add`/…) |
@@ -835,8 +835,9 @@ The four-revision retention applies per module name.
   error; it does **not** check the error code, which the doctest marker `compile_fail EXXXX`
   asserts.
 - Golden tests: snapshots of REPL output and error messages.
-- Benchmarks: `bench` declarations; each reports the median, mean and 95% confidence interval of
-  N iterations (default N=100; `--iterations`/`--warmup`). `--save-baseline FILE` writes JSON
+- Benchmarks use `@bench` declarations and report the median, mean and 95% confidence interval of
+  N iterations (default N=100; `--iterations`/`--warmup`). From the source workspace, run
+  `bazel run --config=release-max //:aevia -- bench workload.aev`. `--save-baseline FILE` writes JSON
   (`format=1`, `tool`/`version`, `profile=debug|release`, `optimized_ir=true|false`, `iterations`, `warmup`, and per item
   `median_ns`/`mean_ns`/`ci_ns`); `--compare-baseline FILE --threshold RATIO` (default 0.05, may
   be written `5%`) compares medians and, above the threshold, reports `REGRESSION` and exits 1; a

@@ -25,6 +25,33 @@ fn main(): IO Unit = do
 
 对带单位的函数求导时，结果量纲为输出量纲除以输入量纲。积分则将两者相乘。在每次变换的边界跟踪量纲，让模型修改的影响可见。
 
+## 查找 RSSN 算子并传入经过检查的函数
+
+运行 `aevia rssn --describe num_native_par_map_slice` 查看当前链接内核的签名、量纲规则
+及可用绑定。`Rssn.call_ho` 分别接收普通值列表和经过检查的回调列表。每组内部都按签名中的
+顺序排列。这个示例将带量纲的向量和两个整数控制量作为普通值，回调将距离转换为时间。
+
+```aevia,run
+fn round_trip_time(distance: Float[Length]): Float[Time] =
+    (distance / 1.0 m) * 2.0 s
+
+fn round_trip_times(): Result<Tensor<1, Float[Time]>, OpError> =
+    let ordinary = [to_value([1.0 m, 2.0 m, 3.0 m]), to_value(1), to_value(3)]
+    match Rssn.call_ho("num_native_par_map_slice", ordinary, [to_callback(round_trip_time)]) with
+    | Ok(value) -> from_value<Tensor<1, Float[Time]>>(value)
+    | Err(error) -> Err(error)
+
+test "the returned values retain order and time units" =
+    round_trip_times() == Ok([2.0 s, 4.0 s, 6.0 s])
+
+fn main(): IO Unit = do
+    println(round_trip_times())
+```
+
+`from_value` 校验返回张量的秩、元素类型和量纲。回调同步执行，句柄在本次调用期间有效。
+使用 `aevia rssn --audit` 查看链接内核的覆盖情况，或运行
+`aevia rssn --emit --out generated --namespaces` 导出其模块。
+
 ## 改变实验
 
 用表示恒定加加速度的三次项替换恒定加速度项，选取单位使位置仍为长度。先预测导数的量纲和零时刻的值，再运行修改后的程序。

@@ -9,7 +9,8 @@
 #   domain  Name | one-line doc
 #   family  Name rule_set:glob [rule_set:glob ...]    first match wins
 #   mode    Name typed|dynamic       `typed`: every operator needs sig/dynamic/exclude
-#   sig     op [as name](p: T, ...) -> Result<R, OpError>
+#   sig     op [as name][<d, ...>](p: T, ...) -> Result<R, OpError>
+#           optional generic parameters may bind dimensions in the signature
 #   codec   Type to_fn from_fn       wire conversion of a rich type (see prelude)
 #   exclude op [op ...] | reason
 #   dynamic op [op ...] | reason     accepted as dynamic on purpose
@@ -18,6 +19,7 @@
 domain NumberTheory | Number theory over the integers: divisibility, modular arithmetic, primality, factorisation.
 domain Combinatorics | Counting, partitions, permutations as numbers, recurrences.
 domain Group | Finite groups and permutation groups, presentations, characters.
+domain Modular | Prepared exact machine-word arithmetic for odd, even, prime and composite moduli.
 domain FiniteField | Finite fields GF(p), GF(2^8), extension fields and polynomial arithmetic over them.
 domain Coding | Error-correcting codes and checksums.
 domain Crypto | Elliptic curves, ECDH/ECDSA and RSA.
@@ -25,32 +27,51 @@ domain Graph | Graphs and graph algorithms.
 domain Topology | Simplicial and cubical complexes, homology and persistence.
 domain Crystallography | Point groups, crystal systems and molecular symmetry.
 domain Chaos | Fractals, iterated maps, dynamical-system orbits and fractal dimensions.
+domain ComplexDynamics | Bounded quadratic orbits, numerical periodic classification and exterior basin estimates.
 domain Graphics | Quaternions, rigid transforms, curves, meshes and rays.
+domain Meshgen | Measured planar triangulation with explicit vertex budgets.
+domain Cad | Measured CAD triangle meshes, topology, repair and in-memory interchange.
 domain Discrete | Remaining discrete-mathematics operators.
 domain LieAlgebra | Lie algebras, root systems, representations and Lie groups.
 domain Polynomial | Symbolic polynomials, Groebner bases, real-root isolation, partial fractions.
+domain ComplexPolynomial | Approximate complex polynomial roots and backward error diagnostics.
+domain ComplexRootContours | Numerical root counts, contour moments and sampled inequalities.
 domain Logic | Propositional logic, SAT, BDDs.
 domain GeometricAlgebra | Clifford algebra: multivectors, rotors, products.
 domain DifferentialGeometry | Metrics, curvature, differential forms, vector calculus in coordinates.
 domain Functional | Inner-product spaces, operators and integral equations.
 domain Special | Special functions, symbolic and numerical.
+domain Univalent | Coefficient and derivative diagnostics on the normalized unit disk.
+domain ConformalDiagnostics | Checked finite-difference diagnostics for measured complex maps.
+domain Mcmc | Reproducible PCG32 streams and measured Markov chain diagnostics.
+domain Statrs | Prepared statistical distributions, probabilities and moments.
 domain Statistics | Distributions, tests and descriptive statistics, symbolic and numerical.
 domain Calculus | Symbolic calculus, variational calculus, result verification, and D-finite functions (differential equations, recurrences, decided identities).
+domain ComplexDisk | Outward-rounded closed Euclidean disks with a common physical dimension.
 domain Multiprecision | Exact binary dyadics and closed real enclosures with explicit bit precision.
 domain Elementary | Elementary and complex functions, radicals.
 domain Core | Kernel plumbing: term constructors, rewriting, CSE, unit conversion.
+domain Control | Reusable normalized transfer models, sampled PID, MPC and eigensystem realisation.
 domain Numeric | Numerical vectors, matrices and callbacks.
+domain SparseExact | Rational sparse matrices, prepared prime fields and exact elimination.
+domain RiemannHilbert | Measured complex matrix algebra and numerical Riemann–Hilbert solutions.
 domain LinearAlgebra | Symbolic linear algebra, dense and sparse (exact and symbolic sparse matrices, modular methods).
 domain Differential | Ordinary, stochastic and partial differential equations.
 domain Physics | Classical and quantum physics formulas.
+domain Optimizer | Prepared normalized objectives, measured regression and named solvers.
 domain Solving | Equation solving and optimisation.
+domain Contour | Oriented piecewise paths with measured complex positions and dimensionless arc angles.
+domain NumericalTransforms | Bounded and typed finite integral transforms and inverse Laplace quadrature.
+domain ParallelQuadrature | Deterministic fixed-node quadrature and compensated sums of measured data.
+domain Interpolation | Prepared rectilinear interpolation of measured data.
 domain Transforms | Integral and discrete transforms.
 
 family NumberTheory number_theory:* numerical_special:num_number_theory_gcd_u128 numerical_special:num_number_theory_is_prime_bpsw numerical_special:num_number_theory_is_prime_u128 numerical_special:num_number_theory_carmichael_lambda numerical_special:num_number_theory_divisors numerical_special:num_number_theory_divisor_count numerical_special:num_number_theory_divisor_sigma numerical_special:num_number_theory_mul_mod numerical_special:num_number_theory_mul_mod_u128 numerical_special:num_number_theory_mod_pow_u128 numerical_special:num_number_theory_extended_gcd_u64 numerical_special:num_number_theory_mod_inv_u64 numerical_special:num_number_theory_jacobi_symbol numerical_special:num_number_theory_legendre_symbol numerical_special:num_number_theory_primitive_root
 family NumberTheory numerical_special:num_number_exact_bigint_crt_garner numerical_special:num_number_exact_bigint_gcd numerical_special:num_number_exact_bigint_isqrt numerical_special:num_number_exact_bigint_mod_inverse numerical_special:num_number_exact_bigint_nth_root numerical_special:num_number_exact_bigint_xgcd numerical_special:num_number_exact_jacobi_bigint numerical_special:num_number_exact_strong_lucas_bigint numerical_special:num_number_ext_batch_mod_pow numerical_special:num_number_ext_crt_bigint numerical_special:num_number_ext_totient_sieve
 family Combinatorics combinatorics:*
 family Group discrete:perm_* discrete:group* discrete:cyclic_group discrete:dihedral_group discrete:symmetric_group discrete:klein_four_group discrete:fp_group* discrete:todd_coxeter* discrete:presentation_* discrete:representation_* discrete:character_*
-family FiniteField discrete:gf_* discrete:gfp_* discrete:gfx_* discrete:gf256_* discrete:factor_mod discrete:is_irreducible_mod numerical_vector:num_finite_field_batch_inverse_mod numerical_vector:num_finite_field_batch_inverse_skip_zeros numerical_vector:num_finite_field_slice_add_mod numerical_vector:num_finite_field_slice_sub_mod numerical_vector:num_finite_field_slice_scale_mod numerical_vector:num_finite_field_slice_axpy_mod numerical_vector:num_finite_field_dot_mod numerical_vector:num_finite_field_primitive_root_prime numerical_vector:num_finite_field_poly_mul_ntt_mod
+family Modular numerical_special:num_modular_montgomery_* numerical_special:num_modular_barrett_*
+family FiniteField discrete:gf_* discrete:gfp_* discrete:gfx_* discrete:gf256_* discrete:factor_mod discrete:is_irreducible_mod numerical_vector:num_finite_field_batch_inverse_mod numerical_vector:num_finite_field_batch_inverse_skip_zeros numerical_vector:num_finite_field_slice_add_mod numerical_vector:num_finite_field_slice_sub_mod numerical_vector:num_finite_field_slice_scale_mod numerical_vector:num_finite_field_slice_axpy_mod numerical_vector:num_finite_field_dot_mod numerical_vector:num_finite_field_primitive_root_prime numerical_vector:num_finite_field_poly_mul_ntt_mod numerical_vector:num_finite_field_ntt_plan numerical_vector:num_finite_field_ntt_transform
 family Coding discrete:bch_* discrete:hamming_* discrete:rs_* discrete:crc* discrete:conv_encode discrete:interleave discrete:deinterleave discrete:code_*
 family Crypto discrete:ec_* discrete:ecdh_* discrete:ecdsa_* discrete:rsa_*
 family Graph discrete:graph* discrete:digraph discrete:induced_subgraph discrete:algebraic_connectivity
@@ -58,19 +79,39 @@ family Topology discrete:sc_* discrete:cubical_* discrete:persist* discrete:rips
 family Crystallography discrete:point_group* discrete:crystal* discrete:bravais_lattices discrete:molecule_*
 family Chaos discrete:mandelbrot_* discrete:julia_escape discrete:burning_ship_escape discrete:multibrot_escape discrete:newton_fractal_root discrete:henon_orbit discrete:ifs_* discrete:lorenz* discrete:logistic_* discrete:rossler_orbit discrete:tinkerbell_orbit discrete:map_* discrete:complex_map_* discrete:lyapunov_exponent discrete:orbit_* discrete:moran_dimension discrete:similarity_dimension discrete:box_counting discrete:correlation_dimension
 family Graphics discrete:quat_* discrete:rotation_* discrete:translation discrete:translation_* discrete:scaling discrete:scaling_* discrete:shear discrete:shear_* discrete:rotation discrete:reflection discrete:reflection_* discrete:reflect discrete:refract discrete:look_at discrete:perspective discrete:orthographic discrete:ray_* discrete:mesh_* discrete:bezier* discrete:bspline discrete:catmull_rom discrete:barycentric
+family Meshgen numerical_vector:num_meshgen_*
+family Cad numerical_vector:num_cad_*
 family Discrete discrete:*
+family ComplexDynamics numerical_special:num_complex_dynamics_* numerical_callback:num_complex_dynamics_*
 family LieAlgebra lie_structure:* lie:*
 family Polynomial poly:*
+family ComplexPolynomial numerical_vector:num_complex_polynomial_*
+family ComplexRootContours numerical_callback:num_complex_root_*
+family Saddle numerical_callback:num_saddle_*
 family Logic logic:*
+family Multiprecision numerical_special:num_mp_decimal_*
 family GeometricAlgebra geometric_algebra:*
 family DifferentialGeometry geometry:*
+family Contour numerical_special:num_contour_* numerical_callback:num_contour_*
 family Functional functional:*
-family Multiprecision numerical_special:num_mp_real_* numerical_special:num_mp_ball_*
+family Multiprecision numerical_special:num_mp_real_* numerical_special:num_mp_ball_* numerical_special:num_mp_complex_* numerical_special:num_mp_expression_enclose
+family ComplexDisk numerical_special:num_complex_disk_* numerical_callback:num_complex_disk_certify_*
+family NumericalTransforms numerical_special:num_transform_* numerical_callback:num_transform_*
+family Univalent numerical_special:num_univalent_* numerical_callback:num_univalent_*
 family Special special:* numerical_special:*
+family Mcmc numerical_stats:num_mcmc_*
+family Statrs numerical_stats:num_statrs_distribution_*
 family Statistics stats:* numerical_stats:*
 family Calculus calculus:* variational:* verify:* holonomic:*
-family Elementary elementary:* complex:* radicals:*
+family Elementary elementary:* complex:* radicals:* numerical_callback:num_complex_cauchy_fft_derivatives_checked
 family Core kernel:* arith:* rewriting:* cse:* units:*
+family Control numerical_vector:num_control_transfer_* numerical_vector:num_control_pid_response numerical_vector:num_control_simulate_pid numerical_vector:num_control_era* numerical_vector:num_control_impulse_response numerical_vector:num_control_mpc_* numerical_vector:num_control_state_space_* numerical_matrix:num_control_state_space_*
+family SparseExact numerical_matrix:num_linear_sparse_exact_* numerical_matrix:num_linear_rational_sparse_from_dense numerical_matrix:num_linear_rational_sparse_to_dense
+family RiemannHilbert numerical_matrix:num_riemann_hilbert_* numerical_callback:num_riemann_hilbert_solve numerical_callback:num_riemann_hilbert_cauchy_checked numerical_callback:num_riemann_hilbert_plemelj_checked numerical_callback:num_riemann_hilbert_factor_checked
+family Optimizer numerical_vector:num_optimizer_* numerical_vector:num_analysis_simplex_* numerical_vector:num_convex_solve_lp numerical_vector:num_analysis_linear_regression_new numerical_vector:num_native_tape_lower numerical_callback:num_sqp_*
+family ConformalDiagnostics numerical_callback:num_complex_wirtinger_dz_checked numerical_callback:num_complex_wirtinger_dzbar_checked numerical_callback:num_complex_cauchy_riemann_checked numerical_callback:num_complex_laplacian_checked numerical_callback:num_complex_cauchy_riemann_polar_checked numerical_callback:num_conformal_numeric_checked numerical_callback:num_conformal_scale_rotation_checked numerical_callback:num_complex_step_derivative_checked
+family ParallelQuadrature numerical_vector:num_analysis_gauss_legendre_parallel numerical_vector:num_analysis_clenshaw_curtis_parallel numerical_vector:num_analysis_sum_compensated
+family Interpolation numerical_vector:num_interp_bilinear_grid_*
 family Numeric numeric:* numerical_matrix:* numerical_vector:* numerical_callback:*
 family LinearAlgebra linalg:* sparse_symbolic:*
 family Differential ode:* sde:* pde:*
@@ -82,9 +123,267 @@ family Transforms transforms:*
 # Typed domains. `mode typed`: a new kernel operator in these families fails
 # the coverage test until it is given a `sig`, `dynamic` or `exclude` line.
 # ---------------------------------------------------------------------------
+mode Interpolation typed
+sig num_interp_bilinear_grid_prepare as prepare_bilinear<X,Y,Cell>(xs: Tensor<1, Float[X]>, ys: Tensor<1, Float[Y]>, cells: Tensor<2, Float[Cell]>) -> Result<BilinearGrid, OpError>
+sig num_interp_bilinear_grid_evaluate as interpolate<X,Y,Cell>(grid: BilinearGrid, x: Float[X], y: Float[Y], witness: Float[Cell]) -> Result<Float[Cell], OpError>
+codec BilinearGrid bilinear_grid_to_wire bilinear_grid_from_wire
+prelude Interpolation
+| ## A validated grid owned by the current RSSN session.
+| type BilinearGrid = | BilinearGrid(Value)
+|
+| fn bilinear_grid_to_wire(grid: BilinearGrid): Value =
+|     match grid with
+|     | BilinearGrid(value) -> value
+|
+| fn bilinear_grid_from_wire(value: Value): Result<BilinearGrid, OpError> = Ok(BilinearGrid(value))
+|
+| fn release(grid: BilinearGrid): Result<Bool, OpError> =
+|     match Rssn.dynamic("num_native_release", [bilinear_grid_to_wire(grid)]) with
+|     | Ok(value) -> from_value<Bool>(value)
+|     | Err(error) -> Err(error)
+
+mode ParallelQuadrature typed
+sig num_analysis_gauss_legendre_parallel as gauss_legendre<d,e>(lower: Float[d], upper: Float[d], order: Int, integrand_output: Float[e], program: Value) -> Result<Float[d*e], OpError>
+sig num_analysis_clenshaw_curtis_parallel as clenshaw_curtis<d,e>(lower: Float[d], upper: Float[d], order: Int, integrand_output: Float[e], program: Value) -> Result<Float[d*e], OpError>
+sig num_analysis_sum_compensated as sum_compensated<d>(values: Tensor<1, Float[d]>, block: Int, grain: Int) -> Result<Float[d], OpError>
+
+mode NumericalTransforms typed
+dynamic num_transform_mellin_checked num_transform_inverse_mellin_checked num_transform_hilbert_checked num_transform_hankel_checked num_transform_stieltjes_checked num_transform_laplace_talbot_checked num_transform_laplace_talbot_shifted_checked num_transform_laplace_parabola_checked num_transform_laplace_parabola_shifted_checked num_transform_laplace_stehfest_checked | Use the manifest-generated typed scoped callbacks in Rssn_numerical_callback.
+sig num_transform_borel_series as borel_series<E>(coefficients: Tensor<1, Complex[E]>, t: Complex) -> Result<Complex[E], OpError>
+sig num_transform_mellin_barnes_checked as mellin_barnes(num_plus: Tensor<1, Complex>, num_minus: Tensor<1, Complex>, den_plus: Tensor<1, Complex>, den_minus: Tensor<1, Complex>, z: Complex, abscissa: Float, limit: Float, tolerance: Float, panels: Int) -> Result<{ value: Complex, error: Float, converged: Bool, evaluations: Int }, OpError>
+sig num_transform_meijer_g_checked as meijer_g(a: Tensor<1, Complex>, b: Tensor<1, Complex>, m: Int, n: Int, z: Complex, abscissa: Float, limit: Float, tolerance: Float, panels: Int) -> Result<{ value: Complex, error: Float, converged: Bool, evaluations: Int }, OpError>
+
+mode Univalent typed
+dynamic num_univalent_schwarzian_checked num_univalent_nehari_sampled num_univalent_starlikeness_radius_sampled num_univalent_convexity_radius_sampled | Use the manifest-generated typed checked callbacks in Rssn_numerical_callback.
+sig num_univalent_bieberbach as bieberbach(coefficients: Tensor<1, Complex>, tolerance: Float) -> Result<Bool, OpError>
+sig num_univalent_fekete_szego as fekete_szego(a2: Complex, a3: Complex, mu: Complex) -> Result<Float, OpError>
+sig num_univalent_hankel as hankel(coefficients: Tensor<1, Complex>, order: Int, start: Int) -> Result<Complex, OpError>
+sig num_univalent_grunsky_matrix as grunsky_matrix(coefficients: Tensor<1, Complex>, order: Int) -> Result<Tensor<2, Complex>, OpError>
+sig num_univalent_grunsky_check as grunsky_check(matrix: Tensor<2, Complex>, test_vector: Tensor<1, Complex>, tolerance: Float) -> Result<Bool, OpError>
+sig num_univalent_becker as becker(point: Complex, first: Complex, second: Complex) -> Result<Bool, OpError>
+sig num_univalent_loewner_step as loewner_step(point: Complex, driving_angle: Float, step: Float) -> Result<Complex, OpError>
+
+mode ConformalDiagnostics typed
+dynamic num_complex_wirtinger_dz_checked num_complex_wirtinger_dzbar_checked num_complex_cauchy_riemann_checked num_complex_laplacian_checked num_complex_cauchy_riemann_polar_checked num_conformal_numeric_checked num_conformal_scale_rotation_checked num_complex_step_derivative_checked | Use the manifest-generated typed callbacks in Rssn_numerical_callback.
+mode Contour typed
+mode Mcmc typed
+dynamic num_mcmc_metropolis_hastings num_mcmc_random_walk_metropolis num_mcmc_hmc num_mcmc_gibbs num_mcmc_gibbs_with_log_posterior | Use the manifest-generated typed bindings in Rssn_numerical_stats for scoped, normalized callbacks.
+sig num_mcmc_pcg32_new as pcg32(seed: Int, stream: Int) -> Result<Pcg32, OpError>
+sig num_mcmc_pcg32_seeded as seeded(seed: Int) -> Result<Pcg32, OpError>
+sig num_mcmc_pcg32_next_u32 as next_u32(stream: Pcg32) -> Result<Int, OpError>
+sig num_mcmc_pcg32_next_f64 as uniform(stream: Pcg32) -> Result<Float, OpError>
+sig num_mcmc_pcg32_normal as normal(stream: Pcg32) -> Result<Float, OpError>
+sig num_mcmc_split_rhat as split_rhat<d>(chains: Tensor<2, Float[d]>) -> Result<Float, OpError>
+sig num_mcmc_effective_sample_size as effective_sample_size<d>(chain: Tensor<1, Float[d]>) -> Result<Float, OpError>
+sig num_mcmc_autocorrelation as autocorrelation<d>(chain: Tensor<1, Float[d]>, max_lag: Int) -> Result<Tensor<1, Float>, OpError>
+sig num_mcmc_geweke as geweke<d>(chain: Tensor<1, Float[d]>) -> Result<Float, OpError>
+codec Pcg32 pcg32_to_wire pcg32_from_wire
+prelude Mcmc
+| ## Explicit deterministic stream owned by the current RSSN session.
+| type Pcg32 = | Pcg32(Value)
+|
+| fn pcg32_to_wire(stream: Pcg32): Value =
+|     match stream with
+|     | Pcg32(value) -> value
+|
+| fn pcg32_from_wire(value: Value): Result<Pcg32, OpError> = Ok(Pcg32(value))
+|
+| fn release(stream: Pcg32): Result<Bool, OpError> =
+|     match Rssn.dynamic("num_native_release", [pcg32_to_wire(stream)]) with
+|     | Ok(value) -> from_value<Bool>(value)
+|     | Err(error) -> Err(error)
+
+mode SparseExact typed
+sig num_linear_sparse_exact_field_new as field(modulus: Int) -> Result<PrimeField, OpError>
+sig num_linear_sparse_exact_field_prime as modulus(field: PrimeField) -> Result<Int, OpError>
+sig num_linear_sparse_exact_field_reducer as reducer(field: PrimeField) -> Result<ModularBarrett, OpError>
+sig num_linear_sparse_exact_field_add as add(field: PrimeField, left: Int, right: Int) -> Result<Int, OpError>
+sig num_linear_sparse_exact_field_sub as subtract(field: PrimeField, left: Int, right: Int) -> Result<Int, OpError>
+sig num_linear_sparse_exact_field_mul as multiply(field: PrimeField, left: Int, right: Int) -> Result<Int, OpError>
+sig num_linear_sparse_exact_field_pow as power(field: PrimeField, base: Int, exponent: Int) -> Result<Int, OpError>
+sig num_linear_sparse_exact_field_inv as inverse(field: PrimeField, value: Int) -> Result<Option<Int>, OpError>
+sig num_linear_sparse_exact_field_reduce as reduce(field: PrimeField, value: Int) -> Result<Int, OpError>
+sig num_linear_sparse_exact_field_batch_inv as batch_inverse(field: PrimeField, values: Tensor<1, Int>) -> Result<Option<Tensor<1, Int>>, OpError>
+sig num_linear_rational_sparse_from_dense as rational_from_dense(rows: Int, cols: Int, values: Tensor<1, Real>) -> Result<RationalSparse, OpError>
+sig num_linear_rational_sparse_to_dense as rational_to_dense(matrix: RationalSparse) -> Result<RationalDense, OpError>
+sig num_linear_sparse_exact_rational_to_prime as reduce_matrix(matrix: RationalSparse, field: PrimeField) -> Result<MaybePrimeSparse, OpError>
+sig num_linear_sparse_exact_prime_to_dense as prime_to_dense(matrix: PrimeSparse) -> Result<Tensor<2, Int>, OpError>
+sig num_linear_sparse_exact_rcm_plan as rcm_order(matrix: RationalSparse) -> Result<RcmPermutation, OpError>
+sig num_linear_sparse_exact_rational_rref as rational_rref(matrix: RationalSparse) -> Result<RationalRref, OpError>
+sig num_linear_sparse_exact_prime_rref as prime_rref(matrix: PrimeSparse) -> Result<PrimeRref, OpError>
+sig num_linear_sparse_exact_dixon_multi as solve_dixon_multi(matrix: RationalSparse, rhs: Tensor<2, Real>) -> Result<Option<Tensor<2, Real>>, OpError>
+codec PrimeField sparse_exact_field_to_wire sparse_exact_field_from_wire
+codec RationalSparse sparse_exact_rational_to_wire sparse_exact_rational_from_wire
+codec PrimeSparse sparse_exact_prime_to_wire sparse_exact_prime_from_wire
+codec MaybePrimeSparse to_value sparse_exact_maybe_prime_from_wire
+codec RationalRref to_value sparse_exact_rational_rref_from_wire
+codec PrimeRref to_value sparse_exact_prime_rref_from_wire
+
+prelude SparseExact
+| open Rssn_Modular
+|
+| ## A checked prime field with a reusable reduction context.
+| type PrimeField = | PrimeField(Value)
+| type RationalSparse = | RationalSparse(Value)
+| type PrimeSparse = | PrimeSparse(Value)
+| type MaybePrimeSparse = Option<PrimeSparse>
+| type RationalDense = { rows: Int, cols: Int, values: Tensor<1, Real> }
+| type RcmPermutation = { permutation: Tensor<1, Int>, inverse: Tensor<1, Int> }
+| type RationalRref = { matrix: RationalSparse, pivots: Tensor<1, Int> }
+| type PrimeRref = { matrix: PrimeSparse, pivots: Tensor<1, Int> }
+|
+| fn sparse_exact_field_to_wire(field: PrimeField): Value =
+|     match field with
+|     | PrimeField(wire) -> wire
+| fn sparse_exact_field_from_wire(wire: Value): Result<PrimeField, OpError> = Ok(PrimeField(wire))
+| fn sparse_exact_rational_to_wire(matrix: RationalSparse): Value =
+|     match matrix with
+|     | RationalSparse(wire) -> wire
+| fn sparse_exact_rational_from_wire(wire: Value): Result<RationalSparse, OpError> = Ok(RationalSparse(wire))
+| fn sparse_exact_prime_to_wire(matrix: PrimeSparse): Value =
+|     match matrix with
+|     | PrimeSparse(wire) -> wire
+| fn sparse_exact_prime_from_wire(wire: Value): Result<PrimeSparse, OpError> = Ok(PrimeSparse(wire))
+| fn sparse_exact_maybe_prime_from_wire(wire: Value): Result<MaybePrimeSparse, OpError> =
+|     match from_value<Option<Value>>(wire) with
+|     | Ok(Some(matrix)) -> Ok(Some(PrimeSparse(matrix)))
+|     | Ok(None) -> Ok(None)
+|     | Err(failure) -> Err(failure)
+| fn sparse_exact_rational_rref_from_wire(wire: Value): Result<RationalRref, OpError> =
+|     match from_value<{ matrix: Value, pivots: Tensor<1, Int> }>(wire) with
+|     | Ok(result) -> Ok({ matrix = RationalSparse(result.matrix), pivots = result.pivots })
+|     | Err(failure) -> Err(failure)
+| fn sparse_exact_prime_rref_from_wire(wire: Value): Result<PrimeRref, OpError> =
+|     match from_value<{ matrix: Value, pivots: Tensor<1, Int> }>(wire) with
+|     | Ok(result) -> Ok({ matrix = PrimeSparse(result.matrix), pivots = result.pivots })
+|     | Err(failure) -> Err(failure)
+|
+| fn release_field(field: PrimeField): Result<Bool, OpError> =
+|     match Rssn.dynamic("num_native_release", [sparse_exact_field_to_wire(field)]) with
+|     | Ok(wire) -> from_value<Bool>(wire)
+|     | Err(failure) -> Err(failure)
+| fn release_rational(matrix: RationalSparse): Result<Bool, OpError> =
+|     match Rssn.dynamic("num_native_release", [sparse_exact_rational_to_wire(matrix)]) with
+|     | Ok(wire) -> from_value<Bool>(wire)
+|     | Err(failure) -> Err(failure)
+| fn release_prime(matrix: PrimeSparse): Result<Bool, OpError> =
+|     match Rssn.dynamic("num_native_release", [sparse_exact_prime_to_wire(matrix)]) with
+|     | Ok(wire) -> from_value<Bool>(wire)
+|     | Err(failure) -> Err(failure)
+
+mode Optimizer typed
+dynamic num_sqp_solve num_sqp_oracle_objective num_sqp_oracle_gradient num_sqp_oracle_constraints num_sqp_oracle_jacobian num_sqp_oracle_hessian | The domain prelude supplies typed input and result records around the checked callback bridge.
+sig num_sqp_oracle_equality_count as sqp_oracle_equality_count(shape: SqpShape) -> Result<Int, OpError>
+sig num_sqp_oracle_inequality_count as sqp_oracle_inequality_count(shape: SqpShape) -> Result<Int, OpError>
+sig num_analysis_simplex_scaled as simplex<d,e,c>(objective: Tensor<1, Float[e/d]>, constraints: Tensor<2, Float[c/d]>, relations: Tensor<1, String>, values: Tensor<1, Float[c]>, coordinate_reference: Float[d], objective_reference: Float[e], constraint_reference: Float[c]) -> Result<{ status: String, x: Tensor<1, Float[d]>, value: Option<Float[e]>, iterations: Option<Int>, bland_pivots: Option<Int> }, OpError>
+sig num_analysis_simplex_with_scaled as simplex_with_pricing<d,e,c>(objective: Tensor<1, Float[e/d]>, constraints: Tensor<2, Float[c/d]>, relations: Tensor<1, String>, values: Tensor<1, Float[c]>, pricing: String, coordinate_reference: Float[d], objective_reference: Float[e], constraint_reference: Float[c]) -> Result<{ status: String, x: Tensor<1, Float[d]>, value: Option<Float[e]>, iterations: Option<Int>, bland_pivots: Option<Int> }, OpError>
+sig num_analysis_simplex_budgeted as simplex_budgeted<d,e,c>(objective: Tensor<1, Float[e/d]>, constraints: Tensor<2, Float[c/d]>, relations: Tensor<1, String>, values: Tensor<1, Float[c]>, pricing: String, coordinate_reference: Float[d], objective_reference: Float[e], constraint_reference: Float[c], max_pivots: Int) -> Result<{ status: String, x: Tensor<1, Float[d]>, value: Option<Float[e]>, iterations: Option<Int>, bland_pivots: Option<Int> }, OpError>
+sig num_convex_solve_lp as solve_linear_program<d,e,c>(objective: Tensor<1, Float[e/d]>, constraints: Tensor<2, Float[c/d]>, relations: Tensor<1, String>, values: Tensor<1, Float[c]>, coordinate_reference: Float[d], objective_reference: Float[e], constraint_reference: Float[c], lower: Tensor<1, Float[d]>, upper: Tensor<1, Float[d]>, upper_present: Tensor<1, Bool>, max_pivots: Int) -> Result<{ status: String, x: Tensor<1, Float[d]>, value: Option<Float[e]>, iterations: Option<Int>, bland_pivots: Option<Int> }, OpError>
+sig num_native_tape_lower as tape(expressions: Tensor<1, String>, inputs: Tensor<1, String>, parameters: Tensor<1, String>, input_scales: Tensor<1, Float>, parameter_scales: Tensor<1, Float>, output_scales: Tensor<1, Float>) -> Result<ObjectiveTape, OpError>
+sig num_optimizer_problem_new as prepare(tape: ObjectiveTape, output: Int, parameters: Tensor<1, Float>, analytic_gradient: Bool) -> Result<Objective, OpError>
+sig num_optimizer_problem_try_new as prepare_checked(tape: ObjectiveTape, output: Int, parameters: Tensor<1, Float>, analytic_gradient: Bool) -> Result<Objective, OpError>
+sig num_optimizer_has_gradient as has_gradient(problem: Objective) -> Result<Bool, OpError>
+sig num_optimizer_with_bounds as with_bounds(problem: Objective, lower: Tensor<1, Float>, upper: Tensor<1, Float>) -> Result<Objective, OpError>
+sig num_optimizer_value_and_gradient as value_and_gradient(problem: Objective, point: Tensor<1, Float>) -> Result<ObjectiveEvaluation, OpError>
+sig num_optimizer_rosenbrock as rosenbrock(coordinates: Int) -> Result<Objective, OpError>
+sig num_optimizer_rosenbrock_cost as rosenbrock_cost(point: Tensor<1, Float>) -> Result<Float, OpError>
+sig num_optimizer_sphere as sphere(coordinates: Int) -> Result<Objective, OpError>
+sig num_optimizer_sphere_cost as sphere_cost(point: Tensor<1, Float>) -> Result<Float, OpError>
+sig num_optimizer_rastrigin as rastrigin(coordinates: Int) -> Result<Objective, OpError>
+sig num_optimizer_rastrigin_cost as rastrigin_cost(point: Tensor<1, Float>) -> Result<Float, OpError>
+sig num_analysis_linear_regression_new as regression<d, e>(predictors: Tensor<2, Float[d]>, response: Tensor<1, Float[e]>, predictor_reference: Float[d], response_reference: Float[e]) -> Result<RegressionModel, OpError>
+sig num_optimizer_regression_coefficient_count as coefficient_count(model: RegressionModel) -> Result<Int, OpError>
+sig num_optimizer_regression_residuals as residuals<e>(model: RegressionModel, coefficients: Tensor<1, Value>, response_reference: Float[e]) -> Result<Tensor<1, Float[e]>, OpError>
+sig num_optimizer_regression_problem as regression_problem(model: RegressionModel) -> Result<Objective, OpError>
+sig num_optimizer_needs_bounds as needs_bounds(solver: String) -> Result<Bool, OpError>
+sig num_optimizer_needs_gradient as needs_gradient(solver: String) -> Result<Bool, OpError>
+sig num_optimizer_minimize as minimize(problem: Objective, initial: Tensor<1, Float>, solver: String, options: OptimizerOptions) -> Result<OptimizerResult, OpError>
+dynamic num_optimizer_find_root num_optimizer_find_root_with_derivative | Use the manifest-generated typed numerical-vector bindings to pass scoped scalar functions.
+codec ObjectiveTape optimizer_tape_to_wire optimizer_tape_from_wire
+codec Objective optimizer_objective_to_wire optimizer_objective_from_wire
+codec RegressionModel optimizer_regression_to_wire optimizer_regression_from_wire
+
+prelude Optimizer
+| type SqpShape = { equalities: Int, inequalities: Int }
+| type SqpSparseEntries = { rows: Tensor<1, Int>, columns: Tensor<1, Int>, values: Tensor<1, Float> }
+| type SqpEvaluation = { objective: Float, gradient: Tensor<1, Float>, constraints: Tensor<1, Float>, jacobian: SqpSparseEntries }
+| type SqpResult = { x: Tensor<1, Float>, objective: Float, equality_multipliers: Tensor<1, Float>, inequality_multipliers: Tensor<1, Float>, iterations: Int, evaluations: Int, kkt_residual: Float, converged: Bool }
+|
+| fn sqp_solve(initial: Tensor<1, Float>, shape: SqpShape, tolerance: Float, trust_radius: Float, max_iterations: Int, max_evaluations: Int, evaluate: (Tensor<1, Float>) -> SqpEvaluation, hessian: (Tensor<1, Float>, Tensor<1, Float>, Tensor<1, Float>) -> SqpSparseEntries): Result<SqpResult, OpError> =
+|     match Rssn.call_ho("num_sqp_solve", [to_value(initial), to_value(shape), to_value(tolerance), to_value(trust_radius), to_value(max_iterations), to_value(max_evaluations)], [to_callback(evaluate), to_callback(hessian)]) with
+|     | Ok(wire) -> from_value<SqpResult>(wire)
+|     | Err(failure) -> Err(failure)
+| fn sqp_oracle_objective(point: Tensor<1, Float>, shape: SqpShape, evaluate: (Tensor<1, Float>) -> SqpEvaluation): Result<Float, OpError> =
+|     match Rssn.call_ho("num_sqp_oracle_objective", [to_value(point), to_value(shape)], [to_callback(evaluate)]) with
+|     | Ok(wire) -> from_value<Float>(wire)
+|     | Err(failure) -> Err(failure)
+| fn sqp_oracle_gradient(point: Tensor<1, Float>, shape: SqpShape, evaluate: (Tensor<1, Float>) -> SqpEvaluation): Result<Tensor<1, Float>, OpError> =
+|     match Rssn.call_ho("num_sqp_oracle_gradient", [to_value(point), to_value(shape)], [to_callback(evaluate)]) with
+|     | Ok(wire) -> from_value<Tensor<1, Float>>(wire)
+|     | Err(failure) -> Err(failure)
+| fn sqp_oracle_constraints(point: Tensor<1, Float>, shape: SqpShape, evaluate: (Tensor<1, Float>) -> SqpEvaluation): Result<Tensor<1, Float>, OpError> =
+|     match Rssn.call_ho("num_sqp_oracle_constraints", [to_value(point), to_value(shape)], [to_callback(evaluate)]) with
+|     | Ok(wire) -> from_value<Tensor<1, Float>>(wire)
+|     | Err(failure) -> Err(failure)
+| fn sqp_oracle_jacobian(point: Tensor<1, Float>, shape: SqpShape, evaluate: (Tensor<1, Float>) -> SqpEvaluation): Result<SqpSparseEntries, OpError> =
+|     match Rssn.call_ho("num_sqp_oracle_jacobian", [to_value(point), to_value(shape)], [to_callback(evaluate)]) with
+|     | Ok(wire) -> from_value<SqpSparseEntries>(wire)
+|     | Err(failure) -> Err(failure)
+| fn sqp_oracle_hessian(point: Tensor<1, Float>, equality_multipliers: Tensor<1, Float>, inequality_multipliers: Tensor<1, Float>, hessian: (Tensor<1, Float>, Tensor<1, Float>, Tensor<1, Float>) -> SqpSparseEntries): Result<SqpSparseEntries, OpError> =
+|     match Rssn.call_ho("num_sqp_oracle_hessian", [to_value(point), to_value(equality_multipliers), to_value(inequality_multipliers)], [to_callback(hessian)]) with
+|     | Ok(wire) -> from_value<SqpSparseEntries>(wire)
+|     | Err(failure) -> Err(failure)
+|
+| ## Immutable source tape with explicit normalized references.
+| type ObjectiveTape = | ObjectiveTape(Value)
+| type Objective = | Objective(Value)
+| type RegressionModel = | RegressionModel(Value)
+| type ObjectiveEvaluation = { value: Float, gradient: Tensor<1, Float> }
+| type OptimizerOptions = { iterations: Int, evaluations: Int, tolerance: Float, gradient_tolerance: Float, seed: Int }
+| type OptimizerResult = { point: Tensor<1, Float>, cost: Float, iterations: Int, cost_evals: Int, converged: Bool, termination: String }
+|
+| fn optimizer_tape_to_wire(tape: ObjectiveTape): Value =
+|     match tape with
+|     | ObjectiveTape(wire) -> wire
+| fn optimizer_tape_from_wire(wire: Value): Result<ObjectiveTape, OpError> = Ok(ObjectiveTape(wire))
+| fn optimizer_objective_to_wire(problem: Objective): Value =
+|     match problem with
+|     | Objective(wire) -> wire
+| fn optimizer_objective_from_wire(wire: Value): Result<Objective, OpError> = Ok(Objective(wire))
+| fn optimizer_regression_to_wire(model: RegressionModel): Value =
+|     match model with
+|     | RegressionModel(wire) -> wire
+| fn optimizer_regression_from_wire(wire: Value): Result<RegressionModel, OpError> = Ok(RegressionModel(wire))
+|
+| fn optimizer_release(wire: Value): Result<Bool, OpError> =
+|     match Rssn.dynamic("num_native_release", [wire]) with
+|     | Ok(result) -> from_value<Bool>(result)
+|     | Err(failure) -> Err(failure)
+| fn release_tape(tape: ObjectiveTape): Result<Bool, OpError> = optimizer_release(optimizer_tape_to_wire(tape))
+| fn release_objective(problem: Objective): Result<Bool, OpError> = optimizer_release(optimizer_objective_to_wire(problem))
+| fn release_model(model: RegressionModel): Result<Bool, OpError> = optimizer_release(optimizer_regression_to_wire(model))
+
 mode NumberTheory typed
 mode Combinatorics typed
+mode Modular typed
 mode FiniteField typed
+mode ComplexDisk typed
+sig num_csr_transpose as csr_transpose<d>(matrix: CsrMatrix<Float[d]>) -> Result<CsrMatrix<Float[d]>, OpError>
+sig num_csr_matmul_dense as csr_matmul_dense<d,e>(matrix: CsrMatrix<Float[d]>, rhs: Tensor<2, Float[e]>) -> Result<Tensor<2, Float[d*e]>, OpError>
+sig num_csr_matmul_sparse as csr_matmul_sparse<d,e>(left: CsrMatrix<Float[d]>, right: CsrMatrix<Float[e]>) -> Result<CsrMatrix<Float[d*e]>, OpError>
+sig num_csr_lsqr as csr_lsqr<d,e>(matrix: CsrMatrix<Float[d]>, rhs: Tensor<1, Float[e]>, damping: Float[d], tolerance: Float, max_iterations: Int) -> Result<SparseLeastSquares<Float[e/d]>, OpError>
+sig num_qr_thin as qr_thin<d>(matrix: Tensor<2, Float[d]>) -> Result<{ q: Tensor<2, Float>, r: Tensor<2, Float[d]> }, OpError>
+sig num_solve_linear_rows as solve_linear_rows<d, e>(matrix: Tensor<2, Float[d]>, rhs: Tensor<1, Float[e]>) -> Result<Tensor<1, Float[e/d]>, OpError>
+mode Control typed
+codec PreparedStateSpace state_space_to_wire state_space_from_wire
+sig num_control_state_space_new as prepare_state_space(a: Tensor<2, Float>, b: Tensor<2, Float>, c: Tensor<2, Float>, d: Tensor<2, Float>) -> Result<PreparedStateSpace, OpError>
+sig num_control_state_space_continuous as prepare_continuous_state_space(a: Tensor<2, Float>, b: Tensor<2, Float>, c: Tensor<2, Float>, d: Tensor<2, Float>) -> Result<PreparedStateSpace, OpError>
+sig num_control_state_space_discrete as prepare_discrete_state_space(a: Tensor<2, Float>, b: Tensor<2, Float>, c: Tensor<2, Float>, d: Tensor<2, Float>, dt: Float) -> Result<PreparedStateSpace, OpError>
+sig num_control_state_space_poles as state_space_poles(model: PreparedStateSpace) -> Result<Tensor<1, Complex>, OpError>
+sig num_control_state_space_is_stable as state_space_is_stable(model: PreparedStateSpace) -> Result<Bool, OpError>
+sig num_control_state_space_is_controllable as state_space_is_controllable(model: PreparedStateSpace) -> Result<Bool, OpError>
+sig num_control_state_space_is_observable as state_space_is_observable(model: PreparedStateSpace) -> Result<Bool, OpError>
+sig num_control_state_space_simulate_with_dt as simulate_state_space_with_dt(model: PreparedStateSpace, initial: Tensor<1, Float>, inputs: Tensor<2, Float>, dt: Float) -> Result<Tensor<2, Float>, OpError>
 mode Multiprecision typed
 
 # A `sig` is also the overlay's statement that the operator is a pure,
@@ -92,6 +391,255 @@ mode Multiprecision typed
 # `Kernel::call_with_witnesses`. An argument outside an operator's domain comes
 # back from the kernel as the unreduced call (`invmod(6, 15)`); the generated
 # wrapper turns that into `Err(NotReduced(..))`.
+
+# --- ComplexDisk -------------------------------------------------------------
+sig num_complex_disk_new as make<d>(center: Complex[d], radius: Float[d]) -> Result<Tensor<[3], Float[d]>, OpError>
+sig num_complex_disk_point as point<d>(real: Float[d], imag: Float[d]) -> Result<Tensor<[3], Float[d]>, OpError>
+sig num_complex_disk_of as of<d>(center: Complex[d]) -> Result<Tensor<[3], Float[d]>, OpError>
+sig num_complex_disk_zero as zero() -> Result<Tensor<[3], Float>, OpError>
+sig num_complex_disk_one as one() -> Result<Tensor<[3], Float>, OpError>
+sig num_complex_disk_i as imaginary_unit() -> Result<Tensor<[3], Float>, OpError>
+sig num_complex_disk_center as center<d>(disk: Tensor<[3], Float[d]>) -> Result<Complex[d], OpError>
+sig num_complex_disk_radius as radius<d>(disk: Tensor<[3], Float[d]>) -> Result<Float[d], OpError>
+sig num_complex_disk_is_finite as is_finite<d>(disk: Tensor<[3], Float[d]>) -> Result<Bool, OpError>
+sig num_complex_disk_erf as erf(disk: Tensor<[3], Float>) -> Result<Option<Tensor<[3], Float>>, OpError>
+sig num_complex_disk_log_gamma as log_gamma(disk: Tensor<[3], Float>) -> Result<Option<Tensor<[3], Float>>, OpError>
+sig num_complex_disk_gamma as gamma(disk: Tensor<[3], Float>) -> Result<Option<Tensor<[3], Float>>, OpError>
+sig num_complex_disk_bessel_j as bessel_j(disk: Tensor<[3], Float>, order: Float) -> Result<Option<Tensor<[3], Float>>, OpError>
+dynamic num_complex_disk_certify_root num_complex_disk_certify_system num_complex_disk_certify_rouche | Use the manifest-generated typed whole-disk callbacks in Rssn_numerical_callback.
+sig num_complex_disk_modulus_lower as modulus_lower<d>(disk: Tensor<[3], Float[d]>) -> Result<Float[d], OpError>
+sig num_complex_disk_modulus_upper as modulus_upper<d>(disk: Tensor<[3], Float[d]>) -> Result<Float[d], OpError>
+sig num_complex_disk_neg as neg<d>(disk: Tensor<[3], Float[d]>) -> Result<Tensor<[3], Float[d]>, OpError>
+sig num_complex_disk_conj as conj<d>(disk: Tensor<[3], Float[d]>) -> Result<Tensor<[3], Float[d]>, OpError>
+sig num_complex_disk_square as square<d>(disk: Tensor<[3], Float[d]>) -> Result<Tensor<[3], Float[d^2]>, OpError>
+sig num_complex_disk_recip as recip<d>(disk: Tensor<[3], Float[d]>) -> Result<Option<Tensor<[3], Float[1/d]>>, OpError>
+sig num_complex_disk_contains_zero as contains_zero<d>(disk: Tensor<[3], Float[d]>) -> Result<Bool, OpError>
+sig num_complex_disk_contains as contains<d>(disk: Tensor<[3], Float[d]>, point: Complex[d]) -> Result<Bool, OpError>
+sig num_complex_disk_inside_strictly as inside_strictly<d>(a: Tensor<[3], Float[d]>, b: Tensor<[3], Float[d]>) -> Result<Bool, OpError>
+sig num_complex_disk_overlaps as overlaps<d>(a: Tensor<[3], Float[d]>, b: Tensor<[3], Float[d]>) -> Result<Bool, OpError>
+sig num_complex_disk_add as add<d>(a: Tensor<[3], Float[d]>, b: Tensor<[3], Float[d]>) -> Result<Tensor<[3], Float[d]>, OpError>
+sig num_complex_disk_sub as sub<d>(a: Tensor<[3], Float[d]>, b: Tensor<[3], Float[d]>) -> Result<Tensor<[3], Float[d]>, OpError>
+sig num_complex_disk_mul as mul<d,e>(a: Tensor<[3], Float[d]>, b: Tensor<[3], Float[e]>) -> Result<Tensor<[3], Float[d*e]>, OpError>
+sig num_complex_disk_scale as scale<d,e>(disk: Tensor<[3], Float[d]>, scale: Float[e]) -> Result<Tensor<[3], Float[d*e]>, OpError>
+sig num_complex_disk_div as divide<d,e>(numerator: Tensor<[3], Float[d]>, denominator: Tensor<[3], Float[e]>) -> Result<Option<Tensor<[3], Float[d/e]>>, OpError>
+
+prelude ComplexDisk
+| type DiskJet = { value: Tensor<[3], Float>, derivative: Tensor<[3], Float> }
+
+sig num_complex_disk_jet_variable as variable(disk: Tensor<[3], Float>) -> Result<DiskJet, OpError>
+sig num_complex_disk_jet_constant as constant(disk: Tensor<[3], Float>) -> Result<DiskJet, OpError>
+sig num_complex_disk_jet_add as jet_add(a: DiskJet, b: DiskJet) -> Result<DiskJet, OpError>
+sig num_complex_disk_jet_sub as jet_sub(a: DiskJet, b: DiskJet) -> Result<DiskJet, OpError>
+sig num_complex_disk_jet_mul as jet_mul(a: DiskJet, b: DiskJet) -> Result<DiskJet, OpError>
+sig num_complex_disk_jet_div as jet_divide(numerator: DiskJet, denominator: DiskJet) -> Result<Option<DiskJet>, OpError>
+sig num_complex_disk_jet_powi as jet_powi(value: DiskJet, exponent: Int) -> Result<Option<DiskJet>, OpError>
+sig num_complex_disk_matvec as matvec<d,e>(matrix: Tensor<3, Float[d]>, vector: Tensor<2, Float[e]>) -> Result<Tensor<2, Float[d*e]>, OpError>
+sig num_complex_disk_matmul as matmul<d,e>(a: Tensor<3, Float[d]>, b: Tensor<3, Float[e]>) -> Result<Tensor<3, Float[d*e]>, OpError>
+sig num_complex_disk_solve as solve<d,e>(matrix: Tensor<3, Float[d]>, rhs: Tensor<2, Float[e]>) -> Result<Option<Tensor<2, Float[e/d]>>, OpError>
+sig num_complex_disk_jet_exp as jet_exp(value: DiskJet) -> Result<DiskJet, OpError>
+sig num_complex_disk_jet_sin as jet_sin(value: DiskJet) -> Result<DiskJet, OpError>
+sig num_complex_disk_jet_cos as jet_cos(value: DiskJet) -> Result<DiskJet, OpError>
+sig num_complex_disk_jet_sinh as jet_sinh(value: DiskJet) -> Result<DiskJet, OpError>
+sig num_complex_disk_jet_cosh as jet_cosh(value: DiskJet) -> Result<DiskJet, OpError>
+sig num_complex_disk_jet_ln as jet_ln(value: DiskJet) -> Result<Option<DiskJet>, OpError>
+sig num_complex_disk_jet_sqrt as jet_sqrt(value: DiskJet) -> Result<Option<DiskJet>, OpError>
+sig num_complex_disk_jet_tan as jet_tan(value: DiskJet) -> Result<Option<DiskJet>, OpError>
+sig num_complex_disk_jet_tanh as jet_tanh(value: DiskJet) -> Result<Option<DiskJet>, OpError>
+sig num_complex_disk_jet_asin as jet_asin(value: DiskJet) -> Result<Option<DiskJet>, OpError>
+sig num_complex_disk_jet_acos as jet_acos(value: DiskJet) -> Result<Option<DiskJet>, OpError>
+sig num_complex_disk_jet_atan as jet_atan(value: DiskJet) -> Result<Option<DiskJet>, OpError>
+sig num_complex_disk_jet_asinh as jet_asinh(value: DiskJet) -> Result<Option<DiskJet>, OpError>
+sig num_complex_disk_jet_acosh as jet_acosh(value: DiskJet) -> Result<Option<DiskJet>, OpError>
+sig num_complex_disk_jet_atanh as jet_atanh(value: DiskJet) -> Result<Option<DiskJet>, OpError>
+sig num_complex_disk_jet_pow as jet_pow(base: DiskJet, exponent: DiskJet) -> Result<Option<DiskJet>, OpError>
+sig num_complex_disk_sec as sec(disk: Tensor<[3], Float>) -> Result<Option<Tensor<[3], Float>>, OpError>
+sig num_complex_disk_csc as csc(disk: Tensor<[3], Float>) -> Result<Option<Tensor<[3], Float>>, OpError>
+sig num_complex_disk_cot as cot(disk: Tensor<[3], Float>) -> Result<Option<Tensor<[3], Float>>, OpError>
+sig num_complex_disk_sech as sech(disk: Tensor<[3], Float>) -> Result<Option<Tensor<[3], Float>>, OpError>
+sig num_complex_disk_csch as csch(disk: Tensor<[3], Float>) -> Result<Option<Tensor<[3], Float>>, OpError>
+sig num_complex_disk_coth as coth(disk: Tensor<[3], Float>) -> Result<Option<Tensor<[3], Float>>, OpError>
+
+# --- Control ----------------------------------------------------------------
+sig num_control_transfer_new as transfer_new(numerator: Tensor<1, Float>, denominator: Tensor<1, Float>) -> Result<PreparedTransfer, OpError>
+sig num_control_transfer_new_proper as transfer_new_proper(numerator: Tensor<1, Float>, denominator: Tensor<1, Float>) -> Result<PreparedTransfer, OpError>
+sig num_control_transfer_is_proper as is_proper(model: PreparedTransfer) -> Result<Bool, OpError>
+sig num_control_transfer_is_strictly_proper as is_strictly_proper(model: PreparedTransfer) -> Result<Bool, OpError>
+sig num_control_transfer_order as transfer_order(model: PreparedTransfer) -> Result<Int, OpError>
+sig num_control_transfer_is_stable as is_stable(model: PreparedTransfer) -> Result<Bool, OpError>
+sig num_control_transfer_zeros as transfer_zeros(model: PreparedTransfer) -> Result<Tensor<1, Complex>, OpError>
+sig num_control_transfer_evaluate as transfer_evaluate(model: PreparedTransfer, frequency: Complex) -> Result<Complex, OpError>
+sig num_control_transfer_series as series_connection(left: PreparedTransfer, right: PreparedTransfer) -> Result<PreparedTransfer, OpError>
+sig num_control_transfer_parallel as parallel_connection(left: PreparedTransfer, right: PreparedTransfer) -> Result<PreparedTransfer, OpError>
+sig num_control_transfer_feedback as negative_feedback(forward: PreparedTransfer, return_path: PreparedTransfer) -> Result<PreparedTransfer, OpError>
+sig num_control_transfer_gain_margin_phase_margin as transfer_margins(model: PreparedTransfer) -> Result<TransferMargins, OpError>
+sig num_control_transfer_step_response as step_response(model: PreparedTransfer, time: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
+
+sig num_control_pid_response as pid_response(gains: PidGains, plant: PreparedTransfer, time: Tensor<1, Float>, setpoint: Float) -> Result<Tensor<1, Float>, OpError>
+sig num_control_simulate_pid as simulate_pid(gains: PidGains, errors: Tensor<1, Float>, dt: Float, limits: Option<PidLimits>) -> Result<Tensor<1, Float>, OpError>
+sig num_control_era as identify_era(outputs: Tensor<2, Float>, inputs: Tensor<1, Float>, order: Int) -> Result<IdentifiedEra, OpError>
+sig num_control_impulse_response as impulse_response(model: IdentifiedEra, steps: Int) -> Result<Tensor<2, Float>, OpError>
+sig num_control_era_matrices as era_matrices(model: IdentifiedEra) -> Result<EraMatrices, OpError>
+
+sig num_control_mpc_prepare as prepare_mpc(a: Tensor<2, Float>, b: Tensor<2, Float>, dt: Float, options: MpcSettings) -> Result<PreparedMpc, OpError>
+sig num_control_mpc_closed_loop as mpc_closed_loop(plan: PreparedMpc, initial: Tensor<1, Float>, reference: Tensor<1, Float>, steps: Int) -> Result<Tensor<2, Float>, OpError>
+
+codec PreparedTransfer transfer_to_wire transfer_from_wire
+codec IdentifiedEra era_to_wire era_from_wire
+codec PreparedMpc mpc_to_wire mpc_from_wire
+prelude Control
+| ## Normalized linear model whose matrices are owned by the RSSN session.
+| type PreparedStateSpace = | PreparedStateSpace(Value)
+|
+| fn state_space_to_wire(model: PreparedStateSpace): Value =
+|     match model with
+|     | PreparedStateSpace(value) -> value
+|
+| fn state_space_from_wire(value: Value): Result<PreparedStateSpace, OpError> =
+|     Ok(PreparedStateSpace(value))
+|
+| fn release_state_space(model: PreparedStateSpace): Result<Bool, OpError> =
+|     match Rssn.dynamic("num_native_release", [state_space_to_wire(model)]) with
+|     | Ok(value) -> from_value<Bool>(value)
+|     | Err(failure) -> Err(failure)
+|
+| ## Session-owned SISO transfer model with descending normalized coefficients.
+| type PreparedTransfer = | PreparedTransfer(Value)
+|
+| ## Parallel PID coefficients for normalized error and time.
+| type PidGains = { kp: Float, ki: Float, kd: Float, filter_time: Option<Float> }
+|
+| type PidLimits = { low: Float, high: Float }
+|
+| ## Realised discrete model with no direct feedthrough.
+| type IdentifiedEra = | IdentifiedEra(Value)
+|
+| type EraMatrices = { a: Tensor<2, Float>, b: Tensor<2, Float>, c: Tensor<2, Float>, order: Int }
+|
+| fn era_to_wire(model: IdentifiedEra): Value =
+|     match model with
+|     | IdentifiedEra(wire) -> wire
+|
+| fn era_from_wire(wire: Value): Result<IdentifiedEra, OpError> =
+|     Ok(IdentifiedEra(wire))
+|
+| fn release_era(model: IdentifiedEra): Result<Bool, OpError> =
+|     match Rssn.dynamic("num_native_release", [era_to_wire(model)]) with
+|     | Ok(wire) -> from_value<Bool>(wire)
+|     | Err(failure) -> Err(failure)
+|
+| ## Prepared discrete MPC with reusable prediction and constraint matrices.
+| type PreparedMpc = | PreparedMpc(Value)
+|
+| ## Normalized MPC weights, horizons and optional component bounds.
+| type MpcSettings = { horizon: Int, control_horizon: Int, q: Tensor<1, Float>, r: Tensor<1, Float>, u_min: Option<Tensor<1, Float>>, u_max: Option<Tensor<1, Float>>, x_min: Option<Tensor<1, Float>>, x_max: Option<Tensor<1, Float>> }
+|
+| fn mpc_to_wire(plan: PreparedMpc): Value =
+|     match plan with
+|     | PreparedMpc(wire) -> wire
+|
+| fn mpc_from_wire(wire: Value): Result<PreparedMpc, OpError> =
+|     Ok(PreparedMpc(wire))
+|
+| fn release_mpc(plan: PreparedMpc): Result<Bool, OpError> =
+|     match Rssn.dynamic("num_native_release", [mpc_to_wire(plan)]) with
+|     | Ok(wire) -> from_value<Bool>(wire)
+|     | Err(failure) -> Err(failure)
+|
+| ## Missing margins indicate no crossover on the analysis grid.
+| type TransferMargins = { gain_db: Option<Float>, phase_degrees: Option<Float> }
+|
+| fn transfer_to_wire(model: PreparedTransfer): Value =
+|     match model with
+|     | PreparedTransfer(wire) -> wire
+|
+| fn transfer_from_wire(wire: Value): Result<PreparedTransfer, OpError> =
+|     Ok(PreparedTransfer(wire))
+|
+| fn release_transfer(model: PreparedTransfer): Result<Bool, OpError> =
+|     match Rssn.dynamic("num_native_release", [transfer_to_wire(model)]) with
+|     | Ok(wire) -> from_value<Bool>(wire)
+|     | Err(failure) -> Err(failure)
+
+# --- Contour
+dynamic num_contour_integrate_segment num_contour_integrate num_contour_principal_value | Use the manifest-generated typed value-only callbacks for Rust contour compatibility.
+dynamic num_contour_residue_infinity_fixed num_contour_integrate_segment_checked num_contour_integrate_checked num_contour_residue_infinity_checked num_contour_principal_value_checked num_contour_integrate_deformed_checked | Use the manifest-generated typed callback bindings in Rssn_numerical_callback.
+
+sig num_contour_deform_checked as deform<d>(start: Complex[d], end: Complex[d], poles: Tensor<1, Complex[d]>, ray_origins: Tensor<1, Complex[d]>, clearance: Float[d], ray_angles: Tensor<1, Float>) -> Result<{ starts: Tensor<1, Complex[d]>, ends: Tensor<1, Complex[d]>, arc_segments: Tensor<1, Int>, arc_centers: Tensor<1, Complex[d]>, arc_radii: Tensor<1, Float[d]>, theta_start: Tensor<1, Float>, theta_end: Tensor<1, Float>, closed: Bool }, OpError>
+sig num_contour_keyhole as keyhole<d>(branch_point: Complex[d], inner: Float[d], outer: Float[d], cut_angle: Float, gap: Float) -> Result<{ starts: Tensor<1, Complex[d]>, ends: Tensor<1, Complex[d]>, arc_segments: Tensor<1, Int>, arc_centers: Tensor<1, Complex[d]>, arc_radii: Tensor<1, Float[d]>, theta_start: Tensor<1, Float>, theta_end: Tensor<1, Float>, closed: Bool }, OpError>
+sig num_contour_hankel as hankel<d>(inner: Float[d], outer: Float[d], cut_angle: Float, gap: Float) -> Result<{ starts: Tensor<1, Complex[d]>, ends: Tensor<1, Complex[d]>, arc_segments: Tensor<1, Int>, arc_centers: Tensor<1, Complex[d]>, arc_radii: Tensor<1, Float[d]>, theta_start: Tensor<1, Float>, theta_end: Tensor<1, Float>, closed: Bool }, OpError>
+sig num_contour_dogbone as dogbone<d>(a: Complex[d], b: Complex[d], radius: Float[d]) -> Result<{ starts: Tensor<1, Complex[d]>, ends: Tensor<1, Complex[d]>, arc_segments: Tensor<1, Int>, arc_centers: Tensor<1, Complex[d]>, arc_radii: Tensor<1, Float[d]>, theta_start: Tensor<1, Float>, theta_end: Tensor<1, Float>, closed: Bool }, OpError>
+sig num_contour_indented_semicircle as indented_semicircle<d>(radius: Float[d], poles: Tensor<1, Float[d]>, indent: Float[d], upper: Bool) -> Result<{ starts: Tensor<1, Complex[d]>, ends: Tensor<1, Complex[d]>, arc_segments: Tensor<1, Int>, arc_centers: Tensor<1, Complex[d]>, arc_radii: Tensor<1, Float[d]>, theta_start: Tensor<1, Float>, theta_end: Tensor<1, Float>, closed: Bool }, OpError>
+sig num_contour_bromwich as bromwich<d>(c: Float[d], y_max: Float[d]) -> Result<{ starts: Tensor<1, Complex[d]>, ends: Tensor<1, Complex[d]>, arc_segments: Tensor<1, Int>, arc_centers: Tensor<1, Complex[d]>, arc_radii: Tensor<1, Float[d]>, theta_start: Tensor<1, Float>, theta_end: Tensor<1, Float>, closed: Bool }, OpError>
+sig num_contour_rectangle as rectangle<d>(x0: Float[d], x1: Float[d], y0: Float[d], y1: Float[d]) -> Result<{ starts: Tensor<1, Complex[d]>, ends: Tensor<1, Complex[d]>, arc_segments: Tensor<1, Int>, arc_centers: Tensor<1, Complex[d]>, arc_radii: Tensor<1, Float[d]>, theta_start: Tensor<1, Float>, theta_end: Tensor<1, Float>, closed: Bool }, OpError>
+sig num_contour_sector as sector<d>(radius: Float[d], angle: Float) -> Result<{ starts: Tensor<1, Complex[d]>, ends: Tensor<1, Complex[d]>, arc_segments: Tensor<1, Int>, arc_centers: Tensor<1, Complex[d]>, arc_radii: Tensor<1, Float[d]>, theta_start: Tensor<1, Float>, theta_end: Tensor<1, Float>, closed: Bool }, OpError>
+
+# --- Planar meshing
+mode Meshgen typed
+sig num_meshgen_advancing_front_2d as advancing_front<d>(boundary: Tensor<2, Float[d]>, spacing: Float[d], reference: Float[d], max_vertices: Int) -> Result<{ points: Tensor<2, Float[d]>, triangles: Tensor<2, Int> }, OpError>
+sig num_meshgen_constrained_delaunay_2d as constrained_delaunay<d>(points: Tensor<2, Float[d]>, segments: Tensor<2, Int>, reference: Float[d], max_vertices: Int) -> Result<{ points: Tensor<2, Float[d]>, triangles: Tensor<2, Int> }, OpError>
+
+# --- CAD --------------------------------------------------------------------
+mode Cad typed
+sig num_cad_mesh_new as mesh_new(vertices: Tensor<2, Float[Length]>, triangles: Tensor<2, Int>) -> Result<CadMesh, OpError>
+sig num_cad_mesh_arrays as mesh_arrays(mesh: CadMesh) -> Result<CadArrays, OpError>
+sig num_cad_mesh_vertex_count as vertex_count(mesh: CadMesh) -> Result<Int, OpError>
+sig num_cad_mesh_triangle_count as triangle_count(mesh: CadMesh) -> Result<Int, OpError>
+sig num_cad_mesh_is_closed as is_closed(mesh: CadMesh) -> Result<Bool, OpError>
+sig num_cad_mesh_is_manifold as is_manifold(mesh: CadMesh) -> Result<Bool, OpError>
+sig num_cad_mesh_euler_characteristic as euler_characteristic(mesh: CadMesh) -> Result<Int, OpError>
+sig num_cad_mesh_signed_volume as signed_volume(mesh: CadMesh) -> Result<Float[Length^3], OpError>
+sig num_cad_mesh_weld as weld(mesh: CadMesh, tolerance: Float[Length]) -> Result<CadWeld, OpError>
+sig num_cad_mesh_repair as repair(mesh: CadMesh, tolerance: Float[Length]) -> Result<CadRepair, OpError>
+sig num_cad_stl_read as read_stl(bytes: Tensor<1, Int>, unit_length: Float[Length]) -> Result<CadMesh, OpError>
+sig num_cad_stl_read_text as read_stl_text(text: String, unit_length: Float[Length]) -> Result<CadMesh, OpError>
+sig num_cad_stl_write_ascii as write_stl_ascii(mesh: CadMesh, unit_length: Float[Length], name: String) -> Result<String, OpError>
+sig num_cad_stl_write_binary as write_stl_binary(mesh: CadMesh, unit_length: Float[Length]) -> Result<Tensor<1, Int>, OpError>
+
+sig num_cad_mesh_boolean as mesh_boolean(left: CadMesh, right: CadMesh, operation: String) -> Result<CadMesh, OpError>
+sig num_cad_step_read_text as read_step_text(text: String) -> Result<CadSolids, OpError>
+
+codec CadMesh cad_mesh_to_wire cad_mesh_from_wire
+codec CadSolids - cad_solids_from_wire
+codec CadWeld - cad_weld_from_wire
+codec CadRepair - cad_repair_from_wire
+prelude Cad
+| ## Session-owned triangle mesh with coherent length coordinates.
+| type CadMesh = | CadMesh(Value)
+|
+| ## Indexed geometry. Each row of either tensor has three entries.
+| type CadArrays = { vertices: Tensor<2, Float[Length]>, triangles: Tensor<2, Int> }
+|
+| type CadSolids = Tensor<1, CadMesh>
+|
+| type CadWeld = { mesh: CadMesh, merged_vertices: Int }
+| type CadRepair = { mesh: CadMesh, merged_vertices: Int, removed_degenerate: Int, filled_holes: Int, flipped: Int }
+|
+| fn cad_mesh_to_wire(mesh: CadMesh): Value =
+|     match mesh with
+|     | CadMesh(value) -> value
+|
+| fn cad_mesh_from_wire(value: Value): Result<CadMesh, OpError> =
+|     Ok(CadMesh(value))
+|
+| fn cad_solids_from_wire(value: Value): Result<CadSolids, OpError> =
+|     match from_value<Tensor<1, Value>>(value) with
+|     | Ok(parts) -> Ok(map(fn (part: Value) => CadMesh(part), parts))
+|     | Err(failure) -> Err(failure)
+|
+| fn cad_weld_from_wire(value: Value): Result<CadWeld, OpError> =
+|     match from_value<{ mesh: Value, merged_vertices: Int }>(value) with
+|     | Ok(result) -> Ok({ mesh = CadMesh(result.mesh), merged_vertices = result.merged_vertices })
+|     | Err(failure) -> Err(failure)
+|
+| fn cad_repair_from_wire(value: Value): Result<CadRepair, OpError> =
+|     match from_value<{ mesh: Value, merged_vertices: Int, removed_degenerate: Int, filled_holes: Int, flipped: Int }>(value) with
+|     | Ok(result) -> Ok({ mesh = CadMesh(result.mesh), merged_vertices = result.merged_vertices, removed_degenerate = result.removed_degenerate, filled_holes = result.filled_holes, flipped = result.flipped })
+|     | Err(failure) -> Err(failure)
+|
+| fn release_mesh(mesh: CadMesh): Result<Bool, OpError> =
+|     match Rssn.dynamic("num_native_release", [cad_mesh_to_wire(mesh)]) with
+|     | Ok(value) -> from_value<Bool>(value)
+|     | Err(failure) -> Err(failure)
 
 # --- NumberTheory -----------------------------------------------------------
 sig num_number_exact_bigint_crt_garner as crt_garner_u64(residues: Tensor<1, Int>, moduli: Tensor<1, Int>) -> Result<Option<Int>, OpError>
@@ -224,8 +772,55 @@ sig num_finite_field_slice_sub_mod as vector_sub_mod(a: Tensor<1, Int>, b: Tenso
 sig num_finite_field_slice_scale_mod as vector_scale_mod(values: Tensor<1, Int>, scalar: Int, m: Int) -> Result<Tensor<1, Int>, OpError>
 sig num_finite_field_slice_axpy_mod as vector_axpy_mod(alpha: Int, x: Tensor<1, Int>, y: Tensor<1, Int>, m: Int) -> Result<Tensor<1, Int>, OpError>
 sig num_finite_field_dot_mod as vector_dot_mod(a: Tensor<1, Int>, b: Tensor<1, Int>, m: Int) -> Result<Int, OpError>
+sig num_modular_montgomery_new as montgomery_new(modulus: Int) -> Result<ModularMontgomery, OpError>
+sig num_modular_montgomery_new_prime as montgomery_new_prime(modulus: Int) -> Result<ModularMontgomery, OpError>
+sig num_modular_montgomery_modulus as montgomery_modulus(plan: ModularMontgomery) -> Result<Int, OpError>
+sig num_modular_montgomery_n_prime as montgomery_n_prime(plan: ModularMontgomery) -> Result<Int, OpError>
+sig num_modular_montgomery_r_mod as montgomery_r_mod(plan: ModularMontgomery) -> Result<Int, OpError>
+sig num_modular_montgomery_r2_mod as montgomery_r2_mod(plan: ModularMontgomery) -> Result<Int, OpError>
+sig num_modular_montgomery_one as montgomery_one(plan: ModularMontgomery) -> Result<Int, OpError>
+sig num_modular_montgomery_one_mont as montgomery_one_mont(plan: ModularMontgomery) -> Result<Int, OpError>
+sig num_modular_montgomery_redc as montgomery_redc(plan: ModularMontgomery, value: Int) -> Result<Int, OpError>
+sig num_modular_montgomery_to_mont as montgomery_to_mont(plan: ModularMontgomery, value: Int) -> Result<Int, OpError>
+sig num_modular_montgomery_to_mont_u128 as montgomery_to_mont_u128(plan: ModularMontgomery, value: Int) -> Result<Int, OpError>
+sig num_modular_montgomery_from_mont as montgomery_from_mont(plan: ModularMontgomery, value: Int) -> Result<Int, OpError>
+sig num_modular_montgomery_add_mont as montgomery_add_mont(plan: ModularMontgomery, a: Int, b: Int) -> Result<Int, OpError>
+sig num_modular_montgomery_sub_mont as montgomery_sub_mont(plan: ModularMontgomery, a: Int, b: Int) -> Result<Int, OpError>
+sig num_modular_montgomery_neg_mont as montgomery_neg_mont(plan: ModularMontgomery, value: Int) -> Result<Int, OpError>
+sig num_modular_montgomery_mul_mont as montgomery_mul_mont(plan: ModularMontgomery, a: Int, b: Int) -> Result<Int, OpError>
+sig num_modular_montgomery_fma_mont as montgomery_fma_mont(plan: ModularMontgomery, a: Int, b: Int, accumulator: Int) -> Result<Int, OpError>
+sig num_modular_montgomery_half as montgomery_half(plan: ModularMontgomery, value: Int) -> Result<Int, OpError>
+sig num_modular_montgomery_pow_mont as montgomery_pow_mont(plan: ModularMontgomery, base: Int, exponent: Int) -> Result<Int, OpError>
+sig num_modular_montgomery_add as montgomery_add(plan: ModularMontgomery, a: Int, b: Int) -> Result<Int, OpError>
+sig num_modular_montgomery_sub as montgomery_sub(plan: ModularMontgomery, a: Int, b: Int) -> Result<Int, OpError>
+sig num_modular_montgomery_neg as montgomery_neg(plan: ModularMontgomery, value: Int) -> Result<Int, OpError>
+sig num_modular_montgomery_mul as montgomery_mul(plan: ModularMontgomery, a: Int, b: Int) -> Result<Int, OpError>
+sig num_modular_montgomery_pow as montgomery_pow(plan: ModularMontgomery, base: Int, exponent: Int) -> Result<Int, OpError>
+sig num_modular_montgomery_inv as montgomery_inv(plan: ModularMontgomery, value: Int) -> Result<Option<Int>, OpError>
+sig num_modular_montgomery_div as montgomery_div(plan: ModularMontgomery, numerator: Int, denominator: Int) -> Result<Option<Int>, OpError>
+sig num_modular_barrett_new as barrett_new(modulus: Int) -> Result<ModularBarrett, OpError>
+sig num_modular_barrett_new_prime as barrett_new_prime(modulus: Int) -> Result<ModularBarrett, OpError>
+sig num_modular_barrett_modulus as barrett_modulus(plan: ModularBarrett) -> Result<Int, OpError>
+sig num_modular_barrett_mu as barrett_mu(plan: ModularBarrett) -> Result<Int, OpError>
+sig num_modular_barrett_reduce_u64 as barrett_reduce_u64(plan: ModularBarrett, value: Int) -> Result<Int, OpError>
+sig num_modular_barrett_reduce_u128 as barrett_reduce_u128(plan: ModularBarrett, value: Int) -> Result<Int, OpError>
+sig num_modular_barrett_add as barrett_add(plan: ModularBarrett, a: Int, b: Int) -> Result<Int, OpError>
+sig num_modular_barrett_sub as barrett_sub(plan: ModularBarrett, a: Int, b: Int) -> Result<Int, OpError>
+sig num_modular_barrett_neg as barrett_neg(plan: ModularBarrett, value: Int) -> Result<Int, OpError>
+sig num_modular_barrett_mul as barrett_mul(plan: ModularBarrett, a: Int, b: Int) -> Result<Int, OpError>
+sig num_modular_barrett_pow as barrett_pow(plan: ModularBarrett, base: Int, exponent: Int) -> Result<Int, OpError>
+sig num_modular_barrett_inv as barrett_inv(plan: ModularBarrett, value: Int) -> Result<Option<Int>, OpError>
+sig num_modular_barrett_div as barrett_div(plan: ModularBarrett, numerator: Int, denominator: Int) -> Result<Option<Int>, OpError>
+
 sig num_finite_field_primitive_root_prime as primitive_root_prime(p: Int) -> Result<Int, OpError>
 sig num_finite_field_poly_mul_ntt_mod as poly_mul_ntt_mod(a: Tensor<1, Int>, b: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig num_finite_field_ntt_plan as ntt_plan(modulus: Int, length: Int) -> Result<PrimeNttPlan, OpError>
+sig num_finite_field_ntt_transform as ntt_transform(values: Tensor<1, Int>, plan: PrimeNttPlan, inverse: Bool) -> Result<Tensor<1, Int>, OpError>
+
+prelude FiniteField
+| ## A portable description of a validated transform plan.
+| type PrimeNttPlan = { modulus: Int, length: Int }
+
 sig gf_add(a: Int, b: Int, p: Int) -> Result<Int, OpError>
 sig gf_sub(a: Int, b: Int, p: Int) -> Result<Int, OpError>
 sig gf_mul(a: Int, b: Int, p: Int) -> Result<Int, OpError>
@@ -272,6 +867,22 @@ dynamic gf256_poly_divmod gfp_divmod gfp_egcd gfp_squarefree gfp_factor gfp_ddf 
 dynamic gfp_norm | contract not yet pinned down by a test; typed once its normalisation convention is documented in the kernel
 dynamic factor_mod is_irreducible_mod | the three-argument form (polynomial, prime, variable-or-flag) is not the coefficient-tensor API of gfp_*; left dynamic until its argument contract is documented
 
+# --- Complex polynomial roots -------------------------------------------------
+mode ComplexPolynomial typed
+
+mode ComplexRootContours typed
+
+mode Saddle typed
+
+dynamic num_saddle_find num_saddle_leading num_saddle_order2 num_saddle_integrate | Use the manifest-generated typed saddle callbacks in Rssn_numerical_callback.
+
+dynamic num_complex_root_circle_moments num_complex_root_circle_winding num_complex_root_circle_rouche_samples num_complex_root_muller num_complex_root_halley num_complex_root_homotopy num_complex_root_delves_lyness | Use the manifest-generated typed callbacks in Rssn_numerical_callback.
+
+sig num_complex_polynomial_durand_kerner as durand_kerner(coefficients: Tensor<1, Complex>, max_steps: Int, tolerance: Float) -> Result<{ roots: Tensor<1, Complex>, backward_errors: Tensor<1, Float>, coefficient_error: Float, degree: Int }, OpError>
+sig num_complex_polynomial_aberth_ehrlich as aberth_ehrlich(coefficients: Tensor<1, Complex>, max_steps: Int, tolerance: Float) -> Result<{ roots: Tensor<1, Complex>, backward_errors: Tensor<1, Float>, coefficient_error: Float, degree: Int }, OpError>
+sig num_complex_polynomial_laguerre as laguerre(coefficients: Tensor<1, Complex>, seed: Complex, max_steps: Int, tolerance: Float) -> Result<Option<{ root: Complex, backward_error: Float }>, OpError>
+sig num_complex_polynomial_isolate_verified as isolate_verified(coefficients: Tensor<1, Complex>, tolerance: Float) -> Result<{ disks: Tensor<2, Float>, complete: Bool, degree: Int }, OpError>
+
 # --- Numeric ----------------------------------------------------------------
 # The Numeric domain is not `typed`: an operator without a line here is still
 # generated, as a dynamic wrapper. The operators below take plain numbers and
@@ -293,6 +904,53 @@ sig num_native_qlinalg_solve_mat as exact_solve_matrix(matrix: ExactMatrix, rhs:
 sig num_native_qlinalg_solve_unique as exact_solve_unique(matrix: ExactMatrix, rhs: Tensor<1, Real>) -> Result<Option<Tensor<1, Real>>, OpError>
 
 # Robust statistics.
+# Finite-domain GLM link and variance functions.
+mode Statrs typed
+codec StatrsDistribution statrs_distribution_to_wire statrs_distribution_from_wire
+
+sig num_statrs_distribution_new as prepare(name: String, parameters: Tensor<1, Float>) -> Result<StatrsDistribution, OpError>
+sig num_statrs_distribution_pdf as pdf(distribution: StatrsDistribution, x: Float) -> Result<Float, OpError>
+sig num_statrs_distribution_cdf as cdf(distribution: StatrsDistribution, x: Float) -> Result<Float, OpError>
+sig num_statrs_distribution_sf as sf(distribution: StatrsDistribution, x: Float) -> Result<Float, OpError>
+sig num_statrs_distribution_mean as mean(distribution: StatrsDistribution) -> Result<Float, OpError>
+sig num_statrs_distribution_variance as variance(distribution: StatrsDistribution) -> Result<Float, OpError>
+sig num_statrs_distribution_entropy as entropy(distribution: StatrsDistribution) -> Result<Float, OpError>
+sig num_statrs_distribution_is_discrete as is_discrete(distribution: StatrsDistribution) -> Result<Bool, OpError>
+sig num_statrs_distribution_is_signed_discrete as is_signed_discrete(distribution: StatrsDistribution) -> Result<Bool, OpError>
+
+prelude Statrs
+| ## A distribution prepared in the current RSSN session.
+| type StatrsDistribution = | StatrsDistribution(Value)
+|
+| fn statrs_distribution_to_wire(distribution: StatrsDistribution): Value =
+|     match distribution with
+|     | StatrsDistribution(value) -> value
+|
+| fn statrs_distribution_from_wire(value: Value): Result<StatrsDistribution, OpError> =
+|     Ok(StatrsDistribution(value))
+|
+| fn release_distribution(distribution: StatrsDistribution): Result<Bool, OpError> =
+|     match Rssn.dynamic("num_native_release", [statrs_distribution_to_wire(distribution)]) with
+|     | Ok(value) -> from_value<Bool>(value)
+|     | Err(failure) -> Err(failure)
+
+prelude Statistics
+| ## Portable fitted GLM diagnostics. Coefficients place the intercept first.
+| type GlmFit = { beta: Tensor<1, Float>, se: Tensor<1, Float>, deviance: Float, null_deviance: Float, iterations: Int, converged: Bool, aic: Float, dispersion: Float, fitted: Tensor<1, Float> }
+| type GlmModel = { estimation: GlmFit, link: String }
+| type CoxFit = { beta: Tensor<1, Float>, se: Tensor<1, Float>, z: Tensor<1, Float>, p: Tensor<1, Float>, loglik: Float, iterations: Int, converged: Bool, concordance: Float }
+| type KaplanMeier<t> = { times: Tensor<1, t>, at_risk: Tensor<1, Int>, events: Tensor<1, Int>, survival: Tensor<1, Float>, variance: Tensor<1, Float>, lower: Tensor<1, Float>, upper: Tensor<1, Float> }
+
+sig num_survival_fit_cox as fit_cox<d>(time: Tensor<1, Float[d]>, event: Tensor<1, Bool>, covariates: Tensor<2, Float>, ties: String, max_iterations: Int, tolerance: Float) -> Result<CoxFit, OpError>
+sig num_survival_predict_cox as predict_cox(fit: CoxFit, covariates: Tensor<2, Float>) -> Result<Tensor<1, Float>, OpError>
+sig num_survival_kaplan_meier as kaplan_meier<d>(time: Tensor<1, Float[d]>, event: Tensor<1, Bool>, confidence: Float) -> Result<KaplanMeier<Float[d]>, OpError>
+sig num_survival_median as median_survival<d>(curve: KaplanMeier<Float[d]>) -> Result<Option<Float[d]>, OpError>
+sig num_glm_fit as fit_glm(rows: Tensor<2, Float>, observed: Tensor<1, Float>, family: String, link: String, weights: Option<Tensor<1, Float>>, max_iterations: Int, tolerance: Float) -> Result<GlmModel, OpError>
+sig num_glm_predict as predict_glm(model: GlmModel, rows: Tensor<2, Float>) -> Result<Tensor<1, Float>, OpError>
+sig num_glm_link as glm_link(name: String, mean: Float) -> Result<Float, OpError>
+sig num_glm_inverse_link as glm_inverse_link(name: String, predictor: Float) -> Result<Float, OpError>
+sig num_glm_link_derivative as glm_link_derivative(name: String, mean: Float) -> Result<Float, OpError>
+sig num_glm_variance as glm_variance(name: String, mean: Float) -> Result<Float, OpError>
 sig mad(xs: Tensor<1, Float>) -> Result<Float, OpError>
 sig mad_sigma(xs: Tensor<1, Float>) -> Result<Float, OpError>
 sig trimmed_mean(xs: Tensor<1, Float>, proportion: Float) -> Result<Float, OpError>
@@ -346,12 +1004,89 @@ sig num_uhp_to_disk as uhp_to_disk(point: Complex) -> Result<Complex, OpError>
 sig num_disk_to_uhp as disk_to_uhp(point: Complex) -> Result<Complex, OpError>
 sig num_uhp_distance as uhp_distance(first: Complex, second: Complex) -> Result<Float, OpError>
 sig num_poincare_disk_distance as poincare_disk_distance(first: Complex, second: Complex) -> Result<Float, OpError>
+sig num_complex_coords_to_polar as to_polar<d>(point: Complex[d]) -> Result<{ radius: Float[d], angle: Float }, OpError>
+sig num_complex_coords_from_polar as from_polar<d>(radius: Float[d], angle: Float) -> Result<Complex[d], OpError>
+sig num_complex_coords_abs_sq as complex_abs_squared<d>(point: Complex[d]) -> Result<Float[d^2], OpError>
+sig num_complex_coords_sign as complex_sign<d>(point: Complex[d]) -> Result<Complex, OpError>
+sig num_complex_coords_unwrap_phase as unwrap_phase<d>(samples: Tensor<1, Complex[d]>) -> Result<Tensor<1, Float>, OpError>
+sig num_complex_coords_continue_root as continue_complex_root(points: Tensor<1, Complex>, degree: Int, initial_branch: Int) -> Result<Tensor<1, Complex>, OpError>
+sig num_complex_coords_cis as cis(theta: Float) -> Result<Complex, OpError>
+sig num_complex_coords_to_riemann_sphere as riemann_sphere_project(point: Complex) -> Result<RiemannSpherePoint, OpError>
+sig num_complex_coords_from_riemann_sphere as riemann_sphere_unproject(x: Float, y: Float, z: Float) -> Result<Option<Complex>, OpError>
+sig num_complex_coords_chordal_distance as chordal_distance(first: Complex, second: Complex) -> Result<Float, OpError>
+sig num_complex_coords_spherical_metric_factor as spherical_metric_factor(point: Complex) -> Result<Float, OpError>
+sig num_complex_surface_hyperelliptic as hyperelliptic_covering(roots: Tensor<1, Complex>) -> Result<{ degree: Int, branch_points: Tensor<1, Complex>, has_branch_at_infinity: Bool, ramification_indices: { offsets: Tensor<1, Int>, indices: Tensor<1, Int> }, monodromy_generators: { offsets: Tensor<1, Int>, indices: Tensor<1, Int> }, genus: Int }, OpError>
+sig num_complex_surface_superelliptic as superelliptic_covering(roots: Tensor<1, Complex>, degree: Int) -> Result<{ degree: Int, branch_points: Tensor<1, Complex>, has_branch_at_infinity: Bool, ramification_indices: { offsets: Tensor<1, Int>, indices: Tensor<1, Int> }, monodromy_generators: { offsets: Tensor<1, Int>, indices: Tensor<1, Int> }, genus: Int }, OpError>
+sig num_complex_surface_monodromy_checked as monodromy(coefficients: Tensor<2, Complex>, path: Tensor<1, Complex>, subdivisions: Int) -> Result<Tensor<1, Int>, OpError>
+sig num_conformal_cross_ratio as cross_ratio(z1: Complex, z2: Complex, z3: Complex, z4: Complex) -> Result<Complex, OpError>
+sig num_real_polynomial_barycentric_eval as barycentric_interpolate<d, e>(nodes: Tensor<1, Float[d]>, values: Tensor<1, Float[e]>, query: Float[d]) -> Result<Float[e], OpError>
+sig num_real_polynomial_power as polynomial_power(coefficients: Tensor<1, Float>, exponent: Int) -> Result<Tensor<1, Float>, OpError>
+sig num_real_polynomial_gcd as polynomial_gcd(left: Tensor<1, Float>, right: Tensor<1, Float>, relative_tolerance: Float) -> Result<Tensor<1, Float>, OpError>
+sig num_special_complex_legendre_p as complex_legendre_p(degree: Int, z: Complex) -> Result<Complex, OpError>
+sig num_special_complex_associated_legendre_p as complex_associated_legendre_p(degree: Int, order: Int, z: Complex) -> Result<Complex, OpError>
+sig num_special_complex_chebyshev_t as complex_chebyshev_t(degree: Int, z: Complex) -> Result<Complex, OpError>
+sig num_special_complex_chebyshev_u as complex_chebyshev_u(degree: Int, z: Complex) -> Result<Complex, OpError>
+sig num_special_complex_hermite_h as complex_hermite_h(degree: Int, z: Complex) -> Result<Complex, OpError>
+sig num_special_complex_laguerre_l as complex_laguerre_l(degree: Int, alpha: Complex, z: Complex) -> Result<Complex, OpError>
+sig num_special_complex_jacobi_p as complex_jacobi_p(degree: Int, alpha: Complex, beta: Complex, z: Complex) -> Result<Complex, OpError>
+sig num_special_complex_gegenbauer_c as complex_gegenbauer_c(degree: Int, lambda: Complex, z: Complex) -> Result<Complex, OpError>
+sig num_special_complex_spherical_harmonic as complex_spherical_harmonic(degree: Int, order: Int, theta: Complex, phi: Complex) -> Result<Complex, OpError>
+sig num_special_complex_bernoulli as complex_bernoulli(degree: Int, z: Complex) -> Result<Complex, OpError>
+sig num_special_complex_euler as complex_euler(degree: Int, z: Complex) -> Result<Complex, OpError>
+sig num_special_complex_clausen as complex_clausen(order: Int, z: Complex) -> Result<Complex, OpError>
+sig num_special_complex_log_barnes_g as complex_log_barnes_g(z: Complex) -> Result<Complex, OpError>
+sig num_special_complex_fresnel_auxiliary as complex_fresnel_auxiliary(z: Complex) -> Result<{ f: Complex, g: Complex }, OpError>
+sig num_special_complex_bessel_j_order as complex_bessel_j_order(order: Complex, z: Complex) -> Result<Complex, OpError>
+sig num_special_complex_bessel_i_order as complex_bessel_i_order(order: Complex, z: Complex) -> Result<Complex, OpError>
+sig num_special_complex_anger_j as complex_anger_j(order: Float, z: Complex) -> Result<Complex, OpError>
+sig num_special_complex_weber_e as complex_weber_e(order: Float, z: Complex) -> Result<Complex, OpError>
+sig num_special_complex_kelvin as complex_kelvin(order: Float, z: Complex) -> Result<{ ber: Complex, bei: Complex, ker: Complex, kei: Complex }, OpError>
+sig num_special_complex_exp_integral_en as complex_exp_integral_en(order: Int, z: Complex) -> Result<Complex, OpError>
+sig num_special_complex_legendre_q as complex_legendre_q(degree: Int, z: Complex) -> Result<Complex, OpError>
+sig num_conformal_joukowsky as joukowsky(point: Complex) -> Result<Complex, OpError>
+sig num_conformal_joukowsky_inverse as joukowsky_inverse(point: Complex) -> Result<JoukowskyBranches, OpError>
+sig num_conformal_karman_trefftz as karman_trefftz(point: Complex, exponent: Float) -> Result<Complex, OpError>
+sig num_conformal_koebe_map as koebe_map(point: Complex) -> Result<Complex, OpError>
+sig num_conformal_cayley_transform as cayley_transform(point: Complex) -> Result<Complex, OpError>
+sig num_conformal_disk_automorphism as disk_automorphism(alpha: Complex, theta: Float) -> Result<{ a: Complex, b: Complex, c: Complex, d: Complex }, OpError>
+sig num_conformal_mobius_three_points as mobius_three_points(z1: Complex, z2: Complex, z3: Complex, w1: Complex, w2: Complex, w3: Complex) -> Result<{ a: Complex, b: Complex, c: Complex, d: Complex }, OpError>
+sig num_conformal_classify_mobius as classify_mobius(map: { a: Complex, b: Complex, c: Complex, d: Complex }) -> Result<String, OpError>
+sig num_conformal_mobius_fixed_points as mobius_fixed_points(map: { a: Complex, b: Complex, c: Complex, d: Complex }) -> Result<{ points: Tensor<1, Complex>, all: Bool }, OpError>
+sig num_conformal_bergman_polynomial_basis as bergman_polynomial_basis(basis: Tensor<2, Complex>, z: Complex, w: Complex) -> Result<Complex, OpError>
+sig num_conformal_schwarz_christoffel_solve as schwarz_christoffel_solve(vertices: Tensor<1, Complex>, max_iterations: Int, tolerance: Float) -> Result<{ prevertices: Tensor<1, Float>, interior_angles_pi: Tensor<1, Float>, scale: Complex, shift: Complex }, OpError>
+sig num_conformal_schwarz_christoffel_evaluate as schwarz_christoffel_evaluate(map: { prevertices: Tensor<1, Float>, interior_angles_pi: Tensor<1, Float>, scale: Complex, shift: Complex }, point: Complex, tolerance: Float, panels: Int) -> Result<{ value: Complex, error: Float, evaluations: Int, converged: Bool }, OpError>
+sig num_conformal_szego_prepare_sampled as szego_prepare_sampled(points: Tensor<1, Complex>, derivatives: Tensor<1, Complex>, center: Complex) -> Result<{ points: Tensor<1, Complex>, weights: Tensor<1, Complex>, center: Complex }, OpError>
+sig num_conformal_szego_evaluate as szego_evaluate(model: { points: Tensor<1, Complex>, weights: Tensor<1, Complex>, center: Complex }, point: Complex) -> Result<Complex, OpError>
+sig num_conformal_szego_evaluate_map as szego_evaluate_map(model: { points: Tensor<1, Complex>, weights: Tensor<1, Complex>, center: Complex }, point: Complex) -> Result<{ mapped: Complex, szego: Complex }, OpError>
+sig num_conformal_szego_evaluate_bergman as szego_evaluate_bergman(model: { points: Tensor<1, Complex>, weights: Tensor<1, Complex>, center: Complex }, point: Complex) -> Result<Complex, OpError>
+sig num_conformal_bergman_kernel_disk as bergman_kernel_disk(z: Complex, w: Complex) -> Result<Complex, OpError>
+sig num_special_complex_carlson_rf as complex_carlson_rf(x: Complex, y: Complex, z: Complex) -> Result<Complex, OpError>
+sig num_special_complex_carlson_rc as complex_carlson_rc(x: Complex, y: Complex) -> Result<Complex, OpError>
+sig num_special_complex_carlson_rd as complex_carlson_rd(x: Complex, y: Complex, z: Complex) -> Result<Complex, OpError>
+sig num_special_complex_carlson_rg as complex_carlson_rg(x: Complex, y: Complex, z: Complex) -> Result<Complex, OpError>
+sig num_special_complex_carlson_rj as complex_carlson_rj(x: Complex, y: Complex, z: Complex, p: Complex) -> Result<Complex, OpError>
 sig num_weierstrass_p_prime_complex as weierstrass_p_prime(point: Complex, omega1: Complex, omega2: Complex) -> Result<Complex, OpError>
 sig num_weierstrass_invariants_complex as weierstrass_invariants(omega1: Complex, omega2: Complex) -> Result<WeierstrassInvariants, OpError>
+sig num_weierstrass_sigma_complex as weierstrass_sigma(point: Complex, omega1: Complex, omega2: Complex) -> Result<Complex, OpError>
+sig num_weierstrass_zeta_complex as weierstrass_zeta(point: Complex, omega1: Complex, omega2: Complex) -> Result<Complex, OpError>
+sig num_weierstrass_modular_discriminant_complex as complex_modular_discriminant(tau: Complex) -> Result<Complex, OpError>
+sig num_continuation_pade as pade_complex(coefficients: Tensor<1, Complex>, m: Int, n: Int) -> Result<ComplexPade, OpError>
+sig num_continuation_eval_pade as eval_pade_complex(pade: ComplexPade, point: Complex) -> Result<Complex, OpError>
+sig num_continuation_wynn as wynn_epsilon_complex(partial_sums: Tensor<1, Complex>) -> Result<Complex, OpError>
+sig num_continuation_recenter as recenter_taylor_complex(coefficients: Tensor<1, Complex>, centers: Tensor<1, Complex>) -> Result<Tensor<1, Complex>, OpError>
+sig num_continuation_holonomic_order as holonomic_order(coefficients: Tensor<2, Complex>) -> Result<Int, OpError>
+sig num_continuation_holonomic_follow as continue_holonomic(coefficients: Tensor<2, Complex>, path: Tensor<1, Complex>, initial: Tensor<1, Complex>, taylor_order: Int) -> Result<Tensor<1, Complex>, OpError>
+sig num_continuation_holonomic_monodromy as holonomic_monodromy(coefficients: Tensor<2, Complex>, path: Tensor<1, Complex>, taylor_order: Int) -> Result<Tensor<2, Complex>, OpError>
+sig num_continuation_borel_pade as borel_pade_complex(coefficients: Tensor<1, Complex>, point: Complex, numerator_order: Int, denominator_order: Int) -> Result<Complex, OpError>
 
 # Checked division on exact dyadic data.
 sig num_mp_real_div as dyadic_div(numerator: Dyadic, denominator: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
 sig num_mp_ball_div as dyadic_ball_div(numerator: DyadicBall, denominator: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+# Configurable branch cuts use a real angle in radians.
+sig num_complex_coords_arg_branch as arg_branch(z: Complex, theta0: Float) -> Result<Float, OpError>
+sig num_complex_coords_log_cut as log_cut(z: Complex, theta0: Float) -> Result<Complex, OpError>
+sig num_complex_coords_sqrt_cut as sqrt_cut<d>(z: Complex[d], theta0: Float) -> Result<Complex[d^(1/2)], OpError>
+sig num_complex_coords_pow_cut as pow_cut(z: Complex, w: Complex, theta0: Float) -> Result<Complex, OpError>
 # Complex special functions: arguments are (re, im), results are [re, im].
 sig lgamma_complex(re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
 sig gamma_complex(re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
@@ -528,8 +1263,17 @@ sig cp_dense as cp_dense_4(weights: Tensor<1, Float>, factors: Tensor<1, Tensor<
 # wrappers. Keep it to types and codecs: the arithmetic belongs to the kernel.
 # ---------------------------------------------------------------------------
 prelude Special
+| ## Cartesian coordinates on the unit Riemann sphere.
+| type RiemannSpherePoint = { x: Float, y: Float, z: Float }
+|
+| ## Inverse Joukowsky branches ordered by the principal square root.
+| type JoukowskyBranches = { plus: Complex, minus: Complex }
+|
 | ## Lattice invariants for the chosen pair of Weierstrass half-periods.
 | type WeierstrassInvariants = { g2: Complex, g3: Complex }
+|
+| ## Normalized Padé numerator and denominator in ascending coefficient order.
+| type ComplexPade = { numerator: Tensor<1, Complex>, denominator: Tensor<1, Complex> }
 |
 | ## A binary real with value mantissa * 2^exponent and precision in bits.
 | type Dyadic = { mantissa: Int, exponent: Int, precision: Int }
@@ -561,6 +1305,40 @@ prelude Combinatorics
 |     | Err(e) -> Err(e)
 |
 
+# --- Complex dynamics -------------------------------------------------------
+mode ComplexDynamics typed
+
+dynamic num_complex_dynamics_newton_basin_checked num_complex_dynamics_koenigs_checked | Call the manifest-generated typed bindings in Rssn_numerical_callback for measured maps and derivatives.
+
+sig num_complex_dynamics_mandelbrot_escape as mandelbrot_escape(c: Complex, max_steps: Int, radius: Float) -> Result<{ steps: Int, escaped: Bool, potential: Option<Float> }, OpError>
+sig num_complex_dynamics_julia_escape as julia_escape(initial: Complex, c: Complex, max_steps: Int, radius: Float) -> Result<{ steps: Int, escaped: Bool, potential: Option<Float> }, OpError>
+sig num_complex_dynamics_in_main_components as in_main_components(c: Complex) -> Result<Bool, OpError>
+sig num_complex_dynamics_mandelbrot_distance as mandelbrot_distance(c: Complex, max_steps: Int) -> Result<Option<Float>, OpError>
+sig num_complex_dynamics_quadratic_periodic_points as quadratic_periodic_points(c: Complex, period: Int, seeds: Tensor<1, Complex>, max_steps: Int, tolerance: Float) -> Result<{ points: Tensor<1, Complex>, residuals: Tensor<1, Float>, period: Int }, OpError>
+sig num_complex_dynamics_bottcher as bottcher(point: Complex, c: Complex, max_steps: Int) -> Result<Complex, OpError>
+sig num_complex_dynamics_external_ray as external_ray(c: Complex, angle: Float, potential: Float, max_steps: Int) -> Result<{ point: Complex, residual: Float }, OpError>
+sig num_complex_dynamics_quadratic_orbit as quadratic_orbit(initial: Complex, c: Complex, steps: Int) -> Result<Tensor<1, Complex>, OpError>
+sig num_complex_dynamics_quadratic_multiplier as quadratic_multiplier(point: Complex, c: Complex, period: Int, tolerance: Float) -> Result<{ multiplier: Complex, kind: String, period: Int, residual: Float }, OpError>
+sig num_complex_dynamics_quadratic_lyapunov as quadratic_lyapunov(initial: Complex, c: Complex, steps: Int, burn_in: Int) -> Result<Float, OpError>
+
+# --- Riemann–Hilbert ---------------------------------------------------------
+mode RiemannHilbert typed
+
+dynamic num_riemann_hilbert_cauchy_checked num_riemann_hilbert_plemelj_checked num_riemann_hilbert_factor_checked num_complex_cauchy_fft_derivatives_checked | Use the manifest-generated typed callbacks in Rssn_numerical_callback.
+
+dynamic num_riemann_hilbert_solve | Use the manifest-generated typed matrix jump in Rssn_numerical_callback.
+
+sig num_riemann_hilbert_matrix_new as matrix<d>(entries: Tensor<[4], Complex[d]>) -> Result<Tensor<[2, 2], Complex[d]>, OpError>
+sig num_riemann_hilbert_matrix_identity as identity() -> Result<Tensor<[2, 2], Complex>, OpError>
+sig num_riemann_hilbert_matrix_zero as zero() -> Result<Tensor<[2, 2], Complex>, OpError>
+sig num_riemann_hilbert_matrix_add as add<d>(first: Tensor<[2, 2], Complex[d]>, second: Tensor<[2, 2], Complex[d]>) -> Result<Tensor<[2, 2], Complex[d]>, OpError>
+sig num_riemann_hilbert_matrix_sub as subtract<d>(first: Tensor<[2, 2], Complex[d]>, second: Tensor<[2, 2], Complex[d]>) -> Result<Tensor<[2, 2], Complex[d]>, OpError>
+sig num_riemann_hilbert_matrix_mul as multiply<d, e>(first: Tensor<[2, 2], Complex[d]>, second: Tensor<[2, 2], Complex[e]>) -> Result<Tensor<[2, 2], Complex[d*e]>, OpError>
+sig num_riemann_hilbert_matrix_scale as scale<d, e>(matrix: Tensor<[2, 2], Complex[d]>, scalar: Complex[e]) -> Result<Tensor<[2, 2], Complex[d*e]>, OpError>
+sig num_riemann_hilbert_matrix_inv as inverse<d>(matrix: Tensor<[2, 2], Complex[d]>) -> Result<Option<Tensor<[2, 2], Complex[1/d]>>, OpError>
+sig num_riemann_hilbert_matrix_norm as frobenius_norm<d>(matrix: Tensor<[2, 2], Complex[d]>) -> Result<Float[d], OpError>
+sig num_riemann_hilbert_solution_eval as evaluate(solution: { nodes: Tensor<1, Float>, weights: Tensor<1, Float>, density: Tensor<3, Complex> }, point: Complex) -> Result<Tensor<[2, 2], Complex>, OpError>
+
 # --- Numeric: results of the tensor decompositions ----------------------------
 # The kernel answers a list of unlike parts (`list(core, list(U_1, .., U_N), error)`)
 # that no Aevia tensor type holds. `from_value<Tensor<1, Value>>` hands the parts out as
@@ -578,6 +1356,11 @@ codec ExactMatrix exact_matrix_to_value exact_matrix_from_value
 codec ExactMatrixSolution - exact_matrix_solution_from_value
 
 prelude Numeric
+| ## Checked structural CSR with zero-based column indices.
+| type CsrMatrix<t> = { rows: Int, cols: Int, indptr: Tensor<1, Int>, indices: Tensor<1, Int>, values: Tensor<1, t> }
+|
+| type SparseLeastSquares<t> = { x: Tensor<1, t>, residual: Float, iterations: Int, converged: Bool }
+|
 | ## Session-owned rational coefficients normalized by an explicit positive reference.
 | type ExactMatrix = | ExactMatrix(Value)
 |
@@ -960,6 +1743,9 @@ sig perm_group_contains(g: PermGroup, p: Perm) -> Result<Bool, OpError>
 
 # --- Multiprecision ----------------------------------------------------------
 prelude Multiprecision
+| ## Binary precision and exponent limits for a finite dyadic.
+| type DyadicLimits = { min_precision: Int, max_precision: Int, min_exponent: Int, max_exponent: Int }
+|
 | ## A finite exact dyadic equal to mantissa * 2^exponent.
 | ## Nonzero mantissas have precision bits. Zero has exponent zero.
 | type Dyadic = { mantissa: Int, exponent: Int, precision: Int }
@@ -967,30 +1753,195 @@ prelude Multiprecision
 | ## A closed interval with a nonnegative dyadic radius.
 | type DyadicBall = { midpoint: Dyadic, radius: Dyadic }
 |
+| ## A pair of certified sine and cosine enclosures.
+| type DyadicSinCos = { sin: DyadicBall, cos: DyadicBall }
+|
 | ## Endpoints rounded outward to the requested bit precision.
 | type DyadicBounds = { lower: Dyadic, upper: Dyadic }
 |
+| ## A closed complex rectangle with independent real and imaginary dyadic intervals.
+| type DyadicRectangle = { real: DyadicBall, imag: DyadicBall }
+|
 
+sig num_mp_real_zero as zero_dyadic(precision: Int) -> Result<Dyadic, OpError>
+sig num_mp_real_one as one_dyadic(precision: Int) -> Result<Dyadic, OpError>
+sig num_mp_real_from_i64 as dyadic_from_i64(value: Int, precision: Int) -> Result<Dyadic, OpError>
+sig num_mp_real_from_bigint as dyadic_from_int(value: Int, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_real_from_f64 as dyadic_from_float(value: Float, precision: Int) -> Result<Dyadic, OpError>
+sig num_mp_real_to_f64 as dyadic_to_float(value: Dyadic) -> Result<Float, OpError>
+sig num_mp_real_sign as dyadic_sign(value: Dyadic) -> Result<Int, OpError>
+sig num_mp_decimal_from_text as decimal_to_dyadic(text: String, precision: Int) -> Result<Dyadic, OpError>
+sig num_mp_decimal_from_text_in as decimal_to_dyadic_in(text: String, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_decimal_to_text as dyadic_to_decimal(value: Dyadic, digits: Int) -> Result<String, OpError>
+sig num_mp_decimal_to_text_in as dyadic_to_decimal_in(value: Dyadic, digits: Int, rounding: String) -> Result<String, OpError>
+sig num_mp_decimal_round_text as round_decimal_text(text: String, digits: Int, rounding: String) -> Result<String, OpError>
+sig num_mp_decimal_enclose as enclose_decimal(text: String, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_decimal_format_ball as format_decimal_ball(interval: DyadicBall, digits: Int) -> Result<String, OpError>
+sig num_mp_decimal_exponent as decimal_exponent(value: Dyadic) -> Result<Option<Int>, OpError>
+sig num_mp_decimal_significant_digits as significant_decimal_digits(value: Dyadic) -> Result<Int, OpError>
+sig num_mp_decimal_working_bits as working_bits_for_decimal_digits(digits: Int) -> Result<Int, OpError>
 sig num_mp_real_round as round_dyadic(mantissa: Int, exponent: Int, precision: Int, rounding: String) -> Result<Dyadic, OpError>
 sig num_mp_real_compare as compare_dyadic(left: Dyadic, right: Dyadic) -> Result<Int, OpError>
 sig num_mp_real_add as add_dyadic(left: Dyadic, right: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
 sig num_mp_real_sub as subtract_dyadic(left: Dyadic, right: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
 sig num_mp_real_mul as multiply_dyadic(left: Dyadic, right: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
 sig num_mp_real_div as divide_dyadic(left: Dyadic, right: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_ball_add as add_balls(left: DyadicBall, right: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_sub as subtract_balls(left: DyadicBall, right: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_mul as multiply_balls(left: DyadicBall, right: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
 sig num_mp_ball_div as divide_balls(numerator: DyadicBall, divisor: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_real_const_pi as pi_dyadic(precision: Int) -> Result<Dyadic, OpError>
+sig num_mp_real_const_e as e_dyadic(precision: Int) -> Result<Dyadic, OpError>
+sig num_mp_real_const_ln2 as ln2_dyadic(precision: Int) -> Result<Dyadic, OpError>
+sig num_mp_real_const_sqrt2 as sqrt2_dyadic(precision: Int) -> Result<Dyadic, OpError>
+sig num_mp_real_const_phi as phi_dyadic(precision: Int) -> Result<Dyadic, OpError>
+sig num_mp_real_const_named as named_dyadic_constant(name: String, precision: Int) -> Result<Dyadic, OpError>
+sig num_mp_real_const_enclose as enclose_dyadic_constant(name: String, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_real_const_names as dyadic_constant_names() -> Result<Tensor<1, String>, OpError>
+sig num_mp_real_const_pi_scaled as floor_pi_times_power_of_two(bits: Int) -> Result<Int, OpError>
+sig num_mp_real_const_functions as mp_expression_function_names() -> Result<Tensor<1, String>, OpError>
 sig num_mp_real_abs as abs_dyadic(value: Dyadic) -> Result<Dyadic, OpError>
 sig num_mp_real_neg as negate_dyadic(value: Dyadic) -> Result<Dyadic, OpError>
 sig num_mp_real_is_zero as dyadic_is_zero(value: Dyadic) -> Result<Bool, OpError>
+sig num_mp_real_ln as ln_dyadic(value: Dyadic, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_ln as ln_ball(interval: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_real_log2 as log2_dyadic(value: Dyadic, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_log2 as log2_ball(interval: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_real_log10 as log10_dyadic(value: Dyadic, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_log10 as log10_ball(interval: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_real_exp2 as exp2_dyadic(value: Dyadic, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_exp2 as exp2_ball(interval: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_real_scale_decimal as scale_decimal_dyadic(value: Dyadic, exponent: Int, precision: Int) -> Result<Dyadic, OpError>
+sig num_mp_real_scale_decimal_in as scale_decimal_dyadic_in(value: Dyadic, exponent: Int, precision: Int, rounding: String) -> Result<Dyadic, OpError>
 sig num_mp_real_is_integer as dyadic_is_integer(value: Dyadic) -> Result<Bool, OpError>
 sig num_mp_real_floor_log2 as dyadic_floor_log2(value: Dyadic) -> Result<Option<Int>, OpError>
 sig num_mp_real_trunc_to_bigint as truncate_dyadic(value: Dyadic) -> Result<Int, OpError>
+sig num_mp_real_exp as exp_dyadic(value: Dyadic, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_exp as exp_ball(interval: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
 sig num_mp_real_with_precision as requantize_dyadic(value: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
 sig num_mp_real_sqrt as sqrt_dyadic(value: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_real_sin as sin_dyadic(value: Dyadic, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_sin as sin_ball(interval: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_real_cos as cos_dyadic(value: Dyadic, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_cos as cos_ball(interval: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_real_tan as tan_dyadic(value: Dyadic, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_tan as tan_ball(interval: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_real_sin_cos as sin_cos_dyadic(value: Dyadic, precision: Int) -> Result<DyadicSinCos, OpError>
 sig num_mp_real_scale_pow2 as scale_dyadic_pow2(value: Dyadic, shift: Int) -> Result<Dyadic, OpError>
 sig num_mp_ball_new as make_ball(midpoint: Dyadic, radius: Dyadic) -> Result<DyadicBall, OpError>
+sig num_mp_real_mantissa as dyadic_mantissa(value: Dyadic) -> Result<Int, OpError>
+sig num_mp_real_exponent as dyadic_exponent(value: Dyadic) -> Result<Int, OpError>
+sig num_mp_real_precision as dyadic_precision(value: Dyadic) -> Result<Int, OpError>
+sig num_mp_ball_midpoint as ball_midpoint(interval: DyadicBall) -> Result<Dyadic, OpError>
+sig num_mp_ball_radius as ball_radius(interval: DyadicBall) -> Result<Dyadic, OpError>
+sig num_mp_real_limits as dyadic_limits() -> Result<DyadicLimits, OpError>
+sig num_mp_real_rounding_mode as canonical_dyadic_rounding(rounding: String) -> Result<String, OpError>
+sig num_mp_real_cbrt as cbrt_dyadic_enclosure(value: Dyadic, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_real_cbrt_in as cbrt_dyadic(value: Dyadic, precision: Int, rounding: String) -> Result<Dyadic, OpError>
+sig num_mp_real_hypot as hypot_dyadic_enclosure(left: Dyadic, right: Dyadic, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_sqrt as sqrt_ball(interval: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
 sig num_mp_ball_point as point_ball(value: Dyadic) -> Result<DyadicBall, OpError>
+sig num_mp_real_sinh as sinh_dyadic(value: Dyadic, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_sinh as sinh_ball(interval: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_real_cosh as cosh_dyadic(value: Dyadic, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_cosh as cosh_ball(interval: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_real_tanh as tanh_dyadic(value: Dyadic, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_tanh as tanh_ball(interval: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
 sig num_mp_ball_contains_zero as ball_contains_zero(interval: DyadicBall) -> Result<Bool, OpError>
 sig num_mp_ball_width as ball_width(interval: DyadicBall) -> Result<Dyadic, OpError>
 sig num_mp_ball_neg as negate_ball(interval: DyadicBall) -> Result<DyadicBall, OpError>
 sig num_mp_ball_abs as abs_ball(interval: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
 sig num_mp_ball_endpoints as ball_endpoints(interval: DyadicBall, precision: Int) -> Result<DyadicBounds, OpError>
+sig num_mp_ball_lipschitz as widen_ball_lipschitz(interval: DyadicBall, mapped_midpoint: Dyadic, bound: Dyadic, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_expression_enclose as enclose_expression(text: String, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_complex_new as make_complex_rectangle(real: DyadicBall, imag: DyadicBall) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_point as point_complex_rectangle(real: Dyadic, imag: Dyadic) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_from_real as lift_real_ball(real: DyadicBall) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_zero as zero_complex_rectangle(precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_one as one_complex_rectangle(precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_i as imaginary_unit_rectangle(precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_sin as sin_complex_rectangle(value: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_cos as cos_complex_rectangle(value: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_tan as tan_complex_rectangle(value: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_sinh as sinh_complex_rectangle(value: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_cosh as cosh_complex_rectangle(value: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_tanh as tanh_complex_rectangle(value: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_asin as asin_complex_rectangle(value: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_acos as acos_complex_rectangle(value: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_atan as atan_complex_rectangle(value: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_asinh as asinh_complex_rectangle(value: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_acosh as acosh_complex_rectangle(value: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_atanh as atanh_complex_rectangle(value: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_erf as erf_complex_rectangle(value: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_erfc as erfc_complex_rectangle(value: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_bessel_j as bessel_j_complex_rectangle(value: DyadicRectangle, order: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_log_gamma as log_gamma_complex_rectangle(value: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_gamma as gamma_complex_rectangle(value: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_digamma as digamma_complex_rectangle(value: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_riemann_zeta as riemann_zeta_complex_rectangle(order: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_polylog as polylog_complex_rectangle(value: DyadicRectangle, order: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_sqrt as sqrt_complex_rectangle(value: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_pow as principal_power_complex_rectangle(base: DyadicRectangle, exponent: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_abs as complex_rectangle_modulus(value: DyadicRectangle, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_complex_exp as exp_complex_rectangle(value: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_ln as ln_complex_rectangle(value: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_neg as negate_complex_rectangle(value: DyadicRectangle) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_conj as conjugate_complex_rectangle(value: DyadicRectangle) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_add as add_complex_rectangles(left: DyadicRectangle, right: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_sub as subtract_complex_rectangles(left: DyadicRectangle, right: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_mul as multiply_complex_rectangles(left: DyadicRectangle, right: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_div as divide_complex_rectangles(left: DyadicRectangle, right: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_complex_recip as reciprocal_complex_rectangle(value: DyadicRectangle, precision: Int) -> Result<DyadicRectangle, OpError>
+sig num_mp_real_atan as atan_dyadic(value: Dyadic, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_atan as atan_ball(interval: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_real_atan2 as atan2_dyadic(y: Dyadic, x: Dyadic, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_atan2 as atan2_ball(y: DyadicBall, x: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_real_asin as asin_dyadic(value: Dyadic, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_asin as asin_ball(interval: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_real_acos as acos_dyadic(value: Dyadic, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_acos as acos_ball(interval: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_complex_arg as dyadic_rectangle_argument(value: DyadicRectangle, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_complex_abs_sq as complex_rectangle_norm_squared(value: DyadicRectangle, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_real_pow as power_dyadic(base: Dyadic, exponent: Dyadic, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_pow as power_ball(base: DyadicBall, exponent: DyadicBall, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_real_powi as powi_dyadic(base: Dyadic, exponent: Int, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_powi as powi_ball(base: DyadicBall, exponent: Int, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_real_pow_ratio as power_dyadic_ratio(base: Dyadic, numerator: Int, denominator: Int, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_ball_pow_ratio as power_ball_ratio(base: DyadicBall, numerator: Int, denominator: Int, precision: Int) -> Result<DyadicBall, OpError>
+sig num_mp_complex_powi as power_complex_rectangle(value: DyadicRectangle, exponent: Int, precision: Int) -> Result<DyadicRectangle, OpError>
+
+codec ModularMontgomery modular_montgomery_to_value modular_montgomery_from_value
+codec ModularBarrett modular_barrett_to_value modular_barrett_from_value
+
+prelude Modular
+| ## Session-owned Montgomery reducer for an odd modulus.
+| type ModularMontgomery = | ModularMontgomery(Value)
+|
+| ## Session-owned Barrett reducer for a modulus of at least two.
+| type ModularBarrett = | ModularBarrett(Value)
+|
+| fn modular_montgomery_to_value(plan: ModularMontgomery): Value =
+|     match plan with
+|     | ModularMontgomery(wire) -> wire
+|
+| fn modular_montgomery_from_value(wire: Value): Result<ModularMontgomery, OpError> =
+|     Ok(ModularMontgomery(wire))
+|
+| fn modular_barrett_to_value(plan: ModularBarrett): Value =
+|     match plan with
+|     | ModularBarrett(wire) -> wire
+|
+| fn modular_barrett_from_value(wire: Value): Result<ModularBarrett, OpError> =
+|     Ok(ModularBarrett(wire))
+|
+| ## Releases the reducer and invalidates every copy of its handle.
+| fn release_montgomery(plan: ModularMontgomery): Result<Bool, OpError> =
+|     match Rssn.dynamic("num_native_release", [modular_montgomery_to_value(plan)]) with
+|     | Ok(wire) -> from_value<Bool>(wire)
+|     | Err(failure) -> Err(failure)
+|
+| ## Releases the reducer and invalidates every copy of its handle.
+| fn release_barrett(plan: ModularBarrett): Result<Bool, OpError> =
+|     match Rssn.dynamic("num_native_release", [modular_barrett_to_value(plan)]) with
+|     | Ok(wire) -> from_value<Bool>(wire)
+|     | Err(failure) -> Err(failure)

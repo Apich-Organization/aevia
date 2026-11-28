@@ -2,6 +2,7 @@
 
 import argparse
 from contextlib import redirect_stdout
+from datetime import date
 import hashlib
 import json
 import os
@@ -74,7 +75,15 @@ def source_digests(inputs):
 def artifacts(build, workflow):
     flags, overrides = cargo_profile(build)
     optimized = "--release" in flags
-    if workflow == "toolchain":
+    if workflow == "toolchain_minimal":
+        flags = [flag for flag in flags if flag != "--all-features"]
+        build.cargo(["build", "-p", "aevia-cli", "--no-default-features", *flags], env=overrides)
+        names = ["aevia"]
+    elif workflow == "toolchain_profiling":
+        build.cargo(["build", "-p", "aevia-cli", "--profile", "profiling"])
+        optimized = False
+        names = ["aevia"]
+    elif workflow == "toolchain":
         features = []
         if optimized:
             verify_kernel_features(build)
@@ -82,26 +91,51 @@ def artifacts(build, workflow):
         build.cargo(["build", "-p", "aevia-cli", "-p", "aevia-lsp", *flags, *features], env=overrides)
         names = ["aevia", "aevia-lsp"]
     else:
-        names = ["aevia-pkg"]
-        packages = ["-p", "aevia-pkg"]
+        if workflow == "registry_server":
+            names = ["aevia-registry"]
+            packages = ["-p", "aevia-registry-server", "--bin", "aevia-registry"]
+        else:
+            names = ["aevia-pkg"]
+            packages = ["-p", "aevia-pkg"]
         if workflow == "platform_binaries":
             packages += ["-p", "aevia-registry-server"]
             names += ["aevia-playground", "aevia-registry"]
         build.cargo(["build", *packages, *flags], cwd=build.root / "platform", env=overrides)
     suffix = ".exe" if "windows" in build.target else ""
-    profile = "release" if optimized else None
-    build.copy_artifacts("bin", build.cargo_output(profile), [name + suffix for name in names])
+    profile = "profiling" if workflow == "toolchain_profiling" else ("release" if optimized else "debug")
+    output = build.cargo_output(profile)
+    binaries = [name + suffix for name in names]
+    if workflow == "toolchain_profiling" and build.target.endswith("-windows-msvc"):
+        binaries.append("aevia.pdb")
+    build.copy_artifacts("bin", output, binaries)
     if optimized:
         receipt = build.outputs["bin"] / _RELEASE_INPUTS
         staged = {path: build.mirror / path for path in build.inputs}
         receipt.write_text(json.dumps(source_digests(staged), sort_keys=True) + "\n", encoding="utf-8")
 
 
-def release_smoke(build, directory):
+def run_domain_plan(build, cli):
+    parser = argparse.ArgumentParser(description="Run the Bazel RSSN domain test plan")
+    parser.add_argument("--backend", action="append", choices=("ast", "ir"), required=True)
+    parser.add_argument("--example", action="append", default=[])
+    parser.add_argument("--suite", action="append", required=True)
+    plan = parser.parse_args(build.settings["build"])
+    for example in plan.example:
+        build.run([cli, "--caps=", "--jobs", "1", "test", f"examples/{example}.aev"])
+    for backend in plan.backend:
+        for suite in plan.suite:
+            build.run([cli, "--caps=", "--jobs", "1", "--backend", backend, "test", "--no-cache",
+                       f"tests/domain_{suite}.aev"])
+
+
+def release_smoke(build, directory, *, expected_version=None):
     build.assert_native()
     cli, lsp = bins(build, directory)
     suffix = cli.suffix
-    build.run([cli, "--version"])
+    version = build.run([cli, "--version"], capture_output=True, text=True).stdout.strip()
+    if expected_version is not None and version != f"aevia {expected_version}":
+        raise ValueError(f"Expected packaged CLI version {expected_version}, got {version!r}")
+    print(version)
     build.run([directory / ("aevia-pkg" + suffix), "--version"])
     flags = ["--require-default-backends"]
     if build.target.endswith("-linux-gnu"):
@@ -121,10 +155,7 @@ def release_smoke(build, directory):
     build.run(["node", "editors/test/lsp-smoke.js", lsp, "--initialize-only"])
     build.run(["node", "editors/test/dap-smoke.js", cli])
     build.run(["node", "editors/test/dap-smoke.js", cli, "--exception"])
-    for backend in ("ast", "ir"):
-        for suite in ("acoustic_storage", "hyperelastic_observer", "native_split_step", "multiprecision"):
-            build.run([cli, "--jobs", "1", "--caps=", "--backend", backend,
-                       "test", "--no-cache", f"tests/domain_{suite}.aev"])
+    run_domain_plan(build, cli)
 
 
 _RELEASE_FILES = (
@@ -137,17 +168,23 @@ _RELEASE_FILES = (
 _RELEASE_GUIDES = ("BAZEL.md", "BAZEL.zh-CN.md")
 
 
-def verify_release_archive(build, archive, *, require_guides=False):
-    flags = ["--require-build-guides"] if require_guides else []
+def verify_release_archive(build, archive, *, require_guides=False, rssn_commit=None, expected_version=None):
+    flags = ["--expected-target", build.target]
+    if require_guides:
+        flags.append("--require-build-guides")
+    if rssn_commit is not None:
+        flags.extend(("--expected-rssn-commit", rssn_commit))
     build.python("scripts/check_release_archive.py", archive, *flags)
+    name = archive.stem if archive.suffix == ".zip" else archive.name.removesuffix(".tar.gz")
+    distribution = name.removeprefix("aevia-").removesuffix(f"-{build.target}")
+    if expected_version is None and not distribution.startswith("nightly-"):
+        expected_version = distribution
     with tempfile.TemporaryDirectory(prefix="aevia-extract-", dir=build.scratch) as temp:
         if archive.suffix == ".zip":
             shutil.unpack_archive(archive, temp)
-            name = archive.stem
         else:
             shutil.unpack_archive(archive, temp, filter="data")
-            name = archive.name.removesuffix(".tar.gz")
-        release_smoke(build, Path(temp) / name)
+        release_smoke(build, Path(temp) / name, expected_version=expected_version)
 
 
 def resolve_commit(build, checkout, revision):
@@ -203,6 +240,20 @@ def verify_linux_release_abi(build, binaries):
             raise ValueError(f"{binary.name} requires {names}. Build the Linux release with the Ubuntu 24.04 ABI")
 
 
+def verify_release_distribution(build, commit, distribution):
+    manifest = build.run(["git", "show", f"{commit}:Cargo.toml"], cwd=build.workspace,
+                         capture_output=True, text=True).stdout
+    version = tomllib.loads(manifest)["workspace"]["package"]["version"]
+    if distribution.startswith("nightly-"):
+        try:
+            date.fromisoformat(distribution.removeprefix("nightly-"))
+        except ValueError as error:
+            raise ValueError(f"{distribution} must contain a valid calendar date") from error
+    elif distribution != version:
+        raise ValueError(f"Distribution {distribution} must match the Aevia version {version} at {commit}")
+    return version
+
+
 def package_release(build, args, *, from_binaries=False):
     build.assert_native()
     parser = argparse.ArgumentParser(description="Package and verify a native Aevia distribution")
@@ -222,6 +273,7 @@ def package_release(build, args, *, from_binaries=False):
         parser.error("--rssn-commit must be a 40-character Git commit")
     cwd = Path(os.getenv("BUILD_WORKING_DIRECTORY", str(build.workspace)))
     commit = resolve_commit(build, build.workspace, options.source_commit)
+    version = verify_release_distribution(build, commit, options.distribution)
     if from_binaries:
         toolchain = (cwd / options.toolchain_bin).resolve()
         platform = (cwd / options.platform_bin).resolve()
@@ -271,7 +323,8 @@ def package_release(build, args, *, from_binaries=False):
             digest = hashlib.file_digest(stream, "sha256").hexdigest()
         checksum = archive.with_name(archive.name + ".sha256")
         checksum.write_text(f"{digest}  {archive.name}\n", encoding="ascii", newline="\n")
-        verify_release_archive(build, archive, require_guides=not from_binaries)
+        verify_release_archive(build, archive, require_guides=not from_binaries,
+                               rssn_commit=options.rssn_commit, expected_version=version)
         if ship_registry:
             registry = temporary / "aevia-registry"
             shutil.copy2(platform / "aevia-registry", registry)
@@ -279,7 +332,7 @@ def package_release(build, args, *, from_binaries=False):
             if with_registry_image:
                 variant = f"linux-{build.target.split('-', 1)[0]}"
                 image_archive = temporary / f"aevia-registry-{variant}.tar"
-                registry_image(build, ["--registry", str(registry), "--tag", f"aevia-registry:{variant}",
+                registry_image_archive(build, ["--registry", str(registry), "--tag", f"aevia-registry:{variant}",
                                        "--archive", str(image_archive)])
                 registry_files += [image_archive, image_archive.with_suffix(".tar.sha256")]
             registry_out = out / "registry"
@@ -291,7 +344,7 @@ def package_release(build, args, *, from_binaries=False):
     print(out / archive.name)
 
 
-def registry_image(build, args):
+def registry_image_archive(build, args):
     build.assert_native()
     if not build.target.endswith("-linux-gnu"):
         raise ValueError("The registry image requires a native Linux build")
@@ -326,12 +379,100 @@ def registry_image(build, args):
         archive_checksum(archive)
 
 
+def build_registry_image(build, binary, engine, tags):
+    if not binary.is_file():
+        raise ValueError(f"Missing registry executable {binary}")
+    architecture, _, system = build.target.partition("-")
+    if "linux" not in system:
+        raise ValueError("Build the registry executable for a Linux target before packaging it")
+    architecture = {"aarch64": "arm64", "x86_64": "amd64"}.get(architecture, architecture)
+    platform = build.root / "platform"
+    with tempfile.TemporaryDirectory(prefix="aevia-image-", dir=build.scratch) as directory:
+        executable = Path(directory) / "aevia-registry"
+        shutil.copyfile(binary, executable)
+        executable.chmod(0o755)
+        command = [engine, "build", "--file", platform / "infra/Containerfile.server",
+                   "--target", "optimized-runtime", "--build-context", f"optimized={directory}",
+                   "--platform", f"linux/{architecture}"]
+        for tag in tags:
+            command.extend(["--tag", tag])
+        build.run([*command, platform], cwd=platform)
+
+
+def registry_image(build, args):
+    parser = argparse.ArgumentParser(description="Build an Aevia registry image with the selected executable")
+    parser.add_argument("--binary", type=Path, help="use an executable built by Bazel")
+    parser.add_argument("--engine", choices=("podman", "docker"), default="podman")
+    parser.add_argument("--tag", action="append", required=True)
+    options = parser.parse_args(args)
+    if options.binary is not None:
+        cwd = Path(os.getenv("BUILD_WORKING_DIRECTORY", str(build.workspace)))
+        binary = (cwd / options.binary).resolve()
+    elif build.extra:
+        binary = build.extra[0] / "aevia-registry"
+    else:
+        raise ValueError("Pass --binary to registry_image_from_binary")
+    build_registry_image(build, binary, options.engine, options.tag)
+
+
+def registry_image_test(build):
+    build.assert_native()
+    tag = "localhost/aevia-registry:ci"
+    build_registry_image(build, build.extra[0] / "aevia-registry", "docker", [tag])
+    result = build.run(["docker", "run", "--rm", "--network=none", tag], check=False,
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    print(result.stdout, end="")
+    if result.returncode != 2 or "DATABASE_URL" not in result.stdout:
+        raise ValueError("the registry image did not start and report its missing database configuration")
+
+
+def build_playground_image(build, cli, tag):
+    if not cli.is_file():
+        raise ValueError(f"Missing Aevia executable {cli}")
+    with tempfile.TemporaryDirectory(prefix="aevia-playground-", dir=build.scratch) as directory:
+        executable = Path(directory) / "aevia"
+        shutil.copyfile(cli, executable)
+        executable.chmod(0o755)
+        containerfile = build.root / "platform/infra/Containerfile.playground"
+        build.run(["podman", "build", "--file", containerfile, "--tag", tag, directory])
+
+
+def playground_image(build, args):
+    parser = argparse.ArgumentParser(description="Build a playground image with the selected CLI")
+    parser.add_argument("--aevia", type=Path, help="use a Linux CLI built by Bazel")
+    parser.add_argument("--tag", required=True)
+    options = parser.parse_args(args)
+    if options.aevia is not None:
+        cwd = Path(os.getenv("BUILD_WORKING_DIRECTORY", str(build.workspace)))
+        cli = (cwd / options.aevia).resolve()
+    elif build.extra:
+        cli, _ = bins(build)
+    else:
+        raise ValueError("Pass --aevia to playground_image_from_binary")
+    build_playground_image(build, cli, options.tag)
+
+
+def playground_image_test(build):
+    build.assert_native()
+    cli, _ = bins(build)
+    tag = "localhost/aevia-playground:ci"
+    build_playground_image(build, cli, tag)
+    result = build.run([
+        "podman", "run", "--rm", "-i", "--network=none", "--read-only", "--cap-drop=ALL",
+        "--security-opt=no-new-privileges", "--tmpfs=/work:rw,nodev,nosuid,noexec,mode=1777",
+        "--workdir=/work", "--entrypoint=/bin/sh", tag,
+        "-ec", "cat > main.aev; aevia --max-stack 16 --budget 100000 --jobs 1 --caps= run main.aev",
+    ], input='fn main(): IO Unit = do\n    println("playground ready")\n', capture_output=True, text=True)
+    print(result.stdout, end="")
+    if "playground ready" not in result.stdout.splitlines():
+        raise ValueError("the playground image did not execute the test program")
+
+
 def platform_test(build):
     build.assert_native()
     if not build.env.get("AEVIA_TEST_DATABASE_URL"):
         raise ValueError("AEVIA_TEST_DATABASE_URL is required for PostgreSQL integration tests")
     root = build.root / "platform"
-    build.run(["sh", "infra/check-lang-workspace.sh", ".."], cwd=root)
     # The GnuPG socket path may be shorter than Bazel's TEST_TMPDIR.
     with tempfile.TemporaryDirectory(prefix="aevia-gpg-", dir="/tmp" if os.name != "nt" else None) as temporary:
         flags, overrides = cargo_profile(build, ["--all-features"])
@@ -374,57 +515,100 @@ def editors(build):
         "--eval", "(unless (and (derived-mode-p 'aevia-mode) (commandp 'aevia-run-file) (commandp 'aevia-test-file) (commandp 'aevia-repl)) (error \"Aevia mode failed to register\"))",
     ])
 
+def format_workspaces(build, args):
+    if args not in ([], ["--check"]):
+        raise ValueError("fmt accepts only --check")
+    command = ["rustup", "run", "nightly", "cargo", "fmt", "--all", *args]
+    if args:
+        for workspace in (build.root, build.root / "platform"):
+            build.run(command, cwd=workspace)
+    else:
+        with build.refresh(["aevia/crates/**/*.rs", "aevia/platform/crates/**/*.rs", "aevia/tools/**/*.rs"]):
+            for workspace in (build.root, build.root / "platform"):
+                build.run(command, cwd=workspace)
+
+
+def platform_dev(build, args):
+    if len(args) != 1 or args[0] not in ("up", "down", "reset", "run"):
+        raise ValueError("platform_dev expects up, down, reset or run")
+    script = str(build.root / "platform/scripts/dev_stack.sh")
+    env = {"AEVIA_DEV_PLATFORM": str(build.checkout("aevia") / "platform")}
+    command = ["sh", script, *args]
+    if args[0] != "run":
+        build.run(command, env=env)
+        return
+    build.assert_native()
+    build.cargo(["build", "-p", "aevia-registry-server", "--bin", "aevia-registry"],
+                cwd=build.root / "platform")
+    suffix = ".exe" if "windows" in build.target else ""
+    command.append(str(build.cargo_output() / ("aevia-registry" + suffix)))
+    # The process replacement closes the cache lock before the server starts.
+    os.execvpe(command[0], command, build.env | env)
+
+
 def zed_wasm(build):
     root = build.root / "editors/zed"
     build.cargo(["clippy", "--target", "wasm32-wasip2", "--all-targets", "--", "-D", "warnings"], cwd=root, target=False)
     build.cargo(["build", "--target", "wasm32-wasip2"], cwd=root, target=False)
 
 
+def vscode_check(build):
+    vscode = build.root / "editors/vscode"
+    build.run(["npm", "ci", "--ignore-scripts"], cwd=vscode)
+    build.run(["node", "--check", "extension.js"], cwd=vscode)
+    build.run(["npm", "test"], cwd=vscode)
+    build.run(["node", "-e", 'JSON.parse(require("node:fs").readFileSync("syntaxes/aevia.tmLanguage.json", "utf8"))'],
+              cwd=vscode)
+
+
 def editor_packages(build, args):
+    parser = argparse.ArgumentParser(description="Package and verify Aevia editor extensions")
+    parser.add_argument("--editor", choices=("all", "vscode"), default="all")
+    parser.add_argument("output", type=Path, nargs="?", help="output directory (default: dist/editor-extensions)")
+    options = parser.parse_args(args)
+    vscode_check(build)
     vscode = build.root / "editors/vscode"
     jetbrains = build.root / "editors/jetbrains"
     with tempfile.TemporaryDirectory(dir=build.scratch) as temporary:
         destination = Path(temporary) / "extensions"
         destination.mkdir()
-        build.run(["npm", "ci", "--ignore-scripts"], cwd=vscode)
-        build.run(["node", "--check", "extension.js"], cwd=vscode)
-        build.run(["npm", "test"], cwd=vscode)
-        build.run(["node", "-e", 'JSON.parse(require("node:fs").readFileSync("syntaxes/aevia.tmLanguage.json", "utf8"))'],
-                  cwd=vscode)
         build.run(["npm", "run", "package", "--", "--out", destination], cwd=vscode)
-        build.run(["gradle", "--no-daemon", "buildPlugin", "verifyPluginStructure"], cwd=jetbrains)
-        for package in (jetbrains / "build/distributions").glob("*.zip"):
-            shutil.copy2(package, destination)
-        build.python("editors/test/packages.py", destination)
+        if options.editor == "all":
+            build.run(["gradle", "--no-daemon", "buildPlugin", "verifyPluginStructure"], cwd=jetbrains)
+            for package in (jetbrains / "build/distributions").glob("*.zip"):
+                shutil.copy2(package, destination)
+        build.python("editors/test/packages.py", destination, "--editor", options.editor)
         if not os.getenv("TEST_TMPDIR"):
-            zed = build.root / "editors/zed"
-            build.cargo(["build", "--release", "--target", "wasm32-wasip2"], cwd=zed, target=False, env={
-                "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
-                "CARGO_PROFILE_RELEASE_LTO": build.lto,
-                "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": build.codegen_units,
-                "CARGO_PROFILE_RELEASE_INCREMENTAL": "false",
-            })
-            wasm = build.target_dir / "wasm32-wasip2/release/zed_aevia.wasm"
-            if not wasm.is_file():
-                raise ValueError("Zed extension was not built as a WebAssembly component")
-            with wasm.open("rb") as binary:
-                if binary.read(8) != b"\0asm\x0d\0\x01\0":
-                    raise ValueError("Zed output is not a WebAssembly component")
-            version = tomllib.loads((build.root / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
-            for editor in ("emacs", "helix", "kate", "sublime", "tree-sitter-aevia", "vim", "zed"):
-                directory = build.root / "editors" / editor
-                archive = destination / f"aevia-{editor}-{version}.zip"
-                with ZipFile(archive, "w", compression=ZIP_DEFLATED) as package:
-                    for source in sorted(directory.rglob("*")):
-                        relative = source.relative_to(directory)
-                        if source.is_file() and not set(relative.parts) & {"target", "node_modules", "test", "extension.wasm"}:
-                            package.write(source, relative.as_posix())
-                    if editor == "zed":
-                        package.write(wasm, "extension.wasm")
-                with ZipFile(archive) as package:
-                    if not package.namelist() or package.testzip():
-                        raise ValueError(f"Invalid editor package: {archive}")
-            out = Path(args[0]).absolute() if args else build.workspace / "dist/editor-extensions"
+            if options.editor == "all":
+                zed = build.root / "editors/zed"
+                build.cargo(["build", "--release", "--target", "wasm32-wasip2"], cwd=zed, target=False, env={
+                    "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+                    "CARGO_PROFILE_RELEASE_LTO": build.lto,
+                    "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": build.codegen_units,
+                    "CARGO_PROFILE_RELEASE_INCREMENTAL": "false",
+                })
+                wasm = build.target_dir / "wasm32-wasip2/release/zed_aevia.wasm"
+                if not wasm.is_file():
+                    raise ValueError("Zed extension was not built as a WebAssembly component")
+                with wasm.open("rb") as binary:
+                    if binary.read(8) != b"\0asm\x0d\0\x01\0":
+                        raise ValueError("Zed output is not a WebAssembly component")
+                version = tomllib.loads((build.root / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
+                for editor in ("emacs", "helix", "kate", "sublime", "tree-sitter-aevia", "vim", "zed"):
+                    directory = build.root / "editors" / editor
+                    archive = destination / f"aevia-{editor}-{version}.zip"
+                    with ZipFile(archive, "w", compression=ZIP_DEFLATED) as package:
+                        for source in sorted(directory.rglob("*")):
+                            relative = source.relative_to(directory)
+                            if source.is_file() and not set(relative.parts) & {"target", "node_modules", "test", "extension.wasm"}:
+                                package.write(source, relative.as_posix())
+                        if editor == "zed":
+                            package.write(wasm, "extension.wasm")
+                    with ZipFile(archive) as package:
+                        if not package.namelist() or package.testzip():
+                            raise ValueError(f"Invalid editor package: {archive}")
+            caller = Path(build.env.get("BUILD_WORKING_DIRECTORY", build.workspace))
+            out = caller / options.output if options.output else build.workspace / "dist/editor-extensions"
             out.mkdir(parents=True, exist_ok=True)
             for package in list(destination.iterdir()):
                 shutil.copy2(package, out)
@@ -444,21 +628,103 @@ def contracts(build):
     build.python("tools/check_stdlib_docs.py", "--aevia", cli)
     build.python("tools/bundle_spec.py", "--check")
     build.python("tools/check_manuals.py", "--aevia", cli)
-    for example in ("sensor_calibration", "relaxation_fit"):
-        build.run([cli, "--caps=", "--jobs", "1", "test", f"examples/{example}.aev"])
+    run_domain_plan(build, cli)
 
 
 def refresh_stdlib(build):
     build.tool("aevia-stdlib-gen", "--write")
 
 
+def refresh_stdlib_reference(build, args):
+    parser = argparse.ArgumentParser(description="Refresh the checked-in standard library reference")
+    parser.add_argument("--check", action="store_true", help="verify without updating the checkout")
+    parser.add_argument("--aevia", type=Path, help="use an existing native CLI from the paired source")
+    options = parser.parse_args(args)
+    build.assert_native()
+    if options.aevia is None:
+        build.cargo(["build", "-p", "aevia-cli"])
+        cli, _ = bins(build, build.cargo_output())
+    else:
+        cwd = Path(os.getenv("BUILD_WORKING_DIRECTORY", str(build.workspace)))
+        cli = (cwd / options.aevia).resolve()
+    if options.check:
+        build.python("tools/check_stdlib_docs.py", "--aevia", cli)
+    else:
+        with build.refresh(["aevia/platform/stdlib-docs/*.md", "aevia/platform/stdlib-docs/stdlib-docs.json"]):
+            build.python("tools/check_stdlib_docs.py", "--aevia", cli, "--write")
+
+
+_BENCHMARK_COMMANDS = {
+    "interp": ["bench", "-p", "aevia-core", "--bench", "interp"],
+    "matmul": ["run", "-p", "aevia-std", "--release", "--example", "matmul_bench"],
+    "startup": ["run", "-p", "aevia-rssn", "--profile", "profiling", "--example", "startup"],
+    "startup-phases": ["test", "-p", "aevia-core", "--test", "startup",
+                       "--", "--nocapture", "--exact", "startup_phases_are_profiled"],
+    "tail-call": ["test", "-p", "aevia-core", "--test", "ir_tail",
+                  "--", "--ignored", "--nocapture", "--exact", "bench_tail_call_step"],
+    "dense-tensors": ["test", "--release", "-p", "aevia-core", "--test", "tensors_dense",
+                      "--", "--ignored", "--nocapture", "--exact", "bench_dense_vs_boxed_100k"],
+    "dense-matmul": ["test", "--release", "-p", "aevia-core", "--test", "tensors_dense",
+                     "--", "--ignored", "--nocapture", "--exact", "bench_matmul_256"],
+    "dense-axis": ["test", "-p", "aevia-core", "--test", "reductions_axis",
+                   "--", "--nocapture", "--exact", "the_dense_axis_path_does_not_box_per_element"],
+    "dense-minmax": ["test", "-p", "aevia-core", "--test", "reductions_minmax",
+                     "--", "--nocapture", "--exact", "the_dense_scan_is_the_fast_path"],
+    "cli": ["test", "-p", "aevia-cli", "--test", "cli", "--", "--exact",
+            "bench_times_bench_functions_and_reports_failures"],
+}
+_BENCHMARK_SMOKE = ("tail-call", "cli")
+
+
+def benchmark(build, args, *, ci=False):
+    parser = argparse.ArgumentParser(description="Run Aevia performance benchmarks")
+    if ci:
+        parser.add_argument("--full", action="store_true", help="run every workload")
+        options = parser.parse_args(args)
+        workloads = _BENCHMARK_COMMANDS if options.full else _BENCHMARK_SMOKE
+    else:
+        parser.add_argument("workload", choices=tuple(_BENCHMARK_COMMANDS))
+        workloads = (parser.parse_args(args).workload,)
+    build.assert_runnable()
+    for workload in workloads:
+        print(f"Aevia benchmark {workload}", flush=True)
+        env = None
+        if workload == "dense-matmul":
+            env = {"RAYON_NUM_THREADS": build.env.get("RAYON_NUM_THREADS", "2")}
+        build.cargo(_BENCHMARK_COMMANDS[workload], env=env)
+
+
+def profile(build, args):
+    if not args:
+        raise ValueError("Pass the Aevia command and its arguments after //:profile --")
+    build.assert_native()
+    if build.target not in ("x86_64-pc-windows-msvc", "x86_64-pc-windows-gnu"):
+        raise ValueError("The sampling profiler requires x86-64 Windows")
+    build.cargo(["build", "-p", "aevia-prof", "--release"])
+    executable = build.cargo_output("release") / "aevia-prof.exe"
+    (toolchain,) = build.extra
+    cwd = Path(os.getenv("BUILD_WORKING_DIRECTORY", str(build.workspace)))
+    build.run([executable, toolchain / "aevia.exe", *args], cwd=cwd)
+
+
 def dispatch(build, workflow, args):
-    if workflow in ("toolchain", "platform_cli", "platform_binaries"):
+    if workflow in ("toolchain", "toolchain_minimal", "toolchain_profiling",
+                    "platform_cli", "platform_binaries", "registry_server"):
         artifacts(build, workflow)
-    elif workflow in ("package-release", "package-release-from-binaries"):
-        package_release(build, args, from_binaries=workflow.endswith("-from-binaries"))
     elif workflow == "registry-image":
         registry_image(build, args)
+    elif workflow == "registry-image-test":
+        registry_image_test(build)
+    elif workflow == "postgres-image":
+        infra = build.root / "platform/infra"
+        build.run(["podman", "build", "--file", infra / "Containerfile.postgres",
+                   "--tag", "localhost/aevia/postgres:18-trixie", infra])
+    elif workflow == "playground-image-test":
+        playground_image_test(build)
+    elif workflow == "playground-image":
+        playground_image(build, args)
+    elif workflow in ("package-release", "package-release-from-binaries"):
+        package_release(build, args, from_binaries=workflow.endswith("-from-binaries"))
     elif workflow == "release-inputs-test":
         module_paths = [str(Path(__file__).absolute().parent), sys.path[0]]
         build.python("scripts/test_release_inputs.py", env={"PYTHONPATH": os.pathsep.join(module_paths)})
@@ -467,14 +733,34 @@ def dispatch(build, workflow, args):
         source = parser.add_mutually_exclusive_group(required=True)
         source.add_argument("--archive", type=Path)
         source.add_argument("--bin-dir", type=Path)
+        parser.add_argument("--rssn-commit", help="expected RSSN source commit for the archive")
         inputs = parser.parse_args(args)
+        if inputs.rssn_commit is not None:
+            if inputs.archive is None:
+                parser.error("--rssn-commit requires --archive")
+            if not re.fullmatch(r"[0-9a-f]{40}", inputs.rssn_commit):
+                parser.error("--rssn-commit must be a 40-character Git commit")
         cwd = Path(os.getenv("BUILD_WORKING_DIRECTORY", str(build.workspace)))
         if inputs.archive:
-            verify_release_archive(build, (cwd / inputs.archive).resolve())
+            verify_release_archive(build, (cwd / inputs.archive).resolve(), rssn_commit=inputs.rssn_commit)
         else:
             release_smoke(build, (cwd / inputs.bin_dir).resolve())
+    elif workflow in ("benchmark", "benchmark-ci"):
+        benchmark(build, args, ci=workflow == "benchmark-ci")
+    elif workflow == "profile":
+        profile(build, args)
     elif workflow == "check":
         build.cargo(["check", *(args or ["--workspace", "--all-targets"])])
+    elif workflow == "fmt":
+        format_workspaces(build, build.settings["build"] + args)
+    elif workflow == "rustdoc":
+        build.cargo(["doc", "--workspace", "--no-deps"])
+    elif workflow == "platform-rustdoc":
+        build.cargo(["doc", "--workspace", "--all-features", "--no-deps"], cwd=build.root / "platform")
+    elif workflow == "profiler-clippy":
+        build.cargo(["clippy", "-p", "aevia-prof", "--all-targets", "--", "-D", "warnings"])
+    elif workflow == "platform-dev":
+        platform_dev(build, args)
     elif workflow in ("clippy", "platform-clippy"):
         root = build.root / "platform" if workflow == "platform-clippy" else build.root
         build.cargo(["clippy", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"], cwd=root)
@@ -483,13 +769,14 @@ def dispatch(build, workflow, args):
         flags, overrides = cargo_profile(build, build.settings["build"])
         if "--all-features" in flags or "--all-features" in args:
             verify_kernel_features(build)
-        build.cargo(["test", "--workspace", *flags, *args], env=overrides)
+        build.rust_workspace_tests(["--workspace", *flags], args, env=overrides)
     elif workflow == "platform-test":
         platform_test(build)
+    elif workflow == "platform-unit":
+        build.cargo(["test", "--workspace", *args], cwd=build.root / "platform")
     elif workflow == "platform-scripts":
         build.python("platform/scripts/test_dev.py")
         build.python("platform/scripts/test_deploy.py")
-        build.run(["sh", "platform/infra/check-lang-workspace.sh", "."])
     elif workflow == "editors":
         editors(build)
     elif workflow == "editor-kate":
@@ -504,6 +791,8 @@ def dispatch(build, workflow, args):
         build.run(["node", "editors/test/lsp-smoke.js", lsp])
         build.run(["node", "editors/test/dap-smoke.js", cli])
         build.run(["node", "editors/test/dap-smoke.js", cli, "--exception"])
+    elif workflow == "editor-vscode":
+        vscode_check(build)
     elif workflow == "editor-packages":
         editor_packages(build, args)
     elif workflow == "toolchain-test":
@@ -514,6 +803,14 @@ def dispatch(build, workflow, args):
     elif workflow == "contracts":
         build.assert_native()
         contracts(build)
+    elif workflow == "rssn-api-audit":
+        build.assert_runnable()
+        options = list(args or ["--verify"])
+        if len(options) == 3 and options[1] == "--manifest":
+            cwd = Path(os.getenv("BUILD_WORKING_DIRECTORY", str(build.workspace)))
+            options[2] = str((cwd / options[2]).resolve())
+        with redirect_stdout(sys.stderr):
+            build.tool("rssn-api-audit", *options)
     elif workflow == "refresh-kernel":
         build.assert_native()
         with build.refresh([*GENERATED, "aevia/tools/rssn-api-audit/inventory.tsv",
@@ -527,6 +824,8 @@ def dispatch(build, workflow, args):
     elif workflow == "refresh-stdlib":
         with build.refresh(["aevia/crates/aevia-std/stdlib/**/*.aev", "aevia/crates/aevia-std/src/stdlib_table.rs"]):
             refresh_stdlib(build)
+    elif workflow == "refresh-stdlib-reference":
+        refresh_stdlib_reference(build, args)
     elif workflow == "refresh-spec":
         with build.refresh(["aevia/Aevia-Language-Specification*"]):
             build.python("tools/bundle_spec.py", *args)

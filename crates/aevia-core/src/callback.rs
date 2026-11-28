@@ -144,6 +144,9 @@ fn supported_schema(ty: &Type) -> bool {
         | Type::Scalar(Rep::Int | Rep::Real | Rep::Float | Rep::Complex, dim) => dim.is_concrete(),
         | Type::Bool | Type::Str => true,
         | Type::Tensor { elem, .. } => supported_schema(elem),
+        | Type::Adt(id, args) if *id == aevia_types::adt::OPTION_ID => {
+            matches!(args.as_slice(), [payload] if supported_schema(payload))
+        },
         | Type::Record(row) => {
             row.tail_var().is_none()
                 && row

@@ -1,0 +1,63 @@
+import Rssn_ComplexDisk as Disk
+
+let measured = Disk.make(complex(3.0 m, 4.0 m), 0.25 m)
+
+let divisor = Disk.point(2.0 s, 0.0 s)
+
+test "disk geometry keeps measured coordinates and radius" =
+    match measured with
+    | Ok(ball) ->
+        match (Disk.center(ball), Disk.radius(ball), Disk.modulus_upper(ball), Disk.contains(ball, complex(3.25 m, 4.0 m))) with
+        | (Ok(center), Ok(radius), Ok(bound), Ok(inside)) -> approx_eq(re(center), 3.0 m, 1e-12 m) && approx_eq(im(center), 4.0 m, 1e-12 m) && approx_eq(radius, 0.25 m, 1e-12 m) && bound >= 5.25 m && inside
+        | _ -> false
+    | Err(_) -> false
+
+test "complex disk products and quotients propagate physical units" =
+    match (measured, divisor) with
+    | (Ok(a), Ok(b)) ->
+        match (Disk.mul(a, b), Disk.divide(a, b)) with
+        | (Ok(product), Ok(Some(quotient))) -> approx_eq(product[0], 6.0 m*s, 1e-12 m*s) && approx_eq(quotient[1], 2.0 m/s, 1e-12 m/s)
+        | _ -> false
+    | _ -> false
+
+test "disk division distinguishes absence from malformed input" =
+    match (measured, Disk.make(complex(0.0 m, 0.0 m), 1.0 m), Disk.make(complex(3.0 m, 4.0 m), -0.25 m)) with
+    | (Ok(a), Ok(b), Err(_)) -> Disk.divide(a, b) == Ok(None)
+    | _ -> false
+
+test "disk jets enclose the value and derivative of a square" =
+    match Disk.make(complex(2.0, 0.0), 0.125) with
+    | Ok(z) ->
+        match Disk.variable(z) with
+        | Ok(x) ->
+            match Disk.jet_mul(x, x) with
+            | Ok(square) -> Disk.contains(square.value, complex(4.515625, 0.0)) == Ok(true) && Disk.contains(square.derivative, complex(4.25, 0.0)) == Ok(true)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "certified disk solve returns the physical solution or no certificate" =
+    let matrix = [[[2.0 s, 0.0 s, 0.0 s], [0.0 s, 0.0 s, 0.0 s]], [[0.0 s, 0.0 s, 0.0 s], [4.0 s, 0.0 s, 0.0 s]]]
+    let rhs = [[2.0 m, 0.0 m, 0.01 m], [8.0 m, 0.0 m, 0.02 m]]
+    match Disk.solve(matrix, rhs) with
+    | Ok(Some(answer)) -> approx_eq(answer[0, 0], 1.0 m/s, 1e-12 m/s) && approx_eq(answer[1, 0], 2.0 m/s, 1e-12 m/s)
+    | _ -> false
+
+test "acosh disk jet picks the principal derivative on each side" =
+    match (Disk.of(complex(-2.0, 1.0)), Disk.of(complex(2.0, 1.0))) with
+    | (Ok(a), Ok(b)) ->
+        match (Disk.variable(a), Disk.variable(b)) with
+        | (Ok(left), Ok(right)) ->
+            match (Disk.jet_acosh(left), Disk.jet_acosh(right)) with
+            | (Ok(Some(l)), Ok(Some(r))) -> l.derivative[0] < 0.0 && r.derivative[0] > 0.0
+            | _ -> false
+        | _ -> false
+    | _ -> false
+
+test "acosh and reciprocal sine reject disks through singular points" =
+    match (Disk.make(complex(-2.0, 0.0), 0.01), Disk.zero()) with
+    | (Ok(cut), Ok(zero)) ->
+        match Disk.variable(cut) with
+        | Ok(jet) -> Disk.jet_acosh(jet) == Ok(None) && Disk.csc(zero) == Ok(None)
+        | Err(_) -> false
+    | _ -> false

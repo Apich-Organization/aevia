@@ -20,6 +20,15 @@ Use the Rust test targets closest to the modified API and retain expensive integ
 
 The two CI workflows run formatting, lint, tests, contract generation and documentation checks. Aevia also builds the platform and editor extensions. Linux and Windows exercise the main language and kernel workspaces. Platform database integration runs with a disposable PostgreSQL service. The consolidated CI gate requires success from each required job.
 
+Bazel defines the selection of features, gate order and artifact inputs. Run
+`bazel test //:contracts_test` for Aevia's checked bindings and documentation,
+and `bazel run //:refresh_spec` to regenerate both specification editions.
+`//:joint_all_features_test` runs the paired Rust workspaces. The contract and
+release-smoke plans exercise selected RSSN domain fixtures with both the AST
+and IR evaluators. The release entry is `//:package_release` with
+`--config=release-max`, which builds all features with the RSSN LLVM optimizer,
+fat LTO and one codegen unit. [Bazel targets and release inputs](https://github.com/Apich-Organization/aevia/blob/main/BAZEL.md)
+
 A versioned release begins when a matching `vMAJOR.MINOR.PATCH` tag is pushed. A prerelease such as `v0.1.0-beta.1` uses the same workflow. Run **Release → Run workflow** with **dry_run** enabled to check the candidate before tagging. Both workflows run the complete CI gate on the build commit, assemble archives and checksums, and attach the assets to a draft. Verify the draft's commit and contents before publishing. GitHub locks the tag and assets and attests them when the release is published. RSSN's crates.io job also requires approval in the `crates-io` environment.
 
 Nightly builds run on the repository's default branch and publish a new immutable prerelease under `nightly-YYYY-MM-DD` in UTC. Each dated tag is used once. Nightly runs do not publish to crates.io or update the registry container. Aevia pins the RSSN checkout to an exact commit. For versioned publication the RSSN tag must match Aevia's locked RSSN version. A nightly uses the configured `RSSN_REF` or the RSSN `v0.3` branch, and still checks its package version against the lockfile.

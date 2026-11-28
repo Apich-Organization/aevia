@@ -45,34 +45,40 @@ calculation on the CPU. `cpu-parallel` keeps work on the host and uses the
 configured CPU worker count. `ir` and `ast` select the reference evaluators for
 comparison. In a REPL, evaluator switches govern new evaluation and definitions.
 
-`--rssn-backend` selects the process-wide RSSN backend for portable expressions
-and native kernels. `aevia devices` lists the active and available RSSN
-selectors. In the REPL, use `:rssn-backend` to inspect the current selection
-and `:rssn-backend auto` to restore automatic selection. `--backend` controls
-the Aevia evaluator and matrix routing independently.
+`--rssn-backend` selects the process-wide RSSN backend used to compile portable
+expressions. Its `auto` setting starts with the CPU tape and can compile hot
+expressions in the background when the host supports Cranelift. It uses the
+interpreter on other hosts. `aevia devices` lists the available selectors and
+the current choice. In the REPL, use `:rssn-backend` to inspect it and
+`:rssn-backend auto` to restore it. `--backend` controls the Aevia evaluator and
+matrix routing independently.
 
 The CLI or embedding application controls RSSN's process default. Aevia
 source can choose a backend handle for a specific compilation. GPU discovery
 and execution require the `gpu` capability, including calls that reuse a GPU
 handle or compiled GPU program inside a narrower `with_cap` block.
 
-To build the minimal CLI without linking the optional RSSN JIT, wgpu, and NumPy
-features, use `cargo build -p aevia-cli --no-default-features`.
+Run `bazel build //:toolchain_minimal` to build a CLI that omits the optional
+RSSN JIT, wgpu and NumPy integration. The executable is
+`bazel-bin/toolchain_minimal/bin/aevia` (with `.exe` on Windows).
 
 ## Measure the right part
 
-Separate file and terminal work from the part you want to measure. Use a fixed fixture, a warm-up, repeat runs, and common settings for threads and optimization. Verify the result on each configuration before comparing time. `aevia bench --help` describes the tool's benchmark declarations and baseline format.
+Separate file and terminal work from the part you want to measure. Use a fixed fixture, a warm-up, repeat runs, and common settings for threads and optimization. Verify the result on each configuration before comparing time. From the repository, use
+`bazel run --config=release-max //:aevia -- bench workloads.aev` for an Aevia file containing
+`@bench` functions. Run `bazel run //:aevia -- bench --help` for baseline options.
 
 An optimized build of the toolchain and the CLI option `--release` address different stages. Build settings affect the interpreter executable. The CLI option enables optimizations for the checked program. Report both, along with enabled backend features, when sharing measurements.
 
 ## Sample a program on Windows
 
-The `aevia-prof` development tool samples a child process on x86-64 Windows without elevation. Build the executable with the `profiling` profile to include its debug symbols. In PowerShell, run the sampler from the repository root.
+The `aevia-prof` development tool samples a child process on x86-64 Windows
+without elevation. From the repository root, run the Bazel profiler with your
+usual CLI arguments. Bazel builds the sampler and the CLI with profiling symbols.
 
 ```powershell
-cargo build --profile profiling -p aevia-cli
 $env:AEVIA_PROF_FOLDED = "candidates.folded"
-cargo run -p aevia-prof --release -- target\profiling\aevia.exe run candidates.aev
+bazel run //:profile -- run candidates.aev
 Remove-Item Env:AEVIA_PROF_FOLDED
 ```
 

@@ -1,0 +1,25 @@
+## Certified circular && hyperbolic functions of complex dyadic rectangles.
+import Rssn_Multiprecision as MP
+
+let zero: MP.Dyadic = { mantissa = 0, exponent = 0, precision = 1 }
+
+let one: MP.Dyadic = { mantissa = 1, exponent = 0, precision = 1 }
+
+let large: MP.Dyadic = { mantissa = 1, exponent = 20, precision = 1 }
+
+let zero_ball: MP.DyadicBall = { midpoint = zero, radius = zero }
+
+let one_ball: MP.DyadicBall = { midpoint = one, radius = zero }
+
+let origin: MP.DyadicRectangle = { real = zero_ball, imag = zero_ball }
+
+let point_one: MP.DyadicRectangle = { real = one_ball, imag = zero_ball }
+
+test "circular functions map zero to exact integers" = MP.sin_complex_rectangle(origin, 1) == Ok(origin) && MP.cos_complex_rectangle(origin, 1) == Ok(point_one) && MP.tan_complex_rectangle(origin, 1) == Ok(origin)
+
+test "hyperbolic functions map zero to exact integers" = MP.sinh_complex_rectangle(origin, 1) == Ok(origin) && MP.cosh_complex_rectangle(origin, 1) == Ok(point_one) && MP.tanh_complex_rectangle(origin, 1) == Ok(origin)
+
+test "tangent saturates along the imaginary axis" =
+    match MP.tan_complex_rectangle({ real = zero_ball, imag = { midpoint = large, radius = zero } }, 32) with
+    | Ok(value) -> MP.dyadic_sign(value.real.midpoint) == Ok(0) && MP.dyadic_sign(value.imag.midpoint) == Ok(1)
+    | Err(_) -> false

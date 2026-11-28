@@ -1,0 +1,14 @@
+import Rssn_Meshgen as Meshgen
+
+let square = [[0.0 m, 0.0 m], [100.0 cm, 0.0 m], [1.0 m, 1.0 m], [0.0 m, 1000.0 mm]]
+let crossing = [[0, 2], [1, 3]]
+
+test "crossing constraints return a measured Steiner vertex and four triangles" =
+    match Meshgen.constrained_delaunay(square, crossing, 100.0 cm, 64) with
+    | Ok(mesh) -> approx_eq(mesh.points[4, 0], 0.5 m, 1e-12 m) && approx_eq(mesh.points[4, 1], 0.5 m, 1e-12 m) && shape(mesh.triangles) == [4, 3]
+    | Err(_) -> false
+
+test "advancing front respects its vertex budget before resampling" =
+    match (Meshgen.advancing_front(square, 50.0 cm, 1.0 m, 128), Meshgen.advancing_front(square, 0.1 cm, 1.0 m, 16)) with
+    | (Ok(mesh), Err(_)) -> length(mesh.points) > 4 && length(mesh.triangles) > 0
+    | _ -> false

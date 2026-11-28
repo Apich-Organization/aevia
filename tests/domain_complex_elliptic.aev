@@ -1,0 +1,54 @@
+import Rssn_Special as Special
+
+let origin = complex(0.0, 0.0)
+
+let first = complex(0.5, 0.0)
+
+let second = complex(0.0, 0.5)
+
+let point = complex(0.21, -0.13)
+
+test "sigma has exact lattice zeros and zeta reports poles" =
+    let lattice_point = complex(1.0, 1.0)
+    let sigma = Special.weierstrass_sigma(lattice_point, first, second)
+    let zeta = Special.weierstrass_zeta(lattice_point, first, second)
+    sigma == Ok(origin) && is_err(zeta)
+
+test "square lattice zeta gains pi when shifted by the real period" =
+    match (Special.weierstrass_zeta(point, first, second), Special.weierstrass_zeta(point + complex(1.0, 0.0), first, second)) with
+    | (Ok(initial), Ok(shifted)) -> approx_eq(magnitude(shifted - initial - complex(3.141592653589793, 0.0)), 0.0, 1e-11)
+    | _ -> false
+
+test "sigma is invariant under a large integral shear of the basis" =
+    let sheared = second + complex(31.0, 0.0) * first
+    match (Special.weierstrass_sigma(point, first, second), Special.weierstrass_sigma(point, first, sheared)) with
+    | (Ok(initial), Ok(shifted_basis)) -> approx_eq(magnitude(initial - shifted_basis), 0.0, 1e-11)
+    | _ -> false
+
+test "modular discriminant is periodic and checks the upper half-plane" =
+    let tau = complex(0.25, 1.0)
+    let invalid = Special.complex_modular_discriminant(complex(0.25, -1.0))
+    match (Special.complex_modular_discriminant(tau), Special.complex_modular_discriminant(tau + complex(1.0, 0.0))) with
+    | (Ok(a), Ok(b)) -> approx_eq(magnitude((a - b) / a), 0.0, 1e-12) && is_err(invalid)
+    | _ -> false
+
+test "Carlson RJ includes the full duplication correction" =
+    let x = complex(1.0, 2.0)
+    let y = complex(2.0, -2.0)
+    let p = complex(3.0, -3.0)
+    let expected = complex(0.3778727015139048, 0.2117430828154714)
+    match Special.complex_carlson_rj(x, y, origin, p) with
+    | Ok(result) -> approx_eq(magnitude(result - expected), 0.0, 1e-13)
+    | _ -> false
+
+test "Carlson forms share principal limits and reject poles" =
+    let one = complex(1.0, 0.0)
+    let four = complex(4.0, 0.0)
+    let half = complex(0.5, 0.0)
+    let expected_rd = complex(0.125, 0.0)
+    let rf = Special.complex_carlson_rf(four, four, four) == Ok(half)
+    let rc = Special.complex_carlson_rc(four, four) == Ok(half)
+    let rd = Special.complex_carlson_rd(four, four, four) == Ok(expected_rd)
+    let rg = Special.complex_carlson_rg(four, origin, origin) == Ok(one)
+    let pole = is_err(Special.complex_carlson_rd(one, one, origin))
+    rf && rc && rd && rg && pole

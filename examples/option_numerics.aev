@@ -1,4 +1,4 @@
-## Run: cargo run -p aevia-cli -- test examples/option_numerics.aev
+## Run: bazel run //:aevia -- test examples/option_numerics.aev
 import Rssn_numerical_stats as S
 
 import Rssn_numerical_vector as V

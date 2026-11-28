@@ -173,7 +173,7 @@ The flat `Rssn.<op>` and the per-rule-set `Rssn_<rule_set>` follow the **kernel'
 - **Error channel.** A kernel failure is `Err(OpError)`; a graph-backend operator whose argument leaves its domain returns an unreduced call term (`invmod(6, 15)`), which `from_value` reports as a `TypeMismatch` carrying the text of that term.
 - **Diagnostic channel: why it did not reduce.** When a numeric operator rejects its arguments (shape mismatch, axis out of range, singular system, incompatible Neumann data, …) the kernel leaves only the unreduced call term. `Session::explain(term)` (`rssn::kernel::{Diag, DiagKind}`) replays the operator's evaluator on the calling thread and returns `Diag { op, arg, kind, message }`. When the result is exactly the operator's own unreduced call and `kind` is not `Symbolic`, the bridge (`Kernel::call_with_witnesses`, `call_key`, `call_key_with_witnesses`) returns `KernelError::from_diag`, with the stable code `rssn.diag.<kind>` (`arity`, `shape`, `domain`, `singular`, `incompatible`, `not_converged`, `unsupported`, `symbolic`, `unspecified`). `Rssn.dynamic` writes it in user form — function name, parameter name, position — inside `Err`: ``Err(rssn.diag.domain: tensordot_2_2_1: argument `axes_a` (#3): an axis is past the rank of the first tensor (rank 2): [2])``. Parameter names come from the overlay's `sig`; witnessed/dynamic wrappers give only a position (`argument #3`). `OpError` stays an opaque type: `"{e}"` gives `code: message`, and no constructor or `Rssn.*` member was added. At a **throwing** site (a typed call `Rssn.<op>(..)`) the same finding is `E0807` with the stable code in a note. Only operators of `rules::numeric::TABLES` record reasons.
 - **Dimension evidence.** `sig` also declares "this operator is a pure function of dimensionless arguments"; rules the kernel declares `Dimensionless`, and `List/NonMetric/Compare/Angle` rules when the arguments are known to be dimensionless, give bare-number results `Scalar(1)` evidence; other rules (`Same`, `Sum`, `Custom`, …) are not trusted. A `list(...)` term result is read back as a tensor when trusted (equal-length rows merge into a higher-rank tensor; unequal ones stay a tensor of tensors).
-- **Generated at run time.** A module is rendered from the live manifest when `import Rssn_NumberTheory` is resolved (`codegen::namespace_source`), and no generated source is committed, so it cannot drift from the linked kernel. Only the overlay and the coverage report `tools/rssn-api-audit/RSSN-COVERAGE.md` are committed; `cargo test -p aevia-rssn --test domains` regenerates and compares them (`AEVIA_BLESS=1` rewrites).
+- **Generated at run time.** A module is rendered from the live manifest when `import Rssn_NumberTheory` is resolved (`codegen::namespace_source`), and no generated source is committed, so it cannot drift from the linked kernel. The committed overlay and coverage report `tools/rssn-api-audit/RSSN-COVERAGE.md` are checked by `bazel test //:contracts_test`. Use `bazel run //:refresh_kernel` to regenerate the checked-in artifacts after changing the contract.
 
 **`Rssn_Numeric`.** rssn's `numeric` rule set (robust statistics, windows and spectra, wavelets, Krylov/sparse/low-rank/tensor decompositions, dimension-independent finite-difference solvers, complex special functions, expression operators) all have a `sig`, and none stays in the dynamic tier; user-facing interface and examples are in §8.19.1. The rules:
 
@@ -273,18 +273,27 @@ The native toolchain enables Cranelift, wgpu and RSSN's NumPy I/O feature by
 default. An explicit `@jit` in a build with no native JIT support reports
 `E1001("core.jit")`.
 
-Use `aevia devices` to inspect the active and available RSSN selectors.
-`--rssn-backend <name>` sets the process-wide RSSN backend, and the REPL exposes
-the same selection as `:rssn-backend [name]`. With `auto`, RSSN selects the
-available host execution path at runtime. Aevia controls its own evaluator and
-matrix offload policy independently via `--backend`.
+Use `aevia devices` to inspect the linked features, current RSSN backend and
+available selectors. `--rssn-backend NAME` sets the process default. In the
+REPL, enter `:rssn-backend` to inspect it and `:rssn-backend auto` to restore
+automatic selection. Aevia controls its own evaluator and matrix offload
+policy independently with `--backend`.
+
+On a host with Cranelift support, RSSN `auto` starts with the CPU tape and
+compiles hot expressions in the background. Other hosts use the interpreter.
+`interpreter` selects the tape path, `cpu` and `cpu-parallel` select explicit
+CPU devices, and `tiered` and `cranelift` select compiled paths where supported.
+`jit` is an alias for `cranelift`. Use an available device ID for a specific GPU,
+or `gpu` for the first discovered wgpu adapter. An unavailable explicit
+`--rssn-backend` selection exits with status 2.
 
 For example, `aevia --rssn-backend cpu-parallel test examples/native_backend.aev`
 uses the parallel CPU backend for RSSN compilation in the example. Source
-code can select a backend for an individual RSSN program with
-`Rssn.num_backend_named` and `Rssn.num_backend_compile`. Selecting or using an
-RSSN GPU backend in source code requires the `gpu` capability. To set the
-process default, use the CLI option or the REPL command.
+code can select a backend for an individual program through the declared
+`num_backend_named` and `num_backend_compile` operators. The `gpu` capability
+is required to discover, select or use a GPU backend from source, including
+when a GPU handle or compiled GPU program is reused in a narrower `with_cap`
+scope.
 
 ### 10.6.5 Devices and data-parallel execution
 
@@ -352,10 +361,17 @@ binary64 arithmetic on the host unless the device offers it directly.
 
 ### 10.8.1 Compatibility and validation
 
-Use `aevia rssn --audit` to report the signatures and capabilities provided by the
-linked kernel. Conformance tests compare source declarations and checked adapters,
-exercise structured values and units, and verify the compiled evaluator against
-the reference path. Runtime and symbolic budgets are separate (§6.9.1). Native
+Use `aevia rssn --audit` to inspect binding coverage for the linked kernel.
+Use `aevia rssn --describe OPERATOR` for one operator's signatures, dimension
+rule and callable bindings. `aevia rssn --emit --out generated --namespaces`
+writes the modules for that build. When a declaration has a verified typed
+callback facade, use its emitted signature. For an explicit higher-order call,
+`Rssn.call_ho` groups ordinary arguments and `to_callback` closures into separate
+lists while retaining the signature's order within each list (§8.19).
+
+Conformance tests compare source declarations and checked adapters, exercise
+structured values and units, and verify the compiled evaluator against the
+reference path. Runtime and symbolic budgets are separate (§6.9.1). Native
 evaluators that cannot execute a supported code path can return to the interpreter.
 
 ## 10.9 An end-to-end call chain

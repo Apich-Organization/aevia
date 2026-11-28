@@ -1,0 +1,25 @@
+## Evaluate analytically continued polynomials and inspect a named complex result.
+import Rssn_Special as Special
+
+let point = complex(0.25, 0.5)
+
+let zero = complex(0.0, 0.0)
+
+let alpha = complex(-1.0, 0.0)
+
+let jacobi = Special.complex_jacobi_p(2, alpha, alpha, point)
+
+let fresnel = Special.complex_fresnel_auxiliary(point)
+
+test "Jacobi with two zero parameters is Legendre" =
+    match (Special.complex_jacobi_p(6, zero, zero, point), Special.complex_legendre_p(6, point)) with
+    | (Ok(jacobi), Ok(legendre)) -> approx_eq(magnitude(jacobi - legendre), 0.0, 1e-12)
+    | _ -> false
+
+fn main(): IO Unit = do
+    match jacobi with
+    | Ok(value) -> println("Jacobi P₂⁽⁻¹,⁻¹⁾ at {point} = {value}")
+    | Err(error) -> println("Jacobi evaluation failed {error}")
+    match fresnel with
+    | Ok(pair) -> println("Fresnel auxiliary values f = {pair.f} and g = {pair.g}")
+    | Err(error) -> println("Fresnel evaluation failed {error}")

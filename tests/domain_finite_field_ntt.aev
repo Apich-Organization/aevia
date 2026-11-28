@@ -1,0 +1,24 @@
+## Exact ordinary-residue NTT using a reusable prime and length.
+import Rssn_FiniteField as Field
+
+test "the prepared transform matches its exact DFT" =
+    match Field.ntt_plan(17, 4) with
+    | Err(_) -> false
+    | Ok(plan) -> Field.ntt_transform([1, 2, 3, 4], plan, false) == Ok([10, 6, 15, 7])
+
+test "the normalized inverse preserves residues across a full-word modulus" =
+    match Field.ntt_plan(18446744069414584321, 4) with
+    | Err(_) -> false
+    | Ok(plan) -> match Field.ntt_transform([18446744069414584320, 2, 18446744073709551615, 1], plan, false) with
+        | Err(_) -> false
+        | Ok(spectrum) -> Field.ntt_transform(spectrum, plan, true) == Ok([18446744069414584320, 2, 4294967294, 1])
+
+test "a length not dividing prime minus one is invalid" =
+    match Field.ntt_plan(7, 4) with
+    | Err(_) -> true
+    | Ok(_) -> false
+
+test "a reconstructed descriptor is validated before transformation" =
+    match Field.ntt_transform([1, 2, 3, 4], { modulus = 341, length = 4 }, false) with
+    | Err(_) -> true
+    | Ok(_) -> false

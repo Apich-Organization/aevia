@@ -20,6 +20,24 @@ ${EDITOR:-vi} .env
 ./deploy.sh logs registry
 ```
 
+从源码构建时，请确保 Bazel 可访问相邻的 RSSN 工作区。`./deploy.sh build` 将注册中心
+镜像构建转交给 Bazel。首次执行 `./deploy.sh up` 时，如果本地没有注册中心镜像，会先用
+同一目标构建再启动 Compose。如果缺少本地 PostgreSQL 镜像，也会用
+`bazel run //:postgres_image` 构建。在 Aevia 仓库根目录可以直接运行以下命令。
+
+```sh
+bazel run //:registry_image -- --tag localhost/aevia/registry:0.1.0
+bazel build //:registry_server
+bazel run //:registry_image_from_binary -- \
+  --binary bazel-bin/registry_server/bin/aevia-registry \
+  --tag localhost/aevia/registry:0.1.0
+```
+
+第一条命令构建注册中心并生成镜像。最后一条把已有的注册中心可执行文件打包成镜像，
+例如使用上一条 Bazel 构建的产物。两种镜像目标均默认使用 Podman，也接受 `--engine docker`
+和多个 `--tag` 参数。Compose 启动生成的 `localhost/aevia/registry:0.1.0` 镜像，并应用
+数据库及内容挂载配置。
+
 将 `AEVIA_DOMAIN` 设为公网域名，`AEVIA_BASE_URL` 设为对应的 HTTPS 源，`AEVIA_ACME_EMAIL` 设为有人关注的联系邮箱。Compose 中的数据库主机名是 `db`。主机可以通过 `127.0.0.1:8080` 访问内部注册中心监听端口。
 
 Caddy 面向公网，管理 TLS、设置 HSTS 并压缩响应。注册中心直接设置浏览器安全响应头。Caddy 转发前会重写 `X-Forwarded-For`，供注册中心进行限流。仅在请求通过受控且会重写此标头的代理时启用 `AEVIA_TRUST_PROXY=true`。由 systemd 直接管理容器时，可使用 [Quadlet 单元](../infra/quadlet/README.md)。
@@ -93,15 +111,17 @@ Compose 和 Quadlet 以只读方式挂载下列目录。注册中心定期检查
 
 ## 启用教程运行功能
 
-在专用 Linux 主机或专用无根 Podman 账户下运行 `aevia-playground`。环境需要 cgroup v2，并为账户分配从属 UID 和 GID 范围。准备适用于该主机架构的 Linux `aevia` 可执行文件。从仓库根目录构建工作进程及使用匹配 CLI 的镜像。
+在专用 Linux 主机或专用无根 Podman 账户下运行 `aevia-playground`。环境需要 cgroup v2，
+并为账户分配从属 UID 和 GID 范围。从仓库根目录构建工作进程，以及包含适用于该主机架构的 CLI 的镜像。
 
 ```sh
-cargo build --locked --release --manifest-path platform/Cargo.toml \
-    -p aevia-registry-server --bin aevia-playground
-sh platform/infra/build-playground.sh target/release/aevia localhost/aevia/playground:release
+bazel build --config=release //:platform_binaries
+bazel run //:playground_image -- --tag localhost/aevia/playground:release
 ```
 
-将 `platform/target/release/aevia-playground` 安装到工作账户的 `~/.local/bin/aevia-playground`，再建立权限为 `0600` 的 `~/.config/aevia/playground.env`。
+打包已有的配套 CLI 时，使用 `bazel run //:playground_image_from_binary -- --aevia /path/to/aevia --tag localhost/aevia/playground:release`。
+
+将 `bazel-bin/platform_binaries/bin/aevia-playground` 安装到工作账户的 `~/.local/bin/aevia-playground`，再建立权限为 `0600` 的 `~/.config/aevia/playground.env`。
 
 ```dotenv
 AEVIA_PLAYGROUND_BIND=127.0.0.1:9081

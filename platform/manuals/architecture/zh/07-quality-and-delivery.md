@@ -20,6 +20,13 @@
 
 两个 CI 工作流运行格式检查、lint、测试、接口生成检查和文档检查。Aevia 还构建平台和编辑器扩展。Linux 与 Windows 运行语言及内核工作区的测试。平台数据库集成使用一次性的 PostgreSQL 服务。汇总门禁要求所有必需任务成功。
 
+Bazel 统一定义特性选择、门禁顺序和产物输入。运行 `bazel test //:contracts_test` 校验
+Aevia 绑定及文档，运行 `bazel run //:refresh_spec` 重新生成两种语言的规范。
+`//:joint_all_features_test` 运行两个 Rust 工作区的全特性测试。契约和发布冒烟计划均用
+AST 与 IR 求值器执行选定的 RSSN 数值域用例。发布入口为 `//:package_release`，使用
+`--config=release-max`，以全特性、RSSN LLVM 优化器、fat LTO 和一个代码生成单元构建。
+[Bazel 目标和发布输入](https://github.com/Apich-Organization/aevia/blob/main/BAZEL.zh-CN.md)
+
 推送与 Cargo 版本一致的 `vMAJOR.MINOR.PATCH` 标签后会启动发布流程。`v0.1.0-beta.1` 等预发布版本走同一流程。打标签前可手动运行 **Release** 工作流并启用 **dry_run**。两个仓库都在构建提交上运行完整 CI，生成归档和校验和，并将附件上传到草稿。核对提交和附件后再发布。GitHub 在发布时锁定标签和附件并为它们签发证明。RSSN 的 crates.io 任务还需要在 `crates-io` 环境中批准。
 
 每日构建在仓库默认分支运行，使用 UTC 日期 `nightly-YYYY-MM-DD` 发布不可变的预发布。每个日期标签只使用一次。每日构建不会发布到 crates.io 或更新注册表容器。Aevia 将 RSSN 检出固定到具体提交。正式版本的 RSSN 标签必须与 Aevia 锁文件中的版本一致。每日构建使用配置的 `RSSN_REF` 或 RSSN 的 `v0.3` 分支，同时校验包版本与锁文件一致。

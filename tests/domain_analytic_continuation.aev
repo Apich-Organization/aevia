@@ -1,0 +1,21 @@
+## Build and reuse a typed complex rational approximation.
+import Rssn_Special as Special
+
+let zero = complex(0.0, 0.0)
+
+let one = complex(1.0, 0.0)
+
+let two = complex(2.0, 0.0)
+
+test "a Padé record evaluates the analytic continuation and reports its pole" =
+    match Special.pade_complex([one, one], 0, 1) with
+    | Ok(pade) -> Special.eval_pade_complex(pade, complex(0.5, 0.0)) == Ok(two) && is_err(Special.eval_pade_complex(pade, one))
+    | Err(_) -> false
+
+test "Wynn acceleration recovers a geometric sum" =
+    Special.wynn_epsilon_complex([one, complex(1.5, 0.0), complex(1.75, 0.0)]) == Ok(two)
+
+test "a Taylor polynomial is recentered along an ordered chain" =
+    match Special.recenter_taylor_complex([one, two, complex(3.0, 0.0)], [zero, one, two]) with
+    | Ok(coefficients) -> coefficients[0] == complex(17.0, 0.0) && coefficients[1] == complex(14.0, 0.0) && coefficients[2] == complex(3.0, 0.0)
+    | Err(_) -> false

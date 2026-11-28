@@ -4544,6 +4544,7 @@ type ColumnInfo = { name: String, dtype: String, unit: Option&lt;String&gt; }</c
 <p><code>read_npy</code> 的秩必须是具体自然数，例如 <code>read_npy&lt;2&gt;(path)</code>。省略时报告 <code>E0314</code>。文件的实际秩不符时，IO 动作返回 <code>Err(DataError)</code>。</p>
 <p><code>read_json</code> 接受 <code>.json</code> 文件。<code>read_csv</code>、<code>read_csv_dyn</code> 和 <code>read_json</code> 遇到不支持的扩展名时，在 IO 动作执行后返回含 <code>E0904</code> 的 <code>Err(DataError)</code>。</p>
 <p>NPY 支持 1.0/2.0/3.0、小端与大端 float32/float64、C 与 Fortran 排列（Fortran 输入转换为行优先存储；写出用小端 float64、C 排列）；<code>read_npy&lt;n&gt;</code> 保存并验证具体秩，<code>write_npy</code> 接受任意秩的无量纲 <code>Float</code> 张量；未具体化的泛型秩报 <code>E0304</code>。 IO 错误码：文件不存在 <code>E0901</code>，非法参数 <code>E0902</code>，损坏/截断/秩不匹配/大小溢出 <code>E0903</code>，不支持的格式、dtype 或扩展名 <code>E0904</code>，绘图写出失败 <code>E0905</code>；NPY 错误在 IO 动作执行后作为 <code>Err(DataError)</code> 返回。</p>
+<p>本机工具链默认启用 RSSN 的 <code>npy</code> 特性。精简 CLI 也提供 Aevia <code>Data</code> 的可移植读写接口。 两个文件动作都需要 <code>fs</code> 能力。处理测量数组时，可把单位另存为元数据，再将载入的无量纲值 按该单位显式转换。</p>
 <h2 id="08-stdlib--812-plot">8.12 Plot</h2>
 <pre class="code"><code>type PlotSpec
 type Series
@@ -4765,7 +4766,7 @@ Rssn.register_plugin : Plugin -&gt; Result&lt;PluginId, PluginError&gt;   # alia
 <li><strong>维度无关，按维数/秩命名。</strong> <code>heat_fd</code>、<code>wave_fd</code>、<code>poisson_fd</code>、<code>advect_fd</code> 在内核里不分维度：空间维数就是场数据的嵌套深度（列表一维，列表的列表二维，三层三维；定义域是单位区间/方块/立方体）。 一个 Aevia 签名只有一个字面量秩，所以一个内核算子带<strong>多条签名，各用自己的名字</strong>：不带后缀的名字是一维形式（<code>poisson_fd(f: Tensor&lt;1, Float&gt;, boundary: Float)</code>），<code>_2d</code>/<code>_3d</code> 取 <code>Tensor&lt;2, Float&gt;</code>/<code>Tensor&lt;3, Float&gt;</code> 场（<code>heat_fd_2d</code>、<code>wave_fd_3d</code>、<code>advect_fd_3d</code> …），答案与场同形状；平流速度仍是 <code>Tensor&lt;1, Float&gt;</code>，每个空间维一个分量。秩多态的张量算子同理按秩命名： <code>tensor_norm_&lt;r&gt;</code>、<code>tensor_inner_&lt;r&gt;</code>（r = 1..4）与 <code>tensordot_&lt;ra&gt;_&lt;rb&gt;_&lt;k&gt;</code>（收缩 k 个轴，<code>axes_a</code>/<code>axes_b: Tensor&lt;1, Int&gt;</code> 从 0 起，结果秩 ra + rb − 2k，0 时为 <code>Float</code>；结果秩至多 4）。 分解 <code>hosvd_&lt;r&gt;</code>、<code>hooi_&lt;r&gt;</code>、<code>cp_als_&lt;r&gt;</code>、<code>tt_svd_&lt;r&gt;</code>、<code>tt_dense_&lt;r&gt;</code>（r = 2、3、4）的结果是记录 <code>Hosvd&lt;r&gt;</code>、<code>Hooi&lt;r&gt;</code>、<code>CpFit</code>、<code>TensorTrain</code>（因子表是 <code>Tensor&lt;1, Tensor&lt;2, Float&gt;&gt;</code>）， 混合列表由列表访问器 <code>from_value&lt;Tensor&lt;1, Value&gt;&gt;</code> 拆开再逐部分解码（§10.3.8）。符号 PDE 只有一个名字：<code>solve_heat_equation</code>、<code>solve_wave_equation</code>、<code>solve_laplace_equation</code>、 <code>solve_poisson_equation</code>（维数由方程的变量决定，旧的 <code>_1d</code>/<code>_2d</code>/<code>_3d</code> 是别名）；仿射变换 <code>translation</code>、<code>scaling</code>、<code>shear</code>、<code>reflection</code>、<code>rotation</code> 同理，归入 <code>Rssn_Graphics</code>。</li>
 <li>参差输入（邻接表、项数不同的多项式方程）没有字面量写法，用 <code>map(f, range(0, n))</code> 构造 <code>Tensor&lt;1, Tensor&lt;1, Float&gt;&gt;</code>。</li>
 </ul>
-<p>端到端示例与封闭形式核对：<code>tests/domain_numeric.aev</code>（<code>mad([1,2,3,4,100]) = 1</code>、<code>ifft(fft(x)) = x</code>、小波往返、<code>poisson_fd</code> 的 <code>-u'' = 1</code> 得 <code>x(1-x)/2</code>、<code>heat_fd</code> 的 <code>exp(-π²t)</code> 衰减、 <code>tensordot_2_2_1</code> 对手算矩阵乘、<code>hosvd_3</code>/<code>tt_svd_3</code> 的重构、<code>ode_solve</code> 的 <code>y' = -2y</code> 得 <code>e^-2</code>、<code>lambert_w_complex(1,0,0) = 0.5671…</code> 等），由 <code>cargo test -p aevia-rssn --test aev_suites</code> 运行。</p>
+<p>端到端示例与封闭形式核对：<code>tests/domain_numeric.aev</code>（<code>mad([1,2,3,4,100]) = 1</code>、<code>ifft(fft(x)) = x</code>、小波往返、<code>poisson_fd</code> 的 <code>-u'' = 1</code> 得 <code>x(1-x)/2</code>、<code>heat_fd</code> 的 <code>exp(-π²t)</code> 衰减、 <code>tensordot_2_2_1</code> 对手算矩阵乘、<code>hosvd_3</code>/<code>tt_svd_3</code> 的重构、<code>ode_solve</code> 的 <code>y' = -2y</code> 得 <code>e^-2</code>、<code>lambert_w_complex(1,0,0) = 0.5671…</code> 等），可运行 <code>bazel run //:aevia -- test --no-cache tests/domain_numeric.aev</code> 验证。</p>
 <h3 id="08-stdlib--8192-原生数值模型">8.19.2 原生数值模型</h3>
 <p>以下入口由清单生成；它们调用 RSSN 的关联方法或明确的泛型实例，不在 Aevia 中实现数值算法。 <code>D</code>、<code>E</code> 表示独立的元素量纲，<code>X</code> 表示坐标量纲。</p>
 <table>
@@ -5123,7 +5124,7 @@ Physics
 <li>JIT 结果与解释器 MUST 逐位一致；不能保证一致的情形 MUST bail，不一致是 bug。</li>
 <li><code>map_floats</code>（设备接缝）仍用直线 tape 降级，因为 GPU 需要无控制流的程序。</li>
 </ul>
-<p>默认构建包含 Cranelift、wgpu 与 NumPy <code>.npy</code> 支持。用 <code>aevia devices</code> 查看当前构建和设备。 精简构建可使用 <code>cargo build -p aevia-cli --no-default-features</code>。此时普通函数仍可解释执行， 显式 <code>@jit</code> 报 <code>E1001("core.jit")</code>。参考测试 <code>tests/jit_native.aev</code>。</p>
+<p>默认构建包含 Cranelift、wgpu 与 NumPy <code>.npy</code> 支持。用 <code>aevia devices</code> 查看当前构建和设备。 使用 <code>bazel build //:toolchain_minimal</code> 构建精简 CLI。普通函数仍可解释执行， 显式 <code>@jit</code> 报 <code>E1001("core.jit")</code>。参考测试 <code>tests/jit_native.aev</code>。</p>
 <h3 id="09-runtime--964-设备目标">9.6.4 设备目标</h3>
 <p><code>@jit</code> 始终是标量、CPU、机器码路径；<code>Cpu</code>/<code>CpuParallel</code>/<code>Gpu(n)</code> 上的数据并行是另一套机制（rssn <code>Device</code>，§10.6.5）， 满足 <code>@jit</code> 的函数也满足设备批量路径。</p>
 <ul>
@@ -5330,6 +5331,10 @@ aevia --version</code></pre>
 <td>选择执行后端：<code>auto</code>、<code>ir</code>、<code>ast</code>、<code>cpu</code>、<code>cpu-parallel</code> 或 <code>gpu</code></td>
 </tr>
 <tr>
+<td><code>--rssn-backend NAME</code></td>
+<td>为进程选择 RSSN 表达式执行后端。运行 <code>aevia devices</code> 查看可用值，见 §10.6.4。</td>
+</tr>
+<tr>
 <td><code>--jobs N</code></td>
 <td>并行求值的工作线程数（§9.7.2）</td>
 </tr>
@@ -5431,7 +5436,7 @@ aevia --version</code></pre>
 <li>Doctest：<code>aevia test --doc [FILE…/DIRS…]</code> 抽取 <code>##</code> 注释中所有标 <code>aevia</code> 的围栏块并逐个编译。块首行可写 <code>compile_fail</code>（要求编译失败）或 <code>compile_fail EXXXX</code>（要求失败且含该代码）；不写标记要求编译通过。每个片段是独立合成 模块：声明模块的 <code>import</code>/<code>open</code> 行被复制，导入按声明文件的包与相邻目录解析，模块自身声明不隐式进入片段；片段使用内存 源码，不写临时文件；依赖或继承导入失败不满足预期编译失败。同一文件的片段共享包解析结果，编译输入相同的导入模块复用类型检查结果。 <code>--locked</code> 检查每个被检查文档所属包而非调用者工作目录。 任何失败退出码为 1；没有可检查的块或过滤后为空也退出 1。抽取器在 <code>aevia-doc::doctest</code>。</li>
 <li>编译失败测试：<code>compile_fail("&lt;source&gt;") : String -&gt; Bool</code> 在隔离环境（无导入、仅 Prelude）编译片段，至少一个错误时为 <code>true</code>；它<strong>不</strong>检查错误码，错误码由 doctest 的 <code>compile_fail EXXXX</code> 断言。</li>
 <li>黄金测试：REPL 输出/错误信息快照。</li>
-<li>基准：<code>bench</code> 声明；每项报告 N 次迭代的中位数、均值与 95% 置信区间（默认 N=100，<code>--iterations</code>/<code>--warmup</code>）。 <code>--save-baseline FILE</code> 写 JSON（<code>format=1</code>、<code>tool</code>/<code>version</code>、<code>profile=debug|release</code>、<code>optimized_ir=true|false</code>、<code>iterations</code>、<code>warmup</code>、每项 <code>median_ns</code>/<code>mean_ns</code>/<code>ci_ns</code>）；<code>--compare-baseline FILE --threshold RATIO</code>（默认 0.05，可写 <code>5%</code>）按中位数比较， 超出阈值报 <code>REGRESSION</code> 并退出 1；profile 不一致退出 2；只在一侧出现的 workload 被报告但不计为回归。协议：只比较 release 构建、同机、相同的 <code>--release</code> IR 优化设置、median of N。旧基线若没有 <code>optimized_ir</code> 字段，视为未优化。</li>
+<li>基准：<code>@bench</code> 声明；每项报告 N 次迭代的中位数、均值与 95% 置信区间（默认 N=100，<code>--iterations</code>/<code>--warmup</code>）。 从源码工作区运行 <code>bazel run --config=release-max //:aevia -- bench workload.aev</code>。 <code>--save-baseline FILE</code> 写 JSON（<code>format=1</code>、<code>tool</code>/<code>version</code>、<code>profile=debug|release</code>、<code>optimized_ir=true|false</code>、<code>iterations</code>、<code>warmup</code>、每项 <code>median_ns</code>/<code>mean_ns</code>/<code>ci_ns</code>）；<code>--compare-baseline FILE --threshold RATIO</code>（默认 0.05，可写 <code>5%</code>）按中位数比较， 超出阈值报 <code>REGRESSION</code> 并退出 1；profile 不一致退出 2；只在一侧出现的 workload 被报告但不计为回归。协议：只比较 release 构建、同机、相同的 <code>--release</code> IR 优化设置、median of N。旧基线若没有 <code>optimized_ir</code> 字段，视为未优化。</li>
 </ul>
 <h2 id="09-runtime--913-性能目标">9.13 性能目标</h2>
 <table>
@@ -5764,7 +5769,7 @@ let term = session.sym(&amp;name);</code></pre>
 <li><strong>错误通道。</strong> kernel 失败是 <code>Err(OpError)</code>；图后端算子参数越出定义域时返回未约化的调用项（<code>invmod(6, 15)</code>）， <code>from_value</code> 把它报告为带该项文本的 <code>TypeMismatch</code>。</li>
 <li><strong>诊断通道：为什么没有约化。</strong> 数值算子拒绝参数（形状不符、轴越界、系统奇异、Neumann 数据不相容……）时，kernel 只留下 未约化的调用项。<code>Session::explain(term)</code>（<code>rssn::kernel::{Diag, DiagKind}</code>）在调用线程上重放该算子的求值器，给出 <code>Diag { op, arg, kind, message }</code>。桥（<code>Kernel::call_with_witnesses</code>、<code>call_key</code>、<code>call_key_with_witnesses</code>）在结果恰好 是该算子自己的未约化调用、且 <code>kind</code> 不是 <code>Symbolic</code> 时，返回 <code>KernelError::from_diag</code>，代码为稳定的 <code>rssn.diag.&lt;kind&gt;</code>（<code>arity</code>、<code>shape</code>、<code>domain</code>、<code>singular</code>、<code>incompatible</code>、<code>not_converged</code>、<code>unsupported</code>、 <code>symbolic</code>、<code>unspecified</code>）。<code>Rssn.dynamic</code> 在 <code>Err</code> 里写成用户形式——函数名、参数名、位置： <code>Err(rssn.diag.domain: tensordot_2_2_1: argument `axes_a` (#3): an axis is past the rank of the first tensor (rank 2): [2])</code>。 参数名取自 overlay 的 <code>sig</code>；witnessed/dynamic 包装器只给位置（<code>argument #3</code>）。<code>OpError</code> 仍是不透明类型， <code>"{e}"</code> 给出 <code>代码: 消息</code>，没有新增构造子或 <code>Rssn.*</code> 成员。在<strong>抛出</strong>位置（<code>Rssn.&lt;op&gt;(..)</code> 的类型化调用）同一发现是 <code>E0807</code>，附注给出稳定代码。只有 <code>rules::numeric::TABLES</code> 的算子记录原因。</li>
 <li><strong>维度证据。</strong> <code>sig</code> 同时声明“该算子是无量纲参数的纯函数”；kernel 声明的 <code>Dimensionless</code> 规则、以及参数已知无量纲时的 <code>List/NonMetric/Compare/Angle</code> 规则，会让裸数结果携带 <code>Scalar(1)</code> 证据；其余规则（<code>Same</code>、<code>Sum</code>、<code>Custom</code>…）不被信任。 <code>list(...)</code> 项结果在可信时被读回成张量（等长行合并成高阶张量，不等长保留为张量的张量）。</li>
-<li><strong>运行期生成。</strong> 模块在解析 <code>import Rssn_NumberTheory</code> 时由 live manifest 渲染（<code>codegen::namespace_source</code>），不提交 生成源，因此不与所链接的 kernel 漂移。提交的只有 overlay 与覆盖报告 <code>tools/rssn-api-audit/RSSN-COVERAGE.md</code>； <code>cargo test -p aevia-rssn --test domains</code> 重新生成并比对（<code>AEVIA_BLESS=1</code> 重写）。</li>
+<li><strong>运行期生成。</strong> 模块在解析 <code>import Rssn_NumberTheory</code> 时由 live manifest 渲染（<code>codegen::namespace_source</code>），不提交 生成源，因此不与所链接的内核漂移。<code>bazel test //:contracts_test</code> 检查提交的 overlay 和覆盖报告 <code>tools/rssn-api-audit/RSSN-COVERAGE.md</code>。修改契约后，用 <code>bazel run //:refresh_kernel</code> 重新生成提交的产物。</li>
 </ul>
 <p><strong><code>Rssn_Numeric</code>。</strong> rssn 的 <code>numeric</code> 规则集（稳健统计、窗与谱、小波、Krylov/稀疏/低秩/张量分解、维度无关的有限差分求解器、 复变特殊函数、表达式算子）全部有 <code>sig</code>，没有一个留在 dynamic 档；用户接口与示例见 §8.19.1。规则：</p>
 <ul>
@@ -5847,8 +5852,9 @@ pub fn kernel() -&gt; Rc&lt;Kernel&gt;;   // 当前线程的会话，首次使�
 <h3 id="10-backend--1064-jit">10.6.4 JIT</h3>
 <p>RSSN 的 <code>Term::compile</code> 将闭式 <code>Float</code> 表达式编译成函数。<code>TieredBackend</code> 先解释执行， 可在后台编译。Aevia 将满足条件的 Core IR 标量函数降级到 RSSN LIR，经预热后使用 Cranelift 编译，也可用 <code>@jit</code> 主动请求。进入本机代码前，调用必须经过验证且具有受支持的 具体标量表示。含副作用的函数、不支持的程序和编译失败的情况继续由解释器执行。</p>
 <p>本机工具链默认启用 Cranelift、wgpu 和 RSSN 的 NumPy IO 功能。不支持本机 JIT 的构建中， 显式使用 <code>@jit</code> 会报告 <code>E1001("core.jit")</code>。</p>
-<p>用 <code>aevia devices</code> 查看当前和可用的 RSSN 后端。<code>--rssn-backend &lt;name&gt;</code> 设置进程级 RSSN 后端，REPL 的 <code>:rssn-backend [name]</code> 提供同样的选择。默认的 <code>auto</code> 在运行时 根据可用能力选择宿主执行路径。Aevia 自身的求值器和矩阵卸载策略由 <code>--backend</code> 独立控制。</p>
-<p>例如，<code>aevia --rssn-backend cpu-parallel test examples/native_backend.aev</code> 会为示例中的 RSSN 编译选择并行 CPU 后端。源程序可用 <code>Rssn.num_backend_named</code> 和 <code>Rssn.num_backend_compile</code> 为单个 RSSN 程序选择后端。源程序选择或使用 RSSN GPU 后端 需要 <code>gpu</code> 能力。设置进程默认值时，可用命令行选项或 REPL 命令。</p>
+<p>用 <code>aevia devices</code> 查看当前构建启用的功能、当前 RSSN 后端及可用选项。 <code>--rssn-backend NAME</code> 设置进程默认值。在 REPL 中用 <code>:rssn-backend</code> 查看， 用 <code>:rssn-backend auto</code> 恢复自动选择。Aevia 自身的求值器和矩阵卸载策略由 <code>--backend</code> 独立控制。</p>
+<p>在支持 Cranelift 的宿主上，RSSN 的 <code>auto</code> 先通过 CPU 指令带求值，再在后台编译热点表达式。 其他宿主使用解释器。<code>interpreter</code> 选择指令带，<code>cpu</code> 和 <code>cpu-parallel</code> 显式选择 CPU 设备， <code>tiered</code> 和 <code>cranelift</code> 在支持的平台上选择编译路径。<code>jit</code> 是 <code>cranelift</code> 的别名。 用可用的设备 ID 选择特定 GPU，或用 <code>gpu</code> 选择发现的第一个 wgpu 适配器。 显式指定的 <code>--rssn-backend</code> 不可用时，命令以状态 2 退出。</p>
+<p>例如，<code>aevia --rssn-backend cpu-parallel test examples/native_backend.aev</code> 会为示例中的 RSSN 编译选择并行 CPU 后端。源程序可用清单声明的 <code>num_backend_named</code> 和 <code>num_backend_compile</code> 算子为单个程序选择后端。从源码探测、选择或使用 GPU 后端需要 <code>gpu</code> 能力，在收紧权限的 <code>with_cap</code> 作用域中复用 GPU 句柄或已编译的 GPU 程序也需要此能力。</p>
 <h3 id="10-backend--1065-设备与数据并行执行">10.6.5 设备与数据并行执行</h3>
 <p>Aevia 的 <code>Device</code> 值标识请求的执行位置。<code>device_of(tensor)</code> 返回张量所在位置。 <code>to_device(tensor, device)</code> 和 <code>on(device, thunk)</code> 是 IO 动作，目前均支持 <code>Cpu</code>。 请求 <code>Gpu</code> 或 <code>Distributed</code> 放置时，即便 RSSN 宿主设备注册表已发现 GPU， 仍分别以能力名 <code>core.gpu</code> 或 <code>core.distributed</code> 报 <code>E1001</code>（§13.9.4）。</p>
 <p>RSSN 设备层提供缓冲区、数值内核 IR、CPU 参考及并行执行器，以及通过 <code>gpu-wgpu</code> 启用的 WGSL 后端。嵌入宿主可用它批量求值、执行数组运算与固定步长集合仿真。 Aevia 解释器的 CPU 批量路径接受 §9.6.1 所述纯标量子集。设备枚举、启动融合和显式 GPU 缓冲区传输由 RSSN 宿主 API 提供。</p>
@@ -5900,7 +5906,8 @@ pub fn kernel() -&gt; Rc&lt;Kernel&gt;;   // 当前线程的会话，首次使�
 <li>回调句柄限于发起它的宿主调用（§8.19）。仿真参数可通过模式检查的记录或通用 JSON 接口传入（§8.17）。可选本机代码与设备能力在选用时确定（§10.6）。</li>
 </ul>
 <h3 id="10-backend--1081-兼容性与验证">10.8.1 兼容性与验证</h3>
-<p>使用 <code>aevia rssn --audit</code> 查看所链接内核的签名及能力。一致性测试比较源码声明与已检查 适配器，覆盖结构化值与单位，并将编译求值与参考路径对照。运行时预算与符号预算分别 设定（§6.9.1）。本机求值器无法执行某条受支持的路径时，可回到解释器。</p>
+<p>使用 <code>aevia rssn --audit</code> 查看所链接内核的绑定覆盖。用 <code>aevia rssn --describe OPERATOR</code> 查询单个算子的签名、量纲规则和可调用绑定。<code>aevia rssn --emit --out generated --namespaces</code> 导出对应构建的模块。对于有受验证的类型化回调封装的声明，可使用导出签名。显式高阶调用 <code>Rssn.call_ho</code> 分别接收普通参数列表和由 <code>to_callback</code> 封装的闭包列表，两组内部都保持签名 顺序（§8.19）。</p>
+<p>一致性测试比较源码声明与已检查适配器，覆盖结构化值与单位，并将编译求值与参考路径对照。运行时预算与符号预算分别 设定（§6.9.1）。本机求值器无法执行某条受支持的路径时，可回到解释器。</p>
 <h2 id="10-backend--109-一个端到端的调用链">10.9 一个端到端的调用链</h2>
 <pre class="code" data-lang="aevia"><code><span class="kw">fn</span> fall_time(h: Float[L]): Float[T] =
     sqrt(<span class="n">2</span> * h / g)</code></pre>

@@ -1,6 +1,6 @@
 ## The `Ode` module of §8.20.
 # Generated standard library; do not edit.
-# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Regenerate with `bazel run //:refresh_stdlib`.
 module Ode
 
 ## The integration scheme for an ODE solver. Dopri5 is the adaptive default for smooth problems; Rk4 is a fixed-step classical method. Radau, Bdf and Rosenbrock23 are for stiff problems, and AutoSwitch starts with Dopri5 and falls back to Radau. StormerVerlet, Ruth4 and the GaussLegendre and ImplicitMidpoint methods are geometric integrators that preserve the structure of Hamiltonian systems, and the Adaptive* forms vary the step while keeping that method.

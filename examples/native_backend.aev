@@ -1,4 +1,4 @@
-## Run: cargo run -p aevia-cli -- test examples/native_backend.aev
+## Run: bazel run //:aevia -- test examples/native_backend.aev
 ## Expressions use dimensionless normalized coordinates; handles retain each axis unit.
 ## This program uses the active RSSN backend. Run the same example with
 ## `--rssn-backend cpu`, `--rssn-backend cranelift`, or a GPU selector from `aevia devices`.

@@ -3,7 +3,7 @@
 ## evaluator for the 200,000-iteration tail loop. The default CLI build
 ## includes the `jit` feature. The AST evaluator applies its recursion depth
 ## guard to the long case.
-## Run with: cargo run -p aevia-cli -- --backend ir test tests/jit_native.aev
+## Run with: bazel run //:aevia -- --backend ir test tests/jit_native.aev
 @jit
 fn fib(n: Int): Int =
     match n with

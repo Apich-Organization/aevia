@@ -1,0 +1,19 @@
+import Rssn_Special as Special
+
+let first = complex(0.0, 0.0)
+let second = complex(1.0, 0.0)
+let third = complex(1.0, 1.0)
+let fourth = complex(0.0, 1.0)
+
+test "a fitted square map is reusable in interior evaluations" =
+    match Special.schwarz_christoffel_solve([first, second, third, fourth], 40, 1e-7) with
+    | Ok(map) ->
+        match Special.schwarz_christoffel_evaluate(map, complex(0.5, 0.5), 1e-9, 128) with
+        | Ok(v) -> v.converged && decide(re(v.value) > 0.0 && re(v.value) < 1.0 && im(v.value) > 0.0 && im(v.value) < 1.0) == Some(true)
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "crossed polygons fail before Newton iteration" =
+    match Special.schwarz_christoffel_solve([first, third, second, fourth], 40, 1e-7) with
+    | Ok(_) -> false
+    | Err(_) -> true
