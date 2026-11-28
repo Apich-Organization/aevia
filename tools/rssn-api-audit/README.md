@@ -1,7 +1,9 @@
 # RSSN kernel API inventory
 
-`cargo run -p rssn-api-audit -- --report` lists public kernel, backend and simulation source APIs,
-including conditional declarations. `--verify` checks both the checked-in
+`bazel test //:rssn_api_audit_test` verifies the callable inventory in CI. Run
+`bazel run //:refresh_kernel` to regenerate it with the other kernel artifacts.
+The inventory lists public kernel, backend and simulation source APIs, including
+conditional declarations. `--verify` checks both the checked-in
 snapshot and callable coverage from one reading of the kernel sources. After
 reviewing an intentional change, use `--write-checked` to validate coverage and
 update the snapshot. `--check`, `--coverage-check` and `--write` still support

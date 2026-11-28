@@ -362,6 +362,9 @@ fn supported_callback_schema(ty: &crate::SigType) -> bool {
                     && supported_callback_schema(ty)
             })
         },
+        | S::Variant(cases) => {
+            crate::registry::option_payload(cases).is_some_and(supported_callback_schema)
+        },
         | _ => false,
     }
 }
@@ -422,6 +425,13 @@ fn apply_callback_schema(
         | (Value::Record(record), crate::SigType::Record(fields)) => {
             for (name, value) in &mut record.fields {
                 if let Some((_, sig)) = fields.iter().find(|(n, _)| n == name) {
+                    apply_callback_schema(value, sig);
+                }
+            }
+        },
+        | (Value::Variant(variant), crate::SigType::Variant(cases)) => {
+            if let Some((_, fields)) = cases.iter().find(|(tag, _)| *tag == variant.tag) {
+                for (value, sig) in variant.payload.iter_mut().zip(fields) {
                     apply_callback_schema(value, sig);
                 }
             }
@@ -504,6 +514,15 @@ fn callback_schema_proves(
                         | _ => false,
                     }
                 })
+        },
+        | (S::Variant(expected), S::Variant(actual), W::OptionSchema(proof)) => {
+            match (
+                crate::registry::option_payload(expected),
+                crate::registry::option_payload(actual),
+            ) {
+                | (Some(expected), Some(actual)) => callback_schema_proves(expected, actual, proof),
+                | _ => false,
+            }
         },
         | _ => false,
     }
@@ -821,25 +840,9 @@ fn validate_ordinary_callback_input(
             }
             Ok(())
         },
-        | (Val::Variant { tag, payload }, S::Variant(cases))
-            if crate::registry::option_payload(cases).is_some() =>
-        {
-            let W::Variant {
-                tag: witnessed_tag,
-                fields,
-            } = witness
-            else {
-                return Err(missing());
-            };
-            let Some((_, declared)) = cases.iter().find(|(name, _)| name == tag) else {
-                return Err(missing());
-            };
-            if witnessed_tag != tag
-                || payload.len() != declared.len()
-                || fields.len() != payload.len()
-            {
-                return Err(missing());
-            }
+        | (Val::Variant { tag, payload }, S::Variant(cases)) => {
+            let (declared, fields) =
+                option_packet_fields(tag, payload.len(), witness, cases).ok_or_else(missing)?;
             for ((value, proof), ty) in payload.iter().zip(fields).zip(declared) {
                 validate_ordinary_callback_input(value, proof, ty)?;
             }
@@ -869,6 +872,27 @@ fn validate_ordinary_callback_input(
         },
         | _ => Err(missing()),
     }
+}
+
+// Native Option tags are permitted only with exactly the declared payload and a
+// matching witness. Both boundary directions verify every field recursively.
+fn option_packet_fields<'a>(
+    tag: &str,
+    arity: usize,
+    witness: &'a crate::witness::DimensionWitness,
+    cases: &'a [(String, Vec<crate::SigType>)],
+) -> Option<(&'a [crate::SigType], &'a [crate::witness::DimensionWitness])> {
+    crate::registry::option_payload(cases)?;
+    let crate::witness::DimensionWitness::Variant {
+        tag: witnessed_tag,
+        fields,
+    } = witness
+    else {
+        return None;
+    };
+    let (_, declared) = cases.iter().find(|(name, _)| name == tag)?;
+    (witnessed_tag == tag && arity == declared.len() && fields.len() == arity)
+        .then_some((declared.as_slice(), fields.as_slice()))
 }
 
 #[allow(
@@ -993,6 +1017,14 @@ fn validate_callback_result(
             }
             Ok(())
         },
+        | (Val::Variant { tag, payload }, S::Variant(cases)) => {
+            let (declared, fields) =
+                option_packet_fields(tag, payload.len(), witness, cases).ok_or_else(mismatch)?;
+            for ((value, proof), ty) in payload.iter().zip(fields).zip(declared) {
+                validate_callback_result(value, proof, ty)?;
+            }
+            Ok(())
+        },
         | (Val::Record(fields), S::Record(schema)) => {
             let W::Record(witnesses) = witness else {
                 return Err(mismatch());
@@ -1030,6 +1062,7 @@ fn validate_callback_result(
             _,
             S::Tensor { .. }
             | S::Record(_)
+            | S::Variant(_)
             | S::Dim(_, _)
             | S::Int
             | S::Real
@@ -3168,6 +3201,60 @@ mod recursive_callback_witness_tests {
         ]);
         assert!(validate_ordinary_callback_input(&value, &duplicate, &schema).is_err());
     }
+    #[test]
+    fn callbacks_validate_option_tags_arity_and_payload_dimensions() {
+        let length = aevia_dim::Dim::base("Length");
+        let sig = S::Variant(vec![
+            ("None".into(), vec![]),
+            (
+                "Some".into(),
+                vec![S::Dim(Box::new(S::Float), length.clone())],
+            ),
+        ]);
+        assert!(super::supported_callback_schema(&sig));
+        let variant = |tag: &str, payload| {
+            Val::Variant {
+                tag: tag.to_owned(),
+                payload,
+            }
+        };
+        let proof = |tag: &str, fields| {
+            W::Variant {
+                tag: tag.to_owned(),
+                fields,
+            }
+        };
+        let some = variant("Some", vec![Val::Num(crate::Num::Float(3.0))]);
+        let none = variant("None", Vec::new());
+        assert!(
+            super::validate_callback_result(
+                &some,
+                &proof("Some", vec![W::Scalar(length.clone())]),
+                &sig
+            )
+            .is_ok()
+        );
+        assert!(super::validate_callback_result(&none, &proof("None", Vec::new()), &sig).is_ok());
+        for bad in [
+            proof("None", Vec::new()),
+            proof("Some", Vec::new()),
+            proof("Some", vec![W::Scalar(aevia_dim::Dim::base("Time"))]),
+            proof("Some", vec![W::Scalar(length.clone()), W::Scalar(length)]),
+        ] {
+            assert_eq!(
+                super::validate_callback_result(&some, &bad, &sig)
+                    .unwrap_err()
+                    .code,
+                "E1003"
+            );
+        }
+        let unchecked = S::Variant(vec![("Some".into(), vec![S::Float])]);
+        assert!(!super::supported_callback_schema(&unchecked));
+        assert!(
+            super::validate_callback_result(&none, &proof("None", Vec::new()), &unchecked).is_err()
+        );
+    }
+
     #[test]
     fn callback_empty_tensor_needs_actual_recursive_schema() {
         let element = S::Record(vec![("x".into(), S::Float), ("ok".into(), S::Bool)]);

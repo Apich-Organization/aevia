@@ -35,6 +35,8 @@ mod source_policy_math;
 #[path = "../../../../rssn/tests/contraction_contract.rs"]
 mod contraction_contract;
 
+#[path = "../../../../rssn/tests/modular_context_abi.rs"]
+mod modular_context_abi;
 #[path = "../../../../rssn/tests/native_models.rs"]
 mod native_models;
 #[path = "../../../../rssn/tests/native_objects.rs"]
@@ -48,6 +50,15 @@ mod native_reverse_ad;
 #[path = "../../../../rssn/tests/native_homology.rs"]
 mod native_homology;
 
+#[path = "../../../../rssn/tests/mpc_context_abi.rs"]
+mod mpc_context_abi;
+
+#[path = "../../../../rssn/tests/control_trajectories_abi.rs"]
+mod control_trajectories_abi;
+
+#[path = "../../../../rssn/tests/transfer_context_abi.rs"]
+mod transfer_context_abi;
+
 #[path = "../../../../rssn/tests/native_backend.rs"]
 mod native_backend;
 
@@ -59,6 +70,9 @@ mod native_linear;
 
 #[path = "../../../../rssn/tests/native_grids.rs"]
 mod native_grids;
+
+#[path = "../../../../rssn/tests/cad_mesh_abi.rs"]
+mod cad_mesh_abi;
 
 #[path = "../../../../rssn/tests/native_mechanics.rs"]
 mod native_mechanics;
