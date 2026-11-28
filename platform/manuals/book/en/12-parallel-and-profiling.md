@@ -64,21 +64,21 @@ RSSN JIT, wgpu and NumPy integration. The executable is
 
 ## Measure the right part
 
-Separate file and terminal work from the part you want to measure. Use a fixed fixture, a warm-up, repeat runs, and common settings for threads and optimization. Verify the result on each configuration before comparing time. `aevia bench --help` describes the tool's benchmark declarations and baseline format.
+Separate file and terminal work from the part you want to measure. Use a fixed fixture, a warm-up, repeat runs, and common settings for threads and optimization. Verify the result on each configuration before comparing time. From the repository, use
+`bazel run --config=release-max //:aevia -- bench workloads.aev` for an Aevia file containing
+`@bench` functions. Run `bazel run //:aevia -- bench --help` for baseline options.
 
 An optimized build of the toolchain and the CLI option `--release` address different stages. Build settings affect the interpreter executable. The CLI option enables optimizations for the checked program. Report both, along with enabled backend features, when sharing measurements.
 
 ## Sample a program on Windows
 
 The `aevia-prof` development tool samples a child process on x86-64 Windows
-without elevation. Build a CLI with profiling symbols from the repository root.
-In PowerShell, set `$profiler` to the path of your `aevia-prof.exe` sampler and
-pass the symbolized CLI as its first argument.
+without elevation. From the repository root, run the Bazel profiler with your
+usual CLI arguments. Bazel builds the sampler and the CLI with profiling symbols.
 
 ```powershell
-bazel build //:toolchain_profiling
 $env:AEVIA_PROF_FOLDED = "candidates.folded"
-& $profiler .\bazel-bin\toolchain_profiling\bin\aevia.exe run candidates.aev
+bazel run //:profile -- run candidates.aev
 Remove-Item Env:AEVIA_PROF_FOLDED
 ```
 

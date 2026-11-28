@@ -5772,7 +5772,8 @@ CLI 的 `check`（含 `--all`）、`run`、`lint`（含 `--all`）、`test` 和 
 - 编译失败测试：`compile_fail("<source>") : String -> Bool` 在隔离环境（无导入、仅 Prelude）编译片段，至少一个错误时为
   `true`；它**不**检查错误码，错误码由 doctest 的 `compile_fail EXXXX` 断言。
 - 黄金测试：REPL 输出/错误信息快照。
-- 基准：`bench` 声明；每项报告 N 次迭代的中位数、均值与 95% 置信区间（默认 N=100，`--iterations`/`--warmup`）。
+- 基准：`@bench` 声明；每项报告 N 次迭代的中位数、均值与 95% 置信区间（默认 N=100，`--iterations`/`--warmup`）。
+  从源码工作区运行 `bazel run --config=release-max //:aevia -- bench workload.aev`。
   `--save-baseline FILE` 写 JSON（`format=1`、`tool`/`version`、`profile=debug|release`、`optimized_ir=true|false`、`iterations`、`warmup`、每项
   `median_ns`/`mean_ns`/`ci_ns`）；`--compare-baseline FILE --threshold RATIO`（默认 0.05，可写 `5%`）按中位数比较，
   超出阈值报 `REGRESSION` 并退出 1；profile 不一致退出 2；只在一侧出现的 workload 被报告但不计为回归。协议：只比较

@@ -53,20 +53,20 @@ CLI。可执行文件位于 `bazel-bin/toolchain_minimal/bin/aevia`，Windows �
 
 ## 测量需要比较的部分
 
-把文件和终端 IO 与待测计算分开。使用固定样本、预热和多次重复运行，并保持线程与优化设置一致。比较耗时前先验证各配置的结果。`aevia bench --help` 说明基准声明和基线文件的格式。
+把文件和终端 IO 与待测计算分开。使用固定样本、预热和多次重复运行，并保持线程与优化设置一致。比较耗时前先验证各配置的结果。在仓库中运行
+`bazel run --config=release-max //:aevia -- bench workloads.aev`，测量 Aevia 文件中的
+`@bench` 函数。用 `bazel run //:aevia -- bench --help` 查看基线选项。
 
 优化构建工具链和 CLI 的 `--release` 选项作用在不同阶段。构建设置影响解释器二进制文件，CLI 选项开启对已检查程序的优化。分享测量结果时，一并记录这两组设置和启用的后端功能。
 
 ## 在 Windows 上采样
 
-开发工具 `aevia-prof` 可以在 x86-64 Windows 上采样子进程，无需管理员权限。先从仓库根目录
-构建保留性能分析符号的 CLI。在 PowerShell 中将 `$profiler` 设为 `aevia-prof.exe` 采样器的路径，
-并把带符号的 CLI 作为第一个参数。
+开发工具 `aevia-prof` 可以在 x86-64 Windows 上采样子进程，无需管理员权限。在仓库
+根目录通过 Bazel 运行采样器，传入平常使用的 CLI 参数。Bazel 会构建采样器和带性能分析符号的 CLI。
 
 ```powershell
-bazel build //:toolchain_profiling
 $env:AEVIA_PROF_FOLDED = "candidates.folded"
-& $profiler .\bazel-bin\toolchain_profiling\bin\aevia.exe run candidates.aev
+bazel run //:profile -- run candidates.aev
 Remove-Item Env:AEVIA_PROF_FOLDED
 ```
 

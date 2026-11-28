@@ -835,8 +835,9 @@ The four-revision retention applies per module name.
   error; it does **not** check the error code, which the doctest marker `compile_fail EXXXX`
   asserts.
 - Golden tests: snapshots of REPL output and error messages.
-- Benchmarks: `bench` declarations; each reports the median, mean and 95% confidence interval of
-  N iterations (default N=100; `--iterations`/`--warmup`). `--save-baseline FILE` writes JSON
+- Benchmarks use `@bench` declarations and report the median, mean and 95% confidence interval of
+  N iterations (default N=100; `--iterations`/`--warmup`). From the source workspace, run
+  `bazel run --config=release-max //:aevia -- bench workload.aev`. `--save-baseline FILE` writes JSON
   (`format=1`, `tool`/`version`, `profile=debug|release`, `optimized_ir=true|false`, `iterations`, `warmup`, and per item
   `median_ns`/`mean_ns`/`ci_ns`); `--compare-baseline FILE --threshold RATIO` (default 0.05, may
   be written `5%`) compares medians and, above the threshold, reports `REGRESSION` and exits 1; a
