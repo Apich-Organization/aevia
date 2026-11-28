@@ -25337,7 +25337,7 @@
         "(Tensor<1, Float[_]>, Tensor<2, Float[_]>, Tensor<1, String>, Tensor<1, Float[_]>, Float[_], Float[_], Float[_]) -> { status: String, x: Tensor<1, Float[_]>, value: None | Some(Float[_]), iterations: None | Some(Int), bland_pivots: None | Some(Int) }"
       ],
       "stability": "Experimental",
-      "doc": "Native simplex LP with normalized coefficient conversion using positive coordinate/objective/constraint references; preserves Optimal,Infeasible,Unbounded without fabricated coordinates or objective.\n\nTwo-phase simplex: minimise `c . x` subject to rows `a_i . x (rel_i) b_i`\nand `x >= 0`, with steepest-edge pricing and the Bland anti-cycling\nfallback; see [`simplex_with`].",
+      "doc": "Two-phase nonnegative simplex with measured coordinate, objective and constraint references.\n\nTwo-phase simplex: minimise `c . x` subject to rows `a_i . x (rel_i) b_i`\nand `x >= 0`, with steepest-edge pricing and the Bland anti-cycling\nfallback; see [`simplex_with`].",
       "examples": []
     },
     {
@@ -25347,7 +25347,7 @@
         "(Tensor<1, Float[_]>, Tensor<2, Float[_]>, Tensor<1, String>, Tensor<1, Float[_]>, String, Float[_], Float[_], Float[_]) -> { status: String, x: Tensor<1, Float[_]>, value: None | Some(Float[_]), iterations: None | Some(Int), bland_pivots: None | Some(Int) }"
       ],
       "stability": "Experimental",
-      "doc": "Native simplex LP with actual selectable Dantzig,SteepestEdge,Bland pricing and retained pivot statistics; independent positive coordinate/objective/constraint references.\n\nTwo-phase tableau simplex with a selectable pricing rule.\n\nFor [`Pricing::Dantzig`] and [`Pricing::SteepestEdge`] the solver\nmonitors degeneracy: after a run of consecutive pivots that do not\nimprove the objective it switches to Bland's rule (smallest-index\nentering variable, ties in the ratio test broken by smallest basic\nindex) until a strictly improving pivot occurs, which guarantees\ntermination on cycling examples such as Beale's. The leaving-variable\ntie-break is always Bland's.",
+      "doc": "Two-phase nonnegative simplex with measured reference scales, selectable pricing and pivot statistics.\n\nTwo-phase tableau simplex with a selectable pricing rule.\n\nFor [`Pricing::Dantzig`] and [`Pricing::SteepestEdge`] the solver\nmonitors degeneracy: after a run of consecutive pivots that do not\nimprove the objective it switches to Bland's rule (smallest-index\nentering variable, ties in the ratio test broken by smallest basic\nindex) until a strictly improving pivot occurs, which guarantees\ntermination on cycling examples such as Beale's. The leaving-variable\ntie-break is always Bland's.",
       "examples": []
     },
     {
@@ -29832,7 +29832,7 @@
     },
     {
       "name": "num_control_state_space_continuous",
-      "rule_set": "numerical_matrix",
+      "rule_set": "numerical_vector",
       "signatures": [
         "(Tensor<2, Float>, Tensor<2, Float>, Tensor<2, Float>, Tensor<2, Float>) -> rssn/native/control/state-space/v1"
       ],
@@ -29842,7 +29842,7 @@
     },
     {
       "name": "num_control_state_space_discrete",
-      "rule_set": "numerical_matrix",
+      "rule_set": "numerical_vector",
       "signatures": [
         "(Tensor<2, Float>, Tensor<2, Float>, Tensor<2, Float>, Tensor<2, Float>, Float) -> rssn/native/control/state-space/v1"
       ],
@@ -29852,7 +29852,7 @@
     },
     {
       "name": "num_control_state_space_is_controllable",
-      "rule_set": "numerical_matrix",
+      "rule_set": "numerical_vector",
       "signatures": [
         "(rssn/native/control/state-space/v1) -> Bool"
       ],
@@ -29862,7 +29862,7 @@
     },
     {
       "name": "num_control_state_space_is_observable",
-      "rule_set": "numerical_matrix",
+      "rule_set": "numerical_vector",
       "signatures": [
         "(rssn/native/control/state-space/v1) -> Bool"
       ],
@@ -29872,7 +29872,7 @@
     },
     {
       "name": "num_control_state_space_is_stable",
-      "rule_set": "numerical_matrix",
+      "rule_set": "numerical_vector",
       "signatures": [
         "(rssn/native/control/state-space/v1) -> Bool"
       ],
@@ -29882,7 +29882,7 @@
     },
     {
       "name": "num_control_state_space_new",
-      "rule_set": "numerical_matrix",
+      "rule_set": "numerical_vector",
       "signatures": [
         "(Tensor<2, Float>, Tensor<2, Float>, Tensor<2, Float>, Tensor<2, Float>) -> rssn/native/control/state-space/v1"
       ],
@@ -29892,7 +29892,7 @@
     },
     {
       "name": "num_control_state_space_poles",
-      "rule_set": "numerical_matrix",
+      "rule_set": "numerical_vector",
       "signatures": [
         "(rssn/native/control/state-space/v1) -> Tensor<1, Complex>"
       ],
@@ -29902,7 +29902,7 @@
     },
     {
       "name": "num_control_state_space_simulate_with_dt",
-      "rule_set": "numerical_matrix",
+      "rule_set": "numerical_vector",
       "signatures": [
         "(rssn/native/control/state-space/v1, Tensor<1, Float>, Tensor<2, Float>, Float) -> Tensor<2, Float>"
       ],

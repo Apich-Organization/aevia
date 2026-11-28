@@ -295,7 +295,7 @@ crate::kernels::amg_general::AmgGeneral::workspace_len	declared	num_linear_amg_g
 crate::kernels::analytic_continuation::HolonomicOde::order	declared	num_continuation_holonomic_order		const fn order (& self) -> usize
 crate::kernels::analytic_continuation::borel_pade_resum	declared	num_continuation_borel_pade		fn borel_pade_resum (coeffs : & [Complex64] , z : Complex64 , pade_m : usize , pade_n : usize ,) -> Option < Complex64 >
 crate::kernels::analytic_continuation::continue_holonomic_along_path	declared	num_continuation_holonomic_follow		fn continue_holonomic_along_path (ode : & HolonomicOde , path : & [Complex64] , initial_state : & [Complex64] , taylor_order : usize ,) -> Option < Vec < Complex64 > >
-crate::kernels::analytic_continuation::eval_pade_complex	declared	num_continuation_eval_pade		fn eval_pade_complex (p : & [Complex64] , q : & [Complex64] , z : Complex64) -> Complex64
+crate::kernels::analytic_continuation::eval_pade_complex	declared	num_continuation_eval_pade		fn eval_pade_complex (p : & [Complex64] , q : & [Complex64] , z : Complex64 ,) -> Complex64
 crate::kernels::analytic_continuation::holonomic_monodromy_matrix	declared	num_continuation_holonomic_monodromy		fn holonomic_monodromy_matrix (ode : & HolonomicOde , loop_pts : & [Complex64] , taylor_order : usize ,) -> Option < Vec < Vec < Complex64 > > >
 crate::kernels::analytic_continuation::laurent_coeffs_fft	declared	num_continuation_laurent_fft		fn laurent_coeffs_fft < F > (f : F , center : Complex64 , radius : f64 , neg_order : usize , pos_order : usize , n_samples : usize ,) -> Vec < (i32 , Complex64) > where F : Fn (Complex64) -> Complex64 ,
 crate::kernels::analytic_continuation::pade_approximant_complex	declared	num_continuation_pade		fn pade_approximant_complex (taylor_coeffs : & [Complex64] , m : usize , n : usize ,) -> Option < (Vec < Complex64 > , Vec < Complex64 >) >
@@ -671,19 +671,19 @@ crate::kernels::complex_scalar::norm_squared	declared	num_analysis_complex_scala
 crate::kernels::complex_scalar::pow	declared	num_analysis_complex_scalar_pow		fn pow (value : Complex , exponent : i64 ,) -> Complex
 crate::kernels::complex_scalar::powc	declared	num_analysis_complex_scalar_powc		fn powc (base : Complex , exponent : Complex ,) -> Complex
 crate::kernels::complex_scalar::sin	declared	num_analysis_complex_scalar_sin		fn sin (value : Complex) -> Complex
-crate::kernels::complex_transforms::borel_transform_series	declared	num_transform_borel_series		fn borel_transform_series (coeffs : & [C] , t : C) -> C
-crate::kernels::complex_transforms::bromwich_talbot	declared	num_transform_laplace_talbot_checked		fn bromwich_talbot < F : Fn (C) -> C > (f : F , t : f64 , n_pts : usize) -> Result < C , String >
+crate::kernels::complex_transforms::borel_transform_series	declared	num_transform_borel_series		fn borel_transform_series (coeffs : & [C] , t : C ,) -> C
+crate::kernels::complex_transforms::bromwich_talbot	declared	num_transform_laplace_talbot_checked		fn bromwich_talbot < F : Fn (C) -> C > (f : F , t : f64 , n_pts : usize ,) -> Result < C , String >
 crate::kernels::complex_transforms::bromwich_talbot_shifted	declared	num_transform_laplace_talbot_shifted_checked		fn bromwich_talbot_shifted < F : Fn (C) -> C > (f : F , t : f64 , sigma : f64 , n_pts : usize ,) -> Result < C , String >
-crate::kernels::complex_transforms::bromwich_weideman_parabola	declared	num_transform_laplace_parabola_checked		fn bromwich_weideman_parabola < F : Fn (C) -> C > (f : F , t : f64 , n_pts : usize) -> Result < C , String >
+crate::kernels::complex_transforms::bromwich_weideman_parabola	declared	num_transform_laplace_parabola_checked		fn bromwich_weideman_parabola < F : Fn (C) -> C > (f : F , t : f64 , n_pts : usize ,) -> Result < C , String >
 crate::kernels::complex_transforms::bromwich_weideman_parabola_shifted	declared	num_transform_laplace_parabola_shifted_checked		fn bromwich_weideman_parabola_shifted < F : Fn (C) -> C > (f : F , t : f64 , sigma : f64 , n_pts : usize ,) -> Result < C , String >
 crate::kernels::complex_transforms::gaver_stehfest_inverse_laplace	declared	num_transform_laplace_stehfest_checked		fn gaver_stehfest_inverse_laplace < F : Fn (f64) -> f64 > (f : F , t : f64 , order : usize ,) -> Result < f64 , String >
-crate::kernels::complex_transforms::hankel_transform	declared	num_transform_hankel_checked		fn hankel_transform < F : Fn (f64) -> C > (f : F , nu : f64 , k : f64 , r_max : f64 , tol : f64) -> C
+crate::kernels::complex_transforms::hankel_transform	declared	num_transform_hankel_checked		fn hankel_transform < F : Fn (f64) -> C > (f : F , nu : f64 , k : f64 , r_max : f64 , tol : f64 ,) -> C
 crate::kernels::complex_transforms::hilbert_transform_real	declared	num_transform_hilbert_checked		fn hilbert_transform_real < F : Fn (f64) -> f64 > (f : F , x : f64 , bound : f64 , tol : f64 ,) -> Result < f64 , String >
-crate::kernels::complex_transforms::inverse_mellin_transform	declared	num_transform_inverse_mellin_checked		fn inverse_mellin_transform < F : Fn (C) -> C > (f : F , x : C , c : f64 , t_max : f64 , tol : f64) -> C
+crate::kernels::complex_transforms::inverse_mellin_transform	declared	num_transform_inverse_mellin_checked		fn inverse_mellin_transform < F : Fn (C) -> C > (f : F , x : C , c : f64 , t_max : f64 , tol : f64 ,) -> C
 crate::kernels::complex_transforms::meijer_g	declared	num_transform_meijer_g_checked		fn meijer_g (a : & [C] , b : & [C] , m : usize , n : usize , z : C , c : f64 , t_max : f64 , tol : f64 ,) -> Result < C , String >
 crate::kernels::complex_transforms::mellin_barnes_integral	declared	num_transform_mellin_barnes_checked		fn mellin_barnes_integral (num_plus : & [C] , num_minus : & [C] , den_plus : & [C] , den_minus : & [C] , z : C , c : f64 , t_max : f64 , tol : f64 ,) -> C
-crate::kernels::complex_transforms::mellin_transform	declared	num_transform_mellin_checked		fn mellin_transform < F : Fn (f64) -> C > (f : F , s : C , log_bound : f64 , tol : f64) -> C
-crate::kernels::complex_transforms::stieltjes_transform	declared	num_transform_stieltjes_checked		fn stieltjes_transform < F : Fn (f64) -> C > (f : F , z : C , r_max : f64 , tol : f64) -> C
+crate::kernels::complex_transforms::mellin_transform	declared	num_transform_mellin_checked		fn mellin_transform < F : Fn (f64) -> C > (f : F , s : C , log_bound : f64 , tol : f64 ,) -> C
+crate::kernels::complex_transforms::stieltjes_transform	declared	num_transform_stieltjes_checked		fn stieltjes_transform < F : Fn (f64) -> C > (f : F , z : C , r_max : f64 , tol : f64 ,) -> C
 crate::kernels::computer_graphics::Color::clamp	declared	num_native_graphics_color_clamp		const fn clamp (& self) -> Self
 crate::kernels::computer_graphics::Color::lerp	declared	num_native_graphics_color_lerp		fn lerp (& self , other : & Self , t : f64 ,) -> Self
 crate::kernels::computer_graphics::Color::new	declared	num_native_graphics_color_new		const fn new (r : f64 , g : f64 , b : f64 , a : f64 ,) -> Self
@@ -965,11 +965,11 @@ crate::kernels::convex::<reexport:bfa5c6dacc06724d>	resolved-reexport			lp :: so
 crate::kernels::convex::<reexport:c699cb11e424fd96>	unresolved-reexport			lp :: LpSolution
 crate::kernels::convex::<reexport:cacb4760736c7855>	resolved-reexport			qp :: solve_qp
 crate::kernels::convex::<reexport:d6f0c71b7526d343>	resolved-reexport			sdp :: solve_sdp
-crate::kernels::convex::lp::solve_lp	declared	num_convex_solve_lp		fn solve_lp (p : & LpProblem , max_iter : usize) -> Result < LpSolution , String >
+crate::kernels::convex::lp::solve_lp	declared	num_convex_solve_lp		fn solve_lp (p : & LpProblem , max_iter : usize ,) -> Result < LpSolution , String >
 crate::kernels::convex::qp::solve_qp	declared-alias	qp_solve@b995b2bf4549f5aff84f9aa6d2814449,qp_solve@faf8b610056c98badfce9633b71ca509		fn solve_qp (p : & QpProblem , max_iter : usize ,) -> Result < QpSolution , String >
 crate::kernels::convex::sdp::solve_sdp	declared-alias	sdp_solve@379650d8b5bfb61690e54792840193a8,sdp_solve@e99ccb91897b7c9dfb50e7b07e587603		fn solve_sdp (p : & SdpProblem , max_iter : usize ,) -> Result < SdpSolution , String >
 crate::kernels::convex::socp::solve_socp	declared-alias	socp_solve@379650d8b5bfb61690e54792840193a8,socp_solve@3fe7d621c69f4592b3a4e1e61b3e3886		fn solve_socp (p : & SocpProblem , max_iter : usize ,) -> Result < SocpSolution , String >
-crate::kernels::convex::solve_lp	declared-alias	num_convex_solve_lp		fn solve_lp (p : & LpProblem , max_iter : usize) -> Result < LpSolution , String >
+crate::kernels::convex::solve_lp	declared-alias	num_convex_solve_lp		fn solve_lp (p : & LpProblem , max_iter : usize ,) -> Result < LpSolution , String >
 crate::kernels::convex::solve_qp	declared	qp_solve@b995b2bf4549f5aff84f9aa6d2814449,qp_solve@faf8b610056c98badfce9633b71ca509		fn solve_qp (p : & QpProblem , max_iter : usize ,) -> Result < QpSolution , String >
 crate::kernels::convex::solve_sdp	declared	sdp_solve@379650d8b5bfb61690e54792840193a8,sdp_solve@e99ccb91897b7c9dfb50e7b07e587603		fn solve_sdp (p : & SdpProblem , max_iter : usize ,) -> Result < SdpSolution , String >
 crate::kernels::convex::solve_socp	declared	socp_solve@379650d8b5bfb61690e54792840193a8,socp_solve@3fe7d621c69f4592b3a4e1e61b3e3886		fn solve_socp (p : & SocpProblem , max_iter : usize ,) -> Result < SocpSolution , String >
@@ -1545,7 +1545,7 @@ crate::kernels::integrate::simpson_rule	declared	num_analysis_integrate_simpson_
 crate::kernels::integrate::trapezoidal_rule	declared	num_analysis_integrate_trapezoidal_scaled		fn trapezoidal_rule < F > (f : F , range : (f64 , f64) , n_steps : usize ,) -> f64 where F : Fn (f64) -> f64 ,
 crate::kernels::interp_ext::BSpline::eval	declared	num_bspline_query		fn eval (& self , x : f64 ,) -> Result < f64 , InterpError >
 crate::kernels::interp_ext::BSpline::interpolate	declared	num_bspline_build		fn interpolate (xs : & [f64] , ys : & [f64] , degree : usize ,) -> Result < Self , InterpError >
-crate::kernels::interp_ext::BilinearGrid<'grid>::eval	declared	num_interp_bilinear_grid_evaluate		fn eval (& self , x : f64 , y : f64) -> Result < f64 , InterpError >
+crate::kernels::interp_ext::BilinearGrid<'grid>::eval	declared	num_interp_bilinear_grid_evaluate		fn eval (& self , x : f64 , y : f64 ,) -> Result < f64 , InterpError >
 crate::kernels::interp_ext::BilinearGrid<'grid>::new	declared	num_interp_bilinear_grid_prepare		fn new (xs : & 'grid [f64] , ys : & 'grid [f64] , grid : & 'grid [f64] ,) -> Result < Self , InterpError >
 crate::kernels::interp_ext::akima	declared	num_interp_ext_akima		fn akima (xs : & [f64] , ys : & [f64] , x : f64 ,) -> Result < f64 , InterpError >
 crate::kernels::interp_ext::akima_many	declared	num_interp_ext_akima_many		fn akima_many (xs : & [f64] , ys : & [f64] , queries : & [f64] ,) -> Result < Vec < f64 > , InterpError >
@@ -2140,14 +2140,14 @@ crate::kernels::mp::real::Real::zero	declared	num_mp_real_zero		fn zero (prec : 
 crate::kernels::mp::real::limits	declared	num_mp_real_limits		const fn limits () -> RealLimits
 crate::kernels::mp::round_named	declared	num_mp_real_rounding_mode		fn round_named (name : & str) -> Result < Round , String >
 crate::kernels::mp::round_text	declared	mp_round@019d92aeb9f00f3bbaa6e953f1083202,mp_round@dbe957e73925de44b4f310182d0606ff,mp_round_mode@3ca3aa20959be400e5a4fba8988791cf,mp_round_mode@c54d9ddf2eebae97b0798353c82ad8ea,mp_round_mode@e704f402bb7fbcc2dbe7165a17756403,num_mp_decimal_round_text		fn round_text (text : & str , digits : usize , mode : Round ,) -> Result < String , String >
-crate::kernels::mp::special_complex::MpComplex::bessel_j	declared	num_mp_complex_bessel_j		fn bessel_j (& self , nu : & Self , prec : u32) -> Result < Self , String >
-crate::kernels::mp::special_complex::MpComplex::digamma	declared	num_mp_complex_digamma		fn digamma (& self , prec : u32) -> Result < Self , String >
-crate::kernels::mp::special_complex::MpComplex::erf	declared	num_mp_complex_erf		fn erf (& self , prec : u32) -> Result < Self , String >
-crate::kernels::mp::special_complex::MpComplex::erfc	declared	num_mp_complex_erfc		fn erfc (& self , prec : u32) -> Result < Self , String >
-crate::kernels::mp::special_complex::MpComplex::gamma	declared	num_mp_complex_gamma		fn gamma (& self , prec : u32) -> Result < Self , String >
-crate::kernels::mp::special_complex::MpComplex::ln_gamma	declared	num_mp_complex_log_gamma		fn ln_gamma (& self , prec : u32) -> Result < Self , String >
-crate::kernels::mp::special_complex::MpComplex::polylog	declared	num_mp_complex_polylog		fn polylog (& self , s : & Self , prec : u32) -> Result < Self , String >
-crate::kernels::mp::special_complex::MpComplex::riemann_zeta	declared	num_mp_complex_riemann_zeta		fn riemann_zeta (& self , prec : u32) -> Result < Self , String >
+crate::kernels::mp::special_complex::MpComplex::bessel_j	declared	num_mp_complex_bessel_j		fn bessel_j (& self , nu : & Self , prec : u32 ,) -> Result < Self , String >
+crate::kernels::mp::special_complex::MpComplex::digamma	declared	num_mp_complex_digamma		fn digamma (& self , prec : u32 ,) -> Result < Self , String >
+crate::kernels::mp::special_complex::MpComplex::erf	declared	num_mp_complex_erf		fn erf (& self , prec : u32 ,) -> Result < Self , String >
+crate::kernels::mp::special_complex::MpComplex::erfc	declared	num_mp_complex_erfc		fn erfc (& self , prec : u32 ,) -> Result < Self , String >
+crate::kernels::mp::special_complex::MpComplex::gamma	declared	num_mp_complex_gamma		fn gamma (& self , prec : u32 ,) -> Result < Self , String >
+crate::kernels::mp::special_complex::MpComplex::ln_gamma	declared	num_mp_complex_log_gamma		fn ln_gamma (& self , prec : u32 ,) -> Result < Self , String >
+crate::kernels::mp::special_complex::MpComplex::polylog	declared	num_mp_complex_polylog		fn polylog (& self , s : & Self , prec : u32 ,) -> Result < Self , String >
+crate::kernels::mp::special_complex::MpComplex::riemann_zeta	declared	num_mp_complex_riemann_zeta		fn riemann_zeta (& self , prec : u32 ,) -> Result < Self , String >
 crate::kernels::mp::to_decimal	declared-alias	num_mp_decimal_to_text		fn to_decimal (x : & Real , digits : usize ,) -> Result < String , String >
 crate::kernels::mp::to_decimal_in	declared-alias	num_mp_decimal_to_text_in		fn to_decimal_in (x : & Real , digits : usize , mode : Round ,) -> Result < String , String >
 crate::kernels::mp::to_float_text	declared	mp_to_float@338149b74d60d79d76c1650c69280c08,mp_to_float@c4239a555a4104a42567db664b5075fa		fn to_float_text (text : & str) -> Result < f64 , String >
@@ -2368,7 +2368,7 @@ crate::kernels::optim::nonlinear_cg	declared	num_nonlinear_cg,num_nonlinear_cg_s
 crate::kernels::optim::numerical_gradient	declared	num_analysis_optimization_gradient_scaled		fn numerical_gradient < F : Fn (& [f64]) -> f64 > (f : & F , x : & [f64] ,) -> Vec < f64 >
 crate::kernels::optim::qp_active_set	declared	num_analysis_qp_active_set_scaled		fn qp_active_set (hess : & Mat , grad : & [f64] , a_eq : & [Vec < f64 >] , b_eq : & [f64] , a_ineq : & [Vec < f64 >] , b_ineq : & [f64] ,) -> Option < QpSolution >
 crate::kernels::optim::second_order_check	declared	num_native_second_order_check_scaled		fn second_order_check < F , H , K > (f : F , eq : H , ineq : K , x : & [f64] , lambda : & [f64] , mu : & [f64] ,) -> SecondOrderStatus where F : Fn (& [f64]) -> f64 , H : Fn (& [f64]) -> Vec < f64 > , K : Fn (& [f64]) -> Vec < f64 > ,
-crate::kernels::optim::simplex	declared	num_analysis_simplex_scaled		fn simplex (c : & [f64] , a : & [Vec < f64 >] , rel : & [Relation] , b : & [f64]) -> LpStatus
+crate::kernels::optim::simplex	declared	num_analysis_simplex_scaled		fn simplex (c : & [f64] , a : & [Vec < f64 >] , rel : & [Relation] , b : & [f64] ,) -> LpStatus
 crate::kernels::optim::simplex_with	declared	num_analysis_simplex_with_scaled		fn simplex_with (c : & [f64] , a : & [Vec < f64 >] , rel : & [Relation] , b : & [f64] , pricing : Pricing ,) -> LpResult
 crate::kernels::optim::simplex_with_max_iter	declared	num_analysis_simplex_budgeted		fn simplex_with_max_iter (c : & [f64] , a : & [Vec < f64 >] , rel : & [Relation] , b : & [f64] , pricing : Pricing , max_iter : usize ,) -> Result < LpResult , String >
 crate::kernels::optim::simulated_annealing	declared	num_native_simulated_annealing_scaled		fn simulated_annealing < F : Fn (& [f64]) -> f64 > (f : F , x0 : & [f64] , step : f64 , t0 : f64 , cooling : f64 , iterations : usize , seed : u64 ,) -> OptResult

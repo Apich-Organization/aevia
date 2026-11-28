@@ -59,7 +59,7 @@ Exposure tiers, from best to worst: **typed** (`Rssn_<Domain>.f(x: Int): Result<
 | `Rssn_Multiprecision` | typed-required | 146 | 146 | 0 | 0 | 0 | numerical_special |
 | `Rssn_Elementary` | dynamic-ok | 126 | 2 | 123 | 1 | 0 | complex, elementary, numerical_callback, radicals |
 | `Rssn_Core` | dynamic-ok | 21 | 0 | 8 | 13 | 0 | arith, cse, kernel, rewriting, units |
-| `Rssn_Control` | typed-required | 28 | 28 | 0 | 0 | 0 | numerical_matrix, numerical_vector |
+| `Rssn_Control` | typed-required | 28 | 28 | 0 | 0 | 0 | numerical_vector |
 | `Rssn_Numeric` | dynamic-ok | 3890 | 106 | 177 | 3607 | 0 | numeric, numerical_callback, numerical_matrix, numerical_vector |
 | `Rssn_SparseExact` | typed-required | 18 | 18 | 0 | 0 | 0 | numerical_matrix |
 | `Rssn_RiemannHilbert` | typed-required | 14 | 10 | 0 | 4 | 0 | numerical_callback, numerical_matrix |
@@ -97,10 +97,10 @@ Exposure tiers, from best to worst: **typed** (`Rssn_<Domain>.f(x: Int): Result<
 | `number_theory` | 47 | 12 | 35 | 46 | 6 | 44 | 0 | 3 | 0 | NumberTheory |
 | `numeric` | 267 | 260 | 7 | 267 | 242 | 90 | 177 | 0 | 0 | Numeric |
 | `numerical_callback` | 215 | 215 | 0 | 0 | 15 | 5 | 0 | 206 | 0 | ComplexDisk, ComplexDynamics, ComplexRootContours, ConformalDiagnostics, Contour, Elementary, Numeric, NumericalTransforms, Optimizer, RiemannHilbert, Univalent |
-| `numerical_matrix` | 494 | 494 | 0 | 0 | 217 | 42 | 0 | 452 | 0 | Control, Numeric, RiemannHilbert, SparseExact |
+| `numerical_matrix` | 486 | 486 | 0 | 0 | 217 | 34 | 0 | 452 | 0 | Numeric, RiemannHilbert, SparseExact |
 | `numerical_special` | 571 | 571 | 0 | 0 | 525 | 382 | 0 | 189 | 0 | ComplexDisk, ComplexDynamics, Contour, Modular, Multiprecision, NumberTheory, Special, Univalent |
 | `numerical_stats` | 107 | 107 | 0 | 0 | 87 | 28 | 0 | 79 | 0 | Mcmc, Statistics, Statrs |
-| `numerical_vector` | 3101 | 3101 | 0 | 0 | 637 | 91 | 0 | 3010 | 0 | Cad, ComplexPolynomial, Control, FiniteField, Interpolation, Meshgen, Numeric, Optimizer, ParallelQuadrature |
+| `numerical_vector` | 3109 | 3109 | 0 | 0 | 637 | 99 | 0 | 3010 | 0 | Cad, ComplexPolynomial, Control, FiniteField, Interpolation, Meshgen, Numeric, Optimizer, ParallelQuadrature |
 | `ode` | 16 | 12 | 4 | 16 | 3 | 0 | 11 | 5 | 0 | Differential |
 | `optimize` | 16 | 3 | 13 | 16 | 0 | 0 | 6 | 10 | 0 | Solving |
 | `pde` | 84 | 78 | 6 | 84 | 16 | 2 | 43 | 39 | 0 | Differential |

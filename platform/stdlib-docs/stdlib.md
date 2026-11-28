@@ -29614,7 +29614,7 @@ unboundedness is determined.
 (Tensor<1, Float[_]>, Tensor<2, Float[_]>, Tensor<1, String>, Tensor<1, Float[_]>, Float[_], Float[_], Float[_]) -> { status: String, x: Tensor<1, Float[_]>, value: None | Some(Float[_]), iterations: None | Some(Int), bland_pivots: None | Some(Int) }
 ```
 
-Native simplex LP with normalized coefficient conversion using positive coordinate/objective/constraint references; preserves Optimal,Infeasible,Unbounded without fabricated coordinates or objective.
+Two-phase nonnegative simplex with measured coordinate, objective and constraint references.
 
 Two-phase simplex: minimise `c . x` subject to rows `a_i . x (rel_i) b_i`
 and `x >= 0`, with steepest-edge pricing and the Bland anti-cycling
@@ -29626,7 +29626,7 @@ fallback; see [`simplex_with`].
 (Tensor<1, Float[_]>, Tensor<2, Float[_]>, Tensor<1, String>, Tensor<1, Float[_]>, String, Float[_], Float[_], Float[_]) -> { status: String, x: Tensor<1, Float[_]>, value: None | Some(Float[_]), iterations: None | Some(Int), bland_pivots: None | Some(Int) }
 ```
 
-Native simplex LP with actual selectable Dantzig,SteepestEdge,Bland pricing and retained pivot statistics; independent positive coordinate/objective/constraint references.
+Two-phase nonnegative simplex with measured reference scales, selectable pricing and pivot statistics.
 
 Two-phase tableau simplex with a selectable pricing rule.
 
@@ -35059,7 +35059,7 @@ limits and conditional-integration anti-windup.
 
 Returns the control signal at each sample.
 
-## `numerical_matrix.num_control_state_space_continuous` (Experimental)
+## `numerical_vector.num_control_state_space_continuous` (Experimental)
 
 ```aevia
 (Tensor<2, Float>, Tensor<2, Float>, Tensor<2, Float>, Tensor<2, Float>) -> rssn/native/control/state-space/v1
@@ -35072,7 +35072,7 @@ Builds a continuous-time model.
 # Errors
 As [`StateSpace::new`].
 
-## `numerical_matrix.num_control_state_space_discrete` (Experimental)
+## `numerical_vector.num_control_state_space_discrete` (Experimental)
 
 ```aevia
 (Tensor<2, Float>, Tensor<2, Float>, Tensor<2, Float>, Tensor<2, Float>, Float) -> rssn/native/control/state-space/v1
@@ -35086,7 +35086,7 @@ Builds a discrete-time model with sample time `dt`.
 As [`StateSpace::new`], plus an error when `dt` is not finite and
 positive.
 
-## `numerical_matrix.num_control_state_space_is_controllable` (Experimental)
+## `numerical_vector.num_control_state_space_is_controllable` (Experimental)
 
 ```aevia
 (rssn/native/control/state-space/v1) -> Bool
@@ -35097,7 +35097,7 @@ Checks whether the normalized state-space controllability matrix has full row ra
 Whether the pair `(A, B)` is controllable (numerical rank test with a
 relative tolerance of `1e-9`).
 
-## `numerical_matrix.num_control_state_space_is_observable` (Experimental)
+## `numerical_vector.num_control_state_space_is_observable` (Experimental)
 
 ```aevia
 (rssn/native/control/state-space/v1) -> Bool
@@ -35108,7 +35108,7 @@ Checks whether the normalized state-space observability matrix has full column r
 Whether the pair `(A, C)` is observable (numerical rank test with a
 relative tolerance of `1e-9`).
 
-## `numerical_matrix.num_control_state_space_is_stable` (Experimental)
+## `numerical_vector.num_control_state_space_is_stable` (Experimental)
 
 ```aevia
 (rssn/native/control/state-space/v1) -> Bool
@@ -35121,7 +35121,7 @@ Whether the model is asymptotically stable.
 A continuous model is stable when every pole has negative real part; a
 discrete model when every pole lies inside the unit circle.
 
-## `numerical_matrix.num_control_state_space_new` (Experimental)
+## `numerical_vector.num_control_state_space_new` (Experimental)
 
 ```aevia
 (Tensor<2, Float>, Tensor<2, Float>, Tensor<2, Float>, Tensor<2, Float>) -> rssn/native/control/state-space/v1
@@ -35135,7 +35135,7 @@ Builds a continuous-time model after checking the matrix dimensions.
 Returns an error when `a` is not square, when `b`/`c`/`d` are not
 consistent with `a`, or when an entry is not finite.
 
-## `numerical_matrix.num_control_state_space_poles` (Experimental)
+## `numerical_vector.num_control_state_space_poles` (Experimental)
 
 ```aevia
 (rssn/native/control/state-space/v1) -> Tensor<1, Complex>
@@ -35148,7 +35148,7 @@ Eigenvalues of `A`.
 Returns an empty vector for a static model or when the eigensolver
 fails.
 
-## `numerical_matrix.num_control_state_space_simulate_with_dt` (Experimental)
+## `numerical_vector.num_control_state_space_simulate_with_dt` (Experimental)
 
 ```aevia
 (rssn/native/control/state-space/v1, Tensor<1, Float>, Tensor<2, Float>, Float) -> Tensor<2, Float>
