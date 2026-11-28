@@ -271,7 +271,7 @@ RSSN 拥有数值算法，包括精确整数/有理数、复数、张量收缩�
 - `map_floats`（设备接缝）仍用直线 tape 降级，因为 GPU 需要无控制流的程序。
 
 默认构建包含 Cranelift、wgpu 与 NumPy `.npy` 支持。用 `aevia devices` 查看当前构建和设备。
-精简构建可使用 `cargo build -p aevia-cli --no-default-features`。此时普通函数仍可解释执行，
+使用 `bazel build //:toolchain_minimal` 构建精简 CLI。普通函数仍可解释执行，
 显式 `@jit` 报 `E1001("core.jit")`。参考测试 `tests/jit_native.aev`。
 
 ### 9.6.4 设备目标
@@ -463,6 +463,7 @@ aevia --version
 | `--budget STEPS` | 尾调用/IO 步骤预算，超出 `E0805`（默认 100,000,000；不是秒，§9.3.4） |
 | `--caps LIST` | 只授予这些 capability：`fs,net,env,rand,gpu`（空列表 = 全部沙箱；默认全部，§9.14） |
 | `--backend NAME` | 选择执行后端：`auto`、`ir`、`ast`、`cpu`、`cpu-parallel` 或 `gpu` |
+| `--rssn-backend NAME` | 为进程选择 RSSN 表达式执行后端。运行 `aevia devices` 查看可用值，见 §10.6.4。 |
 | `--jobs N` | 并行求值的工作线程数（§9.7.2） |
 | `--color auto\|always\|never` | CLI 与 REPL 着色；自动模式遵循终端支持与 `NO_COLOR` |
 | `--locked` | 拒绝改写过期的 `aevia.lock`（`update`/`add`/…） |

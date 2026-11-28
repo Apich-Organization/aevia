@@ -45,19 +45,22 @@ calculation on the CPU. `cpu-parallel` keeps work on the host and uses the
 configured CPU worker count. `ir` and `ast` select the reference evaluators for
 comparison. In a REPL, evaluator switches govern new evaluation and definitions.
 
-`--rssn-backend` selects the process-wide RSSN backend for portable expressions
-and native kernels. `aevia devices` lists the active and available RSSN
-selectors. In the REPL, use `:rssn-backend` to inspect the current selection
-and `:rssn-backend auto` to restore automatic selection. `--backend` controls
-the Aevia evaluator and matrix routing independently.
+`--rssn-backend` selects the process-wide RSSN backend used to compile portable
+expressions. Its `auto` setting starts with the CPU tape and can compile hot
+expressions in the background when the host supports Cranelift. It uses the
+interpreter on other hosts. `aevia devices` lists the available selectors and
+the current choice. In the REPL, use `:rssn-backend` to inspect it and
+`:rssn-backend auto` to restore it. `--backend` controls the Aevia evaluator and
+matrix routing independently.
 
 The CLI or embedding application controls RSSN's process default. Aevia
 source can choose a backend handle for a specific compilation. GPU discovery
 and execution require the `gpu` capability, including calls that reuse a GPU
 handle or compiled GPU program inside a narrower `with_cap` block.
 
-To build the minimal CLI without linking the optional RSSN JIT, wgpu, and NumPy
-features, use `cargo build -p aevia-cli --no-default-features`.
+Run `bazel build //:toolchain_minimal` to build a CLI that omits the optional
+RSSN JIT, wgpu and NumPy integration. The executable is
+`bazel-bin/toolchain_minimal/bin/aevia` (with `.exe` on Windows).
 
 ## Measure the right part
 
@@ -67,12 +70,15 @@ An optimized build of the toolchain and the CLI option `--release` address diffe
 
 ## Sample a program on Windows
 
-The `aevia-prof` development tool samples a child process on x86-64 Windows without elevation. Build the executable with the `profiling` profile to include its debug symbols. In PowerShell, run the sampler from the repository root.
+The `aevia-prof` development tool samples a child process on x86-64 Windows
+without elevation. Build a CLI with profiling symbols from the repository root.
+In PowerShell, set `$profiler` to the path of your `aevia-prof.exe` sampler and
+pass the symbolized CLI as its first argument.
 
 ```powershell
-cargo build --profile profiling -p aevia-cli
+bazel build //:toolchain_profiling
 $env:AEVIA_PROF_FOLDED = "candidates.folded"
-cargo run -p aevia-prof --release -- target\profiling\aevia.exe run candidates.aev
+& $profiler .\bazel-bin\toolchain_profiling\bin\aevia.exe run candidates.aev
 Remove-Item Env:AEVIA_PROF_FOLDED
 ```
 

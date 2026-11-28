@@ -34,6 +34,14 @@ Large optimized dense products use the active pool with row-major views of the i
 
 Compiled evaluation can use a tape with scalar, batched, automatic-differentiation or interval execution. LIR provides typed registers, branches, calls and a fallback exit. Cranelift compiles eligible work behind the JIT feature. The optional device backend adds an explicit buffer and launch model. Numeric algorithms that need reproducibility should treat precision, reduction order and backend choice as part of the experiment.
 
+Native builds enable Cranelift, wgpu and RSSN's NumPy integration by default.
+A thread-scoped RSSN backend takes precedence over a process selection, which
+in turn takes precedence over automatic selection. With automatic selection,
+a supported host starts with the CPU tape and JIT-compiles hot code. The
+interpreter serves other hosts. Explicit device selection and the language's
+matrix offload policy have separate controls and check GPU capability at use.
+[Choose and inspect a backend](/book/12-parallel-and-profiling?lang=en)
+
 ## The two identities in the arena
 
 A `NodeId` identifies a concrete term. The structural hash table interns an operator, payload and ordered concrete children so repeated subtrees share storage. A `ClassId` identifies an equivalence class. Union-find finds its canonical representative, and a linked member ring permits class merges without rewriting all concrete nodes. The congruence table compares operators over canonical child classes. A use list records parents affected by a merge. Rebuilding those parents can identify more congruent nodes while preserving existing term handles.

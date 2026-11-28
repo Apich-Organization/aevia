@@ -26,7 +26,13 @@ Tests read these files, so a rewrite must keep their shape and pass the test aft
 | `08-stdlib.md` | `aevia-std/tests/spec_signatures.rs`, `aevia-stdlib-model/src/spec.rs`, `aevia-core/tests/stdlib_coverage.rs` | the signature tables in §8.1–§8.16 (name column, signature column) |
 | `11-examples.md` | `aevia-std/tests/spec_programs.rs` | complete programs in fenced `aevia` blocks; the extraction count is asserted |
 
-Run `cargo test -p aevia-std --test spec_signatures --test spec_programs` after touching them.
+After editing them, check the documented signatures and examples with Bazel.
+
+```sh
+bazel test //:rust_tests \
+  --test_arg=--test --test_arg=spec_signatures \
+  --test_arg=--test --test_arg=spec_programs
+```
 Never translate identifiers, signatures or code inside those tables; translate only prose.
 
 ## Reviewing a chapter against the implementation
