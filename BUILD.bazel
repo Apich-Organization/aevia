@@ -1,3 +1,4 @@
+load("//bazel:rssn_suites.bzl", "RSSN_CONTRACT_PLAN", "RSSN_RELEASE_PLAN")
 load("@rssn//bazel:rules.bzl", "cargo_artifact", "scientific_run", "scientific_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -43,6 +44,11 @@ config_setting(
     define_values = {"aevia_llvm_optimizer": "1"},
 )
 
+config_setting(
+    name = "bounded_rust_tests",
+    define_values = {"rssn_bounded_tests": "1"},
+)
+
 _RELEASE_ARGUMENTS = select({
     ":optimized": ["--release"],
     "//conditions:default": [],
@@ -76,20 +82,21 @@ _RELEASE_PREREQUISITES = select({
         workflow = name,
         project = "aevia",
         aevia = ":sources",
-        rssn = "@rssn//:sources" if name == "toolchain" else None,
-        scope = "" if name == "toolchain" else "platform",
+        rssn = "@rssn//:sources" if name.startswith("toolchain") else None,
+        scope = "" if name.startswith("toolchain") else "platform",
         data = _TASKS + _RELEASE_PREREQUISITES,
         arguments = _RELEASE_ARGUMENTS,
         plugin = _RELEASE_PASS,
         outputs = ["bin"],
         directories = ["bin"],
     )
-    for name in ["toolchain", "platform_cli", "platform_binaries"]
+    for name in ["toolchain", "toolchain_minimal", "toolchain_profiling", "platform_cli", "platform_binaries", "registry_server"]
 ]
 
 scientific_run(
     name = "package_release",
     workflow = "package-release",
+    arguments = RSSN_RELEASE_PLAN,
     project = "aevia",
     aevia = ":sources",
     rssn = "@rssn//:sources",
@@ -112,6 +119,7 @@ scientific_run(
         project = "aevia",
         aevia = ":sources",
         scope = "release",
+        arguments = RSSN_RELEASE_PLAN,
         data = _TASKS,
         tags = ["manual"],
     )
@@ -147,7 +155,7 @@ scientific_test(
         workflow = workflow,
         project = "aevia",
         aevia = ":sources",
-        rssn = "@rssn//:sources" if workflow in ["rust-tests", "clippy", "editor-protocol", "toolchain-test", "contracts"] else None,
+        rssn = "@rssn//:sources" if workflow in ["rust-tests", "clippy", "fmt", "rustdoc", "profiler-clippy", "editor-protocol", "toolchain-test", "contracts", "rssn-api-audit"] else None,
         scope = "platform" if workflow.startswith("platform-") else "editors" if workflow.startswith("editor-") or workflow == "editors" else "",
         data = _TASKS + data,
         arguments = arguments + _RELEASE_ARGUMENTS if workflow in ["rust-tests", "platform-test"] else arguments,
@@ -160,17 +168,34 @@ scientific_test(
         ("clippy_test", "clippy", [], [], ["manual"]),
         ("platform_clippy_test", "platform-clippy", [], [], ["manual"]),
         ("rust_tests", "rust-tests", [], [], []),
-        ("rust_all_features_test", "rust-tests", [], ["--all-features"], ["manual", "gpu"]),
+        (
+            "rust_all_features_test",
+            "rust-tests",
+            [],
+            ["--all-features"] + select({
+                ":bounded_rust_tests": ["--batches=2"],
+                "//conditions:default": [],
+            }),
+            ["manual", "gpu"],
+        ),
         ("platform_test", "platform-test", [], [], ["manual", "external", "no-cache"]),
         ("platform_scripts_test", "platform-scripts", [], [], []),
+        ("platform_unit_test", "platform-unit", [], [], ["manual"]),
+        ("registry_image_test", "registry-image-test", [":registry_server"], [], ["manual", "external"]),
+        ("playground_image_test", "playground-image-test", [":toolchain"], [], ["manual", "external"]),
         ("editor_config_test", "editors", [], [], ["manual", "external"]),
         ("editor_kate_test", "editor-kate", [], [], ["manual", "external"]),
         ("editor_zed_runnables_test", "editor-zed-runnables", [], [], ["manual", "external"]),
         ("editor_zed_wasm_test", "editor-zed-wasm", [], [], ["manual", "external"]),
+        ("fmt_test", "fmt", [], ["--check"], ["manual"]),
+        ("rustdoc_test", "rustdoc", [], [], ["manual"]),
+        ("platform_rustdoc_test", "platform-rustdoc", [], [], ["manual"]),
+        ("profiler_clippy_test", "profiler-clippy", [], [], ["manual"]),
         ("editor_protocol_test", "editor-protocol", [":toolchain"], [], ["manual", "external"]),
         ("editor_package_test", "editor-packages", [], [], ["manual", "external"]),
         ("toolchain_test", "toolchain-test", [":toolchain"], [], []),
-        ("contracts_test", "contracts", [":toolchain"], [], []),
+        ("contracts_test", "contracts", [":toolchain"], RSSN_CONTRACT_PLAN, []),
+        ("rssn_api_audit_test", "rssn-api-audit", [], [], ["manual"]),
     ]
 ]
 
@@ -180,7 +205,7 @@ scientific_test(
         workflow = workflow,
         project = "aevia",
         aevia = ":sources",
-        rssn = "@rssn//:sources" if workflow in ["refresh-kernel", "refresh-stdlib"] else None,
+        rssn = "@rssn//:sources" if workflow in ["refresh-kernel", "refresh-stdlib", "refresh-stdlib-reference"] else None,
         scope = "editors" if workflow == "editor-packages" else "spec" if workflow == "refresh-spec" else "",
         data = _TASKS + data,
         tags = ["manual"],
@@ -188,6 +213,7 @@ scientific_test(
     for name, workflow, data in [
         ("refresh_kernel", "refresh-kernel", []),
         ("refresh_stdlib", "refresh-stdlib", []),
+        ("refresh_stdlib_reference", "refresh-stdlib-reference", []),
         ("refresh_spec", "refresh-spec", []),
         ("editor_packages", "editor-packages", []),
     ]
@@ -210,6 +236,76 @@ test_suite(
     name = "joint_all_features_test",
     tags = ["manual"],
     tests = [":rust_all_features_test", "@rssn//:rust_all_features_test"],
+)
+
+scientific_run(
+    name = "rssn_api_audit",
+    workflow = "rssn-api-audit",
+    project = "aevia",
+    aevia = ":sources",
+    rssn = "@rssn//:sources",
+    data = _TASKS,
+    tags = ["manual"],
+)
+
+scientific_run(
+    name = "fmt",
+    workflow = "fmt",
+    project = "aevia",
+    aevia = ":sources",
+    rssn = "@rssn//:sources",
+    data = _TASKS,
+)
+
+[
+    scientific_run(
+        name = name,
+        workflow = "registry-image",
+        project = "aevia",
+        aevia = ":sources",
+        scope = "platform",
+        data = _TASKS + data,
+        tags = ["manual", "external"],
+    )
+    for name, data in [
+        ("registry_image", [":registry_server"]),
+        ("registry_image_from_binary", []),
+    ]
+]
+
+[
+    scientific_run(
+        name = name,
+        workflow = "playground-image",
+        project = "aevia",
+        aevia = ":sources",
+        scope = "platform",
+        data = _TASKS + data,
+        tags = ["manual", "external"],
+    )
+    for name, data in [
+        ("playground_image", [":toolchain"]),
+        ("playground_image_from_binary", []),
+    ]
+]
+
+scientific_run(
+    name = "postgres_image",
+    workflow = "postgres-image",
+    project = "aevia",
+    aevia = ":sources",
+    scope = "platform",
+    data = _TASKS,
+    tags = ["manual", "external"],
+)
+
+scientific_run(
+    name = "platform_dev",
+    workflow = "platform-dev",
+    project = "aevia",
+    aevia = ":sources",
+    scope = "platform",
+    data = _TASKS,
 )
 
 scientific_run(

@@ -93,9 +93,9 @@ bazel build //:toolchain //:platform_cli
 bazel test //:rust_all_features_test
 ```
 
-平台有独立 Cargo 工作区和[部署指南](platform/docs/DEPLOY.zh.md)。运行 `bazel test //:joint_all_features_test` 可同时测试语言工作区和选定的 RSSN 工作树。定向检查可用 `--test_arg=--test --test_arg=allocations` 指定测试目标。`cargo +nightly fmt --all --check` 检查语言工作区的格式。
+平台有独立 Cargo 工作区和[部署指南](platform/docs/DEPLOY.zh.md)。运行 `bazel test //:joint_all_features_test` 可同时测试语言工作区和选定的 RSSN 工作树。定向检查可用 `--test_arg=--test --test_arg=allocations` 指定测试目标。`bazel test //:fmt_test` 检查两个工作区的格式。
 
-安装 Pandoc 后，运行 `bazel run //:refresh_spec` 生成单页规范。运行 `bazel run //:refresh_stdlib` 生成标准库源码。`bazel run //:aevia -- doc --stdlib --json` 生成参考页面及 JSON 索引。用 `--lang en` 生成仓库中的参考文件，用 `--lang zh` 输出中文页面。 [双语参考检查](tools/check_stdlib_docs.py)
+安装 Pandoc 后，运行 `bazel run //:refresh_spec` 生成单页规范。运行 `bazel run //:refresh_stdlib` 生成标准库源码。`bazel run //:refresh_stdlib_reference` 验证双语内容后，更新入库的英文参考页面和双语 JSON 索引。加上 `-- --check` 可校验现有文件。用 `bazel run //:aevia -- doc --stdlib --lang zh` 单独生成中文页面。
 
 ## 许可
 

@@ -22,7 +22,8 @@ ${EDITOR:-vi} .env
 
 从源码构建时，请确保 Bazel 可访问相邻的 RSSN 工作区。`./deploy.sh build` 将注册中心
 镜像构建转交给 Bazel。首次执行 `./deploy.sh up` 时，如果本地没有注册中心镜像，会先用
-同一目标构建再启动 Compose。在 Aevia 仓库根目录可以直接运行以下命令。
+同一目标构建再启动 Compose。如果缺少本地 PostgreSQL 镜像，也会用
+`bazel run //:postgres_image` 构建。在 Aevia 仓库根目录可以直接运行以下命令。
 
 ```sh
 bazel run //:registry_image -- --tag localhost/aevia/registry:0.1.0

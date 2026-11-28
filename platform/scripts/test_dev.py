@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the developer stack with isolated container and Cargo fixtures."""
+"""Check the developer stack with isolated container and Bazel fixtures."""
 
 import json
 import os
@@ -12,6 +12,7 @@ import unittest
 
 
 DEV = Path(__file__).with_name("dev.sh")
+STACK = Path(__file__).with_name("dev_stack.sh")
 TOOLS = r"""
 import json
 import os
@@ -25,10 +26,19 @@ state = state_path.read_text()
 with open(os.environ["DEV_FIXTURE_TRACE"], "a", encoding="utf-8") as trace:
     trace.write(json.dumps([tool, *args]) + "\n")
 
-if tool == "cargo":
+if tool == "bazel":
+    assert args[:3] == ["run", "//:platform_dev", "--"]
+    root = Path.cwd()
+    assert root == Path(os.environ["DEV_FIXTURE_ROOT"])
+    platform = root / "platform"
+    os.environ["AEVIA_DEV_PLATFORM"] = str(platform)
+    extras = [str(Path(sys.argv[0]).with_name("aevia-registry"))] if args[3:] == ["run"] else []
+    script = str(platform / "scripts" / "dev_stack.sh")
+    os.execvp("sh", ["sh", script, *args[3:], *extras])
+elif tool == "aevia-registry":
     keys = ("AEVIA_BIND", "AEVIA_BASE_URL", "AEVIA_STORAGE_DIR", "AEVIA_SPEC_DIR")
     values = {key: os.environ.get(key) for key in keys}
-    Path(os.environ["DEV_FIXTURE_CARGO"]).write_text(json.dumps(values))
+    Path(os.environ["DEV_FIXTURE_REGISTRY"]).write_text(json.dumps(values))
 elif tool == "openssl":
     print("1" * 64)
 elif args[:2] == ["container", "inspect"]:
@@ -61,9 +71,10 @@ class DevTests(unittest.TestCase):
         self.script = self.platform / "scripts" / "dev.sh"
         self.script.parent.mkdir(parents=True)
         shutil.copyfile(DEV, self.script)
+        shutil.copyfile(STACK, self.script.with_name("dev_stack.sh"))
         self.bin = scratch / "bin"
         self.bin.mkdir()
-        for name in ("podman", "docker", "cargo", "openssl"):
+        for name in ("podman", "docker", "bazel", "aevia-registry", "openssl"):
             command = self.bin / name
             command.write_text(f"#!{sys.executable}\n{TOOLS}", encoding="utf-8")
             command.chmod(0o755)
@@ -74,12 +85,13 @@ class DevTests(unittest.TestCase):
 
         self.trace = scratch / "trace.jsonl"
         self.state = scratch / "state.txt"
-        self.cargo = scratch / "cargo.json"
+        self.registry = scratch / "registry.json"
         self.env = {
             "PATH": str(self.bin),
             "DEV_FIXTURE_TRACE": str(self.trace),
             "DEV_FIXTURE_STATE": str(self.state),
-            "DEV_FIXTURE_CARGO": str(self.cargo),
+            "DEV_FIXTURE_REGISTRY": str(self.registry),
+            "DEV_FIXTURE_ROOT": str(self.root),
         }
 
     def dev(self, command, *, state="absent", environment=None):
@@ -109,7 +121,8 @@ class DevTests(unittest.TestCase):
             "127.0.0.1:8080", "http://127.0.0.1:8080",
             str(self.platform / "target" / "packages"), str(self.root / "spec"),
         ])
-        self.assertTrue(all(call[0] in ("podman", "openssl") for call in self.commands()))
+        self.assertEqual(self.commands()[0], ["bazel", "run", "//:platform_dev", "--", "up"])
+        self.assertTrue(all(call[0] in ("podman", "openssl") for call in self.commands()[1:]))
         launch = next(call for call in self.commands() if call[:2] == ["podman", "run"])
         self.assertIn("127.0.0.1:55432:5432", launch)
 
@@ -117,11 +130,11 @@ class DevTests(unittest.TestCase):
         env = {"AEVIA_BIND": "[::1]:9089", "AEVIA_BASE_URL": "http://[::1]:9089"}
         result = self.dev("run", state="running", environment=env)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(self.cargo.read_text()), env | {
+        self.assertEqual(json.loads(self.registry.read_text()), env | {
             "AEVIA_STORAGE_DIR": str(self.platform / "target" / "packages"),
             "AEVIA_SPEC_DIR": str(self.root / "spec"),
         })
-        self.assertEqual(self.commands()[-1], ["cargo", "run", "--package", "aevia-registry-server"])
+        self.assertEqual(self.commands()[-1], ["aevia-registry"])
 
     def test_docker_fallback_starts_existing_stopped_container(self):
         (self.bin / "podman").unlink()
@@ -138,7 +151,10 @@ class DevTests(unittest.TestCase):
         ])
         result = self.dev("down")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.commands(), [["podman", "container", "inspect", "aevia-dev-db"]])
+        self.assertEqual(self.commands(), [
+            ["bazel", "run", "//:platform_dev", "--", "down"],
+            ["podman", "container", "inspect", "aevia-dev-db"],
+        ])
 
     def test_reset_uses_one_transaction_and_reports_sql_exit(self):
         result = self.dev("reset", state="running", environment={"DEV_FIXTURE_SQL_STATUS": "13"})

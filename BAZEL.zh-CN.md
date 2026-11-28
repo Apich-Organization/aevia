@@ -23,23 +23,33 @@ bazel test --override_module=rssn=/work/rssn-worktree //:joint_test
 | `bazel build //:toolchain` | 构建 CLI 和 LSP |
 | `bazel run //:aevia -- --version` | 运行 Bazel 构建的 CLI |
 | `bazel run //:aevia -- rssn --manifest-json > manifest.json` | 导出实际链接的 RSSN 清单，供审计与绑定工具使用 |
+| `bazel run @rssn//:refresh_bindings_from_manifest -- --manifest manifest.json` | 用导出的清单刷新实际链接版本的各语言接口 |
 | `bazel run //:check` | 检查 Rust 工作区，省去测试可执行文件的链接 |
+| `bazel run //:fmt` / `bazel test //:fmt_test` | 用 nightly Rustfmt 格式化两个工作区，或验证格式 |
+| `bazel test //:rustdoc_test //:platform_rustdoc_test` | 为两个工作区构建 Rust API 文档 |
+| `bazel run //:platform_dev -- run` | 启动本地 PostgreSQL 并运行注册中心 |
+| `bazel run //:registry_image -- --tag IMAGE` | 构建注册中心和运行镜像 |
+| `bazel run //:postgres_image` | 构建 Compose 或 Quadlet 使用的本地 PostgreSQL 镜像 |
+| `bazel run //:playground_image -- --tag IMAGE` | 构建 Aevia CLI 和 Playground 工作进程镜像 |
 | `bazel test //:test` | Aevia Rust 主测试、安装和工具链测试、契约检查 |
 | `bazel test //:joint_test` | Aevia 和 RSSN 主测试及两边的契约检查 |
 | `bazel test //:integration_test` | 两个仓库的全特性、数据库、编辑器和语言绑定集成测试 |
 | `bazel test //:rust_all_features_test` | Aevia 全特性 Rust 测试 |
 | `bazel test //:joint_all_features_test` | RSSN 和 Aevia 的全特性 Rust 测试 |
-| `bazel test //:platform_scripts_test` | 模拟部署与开发脚本测试、平台依赖镜像校验 |
+| `bazel test --define=rssn_bounded_tests=1 //:joint_all_features_test` | 运行两个工作区的全特性测试，每批回收已完成的集成测试二进制文件 |
+| `bazel test //:platform_scripts_test` | 运行部署和开发脚本的测试用例 |
 | `bazel test //:platform_test` | PostgreSQL 平台测试和无编译器特性的文档包测试 |
 | `bazel test //:editor_config_test //:editor_protocol_test` | 编辑器配置、Tree-sitter 解析器以及 LSP/DAP 协议测试 |
 | `bazel test //:editor_kate_test //:editor_zed_runnables_test //:editor_zed_wasm_test` | Kate 高亮、Zed 查询及 WASI 扩展 |
 | `bazel test //:editor_package_test` | VS Code 和 JetBrains 扩展打包及内容验证 |
 | `bazel run //:editor_packages` | 生成可分发的编辑器扩展，默认写入 `dist/editor-extensions/` |
 | `bazel test @rssn//:bindings_test` | RSSN 的四语言绑定测试 |
+| `bazel test //:rssn_api_audit_test` / `bazel run //:rssn_api_audit -- --report` | 验证 RSSN 可调用接口清单或输出审计报告 |
 | `bazel test //:clippy_test //:platform_clippy_test` | 对语言和平台工作区执行严格 Clippy |
 | `bazel test //:release_inputs_test` | 验证发布源码溯源和 Linux ABI 检查 |
 | `bazel run //:refresh_kernel` | 按顺序刷新 RSSN 生成代码、Aevia API 清单、标准库源和覆盖报告 |
 | `bazel run //:refresh_stdlib` / `bazel run //:refresh_spec` | 分别刷新标准库源或规格文档 |
+| `bazel run //:refresh_stdlib_reference` | 验证双语参考内容并更新入库页面和 JSON。传入 `-- --check` 校验现有文件，或用 `-- --aevia /path/to/aevia` 复用由配套源码构建的本机 CLI。 |
 
 运行平台数据库测试时，请设置 `AEVIA_TEST_DATABASE_URL` 指向可供测试的数据源。测试自行建立临时 GPG 密钥。编辑器目标根据所选测试使用 Node.js、PyYAML、Vim、Emacs、Helix、`ksyntaxhighlighter6` 或 `tree-sitter`。Zed WASI 测试需要 `wasm32-wasip2` 和 Clippy。打包需要 npm、Java 21 和 Gradle。RSSN 的 header、manifest、witness 和绑定更新目标也可以从 Aevia 使用，例如 `bazel run @rssn//:refresh_witness` 或 `bazel build @rssn//:manifest`。更新命令只在生成成功后发布指定文件，并会检查生成期间是否有人改动同一文件。
 
@@ -51,6 +61,8 @@ bazel run --config=release-max //:package_release -- \
 ```
 
 Bazel 在构建发布二进制文件前运行 RSSN 的 LLVM 流水线探针。此发布目标启用 Aevia 和 RSSN 的全部特性、LLVM 优化插件、通用 CPU 参数、fat LTO 和单个 CGU。目标在 `dist/` 生成并验证发行包与校验文件，运行包内的 CLI 和 LSP，并检查 NumPy `.npy` 读写、Cranelift JIT、AST 和 IR。Linux 需要 `mesa-vulkan-drivers` 提供 Lavapipe，以验证 wgpu 适配器。CI 使用同一个发布目标，并从干净的 Aevia 和 RSSN 工作树构建。打包时检查指定的提交，并核对各二进制构建使用的源码快照与打包输入。发布镜像使用的 Linux x86-64 registry 二进制文件位于 `dist/registry/`。
+
+`bazel/rssn_suites.bzl` 统一定义 `//:contracts_test` 和发布冒烟测试所用的 RSSN 用例。每个入选用例都在 AST 和 IR 下运行。两个打包目标和 `//:release_smoke` 共用发布用例清单。
 
 Linux 发布运行器使用 Ubuntu 24.04。打包目标通过 `readelf` 检查发布的二进制文件所需的 glibc 版本，要求 2.39 或更早。
 

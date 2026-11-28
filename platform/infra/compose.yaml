@@ -20,11 +20,6 @@ x-logging: &logging
 
 services:
   db:
-    build:
-      context: .
-      dockerfile: Containerfile.postgres
-      args:
-        POSTGRES_IMAGE: docker.io/library/postgres:18-trixie
     image: localhost/aevia/postgres:18-trixie
     restart: unless-stopped
     environment:
@@ -52,14 +47,6 @@ services:
       - storage
 
   registry:
-    build:
-      context: ..
-      dockerfile: infra/Containerfile.server
-      args:
-        RUST_VERSION: "1.100"
-      # The language crates are in the parent workspace.
-      additional_contexts:
-        lang: ../../crates
     image: localhost/aevia/registry:0.1.0
     restart: unless-stopped
     env_file:

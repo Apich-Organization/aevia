@@ -23,7 +23,8 @@ ${EDITOR:-vi} .env
 Run source builds from a checkout whose RSSN sibling is available to Bazel.
 `./deploy.sh build` forwards the registry image build to Bazel. On a first
 `./deploy.sh up` with no local registry image, it builds that image through the
-same target before starting Compose. From the Aevia repository root, the
+same target before starting Compose. It also builds the local PostgreSQL image
+when needed through `bazel run //:postgres_image`. From the Aevia repository root, the
 underlying commands are as follows.
 
 ```sh

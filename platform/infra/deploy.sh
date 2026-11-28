@@ -21,10 +21,8 @@ REPO_DIR=$(CDPATH= cd -- "$INFRA_DIR/.." && pwd)
 ENV_FILE="$INFRA_DIR/.env"
 COMPOSE_FILE="$INFRA_DIR/compose.yaml"
 BACKUP_DIR="$INFRA_DIR/backups"
-LANG_CRATES=$(CDPATH= cd -- "$REPO_DIR/../crates" 2>/dev/null && pwd || true)
 
 IMAGE_REGISTRY="localhost/aevia/registry:0.1.0"
-RUST_VERSION="1.100"
 
 COMPOSE_BIN=""
 COMPOSE_SUB=""
@@ -91,40 +89,21 @@ archive_volume() {
 
 cmd_build() {
 	command -v podman >/dev/null 2>&1 || die "podman is required to build the images"
-
-	if [ -z "$LANG_CRATES" ]; then
-		die "the language source directory is missing: expected $REPO_DIR/../crates (needed by aevia-registry-docs)"
-	fi
-
-	# The image resolves the language crates' inherited fields from a checked-in
-	# mirror of their workspace root. Fail before a ten-minute build if the
-	# mirror has drifted.
-	if [ -f "$INFRA_DIR/check-lang-workspace.sh" ]; then
-		if ! sh "$INFRA_DIR/check-lang-workspace.sh" "$REPO_DIR/.."; then
-			die "infra/lang-workspace.toml is out of step with the language repository"
-		fi
-	fi
-
-	# The image is built for the host's own architecture. On the ARM deployment
-	# host that is a native aarch64 build; --platform makes it explicit so a
-	# stale builder default cannot silently produce an amd64 image.
-	set -- build \
-		--file "$INFRA_DIR/Containerfile.server" \
-		--build-context "lang=$LANG_CRATES" \
-		--tag "$IMAGE_REGISTRY" \
-		--build-arg "RUST_VERSION=$RUST_VERSION"
-
-	if [ "$(uname -m)" = "aarch64" ]; then
-		set -- "$@" --platform linux/arm64
-	fi
-
-	set -- "$@" "$REPO_DIR"
-	run podman "$@"
+	(
+		cd "$REPO_DIR/.."
+		run bazel run //:registry_image -- --tag "$IMAGE_REGISTRY"
+	)
 }
 
 cmd_up() {
 	require_env
 	detect_compose
+	if ! podman image exists "$IMAGE_REGISTRY"; then
+		cmd_build
+	fi
+	if ! podman image exists localhost/aevia/postgres:18-trixie; then
+		(cd "$REPO_DIR/.." && run bazel run //:postgres_image)
+	fi
 	run compose up --detach --remove-orphans
 	run compose ps
 }

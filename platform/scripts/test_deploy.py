@@ -20,6 +20,7 @@ SQL = b"CREATE TABLE package (id integer);\n"
 
 PODMAN = """\
 import gzip
+import json
 import os
 from pathlib import Path
 import sys
@@ -28,6 +29,18 @@ import time
 root = Path(os.environ["FIXTURE_ROOT"])
 mode = os.environ["FIXTURE_MODE"]
 args = sys.argv[1:]
+tool = Path(sys.argv[0]).name
+with (root / "commands.jsonl").open("a", encoding="utf-8") as trace:
+    trace.write(json.dumps([tool, *args]) + "\\n")
+if tool == "bazel":
+    assert Path.cwd() == root
+    assert args in (["run", "//:registry_image", "--", "--tag", "localhost/aevia/registry:0.1.0"],
+                    ["run", "//:postgres_image"])
+    sys.exit(0)
+if args == ["image", "exists", "localhost/aevia/registry:0.1.0"]:
+    sys.exit(mode == "missing-image")
+if args == ["image", "exists", "localhost/aevia/postgres:18-trixie"]:
+    sys.exit(mode == "missing-db-image")
 
 def run_job(name, *, compressed=True):
     (root / f"{name}.started").touch()
@@ -51,6 +64,8 @@ if args[0] == "compose":
     if command == ["ps", "--quiet", "--status", "running", "registry"]:
         if mode == "running":
             print("registry-fixture")
+    elif command in (["up", "--detach", "--remove-orphans"], ["ps"]):
+        sys.exit(0)
     elif command[:4] == ["exec", "-T", "db", "sh"]:
         operation = command[-1]
         if operation.startswith("pg_dump "):
@@ -100,9 +115,10 @@ class BackupTests(unittest.TestCase):
         (infra / ".env").write_text(f"AEVIA_SESSION_SECRET={'1' * 64}\n", encoding="utf-8")
         mocks = self.root / "bin"
         mocks.mkdir()
-        podman = mocks / "podman"
-        podman.write_text(f"#!{sys.executable}\n{PODMAN}", encoding="utf-8")
-        podman.chmod(0o755)
+        for name in ("podman", "bazel"):
+            tool = mocks / name
+            tool.write_text(f"#!{sys.executable}\n{PODMAN}", encoding="utf-8")
+            tool.chmod(0o755)
         date = mocks / "date"
         date.write_text(f"#!/bin/sh\nprintf '%s\\n' '{STAMP}'\n", encoding="utf-8")
         date.chmod(0o755)
@@ -143,6 +159,34 @@ class BackupTests(unittest.TestCase):
 
     def assert_unpublished(self):
         self.assertEqual(list(self.backups.glob("*")), [])
+
+    def test_build_delegates_registry_packaging_to_bazel(self):
+        result = self.deploy("build")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        commands = (self.root / "commands.jsonl").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(commands, ['["bazel", "run", "//:registry_image", "--", "--tag", '
+                                    '"localhost/aevia/registry:0.1.0"]'])
+
+    def test_up_builds_a_missing_image_before_starting_compose(self):
+        result = self.deploy("up", mode="missing-image")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        commands = (self.root / "commands.jsonl").read_text(encoding="utf-8").splitlines()
+        launch = next(i for i, line in enumerate(commands) if '"up", "--detach"' in line)
+        build = next(i for i, line in enumerate(commands) if line.startswith('["bazel",'))
+        self.assertLess(build, launch)
+
+    def test_up_builds_only_the_missing_database_image(self):
+        result = self.deploy("up", mode="missing-db-image")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        commands = (self.root / "commands.jsonl").read_text(encoding="utf-8").splitlines()
+        builds = [line for line in commands if line.startswith('["bazel",')]
+        self.assertEqual(builds, ['["bazel", "run", "//:postgres_image"]'])
+
+    def test_up_uses_the_existing_image(self):
+        result = self.deploy("up")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        commands = (self.root / "commands.jsonl").read_text(encoding="utf-8").splitlines()
+        self.assertFalse(any(line.startswith('["bazel",') for line in commands))
 
     def test_backups_overlap_and_keep_plain_sql_restore_format(self):
         result = self.deploy("backup", mode="parallel")

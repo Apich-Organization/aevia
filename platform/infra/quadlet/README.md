@@ -6,10 +6,9 @@ Quadlet runs the same registry, database and edge as the Compose stack. Choose o
 
 ## Install
 
-Run these commands from `platform/infra/quadlet` as the rootless Podman user. Adjust the read-only source mount paths in `aevia-registry.container` if the Aevia checkout is outside `~/aevia`.
+Run these commands from `platform/infra/quadlet` as the rootless Podman user. The image build uses Bazel and the adjacent RSSN checkout. Adjust the read-only source mount paths in `aevia-registry.container` if the Aevia checkout is outside `~/aevia`.
 
 ```sh
-sh ../check-lang-workspace.sh
 umask 077
 mkdir -p ~/.config/containers/systemd ~/.config/aevia
 mkdir -p ~/.local/share/aevia/caddy/data ~/.local/share/aevia/caddy/config
@@ -23,7 +22,7 @@ Set `AEVIA_BASE_URL` to the public origin in `aevia.env`. Replace the example `A
 
 ```sh
 ../deploy.sh build
-podman build -f ../Containerfile.postgres -t localhost/aevia/postgres:18-trixie ..
+(cd ../../.. && bazel run //:postgres_image)
 systemctl --user daemon-reload
 systemctl --user start aevia-caddy.service
 systemctl --user status aevia-db.service aevia-registry.service aevia-caddy.service
@@ -63,7 +62,7 @@ Restart the registry with `systemctl --user start aevia-registry.service`. Keep 
 
 Quadlet 通过无根 Podman 和 systemd 管理注册中心、数据库和 TLS 代理。Caddy 与注册中心共用边缘网络，PostgreSQL 则位于单独的内部网络。在同一主机上选择 Compose 或 Quadlet 作为服务管理方式。
 
-从 `platform/infra/quadlet` 执行上面的安装命令。先离线核对工作区清单，再将单元文件复制到 `~/.config/containers/systemd/`，并复制 Caddyfile 和环境配置。仓库检出位置在 `~/aevia` 以外时，修改 `aevia-registry.container` 的只读文档挂载路径。
+从 `platform/infra/quadlet` 执行上面的安装命令。镜像构建需要 Bazel 和相邻的 RSSN 工作树。将单元文件复制到 `~/.config/containers/systemd/`，并复制 Caddyfile 和环境配置。仓库检出位置在 `~/aevia` 以外时，修改 `aevia-registry.container` 的只读文档挂载路径。
 
 `~/.config/aevia/aevia.env` 保存注册中心环境。将 `AEVIA_BASE_URL` 设为公开访问地址，把 `AEVIA_SESSION_SECRET` 替换为 `openssl rand -hex 32` 的输出，并在 `DATABASE_URL` 中使用新设定的密码和主机名 `db`。`db.env` 中的 `POSTGRES_USER`、`POSTGRES_PASSWORD` 和 `POSTGRES_DB` 必须与连接字符串相符。要自定义 TLS 域名或 ACME 邮箱，可在 `caddy.env` 中设置 `AEVIA_DOMAIN` 和 `AEVIA_ACME_EMAIL`。文件不存在时，Caddy 使用 `Caddyfile` 中的默认值。将各环境文件的权限设为 `600`。
 

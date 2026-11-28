@@ -26,17 +26,17 @@ The default channel is `stable`. Use `--channel nightly` or `-Channel nightly` t
 
 ## Develop the registry
 
-From `platform/`, run `./scripts/dev.sh run` to start the registry at `http://127.0.0.1:8080`. Set `AEVIA_BIND` and `AEVIA_BASE_URL` to use another listener and public origin. The script prefers Podman and also supports Docker. It starts a PostgreSQL 18 container named `aevia-dev-db` on `127.0.0.1:55432`. The registry stores local archives in `platform/target/packages` and reads the specification from the repository’s `spec/`. Use `./scripts/dev.sh up` to start only the database and print the environment exports.
+From the repository root, run `bazel run //:platform_dev -- run` to start the registry at `http://127.0.0.1:8080`. Set `AEVIA_BIND` and `AEVIA_BASE_URL` to use another listener and public origin. The script prefers Podman and also supports Docker. It starts a PostgreSQL 18 container named `aevia-dev-db` on `127.0.0.1:55432`. The registry stores local archives in `platform/target/packages` and reads the specification from the repository’s `spec/`. Use `bazel run //:platform_dev -- up` to start only the database and print the environment exports. The existing `platform/scripts/dev.sh` command forwards to this target.
 
-[`Cargo.toml`](Cargo.toml) declares the minimum supported Rust version. The platform builds the parser, formatter, documentation, dimension, and dependency resolution crates from the language workspace. The registry image uses a smaller Cargo workspace manifest for the same five crates. Check that manifest from the repository root with `sh platform/infra/check-lang-workspace.sh`. The check requires no build.
+[`Cargo.toml`](Cargo.toml) declares the minimum supported Rust version. The platform builds the parser, formatter, documentation, dimension, and dependency resolution crates from the language workspace. Build the registry image from this checkout with `bazel run //:registry_image -- --tag localhost/aevia/registry:0.1.0`.
 
 ```sh
-cargo test --locked --workspace
+bazel test //:platform_unit_test
 AEVIA_TEST_DATABASE_URL=postgres://aevia:aevia@127.0.0.1:55432/aevia \
-    cargo test --locked -p aevia-registry-server --test api
+    bazel test --test_env=AEVIA_TEST_DATABASE_URL //:platform_test
 ```
 
-The database integration tests create a separate schema for each test and require PostgreSQL 18 and permission to create schemas. To exercise the OpenPGP publish path, supply a disposable `GNUPGHOME` with a signing key.
+The database integration tests create a separate schema for each test and require PostgreSQL 18 and permission to create schemas. The integration target creates a disposable OpenPGP signing key for publish tests.
 
 ## 中文
 
@@ -58,14 +58,14 @@ Linux 和 macOS 的默认安装目录是 `~/.aevia`，Windows 的默认目录是
 
 ### 开发注册中心
 
-在 `platform/` 运行 `./scripts/dev.sh run`，即可通过 `http://127.0.0.1:8080` 访问注册中心。如需使用其他监听地址或公开访问地址，可设置 `AEVIA_BIND` 和 `AEVIA_BASE_URL`。脚本优先使用 Podman，也支持 Docker。它会在 `127.0.0.1:55432` 启动名为 `aevia-dev-db` 的 PostgreSQL 18 容器。注册中心将本地包归档写入 `platform/target/packages`，并从仓库的 `spec/` 读取语言规范。仅需数据库时，运行 `./scripts/dev.sh up`，脚本会输出环境变量设置。
+在仓库根目录运行 `bazel run //:platform_dev -- run`，即可通过 `http://127.0.0.1:8080` 访问注册中心。如需使用其他监听地址或公开访问地址，可设置 `AEVIA_BIND` 和 `AEVIA_BASE_URL`。脚本优先使用 Podman，也支持 Docker。它会在 `127.0.0.1:55432` 启动名为 `aevia-dev-db` 的 PostgreSQL 18 容器。注册中心将本地包归档写入 `platform/target/packages`，并从仓库的 `spec/` 读取语言规范。仅需数据库时，运行 `bazel run //:platform_dev -- up`，命令会输出环境变量设置。原有 `platform/scripts/dev.sh` 会转发到该 Bazel 目标。
 
-[`Cargo.toml`](Cargo.toml) 声明了最低 Rust 版本。平台复用语言工作区中的解析、格式化、文档、量纲及依赖解析 crate。注册中心镜像使用一份只包含这五个 crate 的工作区清单。可在仓库根目录运行 `sh platform/infra/check-lang-workspace.sh` 离线核对清单。
+[`Cargo.toml`](Cargo.toml) 声明了最低 Rust 版本。平台复用语言工作区中的解析、格式化、文档、量纲及依赖解析 crate。在仓库根目录运行 `bazel run //:registry_image -- --tag localhost/aevia/registry:0.1.0` 构建注册中心镜像。
 
 ```sh
-cargo test --locked --workspace
+bazel test //:platform_unit_test
 AEVIA_TEST_DATABASE_URL=postgres://aevia:aevia@127.0.0.1:55432/aevia \
-    cargo test --locked -p aevia-registry-server --test api
+    bazel test --test_env=AEVIA_TEST_DATABASE_URL //:platform_test
 ```
 
-数据库集成测试需要 PostgreSQL 18 和创建模式的权限，每项测试使用独立模式。测试 OpenPGP 发布时，请使用带有签名密钥的临时 `GNUPGHOME`。
+数据库集成测试需要 PostgreSQL 18 和创建模式的权限，每项测试使用独立模式。集成测试目标会为 OpenPGP 发布测试创建一次性签名密钥。

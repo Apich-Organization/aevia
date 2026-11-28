@@ -21,15 +21,24 @@ bazel test --override_module=rssn=/work/rssn-worktree //:joint_test
 | Command | Purpose |
 | --- | --- |
 | `bazel build //:toolchain` | Build the CLI and LSP |
+| `bazel build //:toolchain_minimal //:toolchain_profiling` | Build the CLI with default features disabled or with the profiling Cargo profile |
 | `bazel run //:aevia -- --version` | Run the Bazel-built CLI |
 | `bazel run //:aevia -- rssn --manifest-json > manifest.json` | Export the linked RSSN manifest for audit and bindings tools |
+| `bazel run @rssn//:refresh_bindings_from_manifest -- --manifest manifest.json` | Refresh the linked RSSN version's language bindings from the exported manifest |
 | `bazel run //:check` | Check the Rust workspace without linking test binaries |
+| `bazel run //:fmt` / `bazel test //:fmt_test` | Format both workspaces with nightly Rustfmt, or check formatting |
+| `bazel test //:rustdoc_test //:platform_rustdoc_test` | Build Rust API documentation for both workspaces |
+| `bazel run //:platform_dev -- run` | Start the local PostgreSQL instance and run the registry |
+| `bazel run //:registry_image -- --tag IMAGE` | Build the registry and its runtime image |
+| `bazel run //:postgres_image` | Build the local PostgreSQL runtime image for Compose or Quadlet |
+| `bazel run //:playground_image -- --tag IMAGE` | Build the Aevia CLI and its playground worker image |
 | `bazel test //:test` | Aevia Rust tests, installer and toolchain tests, and contract checks |
 | `bazel test //:joint_test` | Core tests and contract checks for both repositories |
 | `bazel test //:integration_test` | All-feature tests, PostgreSQL, editor suites and language bindings across both repositories |
 | `bazel test //:rust_all_features_test` | Aevia Rust tests with all features |
 | `bazel test //:joint_all_features_test` | RSSN and Aevia all-feature Rust tests |
-| `bazel test //:platform_scripts_test` | Deployment and development script fixtures and the platform workspace mirror check |
+| `bazel test --define=rssn_bounded_tests=1 //:joint_all_features_test` | Run both workspaces while discarding completed integration binaries one batch at a time |
+| `bazel test //:platform_scripts_test` | Deployment and development script fixtures |
 | `bazel test //:platform_test` | PostgreSQL integration and compiler-free documentation crate tests |
 | `bazel test //:editor_config_test //:editor_protocol_test` | Editor configuration, Tree-sitter parser, LSP and DAP |
 | `bazel test //:editor_kate_test //:editor_zed_runnables_test //:editor_zed_wasm_test` | Kate highlighting, Zed queries and the WASI extension |
@@ -38,8 +47,10 @@ bazel test --override_module=rssn=/work/rssn-worktree //:joint_test
 | `bazel test //:editor_package_test` | Build and inspect the VS Code and JetBrains packages |
 | `bazel run //:editor_packages` | Package editor extensions, by default into `dist/editor-extensions/` |
 | `bazel test @rssn//:bindings_test` | Run all four RSSN language suites |
+| `bazel test //:rssn_api_audit_test` / `bazel run //:rssn_api_audit -- --report` | Verify the RSSN callable inventory or print its audit report |
 | `bazel run //:refresh_kernel` | Refresh RSSN generators, the Aevia API inventory, stdlib sources and coverage |
 | `bazel run //:refresh_stdlib` / `bazel run //:refresh_spec` | Refresh stdlib sources or specification documents |
+| `bazel run //:refresh_stdlib_reference` | Validate both reference editions and refresh the checked-in pages and JSON. Pass `-- --check` to verify them or `-- --aevia /path/to/aevia` to reuse a native CLI from the paired source. |
 
 Set `AEVIA_TEST_DATABASE_URL` to a database suitable for testing. The suite creates a disposable GnuPG key. Depending on the suite, editor tests use Node.js, PyYAML, Vim, Emacs, Helix, `ksyntaxhighlighter6` or `tree-sitter`. The Zed WASI target requires Clippy and `wasm32-wasip2`. Editor packaging needs npm, Java 21 and Gradle. RSSN header, manifest, witness and binding tasks can also run from Aevia, for example `bazel run @rssn//:refresh_witness` and `bazel build @rssn//:manifest`. Refresh targets publish only the selected generated paths after generation succeeds and check for concurrent edits before replacing them.
 
@@ -60,6 +71,8 @@ this release target with clean Aevia and RSSN checkouts. Packaging verifies the
 requested commits and compares the source snapshot of each binary build with
 the packaging inputs. The Linux x86-64 registry binary used for the published image
 is written to `dist/registry/`.
+
+The shared `bazel/rssn_suites.bzl` plan selects which RSSN fixtures run in `//:contracts_test` and which also run against release binaries. The plan runs each selected fixture under AST and IR. Both packaging targets and `//:release_smoke` use the same release fixture list.
 
 Linux release runners use Ubuntu 24.04. The packaging target runs `readelf`
 and checks that the shipped binaries require glibc 2.39 or earlier.

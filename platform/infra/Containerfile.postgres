@@ -17,8 +17,7 @@
 # - Migration 0003 uses PG 18 virtual generated columns, `uuidv7()`, and
 #   `RETURNING OLD/NEW`.
 #
-# Build (compose does it for you):
-#   podman build -f infra/Containerfile.postgres -t localhost/aevia/postgres:18-trixie infra/
+# Build from the Aevia repository root with bazel run //:postgres_image.
 
 ARG POSTGRES_IMAGE=docker.io/library/postgres:18-trixie
 FROM ${POSTGRES_IMAGE}
